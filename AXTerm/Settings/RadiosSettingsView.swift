@@ -250,16 +250,26 @@ struct RadioDetailView: View {
                 case .ble:
                     BLESettingsContent(viewModel: viewModel)
                 case .modem:
-                    Text("The sound modem's settings arrive with its form.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    ModemSettingsContent(viewModel: viewModel)
                 }
             } header: {
                 Text("Transport")
             }
 
+            #if os(macOS)
+            if viewModel.selectedTransport == .modem {
+                ModemRigSection(viewModel: viewModel)
+                ModemTransmitSection(viewModel: viewModel)
+                ModemRadioSection(viewModel: viewModel)
+            }
+            #endif
+
             Section {
                 ConnectionStatusView(status: viewModel.connectionStatus)
+
+                if viewModel.selectedTransport == .modem, viewModel.connectionStatus == .connected {
+                    ModemStatusRows(viewModel: viewModel)
+                }
 
                 // What is on the other end of the link. Direwolf answers the
                 // in-band KISS hardware query with its name and version; a

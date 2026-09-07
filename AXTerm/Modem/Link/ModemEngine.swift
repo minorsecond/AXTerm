@@ -70,6 +70,10 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
                                        rng: SystemRandomNumberGenerator())
     private var encoder: HDLCEncoder?
     private var modulator: AFSKModulator?
+    /// A steady mark tone instead of frames: bits still to play. Zero
+    /// when the transmitter carries frames.
+    private var toneBitsRemaining = 0
+    private let toneRequest = Mutex<Int>(0)
     private var rxClock: Int64 = 0
     private var txWrittenTotal: Int64 = 0
     private var framesInTransmission = 0
@@ -145,6 +149,18 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
             guard queue.count < config.maxQueuedFrames else { throw ModemError.queueFull }
             queue.append(ax25)
         }
+        if scheduling == .dedicatedThread { wake.signal() }
+    }
+
+    /// Key the transmitter with a steady mark tone for `seconds`, through the
+    /// same channel access and PTT path a frame takes — the operator's way
+    /// to set the radio's drive level. Frames queued meanwhile wait.
+    func requestTestTone(seconds: Double) throws {
+        guard isRunning else { throw ModemError.notRunning }
+        let config = configuration.withLock { $0 }
+        guard config.mode.isTxCapable else { throw ModemError.txNotSupportedInMode }
+        let bits = Int(max(0.1, min(seconds, 30)) * config.mode.baud)
+        toneRequest.withLock { $0 = bits }
         if scheduling == .dedicatedThread { wake.signal() }
     }
 
@@ -272,7 +288,8 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         switch txState {
         case .idle:
             let queued = pending.withLock { $0.count }
-            guard queued > 0, active.mode.isTxCapable else { return }
+            let tone = toneRequest.withLock { $0 }
+            guard queued > 0 || tone > 0, active.mode.isTxCapable else { return }
             access.requestChannel(now: rxClock)
             txState = .waitingForChannel
 
@@ -342,11 +359,18 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     }
 
     private func startKeying() {
-        var enc = HDLCEncoder(baud: active.mode.baud, txDelayMs: active.txDelayMs, txTailMs: active.txTailMs)
-        let frames = pending.withLock { queue -> [Data] in let f = queue; queue.removeAll(); return f }
-        for frame in frames { enc.append(frame: frame) }
-        framesInTransmission = frames.count
-        encoder = enc
+        // A requested tone goes first, alone; frames wait for the next key.
+        toneBitsRemaining = toneRequest.withLock { let n = $0; $0 = 0; return n }
+        if toneBitsRemaining > 0 {
+            encoder = nil
+            framesInTransmission = 0
+        } else {
+            var enc = HDLCEncoder(baud: active.mode.baud, txDelayMs: active.txDelayMs, txTailMs: active.txTailMs)
+            let frames = pending.withLock { queue -> [Data] in let f = queue; queue.removeAll(); return f }
+            for frame in frames { enc.append(frame: frame) }
+            framesInTransmission = frames.count
+            encoder = enc
+        }
         modulator = AFSKModulator(sampleRate: sampleRate, mode: active.mode.parameters,
                                   amplitude: active.txAmplitude, spaceGainDB: active.txSpaceGainDB)
         pttConfirmation.store(0, ordering: .releasing)
@@ -376,12 +400,22 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
 
     /// Keep about a quarter second of audio queued ahead of the device.
     private func topUpTransmitRing() {
-        guard var mod = modulator, var enc = encoder, !mod.isExhausted else { return }
+        guard var mod = modulator, !mod.isExhausted else { return }
+        var enc = encoder
+        var tone = toneBitsRemaining
         let lead = Int64(0.3 * sampleRate)
         while !mod.isExhausted,
               txWrittenTotal - outputConsumed.load(ordering: .acquiring) < lead,
               txRing.availableToWrite >= scratchOut.count {
-            let n = mod.render(into: &scratchOut, count: scratchOut.count) { enc.nextBit() }
+            let n = mod.render(into: &scratchOut, count: scratchOut.count) {
+                if enc == nil {
+                    // Steady mark (1200 Hz): the low level, held every bit.
+                    guard tone > 0 else { return nil }
+                    tone -= 1
+                    return false
+                }
+                return enc!.nextBit()
+            }
             if n > 0 {
                 scratchOut.withUnsafeBufferPointer { ptr in
                     _ = txRing.write(UnsafeBufferPointer(rebasing: ptr[0..<n]))
@@ -391,6 +425,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         }
         modulator = mod
         encoder = enc
+        toneBitsRemaining = tone
     }
 
     private func unkey(reason: String?) {
@@ -404,6 +439,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         framesInTransmission = 0
         encoder = nil
         modulator = nil
+        toneBitsRemaining = 0
         txState = .cooldown(until: rxClock + Int64(Double(active.rxMuteAfterTxMs) / 1000 * sampleRate))
         demodulator?.reset()
         carrier.reset()

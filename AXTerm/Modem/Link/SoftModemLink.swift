@@ -121,6 +121,9 @@ nonisolated final class SoftModemLink: KISSLink, @unchecked Sendable {
     /// A new keying method, for a closed link.
     func replacePTT(_ new: PTTController) { engine.replacePTT(new) }
 
+    /// Key up with a steady tone, for setting the radio's drive level.
+    func sendTestTone(seconds: Double) throws { try engine.requestTestTone(seconds: seconds) }
+
     /// Settings changed under a running link: levels and timing apply in
     /// place; the engine rebuilds its DSP if the mode did.
     func update(configuration new: SoftModemConfiguration) {

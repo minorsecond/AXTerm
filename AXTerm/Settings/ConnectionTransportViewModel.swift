@@ -18,10 +18,15 @@ enum TransportSelection: String, CaseIterable, Identifiable {
     
     var id: String { rawValue }
 
-    /// What the picker offers. The sound modem appears once its form
-    /// exists; a profile that already is one always shows its segment.
+    /// What the picker offers. The sound modem needs a Mac's sound devices
+    /// and serial ports; elsewhere its segment shows only for a profile
+    /// that already is one, so the operator can see and change it.
     static func selectable(including current: TransportSelection) -> [TransportSelection] {
-        allCases.filter { $0 != .modem || current == .modem }
+        #if os(macOS)
+        return allCases
+        #else
+        return allCases.filter { $0 != .modem || current == .modem }
+        #endif
     }
 }
 
@@ -116,6 +121,7 @@ final class ConnectionTransportViewModel: ObservableObject {
     
     private let serialDiscovery = SerialPortDiscovery()
     private let bleScanner = BLEDeviceScanner()
+    private let audioDiscovery = AudioDeviceDiscovery()
     private var cancellables: Set<AnyCancellable> = []
     private var serialGraceTimer: Timer?
     
@@ -170,6 +176,24 @@ final class ConnectionTransportViewModel: ObservableObject {
         if mobilinkdModemType != modem { mobilinkdModemType = modem }
         if mobilinkdInputGain != Double(profile.mobilinkdInputGain) { mobilinkdInputGain = Double(profile.mobilinkdInputGain) }
         if mobilinkdOutputGain != Double(profile.mobilinkdOutputGain) { mobilinkdOutputGain = Double(profile.mobilinkdOutputGain) }
+
+        if modemMode != profile.modemMode { modemMode = profile.modemMode }
+        if audioInputDeviceUID != profile.audioInputDeviceUID { audioInputDeviceUID = profile.audioInputDeviceUID }
+        if audioOutputDeviceUID != profile.audioOutputDeviceUID { audioOutputDeviceUID = profile.audioOutputDeviceUID }
+        if audioInputChannel != profile.audioInputChannel { audioInputChannel = profile.audioInputChannel }
+        if civSerialPath != profile.civSerialPath { civSerialPath = profile.civSerialPath }
+        let hex = String(format: "%02X", profile.civAddress)
+        if civAddressHex.uppercased() != hex { civAddressHex = hex }
+        if pttMethod != profile.pttMethod { pttMethod = profile.pttMethod }
+        if txDelayMs != profile.txDelayMs { txDelayMs = profile.txDelayMs }
+        if txTailMs != profile.txTailMs { txTailMs = profile.txTailMs }
+        if persistence != profile.persistence { persistence = profile.persistence }
+        if slotTimeMs != profile.slotTimeMs { slotTimeMs = profile.slotTimeMs }
+        if Int(txAudioLevel) != profile.txAudioLevel { txAudioLevel = Double(profile.txAudioLevel) }
+        if followsRadioFrequency != profile.followsRadioFrequency { followsRadioFrequency = profile.followsRadioFrequency }
+        if setsRadioModeOnConnect != profile.setsRadioModeOnConnect { setsRadioModeOnConnect = profile.setsRadioModeOnConnect }
+        if maxTransmitSeconds != profile.maxTransmitSeconds { maxTransmitSeconds = profile.maxTransmitSeconds }
+        if rigModel != profile.rigModel { rigModel = profile.rigModel }
 
         let primary = settings.primaryRadio?.id == radioID
         if isPrimary != primary { isPrimary = primary }
@@ -242,6 +266,20 @@ final class ConnectionTransportViewModel: ObservableObject {
         bleScanner.$isScanning
             .receive(on: RunLoop.main)
             .assign(to: &$isScanningBLE)
+
+        audioDiscovery.$devices
+            .receive(on: RunLoop.main)
+            .assign(to: &$audioDevices)
+
+        // The modem's telemetry and the rig's status, this radio's only.
+        packetEngine.radioManager.$modemTelemetry
+            .receive(on: RunLoop.main)
+            .map { [radioID] in $0[radioID] }
+            .assign(to: &$modemTelemetry)
+        packetEngine.radioManager.$rigStatus
+            .receive(on: RunLoop.main)
+            .map { [radioID] in $0[radioID] }
+            .assign(to: &$rigStatus)
     }
     
     private func handleSerialDevicesUpdate(_ discovered: [SerialDevice]) {
@@ -346,6 +384,9 @@ final class ConnectionTransportViewModel: ObservableObject {
     func onAppear() {
         if selectedTransport == .serial {
             Task { serialDiscovery.startScanning() }
+        } else if selectedTransport == .modem {
+            Task { serialDiscovery.startScanning() }
+            audioDiscovery.startObserving()
         } else if selectedTransport == .ble {
              // Don't auto-start BLE scan every time view appears,
              // only if we don't have a device selected or user requests it.
@@ -356,6 +397,7 @@ final class ConnectionTransportViewModel: ObservableObject {
     func onDisappear() {
         Task { serialDiscovery.stopScanning() }
         bleScanner.stopScan()
+        audioDiscovery.stopObserving()
         stopSerialGraceTimer()
     }
     
@@ -481,10 +523,12 @@ final class ConnectionTransportViewModel: ObservableObject {
             // BLE scan is manual or on-demand
 
         case .modem:
-            // The CI-V port is a serial device; the audio devices come later.
+            // The CI-V port is a serial device; the audio pair is the link.
             Task { serialDiscovery.startScanning() }
             bleScanner.stopScan()
+            audioDiscovery.startObserving()
         }
+        if selectedTransport != .modem { audioDiscovery.stopObserving() }
     }
     
     private func updateSettingsForTransport() {
@@ -514,6 +558,195 @@ final class ConnectionTransportViewModel: ObservableObject {
 
     var isSerialTransport: Bool {
         settings.radio(radioID)?.kind == .serial
+    }
+
+    var isModemTransport: Bool {
+        settings.radio(radioID)?.kind == .modem
+    }
+
+    // MARK: - Sound modem
+
+    @Published var modemMode: ModemMode = .afsk1200 {
+        didSet { update { $0.modemMode = modemMode } }
+    }
+    @Published private(set) var audioInputDeviceUID: String = ""
+    @Published private(set) var audioOutputDeviceUID: String = ""
+    @Published var audioInputChannel: ModemInputChannel = .left {
+        didSet { update { $0.audioInputChannel = audioInputChannel } }
+    }
+    @Published var civSerialPath: String = "" {
+        didSet { update { $0.civSerialPath = civSerialPath } }
+    }
+    /// The radio's CI-V address as the operator types it: "A4".
+    @Published var civAddressHex: String = "A4" {
+        didSet {
+            guard let address = UInt8(civAddressHex.trimmingCharacters(in: .whitespaces), radix: 16) else { return }
+            update { $0.civAddress = address }
+        }
+    }
+    @Published var pttMethod: ModemPTTMethod = .civ {
+        didSet { update { $0.pttMethod = pttMethod } }
+    }
+    @Published var txDelayMs: Int = 300 {
+        didSet { update { $0.txDelayMs = max(0, min(2000, txDelayMs)) } }
+    }
+    @Published var txTailMs: Int = 100 {
+        didSet { update { $0.txTailMs = max(0, min(1000, txTailMs)) } }
+    }
+    @Published var persistence: Int = 63 {
+        didSet { update { $0.persistence = max(0, min(255, persistence)) } }
+    }
+    @Published var slotTimeMs: Int = 100 {
+        didSet { update { $0.slotTimeMs = max(10, min(1000, slotTimeMs)) } }
+    }
+    /// 0…100; the profile keeps it whole.
+    @Published var txAudioLevel: Double = 85 {
+        didSet { update { $0.txAudioLevel = Int(txAudioLevel.rounded()) } }
+    }
+    @Published var followsRadioFrequency: Bool = true {
+        didSet { update { $0.followsRadioFrequency = followsRadioFrequency } }
+    }
+    @Published var setsRadioModeOnConnect: Bool = false {
+        didSet { update { $0.setsRadioModeOnConnect = setsRadioModeOnConnect } }
+    }
+    @Published var maxTransmitSeconds: Int = 30 {
+        didSet { update { $0.maxTransmitSeconds = max(3, min(120, maxTransmitSeconds)) } }
+    }
+    /// What the radio called itself, from the profile.
+    @Published private(set) var rigModel: String = ""
+
+    /// The Mac's sound devices, live.
+    @Published private(set) var audioDevices: [ModemAudioDevice] = []
+    /// The modem's levels, carrier and PTT, while it runs.
+    @Published private(set) var modemTelemetry: ModemTelemetry?
+    /// The radio's frequency and mode, while CI-V is up.
+    @Published private(set) var rigStatus: RigStatus?
+    /// The last answer to Identify, or the reason there was none.
+    @Published private(set) var identifyResult: String?
+    @Published private(set) var isIdentifying = false
+    @Published private(set) var isSendingTestTone = false
+    /// What the last modem action had to say when it could not be done.
+    @Published private(set) var modemActionMessage: String?
+
+    var audioInputs: [ModemAudioDevice] { audioDevices.filter(\.hasInput) }
+    var audioOutputs: [ModemAudioDevice] { audioDevices.filter(\.hasOutput) }
+
+    /// The device pair changes the link key, so both halves go in one write.
+    func userDidChangeAudioInput(_ uid: String) {
+        let name = audioDevices.first { $0.uid == uid }?.name ?? ""
+        audioInputDeviceUID = uid
+        update { $0.audioInputDeviceUID = uid; $0.audioInputDeviceName = name }
+    }
+
+    func userDidChangeAudioOutput(_ uid: String) {
+        let name = audioDevices.first { $0.uid == uid }?.name ?? ""
+        audioOutputDeviceUID = uid
+        update { $0.audioOutputDeviceUID = uid; $0.audioOutputDeviceName = name }
+    }
+
+    #if os(macOS)
+    /// The modem radio's live link, if the manager has one up.
+    private var modemLink: ModemRadioLink? {
+        packetEngine.radioManager.session(for: radioID)?.link as? ModemRadioLink
+    }
+    #endif
+
+    /// Ask the radio what it is. Uses the live link's CI-V port when the
+    /// radio is connected; otherwise opens the port just for the question.
+    func identifyRig() {
+        guard !isIdentifying else { return }
+        #if os(macOS)
+        guard let config = settings.radio(radioID)?.modemConfig else { return }
+        isIdentifying = true
+        identifyResult = nil
+        Task { [weak self] in
+            defer { self?.isIdentifying = false }
+            do {
+                let answer: String
+                if let link = self?.modemLink, link.state == .connected {
+                    answer = try await link.identifyRadio()
+                } else {
+                    answer = try await ModemRadioLink.identifyRadio(config: config)
+                }
+                self?.identifyResult = answer
+            } catch {
+                self?.identifyResult = "No answer: \((error as? CIVError)?.message ?? String(describing: error))"
+            }
+        }
+        #else
+        identifyResult = "The sound modem needs a Mac."
+        #endif
+    }
+
+    /// Two seconds of steady tone through the modem's PTT path, so the
+    /// operator can set drive against the radio's ALC meter.
+    func sendTestTone(seconds: Double = 2) {
+        modemActionMessage = nil
+        #if os(macOS)
+        guard let link = modemLink, link.state == .connected else {
+            modemActionMessage = "Connect the radio first."
+            return
+        }
+        do {
+            try link.sendTestTone(seconds: seconds)
+            isSendingTestTone = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds + 1) { [weak self] in
+                self?.isSendingTestTone = false
+            }
+        } catch {
+            modemActionMessage = "Could not key the radio: \(error)"
+        }
+        #else
+        modemActionMessage = "The sound modem needs a Mac."
+        #endif
+    }
+
+    /// A UI frame to TEST from this radio's callsign, through the normal
+    /// send path, so the other station's decoder can confirm the whole chain.
+    @discardableResult
+    func sendTestFrame() -> OutboundFrame? {
+        modemActionMessage = nil
+        guard let profile = settings.radio(radioID) else { return nil }
+        let call = profile.resolvedCallsign(station: settings.myCallsign.uppercased())
+        guard !call.isEmpty else {
+            modemActionMessage = "Set a callsign first."
+            return nil
+        }
+        let parsed = CallsignNormalizer.parse(call)
+        let stamp = Date().formatted(date: .omitted, time: .standard)
+        let frame = OutboundFrame(
+            radio: radioID,
+            destination: AX25Address(call: "TEST"),
+            source: AX25Address(call: parsed.call, ssid: parsed.ssid),
+            payload: Data("AXTerm sound modem test \(stamp)".utf8))
+        packetEngine.send(frame: frame) { [weak self] result in
+            if case .failure(let error) = result {
+                self?.modemActionMessage = "Not sent: \(error.localizedDescription)"
+            }
+        }
+        return frame
+    }
+
+    /// Push the modem's mode to the radio: FM-D or USB-D, DATA MOD USB, AF
+    /// squelch open, USB SEND off. The view confirms first.
+    func configureRadioForPacket() {
+        modemActionMessage = nil
+        #if os(macOS)
+        guard let link = modemLink, link.state == .connected else {
+            modemActionMessage = "Connect the radio first."
+            return
+        }
+        Task { [weak self] in
+            do {
+                try await link.configureRadioForPacket()
+                self?.modemActionMessage = "Radio set for packet."
+            } catch {
+                self?.modemActionMessage = "The radio refused: \((error as? CIVError)?.message ?? String(describing: error))"
+            }
+        }
+        #else
+        modemActionMessage = "The sound modem needs a Mac."
+        #endif
     }
 
     // MARK: - Mobilinkd Settings

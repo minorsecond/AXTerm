@@ -166,6 +166,48 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         }
     }
 
+    /// A steady mark tone through the normal PTT path, for the operator to
+    /// set drive level against the radio's ALC.
+    func sendTestTone(seconds: Double) throws { try modem.sendTestTone(seconds: seconds) }
+
+    /// Ask the radio on the open CI-V port what it is and where it is.
+    /// "IC-705 (A4) · 144.390 MHz FM-D".
+    func identifyRadio() async throws -> String {
+        guard let rig, rig.isOpen else { throw CIVError.notOpen }
+        let address = try await rig.identify()
+        rigModel = CIVKnownRadios.model(forAddress: address) ?? String(format: "Icom %02X", address)
+        await refreshRigStatus()
+        return Self.describe(address: address, status: rigStatus)
+    }
+
+    /// The same question on a port nobody has open yet: a throwaway client
+    /// that opens, asks and closes. For the form before the radio connects.
+    static func identifyRadio(config: ModemLinkConfig,
+                              makeTransport: (String) -> CIVTransport = { SerialCIVTransport(path: $0) }) async throws -> String {
+        guard config.usesRig else { throw CIVError.transport("no CI-V port chosen") }
+        let transport = makeTransport(config.civSerialPath)
+        let client = CIVClient(transport: transport, radioAddress: config.civAddress,
+                               controllerAddress: config.civControllerAddress)
+        client.open()
+        defer { client.close() }
+        if case .failed(let reason) = transport.state { throw CIVError.transport(reason) }
+        let address = try await client.identify()
+        try? await client.setTransceive(false)
+        var status = RigStatus()
+        if let hz = try? await client.readFrequency() { status.frequencyHz = hz }
+        if let mode = try? await client.readMode() { status.mode = mode.mode; status.filter = mode.filter }
+        if let data = try? await client.readDataMode() { status.dataMode = data }
+        return describe(address: address, status: status)
+    }
+
+    private static func describe(address: UInt8, status: RigStatus) -> String {
+        var parts = [CIVKnownRadios.describe(address)]
+        if let frequency = status.frequencyLabel {
+            parts.append(status.modeLabel.map { "\(frequency) \($0)" } ?? frequency)
+        }
+        return parts.joined(separator: " \u{b7} ")
+    }
+
     /// The one-shot: put the radio in the right mode for this modem.
     func configureRadioForPacket() async throws {
         guard let rig else { throw CIVError.notOpen }
