@@ -44,26 +44,30 @@ A **radio** is one TNC port on one link, operating under a callsign.
   `WinlinkSyncDevice.identifier`, so the settings migration and the database
   migration that backfills old rows can each ask for it without ordering.
 
-## Settings: the list and the mirror
+## Settings: the list
 
 `AppSettingsStore.radios` is the ordered list (`radios.v1`, JSON in
-defaults). Removed radios are archived, not deleted, so rows that name them
-keep a name. The **primary** radio is the first enabled one.
+defaults) and the only record of how the station's TNCs are reached.
+Removed radios are archived, not deleted, so rows that name them keep a
+name. The **primary** radio is the first enabled one; the surfaces that
+still show a single connection (the one-radio capsule, the menu bar
+header, the iOS strip, Sentry's connection tags, the diagnostics export)
+read `settings.primaryRadio`.
 
 On the first launch after the update the list is absent and the one radio
-the station had is read off the scalar settings (`lastHost`, `lastPort`,
-`kissTransportType`, the serial, BLE and Mobilinkd keys, `tncCapabilities`),
-named for its transport ("Direwolf" for TCP, the device for serial, the
-peripheral for Bluetooth).
+the station had is read off the old single-connection keys (`lastHost`,
+`lastPort`, `kissTransportType`, the serial, BLE and Mobilinkd keys,
+`tncCapabilities`), named for its transport ("Direwolf" for TCP, the device
+for serial, the peripheral for Bluetooth), and `radios.v1` is written at
+once. That read happens exactly once: nothing writes the old keys any more
+and nothing reads them after the list exists. They are left in place so a
+downgrade still finds its connection. (An earlier build of this branch kept
+the two in step both ways — the "mirror"; it went once the last reader of
+the scalars was moved to the list.)
 
-Those scalars are still what the engine reads. So the primary radio's
-profile **mirrors into them, and they mirror back** — the same arrangement
-`WinlinkSettings.gatewayLadder` uses for its top rung. Both directions are
-guarded by equality checks and a re-entrancy flag, so a value that already
-agrees is never rewritten and the two cannot chase each other. The writers
-that still speak the old language (the engine's auto-gain telemetry, tests)
-therefore land in the radio without knowing it exists. The mirror is
-transitional: it goes once nothing reads the scalars.
+Writers that used to set a scalar set the radio: the TNC4's auto-gain
+telemetry lands in `mobilinkdInputGain` of every radio on that link through
+`settings.updateRadio`, which is a no-op when the value already agrees.
 
 Two radios cannot both hold one link and port (`RadioProfileIssue
 .duplicateLink`), and two enabled radios answering as one address is flagged
@@ -437,4 +441,10 @@ These are pinned literally in `RadioPresentationTests`,
    radio named on stations, routes, callers and terminal tabs — all hidden
    until a second radio exists.
 
-Next: the dual rig profile, property tests, and the wider docs.
+10. The old single-connection keys retired: read once on the first launch,
+    never written again; every surface reads `primaryRadio`. The rig's
+    `dual` profile proves both hubs and all three nodes.
+
+Next: nothing planned. Deferred on purpose — shared ping budgets via
+channel-group detection, cross-radio L3 forwarding, a console lens by
+radio, iOS visibility switches.

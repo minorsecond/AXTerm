@@ -299,23 +299,14 @@ final class ObservabilityTests: XCTestCase {
     // MARK: - Settings Store Tests
 
     @MainActor
-    func testAppSettingsStore_sanitizesViaDeferredUpdate() async {
-        let suiteName = "AXTermTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        let store = AppSettingsStore(defaults: defaults)
-
-        store.port = 999999
-        XCTAssertEqual(store.port, 999999) // deferred
-
-        await Task.yield()
-        XCTAssertEqual(store.port, 65535)
-
-        store.host = "   "
-        XCTAssertEqual(store.host, "   ") // deferred
-
-        await Task.yield()
-        XCTAssertEqual(store.host, AppSettingsStore.defaultHost)
+    func testConnectionSanitizersClampAndDefault() {
+        // The host and port live on the radio profile now; the sanitisers the
+        // old setters deferred to are still the rule for what a profile may hold.
+        XCTAssertEqual(AppSettingsStore.sanitizePort(999999), 65535)
+        XCTAssertEqual(AppSettingsStore.sanitizePort(0), 1)
+        XCTAssertEqual(AppSettingsStore.sanitizePort(8001), 8001)
+        XCTAssertEqual(AppSettingsStore.sanitizeHost("   "), AppSettingsStore.defaultHost)
+        XCTAssertEqual(AppSettingsStore.sanitizeHost(" 10.0.0.5 "), "10.0.0.5")
     }
 
     @MainActor

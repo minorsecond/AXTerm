@@ -34,16 +34,16 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
     func testSnapshotDetectsTransportTypeChange() {
         let settings = makeSettings()
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.transportType = KISSTransportType.serial.rawValue
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .serial }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertNotEqual(before, after)
     }
 
     func testSnapshotDetectsSerialPathChange() {
         let settings = makeSettings()
-        settings.transportType = KISSTransportType.serial.rawValue
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .serial }
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.serialDevicePath = "/dev/cu.usbmodem9999"
+        settings.updateRadio(settings.primaryRadio!.id) { $0.serialDevicePath = "/dev/cu.usbmodem9999" }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertNotEqual(before, after)
     }
@@ -51,7 +51,7 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
     func testSnapshotDetectsBaudRateChange() {
         let settings = makeSettings()
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.serialBaudRate = 9600
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .serial; $0.serialBaudRate = 9600 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertNotEqual(before, after)
     }
@@ -59,7 +59,7 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
     func testSnapshotDetectsBLEUUIDChange() {
         let settings = makeSettings()
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.blePeripheralUUID = "NEW-UUID-1234"
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .ble; $0.blePeripheralUUID = "NEW-UUID-1234" }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertNotEqual(before, after)
     }
@@ -67,7 +67,7 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
     func testSnapshotDetectsHostChange() {
         let settings = makeSettings()
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.host = "192.168.1.100"
+        settings.updateRadio(settings.primaryRadio!.id) { $0.host = "192.168.1.100" }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertNotEqual(before, after)
     }
@@ -75,7 +75,7 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
     func testSnapshotDetectsPortChange() {
         let settings = makeSettings()
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.port = 9999
+        settings.updateRadio(settings.primaryRadio!.id) { $0.port = 9999 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertNotEqual(before, after)
     }
@@ -87,7 +87,7 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
     func testSnapshotIgnoresMobilinkdEnabledChange() {
         let settings = makeSettings()
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.mobilinkdEnabled = !settings.mobilinkdEnabled
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = !$0.mobilinkdEnabled }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertEqual(before, after,
             "Mobilinkd enabled toggle must not trigger reconnect")
@@ -95,9 +95,9 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
 
     func testSnapshotIgnoresMobilinkdModemTypeChange() {
         let settings = makeSettings()
-        settings.mobilinkdEnabled = true
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.mobilinkdModemType = 5
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 5 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertEqual(before, after,
             "Modem type change must not trigger reconnect")
@@ -105,9 +105,9 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
 
     func testSnapshotIgnoresMobilinkdOutputGainChange() {
         let settings = makeSettings()
-        settings.mobilinkdEnabled = true
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.mobilinkdOutputGain = 200
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 200 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertEqual(before, after,
             "Output gain change must not trigger reconnect")
@@ -115,10 +115,10 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
 
     func testSnapshotIgnoresMobilinkdInputGainChange() {
         let settings = makeSettings()
-        settings.mobilinkdEnabled = true
-        settings.mobilinkdInputGain = 2
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 2 }
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.mobilinkdInputGain = 4
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 4 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertEqual(before, after,
             "Input gain change must not trigger reconnect")
@@ -130,8 +130,8 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
         let settings = makeSettings()
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         // Change both transport and Mobilinkd fields
-        settings.serialDevicePath = "/dev/cu.usbmodem1234"
-        settings.mobilinkdInputGain = 3
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .serial; $0.serialDevicePath = "/dev/cu.usbmodem1234" }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 3 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         // Should be unequal because of the transport field change
         XCTAssertNotEqual(before, after,
@@ -140,13 +140,13 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
 
     func testSnapshotOnlyMobilinkdFieldsChangedStaysEqual() {
         let settings = makeSettings()
-        settings.mobilinkdEnabled = true
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         // Change ALL Mobilinkd fields
-        settings.mobilinkdEnabled = false
-        settings.mobilinkdModemType = 9
-        settings.mobilinkdOutputGain = 255
-        settings.mobilinkdInputGain = 0
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = false }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 9 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 255 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 0 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertEqual(before, after,
             "Changing only Mobilinkd fields must keep snapshots equal")

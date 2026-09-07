@@ -93,6 +93,11 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         radioStates[radio] ?? .disconnected
     }
 
+    /// The radios sharing one byte stream, in port order.
+    func radios(onLink key: String) -> [RadioID] {
+        (demux[key] ?? [:]).sorted { $0.key < $1.key }.map(\.value)
+    }
+
     func profile(_ radio: RadioID) -> RadioProfile? {
         profiles.first { $0.id == radio }
     }

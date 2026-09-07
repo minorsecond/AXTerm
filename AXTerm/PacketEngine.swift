@@ -308,23 +308,11 @@ final class PacketEngine: ObservableObject {
     /// NOT via KISS init commands on connect. Changing them in the UI should NOT
     /// trigger a serial port close/reopen cycle, which disrupts the running demodulator.
     struct ConnectionConfigSnapshot: Equatable {
-        let transportType: String
-        let serialDevicePath: String
-        let serialBaudRate: Int
-        let blePeripheralUUID: String
-        let host: String
-        let port: Int
-        /// Every enabled radio's transport, so a change to a second radio is
-        /// a change too. Mobilinkd gains are not part of a signature.
+        /// Every enabled radio's transport, so a change to any radio is a
+        /// change. Mobilinkd gains are not part of a signature.
         let radios: [String]
 
         init(settings: AppSettingsStore) {
-            self.transportType = settings.transportType
-            self.serialDevicePath = settings.serialDevicePath
-            self.serialBaudRate = settings.serialBaudRate
-            self.blePeripheralUUID = settings.blePeripheralUUID
-            self.host = settings.host
-            self.port = settings.port
             self.radios = settings.radios.filter { $0.enabled && !$0.archived }.map(\.transportSignature)
         }
     }
@@ -830,7 +818,7 @@ final class PacketEngine: ObservableObject {
     /// Telemetry is a fact about one TNC. The engine's published copy is the
     /// primary radio's, because that is the one the single-radio surfaces
     /// describe; the link keeps its own regardless.
-    private func absorbTelemetry(_ telemetryData: Data, isPrimary: Bool) {
+    private func absorbTelemetry(_ telemetryData: Data, isPrimary: Bool, radios: [RadioID] = []) {
         frameStats.recordFrame(type: "Telemetry", size: telemetryData.count)
         if let identity = TNCIdentifier.identity(fromTelemetryFrame: telemetryData) {
             // The TNC answered the hardware query with its name — Direwolf
@@ -850,11 +838,11 @@ final class PacketEngine: ObservableObject {
             debugTrace("Mobilinkd Battery", ["level": battery])
         } else if let gain = MobilinkdTNC.parseInputGain(telemetryData) {
             // The TNC4 reports the gain its auto-adjust settled on. Written
-            // to the scalar, which the settings store mirrors into the
-            // primary radio's profile.
-            if isPrimary, settings.mobilinkdInputGain != gain {
-                settings.mobilinkdInputGain = gain
-                debugTrace("Mobilinkd Auto-Gain Updated", ["newGain": gain])
+            // to the profile of every radio on this link (a Bluetooth TNC
+            // carries one); `updateRadio` is a no-op when it already agrees.
+            for radio in radios where settings.radio(radio)?.mobilinkdInputGain != gain {
+                settings.updateRadio(radio) { $0.mobilinkdInputGain = gain }
+                debugTrace("Mobilinkd Auto-Gain Updated", ["radio": radio.rawValue, "newGain": gain])
             }
         } else {
             debugTrace("Mobilinkd Telemetry", ["hex": hexPrefix(telemetryData)])
@@ -2678,7 +2666,8 @@ extension PacketEngine: RadioManagerDelegate {
     }
 
     func radioManager(_ manager: RadioManager, link: LinkSession, didReceiveTelemetry frame: Data, port: UInt8) {
-        absorbTelemetry(frame, isPrimary: link === manager.primarySession)
+        absorbTelemetry(frame, isPrimary: link === manager.primarySession,
+                        radios: manager.radios(onLink: link.key))
         if link === manager.primarySession { refreshLinkSummary() }
     }
 

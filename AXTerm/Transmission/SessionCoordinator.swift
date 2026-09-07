@@ -456,7 +456,7 @@ final class SessionCoordinator: ObservableObject {
         )
 
         // When TNC manages the link layer, always use protocol defaults
-        if let caps = appSettings?.tncCapabilities, !caps.supportsLinkTuning {
+        if let caps = appSettings?.primaryRadio?.capabilities, !caps.supportsLinkTuning {
             sessionManager.defaultConfig = AX25SessionConfig(initialRto: userT1)
             TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: userT1)
             return

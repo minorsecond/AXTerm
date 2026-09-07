@@ -1,13 +1,9 @@
 import XCTest
 @testable import AXTerm
 
-/// The radio list inside the settings store, and its two-way mirror onto the
-/// single-connection scalars the engine still reads.
-///
-/// The mirror is the whole reason the rest of the app keeps working while
-/// radios are introduced one layer at a time: the engine, the toolbar and the
-/// tests all still speak `host`/`port`/`transportType`, and those must mean
-/// "the primary radio" without anyone having to know that.
+/// The radio list inside the settings store: the one record of how the
+/// station's TNCs are reached. The old single-connection scalars are read
+/// once, on the first launch after the update, and never written again.
 @MainActor
 final class AppSettingsStoreRadiosTests: XCTestCase {
 
@@ -67,48 +63,36 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
         XCTAssertEqual(second.radios[0].name, "Base")
     }
 
-    // MARK: - The mirror
+    // MARK: - The old keys are read once
 
-    /// Editing the primary radio is editing the connection.
-    func testEditingThePrimaryRadioWritesTheLegacyScalars() {
+    /// The first launch writes the list at once, so the migration is over
+    /// before anything else runs and the old keys are never consulted again.
+    func testTheMigrationWritesTheListImmediately() {
+        defaults.set("10.0.0.5", forKey: AppSettingsStore.hostKey)
+        _ = AppSettingsStore(defaults: defaults)
+        XCTAssertNotNil(defaults.string(forKey: AppSettingsStore.radiosKey))
+        // A later change to the old key is nobody's business.
+        defaults.set("changed.later", forKey: AppSettingsStore.hostKey)
+        XCTAssertEqual(AppSettingsStore(defaults: defaults).primaryRadio?.host, "10.0.0.5")
+    }
+
+    /// Editing a radio edits the list and only the list: nothing writes the
+    /// old keys any more.
+    func testEditingThePrimaryRadioDoesNotTouchTheOldKeys() {
         let store = AppSettingsStore(defaults: defaults)
         store.updateRadio(store.radios[0].id) {
             $0.host = "10.0.0.5"
             $0.port = 8020
             $0.kind = .serial
             $0.serialDevicePath = "/dev/cu.tnc"
-            $0.mobilinkdEnabled = true
         }
-        XCTAssertEqual(store.host, "10.0.0.5")
-        XCTAssertEqual(store.port, 8020)
-        XCTAssertEqual(store.transportType, "serial")
-        XCTAssertTrue(store.isSerialTransport)
-        XCTAssertEqual(store.serialDevicePath, "/dev/cu.tnc")
-        XCTAssertTrue(store.mobilinkdEnabled)
-        XCTAssertEqual(defaults.string(forKey: AppSettingsStore.hostKey), "10.0.0.5")
-    }
-
-    /// The old writers still exist — the engine's auto-gain, for one — and
-    /// what they write must show up in the radio.
-    func testWritingALegacyScalarUpdatesThePrimaryRadio() {
-        let store = AppSettingsStore(defaults: defaults)
-        store.host = "1.2.3.4"
-        store.mobilinkdInputGain = 3
-        XCTAssertEqual(store.radios[0].host, "1.2.3.4")
-        XCTAssertEqual(store.radios[0].mobilinkdInputGain, 3)
-    }
-
-    /// Both directions at once do not chase each other: after a round trip
-    /// everything agrees and nothing is left dirty.
-    func testTheMirrorSettles() {
-        let store = AppSettingsStore(defaults: defaults)
-        store.updateRadio(store.radios[0].id) { $0.host = "a.local" }
-        store.host = "b.local"
-        store.updateRadio(store.radios[0].id) { $0.port = 9001 }
-        XCTAssertEqual(store.radios[0].host, "b.local")
-        XCTAssertEqual(store.host, "b.local")
-        XCTAssertEqual(store.radios[0].port, 9001)
-        XCTAssertEqual(store.port, 9001)
+        // What was actually written, not what `register(defaults:)` answers.
+        let written = defaults.persistentDomain(forName: suiteName) ?? [:]
+        XCTAssertNil(written[AppSettingsStore.hostKey])
+        XCTAssertNil(written[AppSettingsStore.portKey])
+        XCTAssertNil(written[AppSettingsStore.transportTypeKey])
+        XCTAssertEqual(store.primaryRadio?.host, "10.0.0.5")
+        XCTAssertEqual(store.primaryRadio?.kind, .serial)
     }
 
     // MARK: - Several radios
@@ -122,7 +106,7 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
         XCTAssertTrue(store.hasMultipleRadios)
         XCTAssertEqual(added.name, "Radio 2")
         store.updateRadio(added.id) { $0.host = "second.local" }
-        XCTAssertEqual(store.host, AppSettingsStore.defaultHost)
+        XCTAssertEqual(store.primaryRadio?.host, AppSettingsStore.defaultHost)
         XCTAssertEqual(store.primaryRadio?.id, store.radios[0].id)
     }
 
@@ -135,7 +119,7 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
         store.updateRadio(second) { $0.host = "second.local" }
         store.updateRadio(first) { $0.enabled = false }
         XCTAssertEqual(store.primaryRadio?.id, second)
-        XCTAssertEqual(store.host, "second.local")
+        XCTAssertEqual(store.primaryRadio?.host, "second.local")
     }
 
     func testReorderingChangesThePrimary() {
@@ -144,7 +128,7 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
         store.updateRadio(second) { $0.host = "second.local" }
         store.moveRadios(fromOffsets: IndexSet(integer: 1), toOffset: 0)
         XCTAssertEqual(store.primaryRadio?.id, second)
-        XCTAssertEqual(store.host, "second.local")
+        XCTAssertEqual(store.primaryRadio?.host, "second.local")
     }
 
     /// Removed radios stay in storage, off the visible list; the last one

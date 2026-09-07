@@ -2465,7 +2465,7 @@ struct ContentView: View {
     private var tncCapsuleLabel: String {
         switch client.status {
         case .connected:
-            let host = client.connectedHost ?? settings.host
+            let host = client.connectedHost ?? settings.primaryRadio?.host ?? AppSettingsStore.defaultHost
             return "TNC: \(host)"
         case .connecting:
             return "TNC Connecting\u{2026}"
@@ -2477,18 +2477,23 @@ struct ContentView: View {
     }
 
     private var connectionEndpointLabel: String {
-        if settings.isSerialTransport {
-            let device = settings.serialDevicePath.isEmpty
-                ? "No device"
-                : (settings.serialDevicePath as NSString).lastPathComponent
+        switch settings.primaryRadio?.kind ?? .tcp {
+        case .serial:
+            let path = settings.primaryRadio?.serialDevicePath ?? ""
+            let device = path.isEmpty ? "No device" : (path as NSString).lastPathComponent
             return "KISS Serial @ \(device)"
+        case .ble:
+            let name = settings.primaryRadio?.blePeripheralName ?? ""
+            return "KISS Bluetooth @ \(name.isEmpty ? "No peripheral" : name)"
+        case .tcp:
+            return "KISS TCP @ \(connectionHostPort)"
         }
-        return "KISS TCP @ \(connectionHostPort)"
     }
 
     private var connectionHostPort: String {
-        let hostValue = client.connectedHost ?? settings.host
-        let portValue = client.connectedPort.map(String.init) ?? String(settings.port)
+        let primary = settings.primaryRadio
+        let hostValue = client.connectedHost ?? primary?.host ?? AppSettingsStore.defaultHost
+        let portValue = client.connectedPort.map(String.init) ?? String(primary?.port ?? AppSettingsStore.defaultPort)
         return "\(hostValue):\(portValue)"
     }
 

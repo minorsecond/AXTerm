@@ -189,13 +189,12 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         return radio
     }
 
-    /// Overwrites the transport fields with the legacy scalars.
-    mutating func applyLegacy(transportType: String, host: String, port: Int,
-                              serialDevicePath: String, serialBaudRate: Int, serialAutoReconnect: Bool,
-                              blePeripheralUUID: String, blePeripheralName: String, bleAutoReconnect: Bool,
-                              mobilinkdEnabled: Bool, mobilinkdModemType: Int,
-                              mobilinkdOutputGain: Int, mobilinkdInputGain: Int,
-                              capabilities: TNCCapabilities) {
+    private mutating func applyLegacy(transportType: String, host: String, port: Int,
+                                      serialDevicePath: String, serialBaudRate: Int, serialAutoReconnect: Bool,
+                                      blePeripheralUUID: String, blePeripheralName: String, bleAutoReconnect: Bool,
+                                      mobilinkdEnabled: Bool, mobilinkdModemType: Int,
+                                      mobilinkdOutputGain: Int, mobilinkdInputGain: Int,
+                                      capabilities: TNCCapabilities) {
         kind = RadioTransportKind(rawValue: transportType) ?? .tcp
         self.host = host
         self.port = port
@@ -211,6 +210,7 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         self.mobilinkdInputGain = mobilinkdInputGain
         self.capabilities = capabilities
     }
+
 
     /// A name the operator will recognise before they have typed one. With
     /// one radio the name is never shown, so this only matters the moment a

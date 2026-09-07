@@ -130,8 +130,8 @@ struct AXTermiOSRootView: View {
                 TNCStatusStrip(radios: client.radioSummaries)
             } else {
                 TNCStatusStrip(status: client.status,
-                               host: settings.host,
-                               port: settings.port)
+                               host: settings.primaryRadio?.host ?? "",
+                               port: settings.primaryRadio?.port ?? 0)
             }
         }
     }
@@ -146,7 +146,7 @@ struct AXTermiOSRootView: View {
         if radios.count > 1 {
             return "\(call) · \(radios.map(\.name).joined(separator: ", "))"
         }
-        return "\(call) · \(settings.host):\(settings.port)"
+        return "\(call) · \(radios.first?.displayEndpoint ?? "no radio")"
     }
 
     /// Views of the network, reachable from the traffic they describe.

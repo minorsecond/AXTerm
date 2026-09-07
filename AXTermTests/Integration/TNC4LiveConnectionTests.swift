@@ -88,13 +88,13 @@ final class TNC4LiveConnectionTests: XCTestCase {
 
         settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = localCallsign
-        settings.transportType = "serial"
-        settings.serialDevicePath = devicePath
-        settings.serialBaudRate = baudRate
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .serial }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.serialDevicePath = devicePath }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.serialBaudRate = baudRate }
         // NOTE: Mobilinkd config is disabled for connection tests because
         // SET_MODEM_TYPE causes a demodulator restart that can interfere with
         // receiving the UA response. Enable only when testing Mobilinkd-specific features.
-        settings.mobilinkdEnabled = false
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = false }
     }
 
     /// Lazy setup of PacketEngine + SessionCoordinator for tests that need the full stack.
@@ -345,10 +345,10 @@ final class TNC4LiveConnectionTests: XCTestCase {
     /// which is how the real app connects to the TNC4.
     func testConnectToK0EPI7WithMobilinkdEnabled() async throws {
         // Override: enable Mobilinkd with factory-correct gains
-        settings.mobilinkdEnabled = true
-        settings.mobilinkdModemType = 1  // AFSK 1200
-        settings.mobilinkdOutputGain = 11  // TNC4 factory default
-        settings.mobilinkdInputGain = 0    // TNC4 factory default
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 1 }  // AFSK 1200
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 11 }  // TNC4 factory default
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 0 }  // TNC4 factory default
 
         setupFullStack()
         engine.connectUsingSettings()
@@ -468,7 +468,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
     /// Verify that the TNC4 responds to battery level queries.
     /// NOTE: Requires mobilinkdEnabled = true for battery polling to start.
     func testMobilinkdBatteryTelemetry() async throws {
-        settings.mobilinkdEnabled = true
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
         setupFullStack()
         engine.connectUsingSettings()
         guard await waitForStatus(.connected, timeout: 10.0) else {

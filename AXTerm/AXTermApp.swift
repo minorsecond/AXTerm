@@ -119,8 +119,10 @@ struct AXTermApp: App {
         )
 
         // Determine connection settings (test mode overrides take precedence)
-        let effectiveHost = testConfig.effectiveHost(default: settingsStore.host)
-        let effectivePort = testConfig.effectivePort(default: settingsStore.portValue)
+        let primary = settingsStore.primaryRadio
+        let effectiveHost = testConfig.effectiveHost(default: primary?.host ?? AppSettingsStore.defaultHost)
+        let effectivePort = testConfig.effectivePort(
+            default: UInt16(clamping: primary?.port ?? AppSettingsStore.defaultPort))
 
         SentryManager.shared.setConnectionTags(host: effectiveHost, port: effectivePort)
 

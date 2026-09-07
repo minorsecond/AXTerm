@@ -17,7 +17,7 @@ struct LinkLayerSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             t1TimeoutContent
-            if settings.tncCapabilities.supportsLinkTuning {
+            if (settings.primaryRadio?.capabilities ?? TNCCapabilities()).supportsLinkTuning {
                 supportedContent
             } else {
                 unsupportedContent

@@ -153,8 +153,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         let radios = client.radioSummaries
         let status = MenuModel.statusTitle(for: client.status)
-        let host = client.connectedHost ?? settings.host
-        let port = client.connectedPort.map(String.init) ?? String(settings.port)
+        let primary = settings.primaryRadio
+        let host = client.connectedHost ?? primary?.host ?? AppSettingsStore.defaultHost
+        let port = client.connectedPort.map(String.init) ?? String(primary?.port ?? AppSettingsStore.defaultPort)
         // One radio: the line the menu has always shown. Several: how many
         // are up, with one submenu per radio below.
         let headerTitle = radios.count > 1

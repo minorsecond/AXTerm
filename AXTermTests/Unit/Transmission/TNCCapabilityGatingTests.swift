@@ -74,8 +74,8 @@ final class TNCCapabilityGatingTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let store = AppSettingsStore(defaults: defaults)
-        XCTAssertEqual(store.tncCapabilities.mode, .kiss)
-        XCTAssertTrue(store.tncCapabilities.supportsLinkTuning)
+        XCTAssertEqual(store.primaryRadio!.capabilities.mode, .kiss)
+        XCTAssertTrue(store.primaryRadio!.capabilities.supportsLinkTuning)
     }
 
     func testSettingsStorePersistsTNCCapabilities() {
@@ -88,12 +88,12 @@ final class TNCCapabilityGatingTests: XCTestCase {
         var caps = TNCCapabilities()
         caps.mode = .host
         caps.supportsLinkTuning = false
-        store1.tncCapabilities = caps
+        store1.updateRadio(store1.primaryRadio!.id) { $0.capabilities = caps }
 
         // Read back in a new store instance
         let store2 = AppSettingsStore(defaults: defaults)
-        XCTAssertEqual(store2.tncCapabilities.mode, .host)
-        XCTAssertFalse(store2.tncCapabilities.supportsLinkTuning)
+        XCTAssertEqual(store2.primaryRadio!.capabilities.mode, .host)
+        XCTAssertFalse(store2.primaryRadio!.capabilities.supportsLinkTuning)
     }
 
     // MARK: - Capability Gating in SessionCoordinator
@@ -106,7 +106,7 @@ final class TNCCapabilityGatingTests: XCTestCase {
         var caps = TNCCapabilities()
         caps.mode = .host
         caps.supportsLinkTuning = false
-        settings.tncCapabilities = caps
+        settings.updateRadio(settings.primaryRadio!.id) { $0.capabilities = caps }
 
         let coordinator = SessionCoordinator()
         coordinator.appSettings = settings
@@ -137,7 +137,7 @@ final class TNCCapabilityGatingTests: XCTestCase {
 
         let settings = AppSettingsStore(defaults: defaults)
         // Default: KISS mode, supportsLinkTuning = true
-        XCTAssertTrue(settings.tncCapabilities.supportsLinkTuning)
+        XCTAssertTrue(settings.primaryRadio!.capabilities.supportsLinkTuning)
 
         let coordinator = SessionCoordinator()
         coordinator.appSettings = settings
