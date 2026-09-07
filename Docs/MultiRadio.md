@@ -445,6 +445,13 @@ These are pinned literally in `RadioPresentationTests`,
     never written again; every surface reads `primaryRadio`. The rig's
     `dual` profile proves both hubs and all three nodes.
 
+11. A radio without a TNC: the built-in sound modem (`RadioTransportKind
+    .modem`), audio through a sound device and PTT and frequency over CI-V,
+    first for the IC-705 over USB. It is a `KISSLink` like the others, so
+    `LinkSession`, the demux, the engine and every surface above them are
+    unchanged; its link key is the audio pair, and the radio's own frequency
+    and name become facts on the profile. See [SoundModem.md](SoundModem.md).
+
 Next: nothing planned. Deferred on purpose — shared ping budgets via
 channel-group detection, cross-radio L3 forwarding, a console lens by
 radio, iOS visibility switches.

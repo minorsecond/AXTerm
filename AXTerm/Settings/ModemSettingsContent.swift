@@ -292,8 +292,10 @@ struct ModemRadioSection: View {
         }
         return [modeLine,
                 "DATA MOD input: USB.",
+                "USB AF squelch: OFF (open), so the modem hears the channel.",
                 "USB SEND: OFF (AXTerm keys the radio over CI-V).",
-                "AF squelch: open, so the modem hears the channel.",
+                "CI-V Transceive: OFF.",
+                "TX Delay (HF, 50 M, 144 M, 430 M): OFF; the modem's TXDELAY covers it.",
                 "The frequency is not touched."].joined(separator: "\n")
     }
 }

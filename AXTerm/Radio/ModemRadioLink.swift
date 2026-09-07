@@ -17,8 +17,9 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     private var civTransport: CIVTransport?
     private let makeTransport: (String) -> CIVTransport
 
-    /// The radio, as CI-V reports it; nil until identified.
-    private(set) var rigStatus = RigStatus()
+    /// The radio, as CI-V reports it; empty until read.
+    var rigStatus: RigStatus { lock.withLock { _rigStatus } }
+    private var _rigStatus = RigStatus()
     /// "IC-705" once identified.
     private(set) var rigModel: String?
 
@@ -31,6 +32,9 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     private enum Phase: Equatable { case idle, rigOpening, modemOpen, failed(String) }
     private var phase: Phase = .idle
     private var pollTask: Task<Void, Never>?
+    /// The last close, still unkeying and shutting the port; the next open
+    /// waits for it so the same serial path is not opened twice.
+    private var closeTask: Task<Void, Never>?
     private weak var _delegate: KISSLinkDelegate?
     private let deliver: SoftModemLink.Deliver
 
@@ -57,6 +61,32 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         self.modem = SoftModemLink(configuration: config.softModemConfiguration, audio: audio, ptt: rigParts.ptt,
                                    inputName: config.audioInputDeviceName, outputName: config.audioOutputDeviceName,
                                    scheduling: scheduling, deliver: deliver)
+        attachRig()
+    }
+
+    /// Frames the radio sends unasked — CI-V transceive broadcasts when the
+    /// operator tunes — fold into the status; we switch transceive off at
+    /// connect, but a radio that ignores that still gets heard.
+    private func attachRig() {
+        rig?.onUnsolicited = { [weak self] frame in self?.absorbUnsolicited(frame) }
+    }
+
+    private func absorbUnsolicited(_ frame: CIVFrame) {
+        var status = lock.withLock { _rigStatus }
+        switch frame.command {
+        case 0x00, 0x03:
+            guard let hz = CIVBCD.frequencyHz(frame.data) else { return }
+            status.frequencyHz = hz
+        case 0x01, 0x04:
+            guard let raw = frame.data.first, let mode = RigMode(rawValue: raw) else { return }
+            status.mode = mode
+            if frame.data.count > 1 { status.filter = frame.data[1] }
+        default:
+            return
+        }
+        status.updatedAt = Date()
+        lock.withLock { _rigStatus = status }
+        onRigStatus?(status)
     }
 
     private static func makeRig(_ config: ModemLinkConfig, makeTransport: (String) -> CIVTransport)
@@ -106,9 +136,11 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         }
         lock.withLock { phase = .rigOpening }
         deliver { [weak self] in self?._delegate?.linkDidChangeState(.connecting) }
-        civTransport.open()
+        let previousClose = closeTask
         Task { [weak self] in
             guard let self else { return }
+            await previousClose?.value
+            civTransport.open()
             do {
                 if case .failed(let reason) = civTransport.state { throw CIVError.transport(reason) }
                 let address = try await rig.identify()
@@ -131,12 +163,29 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         }
     }
 
+    /// The modem stops first (it asks for PTT off), then the radio is told
+    /// PTT off once more on the still-open port, and only then does the
+    /// port close. A close that raced the unkey would leave the radio
+    /// transmitting; this order cannot.
     func close() {
         pollTask?.cancel()
         pollTask = nil
         modem.close()
-        rig?.close()
         lock.withLock { phase = .idle }
+        guard let rig else { return }
+        let ptt = pttController
+        let method = config.pttMethod
+        closeTask = Task {
+            switch method {
+            case .civ:
+                if rig.isOpen { try? await rig.setPTT(false) }
+            case .rts, .dtr:
+                ptt.setTransmit(false) { _ in }
+            case .none:
+                break
+            }
+            rig.close()
+        }
     }
 
     func send(_ data: Data, completion: @escaping (Error?) -> Void) {
@@ -158,6 +207,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
             civTransport = rigParts.transport
             rig = rigParts.client
             pttController = rigParts.ptt
+            attachRig()
             modem.replacePTT(rigParts.ptt)
             modem.update(configuration: new.softModemConfiguration)
             if wasOpen { open() }
@@ -225,7 +275,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         if let data = try? await rig.readDataMode() { status.dataMode = data }
         status.ptt = modem.telemetry.ptt
         status.updatedAt = Date()
-        rigStatus = status
+        lock.withLock { _rigStatus = status }
         onRigStatus?(status)
     }
 

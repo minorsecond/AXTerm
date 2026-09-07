@@ -1,0 +1,221 @@
+#if os(macOS)
+import XCTest
+@testable import AXTerm
+
+/// The modem radio's link with a scripted radio on the CI-V port: what
+/// opening asks the radio, what a wrong radio does, how the radio's own
+/// frequency reaches the status, and that a transmission keys over CI-V.
+final class ModemRadioLinkTests: XCTestCase {
+
+    /// A delegate that records off any thread.
+    private nonisolated final class Spy: KISSLinkDelegate, @unchecked Sendable {
+        private let lock = NSLock()
+        private var _states: [KISSLinkState] = []
+        private var _errors: [String] = []
+        var states: [KISSLinkState] { lock.withLock { _states } }
+        var errors: [String] { lock.withLock { _errors } }
+        func linkDidReceive(_ data: Data) {}
+        func linkDidChangeState(_ state: KISSLinkState) { lock.withLock { _states.append(state) } }
+        func linkDidError(_ message: String) { lock.withLock { _errors.append(message) } }
+    }
+
+    /// An IC-705 on 144.390 FM-D that accepts every set.
+    private nonisolated static func ic705(_ frame: CIVFrame) -> [UInt8]? {
+        switch (frame.command, frame.subcommand) {
+        case (0x19, 0x00): return FakeCIVTransport.reply(0x19, 0x00, [0xA4])
+        case (0x03, _): return FakeCIVTransport.reply(0x03, nil, CIVBCD.frequencyBytes(hz: 144_390_000))
+        case (0x04, _): return FakeCIVTransport.reply(0x04, nil, [0x05, 0x01])
+        case (0x1A, 0x06) where frame.data.isEmpty: return FakeCIVTransport.reply(0x1A, 0x06, [0x01, 0x01])
+        default: return FakeCIVTransport.ok
+        }
+    }
+
+    private func config(ptt: ModemPTTMethod = .civ, setsMode: Bool = false, follows: Bool = false) -> ModemLinkConfig {
+        var c = ModemLinkConfig()
+        c.audioInputDeviceUID = "in"; c.audioInputDeviceName = "USB Audio CODEC"
+        c.audioOutputDeviceUID = "out"; c.audioOutputDeviceName = "USB Audio CODEC"
+        c.civSerialPath = "/dev/cu.usbmodem14201"
+        c.pttMethod = ptt
+        c.setsRadioModeOnConnect = setsMode
+        c.followsRadioFrequency = follows
+        c.txDelayMs = 100
+        c.txTailMs = 50
+        c.persistence = 255
+        return c
+    }
+
+    private func makeLink(_ config: ModemLinkConfig, responder: @escaping @Sendable (CIVFrame) -> [UInt8]? = ModemRadioLinkTests.ic705)
+    -> (ModemRadioLink, FakeCIVTransport, SyntheticModemIO, Spy) {
+        let transport = FakeCIVTransport()
+        transport.responder = responder
+        let audio = SyntheticModemIO()
+        // Default delivery: delegate calls hop to the main actor, where these
+        // tests run, and land during the awaits.
+        let link = ModemRadioLink(config: config, audio: audio, makeTransport: { _ in transport },
+                                  scheduling: .inline)
+        let spy = Spy()
+        link.delegate = spy
+        return (link, transport, audio, spy)
+    }
+
+    private func waitUntil(_ timeout: TimeInterval = 2, _ condition: @escaping () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    private nonisolated func hex(_ frame: CIVFrame) -> String {
+        frame.encoded().map { String(format: "%02X", $0) }.joined(separator: " ")
+    }
+
+    // MARK: - Opening
+
+    func testOpeningIdentifiesQuietsTheBusReadsTheRadioAndConnects() async {
+        let (link, transport, _, spy) = makeLink(config())
+        link.open()
+        XCTAssertEqual(link.state, .connecting, "CI-V first")
+        await waitUntil { link.state == .connected }
+        XCTAssertEqual(link.state, .connected)
+        XCTAssertEqual(link.rigModel, "IC-705")
+        XCTAssertEqual(link.endpointDescription, "IC-705 via USB Audio CODEC")
+        XCTAssertEqual(link.rigStatus.frequencyHz, 144_390_000)
+        XCTAssertEqual(link.rigStatus.modeLabel, "FM-D")
+
+        let written = transport.written.map(hex)
+        XCTAssertEqual(written.first, "FE FE A4 E0 19 00 FD", "who are you")
+        XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 31 00 FD"), "transceive off")
+        XCTAssertFalse(written.contains { $0.hasPrefix("FE FE A4 E0 06") }, "the mode is the operator's unless asked")
+        await waitUntil { spy.states.last == .connected }
+        XCTAssertEqual(spy.states.last, .connected)
+        XCTAssertTrue(spy.errors.isEmpty)
+        link.close()
+        XCTAssertEqual(link.state, .disconnected)
+    }
+
+    func testSetRadioOnConnectPushesThePacketSetup() async {
+        let (link, transport, _, _) = makeLink(config(setsMode: true))
+        link.open()
+        await waitUntil { link.state == .connected }
+        let written = transport.written.map(hex)
+        XCTAssertTrue(written.contains("FE FE A4 E0 06 05 01 FD"), "FM, filter 1")
+        XCTAssertTrue(written.contains("FE FE A4 E0 1A 06 01 01 FD"), "data mode on")
+        XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 19 01 FD"), "DATA MOD = USB")
+        XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 11 00 FD"), "AF squelch open")
+        XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 25 00 FD"), "USB SEND off")
+        link.close()
+    }
+
+    func testTheWrongRadioFailsBeforeAudioIsTouched() async {
+        let (link, _, audio, spy) = makeLink(config(), responder: { _ in FakeCIVTransport.reply(0x19, 0x00, [0x94]) })
+        link.open()
+        await waitUntil { link.state == .failed }
+        await waitUntil { spy.states.last == .failed }
+        XCTAssertEqual(link.state, .failed)
+        XCTAssertEqual(spy.errors.count, 1)
+        XCTAssertTrue(spy.errors[0].contains("IC-7300"), spy.errors[0])
+        XCTAssertTrue(spy.errors[0].contains("expected IC-705"), spy.errors[0])
+        XCTAssertFalse(audio.isRunning, "no audio device grabbed for a radio that is not ours")
+        XCTAssertEqual(spy.states, [.connecting, .failed])
+    }
+
+    func testASilentPortFailsWithTheReason() async {
+        let (link, _, _, spy) = makeLink(config(), responder: { _ in nil })
+        link.open()
+        await waitUntil(3) { link.state == .failed }
+        await waitUntil { !spy.errors.isEmpty }
+        XCTAssertEqual(link.state, .failed)
+        XCTAssertEqual(spy.errors.first?.hasPrefix("Radio control failed:"), true)
+    }
+
+    func testNoPortMeansAudioOnly() async {
+        var c = config(ptt: .none)
+        c.civSerialPath = ""
+        let (link, transport, _, _) = makeLink(c)
+        link.open()
+        await waitUntil { link.state == .connected }
+        XCTAssertEqual(link.state, .connected)
+        XCTAssertNil(link.rigModel)
+        XCTAssertTrue(transport.written.isEmpty, "nothing to say to a radio we cannot reach")
+        XCTAssertEqual(link.endpointDescription, "Sound modem via USB Audio CODEC")
+        link.close()
+    }
+
+    // MARK: - The radio's own frequency
+
+    func testTheRadioTuningReachesTheStatusUnasked() async {
+        let (link, transport, _, _) = makeLink(config())
+        var seen: [Int?] = []
+        let lock = NSLock()
+        link.onRigStatus = { status in lock.withLock { seen.append(status.frequencyHz) } }
+        link.open()
+        await waitUntil { link.state == .connected }
+        // A transceive broadcast: to 00, from A4, command 00, the new frequency.
+        transport.inject([0xFE, 0xFE, 0x00, 0xA4, 0x00] + CIVBCD.frequencyBytes(hz: 145_010_000) + [0xFD])
+        await waitUntil { link.rigStatus.frequencyHz == 145_010_000 }
+        XCTAssertEqual(link.rigStatus.frequencyHz, 145_010_000)
+        XCTAssertEqual(lock.withLock { seen.last }, 145_010_000)
+        // And a mode broadcast.
+        transport.inject([0xFE, 0xFE, 0x00, 0xA4, 0x01, 0x01, 0x02, 0xFD])
+        await waitUntil { link.rigStatus.mode == .usb }
+        XCTAssertEqual(link.rigStatus.mode, .usb)
+        XCTAssertEqual(link.rigStatus.filter, 2)
+        link.close()
+    }
+
+    func testIdentifyOnTheLiveLinkAndOnAFreshPort() async throws {
+        let (link, _, _, _) = makeLink(config())
+        link.open()
+        await waitUntil { link.state == .connected }
+        let live = try await link.identifyRadio()
+        XCTAssertEqual(live, "IC-705 (A4) \u{b7} 144.390 MHz FM-D")
+        link.close()
+
+        let fresh = FakeCIVTransport()
+        fresh.responder = Self.ic705
+        let answer = try await ModemRadioLink.identifyRadio(config: config(), makeTransport: { _ in fresh })
+        XCTAssertEqual(answer, "IC-705 (A4) \u{b7} 144.390 MHz FM-D")
+        XCTAssertEqual(fresh.state, .closed, "a throwaway question closes its port")
+        XCTAssertEqual(fresh.written.first.map(hex), "FE FE A4 E0 19 00 FD")
+    }
+
+    // MARK: - Keying
+
+    func testATransmissionKeysAndUnkeysOverCIV() async throws {
+        let (link, transport, audio, _) = makeLink(config())
+        link.open()
+        await waitUntil { link.state == .connected }
+        let frame = AX25FrameBuilder.buildUI(from: AX25Address(call: "K0EPI", ssid: 5), to: AX25Address(call: "TEST"),
+                                             via: DigiPath(), pid: 0xF0, payload: Data("hi".utf8), displayInfo: "hi").encodeAX25()
+        let accepted = expectation(description: "accepted")
+        link.send(KISS.encodeFrame(payload: frame, port: 0)) { error in XCTAssertNil(error); accepted.fulfill() }
+        await fulfillment(of: [accepted], timeout: 2)
+
+        // Clock the modem: it asks for PTT, waits for the radio's OK, plays, unkeys.
+        audio.pump(blocks: 2)
+        await waitUntil { transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 01 FD") }
+        XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 1C 00 01 FD"), "PTT on")
+        await waitUntil { link.modem.telemetry.ptt }
+        for _ in 0..<40 where !transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 00 FD") {
+            audio.pump(blocks: 10)
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 1C 00 00 FD"), "PTT off")
+        XCTAssertEqual(decodeAll(audio.renderedOutput, sampleRate: 48_000), [frame])
+        link.close()
+    }
+
+    func testClosingWhileKeyedDropsPTT() async throws {
+        let (link, transport, audio, _) = makeLink(config())
+        link.open()
+        await waitUntil { link.state == .connected }
+        let frame = AX25FrameBuilder.buildUI(from: AX25Address(call: "K0EPI", ssid: 5), to: AX25Address(call: "TEST"),
+                                             via: DigiPath(), pid: 0xF0, payload: Data("long".utf8), displayInfo: "long").encodeAX25()
+        link.send(KISS.encodeFrame(payload: frame, port: 0)) { _ in }
+        audio.pump(blocks: 2)
+        await waitUntil { link.modem.telemetry.ptt }
+        XCTAssertTrue(link.modem.telemetry.ptt)
+        link.close()
+        await waitUntil { transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 00 FD") }
+        XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 1C 00 00 FD"), "never leave the radio keyed")
+    }
+}
+#endif
