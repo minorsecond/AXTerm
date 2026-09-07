@@ -90,9 +90,19 @@ nonisolated final class AFSKDemodulator {
         prefilter = FIRFilter(taps: FIRFilter.bandPass(
             sampleRate: demodSampleRate, lowHz: max(100, low - margin), highHz: high + margin + (shift < 300 ? 0 : 0),
             transitionHz: transition))
-        // Roughly one and a half bit periods of integration.
-        let integration = Int((1.5 * demodSampleRate / mode.baud).rounded())
-        let lpf = FIRFilter.lowPass(sampleRate: demodSampleRate, cutoffHz: mode.baud / 2, taps: integration | 1)
+        // Each detector mixes one tone to baseband; the other tone appears as
+        // a beat at the shift frequency. At 1200 bd (1000 Hz beat, 1200 bd
+        // data) a short integrator over a bit and a half is enough. At 300 bd
+        // the 200 Hz beat lies *below* the bit rate, so it takes a sharp
+        // lowpass — passband to about half the baud, stopband before the
+        // shift — to keep the two tones apart.
+        let lpf: [Float]
+        if shift < mode.baud {
+            lpf = FIRFilter.lowPass(sampleRate: demodSampleRate, cutoffHz: mode.baud * 0.45, transitionHz: shift * 0.3)
+        } else {
+            let integration = Int((1.5 * demodSampleRate / mode.baud).rounded())
+            lpf = FIRFilter.lowPass(sampleRate: demodSampleRate, cutoffHz: mode.baud / 2, taps: integration | 1)
+        }
         markDetector = QuadratureToneDetector(sampleRate: demodSampleRate, toneHz: mode.markHz, lowpassTaps: lpf)
         spaceDetector = QuadratureToneDetector(sampleRate: demodSampleRate, toneHz: mode.spaceHz, lowpassTaps: lpf)
 
