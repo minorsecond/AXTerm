@@ -349,11 +349,14 @@ nonisolated final class NetRomRouter {
         }
     }
 
-    func removeRoute(origin: String, destination: String, sourceType: String? = nil) {
+    func removeRoute(origin: String, destination: String, radio: RadioID? = nil, sourceType: String? = nil) {
         guard let normalizedDestination = normalize(destination) else { return }
         guard var bucket = routesByDestination[normalizedDestination] else { return }
         bucket.removeAll { route in
             guard route.origin == origin else { return false }
+            // A radio filter keeps one radio's stale route from taking the
+            // other radio's still-good route to the same origin with it.
+            if let radio, route.radioID != radio { return false }
             if let sourceType {
                 return route.sourceType == sourceType
             }

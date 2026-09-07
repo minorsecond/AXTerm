@@ -154,7 +154,7 @@ final class NetRomIntegration {
         if let broadcastResult = NetRomBroadcastParser.parse(packet: packet) {
             // Don't reinforce routing from retry/duplicate broadcasts.
             if classification != .retryOrDuplicate {
-                processNetRomBroadcast(broadcastResult, classification: classification)
+                processNetRomBroadcast(broadcastResult, classification: classification, radio: radio)
             }
             return // Don't double-process as regular packet
         }
@@ -201,7 +201,8 @@ final class NetRomIntegration {
     }
 
     /// Process a parsed NET/ROM broadcast, adding the sender as a neighbor and updating routes.
-    private func processNetRomBroadcast(_ result: NetRomBroadcastResult, classification: PacketClassification) {
+    private func processNetRomBroadcast(_ result: NetRomBroadcastResult, classification: PacketClassification,
+                                        radio: RadioID = .primary) {
         let normalizedOrigin = CallsignValidator.normalize(result.originCallsign)
         guard !normalizedOrigin.isEmpty else { return }
 
@@ -228,7 +229,11 @@ final class NetRomIntegration {
         }
 
         // First, ensure the broadcast sender is registered as a neighbor
-        // NET/ROM broadcasts are always direct (no digipeating), so the sender is a neighbor
+        // NET/ROM broadcasts are always direct (no digipeating), so the sender is a neighbor.
+        // Stamped with the radio that heard it, so the neighbour lands on the
+        // right radio — and so `broadcastRoutes`' neighbour lookup, keyed by
+        // (radio, origin), finds it and does not drop every route as "origin
+        // is not a neighbour".
         let syntheticPacket = Packet(
             timestamp: result.timestamp,
             from: AX25Address(call: normalizedOrigin),
@@ -240,14 +245,15 @@ final class NetRomIntegration {
             info: Data(),
             rawAx25: Data(),
             kissEndpoint: nil,
-            infoText: nil
+            infoText: nil,
+            radioID: radio
         )
 
         // Register as neighbor with high quality (broadcast reception implies good link)
         if shouldRefreshNeighbor(for: classification) {
             let observedQuality = linkQualityForNeighbor(normalizedOrigin)
             router.observePacket(syntheticPacket, observedQuality: max(observedQuality, 200), direction: .incoming, timestamp: result.timestamp)
-            router.markAsOfficial(call: normalizedOrigin)
+            router.markAsOfficial(call: normalizedOrigin, radio: radio)
         }
 
         // Convert broadcast entries to RouteInfo and feed to router
@@ -262,9 +268,11 @@ final class NetRomIntegration {
             )
         }
 
-        // Process the broadcast routes through the router
+        // Process the broadcast routes through the router, on the radio that
+        // heard the broadcast — its routes are reached through this radio.
         router.broadcastRoutes(
             from: normalizedOrigin,
+            radio: radio,
             quality: 255, // Broadcast sender quality - actual route quality is in each entry
             destinations: routeInfos,
             timestamp: result.timestamp
@@ -574,13 +582,18 @@ final class NetRomIntegration {
     ) {
         let refreshNeighbor = shouldRefreshNeighbor(for: classification)
         let refreshRoutes = shouldRefreshRoute(for: classification)
+        // The radio that heard this frame — its neighbours and routes are its
+        // own. `router.observePacket` reads it from the packet; the route
+        // refresh must be told, or it targets the primary radio's routes and
+        // silently no-ops on the radio that actually heard the origin.
+        let radio = packet.radioID ?? .primary
 
         if refreshNeighbor {
             router.observePacket(packet, observedQuality: observedQuality, direction: .incoming, timestamp: timestamp)
         }
 
         if refreshRoutes, let origin = packet.from?.display {
-            router.refreshRoutes(from: origin, timestamp: timestamp, allowedSourceTypes: allowedRouteSources)
+            router.refreshRoutes(from: origin, radio: radio, timestamp: timestamp, allowedSourceTypes: allowedRouteSources)
         }
     }
 

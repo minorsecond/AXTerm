@@ -56,12 +56,16 @@ final class NetRomPassiveInference {
         #endif
 
         let isRetry = duplicateStatus == .retryDuplicate || classification == .retryOrDuplicate
+        // The radio that heard this frame. Inferred neighbours and routes are
+        // its own — a station heard only on one radio is a neighbour on that
+        // radio, not on the primary.
+        let radio = packet.radioID ?? .primary
 
         // Case 1: Direct packet addressed to us (no via path)
         if packet.via.isEmpty && normalizedTo == localCallsign {
             guard classification.refreshesNeighbor else { return }
             router.observePacketInferred(
-                makeSyntheticPacket(call: normalizedFrom, timestamp: timestamp),
+                makeSyntheticPacket(call: normalizedFrom, radio: radio, timestamp: timestamp),
                 observedQuality: config.inferredBaseQuality,
                 direction: .incoming,
                 timestamp: timestamp
@@ -106,19 +110,19 @@ final class NetRomPassiveInference {
         let canInfer = weight > 0 && classification != .ackOnly
         if !canInfer {
             if classification == .retryOrDuplicate {
-                recordEvidence(destination: normalizedFrom, origin: nextHop, path: [nextHop, normalizedFrom], timestamp: timestamp, classification: classification, isRetry: true)
+                recordEvidence(destination: normalizedFrom, origin: nextHop, path: [nextHop, normalizedFrom], radio: radio, timestamp: timestamp, classification: classification, isRetry: true)
             }
             return
         }
 
         // Create inferred neighbor from the digipeater
-        simulateNeighborObservationInferred(nextHop: nextHop, timestamp: timestamp)
+        simulateNeighborObservationInferred(nextHop: nextHop, radio: radio, timestamp: timestamp)
 
         // Record route evidence using the path that actually repeated to us.
         // The path we follow to reach the destination is reverse(heardVia) + source.
         // Example: heard VIA W0TX, W0ARP (repeated) => connect path [W0ARP, W0TX, SRC].
         let fullPath = heardViaNormalized.reversed() + [normalizedFrom]
-        recordEvidence(destination: normalizedFrom, origin: nextHop, path: fullPath, timestamp: timestamp, classification: classification, isRetry: isRetry)
+        recordEvidence(destination: normalizedFrom, origin: nextHop, path: fullPath, radio: radio, timestamp: timestamp, classification: classification, isRetry: isRetry)
     }
 
     func purgeStaleEvidence(currentDate: Date) {
@@ -157,10 +161,12 @@ final class NetRomPassiveInference {
 
     // MARK: - Helpers
 
-    private func recordEvidence(destination: String, origin: String, path: [String], timestamp: Date, classification: PacketClassification, isRetry: Bool) {
+    private func recordEvidence(destination: String, origin: String, path: [String], radio: RadioID, timestamp: Date, classification: PacketClassification, isRetry: Bool) {
         var bucket = evidenceByDestination[destination] ?? []
 
-        if let index = bucket.firstIndex(where: { $0.origin == origin }) {
+        // Evidence is per (origin, radio): the same next hop reached on two
+        // radios is two ways in, not one — a different antenna and path.
+        if let index = bucket.firstIndex(where: { $0.origin == origin && $0.radio == radio }) {
             bucket[index].path = path
             bucket[index].refresh(timestamp: timestamp, classification: classification, config: config, isRetry: isRetry)
         } else {
@@ -168,7 +174,7 @@ final class NetRomPassiveInference {
                 return
             }
             let initialScore = config.weight(for: classification)
-            bucket.append(NetRomRouteEvidence(destination: destination, origin: origin, path: path, lastObserved: timestamp, reinforcementScore: initialScore))
+            bucket.append(NetRomRouteEvidence(destination: destination, origin: origin, path: path, lastObserved: timestamp, reinforcementScore: initialScore, radio: radio))
         }
 
         bucket.sort { $0.advertisedQuality(using: config) > $1.advertisedQuality(using: config) }
@@ -192,23 +198,33 @@ final class NetRomPassiveInference {
             guard advertisedQuality >= config.inferredMinimumQuality else { continue }
             router.broadcastRoutes(
                 from: evidence.origin,
+                radio: evidence.radio,
                 quality: advertisedQuality,
                 destinations: [
-                    RouteInfo(destination: evidence.destination, origin: evidence.origin, quality: advertisedQuality, path: evidence.path, lastUpdated: timestamp, sourceType: "inferred")
+                    RouteInfo(destination: evidence.destination, origin: evidence.origin, quality: advertisedQuality, path: evidence.path, lastUpdated: timestamp, sourceType: "inferred", radioID: evidence.radio)
                 ],
                 timestamp: timestamp
             )
         }
 
-        // Keep inferred routes in router aligned to active evidence so stale origins
-        // do not continue to appear after stronger candidates take over.
-        let activeOrigins = Set(bucket.map(\.origin))
-        let staleOrigins = router.currentRoutes()
-            .filter { $0.destination == destination && $0.sourceType == "inferred" && !activeOrigins.contains($0.origin) }
-            .map(\.origin)
-        for origin in staleOrigins {
-            router.removeRoute(origin: origin, destination: destination, sourceType: "inferred")
+        // Keep inferred routes in router aligned to active evidence so stale
+        // (origin, radio) pairs do not linger after stronger candidates take
+        // over. Keyed by both, so dropping one radio's stale route never sweeps
+        // away the other radio's still-good route to the same origin.
+        let active = Set(bucket.map { EvidenceRoute(origin: $0.origin, radio: $0.radio) })
+        let stale = router.currentRoutes()
+            .filter { $0.destination == destination && $0.sourceType == "inferred"
+                && !active.contains(EvidenceRoute(origin: $0.origin, radio: $0.radioID)) }
+        for route in stale {
+            router.removeRoute(origin: route.origin, destination: destination, radio: route.radioID, sourceType: "inferred")
         }
+    }
+
+    /// An (origin, radio) pair — the identity of an inferred route candidate,
+    /// so stale-cleanup distinguishes the same next hop on two radios.
+    private struct EvidenceRoute: Hashable {
+        let origin: String
+        let radio: RadioID
     }
 
     private func simulateNeighborObservation(nextHop: String, timestamp: Date) {
@@ -236,7 +252,7 @@ final class NetRomPassiveInference {
         )
     }
 
-    private func simulateNeighborObservationInferred(nextHop: String, timestamp: Date) {
+    private func simulateNeighborObservationInferred(nextHop: String, radio: RadioID, timestamp: Date) {
         let neighborAddress = AX25Address(call: nextHop)
         let localAddress = AX25Address(call: localCallsign)
         guard !neighborAddress.call.isEmpty, !localAddress.call.isEmpty else { return }
@@ -251,7 +267,8 @@ final class NetRomPassiveInference {
             info: Data(),
             rawAx25: Data(),
             kissEndpoint: nil,
-            infoText: "INFER"
+            infoText: "INFER",
+            radioID: radio
         )
         router.observePacketInferred(
             synthetic,
@@ -261,7 +278,7 @@ final class NetRomPassiveInference {
         )
     }
 
-    private func makeSyntheticPacket(call: String, timestamp: Date) -> Packet {
+    private func makeSyntheticPacket(call: String, radio: RadioID, timestamp: Date) -> Packet {
         let from = AX25Address(call: call)
         let to = AX25Address(call: localCallsign)
         guard !from.call.isEmpty, !to.call.isEmpty else {
@@ -278,7 +295,8 @@ final class NetRomPassiveInference {
             info: Data(),
             rawAx25: Data(),
             kissEndpoint: nil,
-            infoText: "INFER"
+            infoText: "INFER",
+            radioID: radio
         )
     }
 
