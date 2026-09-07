@@ -133,6 +133,7 @@ struct AnalyticsDashboardView: View {
         .onAppear {
             viewModel.trackDashboardOpened()
             viewModel.updatePackets(packetEngine.packets)
+            pushRadioContext()
             syncPreferredGraphModes(with: viewModel.graphViewMode)
             Task { @MainActor in
                 viewModel.setActive(true)
@@ -143,6 +144,13 @@ struct AnalyticsDashboardView: View {
         }
         .onReceive(packetEngine.$packets) { packets in
             viewModel.updatePackets(packets)
+            // A frequency read from the rig or a radio connecting arrives
+            // alongside traffic; refresh the channels here too. Cheap: a no-op
+            // when nothing changed.
+            pushRadioContext()
+        }
+        .onReceive(packetEngine.$hiddenRadioIDs) { _ in
+            pushRadioContext()
         }
         .onChange(of: viewModel.viewState.selectedNodeID) { _, newValue in
             packetEngine.selectedStationCall = newValue
@@ -158,6 +166,20 @@ struct AnalyticsDashboardView: View {
             endpointSimulationSet = endpointSimulationSet.intersection(normalized)
             temporarilyUnignoredEndpoints.subtract(normalized)
         }
+    }
+
+    /// Pushes the current frequency channels and hidden-radio set into the
+    /// view model, so analytics can scope to a channel and drop hidden radios.
+    /// Frequencies come from the rig where it reports them, else the radio's
+    /// stored frequency; radios with neither are each their own channel.
+    private func pushRadioContext() {
+        let radios = packetEngine.radioSummaries.map {
+            AnalyticsRadioChannel.Radio(id: $0.id, name: $0.name, frequencyHz: $0.frequencyHz)
+        }
+        let hidden = packetEngine.hiddenRadioIDs
+        viewModel.updateRadioContext(
+            channels: AnalyticsRadioChannel.channels(radios: radios, hidden: hidden),
+            hidden: hidden)
     }
 
     @ViewBuilder
@@ -262,6 +284,24 @@ struct AnalyticsDashboardView: View {
                 .pickerStyle(.segmented)
                 .fixedSize()
                 .controlSize(.small)
+
+                // Only when there is more than one channel to choose between —
+                // one radio, or several sharing a frequency, needs no picker.
+                if viewModel.radioChannels.count > 1 {
+                    Picker("Channel", selection: $viewModel.selectedRadioScope) {
+                        Text("All radios").tag(AnalyticsRadioScope.all)
+                        ForEach(viewModel.radioChannels) { channel in
+                            Text(channel.label).tag(AnalyticsRadioScope.channel(channel.id))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    .controlSize(.small)
+                    .help("Scope analytics to one frequency. Radios on the same "
+                          + "frequency roll up into one channel; different "
+                          + "frequencies stay separate, so their neighbours, "
+                          + "routes and link quality are never averaged together.")
+                }
 
                 Toggle("Auto-update", isOn: $viewModel.autoUpdateEnabled)
                     .toggleStyle(.switch)

@@ -107,6 +107,25 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
+    /// The frequency channels the operator can scope analytics to, and the
+    /// hidden-radio set, pushed in from the packet engine. With one channel
+    /// and nothing hidden the picker is not shown and scoping is a no-op.
+    @Published private(set) var radioChannels: [AnalyticsRadioChannel] = []
+    private var hiddenRadioIDs: Set<RadioID> = []
+
+    /// Which channel analytics is scoped to. `.all` pools every visible radio
+    /// (same-frequency copies already folded at ingest); a specific channel
+    /// keeps neighbours, routes, quality, coverage and the graph to one
+    /// frequency so different-frequency populations are never averaged.
+    @Published var selectedRadioScope: AnalyticsRadioScope = .all {
+        didSet {
+            guard selectedRadioScope != oldValue else { return }
+            trackFilterChange(reason: "radioScope")
+            scheduleAggregation(reason: "radioScope")
+            scheduleGraphBuild(reason: "radioScope")
+        }
+    }
+
     /// Station identity mode for SSID grouping in the network graph.
     /// When `.station`, ANH, ANH-1, ANH-15 all map to a single "ANH" node.
     /// When `.ssid`, each SSID gets its own node.
@@ -371,6 +390,40 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.packets = packets
         guard isActive else { return }
         packetSubject.send(packets)
+    }
+
+    /// Pushes the current radio channels and hidden set in from the packet
+    /// engine. Called whenever radios connect, a frequency is read from the
+    /// rig, or the operator toggles a radio's visibility. A selection whose
+    /// channel has disappeared falls back to "All radios" so the page never
+    /// shows an empty scope. Recomputes only when something actually changed.
+    func updateRadioContext(channels: [AnalyticsRadioChannel], hidden: Set<RadioID>) {
+        let channelsChanged = channels != radioChannels
+        let hiddenChanged = hidden != hiddenRadioIDs
+        guard channelsChanged || hiddenChanged else { return }
+
+        radioChannels = channels
+        hiddenRadioIDs = hidden
+
+        // Drop a stale selection before any recompute, so the picker and the
+        // scoped data agree in the same pass.
+        if case .channel(let id) = selectedRadioScope,
+           !channels.contains(where: { $0.id == id }) {
+            selectedRadioScope = .all   // its didSet schedules the recompute
+        } else {
+            scheduleAggregation(reason: "radioContext")
+            scheduleGraphBuild(reason: "radioContext")
+        }
+    }
+
+    /// The packets after the radio scope — hidden radios removed, and, when a
+    /// channel is selected, narrowed to it. Every metric reads through this,
+    /// so scoping the input scopes the whole page without touching a compute
+    /// path.
+    private func scoped(_ packets: [Packet]) -> [Packet] {
+        AnalyticsRadioFilter.apply(
+            packets, scope: selectedRadioScope,
+            channels: radioChannels, hidden: hiddenRadioIDs)
     }
 
     /// Precomputes analytics caches while the dashboard is not visible, so first open is fast.
@@ -1276,13 +1329,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let range = currentDateRange(now: now)
         // Half-open [start, end) to match the SQLite path's `receivedAt >= ? AND < ?`;
         // DateInterval.contains is closed and would admit a packet stamped exactly at end.
-        return packets.filter { $0.timestamp >= range.start && $0.timestamp < range.end }
+        return scoped(packets.filter { $0.timestamp >= range.start && $0.timestamp < range.end })
     }
 
     private func timeframePacketSnapshot(now: Date) async -> [Packet] {
         let range = currentDateRange(now: now)
         if let providerPackets = await timeframePacketsProvider?(range) {
-            return providerPackets
+            // The database provider does not know the radio scope; apply it to
+            // its result so both packet sources honour the same filter.
+            return scoped(providerPackets)
         }
         return filteredPackets(now: now)
     }
@@ -1570,7 +1625,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         // Only timeframe, includeViaDigipeaters toggle, and time passing affect the score.
         let health = NetworkHealthCalculator.calculate(
             timeframePackets: timeframePackets,
-            allRecentPackets: packets,
+            allRecentPackets: scoped(packets),
             timeframeDisplayName: timeframe.displayName,
             includeViaDigipeaters: includeViaDigipeaters,
             stationIdentityMode: stationIdentityMode,
@@ -1593,7 +1648,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// Returns IDs of stations active in the last 10 minutes
     func activeNodeIDs() -> Set<String> {
         let recentCutoff = Date().addingTimeInterval(-600) // 10 minutes
-        let recentPackets = packets.filter { $0.timestamp >= recentCutoff }
+        let recentPackets = scoped(packets).filter { $0.timestamp >= recentCutoff }
         // Node IDs are identity keys ("W1ABC-7" in SSID mode, "W1ABC" in station
         // mode). Matching on the bare base call selected nothing in SSID mode.
         var activeKeys: Set<String> = []

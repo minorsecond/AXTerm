@@ -689,6 +689,104 @@ private extension AnalyticsDashboardViewModelTests {
         )) ?? Date(timeIntervalSince1970: 0)
     }
 
+    func testScopingToAChannelNarrowsTheAggregatedData() async {
+        let base = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let a = RadioID(rawValue: "a")   // 144.390
+        let b = RadioID(rawValue: "b")   // 145.050
+        func radioPacket(_ offset: TimeInterval, from: String, radio: RadioID) -> Packet {
+            Packet(timestamp: base.addingTimeInterval(offset),
+                   from: AX25Address(call: from), to: AX25Address(call: "CQ"),
+                   frameType: .ui, control: 0x03, rawAx25: Data([0x01]), radioID: radio)
+        }
+        let packets = [
+            radioPacket(0, from: "AAA", radio: a),
+            radioPacket(60, from: "BBB", radio: a),
+            radioPacket(120, from: "CCC", radio: b),
+        ]
+
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings, calendar: calendar,
+            packetDebounce: 0, graphDebounce: 0, packetScheduler: .main)
+        viewModel.setActive(true)
+        viewModel.customRangeStart = base.addingTimeInterval(-60)
+        viewModel.customRangeEnd = base.addingTimeInterval(600)
+
+        viewModel.updateRadioContext(
+            channels: AnalyticsRadioChannel.channels(
+                radios: [
+                    .init(id: a, name: "APRS", frequencyHz: 144_390_000),
+                    .init(id: b, name: "Packet", frequencyHz: 145_050_000),
+                ], hidden: []),
+            hidden: [])
+        viewModel.updatePackets(packets)
+
+        func seriesTotal() -> Int {
+            viewModel.viewState.series.packetsPerBucket.reduce(0) { $0 + $1.value }
+        }
+
+        await waitFor { seriesTotal() == 3 }
+        XCTAssertEqual(seriesTotal(), 3, "all radios: every packet")
+
+        // Scope to the 145.050 channel — only radio b's one packet remains.
+        viewModel.selectedRadioScope = .channel("freq:145050000")
+        await waitFor { seriesTotal() == 1 }
+        XCTAssertEqual(seriesTotal(), 1, "one channel: only its radio's traffic")
+
+        // Back to all.
+        viewModel.selectedRadioScope = .all
+        await waitFor { seriesTotal() == 3 }
+        XCTAssertEqual(seriesTotal(), 3)
+    }
+
+    func testHidingARadioRemovesItsTrafficFromAnalytics() async {
+        let base = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let a = RadioID(rawValue: "a")
+        let b = RadioID(rawValue: "b")
+        func radioPacket(_ offset: TimeInterval, radio: RadioID) -> Packet {
+            Packet(timestamp: base.addingTimeInterval(offset),
+                   from: AX25Address(call: "K0NTS"), to: AX25Address(call: "CQ"),
+                   frameType: .ui, control: 0x03, rawAx25: Data([0x01]), radioID: radio)
+        }
+        let packets = [radioPacket(0, radio: a), radioPacket(60, radio: b)]
+
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings, calendar: calendar,
+            packetDebounce: 0, graphDebounce: 0, packetScheduler: .main)
+        viewModel.setActive(true)
+        viewModel.customRangeStart = base.addingTimeInterval(-60)
+        viewModel.customRangeEnd = base.addingTimeInterval(600)
+        viewModel.updatePackets(packets)
+
+        func seriesTotal() -> Int {
+            viewModel.viewState.series.packetsPerBucket.reduce(0) { $0 + $1.value }
+        }
+        await waitFor { seriesTotal() == 2 }
+
+        // Hide radio b — the analytics page must drop its packet, like the map
+        // and the packets table already do.
+        viewModel.updateRadioContext(
+            channels: AnalyticsRadioChannel.channels(
+                radios: [
+                    .init(id: a, name: "APRS", frequencyHz: 144_390_000),
+                    .init(id: b, name: "Packet", frequencyHz: 145_050_000),
+                ], hidden: [b]),
+            hidden: [b])
+        await waitFor { seriesTotal() == 1 }
+        XCTAssertEqual(seriesTotal(), 1, "hidden radio's traffic is excluded")
+    }
+
     func makePacket(
         timestamp: Date,
         from: String? = nil,
