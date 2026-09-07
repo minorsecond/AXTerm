@@ -33,6 +33,25 @@ nonisolated struct StationTracker {
         }
     }
 
+    /// Attach an APRS position from this packet, if it carries one. A fix is
+    /// added to the trail only when the station has actually moved, so a fixed
+    /// station beaconing every few minutes does not grow an endless track.
+    static func applyAPRS(_ station: inout Station, packet: Packet) {
+        guard !packet.info.isEmpty,
+              let report = APRSParser.parse(destination: packet.to?.call ?? "", info: packet.info)
+        else { return }
+        station.aprs = report
+        let fix = Station.APRSFix(latitude: report.latitude, longitude: report.longitude,
+                                  timestamp: packet.timestamp)
+        if let last = station.track.last,
+           abs(last.latitude - fix.latitude) < 1e-5, abs(last.longitude - fix.longitude) < 1e-5 {
+            station.track[station.track.count - 1].timestamp = fix.timestamp
+        } else {
+            station.track.append(fix)
+            if station.track.count > 30 { station.track.removeFirst(station.track.count - 30) }
+        }
+    }
+
     mutating func update(with packet: Packet) {
         guard let from = packet.from else { return }
         let call = from.display
@@ -49,6 +68,7 @@ nonisolated struct StationTracker {
             // via-digi while the session correctly said direct).
             stations[index].lastVia = via
             Self.note(&stations[index], radio: radio, at: packet.timestamp, via: via)
+            Self.applyAPRS(&stations[index], packet: packet)
         } else {
             var station = Station(
                 call: call,
@@ -57,6 +77,7 @@ nonisolated struct StationTracker {
                 lastVia: via
             )
             Self.note(&station, radio: radio, at: packet.timestamp, via: via)
+            Self.applyAPRS(&station, packet: packet)
             stations.append(station)
             stationIndex[call] = stations.count - 1
         }

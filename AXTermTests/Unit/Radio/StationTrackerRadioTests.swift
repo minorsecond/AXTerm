@@ -28,6 +28,31 @@ final class StationTrackerRadioTests: XCTestCase {
         XCTAssertEqual(station.heardOn, [a, b], "most recently heard first")
     }
 
+    /// An APRS position packet places the station and grows a movement trail
+    /// only when it actually moves.
+    func testAnAPRSPositionPlacesTheStationAndTracksMovement() {
+        func pos(_ info: String, at: TimeInterval) -> Packet {
+            Packet(timestamp: Date(timeIntervalSince1970: at),
+                   from: AX25Address(call: "W0OOD", ssid: 2), to: AX25Address(call: "APRS"),
+                   via: [], frameType: .ui, control: 0x03, info: Data(info.utf8),
+                   rawAx25: Data([0x01]), radioID: a)
+        }
+        var tracker = StationTracker()
+        tracker.update(with: pos("!3933.48N/10447.65W#digi", at: 10))
+        let placed = tracker.stations.first { $0.call == "W0OOD-2" }!
+        XCTAssertEqual(placed.aprs?.symbolCode, "#")
+        XCTAssertEqual(placed.aprs?.latitude ?? 0, 39.558, accuracy: 0.001)
+        XCTAssertEqual(placed.track.count, 1)
+
+        // Same position again → the trail does not grow.
+        tracker.update(with: pos("!3933.48N/10447.65W#digi", at: 20))
+        XCTAssertEqual(tracker.stations.first { $0.call == "W0OOD-2" }!.track.count, 1)
+
+        // Moved → a new fix.
+        tracker.update(with: pos("!3934.00N/10448.00W#digi", at: 30))
+        XCTAssertEqual(tracker.stations.first { $0.call == "W0OOD-2" }!.track.count, 2)
+    }
+
     /// Frames from before radios existed belong to the primary.
     func testAPacketWithNoRadioIsHeardOnThePrimary() {
         var tracker = StationTracker()

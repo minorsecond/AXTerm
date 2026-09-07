@@ -101,6 +101,20 @@ nonisolated enum HeardStationMap {
             let record = directory[base]
             let grid = gatewayGrids[call]
 
+            // The station's own APRS position, beaconed over the air, is the
+            // most authoritative placement there is: it is about this station,
+            // and it is exact. It outranks every registry and locator below.
+            if let aprs = station.aprs {
+                return Entry(
+                    callsign: call, heardCount: station.heardCount,
+                    lastHeard: station.lastHeard, lastVia: station.lastVia,
+                    position: GreatCircle.Point(latitude: aprs.latitude, longitude: aprs.longitude),
+                    positionSource: "APRS position (heard over the air)",
+                    confidence: .exact,
+                    gridSquare: record?.gridSquare?.uppercased(),
+                    name: record?.name, locality: record?.locality)
+            }
+
             // Precision and identity are different questions. A licence
             // address is exact but describes the *licensee*; an RMS grid
             // describes the *gateway* that registered it. So an exact

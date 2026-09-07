@@ -2,7 +2,7 @@ import Foundation
 
 /// A decoded APRS position from a heard packet — where a station says it is,
 /// with its symbol and optional motion. Pure output of `APRSParser`.
-struct APRSReport: Equatable, Sendable {
+struct APRSReport: Equatable, Hashable, Sendable {
     enum Kind: String, Sendable { case uncompressed, compressed, micE }
 
     var latitude: Double

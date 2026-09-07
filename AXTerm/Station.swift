@@ -41,6 +41,19 @@ nonisolated struct Station: Identifiable, Hashable {
         perRadio.sorted { $0.value.lastHeard > $1.value.lastHeard }.map(\.key)
     }
 
+    /// The station's most recent APRS position report, when it has beaconed
+    /// one — authoritative over a callsign lookup for where to place it.
+    var aprs: APRSReport?
+    /// A bounded trail of recent APRS fixes (oldest → newest) for drawing a
+    /// movement track. Only positions that actually moved are kept.
+    var track: [APRSFix] = []
+
+    struct APRSFix: Hashable, Sendable {
+        var latitude: Double
+        var longitude: Double
+        var timestamp: Date
+    }
+
     var id: String { call }
 
     init(call: String, lastHeard: Date? = nil, heardCount: Int = 0, lastVia: [String] = []) {
