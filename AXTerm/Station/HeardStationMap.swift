@@ -66,8 +66,36 @@ nonisolated enum HeardStationMap {
         /// the licence the network's tactical name resolves to.
         var nodeCallsign: String?
 
+        /// Which kind of point `position` is: the station's own transmitted
+        /// APRS fix, or a licence/registry/locator lookup about the callsign.
+        /// Drives the map symbology — only a transmitted fix wears the
+        /// station's APRS symbol.
+        var origin: PositionOrigin = .unplaced
+
         var id: String { callsign }
         var isPlaced: Bool { position != nil }
+    }
+
+    /// Where a placed station's point came from.
+    nonisolated enum PositionOrigin: Sendable, Equatable {
+        /// The station's own APRS position, beaconed over the air.
+        case transmittedAPRS
+        /// A lookup about the callsign — licence address, RMS grid, or a
+        /// locator the station announced. Not a live fix.
+        case licenceOrGrid
+        /// No position at all.
+        case unplaced
+    }
+
+    /// Which point to show when a station has both a transmitted fix and a
+    /// licence/registry lookup. The operator chooses on the Map page.
+    nonisolated enum PositionPreference: String, Sendable, CaseIterable {
+        /// The station's own transmitted APRS fix wins (the default): it is
+        /// about this station and it is exact.
+        case transmitted
+        /// The licence/registry point wins — where the callsign is licensed,
+        /// rather than where it last beaconed from.
+        case licence
     }
 
     /// Heard within this long counts as active.
@@ -91,6 +119,7 @@ nonisolated enum HeardStationMap {
                         directory: [String: CallsignRecord],
                         gatewayGrids: [String: String],
                         announcedGrids: [String: String] = [:],
+                        preference: PositionPreference = .transmitted,
                         excluding ownCallsign: String = "") -> [Entry] {
         let own = CallsignQuery.normalize(ownCallsign)
         return stations.filter {
@@ -101,20 +130,58 @@ nonisolated enum HeardStationMap {
             let record = directory[base]
             let grid = gatewayGrids[call]
 
-            // The station's own APRS position, beaconed over the air, is the
-            // most authoritative placement there is: it is about this station,
-            // and it is exact. It outranks every registry and locator below.
-            if let aprs = station.aprs {
-                return Entry(
+            // The station's own APRS position, beaconed over the air: about
+            // this station, and exact.
+            let aprsEntry: Entry? = station.aprs.map { aprs in
+                Entry(
                     callsign: call, heardCount: station.heardCount,
                     lastHeard: station.lastHeard, lastVia: station.lastVia,
                     position: GreatCircle.Point(latitude: aprs.latitude, longitude: aprs.longitude),
                     positionSource: "APRS position (heard over the air)",
                     confidence: .exact,
                     gridSquare: record?.gridSquare?.uppercased(),
-                    name: record?.name, locality: record?.locality)
+                    name: record?.name, locality: record?.locality,
+                    origin: .transmittedAPRS)
             }
+            // The licence/registry/locator lookups — a point about the callsign.
+            let derived = derivedEntry(
+                call: call, station: station, record: record,
+                grid: grid, announcedGrid: announcedGrids[call])
 
+            // Choose which to show. Transmitted wins by default; the operator
+            // can prefer the licence point, which falls back to the
+            // transmitted fix only when no lookup placed the station.
+            switch preference {
+            case .transmitted:
+                return aprsEntry ?? derived
+            case .licence:
+                return derived.isPlaced ? derived : (aprsEntry ?? derived)
+            }
+        }
+        // Most recently heard first; ties by callsign so the order is
+        // stable between redraws.
+        .sorted {
+            ($0.lastHeard ?? .distantPast, $1.callsign) > ($1.lastHeard ?? .distantPast, $0.callsign)
+        }
+    }
+
+    /// The best licence/registry/locator placement for a station — everything
+    /// except its own transmitted APRS fix. Returns an unplaced entry when
+    /// nothing locates the callsign.
+    private static func derivedEntry(call: String, station: Station,
+                                     record: CallsignRecord?, grid: String?,
+                                     announcedGrid: String?) -> Entry {
+        func entry(position: GreatCircle.Point?, positionSource: String?,
+                   confidence: PositionConfidence, gridSquare: String?) -> Entry {
+            Entry(
+                callsign: call, heardCount: station.heardCount,
+                lastHeard: station.lastHeard, lastVia: station.lastVia,
+                position: position, positionSource: positionSource,
+                confidence: confidence, gridSquare: gridSquare,
+                name: record?.name, locality: record?.locality,
+                origin: position == nil ? .unplaced : .licenceOrGrid)
+        }
+        do {
             // Precision and identity are different questions. A licence
             // address is exact but describes the *licensee*; an RMS grid
             // describes the *gateway* that registered it. So an exact
@@ -131,36 +198,27 @@ nonisolated enum HeardStationMap {
 
             if let exact, let grid, !gridContains(grid, exact) {
                 // The two sources put this station in different places.
-                return Entry(
-                    callsign: call, heardCount: station.heardCount,
-                    lastHeard: station.lastHeard, lastVia: station.lastVia,
+                return entry(
                     position: Maidenhead.center(of: grid).map(GreatCircle.Point.init),
                     positionSource: "RMS directory grid square (disagrees with \(record?.source ?? "the licence address"), which is elsewhere)",
                     confidence: .gridSquare,
-                    gridSquare: grid.uppercased(),
-                    name: record?.name, locality: record?.locality)
+                    gridSquare: grid.uppercased())
             }
             if let exact, let record {
-                return Entry(
-                    callsign: call, heardCount: station.heardCount,
-                    lastHeard: station.lastHeard, lastVia: station.lastVia,
+                return entry(
                     position: exact,
                     positionSource: grid == nil
                         ? "\(record.source) licence address"
                         : "\(record.source) licence address, inside the registered grid \(grid!.uppercased())",
                     confidence: .exact,
-                    gridSquare: (grid ?? record.gridSquare)?.uppercased(),
-                    name: record.name, locality: record.locality)
+                    gridSquare: (grid ?? record.gridSquare)?.uppercased())
             }
             if let grid, let center = Maidenhead.center(of: grid) {
-                return Entry(
-                    callsign: call, heardCount: station.heardCount,
-                    lastHeard: station.lastHeard, lastVia: station.lastVia,
+                return entry(
                     position: GreatCircle.Point(center),
                     positionSource: "RMS directory grid square",
                     confidence: .gridSquare,
-                    gridSquare: grid.uppercased(),
-                    name: record?.name, locality: record?.locality)
+                    gridSquare: grid.uppercased())
             }
             // The station's own beacon, when it carried a locator. This is
             // the placement most of the world gets — no directory covers
@@ -168,36 +226,23 @@ nonisolated enum HeardStationMap {
             // the registries above (both are vetted claims about the same
             // station), above the licensee fallbacks below (which describe
             // the operator, not the station).
-            if let announced = announcedGrids[call],
+            if let announced = announcedGrid,
                let center = Maidenhead.center(of: announced) {
-                return Entry(
-                    callsign: call, heardCount: station.heardCount,
-                    lastHeard: station.lastHeard, lastVia: station.lastVia,
+                return entry(
                     position: GreatCircle.Point(center),
                     positionSource: "locator announced in its own beacon",
                     confidence: .gridSquare,
-                    gridSquare: announced.uppercased(),
-                    name: record?.name, locality: record?.locality)
+                    gridSquare: announced.uppercased())
             }
             if let record, let position = record.position {
-                return Entry(
-                    callsign: call, heardCount: station.heardCount,
-                    lastHeard: station.lastHeard, lastVia: station.lastVia,
+                return entry(
                     position: position,
                     positionSource: "\(record.source) grid square",
                     confidence: .gridSquare,
-                    gridSquare: record.gridSquare?.uppercased(),
-                    name: record.name, locality: record.locality)
+                    gridSquare: record.gridSquare?.uppercased())
             }
-            return Entry(
-                callsign: call, heardCount: station.heardCount,
-                lastHeard: station.lastHeard, lastVia: station.lastVia,
-                name: record?.name, locality: record?.locality)
-        }
-        // Most recently heard first; ties by callsign so the order is
-        // stable between redraws.
-        .sorted {
-            ($0.lastHeard ?? .distantPast, $1.callsign) > ($1.lastHeard ?? .distantPast, $0.callsign)
+            return entry(position: nil, positionSource: nil,
+                         confidence: .gridSquare, gridSquare: nil)
         }
     }
 

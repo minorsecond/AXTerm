@@ -27,9 +27,22 @@ struct MapLayerRows: View {
     @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = false
     @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = true
     @AppStorage("stations.hidesDistantStations") private var hidesDistantStations = false
+    @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = true
 
     var body: some View {
         Section("Layers") {
+            layer("Transmitted Positions", "dot.radiowaves.up.forward",
+                  isOn: $prefersTransmittedPosition,
+                  caption: prefersTransmittedPosition
+                      ? "APRS fix where a station beacons one"
+                      : "Licence / registry address",
+                  help: "On: place a station at the position it beaconed over the air, and draw "
+                      + "its APRS symbol on the marker. Off: place it at its licence or registry "
+                      + "address instead, as a plain dot. Only stations that have both a "
+                      + "transmitted fix and a lookup are affected \u{2014} the marker's symbol "
+                      + "shows which point you are seeing: a symbol means the live fix, a plain "
+                      + "dot means the address.")
+
             layer("Observed Paths", "point.topleft.down.to.point.bottomright.curvepath",
                   isOn: $showsPaths,
                   help: "Paths observed between stations. Colour is evidence: green completed a "

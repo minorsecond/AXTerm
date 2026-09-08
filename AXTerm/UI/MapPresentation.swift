@@ -161,6 +161,10 @@ struct MapLegend: View {
     /// True when the node directory layer is drawn, so the diamond shape
     /// is explained where the colours are.
     var showsNodes = false
+    /// True when at least one station is placed at its own transmitted APRS
+    /// fix, so the key explains that a symbol marks a beaconed position and a
+    /// plain dot marks a looked-up address.
+    var showsPositionSource = false
     /// Collapses the whole key, not one line of it.
     ///
     /// The disclosure used to hide only the footnote — every swatch stayed
@@ -228,6 +232,21 @@ struct MapLegend: View {
                 Spacer(minLength: 0)
             }
             .help("A hollow marker is a lead, not a fix: the position comes from a different entity than the thing shown \u{2014} typically a NET/ROM node placed at its operator's licence address. Nodes usually sit on a hilltop or a repeater site, not at the operator's house.")
+
+            if showsPositionSource {
+                HStack(spacing: 5) {
+                    Image(systemName: "car.fill")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 8, height: 8)
+                        .background(Circle().fill(Color.green))
+                    Text("Beaconed position \u{b7} plain dot = looked-up address")
+                        .font(.caption2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .help("A station drawn with its APRS symbol is at the position it beaconed over the air \u{2014} a live fix. A plain coloured dot is placed from a lookup about the callsign (licence address, registry grid), not from a transmitted position. Toggle which one is shown under Layers \u{2192} Transmitted Positions.")
+            }
 
             if showsNodes {
                 HStack(spacing: 5) {

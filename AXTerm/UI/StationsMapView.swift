@@ -97,6 +97,14 @@ struct StationsMapView: View {
     /// draw only when at least one station has answered us directly, and
     /// knowing one's own footprint is half of why a coverage map exists.
     @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = true
+    /// Whether to place a station at its own transmitted APRS fix (on) or at
+    /// its licence/registry point (off). Only matters for stations that have
+    /// both; the default prefers the station's own beacon.
+    @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = true
+
+    private var positionPreference: HeardStationMap.PositionPreference {
+        prefersTransmittedPosition ? .transmitted : .licence
+    }
     @StateObject private var insights = NetworkInsightModel()
     /// Stored elevation grids. Terrain forecasts read this and nothing else,
     /// so the feature works with the network down, and is honestly
@@ -306,6 +314,7 @@ struct StationsMapView: View {
             directory: lookup.records,
             gatewayGrids: gatewayGrids,
             announcedGrids: announcedGrids,
+            preference: positionPreference,
             excluding: myCallsign)
         // Aliases used in via paths, placed through their operator.
         // Appended rather than merged: a node is its own thing, and its
@@ -394,6 +403,8 @@ struct StationsMapView: View {
             + "\(hidesDistantStations)|\(myCallsign)|\(observerGrid)|\(bucket)"
             // The resolved origin, or a fix arriving would not redraw.
             + "|\(observer?.latitude ?? 0),\(observer?.longitude ?? 0)"
+            // Flipping the position-source toggle must re-derive placements.
+            + "|\(prefersTransmittedPosition)"
         if entriesCache.key != key {
             let core = coreEntries
             let all = core + directoryEntries(core: core)
@@ -573,12 +584,16 @@ struct StationsMapView: View {
     /// actually placed on the map are included; a symbol with nowhere to sit
     /// is nothing to draw.
     private var aprsSymbols: [String: APRSMapSymbol] {
-        let placedIDs = Set(placed.map(\.id))
+        // Only stations actually placed at their transmitted APRS fix wear
+        // their symbol. When the operator is showing licence points, or a
+        // station happens to be placed by a lookup, it is a plain dot — the
+        // symbol must not imply a live position the marker is not showing.
+        let aprsPlaced = Set(placed.filter { $0.origin == .transmittedAPRS }.map(\.id))
         var result: [String: APRSMapSymbol] = [:]
         for station in stations {
             guard let aprs = station.aprs else { continue }
             let id = station.call.uppercased()
-            guard placedIDs.contains(id) else { continue }
+            guard aprsPlaced.contains(id) else { continue }
             result[id] = APRSMapSymbol(table: aprs.symbolTable, code: aprs.symbolCode)
         }
         return result
@@ -588,10 +603,12 @@ struct StationsMapView: View {
     /// A trail needs at least two fixes to be a line; the map ignores the
     /// rest, but building only the drawable ones keeps the overlay work down.
     private var tracks: [MapTrack] {
-        let placedIDs = Set(placed.map(\.id))
+        // A trail is a line of transmitted fixes; it only belongs under a
+        // marker that is itself at the transmitted point.
+        let aprsPlaced = Set(placed.filter { $0.origin == .transmittedAPRS }.map(\.id))
         return stations.compactMap { station -> MapTrack? in
             let id = station.call.uppercased()
-            guard placedIDs.contains(id), station.track.count >= 2 else { return nil }
+            guard aprsPlaced.contains(id), station.track.count >= 2 else { return nil }
             return MapTrack(
                 id: id,
                 points: station.track.map {

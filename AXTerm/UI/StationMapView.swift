@@ -102,7 +102,8 @@ struct StationMapView: View {
         .overlay(alignment: .bottomLeading) {
             if !legendGivesWayToSelection {
                 MapLegend(kind: legend, overDarkBasemap: store == nil && basemap.isDark,
-                          showsCoverage: coverage != nil, showsNodes: hasNodeSites)
+                          showsCoverage: coverage != nil, showsNodes: hasNodeSites,
+                          showsPositionSource: !aprsSymbols.isEmpty)
                     .padding(10)
             }
         }
@@ -181,7 +182,8 @@ struct StationMapView: View {
         .overlay(alignment: .bottomLeading) {
             if !legendGivesWayToSelection {
                 MapLegend(kind: legend, overDarkBasemap: basemap.isDark,
-                          showsCoverage: coverage != nil, showsNodes: hasNodeSites)
+                          showsCoverage: coverage != nil, showsNodes: hasNodeSites,
+                          showsPositionSource: !aprsSymbols.isEmpty)
                     .padding(10)
                     // The map ignores the safe area so the terrain runs to
                     // the edges; anything floating on top of it must put the
