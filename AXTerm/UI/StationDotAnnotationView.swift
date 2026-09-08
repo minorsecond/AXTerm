@@ -215,6 +215,11 @@ final class StationDotAnnotationView: MKAnnotationView {
         ring.actions = Self.noImplicitAnimations
         glyph.actions = Self.noImplicitAnimations
         glyph.contentsGravity = .resizeAspect
+        // A dark halo so the white glyph reads on any recency colour.
+        glyph.shadowColor = PlatformColor.black.cgColor
+        glyph.shadowOpacity = 0.45
+        glyph.shadowRadius = 1
+        glyph.shadowOffset = .zero
         glyph.isHidden = true
         host.addSublayer(fill)
         host.addSublayer(ring)

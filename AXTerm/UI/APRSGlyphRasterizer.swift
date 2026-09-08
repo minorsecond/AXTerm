@@ -20,8 +20,9 @@ nonisolated enum APRSGlyphRasterizer {
 
     /// A white glyph for the symbol, sized to fit inside a dot of `diameter`.
     static func image(systemName: String, diameter: CGFloat) -> CGImage? {
-        // The glyph sits inside the dot with a little breathing room.
-        let points = max(6, (diameter * 0.62).rounded())
+        // The glyph nearly fills the dot — it is the whole point of an APRS
+        // marker, so it must read as a symbol, not a speck.
+        let points = max(8, (diameter * 0.74).rounded())
         let key = "\(systemName)@\(points)"
         lock.lock()
         if let hit = cache[key] { lock.unlock(); return hit }

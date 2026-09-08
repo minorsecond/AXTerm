@@ -357,11 +357,15 @@ struct StationMapView: View {
                         .foregroundStyle(site.isApproximate ? tint : .white)
                 } else if !site.isApproximate, let symbol = aprsSymbols[site.id] {
                     // The APRS glyph the station beaconed, over its dot — a
-                    // car, a digipeater, a weather station.
+                    // car, a digipeater, a weather station. Sized to fill the
+                    // dot and given a dark edge so it reads white on any
+                    // recency colour, because the symbol is the whole point of
+                    // an APRS marker.
                     Image(systemName: APRSSymbolGlyph.systemImage(
                         table: symbol.table, code: symbol.code))
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.system(size: diameter * 0.66, weight: .black))
                         .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.45), radius: 1)
                 }
                 // Selection is shown by a ring drawn inside the fixed
                 // footprint, never by resizing it.
