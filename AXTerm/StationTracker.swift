@@ -19,6 +19,33 @@ nonisolated struct StationTracker {
         packet.via.filter { $0.repeated }.map { $0.display }
     }
 
+    #if DEBUG
+    /// Opt-in APRS diagnostic. Run with `AXTERM_APRS_TRACE=1` in the scheme's
+    /// environment, switch the radio to 144.390, and watch the console: one
+    /// line per UI frame showing the destination, the info bytes, and whether
+    /// the position parser accepted it — so we can see WHY a station falls back
+    /// to a licence address instead of its beaconed fix.
+    nonisolated(unsafe) private static let aprsTraceEnabled =
+        ProcessInfo.processInfo.environment["AXTERM_APRS_TRACE"] == "1"
+
+    static func aprsTrace(_ packet: Packet) {
+        guard aprsTraceEnabled, packet.frameType == .ui else { return }
+        let info = [UInt8](packet.info)
+        let ascii = String(info.prefix(48).map {
+            (32...126).contains($0) ? Character(UnicodeScalar($0)) : "."
+        })
+        let hex = info.prefix(20).map { String(format: "%02x", $0) }.joined(separator: " ")
+        let dest = packet.to?.call ?? "?"
+        let dti = info.first.map { String(format: "0x%02x", $0) } ?? "-"
+        let parsed = APRSParser.parse(destination: dest, info: packet.info)
+        let outcome = parsed.map {
+            "OK \($0.kind) \(String(format: "%.4f,%.4f", $0.latitude, $0.longitude)) sym=\($0.symbolTable)\($0.symbolCode)"
+        } ?? "NO POSITION"
+        print("[APRSTRACE] from=\(packet.from?.display ?? "?") dest=\(dest) "
+            + "infoLen=\(info.count) dti=\(dti) ascii=\"\(ascii)\" hex=[\(hex)] => \(outcome)")
+    }
+    #endif
+
     /// Folds in lifetime totals read from the log.
     ///
     /// Applied to stations already listed rather than adding rows for every
@@ -37,6 +64,9 @@ nonisolated struct StationTracker {
     /// added to the trail only when the station has actually moved, so a fixed
     /// station beaconing every few minutes does not grow an endless track.
     static func applyAPRS(_ station: inout Station, packet: Packet) {
+        #if DEBUG
+        aprsTrace(packet)
+        #endif
         guard !packet.info.isEmpty,
               let report = APRSParser.parse(destination: packet.to?.call ?? "", info: packet.info)
         else { return }
