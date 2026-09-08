@@ -2187,7 +2187,8 @@ struct TerminalView: View {
                     "preview": String(text.prefix(50)),
                     "via": via.joined(separator: ",")
                 ])
-                client.appendSessionChatLine(from: from.display, text: text, via: via)
+                client.appendSessionChatLine(from: from.display, text: text, via: via,
+                                             radioID: sessionCoordinator.radioOwning(from))
             } else {
                 TxLog.error(.session, "onPlainTextChatReceived: client is nil!", ["from": from.display])
             }
@@ -2873,6 +2874,9 @@ struct TerminalView: View {
                 localCallsign: settings.myCallsign,
                 onIdentity: onIdentity,
                 onIdentityMenu: onIdentityMenu,
+                // Empty with one radio, so the badge appears only when there is
+                // more than one radio to tell apart.
+                radioNames: client.radioNames,
                 // Flips on every Broadcast⇄Session toggle so the console re-pins
                 // to the bottom even when the line set doesn't change (and no
                 // incoming packet would otherwise trigger a re-pin).
@@ -2888,12 +2892,12 @@ struct TerminalView: View {
 
     private var displayedSessionLines: [TerminalLine] {
         // The per-radio sidebar filter hides a radio's traffic everywhere,
-        // the terminal included. A line with no radio (system, our own TX)
-        // is always shown.
+        // the terminal included. See ConsoleLine.passesRadioFilter for the
+        // system/TX/received rules.
         let hidden = client.hiddenRadioIDs
+        let myCall = settings.myCallsign
         func radioVisible(_ line: TerminalLine) -> Bool {
-            guard let id = line.radioID else { return true }
-            return !hidden.contains(id)
+            line.passesRadioFilter(hidden: hidden, myCallsign: myCall)
         }
 
         // Sidebar station filter overrides session-peer filter — clicking any station in the
@@ -2991,7 +2995,9 @@ struct TerminalView: View {
         var payload = Data(text.utf8)
         payload.append(0x0D)  // CR, as node command lines expect
         sessionCoordinator.netRomDriver.send(payload, on: circuitID)
-        client.appendSessionChatLine(from: settings.myCallsign, text: text)
+        let circuitRadio = (sessionCoordinator.netRomDriver.circuit(for: circuitID)?.destination)
+            .flatMap { sessionCoordinator.radioOwning($0) }
+        client.appendSessionChatLine(from: settings.myCallsign, text: text, radioID: circuitRadio)
         txViewModel.clearCompose()
     }
 

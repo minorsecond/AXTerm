@@ -290,3 +290,21 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         }
     }
 }
+
+extension ConsoleLine {
+    /// Whether this line survives the per-radio filter.
+    ///
+    /// System notices and our own transmissions carry no radio and always
+    /// show. A received packet line is attributed to the radio that heard it;
+    /// an unattributed one (legacy, pre-radio) is treated as the primary
+    /// radio's, matching the Packets table and the map — so it hides with the
+    /// primary rather than slipping past the filter unnoticed.
+    func passesRadioFilter(hidden: Set<RadioID>, myCallsign: String) -> Bool {
+        if hidden.isEmpty { return true }
+        if let id = radioID { return !hidden.contains(id) }
+        guard kind == .packet else { return true }
+        let mine = CallsignValidator.normalize(from ?? "") == CallsignValidator.normalize(myCallsign)
+        if mine { return true }
+        return !hidden.contains(.primary)
+    }
+}

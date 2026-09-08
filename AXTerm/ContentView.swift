@@ -1276,6 +1276,13 @@ struct ContentView: View {
 
     private var showsRadioSections: Bool { sidebarSection == .radio }
 
+    /// The radio show/hide filter is shown on the standard-sidebar pages —
+    /// the ones the filter actually scopes — which is everything except Mail
+    /// and BBS, whose own navigation columns would compete with it.
+    private var showsRadioFilter: Bool {
+        sidebarSection == .radio || sidebarSection == .mapLayers
+    }
+
     private var sidebar: some View {
         List(selection: $selectedNav) {
             Section("Views") {
@@ -1294,9 +1301,17 @@ struct ContentView: View {
             // Mail and BBS bring their own navigation column, and nothing
             // here shapes them — showing it anyway left two sidebars
             // competing before the content started.
-            if showsRadioSections {
+            // The radio filter is a global scope — it decides what every page
+            // draws, not just the station-filtered ones — so it stays in the
+            // sidebar on the Map, Analytics, Routes and Nodes pages too, where
+            // the operator most wants to say "just the 705" or "just Direwolf"
+            // and watch it apply. (Self-hides with a single radio.) Left off
+            // Mail and BBS, which bring their own navigation column.
+            if showsRadioFilter {
                 radiosSection
+            }
 
+            if showsRadioSections {
                 reachableSection
 
                 circuitSection

@@ -895,11 +895,13 @@ final class SessionCoordinator: ObservableObject {
         // in the session list, so the line itself says who is talking.
         driver.onCircuitData = { [weak self] id, data in
             guard let self else { return }
-            let peer = self.netRomDriver.circuit(for: id)?.destination.display
-                ?? "NET/ROM"
+            let destination = self.netRomDriver.circuit(for: id)?.destination
+            let peer = destination?.display ?? "NET/ROM"
             let text = String(decoding: data, as: UTF8.self)
             guard !text.isEmpty else { return }
-            self.packetEngine?.appendSessionChatLine(from: peer, text: text)
+            self.packetEngine?.appendSessionChatLine(
+                from: peer, text: text,
+                radioID: destination.flatMap { self.radioOwning($0) })
         }
         // AFTER the transcript consumer, so the host can wrap it: hosted
         // circuits' keystrokes go to the node shell, everything else

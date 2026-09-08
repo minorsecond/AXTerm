@@ -236,6 +236,10 @@ struct ConsoleView: View {
     /// read-only, which is what the Mac wants.
     var onIdentity: ((String) -> Void)?
     var onIdentityMenu: ((String) -> Void)?
+    /// Radio names by id, for the per-line radio badge. Empty with one radio,
+    /// so the badge appears only when there is more than one radio to tell
+    /// apart — the same rule the Packets table's Radio column follows.
+    var radioNames: [RadioID: String] = [:]
     /// Bump from the parent to force a bottom re-pin even when the line set is
     /// unchanged. The Broadcast⇄Session toggle re-lays-out this ScrollView
     /// without changing its content, which can strand the newest lines above the
@@ -430,7 +434,8 @@ struct ConsoleView: View {
                                         ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
                                                              timestampRun: runs[group.id] ?? .alone,
                                                              onIdentity: onIdentity,
-                                                             onIdentityMenu: onIdentityMenu)
+                                                             onIdentityMenu: onIdentityMenu,
+                                                             radioNames: radioNames)
                                             .id(group.id)
                                     }
                                 }
@@ -439,7 +444,8 @@ struct ConsoleView: View {
                                     ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
                                                              timestampRun: timestampRunPositions[group.id] ?? .alone,
                                                              onIdentity: onIdentity,
-                                                             onIdentityMenu: onIdentityMenu)
+                                                             onIdentityMenu: onIdentityMenu,
+                                                             radioNames: radioNames)
                                         .id(group.id)
                                 }
                             }
@@ -794,6 +800,7 @@ struct ConsoleLineGroupView: View {
     var timestampRun: ConsoleTimestampRuler.RunPosition = .alone
     var onIdentity: ((String) -> Void)?
     var onIdentityMenu: ((String) -> Void)?
+    var radioNames: [RadioID: String] = [:]
     @State private var isExpanded = false
 
     var body: some View {
@@ -806,7 +813,8 @@ struct ConsoleLineGroupView: View {
                 allViaPaths: group.allViaPaths,
                 localCallsign: localCallsign,
                 onIdentity: onIdentity,
-                onIdentityMenu: onIdentityMenu
+                onIdentityMenu: onIdentityMenu,
+                radioNames: radioNames
             )
 
             // Expanded duplicates (if any and expanded)
@@ -905,6 +913,9 @@ struct ConsoleLineView: View {
     var onIdentity: ((String) -> Void)?
     /// Long press: the menu of things you can do with an identity.
     var onIdentityMenu: ((String) -> Void)?
+    /// Radio names by id. Empty (one radio) draws no badge, so a single-radio
+    /// station's console reads exactly as it did.
+    var radioNames: [RadioID: String] = [:]
 
     private let callsignSaturation: Double = 0.35
     private let callsignBrightness: Double = 0.75
@@ -993,6 +1004,26 @@ struct ConsoleLineView: View {
             // Duplicate count badge
             if duplicateCount > 0 {
                 DuplicateCountBadge(count: duplicateCount, kind: line.kind)
+            }
+
+            // Which radio heard this line. Only when there is more than one
+            // radio to tell apart — `radioNames` is empty otherwise — so the
+            // operator can see at a glance whether a line came from the 705 or
+            // Direwolf, the same attribution the Packets Radio column shows.
+            if let id = line.radioID, let name = radioNames[id] {
+                HStack(spacing: 2) {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.system(size: fontSize - 2, weight: .semibold))
+                    Text(name)
+                        .font(.system(size: fontSize - 1, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.teal)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(.teal.opacity(0.12), in: Capsule())
+                .help("Heard on \(name)")
+                .accessibilityLabel("Heard on \(name)")
             }
 
             // Message text (wraps to container width; no chopping)

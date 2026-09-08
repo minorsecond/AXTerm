@@ -1250,7 +1250,8 @@ final class PacketEngine: ObservableObject {
     /// Append decoded AXDP/session chat to the console so it appears in the terminal.
     /// Called when AXDP chat is received—the raw I-frame payload is binary so it never
     /// reaches the console via the normal packet path.
-    func appendSessionChatLine(from fromDisplay: String, text: String, via: [String] = []) {
+    func appendSessionChatLine(from fromDisplay: String, text: String, via: [String] = [],
+                               radioID: RadioID? = nil) {
         TxLog.debug(.session, "appendSessionChatLine called", [
             "from": fromDisplay,
             "textLength": text.count,
@@ -1259,7 +1260,10 @@ final class PacketEngine: ObservableObject {
             "currentLineCount": consoleLines.count
         ])
         let toDisplay = settings.myCallsign
-        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text, via: via)
+        // Attributed to the session's radio, so the per-radio filter reaches
+        // connected-mode conversation the way it reaches monitored frames.
+        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text, via: via,
+                                      radioID: radioID)
         appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
         TxLog.debug(.session, "appendSessionChatLine complete", [
             "newLineCount": consoleLines.count
