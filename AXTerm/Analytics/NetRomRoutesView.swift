@@ -111,6 +111,21 @@ struct NetRomRoutesView: View {
             .frame(width: 160)
             .help(modePickerTooltip)
 
+            // Radio channel scope — only when there is more than one channel.
+            if viewModel.radioChannels.count > 1 {
+                Picker("Channel", selection: $viewModel.selectedRadioScope) {
+                    Text("All radios").tag(AnalyticsRadioScope.all)
+                    ForEach(viewModel.radioChannels) { channel in
+                        Text(channel.label).tag(AnalyticsRadioScope.channel(channel.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 150)
+                .help("Scope neighbours, routes and link quality to one "
+                      + "frequency. Radios on the same frequency roll up into "
+                      + "one channel; different frequencies stay separate.")
+            }
+
             // Hide expired toggle
             Toggle("Hide expired", isOn: $settings.hideExpiredRoutes)
                 .platformCheckboxToggle()

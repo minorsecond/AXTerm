@@ -456,6 +456,18 @@ final class NetRomRoutesViewModel: ObservableObject {
     @Published private(set) var routes: [RouteDisplayInfo] = []
     @Published private(set) var linkStats: [LinkStatDisplayInfo] = []
 
+    /// Frequency channels the page can scope to, pushed in from the packet
+    /// engine. With one channel there is nothing to choose and no picker.
+    @Published private(set) var radioChannels: [AnalyticsRadioChannel] = []
+    /// Which channel the page is scoped to. `.all` shows every visible radio;
+    /// a channel keeps neighbours/routes/link-quality to one frequency.
+    @Published var selectedRadioScope: AnalyticsRadioScope = .all {
+        didSet {
+            guard selectedRadioScope != oldValue else { return }
+            refresh()
+        }
+    }
+
     @Published private(set) var isLoading = false
     @Published private(set) var lastRefresh: Date?
 
@@ -470,6 +482,9 @@ final class NetRomRoutesViewModel: ObservableObject {
     private weak var settings: AppSettingsStore?
     private let clock: ClockProviding
     private var refreshTimer: Timer?
+    /// Guards `refresh()` against the re-entry caused by resetting a stale
+    /// radio scope inside it (the scope's didSet calls refresh again).
+    private var isRefreshingNow = false
     private var cancellables: Set<AnyCancellable> = []
 
     /// Cached origin intervals for adaptive TTL calculation
@@ -644,7 +659,49 @@ final class NetRomRoutesViewModel: ObservableObject {
 
     private var hasLoggedFirstRefresh = false
 
+    /// Recomputes the frequency channels from the packet engine's radios and
+    /// resets a selection whose channel has vanished. Called at the top of each
+    /// refresh, so the picker tracks radios connecting and frequencies read
+    /// from the rig without any view wiring.
+    private func refreshRadioChannels() {
+        let radios = (packetEngine?.radioSummaries ?? []).map {
+            AnalyticsRadioChannel.Radio(id: $0.id, name: $0.name, frequencyHz: $0.frequencyHz)
+        }
+        let hidden = packetEngine?.hiddenRadioIDs ?? []
+        let channels = AnalyticsRadioChannel.channels(radios: radios, hidden: hidden)
+        if channels != radioChannels { radioChannels = channels }
+        // A selection whose channel is gone falls back to All. The didSet's
+        // re-refresh is absorbed by refresh()'s reentrancy guard; the data this
+        // pass produces is already correct because `passesRadioScope` treats a
+        // vanished channel as "show all visible".
+        if case .channel(let id) = selectedRadioScope,
+           !channels.contains(where: { $0.id == id }) {
+            selectedRadioScope = .all
+        }
+    }
+
+    /// Whether a row on this radio should be shown: never a hidden radio, and,
+    /// when a channel is selected, only that channel's radios.
+    private func passesRadioScope(_ radio: RadioID) -> Bool {
+        let hidden = packetEngine?.hiddenRadioIDs ?? []
+        if hidden.contains(radio) { return false }
+        switch selectedRadioScope {
+        case .all:
+            return true
+        case .channel(let id):
+            // A selection whose channel vanished shows all visible, not nothing.
+            guard let channel = radioChannels.first(where: { $0.id == id }) else { return true }
+            return channel.radioIDs.contains(radio)
+        }
+    }
+
     func refresh() {
+        // Resetting a stale radio scope re-enters refresh via its didSet; the
+        // guard absorbs that so a single pass does all the work.
+        guard !isRefreshingNow else { return }
+        isRefreshingNow = true
+        defer { isRefreshingNow = false }
+
         guard let integration else {
             #if DEBUG
             if !hasLoggedFirstRefresh {
@@ -654,6 +711,8 @@ final class NetRomRoutesViewModel: ObservableObject {
             #endif
             return
         }
+
+        refreshRadioChannels()
 
         isLoading = true
         let now = clock.now
@@ -693,14 +752,22 @@ final class NetRomRoutesViewModel: ObservableObject {
         let rawNeighbors = integration.currentNeighbors(forMode: routingMode)
         let rawRoutes = integration.currentRoutes(forMode: routingMode)
         let rawLinkStats = integration.exportLinkStats(forMode: routingMode)
-        let filteredNeighbors = rawNeighbors.filter { isDisplayableNode($0.call) }
+        // Radio scope: drop a hidden radio's rows (as the map, packets table
+        // and analytics dashboard do), and, when a frequency channel is
+        // selected, keep only its radios. Now that neighbours/routes carry the
+        // radio that heard them, this actually distinguishes them.
+        let filteredNeighbors = rawNeighbors.filter {
+            isDisplayableNode($0.call) && passesRadioScope($0.radioID)
+        }
         let filteredRoutes = rawRoutes.filter { route in
             isDisplayableNode(route.destination) &&
             isDisplayableNode(route.origin) &&
-            route.path.allSatisfy { isDisplayableNode($0) }
+            route.path.allSatisfy { isDisplayableNode($0) } &&
+            passesRadioScope(route.radioID)
         }
         let filteredLinkStats = rawLinkStats.filter { stat in
-            isDisplayableNode(stat.fromCall) && isDisplayableNode(stat.toCall)
+            isDisplayableNode(stat.fromCall) && isDisplayableNode(stat.toCall) &&
+            passesRadioScope(stat.radioID)
         }
 
         #if DEBUG
