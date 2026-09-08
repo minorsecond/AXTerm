@@ -566,9 +566,19 @@ struct StationsMapView: View {
 
     private var scope: StationScope {
         guard let observer else { return StationScope.build(observerLabel: "", sites: []) }
+        // Showing transmitted positions means showing *only* stations at their
+        // own beaconed fix — a licence/registry guess is not a transmitted
+        // position, so those heard stations are dropped from the map (nodes and
+        // still-unplaced entries are left alone). Off, every placeable station
+        // shows at whatever point it has.
+        let entriesForMap = prefersTransmittedPosition
+            ? visibleEntries.filter {
+                !$0.isPlaced || $0.isNodeAlias || $0.origin == .transmittedAPRS
+            }
+            : visibleEntries
         return HeardStationMap.scope(
             observerLabel: observerGrid.uppercased(),
-            observer: observer, entries: visibleEntries, now: Date(),
+            observer: observer, entries: entriesForMap, now: Date(),
             distanceInMiles: settings.distanceUnitIsMiles)
     }
 
@@ -1162,8 +1172,16 @@ struct StationsMapView: View {
         // about the callsign, so the operator can trust the map at a glance
         // rather than clicking each dot to read its source.
         let beaconed = placed.filter { $0.origin == .transmittedAPRS }.count
+        let addressPlaced = placed.count - beaconed
+        // In transmitted mode the address-placed heard stations are hidden, so
+        // say so rather than counting points that are not on the map.
+        if prefersTransmittedPosition {
+            let hidden = placed.filter { !$0.isNodeAlias && $0.origin != .transmittedAPRS }.count
+            let tail = hidden > 0 ? " \u{b7} \(hidden) address-only hidden" : ""
+            return "\(beaconed) from beacons\(tail)"
+        }
         let suffix = beaconed > 0
-            ? " \u{b7} \(beaconed) from beacons, \(placed.count - beaconed) from address"
+            ? " \u{b7} \(beaconed) from beacons, \(addressPlaced) from address"
             : (placed.isEmpty ? "" : " \u{b7} all from address lookups")
         if unplaced.isEmpty {
             return "\(placed.count) station\(placed.count == 1 ? "" : "s"), all placed\(suffix)"

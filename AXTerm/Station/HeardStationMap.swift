@@ -71,6 +71,9 @@ nonisolated enum HeardStationMap {
         /// Drives the map symbology — only a transmitted fix wears the
         /// station's APRS symbol.
         var origin: PositionOrigin = .unplaced
+        /// The APRS symbol this station beaconed, set only when placed at its
+        /// own transmitted fix.
+        var aprsSymbol: APRSMapSymbol?
 
         var id: String { callsign }
         var isPlaced: Bool { position != nil }
@@ -141,7 +144,8 @@ nonisolated enum HeardStationMap {
                     confidence: .exact,
                     gridSquare: record?.gridSquare?.uppercased(),
                     name: record?.name, locality: record?.locality,
-                    origin: .transmittedAPRS)
+                    origin: .transmittedAPRS,
+                    aprsSymbol: APRSMapSymbol(table: aprs.symbolTable, code: aprs.symbolCode))
             }
             // The licence/registry/locator lookups — a point about the callsign.
             let derived = derivedEntry(
@@ -443,7 +447,8 @@ nonisolated enum HeardStationMap {
                     detail: text,
                     isStale: isStale(entry, now: now),
                     isApproximate: entry.confidence == .inferredFromOperator,
-                    isNode: entry.isNodeAlias)
+                    isNode: entry.isNodeAlias,
+                    aprsSymbol: entry.aprsSymbol)
             })
     }
 

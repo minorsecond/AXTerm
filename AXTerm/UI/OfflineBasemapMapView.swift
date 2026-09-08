@@ -261,7 +261,7 @@ struct OfflineBasemapMapView {
                 isApproximate: site.isApproximate,
                 isObserver: false,
                 isNode: site.isNode,
-                aprsSymbol: aprsSymbols[site.id]))
+                aprsSymbol: site.aprsSymbol))
         }
         return result
     }

@@ -88,6 +88,31 @@ final class HeardStationPositionSourceTests: XCTestCase {
         XCTAssertEqual(e.origin, .unplaced)
     }
 
+    func testTheScopeSiteCarriesTheAPRSSymbolForABeaconedStation() throws {
+        // The symbol must ride on the Site itself — that is what makes a
+        // SwiftUI Map annotation rebuild and actually draw the glyph.
+        let entries = HeardStationMap.entries(
+            stations: [station("W3OO-1", aprs: aprsReport(lat: beacon.lat, lon: beacon.lon))],
+            directory: [:], gatewayGrids: [:])
+        let scope = HeardStationMap.scope(
+            observerLabel: "DM79", observer: GreatCircle.Point(latitude: 39.6, longitude: -104.9),
+            entries: entries, now: now)
+        let site = try XCTUnwrap(scope.sites.first { $0.id == "W3OO-1" })
+        XCTAssertEqual(site.aprsSymbol, APRSMapSymbol(table: "/", code: ">"))
+    }
+
+    func testTheScopeSiteHasNoSymbolForAnAddressPlacedStation() throws {
+        let entries = HeardStationMap.entries(
+            stations: [station("W3OO-1", aprs: nil)],
+            directory: ["W3OO": record("W3OO", lat: licence.lat, lon: licence.lon)],
+            gatewayGrids: [:])
+        let scope = HeardStationMap.scope(
+            observerLabel: "DM79", observer: GreatCircle.Point(latitude: 39.6, longitude: -104.9),
+            entries: entries, now: now)
+        let site = try XCTUnwrap(scope.sites.first { $0.id == "W3OO-1" })
+        XCTAssertNil(site.aprsSymbol, "an address-placed station wears no APRS symbol")
+    }
+
     func testTheDefaultPreferenceIsTransmitted() throws {
         // No explicit preference argument — the beaconed fix must still win.
         let entries = HeardStationMap.entries(

@@ -126,7 +126,8 @@ struct WinlinkScopeWindow: View {
         let entries = byCallsign.compactMap { callsign, rows -> (
             id: String, label: String, position: GreatCircle.Point?,
             signal: StationScope.Signal, subtitle: String, detail: String,
-            isStale: Bool, isApproximate: Bool, isNode: Bool
+            isStale: Bool, isApproximate: Bool, isNode: Bool,
+            aprsSymbol: APRSMapSymbol?
         )? in
             guard let first = rows.first,
                   let center = Maidenhead.center(of: first.gridSquare) else { return nil }
@@ -144,7 +145,8 @@ struct WinlinkScopeWindow: View {
                                grid: first.gridSquare, quality: quality, observer: observer),
                 isStale: signal == .unknown,
                 isApproximate: false,
-                isNode: false)
+                isNode: false,
+                aprsSymbol: nil)
         }
         return StationScope.build(
             observerLabel: observerLabel, observer: observer, entries: entries)

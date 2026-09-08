@@ -47,6 +47,10 @@ nonisolated struct StationScope: Equatable, Sendable {
         /// drawn in its own colour and glyph so infrastructure reads apart
         /// from traffic.
         var isNode: Bool = false
+        /// The APRS symbol the station beaconed, when it is placed at its own
+        /// transmitted fix. Carried on the Site (not a side table) so a
+        /// SwiftUI `Map` annotation actually rebuilds when the symbol arrives.
+        var aprsSymbol: APRSMapSymbol? = nil
 
         var compassPoint: String { GreatCircle.compassPoint(bearingDegrees) }
 
@@ -116,7 +120,8 @@ nonisolated struct StationScope: Equatable, Sendable {
         observer: GreatCircle.Point,
         entries: [(id: String, label: String, position: GreatCircle.Point?,
                    signal: Signal, subtitle: String, detail: String,
-                   isStale: Bool, isApproximate: Bool, isNode: Bool)]
+                   isStale: Bool, isApproximate: Bool, isNode: Bool,
+                   aprsSymbol: APRSMapSymbol?)]
     ) -> StationScope {
         let sites = entries.compactMap { entry -> Site? in
             guard let position = entry.position else { return nil }
@@ -130,7 +135,8 @@ nonisolated struct StationScope: Equatable, Sendable {
                 detail: entry.detail,
                 isStale: entry.isStale,
                 isApproximate: entry.isApproximate,
-                isNode: entry.isNode)
+                isNode: entry.isNode,
+                aprsSymbol: entry.aprsSymbol)
         }
         return build(observerLabel: observerLabel, sites: sites)
     }

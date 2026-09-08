@@ -355,7 +355,7 @@ struct StationMapView: View {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(site.isApproximate ? tint : .white)
-                } else if !site.isApproximate, let symbol = aprsSymbols[site.id] {
+                } else if !site.isApproximate, let symbol = site.aprsSymbol {
                     // The APRS glyph the station beaconed, over its dot — a
                     // car, a digipeater, a weather station. Sized to fill the
                     // dot and given a dark edge so it reads white on any
