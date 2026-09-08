@@ -1158,10 +1158,17 @@ struct StationsMapView: View {
     /// it says so.
     private var coverageSummary: String {
         guard !entries.isEmpty else { return "Nothing heard yet" }
+        // How many dots are the station's own beaconed fix versus a lookup
+        // about the callsign, so the operator can trust the map at a glance
+        // rather than clicking each dot to read its source.
+        let beaconed = placed.filter { $0.origin == .transmittedAPRS }.count
+        let suffix = beaconed > 0
+            ? " \u{b7} \(beaconed) from beacons, \(placed.count - beaconed) from address"
+            : (placed.isEmpty ? "" : " \u{b7} all from address lookups")
         if unplaced.isEmpty {
-            return "\(placed.count) station\(placed.count == 1 ? "" : "s"), all placed"
+            return "\(placed.count) station\(placed.count == 1 ? "" : "s"), all placed\(suffix)"
         }
-        return "\(placed.count) of \(entries.count) placed \u{2014} \(unplaced.count) with no known position"
+        return "\(placed.count) of \(entries.count) placed \u{2014} \(unplaced.count) with no known position\(suffix)"
     }
 
     /// Says what the filter took away, and offers it straight back.

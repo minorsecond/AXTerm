@@ -190,6 +190,21 @@ nonisolated struct StationTracker {
             return station
         }
         sortStations()
+
+        // Re-apply APRS positions from the packet history, in time order, so a
+        // rebuild keeps the transmitted fixes and movement tracks that
+        // update(with:) accrues live. Without this, any bulk rebuild — a radio
+        // reconnecting, a replay, a lifetime-count refresh — silently dropped
+        // every station back to its licence/registry placement and erased its
+        // symbol. Filtered to UI frames with a payload first, so only the few
+        // frames that could carry a position are sorted and parsed.
+        let positionPackets = packets
+            .filter { !$0.isOwnEcho && $0.frameType == .ui && !$0.info.isEmpty }
+            .sorted { $0.timestamp < $1.timestamp }
+        for packet in positionPackets {
+            guard let call = packet.from?.display, let index = stationIndex[call] else { continue }
+            Self.applyAPRS(&stations[index], packet: packet)
+        }
     }
 
     func heardCount(for call: String) -> Int? {

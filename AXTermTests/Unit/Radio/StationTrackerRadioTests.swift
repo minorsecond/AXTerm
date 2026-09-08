@@ -53,6 +53,35 @@ final class StationTrackerRadioTests: XCTestCase {
         XCTAssertEqual(tracker.stations.first { $0.call == "W0OOD-2" }!.track.count, 2)
     }
 
+    /// A rebuild keeps the transmitted APRS fix and track — it must not drop a
+    /// station back to its licence address (the modem-reconnect bug).
+    func testRebuildKeepsAPRSPositionsAndTracks() {
+        func pos(_ info: String, at: TimeInterval) -> Packet {
+            Packet(timestamp: Date(timeIntervalSince1970: at),
+                   from: AX25Address(call: "W0OOD", ssid: 2), to: AX25Address(call: "APRS"),
+                   via: [], frameType: .ui, control: 0x03, info: Data(info.utf8),
+                   rawAx25: Data([0x01]), radioID: a)
+        }
+        // Two positions a beacon apart, plus a plain non-position frame.
+        let packets = [
+            pos("!3933.48N/10447.65W#one", at: 10),
+            pos("!3934.00N/10448.00W#two", at: 20),
+        ]
+
+        var live = StationTracker()
+        for p in packets { live.update(with: p) }
+
+        var rebuilt = StationTracker()
+        rebuilt.rebuild(from: packets)
+
+        let liveStation = live.stations.first { $0.call == "W0OOD-2" }!
+        let rebuiltStation = rebuilt.stations.first { $0.call == "W0OOD-2" }!
+        XCTAssertNotNil(rebuiltStation.aprs, "rebuild must keep the transmitted fix")
+        XCTAssertEqual(rebuiltStation.aprs, liveStation.aprs, "rebuild agrees with live tracking")
+        XCTAssertEqual(rebuiltStation.track.count, liveStation.track.count)
+        XCTAssertEqual(rebuiltStation.track.count, 2, "the movement track survives a rebuild")
+    }
+
     /// Frames from before radios existed belong to the primary.
     func testAPacketWithNoRadioIsHeardOnThePrimary() {
         var tracker = StationTracker()
