@@ -203,6 +203,25 @@ down another agency's road closure with one click will eventually do it by
 accident. The help text says a kill is a transmission and not a local delete,
 or the operator expects the wrong map to change.
 
+**The kill byte, and what receivers do with it.** `_` in place of `*` is the
+whole difference between an object standing and an object gone, and it is
+settled against Xastir rather than against our own parser. `extract_object()`
+(`src/db.c`) takes the first nine characters as the name and leaves `info` on
+the state byte; `_` reaches `delete_object()`, which clears `ST_ACTIVE` and
+`ST_INVIEW` so the object stops being drawn. There is no check of who sent it —
+which is why the owner-only rule on our Stand Down button is ours and not the
+protocol's. Direwolf cannot settle this one: its summary line describes a kill
+exactly as it describes a placement.
+
+Receiving a kill and *acting* on one are separate questions. On air on
+2026-09-09 a placement and its stand-down both went out from K0EPI-7, both were
+repeated by WQ8M-9 and AD1CT, and aprs.fi for iOS logged both frames in its raw
+packet list and left the marker on its map. Xastir's source carries the same
+complaint about its own display — `// ?? does not vanish from map immediately
+!!???` beside the `delete_object()` call, and `// there is some problem...  it
+is not redrawn immediately!` inside it. A kill that changes nothing visible on
+the far end is not evidence that the kill was malformed.
+
 **Our own object on our own map.** Transmitted frames never enter the packet
 log, so `SessionCoordinator.sendAPRSObject` tells `APRSObjectStore` directly.
 Without that the operator places a closure, the sheet dismisses, and nothing
@@ -212,3 +231,9 @@ appears — the same silence the pending-transmission work exists to remove.
 true. Doing that on a timer is a decision about occupying a shared channel
 that belongs to the operator, not to a default, so it is not done;
 `liveWindow` expires an unrepeated object after six hours, ours included.
+
+A stand-down is sent once for the same reason, and there it costs more. A
+placement that fails to arrive is visible to nobody and harms nothing; a kill
+that fails leaves the object standing on every receiver that heard the
+placement, with nothing to clear it until `liveWindow` runs out — and the
+operator who sent it has no way to tell. That is a known gap, not a decision.

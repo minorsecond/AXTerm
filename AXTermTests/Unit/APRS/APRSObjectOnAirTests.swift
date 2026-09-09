@@ -11,6 +11,15 @@ import XCTest
 /// exactly them. Neither half rests on the code under test.
 ///
 /// Regenerate with `TestRig/scripts/axterm_object_onair.py`.
+///
+/// The one thing this capture cannot show is the live/killed byte: Direwolf's
+/// summary line describes a kill exactly as it describes a placement, so both
+/// frames below decode to the same words. That byte is settled by the other
+/// reference implementation instead — Xastir's `extract_object()` (`src/db.c`)
+/// strips the nine-character name and leaves `info` on the state byte, `_`
+/// dispatches to `delete_object()`, and that clears `ST_ACTIVE` and
+/// `ST_INVIEW` so the object stops being drawn. It checks nothing about who
+/// sent it.
 final class APRSObjectOnAirTests: XCTestCase {
 
     /// The timestamp the capture used, so the bytes are reproducible.
@@ -86,6 +95,9 @@ final class APRSObjectOnAirTests: XCTestCase {
     func testDirewolfReadTheNameAndPositionWeIntended() throws {
         let expected = [
             "object-place":           ("ROADCLOSE", "N 39 36.7000", "W 104 43.9000"),
+            // Identical to the placement above, and that is the point: what
+            // Direwolf prints cannot distinguish them. See the note on the
+            // type for where the `_` byte is actually pinned.
             "object-kill":            ("ROADCLOSE", "N 39 36.7000", "W 104 43.9000"),
             "object-alternate-table": ("FIRE",      "N 39 36.0000", "W 104 42.0000"),
             // Nine characters on the wire: the truncation is what everyone
