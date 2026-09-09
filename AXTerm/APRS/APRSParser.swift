@@ -15,6 +15,10 @@ struct APRSReport: Equatable, Hashable, Sendable {
     var comment: String
     var hasTimestamp: Bool
     var kind: Kind
+    /// The weather this beacon carried, for a station whose symbol code is
+    /// `_`. Nil for every other station — and for a weather station whose
+    /// report was all "no sensor" filler.
+    var weather: APRSWeather? = nil
 }
 
 /// Parses the position out of a received APRS packet. Pure and deterministic
@@ -23,9 +27,43 @@ struct APRSReport: Equatable, Hashable, Sendable {
 /// and returns nil for anything else (messages, status, telemetry).
 nonisolated enum APRSParser {
 
+    /// Exactly 0°N 0°E: the Gulf of Guinea, and the sentinel every GPS-fed
+    /// beacon in the world sends when it has no fix.
+    ///
+    /// NI0W-9 transmitted one on 144.390 on 2026-09-09 — a Yaesu with no lock,
+    /// Mic-E destination `PPP0PP`, every latitude digit zero. Read literally
+    /// it places a Colorado mobile 13 000 km away off Africa. A parser that
+    /// returns it hands the map a dot at coordinates nobody transmitted, and a
+    /// map that fits its stations then drags the whole view out to sea.
+    ///
+    /// The test is for the exact point, not a neighbourhood of it: there is no
+    /// distance at which a real position quietly becomes a fiction, and a buoy
+    /// really sitting near the origin is still a station.
+    static func isNullIsland(latitude: Double, longitude: Double) -> Bool {
+        latitude == 0 && longitude == 0
+    }
+
+    /// A bearing, or nil for anything that is not one.
+    ///
+    /// APRS writes due north as 360 and "unknown" as 0 in the uncompressed
+    /// extension, so both ends of that range are real. Anything outside it
+    /// came from a corrupted frame — NI0W-9's gated copy decoded to 579° the
+    /// same morning — and an arrow drawn at 579° points somewhere the station
+    /// is not going. An absent heading is honest; a wrong one is not.
+    static func validCourse(_ degrees: Int?) -> Int? {
+        guard let degrees, degrees > 0, degrees <= 360 else { return nil }
+        return degrees
+    }
+
     /// `destination` is the AX.25 destination callsign (Mic-E hides latitude
     /// there); `info` is the AX.25 information field.
     static func parse(destination: String, info: Data) -> APRSReport? {
+        guard let report = decode(destination: destination, info: info) else { return nil }
+        guard !isNullIsland(latitude: report.latitude, longitude: report.longitude) else { return nil }
+        return report
+    }
+
+    private static func decode(destination: String, info: Data) -> APRSReport? {
         let b = [UInt8](info)
         guard let dti = b.first else { return nil }
         switch dti {
@@ -42,9 +80,29 @@ nonisolated enum APRSParser {
         }
     }
 
+    /// The weather in a **positionless** report (DTI `_`): a station that
+    /// beacons its fix and its weather in separate packets, which many home
+    /// stations do. There is no position to return, so this is a second entry
+    /// point rather than a case of `parse` — a report with no coordinates
+    /// must never become an `APRSReport`, which promises one.
+    ///
+    /// Wire shape: `_` then an 8-character MDHM timestamp, then the fields.
+    static func parseWeather(info: Data) -> APRSWeather? {
+        let b = [UInt8](info)
+        guard b.first == UInt8(ascii: "_"), b.count > 9 else { return nil }
+        // The timestamp is month/day/hour/minute; it says when the station
+        // took the reading, which the receiver's own clock already answers
+        // well enough for a live map, so it is skipped rather than trusted.
+        let stamp = ascii(b, 1, 8)
+        guard stamp.allSatisfy(\.isNumber) else { return nil }
+        return APRSWeather.parse(ascii(b, 9, b.count - 9), form: .positionless)
+    }
+
     // MARK: - Uncompressed / compressed dispatch
 
-    private static func parsePosition(_ b: [UInt8], offset: Int, hasTimestamp: Bool) -> APRSReport? {
+    /// Internal so object and item reports can reuse it: their payload after
+    /// the name and state byte is a position report in exactly this form.
+    static func parsePosition(_ b: [UInt8], offset: Int, hasTimestamp: Bool) -> APRSReport? {
         guard offset < b.count else { return nil }
         let first = b[offset]
         // Uncompressed latitude starts with a digit or an ambiguity space;
@@ -67,9 +125,19 @@ nonisolated enum APRSParser {
 
         var course: Int?
         var speed: Int?
+        var weather: APRSWeather?
         var rest = ascii(b, offset + 19, b.count - (offset + 19))
-        // Leading CSE/SPD: three digits, a slash, three digits.
-        if rest.count >= 7 {
+        if code == "_" {
+            // A weather station reuses the course/speed slot for wind
+            // direction and wind speed. Decoding it as course and speed would
+            // report a house as travelling at 4 knots, and would put a fixed
+            // station in the map's "moving" class — so the whole tail goes to
+            // the weather parser instead, and motion stays nil.
+            let scanned = APRSWeather.scan(rest, form: .withPosition)
+            weather = scanned.weather
+            rest = scanned.comment
+        } else if rest.count >= 7 {
+            // Leading CSE/SPD: three digits, a slash, three digits.
             let cs = Array(rest.prefix(7))
             if cs[3] == "/", cs[0...2].allSatisfy(\.isNumber), cs[4...6].allSatisfy(\.isNumber) {
                 course = Int(String(cs[0...2]))
@@ -79,8 +147,9 @@ nonisolated enum APRSParser {
         }
         let altitude = extractAltitude(&rest)
         return APRSReport(latitude: lat, longitude: lon, symbolTable: table, symbolCode: code,
-                          courseDegrees: course, speedKnots: speed, altitudeFeet: altitude,
-                          comment: rest, hasTimestamp: hasTimestamp, kind: .uncompressed)
+                          courseDegrees: validCourse(course), speedKnots: speed, altitudeFeet: altitude,
+                          comment: rest, hasTimestamp: hasTimestamp, kind: .uncompressed,
+                          weather: weather)
     }
 
     /// `DDMM.mmN` → signed degrees, ambiguity spaces treated as zero.
@@ -130,15 +199,40 @@ nonisolated enum APRSParser {
 
         var course: Int?
         var speed: Int?
+        var windDirection: Int?
+        var windSpeedMPH: Int?
         if c != UInt8(ascii: " "), c >= 33, c <= 33 + 89 {
-            course = Int(c - 33) * 4
-            speed = Int((pow(1.08, Double(s) - 33) - 1).rounded())
+            let degrees = Int(c - 33) * 4
+            let knots = Int((pow(1.08, Double(s) - 33) - 1).rounded())
+            if code == "_" {
+                // In a compressed weather report the same two bytes carry wind
+                // rather than travel. The encoding is identical, so the speed
+                // arrives in knots and is converted to the mph the rest of the
+                // weather layer speaks.
+                windDirection = degrees
+                windSpeedMPH = Int((Double(knots) * 1.150779).rounded())
+            } else {
+                course = degrees
+                speed = knots
+            }
         }
         var rest = ascii(b, offset + 13, b.count - (offset + 13))
+        var weather: APRSWeather?
+        if code == "_" {
+            let scanned = APRSWeather.scan(rest, form: .withPosition)
+            rest = scanned.comment
+            // The keyed fields carry everything except wind, which the
+            // compressed header already gave.
+            var reading = scanned.weather ?? APRSWeather()
+            reading.windDirectionDegrees = windDirection
+            reading.windSpeedMPH = windSpeedMPH
+            weather = reading.isEmpty ? nil : reading
+        }
         let altitude = extractAltitude(&rest)
         return APRSReport(latitude: lat, longitude: lon, symbolTable: table, symbolCode: code,
                           courseDegrees: course, speedKnots: speed, altitudeFeet: altitude,
-                          comment: rest, hasTimestamp: hasTimestamp, kind: .compressed)
+                          comment: rest, hasTimestamp: hasTimestamp, kind: .compressed,
+                          weather: weather)
     }
 
     /// APRS base-91: sum of (byte − 33) · 91^(width−1−i).
@@ -205,7 +299,7 @@ nonisolated enum APRSParser {
         let table = Character(UnicodeScalar(b[8]))
         let comment = b.count > 9 ? ascii(b, 9, b.count - 9) : ""
         return APRSReport(latitude: lat, longitude: lon, symbolTable: table, symbolCode: code,
-                          courseDegrees: course == 0 ? nil : course,
+                          courseDegrees: validCourse(course == 0 ? nil : course),
                           speedKnots: speed == 0 ? nil : speed,
                           altitudeFeet: micEAltitude(comment),
                           comment: comment, hasTimestamp: false, kind: .micE)
