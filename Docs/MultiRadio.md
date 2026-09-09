@@ -246,6 +246,70 @@ figure that misroutes both (CLAUDE.md §8: evidence-based; `WinlinkSyncPolicy
 The one node identity, the ping budget shared by radios on one frequency,
 and the Auto radio for a connect are the next layer.
 
+## Adaptive transmission, per channel
+
+The tuner adjusts paclen, window size and retry count from observed loss, and
+those are properties of a **channel**. Two radios are two channels: a busy
+1200-baud VHF frequency and a clean 9600-baud UHF link have nothing to teach
+each other, and averaging them makes the good one carry the bad one's losses.
+
+It did average them. Until `AdaptiveScope`, AXTerm kept one application-wide
+`globalAdaptiveSettings` plus a per-route cache keyed on
+`(destination, pathSignature)` with **no radio in it**, so a station reachable
+on two radios was one entry, and the network-inference fallback — the sample
+that fires when no session is open — was a single figure applied to every
+transmission on every radio.
+
+Now everything is keyed by scope:
+
+    AdaptiveScope
+      .radio(RadioID)                                   the channel
+      .route(radio:, destination:, path:)               one link on it
+
+- One sample **teaches** its route and the channel underneath it. The channel
+  figure is the aggregate of everything crossing that radio.
+- Resolution **reads** route → channel → the operator's baseline, and never
+  crosses to another radio.
+- The network-inference fallback produces **one sample per radio**
+  (`aggregateLinkQualityPerRadio`), each filed against that radio's channel. A
+  radio with too little evidence is simply absent; it must never borrow
+  another's.
+- `getConfigForDestination` takes the radio, so the same station reached on two
+  radios gets two answers.
+
+### Learning is never seeded across routes
+
+Tempting and wrong, tried twice. Seeding a new route's *learning* from its
+channel lets one route lend its luck to another: with a clean channel a bad
+digipeated path starts out optimistic, and with pessimism inherited instead, a
+single bad route drags down every other route on the radio. Both broke route
+isolation, which is worth more than the faster convergence it was bought with.
+
+So each scope learns only from evidence about **itself**. What the channel
+knows is used at read time only — to answer "what should I open a session with
+for a route I know nothing about yet", a question whose wrong answer costs one
+session's opening parameters rather than a lasting belief.
+
+### Saying which
+
+A per-radio number nobody can attribute is worse than a global one, so every
+figure names its channel (`AdaptiveScopeLabel`) — but only when the station has
+more than one radio, or the attribution is noise on every row. The operator's
+configured baseline belongs to no radio and says "All channels".
+
+**The display has to be keyed the same way the learning is.** It was not, at
+first: `AdaptiveStatusStore` keyed a figure by `destination|path`, and a
+channel-wide figure has neither, so every radio's channel collapsed onto one
+entry and the last radio to learn erased the rest. The toolbar, meanwhile,
+showed `globalAdaptive` — the configured baseline, which no link sample ever
+touches — so a two-radio station read "All channels · K2 P128 N2 15" with ETX,
+loss and RTO blank and "waiting for evidence" underneath, while both radios
+were learning from real traffic and saying so in the log. The key now carries
+the radio (`adaptiveSessionID(radio:destination:path:)`), and with no session
+selected the toolbar shows a real channel — the primary radio's, a fixed
+choice, because showing whichever learned most recently makes the figure flip
+between radios every poll.
+
 ## Storage
 
 Migration v30 (`DatabaseManager.addRadioColumns`) adds the radio to the
@@ -288,6 +352,98 @@ different frequencies the delay costs nothing. Beacons and NODES both use it.
 **Beacons** leave each beaconing radio from that radio's own callsign. The
 console line gains " on IC-705, Base" only when several radios carried it.
 
+Three rules keep a beacon from being configured and then never heard:
+
+- **Editing does not postpone.** `scheduleBeacon` is called on every keystroke
+  in the beacon editor, and re-arming each time restarted a 30-minute countdown
+  from zero — so the beacon an operator had just finished configuring never went
+  out, because configuring it again postponed it. A running timer is now left
+  alone; only a changed interval (or a beacon appearing/disappearing) re-arms.
+- **Silence is reported.** An APRS position beacon with no fix built no frame
+  and said nothing. `SessionCoordinator.beaconObstacle(for:settings:)` names the
+  reason — no fix, no fixed lat/lon, empty text, a malformed digipeater — and
+  `sendBeacon` writes "Beacon not sent on IC-705: …" to the console rather than
+  returning quietly.
+- **It can be sent by hand.** Each radio's beacon section has *Send one now*,
+  disabled with the obstacle spelled out beneath it when it cannot go. With a
+  floor of five minutes and a usual interval of thirty, waiting for the timer
+  was the only way to find out whether a beacon worked.
+- **The map can send one too.** *Ask the Channel ▸ Tell the channel ▸ Beacon my
+  position now* beacons every radio whose beacon is on, staggered, leaving the
+  scheduled beacon untouched. The map is where an operator is looking when they
+  think about their own position, and three levels of Settings is the wrong
+  place for that. `SessionCoordinator.beaconObstacle(_ settings:)` is the
+  station-wide form of the per-radio obstacle: it complains only when *every*
+  beacon is blocked, because one working radio is enough for the button to do
+  something, and a warning that fires on a healthy station is a warning the
+  operator learns to ignore. With nothing configured at all it names the
+  setting to go to rather than reporting a failure with no cause.
+
+An APRS position beacon validates only its **path** (`BeaconPlan.planPath`): its
+info field is generated from a fix, not typed, so the text rules — which reject
+an empty body — do not apply to it.
+
+### The APRS path
+
+`RadioProfile.aprsPath` is one field per radio, used by everything APRS that
+radio sends: the position beacon, a directed query (the map's Ping) and a
+message the operator composes. One field rather than one per feature, because on
+the air it is one decision — a path is how far the station reaches, and a
+station that beacons two hops out and pings direct is answering the same
+question two different ways.
+
+**Nothing on APRS is repeated automatically.** A digipeater repeats a frame only
+when the frame's AX.25 path names it, by callsign or by the `WIDEn-N`
+convention, so everything AXTerm initiated with `path: []` — every ping, every
+message — reached stations in direct earshot and nobody else. That is not a
+subtle deficit: a station whose only direct listeners are one igate and two
+trackers looks, from its own screen, like a channel where nobody answers.
+
+`APRSPath` holds the arithmetic and the etiquette, pure and tested: `n-N` is a
+hop budget the sender sets and each digipeater decrements, so `WIDE2-2` costs
+*three* transmissions of one frame, not two. Paths past three transmissions draw
+a warning, and the pre-New-N forms (`WIDEn-N` with n ≥ 3, `RELAY`, `TRACE`) draw
+a different one — they are mostly ignored by modern digipeaters, so a station
+using them is quieter than it thinks rather than louder.
+
+Replies do **not** come through here: an ack or a query answer keeps
+`InboundContext.replyPath`, retracing the path its message arrived by, which is
+both more accurate and cheaper than a guess. The `?APRS?` flood stays
+deliberately direct — it is a *who hears me directly* probe and a digipeated one
+would answer a different question.
+
+`effectiveAPRSPath` resolves `nil` (never set) to the APRS beacon's own path,
+which is where the setting lived before, so upgrading never silently shortens a
+working station's reach. An empty string is a decision — direct, deliberately —
+and is kept.
+
+#### Checked against Xastir
+
+Xastir is the de-facto reference for what a well-behaved station does, so the
+path rules were read out of its source rather than guessed:
+
+- **General queries are digipeated there.** `WX_query()` and `General_query()`
+  (`src/db_gui.c`) call `output_my_data` with a null path, which falls through
+  to `select_unproto_path` — the interface's own UNPROTO path. So on a normally
+  configured Xastir, `?WX?` goes out digipeated. AXTerm's flood defaults to
+  direct because its probe answers *who can hear me*, which only a direct query
+  can answer honestly; `APRSProbeReach` makes the wide form one click away and
+  records which was used, so the results never claim earshot they did not
+  measure.
+- **Directed queries and messages use the default path, not a reverse path.**
+  Xastir is explicit about it in a comment at each site: *"Nice to return via
+  the reverse path here? No! Better to use the default paths."* AXTerm matches
+  for traffic it initiates. It deliberately differs for *replies*, which keep
+  `InboundContext.replyPath`: an ack retraces the path its message arrived by,
+  which is better on the asymmetric links this station actually has.
+- **Path etiquette** in `APRSPath.unsociable` is `check_unproto_path`
+  (`src/util.c`) rewritten in Swift: `MAX_WIDES` is 3, a fill-in (`WIDE1-1`,
+  `RELAY`) belongs only in the first slot, two `WIDEn-N` entries multiply
+  rather than add, `n` may not be less than `N`, and `N` of 0 is a spent slot.
+- **Xastir rotates three unproto paths per interface** (`unproto1/2/3`). AXTerm
+  has one per radio; the rotation solves a problem — path variety for
+  propagation experiments — that nobody has asked for here.
+
 **NODES and the node identity.** `netRomNodeIdentity` is operator-selectable:
 
 - `unified` (default, BPQ's NODECALL over several PORTCALLs): the station
@@ -310,6 +466,18 @@ the driver only encodes what it is given.
 the pinging radios, and the probe leaves as that radio's callsign; the DISC
 escalation follows it. A station heard only on a radio whose pinging is off
 is not a candidate. The hourly budget stays station-wide.
+
+A candidate list is not a census either. Besides stations heard directly, it
+takes destinations somebody else was overheard calling — and **only connected
+mode puts a station's address in the destination field**. A UI frame's
+destination is not an address: APRS puts a tocall there (APRS 1.01 ch.5) and
+Mic-E overloads it with the latitude, the message bits and the N/S and E/W
+signs (ch.10). `APMI04` is a software version and `S8RVTQ` is a latitude, and
+both are six alphanumerics containing a digit, so both pass every callsign
+shape test there is. The frame type decides
+(`SessionCoordinator.addressesAStation`), because the spelling cannot. Before
+that rule, overhearing NK7W-9 beacon its position made AXTerm transmit an XID
+and then a DISC to its latitude (operator's log, 2026-09-09).
 
 **Mailbox.** `PersonalBBSListener.servesThisRadio` refuses a call that
 arrived on a radio with `answersMailbox` off, and says which switch to look
