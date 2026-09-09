@@ -1,0 +1,287 @@
+{
+  "captured_at": "2026-09-09T14:36:58Z",
+  "asked_as": "ORACLE-1",
+  "target": "XASTIR-1",
+  "channel": "rfnet: 1200-baud AFSK, one Direwolf per station, shared audio bus",
+  "note": "AXTerm's own transmissions on a real modulated channel. The frames are built by TestRig/scripts/axterm_onair.py independently of AXTerm; AXTermOnAirTests asserts AXTerm emits the same bytes.",
+  "frames": {
+    "ping-position": {
+      "info": ":XASTIR-1 :?APRSP",
+      "via": [],
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5841535449522d31203a3f4150525350",
+      "needle": "?APRSP",
+      "replies": [
+        {
+          "after_s": 1.85,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d",
+          "info_ascii": "=3936.70N/10443.90W-AXTerm rig oracle"
+        },
+        {
+          "after_s": 2.8,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d",
+          "info_ascii": "=3936.70N/10443.90W-AXTerm rig oracle"
+        }
+      ],
+      "attempts": 1,
+      "decoded_by_direwolf": [
+        "Directed Station Query, Ambulance, Experimental"
+      ]
+    },
+    "query-version": {
+      "info": ":XASTIR-1 :?VER",
+      "via": [],
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5841535449522d31203a3f564552",
+      "needle": "?VER",
+      "replies": [
+        {
+          "after_s": 2.72,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a78617374697220322e312e380d",
+          "info_ascii": ":ORACLE-1 :xastir 2.1.8"
+        },
+        {
+          "after_s": 3.55,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a78617374697220322e312e380d",
+          "info_ascii": ":ORACLE-1 :xastir 2.1.8"
+        }
+      ],
+      "attempts": 1,
+      "decoded_by_direwolf": [
+        "Directed Station Query, Ambulance, Experimental"
+      ]
+    },
+    "query-directs": {
+      "info": ":XASTIR-1 :?APRSD",
+      "via": [],
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5841535449522d31203a3f4150525344",
+      "needle": "?APRSD",
+      "replies": [
+        {
+          "after_s": 3.27,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a446972656374733d203134372e323835434f20414431435420414944204b4b30582d3130204e3258474c2d31204f5241434c452d310d",
+          "info_ascii": ":ORACLE-1 :Directs= 147.285CO AD1CT AID KK0X-10 N2XGL-1 ORACLE-1"
+        },
+        {
+          "after_s": 3.72,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a446972656374733d2053494d4c4120575430522d390d",
+          "info_ascii": ":ORACLE-1 :Directs= SIMLA WT0R-9"
+        },
+        {
+          "after_s": 4.81,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a446972656374733d203134372e323835434f20414431435420414944204b4b30582d3130204e3258474c2d31204f5241434c452d310d",
+          "info_ascii": ":ORACLE-1 :Directs= 147.285CO AD1CT AID KK0X-10 N2XGL-1 ORACLE-1"
+        },
+        {
+          "after_s": 5.45,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a446972656374733d2053494d4c4120575430522d390d",
+          "info_ascii": ":ORACLE-1 :Directs= SIMLA WT0R-9"
+        }
+      ],
+      "attempts": 1,
+      "decoded_by_direwolf": [
+        "Directed Station Query, Ambulance, Experimental"
+      ]
+    },
+    "query-trace-digipeated": {
+      "info": ":XASTIR-1 :?APRST",
+      "via": [
+        "WIDE1-1"
+      ],
+      "frame_hex": "82a0b482b0a8e09ea48286988a62ae92888a62406303f03a5841535449522d31203a3f4150525354",
+      "needle": "?APRST",
+      "replies": [
+        {
+          "after_s": 3.96,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c57494445312d310d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT,WIDE1-1"
+        },
+        {
+          "after_s": 4.89,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c57494445312d310d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT,WIDE1-1"
+        },
+        {
+          "after_s": 6.01,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c5246444947492d312a0d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT,RFDIGI-1*"
+        },
+        {
+          "after_s": 6.95,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c5246444947492d312a0d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT,RFDIGI-1*"
+        }
+      ],
+      "attempts": 1,
+      "decoded_by_direwolf": [
+        "Directed Station Query, Ambulance, Experimental"
+      ]
+    },
+    "message-numbered": {
+      "info": ":XASTIR-1 :AXTerm on-air proof{042",
+      "via": [],
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5841535449522d31203a41585465726d206f6e2d6169722070726f6f667b303432",
+      "needle": "{042",
+      "replies": [
+        {
+          "after_s": 3.79,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a61636b3034320d",
+          "info_ascii": ":ORACLE-1 :ack042"
+        },
+        {
+          "after_s": 4.56,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a61636b3034320d",
+          "info_ascii": ":ORACLE-1 :ack042"
+        }
+      ],
+      "attempts": 1,
+      "decoded_by_direwolf": [
+        "APRS Message 042 for \"XASTIR-1\", Ambulance, Experimental",
+        "AXTerm on-air proof{042"
+      ]
+    },
+    "beacon-position": {
+      "info": "!3936.70N/10443.90W-AXTerm on-air proof",
+      "via": [],
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f021333933362e37304e2f31303434332e3930572d41585465726d206f6e2d6169722070726f6f66",
+      "needle": "3936.70N",
+      "replies": [],
+      "attempts": 2,
+      "decoded_by_direwolf": [
+        "Position, House, Experimental",
+        "N 39 36.7000, W 104 43.9000",
+        "AXTerm on-air proof"
+      ]
+    },
+    "beacon-compressed": {
+      "info": "!/:KoH4#0S-  AAXTerm on-air proof",
+      "via": [],
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f0212f3a4b6f48342330532d20204141585465726d206f6e2d6169722070726f6f66",
+      "needle": ":KoH4#0S",
+      "replies": [],
+      "attempts": 2,
+      "decoded_by_direwolf": [
+        "Position, House, Experimental",
+        "N 39 36.7019, W 104 43.9021",
+        "AXTerm on-air proof"
+      ]
+    },
+    "general-query": {
+      "info": "?APRS?",
+      "via": [],
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f03f415052533f",
+      "needle": "?APRS?",
+      "replies": [
+        {
+          "after_s": 126.75,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d",
+          "info_ascii": "=3936.70N/10443.90W-AXTerm rig oracle"
+        },
+        {
+          "after_s": 127.65,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d",
+          "info_ascii": "=3936.70N/10443.90W-AXTerm rig oracle"
+        }
+      ],
+      "attempts": 1,
+      "decoded_by_direwolf": [
+        "DEBUG: General Query type = \"APRS\"",
+        "General Query, Ambulance, Experimental"
+      ]
+    }
+  }
+}

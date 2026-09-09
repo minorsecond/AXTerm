@@ -1,0 +1,172 @@
+{
+  "asked_via": [],
+  "captured_at": "2026-09-09T12:38:09Z",
+  "target": "XASTIR-1",
+  "asked_as": "ORACLE-1",
+  "listen_seconds": 12.0,
+  "note": "Byte-exact replies from a real Xastir 2.1.8 over a genuinely modulated channel: each station has its own Direwolf, all of them playing into and listening to one shared PulseAudio null sink, so every frame here was AFSK-modulated and demodulated. docker compose --profile rfnet up -d; regenerate with scripts/xastir_oracle.py --port 8013. Do not hand-edit.",
+  "exchanges": [
+    {
+      "kind": "query",
+      "query": "?APRSP",
+      "sent_info": ":XASTIR-1 :?APRSP",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 3.91,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d",
+          "info_ascii": "=3936.70N/10443.90W-AXTerm rig oracle\r",
+          "addressed_to_us": false
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "kind": "query",
+      "query": "?VER",
+      "sent_info": ":XASTIR-1 :?VER",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 2.37,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d31203a78617374697220322e312e380d",
+          "info_ascii": ":ORACLE-1 :xastir 2.1.8\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "kind": "query",
+      "query": "?APRSD",
+      "sent_info": ":XASTIR-1 :?APRSD",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 1.92,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d31203a446972656374733d204f5241434c452d310d",
+          "info_ascii": ":ORACLE-1 :Directs= ORACLE-1\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "kind": "query",
+      "query": "?APRST",
+      "sent_info": ":XASTIR-1 :?APRST",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 1.87,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158540d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "kind": "query",
+      "query": "?PING?",
+      "sent_info": ":XASTIR-1 :?PING?",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 2.99,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158540d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "kind": "query",
+      "query": "?APRSS",
+      "sent_info": ":XASTIR-1 :?APRSS",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "kind": "query",
+      "query": "?APRSO",
+      "sent_info": ":XASTIR-1 :?APRSO",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "kind": "query",
+      "query": "?APRSM",
+      "sent_info": ":XASTIR-1 :?APRSM",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "kind": "query",
+      "query": "?APRSH",
+      "sent_info": ":XASTIR-1 :?APRSH",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "kind": "query",
+      "query": "?IGATE?",
+      "sent_info": ":XASTIR-1 :?IGATE?",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "kind": "query",
+      "query": "?aprsp",
+      "sent_info": ":XASTIR-1 :?aprsp",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "kind": "query",
+      "query": "?WX?",
+      "sent_info": ":XASTIR-1 :?WX?",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    }
+  ],
+  "channel": "rfnet: 1200-baud AFSK, one Direwolf per station, shared audio bus"
+}
