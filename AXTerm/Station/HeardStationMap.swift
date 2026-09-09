@@ -75,6 +75,28 @@ nonisolated enum HeardStationMap {
         /// own transmitted fix.
         var aprsSymbol: APRSMapSymbol?
 
+        /// The last weather this station reported, and when. Unlike the
+        /// symbol, this is carried whichever point the marker sits on: the
+        /// reading is about the station, not about where the map chose to
+        /// draw it.
+        var weather: APRSWeather?
+        var weatherHeard: Date?
+        /// The station's own readings over time. Carried so the card can show
+        /// what the barometer is *doing*, which is the only thing a single
+        /// surface station can say about weather that has not arrived yet.
+        var weatherHistory: [Station.WeatherSample] = []
+        /// Whatever this station is measuring that is not weather — a creek
+        /// gauge, a battery bank, a tank level. Empty for almost every
+        /// station, and the whole point for the few that send it.
+        var telemetry: [APRSTelemetry.Reading] = []
+        var telemetryTitle: String?
+        var telemetryHeard: Date?
+        /// True when this station has ever shown connected-mode traffic, or
+        /// when nothing is known either way. False means every frame heard
+        /// from it was an APRS beacon, which is evidence it runs no
+        /// connected-mode service to call.
+        var supportsConnect: Bool = true
+
         var id: String { callsign }
         var isPlaced: Bool { position != nil }
     }
@@ -114,19 +136,28 @@ nonisolated enum HeardStationMap {
     ///   - gatewayGrids: grid squares from the RMS cache, keyed by full
     ///     callsign including SSID — a gateway's position is known even
     ///     when its licensee has never been looked up.
-    ///   - excluding: the operator's own callsign. A station hears its
-    ///     own transmissions come back digipeated, so without this the
-    ///     operator appears twice — once as the centre marker and again
-    ///     as a heard station a few metres away.
+    ///   - excluding: the addresses **this station transmits as**, with their
+    ///     SSIDs. A station hears its own transmissions come back digipeated,
+    ///     so without this the operator appears twice — once as the centre
+    ///     marker and again as a heard station a few metres away.
+    ///
+    ///     Full addresses, not base callsigns. Matching on the base swallowed
+    ///     every SSID on the licence, and those are other radios: K0EPI-4 is
+    ///     an HT in the operator's pocket with its own position and its own
+    ///     symbol, ninety yards from the desk and moving. It was heard,
+    ///     parsed, and then dropped from the map for sharing a licence —
+    ///     invisible, unpingable, and unselectable from the traffic strip.
+    ///     Everyone else's sibling SSIDs were always drawn separately, which
+    ///     is what APRS means by a station.
     static func entries(stations: [Station],
                         directory: [String: CallsignRecord],
                         gatewayGrids: [String: String],
                         announcedGrids: [String: String] = [:],
                         preference: PositionPreference = .transmitted,
-                        excluding ownCallsign: String = "") -> [Entry] {
-        let own = CallsignQuery.normalize(ownCallsign)
+                        excluding ownCallsigns: Set<String> = []) -> [Entry] {
+        let own = Set(ownCallsigns.map { $0.uppercased() })
         return stations.filter {
-            own.isEmpty || CallsignQuery.normalize($0.call) != own
+            !own.contains($0.call.uppercased())
         }.map { station in
             let call = station.call.uppercased()
             let base = CallsignQuery.normalize(call)
@@ -145,7 +176,13 @@ nonisolated enum HeardStationMap {
                     gridSquare: record?.gridSquare?.uppercased(),
                     name: record?.name, locality: record?.locality,
                     origin: .transmittedAPRS,
-                    aprsSymbol: APRSMapSymbol(table: aprs.symbolTable, code: aprs.symbolCode))
+                    aprsSymbol: APRSMapSymbol(table: aprs.symbolTable, code: aprs.symbolCode),
+                    weather: station.weather, weatherHeard: station.weatherHeard,
+                    weatherHistory: station.weatherHistory,
+                    telemetry: station.telemetryReadings,
+                    telemetryTitle: station.telemetryDefinition?.title,
+                    telemetryHeard: station.telemetryHeard,
+                    supportsConnect: supportsConnect(station))
             }
             // The licence/registry/locator lookups — a point about the callsign.
             let derived = derivedEntry(
@@ -183,7 +220,13 @@ nonisolated enum HeardStationMap {
                 position: position, positionSource: positionSource,
                 confidence: confidence, gridSquare: gridSquare,
                 name: record?.name, locality: record?.locality,
-                origin: position == nil ? .unplaced : .licenceOrGrid)
+                origin: position == nil ? .unplaced : .licenceOrGrid,
+                weather: station.weather, weatherHeard: station.weatherHeard,
+                weatherHistory: station.weatherHistory,
+                telemetry: station.telemetryReadings,
+                telemetryTitle: station.telemetryDefinition?.title,
+                telemetryHeard: station.telemetryHeard,
+                supportsConnect: supportsConnect(station))
         }
         do {
             // Precision and identity are different questions. A licence
@@ -438,17 +481,28 @@ nonisolated enum HeardStationMap {
                         ? "Markers are nudged apart only so each can be picked."
                         : "Markers are spread within the square so each can be picked; a grid reference gives no finer position than that."
                 }
-                return (
+                return StationScope.SiteDraft(
                     id: entry.callsign,
                     label: entry.callsign,
                     position: position,
                     signal: signal(for: entry, now: now),
                     subtitle: entry.gridSquare ?? "",
                     detail: text,
+                    lastHeard: entry.lastHeard,
                     isStale: isStale(entry, now: now),
                     isApproximate: entry.confidence == .inferredFromOperator,
                     isNode: entry.isNodeAlias,
-                    aprsSymbol: entry.aprsSymbol)
+                    aprsSymbol: entry.aprsSymbol,
+                    weatherBadge: weatherBadge(for: entry, now: now,
+                                               inImperial: distanceInMiles),
+                    weather: entry.weather,
+                    weatherHeard: entry.weatherHeard,
+                    weatherHistory: entry.weatherHistory,
+                    telemetry: entry.telemetry,
+                    telemetryTitle: entry.telemetryTitle,
+                    supportsConnect: entry.isNodeAlias || entry.supportsConnect,
+                    weatherLines: weatherLines(for: entry, now: now,
+                                               inImperial: distanceInMiles))
             })
     }
 
@@ -482,6 +536,12 @@ nonisolated enum HeardStationMap {
         } else if let grid = entry.gridSquare {
             lines.append(grid)
         }
+        // What kind of station this is, read from the symbol it beaconed. Only
+        // a transmitted fix carries one; a looked-up address has no type to
+        // give, so the line is simply absent rather than guessed.
+        if let symbol = entry.aprsSymbol {
+            lines.append(APRSSymbolType.label(code: symbol.code))
+        }
         if let position = entry.position {
             let kilometres = GreatCircle.kilometres(from: observer, to: position)
             let bearing = GreatCircle.bearingDegrees(from: observer, to: position)
@@ -502,6 +562,54 @@ nonisolated enum HeardStationMap {
             lines.append("Position from \(source).")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Whether calling this station could go anywhere.
+    ///
+    /// Evidence-based, and deliberately generous where there is no evidence:
+    /// a station we have heard only as APRS beacons runs no connected-mode
+    /// service, but one we have barely heard at all might, and refusing to
+    /// offer a connect on no evidence would be the app deciding for the
+    /// operator.
+    static func supportsConnect(_ station: Station) -> Bool {
+        let aprsFrames = station.perRadio.values.reduce(0) { $0 + $1.aprsFrames }
+        let sessionFrames = station.perRadio.values.reduce(0) { $0 + $1.sessionFrames }
+        if sessionFrames > 0 { return true }
+        return aprsFrames == 0
+    }
+
+    /// A reading older than this is quoted with its age attached. Weather is
+    /// the one thing on this map that goes wrong quietly: a temperature from
+    /// this morning looks exactly like a temperature from a minute ago.
+    static let weatherFreshWindow: TimeInterval = 3600
+
+    /// The station's own weather, one short line per group of readings, with
+    /// the reading's age appended once it is no longer current.
+    static func weatherLines(for entry: Entry, now: Date, inImperial: Bool) -> [String] {
+        guard let weather = entry.weather else { return [] }
+        var lines = weather.summaryLines(inImperial: inImperial)
+        guard !lines.isEmpty else { return [] }
+        if let trend = APRSWeatherTrend.pressureLine(entry.weatherHistory, now: now) {
+            lines.append(trend)
+        }
+        if let heard = entry.weatherHeard, now.timeIntervalSince(heard) > weatherFreshWindow {
+            lines.append("Reading taken \(heard.formatted(.relative(presentation: .named)))")
+        }
+        return lines
+    }
+
+    /// The one reading worth putting on the map itself, beside the callsign:
+    /// the temperature. Everything else needs its units spelled out to mean
+    /// anything, and a marker has no room to spell anything out.
+    ///
+    /// A reading too old to be current is not badged at all — a stale number
+    /// on a map reads as the current one, and there is nowhere on a marker to
+    /// say otherwise.
+    static func weatherBadge(for entry: Entry, now: Date, inImperial: Bool) -> String? {
+        guard let weather = entry.weather,
+              let heard = entry.weatherHeard,
+              now.timeIntervalSince(heard) <= weatherFreshWindow else { return nil }
+        return weather.temperatureText(inFahrenheit: inImperial)
     }
 
     /// Callsigns worth asking a directory about: unplaced, and plausibly

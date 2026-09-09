@@ -165,13 +165,13 @@ final class StationScopeTests: XCTestCase {
             observerLabel: "K0EPI",
             observer: .init(latitude: 39.7392, longitude: -104.9903),
             entries: [
-                (id: "known", label: "W0ARP-10",
+                StationScope.SiteDraft(id: "known", label: "W0ARP-10",
                  position: .init(latitude: 39.6, longitude: -104.9),
                  signal: .good, subtitle: "", detail: "", isStale: false,
-                 isApproximate: false, isNode: false, aprsSymbol: nil),
-                (id: "unknown", label: "N0XYZ", position: nil,
+                 isApproximate: false, isNode: false),
+                StationScope.SiteDraft(id: "unknown", label: "N0XYZ", position: nil,
                  signal: .unknown, subtitle: "", detail: "", isStale: false,
-                 isApproximate: false, isNode: false, aprsSymbol: nil),
+                 isApproximate: false, isNode: false),
             ])
         XCTAssertEqual(scope.sites.map(\.id), ["known"])
     }
@@ -182,9 +182,9 @@ final class StationScopeTests: XCTestCase {
             observerLabel: "K0EPI",
             observer: .init(latitude: 0, longitude: 0),
             entries: [
-                (id: "north", label: "N", position: .init(latitude: 1, longitude: 0),
+                StationScope.SiteDraft(id: "north", label: "N", position: .init(latitude: 1, longitude: 0),
                  signal: .good, subtitle: "", detail: "", isStale: false,
-                 isApproximate: false, isNode: false, aprsSymbol: nil),
+                 isApproximate: false, isNode: false),
             ])
         let site = try XCTUnwrap(scope.sites.first)
         XCTAssertEqual(site.bearingDegrees, 0, accuracy: 0.01)
@@ -201,9 +201,9 @@ final class StationScopeTests: XCTestCase {
             observerLabel: "DM79po",
             observer: .init(observer),
             entries: [
-                (id: "W0ARP-10", label: "W0ARP-10", position: .init(gateway),
+                StationScope.SiteDraft(id: "W0ARP-10", label: "W0ARP-10", position: .init(gateway),
                  signal: .fair, subtitle: "145.050", detail: "", isStale: false,
-                 isApproximate: false, isNode: false, aprsSymbol: nil),
+                 isApproximate: false, isNode: false),
             ])
         let site = try XCTUnwrap(scope.sites.first)
         // Both squares are in DM79, so this is a short hop.

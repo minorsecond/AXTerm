@@ -271,25 +271,34 @@ final class HeardStationMapTests: XCTestCase {
         let entries = HeardStationMap.entries(
             stations: [station("K0EPI-7"), station("W0ARP-10")],
             directory: [:], gatewayGrids: [:],
-            excluding: "K0EPI-7")
+            excluding: ["K0EPI-7"])
         XCTAssertEqual(entries.map(\.callsign), ["W0ARP-10"])
     }
 
-    /// Any SSID of the operator's own licence is still the operator.
-    func testOwnCallsignExclusionIgnoresSSIDAndCase() {
+    /// Every address this station answers to is the same box at the same
+    /// position, so all of them are excluded — and matching is
+    /// case-insensitive.
+    ///
+    /// This used to be written as "any SSID of the operator's own licence is
+    /// still the operator", matching on the base callsign. That is a
+    /// different claim and a wrong one: the operator's HT is another radio
+    /// on the same licence, and it was dropped from the map, could not be
+    /// pinged, and could not be selected from the traffic strip. See
+    /// `OwnSSIDsOnTheMapTests`.
+    func testEveryAddressThisStationAnswersToIsExcluded() {
         let entries = HeardStationMap.entries(
-            stations: [station("k0epi-1"), station("K0EPI-7"), station("K0EPI")],
+            stations: [station("k0epi-1"), station("K0EPI-7"), station("K0EPI-11")],
             directory: [:], gatewayGrids: [:],
-            excluding: "K0EPI-7")
+            excluding: ["K0EPI-7", "K0EPI-1", "K0EPI-11"])
         XCTAssertTrue(entries.isEmpty)
     }
 
-    /// With no callsign configured nothing is filtered — better to show
+    /// With no addresses given nothing is filtered — better to show
     /// a duplicate than to silently drop someone else's station.
     func testNoOwnCallsignFiltersNothing() {
         let entries = HeardStationMap.entries(
             stations: [station("K0EPI-7"), station("W0ARP-10")],
-            directory: [:], gatewayGrids: [:], excluding: "")
+            directory: [:], gatewayGrids: [:], excluding: [])
         XCTAssertEqual(entries.count, 2)
     }
 

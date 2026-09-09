@@ -38,6 +38,10 @@ nonisolated struct StationScope: Equatable, Sendable {
         var subtitle: String
         /// Full explanation for the tooltip.
         var detail: String
+        /// When this station was last heard, for the map's "just transmitted"
+        /// marking. Distinct from `signal`/`isStale`, which grade recency over
+        /// minutes and hours; this answers "is it on the air right now".
+        var lastHeard: Date? = nil
         /// Drawn faded — known to exist, but not recently confirmed.
         var isStale: Bool
         /// The position is a lead rather than a location — drawn hollow
@@ -51,6 +55,48 @@ nonisolated struct StationScope: Equatable, Sendable {
         /// transmitted fix. Carried on the Site (not a side table) so a
         /// SwiftUI `Map` annotation actually rebuilds when the symbol arrives.
         var aprsSymbol: APRSMapSymbol? = nil
+        /// One current reading drawn beside the callsign — a weather
+        /// station's temperature. Already formatted, because the Site is what
+        /// both map renderers read and neither should be converting units.
+        var weatherBadge: String? = nil
+        /// The whole reading, for the card, which lays it out rather than
+        /// printing it. `detail` deliberately leaves it out so the card does
+        /// not say the same thing twice.
+        var weather: APRSWeather? = nil
+        var weatherHeard: Date? = nil
+        /// This station's readings over time, for the barometric tendency.
+        var weatherHistory: [Station.WeatherSample] = []
+        /// Non-weather sensors this station reports, already labelled and
+        /// calibrated as far as the station has said how.
+        var telemetry: [APRSTelemetry.Reading] = []
+        var telemetryTitle: String?
+        /// Whether a connected-mode call to this site could go anywhere.
+        ///
+        /// False for a station heard only as APRS beacons and for an object,
+        /// which is not a station at all. APRS is connectionless: a weather
+        /// station or a tracker runs no service to answer a SABM, so offering
+        /// Connect there transmits call attempts nobody will ever answer and
+        /// retries them to the limit.
+        var supportsConnect: Bool = true
+        /// Whether an APRS message or position request could reach it. False
+        /// for objects: a fire has no radio.
+        var supportsAPRSContact: Bool = true
+        /// Hover text: the detail plus the weather in words. A tooltip has no
+        /// layout, so the reading has to arrive as prose there.
+        var weatherLines: [String] = []
+
+        /// What hovering the marker shows — everything the card shows, in
+        /// text.
+        var tooltip: String {
+            var text = detail
+            if !weatherLines.isEmpty { text += "\n" + weatherLines.joined(separator: "\n") }
+            if !telemetry.isEmpty {
+                text += "\n" + (telemetryTitle ?? "Telemetry") + ": "
+                    + telemetry.map { ($0.name.map { n in n + " " } ?? "") + $0.text }
+                        .joined(separator: ", ")
+            }
+            return text
+        }
 
         var compassPoint: String { GreatCircle.compassPoint(bearingDegrees) }
 
@@ -113,16 +159,41 @@ nonisolated struct StationScope: Equatable, Sendable {
             rings: rings(forRange: range))
     }
 
+    /// What a caller hands in before range and bearing are known: a Site
+    /// without the two fields this type computes.
+    ///
+    /// A struct with defaults rather than a tuple. As a tuple this had grown
+    /// to fourteen positional elements, and every new field broke every call
+    /// site and every test that built one — including ones that could not
+    /// care less about the field being added.
+    struct SiteDraft {
+        var id: String
+        var label: String
+        var position: GreatCircle.Point?
+        var signal: Signal
+        var subtitle: String = ""
+        var detail: String = ""
+        var lastHeard: Date? = nil
+        var isStale: Bool = false
+        var isApproximate: Bool = false
+        var isNode: Bool = false
+        var aprsSymbol: APRSMapSymbol? = nil
+        var weatherBadge: String? = nil
+        var weather: APRSWeather? = nil
+        var weatherHeard: Date? = nil
+        var weatherHistory: [Station.WeatherSample] = []
+        var telemetry: [APRSTelemetry.Reading] = []
+        var telemetryTitle: String?
+        var supportsConnect: Bool = true
+        var supportsAPRSContact: Bool = true
+        var weatherLines: [String] = []
+    }
+
     /// Convenience for callers that have coordinates: computes range and
     /// bearing for each, and skips any without a position.
-    static func build(
-        observerLabel: String,
-        observer: GreatCircle.Point,
-        entries: [(id: String, label: String, position: GreatCircle.Point?,
-                   signal: Signal, subtitle: String, detail: String,
-                   isStale: Bool, isApproximate: Bool, isNode: Bool,
-                   aprsSymbol: APRSMapSymbol?)]
-    ) -> StationScope {
+    static func build(observerLabel: String,
+                      observer: GreatCircle.Point,
+                      entries: [SiteDraft]) -> StationScope {
         let sites = entries.compactMap { entry -> Site? in
             guard let position = entry.position else { return nil }
             return Site(
@@ -133,10 +204,20 @@ nonisolated struct StationScope: Equatable, Sendable {
                 signal: entry.signal,
                 subtitle: entry.subtitle,
                 detail: entry.detail,
+                lastHeard: entry.lastHeard,
                 isStale: entry.isStale,
                 isApproximate: entry.isApproximate,
                 isNode: entry.isNode,
-                aprsSymbol: entry.aprsSymbol)
+                aprsSymbol: entry.aprsSymbol,
+                weatherBadge: entry.weatherBadge,
+                weather: entry.weather,
+                weatherHeard: entry.weatherHeard,
+                weatherHistory: entry.weatherHistory,
+                telemetry: entry.telemetry,
+                telemetryTitle: entry.telemetryTitle,
+                supportsConnect: entry.supportsConnect,
+                supportsAPRSContact: entry.supportsAPRSContact,
+                weatherLines: entry.weatherLines)
         }
         return build(observerLabel: observerLabel, sites: sites)
     }

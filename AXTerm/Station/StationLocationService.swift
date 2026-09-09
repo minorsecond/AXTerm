@@ -63,7 +63,7 @@ final class StationLocationService: ObservableObject {
     ///
     /// Failure backs off on the same clock: a denied or absent GPS is not
     /// retried any faster than a working one is re-read.
-    func currentLocation(gpsTimeout: TimeInterval = 8,
+    func currentLocation(gpsTimeout: TimeInterval = 15,
                          maxFixAge: TimeInterval = StationLocationService.gpsFixLifetime) async -> StationLocation? {
         if let held = lastLocation, held.source == .gps,
            now().timeIntervalSince(held.timestamp) < maxFixAge {
@@ -145,7 +145,7 @@ nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocat
                 self.continuation = continuation
                 self.lock.unlock()
 
-                let manager = CLLocationManager()
+                let manager = self.manager ?? CLLocationManager()
                 manager.delegate = self
                 manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
                 self.manager = manager
@@ -155,11 +155,13 @@ nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocat
                     self.finish(.failure(GPSError.denied))
                 case .notDetermined:
                     manager.requestWhenInUseAuthorization()
-                    // A location request while undetermined queues
-                    // behind the authorization prompt.
-                    manager.requestLocation()
+                    // Continuous updates rather than requestLocation():
+                    // a Mac positions by Wi-Fi, whose first scan often
+                    // isn't ready when a one-shot gives up — so keep
+                    // listening until a fix lands or the window closes.
+                    manager.startUpdatingLocation()
                 default:
-                    manager.requestLocation()
+                    manager.startUpdatingLocation()
                 }
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
@@ -175,21 +177,34 @@ nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocat
         let continuation = self.continuation
         self.continuation = nil
         lock.unlock()
+        // Stop the scan whichever way this ended — a fix, a timeout, or a
+        // hard error — so CoreLocation isn't left running and the next
+        // request starts clean.
+        manager?.stopUpdatingLocation()
+        guard let continuation else { return }
         switch result {
-        case .success(let fix): continuation?.resume(returning: fix)
-        case .failure(let error): continuation?.resume(throwing: error)
+        case .success(let fix): continuation.resume(returning: fix)
+        case .failure(let error): continuation.resume(throwing: error)
         }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
+        // A negative horizontal accuracy marks an invalid fix; wait for a
+        // real one rather than reporting the antimeridian.
+        guard let location = locations.last, location.horizontalAccuracy >= 0 else { return }
         finish(.success((location.coordinate.latitude, location.coordinate.longitude)))
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        if (error as? CLError)?.code == .denied {
+        switch (error as? CLError)?.code {
+        case .denied:
             finish(.failure(GPSError.denied))
-        } else {
+        case .locationUnknown:
+            // Transient: CoreLocation couldn't fix *yet* but keeps trying.
+            // Ignore it and let the timeout be the deadline — ending here is
+            // what made a slow Wi-Fi fix look like a hard failure.
+            break
+        default:
             finish(.failure(GPSError.unavailable(error.localizedDescription)))
         }
     }
@@ -198,10 +213,12 @@ nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocat
         switch manager.authorizationStatus {
         case .denied, .restricted:
             finish(.failure(GPSError.denied))
-        case .authorizedAlways:
-            manager.requestLocation()
+        case .notDetermined:
+            break   // still waiting on the prompt
         default:
-            break
+            // Authorized (any form, either platform): start the scan the
+            // request may have deferred until the grant came through.
+            manager.startUpdatingLocation()
         }
     }
 }

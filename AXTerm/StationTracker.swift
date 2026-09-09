@@ -67,10 +67,21 @@ nonisolated struct StationTracker {
         #if DEBUG
         aprsTrace(packet)
         #endif
-        guard !packet.info.isEmpty,
-              let report = APRSParser.parse(destination: packet.to?.call ?? "", info: packet.info)
-        else { return }
+        guard !packet.info.isEmpty else { return }
+        guard let report = APRSParser.parse(destination: packet.to?.call ?? "", info: packet.info)
+        else {
+            // No position — but a positionless weather report is still this
+            // station's weather, and dropping it would lose the reading of
+            // every station that beacons its fix and its sensors separately.
+            if let weather = APRSParser.parseWeather(info: packet.info) {
+                recordWeather(&station, weather, at: packet.timestamp)
+            }
+            return
+        }
         station.aprs = report
+        if let weather = report.weather {
+            recordWeather(&station, weather, at: packet.timestamp)
+        }
         let fix = Station.APRSFix(latitude: report.latitude, longitude: report.longitude,
                                   timestamp: packet.timestamp)
         if let last = station.track.last,
@@ -79,6 +90,55 @@ nonisolated struct StationTracker {
         } else {
             station.track.append(fix)
             if station.track.count > 30 { station.track.removeFirst(station.track.count - 30) }
+        }
+    }
+
+    /// Stores a reading as the current one and appends it to the history.
+    ///
+    /// A repeat of the identical reading at a new time still counts: the gap
+    /// between beacons is what makes a tendency measurable, and dropping
+    /// duplicates would make a station whose pressure is steady look as
+    /// though it had stopped reporting.
+    static func recordWeather(_ station: inout Station, _ weather: APRSWeather, at when: Date) {
+        station.weather = weather
+        station.weatherHeard = when
+        // Out-of-order arrivals happen on a digipeated channel. Keep the
+        // history sorted rather than trusting arrival order, because every
+        // trend read off it assumes oldest first.
+        station.weatherHistory.append(Station.WeatherSample(timestamp: when, weather: weather))
+        if station.weatherHistory.count > 1,
+           station.weatherHistory[station.weatherHistory.count - 2].timestamp > when {
+            station.weatherHistory.sort { $0.timestamp < $1.timestamp }
+        }
+        if station.weatherHistory.count > Station.weatherHistoryLimit {
+            station.weatherHistory.removeFirst(
+                station.weatherHistory.count - Station.weatherHistoryLimit)
+        }
+    }
+
+    /// Files a telemetry frame or one of the three messages that define what
+    /// its channels mean.
+    ///
+    /// The definitions are addressed *to the reporting station itself*, which
+    /// is how a station publishes its own calibration. They arrive rarely and
+    /// out of band, so they are merged into whatever is already known rather
+    /// than replacing it.
+    static func applyTelemetry(_ station: inout Station, packet: Packet) {
+        guard !packet.info.isEmpty else { return }
+        if let frame = APRSTelemetry.parseFrame(info: packet.info) {
+            station.telemetry = frame
+            station.telemetryHeard = packet.timestamp
+            return
+        }
+        guard case .message(let addressee, let text, _)? =
+                APRSMessage.parse(info: packet.info) else { return }
+        // Only the station's own definitions describe its own channels.
+        // Someone else's PARM addressed elsewhere says nothing about this one.
+        guard CallsignQuery.normalize(addressee)
+                == CallsignQuery.normalize(station.call) else { return }
+        var definition = station.telemetryDefinition ?? APRSTelemetry.Definition()
+        if APRSTelemetry.parseDefinition(text, into: &definition) {
+            station.telemetryDefinition = definition
         }
     }
 
@@ -97,8 +157,14 @@ nonisolated struct StationTracker {
             // session was proving we hear its own transmitter (sidebar said
             // via-digi while the session correctly said direct).
             stations[index].lastVia = via
-            Self.note(&stations[index], radio: radio, at: packet.timestamp, via: via)
+            // `heardVia` keeps only hops marked used, so an empty path here
+            // means nothing repeated this frame — it came straight off the
+            // station's own transmitter.
+            if via.isEmpty { stations[index].directCount += 1 }
+            else { stations[index].digipeatedCount += 1 }
+            Self.note(&stations[index], radio: radio, at: packet.timestamp, via: via, packet: packet)
             Self.applyAPRS(&stations[index], packet: packet)
+            Self.applyTelemetry(&stations[index], packet: packet)
         } else {
             var station = Station(
                 call: call,
@@ -106,8 +172,10 @@ nonisolated struct StationTracker {
                 heardCount: 1,
                 lastVia: via
             )
-            Self.note(&station, radio: radio, at: packet.timestamp, via: via)
+            if via.isEmpty { station.directCount = 1 } else { station.digipeatedCount = 1 }
+            Self.note(&station, radio: radio, at: packet.timestamp, via: via, packet: packet)
             Self.applyAPRS(&station, packet: packet)
+            Self.applyTelemetry(&station, packet: packet)
             stations.append(station)
             stationIndex[call] = stations.count - 1
         }
@@ -118,19 +186,63 @@ nonisolated struct StationTracker {
     /// Another radio heard a frame this tracker already counted — the same
     /// transmission, a second receiver. The station's count does not move;
     /// which radios can hear it does.
-    mutating func noteHeard(_ call: String, on radio: RadioID, at when: Date, via: [String]) {
+    mutating func noteHeard(_ call: String, on radio: RadioID, at when: Date,
+                            via: [String], packet: Packet) {
         guard let index = stationIndex[call] else { return }
-        Self.note(&stations[index], radio: radio, at: when, via: via)
+        Self.note(&stations[index], radio: radio, at: when, via: via, packet: packet)
     }
 
-    private static func note(_ station: inout Station, radio: RadioID, at when: Date, via: [String]) {
+    /// What a frame proves about the *radio* that heard it. See
+    /// `RadioTrafficFamily`.
+    ///
+    /// Three guards, each of which this got wrong at least once:
+    ///
+    /// * **APRS only ever rides in a UI frame with PID 0xF0.** Without that
+    ///   check, an I-frame inside a connected-mode session counted as APRS
+    ///   evidence, and a packet-only radio was badged "APRS · AX.25" for
+    ///   traffic that was nothing of the sort. NET/ROM is PID 0xCF and is
+    ///   excluded by the same test.
+    /// * **A bare general query is not evidence.** `APRSMessage.parse` accepts
+    ///   any text beginning with `?` as an APRS query, and `?` is the
+    ///   universal help command at a node prompt — so every operator asking a
+    ///   BBS for help was voting the channel APRS.
+    /// * A plain UI frame that parses as nothing proves nothing either way:
+    ///   APRS and a NET/ROM NODES broadcast both ride in one.
+    static func trafficEvidence(_ packet: Packet) -> (aprs: Bool, session: Bool) {
+        let session = RadioTrafficClassifier.isSessionEvidence(packet.frameType)
+        guard !packet.info.isEmpty,
+              packet.frameType == .ui,
+              packet.pid == 0xF0 else { return (false, session) }
+
+        if APRSParser.parse(destination: packet.to?.call ?? "", info: packet.info) != nil
+            || APRSParser.parseWeather(info: packet.info) != nil
+            || APRSObjectReport.parse(info: packet.info) != nil {
+            return (true, session)
+        }
+        // A message or bulletin counts; a bare `?…` query does not.
+        switch APRSMessage.parse(info: packet.info) {
+        case .message, .ack, .reject, .bulletin, .directedQuery:
+            return (true, session)
+        case .generalQuery, .none:
+            return (false, session)
+        }
+    }
+
+    private static func note(_ station: inout Station, radio: RadioID, at when: Date,
+                             via: [String], packet: Packet) {
+        let (isAPRS, isSession) = trafficEvidence(packet)
+
         if var observation = station.perRadio[radio] {
             observation.lastHeard = max(observation.lastHeard, when)
             observation.heardCount += 1
             observation.lastVia = via
+            if isAPRS { observation.aprsFrames += 1 }
+            if isSession { observation.sessionFrames += 1 }
             station.perRadio[radio] = observation
         } else {
-            station.perRadio[radio] = Station.RadioObservation(lastHeard: when, heardCount: 1, lastVia: via)
+            station.perRadio[radio] = Station.RadioObservation(
+                lastHeard: when, heardCount: 1, lastVia: via,
+                aprsFrames: isAPRS ? 1 : 0, sessionFrames: isSession ? 1 : 0)
         }
     }
 
@@ -148,6 +260,8 @@ nonisolated struct StationTracker {
             var heardCount: Int = 0
             var lastVia: [String] = []
             var perRadio: [RadioID: Station.RadioObservation] = [:]
+            var direct: Int = 0
+            var digipeated: Int = 0
         }
 
         var aggregates: [String: Aggregation] = [:]
@@ -157,15 +271,31 @@ nonisolated struct StationTracker {
             let call = from.display
             var aggregate = aggregates[call, default: Aggregation()]
             aggregate.heardCount += 1
+            // Counted here as well as in `update(with:)` for the reason the
+            // comment below gives: a rebuild that left these at zero would
+            // report every station as never heard, and the reach advice would
+            // warn about the whole channel until the next frame arrived.
+            if Self.heardVia(packet).isEmpty { aggregate.direct += 1 }
+            else { aggregate.digipeated += 1 }
             let radio = packet.radioID ?? .primary
+            // Count the traffic evidence here too. A rebuild happens on a
+            // radio reconnect, a replay, or a lifetime-count refresh, and
+            // leaving these at zero wiped every radio's APRS/AX.25
+            // classification — which silently un-grouped the whole map layer
+            // sidebar and dropped both badges. Same failure the position
+            // re-apply below exists to prevent.
+            let (isAPRS, isSession) = Self.trafficEvidence(packet)
             if var observation = aggregate.perRadio[radio] {
                 observation.lastHeard = max(observation.lastHeard, packet.timestamp)
                 observation.heardCount += 1
                 observation.lastVia = Self.heardVia(packet)
+                if isAPRS { observation.aprsFrames += 1 }
+                if isSession { observation.sessionFrames += 1 }
                 aggregate.perRadio[radio] = observation
             } else {
                 aggregate.perRadio[radio] = Station.RadioObservation(
-                    lastHeard: packet.timestamp, heardCount: 1, lastVia: Self.heardVia(packet))
+                    lastHeard: packet.timestamp, heardCount: 1, lastVia: Self.heardVia(packet),
+                    aprsFrames: isAPRS ? 1 : 0, sessionFrames: isSession ? 1 : 0)
             }
             if let currentLastHeard = aggregate.lastHeard {
                 if packet.timestamp >= currentLastHeard {
@@ -187,6 +317,8 @@ nonisolated struct StationTracker {
                 lastVia: aggregate.lastVia
             )
             station.perRadio = aggregate.perRadio
+            station.directCount = aggregate.direct
+            station.digipeatedCount = aggregate.digipeated
             return station
         }
         sortStations()
