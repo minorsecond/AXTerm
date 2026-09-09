@@ -53,6 +53,23 @@ final class APRSObjectSymbolTests: XCTestCase {
         XCTAssertEqual(APRSPlaceObjectSheet.Choice.hospital.label, "Hospital")
     }
 
+    /// Moving an object re-transmits it, and the sheet has to recover which
+    /// choice made it from the two bytes on the wire. A symbol that cannot be
+    /// recovered comes back as the fallback, which silently changes what the
+    /// channel sees — the exact failure this file exists to catch.
+    func testEveryOfferedSymbolIsRecoverableFromItsWireBytes() {
+        for choice in APRSPlaceObjectSheet.Choice.allCases {
+            let (table, code) = choice.symbol
+            XCTAssertEqual(APRSPlaceObjectSheet.Choice.matching(table: table, code: code),
+                           choice, "\(choice.rawValue) does not round-trip through \(table)\(code)")
+        }
+    }
+
+    func testASymbolWeDoNotOfferHasNoChoice() {
+        // `/_` is a weather station: real, and not something this picker places.
+        XCTAssertNil(APRSPlaceObjectSheet.Choice.matching(table: "/", code: "_"))
+    }
+
     /// A symbol we offer has to survive the encoder and come back as itself.
     func testEveryOfferedSymbolRoundTripsThroughTheEncoder() throws {
         for choice in APRSPlaceObjectSheet.Choice.allCases {

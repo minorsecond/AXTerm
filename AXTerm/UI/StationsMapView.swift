@@ -352,11 +352,39 @@ struct StationsMapView: View {
     /// last chose.
     /// Where a secondary click landed, while the compose sheet is up.
     /// A struct rather than a bare coordinate so `sheet(item:)` can drive it.
+    @ViewBuilder
+    private var movingBanner: some View {
+        if let moving = movingObject {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                Text("Secondary-click where \u{201C}\(moving.report.name)\u{201D} should go")
+                    .font(.callout)
+                Button("Cancel") { movingObject = nil }
+                    .controlSize(.small)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.5)))
+            .padding(.top, 10)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
     struct PendingObject: Identifiable {
         let id = UUID()
         let coordinate: CLLocationCoordinate2D
+        /// Set when this is a move rather than a new placement.
+        var moving: APRSObjectStore.Placed?
     }
     @State private var pendingObject: PendingObject?
+    /// The object waiting for somewhere to go.
+    ///
+    /// Moving is armed from the object's own card and finished with the same
+    /// secondary click that places a new one, rather than by dragging the
+    /// marker. A drag that transmits is one slipped trackpad away from moving
+    /// somebody's road closure by accident, and there is no undo on a channel.
+    @State private var movingObject: APRSObjectStore.Placed?
 
     @AppStorage("aprs.ask.reach") private var askReachRaw: String = APRSProbeReach.direct.rawValue
 
@@ -1937,16 +1965,23 @@ struct StationsMapView: View {
                                onSecondaryClick: { coordinate in
                                    // Only where placing is possible at all.
                                    guard onPlaceObject != nil else { return }
-                                   pendingObject = PendingObject(coordinate: coordinate)
+                                   pendingObject = PendingObject(coordinate: coordinate,
+                                                                 moving: movingObject)
+                                   movingObject = nil
                                },
                                coverage: coverageRing,
                                selection: $selection)
             .overlay(alignment: .bottomTrailing) { selectionCard }
+            // Armed state has to be visible and escapable. A mode you cannot
+            // see is a mode you cancel by clicking something else, and here
+            // clicking something else transmits.
+            .overlay(alignment: .top) { movingBanner }
             .sheet(item: $pendingObject) { pending in
                 APRSPlaceObjectSheet(
                     coordinate: pending.coordinate,
                     liveObjects: objects.live(),
                     ourAddresses: ownCallsigns,
+                    moving: pending.moving,
                     onTransmit: { name, table, code, comment in
                         onPlaceObject?(name, true,
                                        pending.coordinate.latitude,
@@ -2118,6 +2153,21 @@ struct StationsMapView: View {
                     // exactly why the button is withheld — an operator who
                     // can stand down another agency's road closure with one
                     // click will eventually do it by accident.
+                    if let placed = ourObject(siteID: site.id), onPlaceObject != nil {
+                        // APRS has no move: re-sending under a name we already
+                        // own is the move, which is why `problem` treats our
+                        // own name as no collision. Arming here and finishing
+                        // with the ordinary secondary click keeps the confirm
+                        // step that a drag would skip.
+                        Button {
+                            movingObject = placed
+                        } label: {
+                            Label("Move\u{2026}", systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+                        }
+                        .controlSize(.small)
+                        .help("Then secondary-click where \u{201C}\(placed.report.name)\u{201D} "
+                              + "should go. It moves on every station that hears it.")
+                    }
                     if let placed = ourObject(siteID: site.id), let onPlaceObject {
                         Button(role: .destructive) {
                             _ = onPlaceObject(placed.report.name, false,

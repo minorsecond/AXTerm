@@ -183,3 +183,54 @@ final class APRSObjectReannounceTests: XCTestCase {
         XCTAssertNil(item.reannounced(at: placed))
     }
 }
+
+
+/// Moving an object.
+///
+/// APRS has no move: re-transmitting under a name we already own is the move,
+/// and every receiver replaces what it had. So the thing worth holding is that
+/// nothing *except* the position changes on the way through.
+final class APRSObjectMoveTests: XCTestCase {
+
+    private let t = Date(timeIntervalSince1970: 1_757_419_200)
+
+    func testMovingKeepsEverythingButThePosition() throws {
+        let before = APRSObjectReport.objectInfo(
+            name: "ROADCLOSE", live: true, latitude: 39.6117, longitude: -104.7317,
+            symbolTable: "\\", symbolCode: "x", comment: "US-85 washed out", at: t)
+        let after = APRSObjectReport.objectInfo(
+            name: "ROADCLOSE", live: true, latitude: 39.7000, longitude: -104.8000,
+            symbolTable: "\\", symbolCode: "x", comment: "US-85 washed out",
+            at: t.addingTimeInterval(600))
+        let a = try XCTUnwrap(APRSObjectReport.parse(info: Data(before.utf8)))
+        let b = try XCTUnwrap(APRSObjectReport.parse(info: Data(after.utf8)))
+
+        // The key is what makes the receiver replace rather than add.
+        XCTAssertEqual(a.key, b.key)
+        XCTAssertEqual(a.symbolTable, b.symbolTable)
+        XCTAssertEqual(a.symbolCode, b.symbolCode)
+        XCTAssertEqual(a.comment, b.comment)
+        XCTAssertTrue(b.isLive)
+        XCTAssertNotEqual(a.latitude, b.latitude)
+        XCTAssertNotEqual(a.longitude, b.longitude)
+    }
+
+    /// And that a move is not a collision with ourselves — the check that
+    /// guards placement has to let this through or there is no way to move at
+    /// all.
+    func testMovingOurOwnObjectIsNotACollision() throws {
+        var store = APRSObjectStore()
+        let info = APRSObjectReport.objectInfo(
+            name: "ROADCLOSE", live: true, latitude: 39.6117, longitude: -104.7317,
+            symbolTable: "\\", symbolCode: "x", at: t)
+        store.record(try XCTUnwrap(APRSObjectReport.parse(info: Data(info.utf8))),
+                     from: "K0EPI-7", at: t)
+        XCTAssertNil(APRSObjectPlacement.problem(
+            name: "ROADCLOSE", liveObjects: store.live(now: t),
+            ourAddresses: ["K0EPI-7"]))
+        // Somebody else's, and it is.
+        XCTAssertEqual(APRSObjectPlacement.problem(
+            name: "ROADCLOSE", liveObjects: store.live(now: t),
+            ourAddresses: ["W0ARP-10"]), .collidesWith(station: "K0EPI-7"))
+    }
+}

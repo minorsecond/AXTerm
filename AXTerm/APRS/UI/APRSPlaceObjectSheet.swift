@@ -17,12 +17,45 @@ struct APRSPlaceObjectSheet: View {
     let onTransmit: (_ name: String, _ symbolTable: Character, _ symbolCode: Character,
                      _ comment: String) -> String?
     let onCancel: () -> Void
+    /// The object being moved, or nil when placing a new one.
+    ///
+    /// Moving is the same transmission as placing: APRS has no move, and
+    /// re-sending an object under a name we already own is how it is done —
+    /// which is why `APRSObjectPlacement.problem` treats our own name as no
+    /// collision. Routing it through this sheet rather than through a drag
+    /// keeps the one thing that matters: nothing keys the radio until the
+    /// operator presses Transmit.
+    var moving: APRSObjectStore.Placed?
 
-    @State private var name = ""
-    @State private var comment = ""
-    @State private var choice: Choice = .incident
+    @State private var name: String
+    @State private var comment: String
+    @State private var choice: Choice
     @State private var failure: String?
     @FocusState private var nameFocused: Bool
+
+    init(coordinate: CLLocationCoordinate2D,
+         liveObjects: [APRSObjectStore.Placed],
+         ourAddresses: Set<String>,
+         moving: APRSObjectStore.Placed? = nil,
+         onTransmit: @escaping (_ name: String, _ symbolTable: Character,
+                                _ symbolCode: Character, _ comment: String) -> String?,
+         onCancel: @escaping () -> Void) {
+        self.coordinate = coordinate
+        self.liveObjects = liveObjects
+        self.ourAddresses = ourAddresses
+        self.moving = moving
+        self.onTransmit = onTransmit
+        self.onCancel = onCancel
+        _name = State(initialValue: moving?.report.name ?? "")
+        _comment = State(initialValue: moving?.report.comment ?? "")
+        // A symbol that is not one of the eight falls back rather than
+        // blocking the move, and the "Others see" row makes the change
+        // visible — silently altering what the channel sees is the failure
+        // this picker exists to prevent.
+        _choice = State(initialValue: moving.flatMap {
+            Choice.matching(table: $0.report.symbolTable, code: $0.report.symbolCode)
+        } ?? .incident)
+    }
 
     /// The handful of symbols an incident net actually uses.
     ///
@@ -68,6 +101,12 @@ struct APRSPlaceObjectSheet: View {
             }
         }
 
+        /// The choice that transmits this symbol, or nil for one this picker
+        /// does not offer.
+        static func matching(table: Character, code: Character) -> Choice? {
+            allCases.first { $0.symbol == (table, code) }
+        }
+
         /// How the rest of the channel will label it, from Direwolf's own
         /// decode on the rig. Shown beside the choice so the operator is
         /// picking what others will see rather than what we call it.
@@ -97,7 +136,7 @@ struct APRSPlaceObjectSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Place an object")
+            Text(moving == nil ? "Place an object" : "Move object")
                 .font(.headline)
             Text(String(format: "%.4f, %.4f", coordinate.latitude, coordinate.longitude))
                 .font(.system(.caption, design: .monospaced))

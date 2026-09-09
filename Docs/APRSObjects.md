@@ -197,6 +197,25 @@ case- and padding-insensitively because that is how the key works everywhere
 else. Re-sending *our own* name is not a collision: it is how an object is
 moved or its comment corrected, and the format offers no other way.
 
+**Moving one.** APRS has no move. Re-transmitting under a name we already own
+*is* the move, and every receiver replaces what it had — which is why
+`APRSObjectPlacement.problem` treats our own name as no collision, and why
+without that check there would be no way to move anything at all.
+
+It is armed from the object's own card and finished with the ordinary
+secondary click, not by dragging the marker. A drag that transmits is one
+slipped trackpad away from moving somebody's road closure by accident and there
+is no undo on a shared channel; routing it through the same sheet keeps the step
+where nothing keys the radio until the operator presses Transmit. The armed
+state gets a banner with a Cancel, because a mode you cannot see is one you
+cancel by clicking somewhere else — and here clicking somewhere else transmits.
+
+The sheet opens pre-filled, which means recovering the choice from the two
+symbol bytes (`Choice.matching`). `APRSObjectSymbolTests` holds that every
+offered symbol round-trips; one that did not would come back as the fallback and
+silently change what the channel sees, which is the failure the symbol table
+exists to prevent.
+
 **Whose object may be stood down.** APRS honours a kill from anyone. The
 button is offered only for our own anyway, because an operator who can stand
 down another agency's road closure with one click will eventually do it by
