@@ -10,6 +10,9 @@ nonisolated struct ModemTelemetry: Equatable, Sendable {
 
     // Decoding.
     var dcd = false
+    /// What `dcd` was decided from, 0…1 — so a channel that reads busy can be
+    /// asked why instead of guessed at. See `DataCarrierDetect`.
+    var toneDiscrimination: Float = 0
     var slicerLocked: [Bool] = []
     var pllJitterBits: [Float] = []
     var framesDecoded: UInt64 = 0
@@ -23,6 +26,10 @@ nonisolated struct ModemTelemetry: Equatable, Sendable {
     var ptt = false
     var txQueueDepth = 0
     var framesSent: UInt64 = 0
+    /// Frames the transmitter gave up on — the channel never cleared, or PTT
+    /// was refused. Counted because "handed to the radio" and "went on the
+    /// air" are different events, and only the radio knows which happened.
+    var framesDropped: UInt64 = 0
     var txUnderruns: UInt64 = 0
     var rxOverruns: UInt64 = 0
     var channelBusy = false

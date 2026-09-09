@@ -35,9 +35,22 @@ nonisolated final class AFSKDemodulator {
         var nrzi = NRZIDecoder()
         var hdlc: HDLCDecoder
         var lastLevel = false
-        var bitClock: Int64 = 0
     }
+
+    /// Detector output samples seen since the demodulator started.
+    ///
+    /// The deduplicator's window has to be measured on a clock every slicer
+    /// shares. Each slicer used to carry its own bit clock, advanced only when
+    /// *that* slicer's PLL advanced — so a slicer that missed transitions fell
+    /// behind, the clocks drifted apart over a long run, and the same frame
+    /// arriving from two slicers looked like two transmissions minutes apart.
+    /// With one slicer nothing showed; with nine the app would count a packet,
+    /// a position or a message more than once.
+    private var sampleClock: Int64 = 0
+    /// `sampleClock` in bit times, which is what the window is expressed in.
+    private var bitClock: Int64 { Int64(Double(sampleClock) * mode.baud / demodSampleRate) }
     private var slicers: [Slicer]
+    private let discriminationAlpha: Float
     private var dedup = FrameDeduplicator()
 
     // Telemetry, read from the DSP thread that drives `process`.
@@ -62,9 +75,45 @@ nonisolated final class AFSKDemodulator {
         return best
     }
     var slicerLocked: [Bool] { slicers.map { $0.pll.isLocked } }
+
+    /// How cleanly the two tones are separated, 0…1 — the carrier-detect input.
+    ///
+    /// The slicer's decision variable is already normalised: `(mark - space) /
+    /// (mark + space)` swings to ±1 when one tone is present and sits near 0
+    /// when the two powers are equal, which is what band noise looks like.
+    /// Its smoothed magnitude is therefore signal presence, measured, and it
+    /// is the only one of the demodulator's outputs that noise cannot fake:
+    /// HDLC activity latches into `.inFrame` on the first random flag and a
+    /// PLL will lock its phase to anything with transitions in it. Both were
+    /// carrier-detect inputs, and on an open squelch both read as a busy
+    /// channel essentially all of the time (measured: 90% for one slicer,
+    /// 99.7% for the nine-slicer comb, on audio containing no signal at all).
+    private(set) var toneDiscrimination: Float = 0
     var pllJitterBits: [Float] { slicers.map { $0.pll.jitterBits } }
 
+    /// How each tone detector's power is smoothed before the comparison.
+    enum DetectorFilter: Equatable, Sendable {
+        /// A short boxcar over `bits` bit periods.
+        case integrator(bits: Double)
+        /// A sharp lowpass: passband to about half the baud, stopband before
+        /// the shift. Needed when the beat between the two tones falls below
+        /// the bit rate and a short window cannot separate them.
+        case sharpLowpass
+    }
+
+    /// Which smoothing a mode wants — the mode says so itself.
+    ///
+    /// This used to be `shift < baud`, which is true for *both* AFSK modes
+    /// (1000 < 1200 and 200 < 300), so the integrator branch beside it was
+    /// unreachable and the comment describing 1200 baud as an integrator case
+    /// described code that had never run. 1200 baud was decoding through a
+    /// filter meant for 300.
+    static func defaultFilter(for mode: ModemMode.Parameters) -> DetectorFilter {
+        mode.detectorFilter
+    }
+
     init(inputSampleRate: Double, mode: ModemMode.Parameters, slicerTwistsDB: [Float] = [0],
+         detectorFilter: DetectorFilter? = nil,
          limits: HDLCDecoder.Limits = HDLCDecoder.Limits()) {
         precondition(mode.markHz > 0 && mode.spaceHz > 0, "not an AFSK mode")
         self.inputSampleRate = inputSampleRate
@@ -97,10 +146,11 @@ nonisolated final class AFSKDemodulator {
         // lowpass — passband to about half the baud, stopband before the
         // shift — to keep the two tones apart.
         let lpf: [Float]
-        if shift < mode.baud {
+        switch detectorFilter ?? Self.defaultFilter(for: mode) {
+        case .sharpLowpass:
             lpf = FIRFilter.lowPass(sampleRate: demodSampleRate, cutoffHz: mode.baud * 0.45, transitionHz: shift * 0.3)
-        } else {
-            let integration = Int((1.5 * demodSampleRate / mode.baud).rounded())
+        case .integrator(let bits):
+            let integration = Int((bits * demodSampleRate / mode.baud).rounded())
             lpf = FIRFilter.lowPass(sampleRate: demodSampleRate, cutoffHz: mode.baud / 2, taps: integration | 1)
         }
         markDetector = QuadratureToneDetector(sampleRate: demodSampleRate, toneHz: mode.markHz, lowpassTaps: lpf)
@@ -113,6 +163,13 @@ nonisolated final class AFSKDemodulator {
                    hdlc: HDLCDecoder(limits: limits))
         }
         framesPerSlicer = Array(repeating: 0, count: slicers.count)
+        // Averaged over ~24 bits. Long enough that band noise — whose
+        // decision variable is very nearly uniform over ±1, so its mean is
+        // 0.5 with a tail that a short average does not suppress — settles
+        // well below a real signal's; short enough (20 ms at 1200 baud) to
+        // rise inside the opening flags of a transmission, whose TXDELAY
+        // preamble is hundreds of milliseconds.
+        discriminationAlpha = Float(1 / (24 * samplesPerBit))
     }
 
     /// Feed one block of input audio (mono, at `inputSampleRate`).
@@ -140,7 +197,12 @@ nonisolated final class AFSKDemodulator {
         guard n > 0 else { return }
 
         for k in 0..<n {
+            sampleClock += 1
             let m = mark[k], s = space[k]
+            // Signal presence, from the untwisted comparison: a real tone
+            // pushes |decision| toward 1, equal powers leave it near 0.
+            let plain = (m - s) / (m + s + 1e-12)
+            toneDiscrimination += (abs(plain) - toneDiscrimination) * discriminationAlpha
             for index in slicers.indices {
                 let g = slicers[index].twistGain
                 let decision = (m - g * s) / (m + g * s + 1e-12)
@@ -150,11 +212,10 @@ nonisolated final class AFSKDemodulator {
                     slicers[index].pll.transition(dataDetected: slicers[index].hdlc.activity != .idle)
                 }
                 guard slicers[index].pll.advance() else { continue }
-                slicers[index].bitClock += 1
                 let bit = slicers[index].nrzi.decode(level: level)
                 switch slicers[index].hdlc.push(bit: bit) {
                 case .frame(let data):
-                    if dedup.shouldDeliver(data, slicer: index, atBit: slicers[index].bitClock) {
+                    if dedup.shouldDeliver(data, slicer: index, atBit: bitClock) {
                         framesDecoded += 1
                         framesPerSlicer[index] += 1
                         lastDecodingSlicer = index
@@ -189,6 +250,7 @@ nonisolated final class AFSKDemodulator {
             slicers[index].hdlc.reset()
             slicers[index].lastLevel = false
         }
+        toneDiscrimination = 0
         dedup.reset()
     }
 }

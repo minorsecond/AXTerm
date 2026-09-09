@@ -65,7 +65,9 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     private var active = SoftModemConfiguration()
     private var sampleRate: Double = 48_000
     private var demodulator: AFSKDemodulator?
-    private var carrier = DataCarrierDetect(holdSamples: 2400)
+    /// Replaced with a rate-derived hold when the engine starts; this is only
+    /// the value before an audio format is known.
+    private var carrier = DataCarrierDetect(holdSamples: 12_000)
     private var access = ChannelAccess(parameters: .init(slotTimeSamples: 4800, persist: 63, maxWaitSamples: 480_000),
                                        rng: SystemRandomNumberGenerator())
     private var encoder: HDLCEncoder?
@@ -78,6 +80,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     private var txWrittenTotal: Int64 = 0
     private var framesInTransmission = 0
     private var framesSent: UInt64 = 0
+    private var framesDropped: UInt64 = 0
     private var lastDecodeAt: Date?
     private var lastError: String?
     private var lastTelemetryClock: Int64 = 0
@@ -279,7 +282,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
                 break
             }
         }
-        _ = carrier.update(activity: demodulator.activity,
+        _ = carrier.update(discrimination: demodulator.toneDiscrimination,
                            rmsDBFS: ModemTelemetry.dbfs(demodulator.rxRMS),
                            squelchDBFS: active.rxSquelchDBFS, now: rxClock)
     }
@@ -299,6 +302,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
                 startKeying()
             case .gaveUp:
                 let dropped = pending.withLock { let n = $0.count; $0.removeAll(); return n }
+                framesDropped += UInt64(dropped)
                 fail("Channel busy for \(Int(active.maxChannelWaitSeconds)) s; \(dropped) frame(s) dropped", fatal: false)
                 txState = .idle
             case .idle, .waiting:
@@ -312,14 +316,14 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
                 txState = .transmitting(keyedAt: rxClock, drainedAt: nil)
                 topUpTransmitRing()
             case 2:
-                pending.withLock { $0.removeAll() }
+                framesDropped += UInt64(pending.withLock { let n = $0.count; $0.removeAll(); return n })
                 encoder = nil
                 modulator = nil
                 txState = .idle
             default:
                 if rxClock - since > Int64(2 * sampleRate) {
                     ptt.setTransmit(false) { _ in }
-                    pending.withLock { $0.removeAll() }
+                    framesDropped += UInt64(pending.withLock { let n = $0.count; $0.removeAll(); return n })
                     encoder = nil
                     modulator = nil
                     fail("PTT was not confirmed within 2 s; frames dropped", fatal: false)
@@ -458,7 +462,15 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         demodulator = mode.markHz > 0
             ? AFSKDemodulator(inputSampleRate: sampleRate, mode: mode, slicerTwistsDB: active.slicerTwistsDB)
             : nil
-        carrier = DataCarrierDetect(holdSamples: Int(0.05 * sampleRate))
+        // Hang time after the last sign of a signal.
+        //
+        // 50 ms was under eight byte times at 1200 baud, so any hesitation in
+        // the receiver read as a clear channel. A quarter of a second bridges
+        // the gaps inside somebody else's transmission and, once they really
+        // have stopped, keeps us off the air just long enough not to trample
+        // the reply they are waiting for. It costs us a quarter second before
+        // our own DWAIT starts, against AX.25 timers measured in seconds.
+        carrier = DataCarrierDetect(holdSamples: Int(0.25 * sampleRate))
         access = ChannelAccess(parameters: .init(sampleRate: sampleRate, configuration: active),
                                rng: SystemRandomNumberGenerator())
     }
@@ -476,6 +488,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         t.rxRMSDBFS = ModemTelemetry.dbfs(demodulator?.rxRMS ?? 0)
         t.rxClipping = peak >= 0.99
         t.dcd = carrier.isDetected
+        t.toneDiscrimination = demodulator?.toneDiscrimination ?? 0
         t.slicerLocked = demodulator?.slicerLocked ?? []
         t.pllJitterBits = demodulator?.pllJitterBits ?? []
         t.framesDecoded = demodulator?.framesDecoded ?? 0
@@ -492,6 +505,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         t.channelBusy = carrier.isDetected
         t.txQueueDepth = pending.withLock { $0.count } + framesInTransmission
         t.framesSent = framesSent
+        t.framesDropped = framesDropped
         t.txUnderruns = UInt64(txUnderruns.load(ordering: .relaxed))
         t.rxOverruns = UInt64(rxOverruns.load(ordering: .relaxed))
         t.audioFormat = audio.format

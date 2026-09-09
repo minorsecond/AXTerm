@@ -168,8 +168,15 @@ final class ModemEngineTests: XCTestCase {
             index = end
         }
         XCTAssertFalse(keyedDuringTheirs, "never keys over a carrier")
-        io.pump(blocks: 20)
-        XCTAssertEqual(ptt.events.first, true, "keys once the channel clears")
+        // Silence is not immediately a clear channel: carrier detect hangs on
+        // for its hold after the last sign of a signal. That hang is the thing
+        // that stops us keying into the gaps *inside* somebody else's
+        // transmission, where the decoder loses sync for a moment and the
+        // channel would otherwise read as free.
+        io.pump(blocks: 20)   // 200 ms, inside the 250 ms hold
+        XCTAssertTrue(ptt.events.isEmpty, "still inside the carrier's hang time")
+        io.pump(blocks: 100)
+        XCTAssertEqual(ptt.events.first, true, "keys once the channel really is clear")
     }
 
     func testPTTRefusalDropsTheFramesAndReportsOnce() throws {

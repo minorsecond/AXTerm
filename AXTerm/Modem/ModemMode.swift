@@ -21,16 +21,30 @@ nonisolated enum ModemMode: String, Codable, CaseIterable, Sendable {
         /// The rate the demodulator runs at; audio is decimated to it.
         let demodSampleRate: Double
         let isTxCapable: Bool
+        /// How the tone detectors smooth their power before the comparison.
+        /// Declared per mode rather than derived: the two AFSK modes sit at
+        /// shift/baud of 0.83 and 0.67, and any threshold separating two
+        /// points that close is a coincidence dressed as a rule.
+        let detectorFilter: AFSKDemodulator.DetectorFilter
     }
 
     var parameters: Parameters {
         switch self {
         case .afsk1200:
-            return Parameters(markHz: 1200, spaceHz: 2200, baud: 1200, demodSampleRate: 12_000, isTxCapable: true)
+            // 2.5 bit periods: measured. Against a sharp lowpass it takes the
+            // hardest bench condition from 26 frames of 40 to 38, is never
+            // worse anywhere in the matrix, and costs no inter-symbol
+            // interference even on a 200-byte frame with no noise to hide it.
+            return Parameters(markHz: 1200, spaceHz: 2200, baud: 1200, demodSampleRate: 12_000,
+                              isTxCapable: true, detectorFilter: .integrator(bits: 2.5))
         case .afsk300:
-            return Parameters(markHz: 1600, spaceHz: 1800, baud: 300, demodSampleRate: 12_000, isTxCapable: true)
+            // The 200 Hz beat falls below the 300 bd bit rate, so no short
+            // window can separate the tones; only a sharp filter does.
+            return Parameters(markHz: 1600, spaceHz: 1800, baud: 300, demodSampleRate: 12_000,
+                              isTxCapable: true, detectorFilter: .sharpLowpass)
         case .g3ruh9600RxIF:
-            return Parameters(markHz: 0, spaceHz: 0, baud: 9600, demodSampleRate: 48_000, isTxCapable: false)
+            return Parameters(markHz: 0, spaceHz: 0, baud: 9600, demodSampleRate: 48_000,
+                              isTxCapable: false, detectorFilter: .sharpLowpass)
         }
     }
 
