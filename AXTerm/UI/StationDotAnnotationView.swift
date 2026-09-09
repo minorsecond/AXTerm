@@ -15,8 +15,11 @@ import AppKit
 /// the dots alone carry the picture — colour and shape still read — and
 /// the labels return as the operator zooms in.
 nonisolated enum MapLabelPolicy {
-    /// Roughly a 50-mile-tall viewport. Wider than that, labels come off.
-    static let labelSpanThresholdDegrees = 0.7
+    /// Roughly a 20-mile-tall viewport — district zoom. Wider than that,
+    /// every callsign at once just collides into an unreadable scatter, so
+    /// labels come off and only the observer's and the selected station's
+    /// names stay (the two worth ink at any zoom). Zoom in to read the rest.
+    static let labelSpanThresholdDegrees = 0.3
 
     static func showsLabels(latitudeDelta: Double) -> Bool {
         latitudeDelta < labelSpanThresholdDegrees
@@ -40,21 +43,63 @@ final class StationDotAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "station-dot"
 
     /// Diameter of an ordinary station, and of this one.
-    private static let size: CGFloat = 15
-    private static let observerSize: CGFloat = 19
+    private static let size: CGFloat = 13
+    private static let observerSize: CGFloat = 18
+    /// A station beaconing an APRS symbol is drawn larger than a plain
+    /// address dot: the glyph is the whole point of the marker, so it has to
+    /// read as a symbol and not a speck, and the extra size also tells a
+    /// live transmitted fix apart from a looked-up address at a glance.
+    private static let aprsSize: CGFloat = 22
 
-    /// The view is far larger than the dot it draws.
+    /// How far outside the dot a click still counts.
     ///
-    /// A 15pt view is a 15pt tap target, which is a third of the 44pt Apple
-    /// asks for and in practice means taps land on the map instead of the
-    /// station — the marker looks right and does nothing. The dot stays small
-    /// and the *view* is comfortable, with the callsign sharing the space
-    /// underneath.
-    private static let hitWidth: CGFloat = 96
-    private static let hitHeight: CGFloat = 56
+    /// **This is the view's frame, not a hit-test override.** MapKit picks an
+    /// annotation by its view's frame and never consults `hitTest`, so an
+    /// override there does nothing — the frame has to *be* the target. The
+    /// view used to be a fixed 96×56 so the callsign had room underneath, and
+    /// the whole of that box selected the station: a click an inch away
+    /// selected it, and on a crowded map it selected the wrong one.
+    ///
+    /// The label now hangs outside the frame instead, which costs nothing
+    /// because a label was never meant to be clickable.
+    ///
+    /// A pointer is precise and a fingertip is not, so the two platforms get
+    /// different padding: four points on the Mac, enough for a comfortable
+    /// target on a touch screen.
+    private static var hitPadding: CGFloat {
+        #if os(iOS)
+        return 14
+        #else
+        return 4
+        #endif
+    }
+    /// Width reserved for the callsign, which is drawn below the frame.
+    private static let labelWidth: CGFloat = 96
+    private static let labelHeight: CGFloat = 15
 
     private let fill = CAShapeLayer()
     private let ring = CAShapeLayer()
+    /// An accent halo shown only while this station is the selection. Sits
+    /// behind the dot so it reads as a ring around it, and carries a soft
+    /// glow of the same colour so a selected marker is obvious even in a
+    /// dense cluster.
+    private let selectionHalo = CAShapeLayer()
+    /// The dot's rect from the last configure, so the halo can be sized
+    /// when selection flips without a full reconfigure.
+    private var lastDotRect: CGRect = .zero
+    /// A thin ring shown while the station has transmitted within
+    /// `MapActivity.window` — "on the air just now".
+    ///
+    /// A ring, and deliberately **not** a pulse. Markers on this map are
+    /// animation-free on purpose (see `noImplicitAnimations` below, and the
+    /// same reasoning in `StationClusterAnnotationView`): a marker that moves
+    /// means the station moved, and nothing else on the map is allowed to
+    /// twitch. An animated "transmitting" pulse would spend that hard-won
+    /// stillness on decoration, and on a channel carrying a frame every few
+    /// seconds it would leave the map permanently blinking. A ring that is
+    /// simply present or absent says the same thing and stays legible when a
+    /// dozen of them are lit.
+    private let activityRing = CAShapeLayer()
     /// The APRS glyph drawn over the dot — a car, a digipeater, a weather
     /// station. A plain `CALayer` whose `contents` is a white template image,
     /// kept separate from the two shape layers so the jitter-tuned dot
@@ -96,17 +141,6 @@ final class StationDotAnnotationView: MKAnnotationView {
     private static var windowMoves = 0
     private static var windowMaxDrift = 0.0
     private static var windowFraction = 0.0
-
-    /// The map this view is inside, found by walking up rather than being
-    /// handed down, so the diagnostic needs no wiring.
-    private var enclosingMap: MKMapView? {
-        var candidate = superview
-        while let view = candidate {
-            if let map = view as? MKMapView { return map }
-            candidate = view.superview
-        }
-        return nil
-    }
 
     /// Where the map sits in the window, which is what pixel alignment is
     /// actually relative to. The map's own frame can read a constant 0,0
@@ -221,6 +255,14 @@ final class StationDotAnnotationView: MKAnnotationView {
         glyph.shadowRadius = 1
         glyph.shadowOffset = .zero
         glyph.isHidden = true
+        selectionHalo.actions = Self.noImplicitAnimations
+        activityRing.actions = Self.noImplicitAnimations
+        activityRing.fillColor = nil
+        activityRing.isHidden = true
+        selectionHalo.fillColor = nil
+        selectionHalo.isHidden = true
+        host.addSublayer(selectionHalo)   // behind fill/ring/glyph
+        host.addSublayer(activityRing)    // outside the dot, under it
         host.addSublayer(fill)
         host.addSublayer(ring)
         host.addSublayer(glyph)
@@ -234,6 +276,43 @@ final class StationDotAnnotationView: MKAnnotationView {
     /// draws nothing, which is how the dots ended up anonymous. A halo
     /// rather than a plate, so a dense cluster of callsigns does not box in
     /// the terrain they sit on.
+    /// The tint from the last `configure`, so the activity ring can be lit or
+    /// cleared on its own without a full reconfigure.
+    private var lastTint: PlatformColor = .clear
+
+    /// Light update for the "just transmitted" ring alone.
+    ///
+    /// Exists so the ring can expire on a timer without touching anything else
+    /// about the marker. A reconfigure would rebuild the paths, the label and
+    /// the glyph, and this map pays real attention to not doing that: the
+    /// whole annotation layer re-lays out when markers are rewritten, which is
+    /// what made the dots shuffle on a timer before.
+    func setActive(_ isActive: Bool) {
+        setActivity(isActive, tint: lastTint, around: lastDotRect)
+    }
+
+    /// Draw (or clear) the "just transmitted" ring around the dot.
+    ///
+    /// It sits a little outside the marker so it never covers the APRS glyph
+    /// or the recency tint, both of which carry their own meaning. The colour
+    /// is the station's own tint rather than one alarm colour for everybody:
+    /// the ring says *when*, and the map already says *what* — a second hue
+    /// here would claim a meaning it does not have.
+    private func setActivity(_ isActive: Bool, tint: PlatformColor, around dotRect: CGRect) {
+        guard isActive else {
+            activityRing.isHidden = true
+            activityRing.path = nil
+            return
+        }
+        let inset: CGFloat = -3
+        let rect = dotRect.insetBy(dx: inset, dy: inset)
+        activityRing.frame = bounds
+        activityRing.path = CGPath(ellipseIn: rect, transform: nil)
+        activityRing.strokeColor = tint.cgColor
+        activityRing.lineWidth = 1.5
+        activityRing.isHidden = false
+    }
+
     private func configureLabel() {
         #if os(iOS)
         label.font = .systemFont(ofSize: 10, weight: .medium)
@@ -311,6 +390,38 @@ final class StationDotAnnotationView: MKAnnotationView {
     }
     #endif
 
+    /// The selection accent — the system's own, so it matches every other
+    /// selected control on the platform.
+    private static var selectionColour: PlatformColor {
+        #if os(macOS)
+        return .controlAccentColor
+        #else
+        return .tintColor
+        #endif
+    }
+
+    /// Sizes and shows/hides the selection halo from the current `isSelected`.
+    /// A selected marker also rises above its neighbours so its halo is never
+    /// clipped by a dot drawn later.
+    private func updateSelectionHalo() {
+        let expanded = lastDotRect.insetBy(dx: -4, dy: -4)
+        selectionHalo.path = CGPath(ellipseIn: expanded, transform: nil)
+        selectionHalo.frame = bounds
+        selectionHalo.lineWidth = 3
+        selectionHalo.strokeColor = Self.selectionColour.cgColor
+        selectionHalo.shadowColor = Self.selectionColour.cgColor
+        selectionHalo.shadowOpacity = isSelected ? 0.55 : 0
+        selectionHalo.shadowRadius = 3
+        selectionHalo.shadowOffset = .zero
+        selectionHalo.isHidden = !isSelected
+        host.zPosition = isSelected ? 2 : 0
+    }
+
+    override func setSelected(_ selected: Bool, animated: Bool) {
+        super.setSelected(selected, animated: animated)
+        updateSelectionHalo()
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -333,25 +444,51 @@ final class StationDotAnnotationView: MKAnnotationView {
     /// - Parameter isNode: NET/ROM infrastructure rather than a heard
     ///   station — drawn as a diamond, so the network's fixtures read apart
     ///   from the traffic at any zoom.
+    /// - Parameter weatherBadge: one current reading to draw after the
+    ///   callsign — a weather station's temperature. Already formatted; the
+    ///   marker only places it.
+    /// - Parameter isActive: the station transmitted within
+    ///   `MapActivity.window`, so it wears the "just now" ring.
     func configure(tint: PlatformColor, isObserver: Bool, approximate: Bool,
                    isNode: Bool = false, callsign: String?,
-                   aprsSymbol: APRSMapSymbol? = nil) {
+                   aprsSymbol: APRSMapSymbol? = nil,
+                   weatherBadge: String? = nil,
+                   isActive: Bool = false) {
+        // A station — or our own station — that carries a drawable APRS
+        // symbol wears a larger marker so the glyph is legible; everything
+        // else keeps the ordinary dot. A node keeps its diamond. Resolve the
+        // glyph image up front, because whether one exists decides the size.
+        let glyphImage: CGImage? = (!isNode && !approximate)
+            ? aprsSymbol.flatMap {
+                APRSGlyphRasterizer.image(
+                    systemName: APRSSymbolGlyph.systemImage(table: $0.table, code: $0.code),
+                    diameter: Self.aprsSize)
+            }
+            : nil
+
         // A diamond reads at a slightly smaller size than a circle of the
         // same box, and infrastructure should sit quietly under traffic.
-        let diameter = isObserver ? Self.observerSize : (isNode ? 13 : Self.size)
-        let ringWidth: CGFloat = isObserver ? 3 : 2
+        let diameter = isObserver ? (glyphImage != nil ? Self.aprsSize : Self.observerSize)
+            : isNode ? 12
+            : glyphImage != nil ? Self.aprsSize
+            : Self.size
+        let ringWidth: CGFloat = isObserver ? 2.5 : 1.5
 
-        frame = CGRect(x: 0, y: 0, width: Self.hitWidth, height: Self.hitHeight)
+        // The frame is the dot plus a little slop, because the frame is what
+        // MapKit uses to decide what a click hit. The callsign is drawn
+        // outside it.
+        let box = diameter + Self.hitPadding * 2
+        frame = CGRect(x: 0, y: 0, width: box, height: box)
         #if os(iOS)
         clipsToBounds = false
+        #else
+        layer?.masksToBounds = false
         #endif
 
         // The dot is centred in the view, and the view is centred on the
         // coordinate, so the dot lands exactly on the position.
-        let dotRect = CGRect(
-            x: (Self.hitWidth - diameter) / 2,
-            y: (Self.hitHeight - diameter) / 2,
-            width: diameter, height: diameter)
+        let dotRect = CGRect(x: Self.hitPadding, y: Self.hitPadding,
+                             width: diameter, height: diameter)
         let shapeRect = dotRect.insetBy(dx: ringWidth / 2, dy: ringWidth / 2)
         let path = isNode
             ? Self.diamondPath(in: shapeRect)
@@ -360,19 +497,17 @@ final class StationDotAnnotationView: MKAnnotationView {
         ring.path = path
         fill.frame = bounds
         ring.frame = bounds
+        lastTint = tint
+        setActivity(isActive, tint: tint, around: dotRect)
 
-        setLabel(callsign, below: dotRect)
+        setLabel(callsign, badge: weatherBadge, below: dotRect)
 
         // The APRS glyph, centred on the dot. Only for a heard station that
         // beaconed a symbol — never the observer, never a node (its diamond
         // and connector glyph already say what it is), never an inferred
         // lead (a symbol would assert a precision the position does not have).
-        if let aprsSymbol, !isObserver, !isNode, !approximate,
-           let image = APRSGlyphRasterizer.image(
-               systemName: APRSSymbolGlyph.systemImage(
-                   table: aprsSymbol.table, code: aprsSymbol.code),
-               diameter: diameter) {
-            glyph.contents = image
+        if let glyphImage {
+            glyph.contents = glyphImage
             glyph.frame = dotRect
             glyph.isHidden = false
         } else {
@@ -386,14 +521,17 @@ final class StationDotAnnotationView: MKAnnotationView {
         ring.fillColor = nil
         ring.strokeColor = approximate
             ? tint.cgColor
-            : PlatformColor.white.withAlphaComponent(0.9).cgColor
+            : PlatformColor.white.cgColor
         ring.lineWidth = ringWidth
         ring.lineDashPattern = approximate ? [3, 2] : nil
 
         fill.shadowColor = PlatformColor.black.cgColor
-        fill.shadowOpacity = 0.3
-        fill.shadowRadius = 2
+        fill.shadowOpacity = 0.22
+        fill.shadowRadius = 2.5
         fill.shadowOffset = .zero
+
+        lastDotRect = dotRect
+        updateSelectionHalo()
 
         // Never let MapKit declutter a station away.
         //
@@ -412,23 +550,70 @@ final class StationDotAnnotationView: MKAnnotationView {
         displayPriority = .required
     }
 
+    // The bouncing, finally pinned by the diagnostics above: with the camera
+    // and the map's window position stone still, MapKit still re-runs
+    // `_updateAnnotationViews` on every `mapLayerDidDraw` and re-snaps each
+    // dot ~1.3pt between two neighbouring pixels — its own pixel-alignment
+    // wobble, ~200 times a second. Nothing we draw causes it and nothing we
+    // draw can stop it upstream, so we refuse it here: a re-position smaller
+    // than a couple of points is dropped *unless the visible rect actually
+    // moved since we last let one through*. A real pan or zoom changes the
+    // rect every frame and its steps are far larger, so it tracks exactly;
+    // an idle map simply stops shivering.
+    /// The map this view is inside, found by walking up rather than being
+    /// handed a reference, so neither the stabilizer nor the diagnostic needs
+    /// wiring.
+    private var enclosingMap: MKMapView? {
+        var candidate = superview
+        while let view = candidate {
+            if let map = view as? MKMapView { return map }
+            candidate = view.superview
+        }
+        return nil
+    }
+
+    private var lastAppliedRect: MKMapRect?
+
+    /// True when this re-position is MapKit's idle pixel shiver, not motion:
+    /// a sub-threshold hop while the camera has not moved since the last one
+    /// we honoured. The threshold and the rule live in `MapFrameStability`
+    /// beside the map-frame gate, and are pinned by `MapStabilityTests`.
+    private func isIdleShiver(distance: CGFloat) -> Bool {
+        guard let rect = enclosingMap?.visibleMapRect else { return false }
+        let rectUnchanged = lastAppliedRect.map { last in
+            rect.origin.x == last.origin.x && rect.origin.y == last.origin.y
+                && rect.size.width == last.size.width && rect.size.height == last.size.height
+        } ?? false
+        if MapFrameStability.isAnnotationShiver(distance: distance, rectUnchanged: rectUnchanged) {
+            return true
+        }
+        // The camera moved (or we have no reference yet): honour this move and
+        // remember where the camera was when we did.
+        lastAppliedRect = rect
+        return false
+    }
+
     #if os(macOS)
     override func setFrameOrigin(_ newOrigin: NSPoint) {
+        let distance = hypot(newOrigin.x - frame.origin.x, newOrigin.y - frame.origin.y)
+        if isIdleShiver(distance: distance) { return }
         #if DEBUG
-        Self.noteMove(hypot(newOrigin.x - frame.origin.x, newOrigin.y - frame.origin.y),
-                      mapRect: enclosingMap?.visibleMapRect,
+        Self.noteMove(distance, mapRect: enclosingMap?.visibleMapRect,
                       windowOrigin: mapOriginInWindow)
         #endif
         super.setFrameOrigin(newOrigin)
     }
     #else
     override var center: CGPoint {
-        didSet {
+        get { super.center }
+        set {
+            let distance = hypot(newValue.x - super.center.x, newValue.y - super.center.y)
+            if isIdleShiver(distance: distance) { return }
             #if DEBUG
-            Self.noteMove(hypot(center.x - oldValue.x, center.y - oldValue.y),
-                          mapRect: enclosingMap?.visibleMapRect,
-                      windowOrigin: mapOriginInWindow)
+            Self.noteMove(distance, mapRect: enclosingMap?.visibleMapRect,
+                          windowOrigin: mapOriginInWindow)
             #endif
+            super.center = newValue
         }
     }
     #endif
@@ -453,8 +638,15 @@ final class StationDotAnnotationView: MKAnnotationView {
         label.isHidden = !visible || !hasLabelText
     }
 
-    private func setLabel(_ callsign: String?, below dot: CGRect) {
-        let text = callsign ?? ""
+    /// The callsign, plus one current reading after it when there is one.
+    /// Kept as plain text rather than an attributed string: the label's colour
+    /// is re-applied on every basemap change, and attributed runs would either
+    /// fight that or have to duplicate it.
+    private func setLabel(_ callsign: String?, badge: String?, below dot: CGRect) {
+        var text = callsign ?? ""
+        if !text.isEmpty, let badge, !badge.isEmpty {
+            text += "  \(badge)"
+        }
         hasLabelText = !text.isEmpty
         #if os(iOS)
         label.text = text
@@ -462,8 +654,14 @@ final class StationDotAnnotationView: MKAnnotationView {
         label.stringValue = text
         #endif
         label.isHidden = text.isEmpty
-        label.frame = CGRect(x: 0, y: dot.maxY + 2,
-                             width: Self.hitWidth,
-                             height: Self.hitHeight - dot.maxY - 2)
+        // Below the frame, not inside it: the frame is the click target and a
+        // callsign is not a thing you click. Drawing outside the bounds is
+        // fine because clipping is off on both platforms.
+        label.frame = CGRect(x: (bounds.width - Self.labelWidth) / 2,
+                             y: dot.maxY + 2,
+                             width: Self.labelWidth,
+                             height: Self.labelHeight)
     }
+
+
 }

@@ -105,7 +105,7 @@ nonisolated enum MapBasemap: String, CaseIterable, Identifiable, Sendable {
 struct MapLegend: View {
 
     /// Legends differ by what the colour actually measures.
-    enum Kind {
+    enum Kind: Equatable {
         /// Winlink gateways: how often the gateway answered *us*.
         case linkQuality
         /// Heard stations: how recently we heard them.
@@ -144,6 +144,19 @@ struct MapLegend: View {
     }
 
     let kind: Kind
+
+    /// APRS mode: symbols are on the map, so colour keys the station *type*
+    /// (see the marker renderer) and recency has moved to opacity. The
+    /// legend follows — type swatches instead of recency swatches, and a
+    /// fade row for recency.
+    private var aprsMode: Bool { showsPositionSource && kind == .recency }
+    /// What the dot colour means right now, for the header and the a11y label.
+    private var keyedDimension: String { aprsMode ? "Station type" : kind.title }
+    private var effectiveFootnote: String {
+        aprsMode
+        ? "In APRS mode colour is the station type; recency is opacity \u{2014} fresh is solid, older fades, nothing is hidden."
+        : kind.footnote
+    }
     /// Drawn over imagery needs a stronger backing than over a light map.
     var overDarkBasemap = false
     /// Nine points is legible beside a pointer and not on a phone held at
@@ -177,6 +190,32 @@ struct MapLegend: View {
     /// with no key is decoration.
     @AppStorage("map.legendExpanded") private var isExpanded = true
 
+    /// The station-type key shown in APRS mode. Colour keys the class exactly
+    /// as the map paints it (digi blue, weather teal, vehicle orange, home
+    /// gray); the white SF Symbol inside reads as the class at legend size —
+    /// not the exact APRS glyph, the same meaning. Recency is no longer a
+    /// colour here: it is opacity, keyed by the fade row below.
+    /// The same four hues the map paints, pulled toward the paper. See
+    /// `OfflineBasemapMapView.Coordinator.typeColour`.
+    static let digipeaterTint = Color(red: 0.36, green: 0.36, blue: 0.62)
+    static let weatherTint = Color(red: 0.20, green: 0.50, blue: 0.56)
+    static let vehicleTint = Color(red: 0.72, green: 0.45, blue: 0.22)
+    static let fixedTint = Color(red: 0.42, green: 0.45, blue: 0.48)
+
+    private static let typeSwatches: [(color: Color, symbol: String, label: String, help: String)] = [
+        (digipeaterTint, "antenna.radiowaves.left.and.right", "Digipeater / relay",
+         "Fixed relay infrastructure — a digipeater, i-gate, gateway or repeater. It forwards other stations rather than being a destination."),
+        (weatherTint, "cloud.sun.fill", "Weather station",
+         "A station beaconing weather data. Its position is fixed; the payload is temperature, wind and rain. "
+         + "Its current temperature is drawn beside its callsign, and the rest of the reading \u{2014} wind, gust, "
+         + "humidity, pressure, rainfall \u{2014} is on the station's card. A reading over an hour old loses the "
+         + "temperature beside the callsign, because a stale number on a map reads as the current one."),
+        (vehicleTint, "car.fill", "Vehicle",
+         "Something on the move, or wearing a vehicle symbol — a car, truck, boat, aircraft or glider — placed where it last beaconed."),
+        (fixedTint, "house.fill", "Fixed / home station",
+         "A station at a fixed location that is not infrastructure — typically an operator's home station."),
+    ]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Button {
@@ -195,38 +234,70 @@ struct MapLegend: View {
                     // guessed from the colours.
                     Text("Legend")
                         .font(.caption2.weight(.semibold))
-                    Text("\u{b7} \(kind.title)")
+                    Text("\u{b7} \(keyedDimension)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
             .help(isExpanded
-                  ? "Hide the key and give the map back the space. Dot colour means \(kind.title.lowercased())."
+                  ? "Hide the key and give the map back the space. Dot colour means \(keyedDimension.lowercased())."
                   : "Show what the dot colours mean.")
             .accessibilityLabel(isExpanded
-                                ? "Legend, \(kind.title), expanded"
-                                : "Legend, \(kind.title), collapsed")
+                                ? "Legend, \(keyedDimension), expanded"
+                                : "Legend, \(keyedDimension), collapsed")
 
             if isExpanded {
-            ForEach(kind.entries, id: \.label) { entry in
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(entry.color)
-                        .frame(width: 8, height: 8)
-                        .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
-                    Text(entry.label)
-                        .font(.caption2)
+            if aprsMode {
+                // Colour = type. Each swatch is the exact disc the map paints
+                // — the class colour with the white class glyph inside.
+                ForEach(Self.typeSwatches, id: \.label) { item in
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(item.color)
+                            .frame(width: 14, height: 14)
+                            .overlay(
+                                Image(systemName: item.symbol)
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(.white))
+                            .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
+                        Text(item.label)
+                            .font(.caption)
+                        Spacer(minLength: 0)
+                    }
+                    .help(item.help)
+                }
+                // Recency, now that colour is spoken for: opacity.
+                HStack(spacing: 6) {
+                    HStack(spacing: 2) {
+                        Circle().fill(.secondary).frame(width: 11, height: 11)
+                        Circle().fill(.secondary).opacity(0.35).frame(width: 11, height: 11)
+                    }
+                    Text("Fresh \u{2192} long silent")
+                        .font(.caption)
                     Spacer(minLength: 0)
                 }
-                .help(entry.detail)
+                .help("With colour keying type, recency is shown by opacity instead: a station heard within the hour is solid and fades as it ages, down to long-silent. Faded, never hidden.")
+            } else {
+                ForEach(kind.entries, id: \.label) { entry in
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(entry.color)
+                            .frame(width: 14, height: 14)
+                            .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
+                        Text(entry.label)
+                            .font(.caption)
+                        Spacer(minLength: 0)
+                    }
+                    .help(entry.detail)
+                }
             }
 
             Divider().padding(.vertical, 1)
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Circle()
                     .strokeBorder(.secondary, style: StrokeStyle(lineWidth: 1.5, dash: [2, 1.5]))
-                    .frame(width: 8, height: 8)
+                    .frame(width: 14, height: 14)
                 Text("Approximate")
                     .font(.caption2)
                 Spacer(minLength: 0)
@@ -234,11 +305,11 @@ struct MapLegend: View {
             .help("A hollow marker is a lead, not a fix: the position comes from a different entity than the thing shown \u{2014} typically a NET/ROM node placed at its operator's licence address. Nodes usually sit on a hilltop or a repeater site, not at the operator's house.")
 
             if showsPositionSource {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Image(systemName: "car.fill")
-                        .font(.system(size: 7, weight: .bold))
+                        .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 8, height: 8)
+                        .frame(width: 14, height: 14)
                         .background(Circle().fill(Color.green))
                     Text("Beaconed position \u{b7} plain dot = looked-up address")
                         .font(.caption2)
@@ -249,13 +320,13 @@ struct MapLegend: View {
             }
 
             if showsNodes {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Rectangle()
                         .fill(Color.purple)
-                        .frame(width: 7, height: 7)
+                        .frame(width: 11, height: 11)
                         .rotationEffect(.degrees(45))
                     Text("Node / directory")
-                        .font(.caption2)
+                        .font(.caption)
                     Spacer(minLength: 0)
                 }
                 .help("A diamond is NET/ROM infrastructure — a node or a station harvested from a node's directory — rather than a station heard on the air.")
@@ -263,22 +334,22 @@ struct MapLegend: View {
 
             if showsCoverage {
                 Divider().padding(.vertical, 1)
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Circle()
                         .strokeBorder(.blue.opacity(0.8), lineWidth: 1.5)
-                        .frame(width: 8, height: 8)
+                        .frame(width: 14, height: 14)
                     Text("Typical coverage")
-                        .font(.caption2)
+                        .font(.caption)
                     Spacer(minLength: 0)
                 }
                 .help("The inner ring: half the stations that answered you directly are inside it. An answer \u{2014} a UA, DM or FRMR to your frames \u{2014} proves that station decoded your transmitter, so it is a measured point in your footprint. Where your signal reliably works.")
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Circle()
                         .strokeBorder(.blue.opacity(0.6),
                                       style: StrokeStyle(lineWidth: 1.2, dash: [2, 1.5]))
-                        .frame(width: 8, height: 8)
+                        .frame(width: 14, height: 14)
                     Text("Farthest answer")
-                        .font(.caption2)
+                        .font(.caption)
                     Spacer(minLength: 0)
                 }
                 .help("The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach \u{2014} not a promise, and not a propagation model. Terrain will bend both rings.")
@@ -290,7 +361,7 @@ struct MapLegend: View {
             // wraps to three and the last line hangs out of the box, off the
             // bottom of the map. A fixed width proposes the width first, so
             // the height reported is the height drawn.
-            Text(kind.footnote)
+            Text(effectiveFootnote)
                 .font(legendFootnoteFont)
                 .foregroundStyle(.secondary)
                 .frame(width: 180, alignment: .leading)

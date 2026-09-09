@@ -11,6 +11,19 @@ import MapKit
 struct StationsMapView: View {
 
     let stations: [Station]
+    /// Objects and items heard on the air — fires, closures, shelters, aid
+    /// stations. Placed by other operators about somewhere other than
+    /// themselves, so they are drawn as their own markers with their reporter
+    /// named on the card.
+    var objects: APRSObjectStore = APRSObjectStore()
+    /// NWS watches and warnings relayed onto APRS. Internet-fed upstream, so
+    /// each one is shown with the time it was heard rather than on its own.
+    var alerts: APRSWeatherAlertStore = APRSWeatherAlertStore()
+    /// The "who can hear me" probe, so a position request can be sent from the
+    /// map itself — the page where you are already looking at who is out there
+    /// and wondering which of them can hear you. Observed, so the control
+    /// follows the probe's own status rather than going stale.
+    @ObservedObject var probe: APRSReachabilityProbe
     /// Raw traffic, for path evidence the station summaries cannot carry —
     /// a completed SABM/UA handshake proves a path end to end, and only the
     /// frames themselves show it.
@@ -26,6 +39,11 @@ struct StationsMapView: View {
     var observerPosition: StationPosition?
     /// Excluded from the heard list and used to label the centre marker.
     let myCallsign: String
+    /// Every address this station transmits as — the beacon callsign plus
+    /// whatever else it answers to. These are the markers the centre already
+    /// is; any *other* SSID on the same licence is a different radio and
+    /// belongs on the map like anyone else's.
+    var ownCallsigns: Set<String> = []
     @ObservedObject var lookup: CallsignLookupService
     @ObservedObject var aliases: NodeAliasStore
     /// Owned rather than copied so the "no positions" banner can turn
@@ -49,10 +67,70 @@ struct StationsMapView: View {
     /// Starts a connect to this name and carries the operator to the
     /// Terminal. Nil hides the button.
     var onConnect: ((String) -> Void)?
+    /// Start an APRS message to this station. Nil hides the action.
+    var onMessage: ((String) -> Void)?
+    /// Send this station one directed query. Nil hides the action.
+    ///
+    /// One closure for the whole catalogue rather than a `ping` and a
+    /// `version` and a `trace`: which question is asked is the operator's
+    /// choice, and the transmit side does the same thing with all of them.
+    var onQuery: ((APRSStationQuery) -> Void)?
+    /// What became of the last ping to a station, for the card to report.
+    /// Nil leaves the card silent about it.
+    var pingState: ((String) -> APRSPingTracker.Ping?)?
+
+    /// What we have heard from a station, for judging how far to ask it.
+    /// A closure rather than the station list itself: this view already takes
+    /// its sites from a projection, and handing it the tracker would let it
+    /// reach for anything.
+    var reachAdvice: ((String) -> APRSReachAdvice)? = nil
+
+    /// What the Ping button promises, spelled out.
+    ///
+    /// A function rather than an inline expression because the concatenation
+    /// is long enough to defeat the type checker inside a `ViewBuilder`, and
+    /// because it is the sentence worth testing: it is where the operator
+    /// learns the reach was overridden and why.
+    static func pingHelp(label: String, reach: APRSProbeReach,
+                         advice: APRSReachAdvice, selected: APRSProbeReach) -> String {
+        var text = "Send \(label) a position request (?APRSP) \u{2014} a targeted "
+        text += "\u{201C}can you hear me\u{201D}. "
+        text += reach == .wide
+            ? "Digipeated on this radio's APRS path, so an answer proves the station is "
+            + "reachable, not that it hears you."
+            : "Sent direct, so an answer proves it hears this station."
+        // Silence about an override would be the worst of both: the operator
+        // picked one reach and a different one goes out.
+        if advice.disagrees(with: selected), let caution = advice.caution {
+            text += " \u{2014} " + caution
+        } else if let caution = advice.caution {
+            text += " " + caution
+        }
+        return text + " The menu has the other six queries and the reach."
+    }
+    /// When this station last put one of our own frames back on the air.
+    ///
+    /// Separate from `pingState` because it answers the question the operator
+    /// actually has \u{2014} *can it hear me* \u{2014} and outlives any single
+    /// ping. A station that repeats our traffic and never answers a query is
+    /// a common and perfectly healthy configuration.
+    var repeatsUs: ((String) -> Date?)?
 
 
     /// Published to the sidebar, which owns the layer toggles now.
     @ObservedObject var layerStatus: MapLayerStatus
+    /// Live traffic for the strip along the bottom. Held as a plain reference,
+    /// **not** `@ObservedObject`: observing it here would re-render the whole
+    /// map on every frame. Only `MapTrafficChin` observes it.
+    var traffic: MapTrafficFeed?
+    /// The radios whose traffic the strip may show — enabled, and not hidden
+    /// on the map. Empty leaves the strip unscoped.
+    var trafficRadios: [MapTrafficRadio] = []
+    /// The radios switched off in the sidebar. The map is handed stations
+    /// already filtered by them, so it cannot see the switch itself — but it
+    /// has to know one was thrown, or removing the markers waits on the
+    /// batching clock and the toggle looks broken.
+    var hiddenRadios: Set<RadioID> = []
 
     @State private var selection: String?
     /// Set by another screen to bring a station into view — "Show on Map"
@@ -102,6 +180,123 @@ struct StationsMapView: View {
     /// both; the default prefers the station's own beacon.
     @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = true
 
+    // APRS-mode per-type visibility. Each hides one class of *transmitted*
+    // APRS station (a station drawn at its beaconed fix, which is the only
+    // kind that has a type). Address dots and nodes carry no APRS class and
+    // are never touched by these. Default on; only surfaced while Transmitted
+    // Positions is on, and mirrored in MapLayerRows under the same keys.
+    @AppStorage("stations.showsObjects") private var showsObjects = true
+    @AppStorage("stations.clustersStations") private var clustersStations = true
+    @AppStorage("stations.falloffMinutes") private var falloffMinutes = 0
+    @AppStorage("stations.showsTracks") private var showsTracks = true
+    @AppStorage("stations.showsAllTracks") private var showsAllTracks = false
+    @AppStorage("stations.trackWindowMinutes") private var trackWindowMinutes = 60
+    @AppStorage("stations.showsWeatherField") private var showsWeatherField = false
+    @AppStorage("stations.weatherFieldParameter") private var weatherFieldParameter =
+        APRSWeatherField.Parameter.temperature.rawValue
+    @AppStorage("stations.showsTypeDigipeater") private var showsTypeDigipeater = true
+    @AppStorage("stations.showsTypeWeather") private var showsTypeWeather = true
+    @AppStorage("stations.showsTypeVehicle") private var showsTypeVehicle = true
+    @AppStorage("stations.showsTypeFixed") private var showsTypeFixed = true
+
+    /// What the trail layer is actually drawing, and why it is not drawing
+    /// more. A layer that can legitimately draw nothing has to say so or it is
+    /// indistinguishable from a broken one — and this one draws nothing most
+    /// of the time, because a trail needs a station that *moved* between two
+    /// beacons inside the window, which fixed stations never do.
+    private var trackCaption: String? {
+        guard showsTracks else { return nil }
+        let drawn = tracks.count
+        if drawn > 0 {
+            return drawn == 1 ? "1 trail" : "\(drawn) trails"
+        }
+        if !showsAllTracks {
+            return selection == nil
+                ? "Select a station to see its trail"
+                : "That station has not moved in this window"
+        }
+        let movers = stations.filter { $0.track.count >= 2 }.count
+        return movers == 0
+            ? "No station has moved since AXTerm started"
+            : "No station has moved within this window"
+    }
+
+    /// Whether a station has been heard recently enough to still be drawn.
+    ///
+    /// Separate from the recency *fade*, which never removes anything. On a
+    /// busy channel a day of accumulated stations buries the handful that are
+    /// actually on the air, and in the situation this map is for, "who is up
+    /// right now" is the whole question. An entry with no heard time at all is
+    /// a directory lead rather than a heard station and is governed by its own
+    /// layer, not by this.
+    private func withinFalloff(_ entry: HeardStationMap.Entry) -> Bool {
+        guard falloffMinutes > 0 else { return true }
+        guard let lastHeard = entry.lastHeard else { return true }
+        return Date().timeIntervalSince(lastHeard) <= Double(falloffMinutes) * 60
+    }
+
+    /// How many placed stations the fall-off is currently holding back, so the
+    /// switch can say what it is doing rather than silently thinning the map.
+    private var falloffHiddenCount: Int {
+        guard falloffMinutes > 0 else { return 0 }
+        return visibleEntries.filter { $0.isPlaced && !withinFalloff($0) }.count
+    }
+
+    /// Everything the operator can switch that changes which markers exist.
+    /// Used to bypass the annotation throttle on a deliberate change.
+    private var layerGeneration: String {
+        MapLayerGeneration.token(
+            switches: [prefersTransmittedPosition, showsTypeDigipeater, showsTypeWeather,
+                       showsTypeVehicle, showsTypeFixed, showsObjects, showsDirectoryNodes,
+                       hidesDistantStations, showsTracks, showsAllTracks, clustersStations],
+            trackWindowMinutes: trackWindowMinutes,
+            falloffMinutes: falloffMinutes,
+            hiddenRadios: hiddenRadios)
+    }
+
+    /// Which families each radio has heard, from the traffic itself. The map's
+    /// APRS layers apply only to radios that actually carry APRS; on a packet
+    /// channel of nodes and sessions they would otherwise hide everything.
+    private var radioFamilies: [RadioID: Set<RadioTrafficFamily>] {
+        RadioTrafficClassifier.families(from: stations)
+    }
+
+    /// Callsigns heard on at least one radio that carries APRS. A station
+    /// nobody heard on an APRS channel is outside the APRS layers' remit.
+    ///
+    /// A radio that has heard nothing classifiable yet counts as APRS, so a
+    /// fresh session behaves exactly as it did before any evidence arrived
+    /// rather than briefly drawing a different map.
+    private var callsOnAPRSChannels: Set<String> {
+        let families = radioFamilies
+        var result: Set<String> = []
+        for station in stations {
+            let onAPRS = station.perRadio.keys.contains { radio in
+                guard let known = families[radio], !known.isEmpty else { return true }
+                return known.contains(.aprs)
+            }
+            if onAPRS || station.perRadio.isEmpty { result.insert(station.call.uppercased()) }
+        }
+        return result
+    }
+
+    private func isOnAPRSChannel(_ entry: HeardStationMap.Entry) -> Bool {
+        callsOnAPRSChannels.contains(entry.callsign.uppercased())
+    }
+
+    /// Whether a placed entry survives the per-type filter. Only a
+    /// transmitted-APRS station carries a symbol to classify; everything else
+    /// passes untouched.
+    private func typeVisible(_ entry: HeardStationMap.Entry) -> Bool {
+        guard let code = entry.aprsSymbol?.code else { return true }
+        switch APRSTypeBucket.of(code: code) {
+        case .digipeater: return showsTypeDigipeater
+        case .weather:    return showsTypeWeather
+        case .vehicle:    return showsTypeVehicle
+        case .fixed:      return showsTypeFixed
+        }
+    }
+
     private var positionPreference: HeardStationMap.PositionPreference {
         prefersTransmittedPosition ? .transmitted : .licence
     }
@@ -127,8 +322,39 @@ struct StationsMapView: View {
     /// Creates a Winlink draft from a layer. Nil hides the send action —
     /// without a mailbox there is nothing to send into.
     var onSendLayer: ((MapOverlayLayer, MapOverlayExport.Format) -> Void)?
+    /// Our own APRS symbol, when the map is scoped to a radio that beacons an
+    /// APRS position. The observer marker wears it so viewing the map through
+    /// a radio using APRS shows us as the symbol we put on the air. Nil draws
+    /// the plain home marker.
+    var ownAPRSSymbol: APRSMapSymbol? = nil
+    /// Put this station's own position on the air now, on every radio that
+    /// beacons. The map is where an operator is looking when they think about
+    /// their own position, and until now the only way to key a beacon was
+    /// three levels into Settings.
+    var onBeacon: (() -> Void)?
+    /// Why that would do nothing — no radio with a beacon on, no fix yet, a
+    /// path that does not validate. Nil when the beacon can go out.
+    var beaconObstacle: (() -> String?)?
     /// Drawing state. Taps become vertices while this is active.
     @State private var drawing = MapDrawingSession()
+    /// The station the Ask sheet is open for. A wrapper rather than a bare
+    /// string so `sheet(item:)` re-presents when the operator picks another
+    /// station without closing first.
+    @State private var askTarget: AskTarget?
+    /// How far a directed query travels. Shared with `APRSAskStationSheet` so
+    /// the quick menu and the dialog cannot disagree about what the operator
+    /// last chose.
+    @AppStorage("aprs.ask.reach") private var askReachRaw: String = APRSProbeReach.direct.rawValue
+
+    private var askReach: APRSProbeReach {
+        APRSProbeReach(rawValue: askReachRaw) ?? .direct
+    }
+
+    struct AskTarget: Identifiable, Equatable {
+        var callsign: String
+        var id: String { callsign }
+    }
+
     /// Geometry waiting to be named — every feature gets a label, so the
     /// prompt is part of finishing the shape rather than an optional extra.
     @State private var pendingGeometry: ShapefileReader.Geometry?
@@ -308,6 +534,12 @@ struct StationsMapView: View {
     /// Stations the radio has actually met: heard stations plus the
     /// via-path aliases. These are the entries the *analysis* layers
     /// (paths, terrain, coverage) are allowed to see.
+    /// Falls back to the beacon callsign alone when the caller has not said
+    /// what else this station answers to.
+    private var ownAddresses: Set<String> {
+        ownCallsigns.isEmpty ? [myCallsign.uppercased()] : ownCallsigns
+    }
+
     private var coreEntries: [HeardStationMap.Entry] {
         let heard = HeardStationMap.entries(
             stations: stations,
@@ -315,7 +547,7 @@ struct StationsMapView: View {
             gatewayGrids: gatewayGrids,
             announcedGrids: announcedGrids,
             preference: positionPreference,
-            excluding: myCallsign)
+            excluding: ownAddresses)
         // Aliases used in via paths, placed through their operator.
         // Appended rather than merged: a node is its own thing, and its
         // position is a lead rather than a fix.
@@ -438,6 +670,108 @@ struct StationsMapView: View {
             ? "\(placedDirectoryCount) drawn \u{b7} \(mergedNodeBoxCount) folded into heard "
               + "stations \u{b7} \(aliases.directory.allEntries.count) known"
             : nil
+        let live = objects.live()
+        let hazards = live.filter { $0.report.urgency == .hazard }.count
+        layerStatus.falloffHiddenCount = falloffHiddenCount
+        layerStatus.trackCaption = trackCaption
+        layerStatus.objectCaption = live.isEmpty ? nil
+            : (hazards > 0
+               ? "\(hazards) hazard\(hazards == 1 ? "" : "s") \u{b7} \(live.count) placed"
+               : "\(live.count) placed")
+        // Say why it cannot be drawn, rather than greying out a switch and
+        // leaving the operator to guess. Two stations reporting the chosen
+        // reading is the floor: one is a reading, not a field.
+        if let field = weatherField {
+            layerStatus.weatherFieldCaption = field.summary(
+                inFahrenheit: settings.distanceUnitIsMiles)
+            layerStatus.weatherFieldUnavailableReason = nil
+        } else {
+            layerStatus.weatherFieldCaption = nil
+            let parameter = APRSWeatherField.Parameter(rawValue: weatherFieldParameter)
+                ?? .temperature
+            let reporting = weatherObservations(for: parameter).count
+            // "None heard" and "heard, but their readings have gone stale" are
+            // completely different situations and the first was being printed
+            // for the second — with weather stations plainly on the map. A
+            // field is built only from readings under an hour old, and the
+            // reason has to say so rather than denying the stations exist.
+            let everHeard = stations.filter {
+                $0.weather.flatMap(parameter.value(from:)) != nil
+            }.count
+            layerStatus.weatherFieldUnavailableReason = {
+                if everHeard == 0 { return "No weather station heard yet" }
+                if reporting == 0 {
+                    return everHeard == 1
+                        ? "1 station heard, its reading is over an hour old"
+                        : "\(everHeard) stations heard, readings over an hour old"
+                }
+                return "Needs 2 current readings \u{b7} 1 so far"
+            }()
+        }
+        // Which parameters could be drawn right now, so the picker can grey
+        // out the ones no station is reporting rather than offering an empty
+        // map. A humidity field needs two stations with hygrometers, which is
+        // a different question from whether any weather station was heard.
+        layerStatus.availableWeatherParameters = Set(
+            APRSWeatherField.Parameter.allCases.filter {
+                weatherObservations(for: $0).count >= 2
+            })
+    }
+
+    // MARK: - Inferred weather field
+
+    /// The weather stations that can contribute to the field: heard, placed,
+    /// currently reporting a temperature, and recent enough to still mean it.
+    ///
+    /// A station placed at a licence address is deliberately allowed in. Its
+    /// thermometer is real even when its dot is a lookup, and excluding it
+    /// would throw away half the readings on a channel where few stations
+    /// beacon a position.
+    private func weatherObservations(
+        for parameter: APRSWeatherField.Parameter) -> [APRSWeatherField.Observation] {
+        let now = Date()
+        let placedByCall = Dictionary(
+            placed.map { ($0.callsign.uppercased(), $0) }, uniquingKeysWith: { first, _ in first })
+        return stations.compactMap { station -> APRSWeatherField.Observation? in
+            let call = station.call.uppercased()
+            guard let weather = station.weather,
+                  let value = parameter.value(from: weather),
+                  let heard = station.weatherHeard,
+                  now.timeIntervalSince(heard) <= HeardStationMap.weatherFreshWindow,
+                  let entry = placedByCall[call],
+                  let position = entry.position
+            else { return nil }
+            return APRSWeatherField.Observation(
+                callsign: call, position: position, value: value,
+                elevationMetres: elevationSampler?.elevation(at: position))
+        }
+    }
+
+    private var weatherField: APRSWeatherField? {
+        let parameter = APRSWeatherField.Parameter(rawValue: weatherFieldParameter)
+            ?? .temperature
+        return APRSWeatherField.build(
+            observations: weatherObservations(for: parameter), parameter: parameter)
+    }
+
+    /// The wash itself, or nothing when the layer is off or too few stations
+    /// have been heard to infer one.
+    private var weatherFieldOverlays: [WeatherFieldOverlay] {
+        guard showsWeatherField, let field = weatherField else { return [] }
+        // The sampler is a value type over a locked cache, so the render
+        // closure can take it to a background queue. Nil when no elevation is
+        // stored, which drops the field to a plain horizontal blend — honest,
+        // and the layer's help says so.
+        let sampler = elevationSampler
+        return [WeatherFieldOverlay.overlay(
+            for: field,
+            elevation: sampler.map { s in { point in s.elevation(at: point) } },
+            isDark: basemap.isDark)].compactMap { $0 }
+    }
+
+    /// Bilinear elevation over the stored tiles, or nil when none are stored.
+    private var elevationSampler: StoredElevationSampler? {
+        elevation.store.map(StoredElevationSampler.init(store:))
     }
 
     /// How many heard stations carry folded-in node identities.
@@ -572,21 +906,102 @@ struct StationsMapView: View {
         // still-unplaced entries are left alone). Off, every placeable station
         // shows at whatever point it has.
         let entriesForMap = prefersTransmittedPosition
-            ? visibleEntries.filter {
-                !$0.isPlaced || $0.isNodeAlias || $0.origin == .transmittedAPRS
+            ? visibleEntries.filter { entry in
+                // Unplaced entries feed the analysis layers, not the map, and
+                // are left alone. A placed station shows only at its own
+                // transmitted fix (a node alias, placed through its operator,
+                // counts) — and in APRS mode a per-type toggle can hide its
+                // whole class.
+                guard entry.isPlaced else { return true }
+                guard withinFalloff(entry) else { return false }
+                // An APRS layer only governs APRS stations. A station heard
+                // only on a radio that carries no APRS — a packet channel of
+                // nodes and sessions — has no beaconed fix to prefer and must
+                // not be hidden for lacking one, which emptied the whole map
+                // whenever such a radio was the one being shown.
+                guard entry.isNodeAlias || entry.origin == .transmittedAPRS
+                        || !isOnAPRSChannel(entry) else { return false }
+                return typeVisible(entry)
             }
-            : visibleEntries
-        return HeardStationMap.scope(
+            : visibleEntries.filter { !$0.isPlaced || withinFalloff($0) }
+        let stationScope = HeardStationMap.scope(
             observerLabel: observerGrid.uppercased(),
             observer: observer, entries: entriesForMap, now: Date(),
             distanceInMiles: settings.distanceUnitIsMiles)
+        guard showsObjects else { return stationScope }
+        // Objects sit alongside stations rather than replacing them: a fire
+        // and the station reporting it are two different points and an
+        // operator needs both.
+        return StationScope.build(
+            observerLabel: stationScope.observerLabel,
+            sites: stationScope.sites + objectSites(observer: observer))
+    }
+
+    /// The heard objects as map sites. Ids are prefixed so an object named
+    /// after a callsign can never collide with the station of that name.
+    private func objectSites(observer: GreatCircle.Point) -> [StationScope.Site] {
+        let now = Date()
+        return objects.live(now: now).map { placed in
+            let position = placed.position
+            return StationScope.Site(
+                id: Self.objectSiteID(placed.report.key),
+                label: placed.report.name,
+                kilometres: GreatCircle.kilometres(from: observer, to: position),
+                bearingDegrees: GreatCircle.bearingDegrees(from: observer, to: position),
+                signal: placed.report.urgency == .hazard ? .poor : .good,
+                subtitle: placed.report.symbolLabel,
+                detail: Self.objectDetail(placed, observer: observer, now: now,
+                                          inMiles: settings.distanceUnitIsMiles),
+                isStale: now.timeIntervalSince(placed.heard) > HeardStationMap.activeWindow,
+                aprsSymbol: APRSMapSymbol(table: placed.report.symbolTable,
+                                          code: placed.report.symbolCode),
+                supportsConnect: false,
+                supportsAPRSContact: false)
+        }
+    }
+
+    static func objectSiteID(_ key: String) -> String { "object:" + key }
+
+    /// What the card says about an object. Attribution first: an object is a
+    /// claim by a person, and who made it is the first thing that decides
+    /// how much weight it carries.
+    static func objectDetail(_ placed: APRSObjectStore.Placed,
+                             observer: GreatCircle.Point, now: Date,
+                             inMiles: Bool) -> String {
+        var lines = [placed.report.name]
+        lines.append(placed.report.symbolLabel
+                     + (placed.report.kind == .item ? " \u{b7} item" : " \u{b7} object"))
+        if !placed.report.comment.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.append(placed.report.comment.trimmingCharacters(in: .whitespaces))
+        }
+        let kilometres = GreatCircle.kilometres(from: observer, to: placed.position)
+        let bearing = GreatCircle.bearingDegrees(from: observer, to: placed.position)
+        lines.append(String(format: "%@ at %.0f\u{00b0} (%@)",
+                            DistanceDisplay.string(kilometres: kilometres, inMiles: inMiles),
+                            bearing, GreatCircle.compassPoint(bearing)))
+        lines.append("")
+        lines.append("Reported by \(placed.reportedBy)")
+        lines.append("Heard \(placed.heard.formatted(.relative(presentation: .named)))"
+                     + (placed.timesHeard > 1 ? " \u{b7} repeated \(placed.timesHeard) times" : ""))
+        if placed.timesHeard == 1 {
+            lines.append("Heard once and not repeated \u{2014} treat as unconfirmed.")
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// The same positions the scope uses, fanned so stations sharing a
     /// grid square are individually pickable. Computed by the model so
     /// the map and the scope can never disagree about where a marker is.
     private var coordinates: [String: GreatCircle.Point] {
-        HeardStationMap.fannedPositions(placed)
+        var result = HeardStationMap.fannedPositions(placed)
+        // Objects are sites too. Without their coordinates here both renderers
+        // silently drop them — the scope listed a fire and the map drew
+        // nothing, which is the worst possible way for this layer to fail.
+        guard showsObjects else { return result }
+        for placed in objects.live() {
+            result[Self.objectSiteID(placed.report.key)] = placed.position
+        }
+        return result
     }
 
     /// The APRS symbol each heard station beaconed, keyed by the same id its
@@ -610,22 +1025,27 @@ struct StationsMapView: View {
     }
 
     /// Movement trails from the fixes stations beaconed, keyed by callsign.
-    /// A trail needs at least two fixes to be a line; the map ignores the
-    /// rest, but building only the drawable ones keeps the overlay work down.
+    ///
+    /// Three separate complaints, one answer. Every rover's trail drawn at
+    /// once buried the map; a trail with no label could not be matched to the
+    /// station that made it; and an unbounded trail showed where something was
+    /// this morning as though it mattered now.
+    ///
+    /// So trails follow the **selection** by default. One trail, belonging to
+    /// the station whose card is open, needs no legend to identify it and adds
+    /// no noise. Showing every trail is still a switch away for when the whole
+    /// picture is the point, and either way the trail is cut to a time window
+    /// the operator sets.
     private var tracks: [MapTrack] {
-        // A trail is a line of transmitted fixes; it only belongs under a
-        // marker that is itself at the transmitted point.
-        let aprsPlaced = Set(placed.filter { $0.origin == .transmittedAPRS }.map(\.id))
-        return stations.compactMap { station -> MapTrack? in
-            let id = station.call.uppercased()
-            guard aprsPlaced.contains(id), station.track.count >= 2 else { return nil }
-            return MapTrack(
-                id: id,
-                points: station.track.map {
-                    GreatCircle.Point(latitude: $0.latitude, longitude: $0.longitude)
-                })
-        }
+        guard showsTracks else { return [] }
+        return MapTrack.trails(
+            stations: stations,
+            placedIDs: Set(placed.filter { $0.origin == .transmittedAPRS }.map(\.id)),
+            selection: selection,
+            showsAll: showsAllTracks,
+            windowMinutes: trackWindowMinutes)
     }
+
 
     var body: some View {
         VStack(spacing: 0) {
@@ -638,6 +1058,10 @@ struct StationsMapView: View {
             if observer == nil {
                 noPosition
             } else {
+                // Above every other banner: a hazard or a live warning is the
+                // reason someone opens this page in an emergency, and it must
+                // not sit below a note about callsign lookups.
+                emergencyBanner
                 if showsUnplacedBanner { unplacedBanner }
                 if hidesDistantStations, !distantStations.isEmpty { distantBanner }
                 // A draggable split is a Mac affordance. On a touch screen
@@ -819,6 +1243,9 @@ struct StationsMapView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+
+            probeMenu
+
             if !unplaced.isEmpty || showsDirectoryNodes {
                 Button {
                     Task { await lookUpUnplaced() }
@@ -937,6 +1364,120 @@ struct StationsMapView: View {
         .padding(12)
     }
     #endif
+
+    /// The APRS general queries: one unaddressed transmission that the whole
+    /// channel answers on its own.
+    ///
+    /// Named "Ask the Channel" because that is what it does. "Who can hear me"
+    /// described only one of these questions — the position flood — and this
+    /// menu also asks for weather, status and objects, which are not about
+    /// hearing at all.
+    ///
+    /// Deliberately **not** disabled while a previous query is still
+    /// listening. Asking a second question during the reply window is a normal
+    /// thing to want, the results fold into the same list either way, and a
+    /// control that greys out for two minutes after every use reads as broken.
+    /// Starting a new query supersedes the old one, and there is an explicit
+    /// way to stop.
+    ///
+    /// Its own property because the Mac header is one long expression and the
+    /// type checker gives up when it grows.
+    @ViewBuilder
+    private var probeMenu: some View {
+        Menu {
+            Section("Ask every station for") {
+                ForEach(APRSGeneralQuery.allCases) { query in
+                    Button {
+                        probe.start(query: query, scope: probe.scope, reach: probeReach)
+                    } label: {
+                        Label(query.label, systemImage: query.systemImage)
+                    }
+                    .help(query.help)
+                }
+            }
+            Section("Ask") {
+                Picker("", selection: Binding(
+                    get: { probeReach },
+                    set: { probeReachRaw = $0.rawValue })) {
+                    ForEach(APRSProbeReach.allCases) { reach in
+                        Text(reach.label).tag(reach)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.inline)
+            }
+            Section("Show replies from") {
+                Picker("", selection: Binding(
+                    get: { probe.scope },
+                    set: { probe.scope = $0 })) {
+                    ForEach(APRSProbeScope.allCases) { scope in
+                        Text(Self.probeLabel(scope)).tag(scope)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.inline)
+            }
+            // The other half of a shared channel, and the reason this menu is
+            // not called "Ask": announcing our own position is the same act
+            // from the other side, and an operator looking at the map is
+            // exactly the operator who wants to send one. It was reachable
+            // only from Settings > Radios before.
+            if let onBeacon {
+                Section("Tell the channel") {
+                    Button {
+                        onBeacon()
+                    } label: {
+                        Label("Beacon my position now", systemImage: "dot.radiowaves.up.forward")
+                    }
+                    .help("Transmit an APRS position report on every radio whose beacon is on, "
+                          + "staggered so two radios on one frequency do not key together. The "
+                          + "scheduled beacon carries on unchanged.")
+                    // Shown rather than hidden behind a disabled control: a
+                    // button that does nothing and will not say why is the
+                    // complaint this whole area started with.
+                    if let blocked = beaconObstacle?() {
+                        Text(blocked)
+                    }
+                }
+            }
+            if probe.status == .listening {
+                Divider()
+                Button(role: .cancel) {
+                    probe.cancel()
+                } label: {
+                    Label("Stop listening", systemImage: "stop.circle")
+                }
+            }
+        } label: {
+            Label(probe.status == .listening ? "Listening\u{2026}" : "Ask the Channel",
+                  systemImage: "antenna.radiowaves.left.and.right")
+        }
+        .fixedSize()
+        .help("One unaddressed APRS query that every station in earshot answers on its own "
+              + "\u{2014} the flood broadcast, not a poll. Forty directed queries would be "
+              + "forty transmissions on a shared channel; this is one. Plain AX.25 nodes are "
+              + "not listening for these and are never bothered. Replies keep arriving for two "
+              + "minutes, and you can ask another question while they do.")
+    }
+
+    /// How far the next question is asked. Remembered, because it is a
+    /// property of the station's situation — a hilltop and a basement want
+    /// different answers — not of one query.
+    @AppStorage("aprs.probe.reach") private var probeReachRaw: String = APRSProbeReach.direct.rawValue
+
+    private var probeReach: APRSProbeReach {
+        APRSProbeReach(rawValue: probeReachRaw) ?? .direct
+    }
+
+    /// Wording for a probe scope on the map, where "Infrastructure" and
+    /// "Moving" need to say what they mean without the surrounding page.
+    static func probeLabel(_ scope: APRSProbeScope) -> String {
+        switch scope {
+        case .all: return "Every station"
+        case .infrastructure: return "Digipeaters & gateways"
+        case .moving: return "Vehicles & trackers"
+        }
+    }
 
     #if os(iOS)
     // MARK: - iOS controls
@@ -1067,6 +1608,8 @@ struct StationsMapView: View {
             .disabled(isLookingUp || !settings.callsignLookupEnabled)
         }
 
+        probeMenu
+
         if modeRaw == "Map" {
             // Drawing starts here rather than from a permanent strip over
             // the map. The strip appears once a tool is active.
@@ -1155,6 +1698,56 @@ struct StationsMapView: View {
     }
     #endif
 
+    /// Live hazards and current NWS warnings, across the top of the map.
+    ///
+    /// Deliberately loud and deliberately narrow: only objects whose symbol
+    /// says something is wrong, and only alerts still being repeated. A banner
+    /// that appears for ordinary traffic is one an operator learns to ignore,
+    /// which is exactly the failure that matters here.
+    @ViewBuilder
+    private var emergencyBanner: some View {
+        let hazards = objects.hazards()
+        let warnings = alerts.current().filter { $0.severity == .warning }
+        if showsObjects, !hazards.isEmpty || !warnings.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(warnings, id: \.identifier) { alert in
+                    Label {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(alert.text).font(.caption.weight(.semibold))
+                            Text(alert.provenance())
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.octagon.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+                ForEach(hazards) { hazard in
+                    Label {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(hazard.report.name) \u{b7} \(hazard.report.symbolLabel)")
+                                .font(.caption.weight(.semibold))
+                            Text("Reported by \(hazard.reportedBy), heard "
+                                 + hazard.heard.formatted(.relative(presentation: .named))
+                                 + (hazard.timesHeard == 1 ? " \u{2014} unconfirmed" : ""))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    .onTapGesture { selection = Self.objectSiteID(hazard.report.key) }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial)
+        }
+    }
+
     /// Whether the "no position" banner is up, so nothing else says the
     /// same thing at the same time.
     private var showsUnplacedBanner: Bool {
@@ -1176,7 +1769,9 @@ struct StationsMapView: View {
         // In transmitted mode the address-placed heard stations are hidden, so
         // say so rather than counting points that are not on the map.
         if prefersTransmittedPosition {
-            let hidden = placed.filter { !$0.isNodeAlias && $0.origin != .transmittedAPRS }.count
+            let hidden = placed.filter {
+                !$0.isNodeAlias && $0.origin != .transmittedAPRS && isOnAPRSChannel($0)
+            }.count
             let tail = hidden > 0 ? " \u{b7} \(hidden) address-only hidden" : ""
             return "\(beaconed) from beacons\(tail)"
         }
@@ -1260,7 +1855,32 @@ struct StationsMapView: View {
         }
     }
 
+    /// Whether the traffic strip is open. Remembered, because an operator who
+    /// wants to watch the channel wants to watch it every time.
+    @AppStorage("map.traffic.expanded") private var trafficExpanded = false
+
+    /// The live traffic strip, when the app supplied a feed.
+    @ViewBuilder
+    private var trafficChin: some View {
+        if let traffic {
+            MapTrafficChin(feed: traffic, radios: trafficRadios,
+                           isExpanded: $trafficExpanded) { call in
+                selection = call
+            }
+        }
+    }
+
     private func mapWithDrawing(observer: GreatCircle.Point) -> some View {
+        VStack(spacing: 0) {
+            mapStack(observer: observer)
+            // Below the map, not over it: the map's own bottom-corner
+            // overlays (the legend, the selection card) keep their space.
+            trafficChin
+        }
+        .textEntryPrompt($drawPrompt)
+    }
+
+    private func mapStack(observer: GreatCircle.Point) -> some View {
         ZStack(alignment: .top) {
             StationMapView(scope: scope, distanceInMiles: settings.distanceUnitIsMiles,
                            observer: observer,
@@ -1269,8 +1889,12 @@ struct StationsMapView: View {
                                basemap: basemap, legend: .recency,
                                pathLinks: pathLinks,
                                aprsSymbols: aprsSymbols,
+                               ownAPRSSymbol: ownAPRSSymbol,
                                tracks: tracks,
                                terrainOverlays: terrainOverlays,
+                               weatherFieldOverlays: weatherFieldOverlays,
+                               layerGeneration: layerGeneration,
+                               clustersStations: clustersStations,
                                tileStore: offlineTiles.hasStoredTiles ? offlineTiles.store : nil,
                                tileSource: offlineTiles.storedSource,
                                overlays: overlayStore.visibleLayers,
@@ -1279,6 +1903,13 @@ struct StationsMapView: View {
                                coverage: coverageRing,
                                selection: $selection)
             .overlay(alignment: .bottomTrailing) { selectionCard }
+            .sheet(item: $askTarget) { target in
+                APRSAskStationSheet(
+                    callsign: target.callsign,
+                    subtitle: askSubtitle(target.callsign),
+                    ping: pingState?(target.callsign),
+                    onSend: { onQuery?($0) })
+            }
             #if os(iOS)
             .overlay(alignment: .topLeading) { coverageChip }
             .modifier(MapOverlayPresentation(store: overlayStore, interaction: overlayInteraction))
@@ -1288,7 +1919,6 @@ struct StationsMapView: View {
                               showsModePicker: showsDrawingModePicker)
                 .padding(.top, 8)
         }
-        .textEntryPrompt($drawPrompt)
     }
 
     /// The Mac keeps the drawing tools in view; a touch screen starts them
@@ -1311,6 +1941,13 @@ struct StationsMapView: View {
         #else
         false
         #endif
+    }
+
+    /// The station line the Ask sheet shows under the callsign — the same
+    /// detail the card is already showing, so the dialog does not open with
+    /// less context than the card it came from.
+    private func askSubtitle(_ callsign: String) -> String? {
+        scope.sites.first { $0.id == callsign }?.detail
     }
 
     /// A floating card for the selected marker: what the tooltip says, in
@@ -1343,6 +1980,41 @@ struct StationsMapView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                // A weather station's readings, laid out rather than printed.
+                // Below the identity lines, because you look up which station
+                // this is before you read what its sensors say.
+                if let weather = site.weather {
+                    Divider().padding(.vertical, 1)
+                    APRSWeatherSummaryView(
+                        weather: weather, heard: site.weatherHeard,
+                        history: site.weatherHistory,
+                        inImperial: settings.distanceUnitIsMiles)
+                }
+                // Whatever else this station measures. Rare, and the entire
+                // reason to look at the station when it is there: a creek
+                // gauge and a battery bank both arrive this way.
+                if !site.telemetry.isEmpty {
+                    Divider().padding(.vertical, 1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(site.telemetryTitle ?? "Telemetry")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(site.telemetry, id: \.channel) { reading in
+                            HStack(spacing: 4) {
+                                Text(reading.name ?? "Channel \(reading.channel + 1)")
+                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 8)
+                                Text(reading.text)
+                                    .monospacedDigit()
+                                    .foregroundStyle(reading.isCalibrated ? .primary : .secondary)
+                            }
+                            .font(.caption)
+                        }
+                    }
+                    .help("Sent by the station itself. A value marked (raw) is the count as "
+                          + "transmitted \u{2014} the station has not published the equation "
+                          + "that turns it into a measurement, so AXTerm will not guess one.")
+                }
                 if let chain = plannedChainFor?(site.id), !chain.isEmpty {
                     // The whole route, in the card where the decision to
                     // connect is made — same planner the relay drives, so
@@ -1356,8 +2028,11 @@ struct StationsMapView: View {
                               + "routes first, then node directories. Every hop is "
                               + "proven live during the connect before the next is asked.")
                 }
-                HStack(spacing: 8) {
-                    if let onConnect {
+                // Wrapping, and only the actions that can actually reach this
+                // site. Four fixed-width buttons in an HStack ran off the edge
+                // of the card and lost their labels.
+                FlowingButtons {
+                    if let onConnect, site.supportsConnect {
                         Button {
                             onConnect(site.id)
                         } label: {
@@ -1377,6 +2052,87 @@ struct StationsMapView: View {
                         .controlSize(.small)
                         .help("Everything known about \(site.label): identity, roles, links, and the chain a connect would walk.")
                     }
+                    if let onMessage, site.supportsAPRSContact {
+                        Button {
+                            onMessage(site.id)
+                        } label: {
+                            Label("Message", systemImage: "message")
+                        }
+                        .controlSize(.small)
+                        .help("Send \(site.label) an APRS text message.")
+                    }
+                    if let onQuery, site.supportsAPRSContact {
+                        // The operator's standing preference, overridden only
+                        // where the evidence contradicts it — and never
+                        // silently: the label, the help and a line in the menu
+                        // all say which reach is about to be used and why.
+                        let advice = reachAdvice?(site.id) ?? .inEarshot
+                        let reach = advice.suggestedReach ?? askReach
+                        // Built here rather than inline: the concatenation
+                        // below defeated the type checker as one expression.
+                        let pingHelp = Self.pingHelp(label: site.label, reach: reach,
+                                                     advice: advice, selected: askReach)
+                        // A split button: the click most operators want stays
+                        // one click, and the other six queries are one more.
+                        // Burying ?APRSP in a menu would slow the commonest
+                        // action down to serve the rarer ones.
+                        Menu {
+                            Section("Ask for") {
+                                ForEach(APRSDirectedQuery.allCases) { query in
+                                    Button {
+                                        onQuery(APRSStationQuery(
+                                            callsign: site.id, kind: query, reach: reach))
+                                    } label: {
+                                        Label(query.label, systemImage: query.systemImage)
+                                    }
+                                    .help(query.help)
+                                }
+                            }
+                            Divider()
+                            // How far a directed query travels, chosen where
+                            // it is sent. It was only ever settable inside
+                            // "Ask…", and the quick Ping then silently used
+                            // whatever that had last been left at — so an
+                            // operator who wanted one station asked over the
+                            // digipeaters had no way to say so from here, and
+                            // no way to see which they were about to get.
+                            if let caution = advice.caution {
+                                Section { Text(caution) }
+                            }
+                            Picker("Reach", selection: Binding(
+                                get: { askReach },
+                                set: { askReachRaw = $0.rawValue })) {
+                                ForEach(APRSProbeReach.allCases) { option in
+                                    Text(option.label).tag(option)
+                                }
+                            }
+                            .pickerStyle(.inline)
+                            Divider()
+                            Button {
+                                askTarget = AskTarget(callsign: site.id)
+                            } label: {
+                                Label("Ask\u{2026}", systemImage: "questionmark.bubble")
+                            }
+                            .help("Pick a query, see what each one actually replies with, and "
+                                  + "choose how far it travels.")
+                        } label: {
+                            Label("Ping", systemImage: reach == .wide
+                                  ? "dot.radiowaves.forward"
+                                  : "dot.radiowaves.left.and.right")
+                        } primaryAction: {
+                            onQuery(APRSStationQuery(
+                                callsign: site.id, kind: .position, reach: reach))
+                        }
+                        .controlSize(.small)
+                        .fixedSize()
+                        .help(pingHelp)
+                    }
+                }
+                if let ping = pingState?(site.id) {
+                    pingRow(ping)
+                }
+                if let at = repeatsUs?(site.id) {
+                    repeatsRow(at)
                 }
             }
             .padding(12)
@@ -1388,6 +2144,47 @@ struct StationsMapView: View {
             .padding(12)
             .transition(.opacity)
         }
+    }
+
+    /// What became of the ping, in one line.
+    ///
+    /// A ping used to end at the transmission: one frame went out and the
+    /// operator watched a channel with no way to tell an answer from the next
+    /// beacon. The distinction between *answered* and *replied* is the whole
+    /// point — a station that addressed us has proved it heard us, while a
+    /// station that merely transmitted has proved nothing unless its own
+    /// cadence makes the timing improbable.
+    @ViewBuilder
+    private func pingRow(_ ping: APRSPingTracker.Ping) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: APRSPingPresentation.icon(ping))
+                .foregroundStyle(APRSPingPresentation.tint(ping))
+            Text(APRSPingPresentation.line(ping))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .help(APRSPingPresentation.help(ping))
+    }
+
+    /// "It hears us", stated as a fact rather than as the absence of one.
+    ///
+    /// A digipeat is the strongest reception evidence APRS offers short of a
+    /// message: the station received our frame and put it back on the air. It
+    /// is shown whether or not a ping is outstanding, because it is what the
+    /// operator wants to know and a silent ping does not disprove it.
+    private func repeatsRow(_ at: Date) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundStyle(.green)
+            Text("Repeats our traffic \u{00B7} \(at.formatted(.relative(presentation: .named)))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .help("This station has put one of our own frames back on the air, so it receives us "
+              + "\u{2014} whatever it does about queries. Only a query sent through a "
+              + "digipeater path can produce this evidence; a direct one has no path to repeat.")
     }
 
     /// A tap on the map while drawing.

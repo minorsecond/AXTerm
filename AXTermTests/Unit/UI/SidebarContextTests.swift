@@ -54,12 +54,40 @@ final class SidebarContextTests: XCTestCase {
     }
 
     /// Every page gets an answer, and the radio context is a choice rather
-    /// than a leftover — five pages claim it deliberately.
+    /// than a leftover — six pages claim it deliberately.
+    ///
+    /// The count is a tripwire, not a fact worth asserting for its own sake.
+    /// `SidebarContext.section(for:)` switches exhaustively, so a new page
+    /// cannot compile without being assigned somewhere; what it *can* do is
+    /// land in `.radio` because that is the nearest case to type. This makes
+    /// adding a page stop here and say which navigation it actually has.
     func testEveryPageIsAccountedFor() {
-        XCTAssertEqual(NavigationItem.allCases.count, 8)
+        XCTAssertEqual(
+            NavigationItem.allCases.count, 9,
+            "A page was added or removed. Decide which navigation it has, put it in the "
+                + "right list below, and update this count — do not just bump the number.")
+
         let radio = NavigationItem.allCases.filter {
             SidebarContext.section(for: $0) == .radio
         }
-        XCTAssertEqual(Set(radio), [.terminal, .packets, .routes, .nodes, .analytics])
+        XCTAssertEqual(
+            Set(radio), [.terminal, .packets, .routes, .nodes, .analytics, .messages],
+            "Messages navigates by conversation inside the page; its sidebar is the "
+                + "heard-station list, which is who you start a message or a probe against.")
+    }
+
+    /// The four sections partition the pages: every page is in exactly one,
+    /// and none is in two. This is the property the count above is only a
+    /// proxy for, and it holds whatever pages exist.
+    func testTheSectionsPartitionEveryPage() {
+        let sections: [SidebarContext.Section] = [.radio, .mapLayers, .mailFolders, .bbsPanes]
+        var seen: [NavigationItem] = []
+        for section in sections {
+            seen += NavigationItem.allCases.filter { SidebarContext.section(for: $0) == section }
+        }
+        XCTAssertEqual(Set(seen), Set(NavigationItem.allCases),
+                       "every page belongs to one of the four sections")
+        XCTAssertEqual(seen.count, NavigationItem.allCases.count,
+                       "no page is claimed by two sections")
     }
 }

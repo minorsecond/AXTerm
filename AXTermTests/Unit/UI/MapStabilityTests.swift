@@ -63,6 +63,36 @@ final class MapStabilityTests: XCTestCase {
             "the sidebar opening shifts the map's origin")
     }
 
+    // MARK: - The annotation-anchor shiver (a still camera, not a still frame)
+
+    /// The frame gate above stops the map re-projecting when its *size*
+    /// wobbles. But the diagnostics found the markers still bouncing with the
+    /// frame perfectly still: MapKit re-anchors every annotation to pixels on
+    /// each presented frame, ~1.3pt, ~200 times a second, while the camera
+    /// does not move. The discriminator there is the visible map rect.
+    func testAnAnchorShiverWithAStillCameraIsSwallowed() {
+        // rectUnchanged == true means the camera has not moved since the last
+        // honoured move; a ~1.3pt hop then is the shiver.
+        XCTAssertTrue(MapFrameStability.isAnnotationShiver(distance: 1.3, rectUnchanged: true))
+        XCTAssertTrue(MapFrameStability.isAnnotationShiver(distance: 0.0, rectUnchanged: true))
+        XCTAssertTrue(MapFrameStability.isAnnotationShiver(distance: 1.99, rectUnchanged: true))
+    }
+
+    func testARealPanReanchorsTheMarker() {
+        // The rect moved: even a small step must be honoured, or the marker
+        // lags the map.
+        XCTAssertFalse(MapFrameStability.isAnnotationShiver(distance: 1.3, rectUnchanged: false))
+        XCTAssertFalse(MapFrameStability.isAnnotationShiver(distance: 0.0, rectUnchanged: false))
+        // A large re-anchor is real motion whatever the camera reads.
+        XCTAssertFalse(MapFrameStability.isAnnotationShiver(distance: 3358, rectUnchanged: true))
+    }
+
+    func testTheAnchorThresholdIsTwoPoints() {
+        XCTAssertEqual(MapFrameStability.annotationStillnessPoints, 2)
+        XCTAssertTrue(MapFrameStability.isAnnotationShiver(distance: 1.999, rectUnchanged: true))
+        XCTAssertFalse(MapFrameStability.isAnnotationShiver(distance: 2.0, rectUnchanged: true))
+    }
+
     /// The boundary itself, both sides, so the threshold cannot drift
     /// silently under someone editing it.
     func testTheThresholdIsExactlyOnePoint() {

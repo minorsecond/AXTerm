@@ -37,4 +37,41 @@ nonisolated struct MapTrack: Identifiable, Sendable, Equatable {
         }
         return MKPolyline(coordinates: coords, count: coords.count)
     }
+
+    /// Which trails to draw, and how much of each.
+    ///
+    /// Pure, because three separate rules decide whether a line appears and
+    /// all three had to be reasoned about from a screenshot rather than a
+    /// test: a trail needs two fixes from a station that *moved*, inside the
+    /// window, and belonging to the selection unless every trail is asked for.
+    /// Most stations never satisfy the first — a house does not move — which
+    /// is why the layer legitimately draws nothing most of the time.
+    ///
+    /// - Parameters:
+    ///   - placedIDs: stations drawn at their own transmitted fix. A trail
+    ///     only belongs under a marker that is itself at the beaconed point.
+    ///   - windowMinutes: 0 keeps everything the station has.
+    static func trails(stations: [Station],
+                       placedIDs: Set<String>,
+                       selection: String?,
+                       showsAll: Bool,
+                       windowMinutes: Int,
+                       now: Date = Date()) -> [MapTrack] {
+        let cutoff = windowMinutes > 0
+            ? now.addingTimeInterval(-Double(windowMinutes) * 60)
+            : Date.distantPast
+        return stations.compactMap { station -> MapTrack? in
+            let id = station.call.uppercased()
+            guard placedIDs.contains(id) else { return nil }
+            if !showsAll, id != selection { return nil }
+            let recent = station.track.filter { $0.timestamp >= cutoff }
+            guard recent.count >= 2 else { return nil }
+            return MapTrack(
+                id: id,
+                points: recent.map {
+                    GreatCircle.Point(latitude: $0.latitude, longitude: $0.longitude)
+                })
+        }
+    }
+
 }

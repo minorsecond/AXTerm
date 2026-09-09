@@ -35,4 +35,30 @@ final class MapLayerStatus: ObservableObject {
     /// How many stations the distance filter is holding back. Zero hides the
     /// row's caption rather than saying "0 hidden".
     @Published var distantCount = 0
+
+    /// "3 stations · lapse rate fitted from them", or nil when too few
+    /// weather stations have been heard to infer a field at all. Nil also
+    /// disables the switch: a layer that cannot draw anything should say why
+    /// rather than sit there looking broken.
+    @Published var weatherFieldCaption: String?
+
+    /// Which field parameters have enough stations reporting to be drawn.
+    /// The picker offers only these: a humidity field needs two hygrometers,
+    /// which is a different question from whether a weather station was heard
+    /// at all.
+    @Published var availableWeatherParameters: Set<APRSWeatherField.Parameter> = []
+
+    /// "2 hazards · 5 objects", or nil when nothing has been placed. Hazards
+    /// are counted separately because they are the reason to look.
+    @Published var objectCaption: String?
+
+    /// Why the weather field cannot be drawn, when it cannot. A greyed-out
+    /// switch with no explanation is indistinguishable from a broken one.
+    @Published var weatherFieldUnavailableReason: String?
+
+    /// How many placed stations the fall-off setting is holding back.
+    @Published var falloffHiddenCount = 0
+
+    /// What the movement-trail layer is drawing, or why it is drawing nothing.
+    @Published var trackCaption: String?
 }

@@ -11,6 +11,12 @@ import SwiftUI
 struct RadioRowView: View {
     let radio: RadioStatusSummary
     @Binding var isShown: Bool
+    /// What this radio has actually been heard carrying. Shown as a small
+    /// badge so the operator can see at a glance which receiver is on the
+    /// APRS channel and which is on the packet network — the thing that
+    /// decides which map layers apply to it. Empty until something
+    /// classifiable arrives, and absent rather than guessed.
+    var families: Set<RadioTrafficFamily> = []
 
     var body: some View {
         HStack(spacing: 6) {
@@ -31,6 +37,16 @@ struct RadioRowView: View {
             }
 
             Spacer(minLength: 4)
+
+            if !families.isEmpty {
+                Text(familyLabel)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 3))
+                    .help(familyHelp)
+            }
 
             HStack(spacing: 2) {
                 Blinkenlight(color: .green, trigger: radio.lastRx ?? .distantPast)
@@ -59,4 +75,17 @@ struct RadioRowView: View {
         case .idle: Color(platform: .platformTertiaryLabel)
         }
     }
+
+    /// Ordered, so the badge does not reshuffle between redraws.
+    private var familyLabel: String {
+        RadioTrafficFamily.allCases.filter(families.contains).map(\.label)
+            .joined(separator: " \u{b7} ")
+    }
+
+    private var familyHelp: String {
+        let lines = RadioTrafficFamily.allCases.filter(families.contains).map(\.help)
+        return "Read from what this radio has heard, not from a setting. "
+            + lines.joined(separator: " ")
+    }
+
 }

@@ -20,7 +20,7 @@ struct AdaptiveToolbarControl: View {
                     Text("· K\(effective.k) P\(effective.p) N2 \(effective.n2)")
                         .font(.system(size: 11))
                         .monospacedDigit()
-                    if effective.destination != nil {
+                    if let destination = effective.destination, !destination.isEmpty {
                         Text("· Session")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
@@ -279,12 +279,13 @@ private struct AdaptivePopoverContent: View {
         )
     }
 
+    /// Which channel and route this figure is about. Since the tuner keeps
+    /// state per radio, "Global Network" would now be a lie on a station with
+    /// more than one — see `AdaptiveScopeLabel`.
     private func contextChipText(adaptive: AdaptiveParams?) -> String {
-        // Session information moved to consolidated header - show only global/network status
-        if let destination = adaptive?.destination {
-            return "\(destination)"  // Show just destination without "Session:" prefix
-        }
-        return "Global Network"
+        AdaptiveScopeLabel.text(for: adaptive,
+                                radioName: { SessionCoordinator.shared?.radioName($0) },
+                                hasMultipleRadios: (SessionCoordinator.shared?.hasMultipleRadios ?? false))
     }
 
     private var chartWindowLabel: String {

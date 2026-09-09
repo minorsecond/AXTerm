@@ -41,7 +41,10 @@ nonisolated enum SidebarContext {
             return .mailFolders
         case .bbs:
             return .bbsPanes
-        case .terminal, .packets, .routes, .nodes, .analytics:
+        case .terminal, .packets, .routes, .nodes, .analytics, .messages:
+            // Messages navigates by conversation inside the page; the sidebar
+            // shows the heard-station list, which is who you start a message
+            // or a "who can hear me" probe against.
             return .radio
         }
     }

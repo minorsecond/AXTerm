@@ -31,11 +31,23 @@ struct StationMapView: View {
     /// APRS symbols to draw over station dots, keyed by site id. Empty leaves
     /// the dots plain.
     var aprsSymbols: [String: APRSMapSymbol] = [:]
+    /// Our own APRS symbol, drawn on the observer marker when the map is
+    /// scoped to a radio that beacons an APRS position. Nil draws the plain
+    /// home arrow.
+    var ownAPRSSymbol: APRSMapSymbol? = nil
     /// Movement trails, one per station that has beaconed more than one fix.
     var tracks: [MapTrack] = []
     /// Shaded elevation, drawn under the network. Non-empty forces the
     /// MKMapView path, which is the only one that can host an overlay.
     var terrainOverlays: [ElevationOverlay] = []
+    /// The inferred temperature wash. Non-empty forces the MKMapView path,
+    /// which is the only one that can host an overlay.
+    var weatherFieldOverlays: [WeatherFieldOverlay] = []
+    /// Fingerprint of the layer switches, so a deliberate change skips the
+    /// annotation throttle.
+    var layerGeneration: String = ""
+    /// Whether ordinary stations fold together when zoomed out.
+    var clustersStations: Bool = true
     /// Stored tiles and the provider they came from. Nil means offline mode
     /// is unavailable — the picker hides it rather than offering a basemap
     /// that would draw nothing.
@@ -68,7 +80,8 @@ struct StationMapView: View {
         // exactly where an operator would first try them.
         if basemap.isOffline, let tileStore {
             mapKitMap(store: tileStore)
-        } else if drawing != nil || !overlays.isEmpty || !terrainOverlays.isEmpty {
+        } else if drawing != nil || !overlays.isEmpty || !terrainOverlays.isEmpty
+                    || !weatherFieldOverlays.isEmpty {
             mapKitMap(store: nil)
         } else {
             appleMap
@@ -91,8 +104,12 @@ struct StationMapView: View {
             overlays: overlays,
             pathLinks: pathLinks,
             aprsSymbols: aprsSymbols,
+            observerSymbol: ownAPRSSymbol,
             tracks: tracks,
             terrainOverlays: terrainOverlays,
+            weatherFieldOverlays: weatherFieldOverlays,
+            layerGeneration: layerGeneration,
+            clustersStations: clustersStations,
             drawing: drawing ?? .constant(MapDrawingSession()),
             onDrawTap: onDrawTap,
             selection: $selection,
@@ -293,9 +310,19 @@ struct StationMapView: View {
                 Circle()
                     .fill(.background)
                     .frame(width: 18, height: 18)
-                Image(systemName: "location.north.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.tint)
+                if let ownAPRSSymbol {
+                    // Our beaconed APRS symbol, so the home marker shows the
+                    // very glyph we put on the air. The tinted ring still
+                    // reads as "you".
+                    Image(systemName: APRSSymbolGlyph.systemImage(
+                        table: ownAPRSSymbol.table, code: ownAPRSSymbol.code))
+                        .font(.system(size: 12, weight: .black))
+                        .foregroundStyle(.tint)
+                } else {
+                    Image(systemName: "location.north.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.tint)
+                }
             }
             Text(observerLabel)
                 .font(.system(size: 10, weight: .semibold))
@@ -315,8 +342,11 @@ struct StationMapView: View {
     /// the dot on selection shifted the whole thing under the cursor, and
     /// clicking around a cluster made them all appear to bounce. Only
     /// what is drawn *inside* the fixed frame changes.
-    private static let markerFootprint: CGFloat = 34
+    private static let markerFootprint: CGFloat = 40
     private static let markerDiameter: CGFloat = 17
+    /// A station beaconing an APRS symbol gets a larger dot so the glyph is
+    /// legible and a live transmitted fix stands apart from an address dot.
+    private static let aprsMarkerDiameter: CGFloat = 28
 
     private func marker(for site: StationScope.Site) -> some View {
         let isSelected = site.id == selection
@@ -325,7 +355,10 @@ struct StationMapView: View {
         // stations moving through it. Recency still shows through the
         // stale fade.
         let tint = site.isNode ? Color.purple : color(for: site.signal)
-        let diameter = Self.markerDiameter
+        // A drawable beaconed symbol earns the larger marker; a node or an
+        // inferred lead keeps the ordinary dot.
+        let hasAPRSGlyph = !site.isNode && !site.isApproximate && site.aprsSymbol != nil
+        let diameter = hasAPRSGlyph ? Self.aprsMarkerDiameter : Self.markerDiameter
 
         return VStack(spacing: 2) {
             ZStack {
@@ -363,9 +396,9 @@ struct StationMapView: View {
                     // an APRS marker.
                     Image(systemName: APRSSymbolGlyph.systemImage(
                         table: symbol.table, code: symbol.code))
-                        .font(.system(size: diameter * 0.66, weight: .black))
+                        .font(.system(size: diameter * 0.72, weight: .black))
                         .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.45), radius: 1)
+                        .shadow(color: .black.opacity(0.5), radius: 1)
                 }
                 // Selection is shown by a ring drawn inside the fixed
                 // footprint, never by resizing it.
@@ -375,7 +408,12 @@ struct StationMapView: View {
             }
             .frame(width: Self.markerFootprint, height: Self.markerFootprint)
 
-            Text(site.label)
+            // The callsign, and for a weather station its current temperature
+            // after it in a lighter weight — one pill, so the reading reads as
+            // something about this station rather than as part of its name.
+            (Text(site.label)
+             + Text(site.weatherBadge.map { "  \($0)" } ?? "")
+                .fontWeight(.regular))
                 // Weight and size are fixed too: a bolder label is wider,
                 // and a wider label moves the marker for the same reason.
                 .font(.system(size: 11, weight: .semibold))
@@ -390,7 +428,7 @@ struct StationMapView: View {
         }
         .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
         .opacity(site.isStale ? 0.75 : 1)
-        .help(site.detail)
+        .help(site.tooltip)
     }
 
     private func color(for signal: StationScope.Signal) -> Color {

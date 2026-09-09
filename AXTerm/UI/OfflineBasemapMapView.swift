@@ -46,12 +46,27 @@ struct OfflineBasemapMapView {
     /// scope's sites carry. Empty leaves every dot plain, so a scope with no
     /// APRS traffic looks exactly as it did.
     var aprsSymbols: [String: APRSMapSymbol] = [:]
+    /// Our own APRS symbol, drawn on the observer marker when the map is
+    /// scoped to a radio that beacons an APRS position. Nil draws the plain
+    /// home dot.
+    var observerSymbol: APRSMapSymbol? = nil
     /// Movement trails, one per station that has beaconed more than one
     /// position. Drawn as polylines under the dots.
     var tracks: [MapTrack] = []
     /// Shaded elevation tiles. Empty draws none, so a map with no terrain
     /// stored looks exactly as it did.
     var terrainOverlays: [ElevationOverlay] = []
+    /// The inferred temperature wash, drawn beneath the network. Empty draws
+    /// nothing, so a map with the layer off looks exactly as it did.
+    var weatherFieldOverlays: [WeatherFieldOverlay] = []
+    /// Fingerprint of the layer switches. When it changes, the annotation
+    /// throttle is bypassed for one pass so the operator's action lands at
+    /// once. See `structuralMutationsAllowed`.
+    var layerGeneration: String = ""
+    /// Whether ordinary stations fold together when zoomed out. Off draws
+    /// every station at its own position at every zoom, which is denser but
+    /// hides nothing.
+    var clustersStations: Bool = true
     /// In-progress drawing. Taps add vertices while this is active.
     @Binding var drawing: MapDrawingSession
     /// Called when a tap lands on the map in a drawing mode.
@@ -107,11 +122,22 @@ struct OfflineBasemapMapView {
         /// The APRS symbol this station beaconed, drawn over its dot. Nil for
         /// a station that has never sent a position, and for infrastructure.
         var aprsSymbol: APRSMapSymbol?
+        /// A current reading drawn after the callsign — a weather station's
+        /// temperature. Part of the drawn label, so it belongs in the redraw
+        /// comparison below rather than in the (unobserved) subtitle.
+        var weatherBadge: String?
+        /// When this station was last heard, for the "just transmitted" ring.
+        /// Deliberately *not* part of `absorb`'s redraw comparison: it changes
+        /// on every frame, and a full reconfigure per packet is exactly the
+        /// marker churn this class spends so much effort avoiding. The ring is
+        /// refreshed on its own cheap timer instead — see `refreshActivity`.
+        var lastHeard: Date?
 
         init(id: String, coordinate: CLLocationCoordinate2D, title: String?,
              subtitle: String?, signal: StationScope.Signal,
              isApproximate: Bool, isObserver: Bool, isNode: Bool = false,
-             aprsSymbol: APRSMapSymbol? = nil) {
+             aprsSymbol: APRSMapSymbol? = nil, weatherBadge: String? = nil,
+             lastHeard: Date? = nil) {
             self.id = id
             self.coordinate = coordinate
             self.title = title
@@ -121,7 +147,23 @@ struct OfflineBasemapMapView {
             self.isObserver = isObserver
             self.isNode = isNode
             self.aprsSymbol = aprsSymbol
+            self.weatherBadge = weatherBadge
+            self.lastHeard = lastHeard
         }
+
+        /// Whether this marker may be folded into a cluster when the map is
+        /// zoomed out.
+        ///
+        /// Ordinary stations may: at state zoom their individual positions are
+        /// unreadable anyway, and fifty overlapping dots hide the terrain the
+        /// map exists to show. Three things never may — the operator's own
+        /// station, anything a person placed as a hazard or an object, and the
+        /// current selection — because those are the reasons the page is open,
+        /// and a hazard folded into a grey number is a hazard nobody sees.
+        var mayCluster: Bool { !isObserver && !isPlacedObject }
+        /// True for a site that came from an APRS object or item rather than
+        /// from a heard station.
+        var isPlacedObject: Bool { id.hasPrefix("object:") }
 
         #if DEBUG
         /// Counts how often an annotation's fields are rewritten, by field.
@@ -168,11 +210,14 @@ struct OfflineBasemapMapView {
                 Self.noteFieldWrite("subtitle")
                 #endif
             }
+            // Carried, never compared: see the property's note.
+            lastHeard = next.lastHeard
             let redraws = title != next.title
                 || signal != next.signal
                 || isApproximate != next.isApproximate
                 || isNode != next.isNode
                 || aprsSymbol != next.aprsSymbol
+                || weatherBadge != next.weatherBadge
             if redraws {
                 #if DEBUG
                 Self.noteFieldWrite("title/tint")
@@ -182,6 +227,7 @@ struct OfflineBasemapMapView {
                 isApproximate = next.isApproximate
                 isNode = next.isNode
                 aprsSymbol = next.aprsSymbol
+                weatherBadge = next.weatherBadge
             }
             return redraws
         }
@@ -246,7 +292,8 @@ struct OfflineBasemapMapView {
             coordinate: observer.clCoordinate,
             title: observerCallsign.isEmpty ? scope.observerLabel : observerCallsign.uppercased(),
             subtitle: "This station",
-            signal: .good, isApproximate: false, isObserver: true)]
+            signal: .good, isApproximate: false, isObserver: true,
+            aprsSymbol: observerSymbol)]
 
         var seen: Set<String> = [result[0].id]
         for site in scope.sites {
@@ -256,12 +303,14 @@ struct OfflineBasemapMapView {
                 id: site.id,
                 coordinate: position.clCoordinate,
                 title: site.label,
-                subtitle: site.subtitle,
+                subtitle: site.tooltip,
                 signal: site.signal,
                 isApproximate: site.isApproximate,
                 isObserver: false,
                 isNode: site.isNode,
-                aprsSymbol: site.aprsSymbol))
+                aprsSymbol: site.aprsSymbol,
+                weatherBadge: site.weatherBadge,
+                lastHeard: site.lastHeard))
         }
         return result
     }
@@ -290,8 +339,46 @@ struct OfflineBasemapMapView {
         var coverageCircles: [MKCircle] = []
         var dashedCoverageIDs: Set<ObjectIdentifier> = []
         var installedCoverage: CoverageEstimate.Ring?
+        /// The clustering setting the markers on screen were built with, so a
+        /// change to it can be told from an ordinary update.
+        var appliedClustering: Bool?
 
-        init(_ parent: OfflineBasemapMapView) { self.parent = parent }
+        /// Expires the "just transmitted" rings.
+        ///
+        /// The ring means "on the air in the last few seconds", so it has to
+        /// go out by itself when the channel falls quiet — otherwise the last
+        /// station to speak stays lit for as long as nothing else arrives,
+        /// which is precisely the wrong answer to "who is transmitting now".
+        /// It cannot ride the ordinary map update, because on a quiet channel
+        /// there isn't one. A few seconds is fine: this only decides how
+        /// promptly a ring clears, and it touches one layer per marker.
+        private var activityTimer: Timer?
+        private static let activityTick: TimeInterval = 5
+
+        init(_ parent: OfflineBasemapMapView) {
+            self.parent = parent
+            super.init()
+            activityTimer = Timer.scheduledTimer(withTimeInterval: Self.activityTick,
+                                                 repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.refreshActivity() }
+            }
+        }
+
+        deinit { activityTimer?.invalidate() }
+
+        /// Light up or clear each marker's activity ring, touching nothing
+        /// else about it.
+        @MainActor
+        func refreshActivity() {
+            guard let mapView else { return }
+            let now = Date()
+            for annotation in mapView.annotations {
+                guard let site = annotation as? SiteAnnotation,
+                      let view = mapView.view(for: site) as? StationDotAnnotationView
+                else { continue }
+                view.setActive(MapActivity.isActive(lastHeard: site.lastHeard, now: now))
+            }
+        }
 
         /// A tap in a drawing mode becomes a vertex; otherwise MapKit's own
         /// selection handling is left alone.
@@ -365,10 +452,14 @@ struct OfflineBasemapMapView {
         var lastLoggedRegion: MKCoordinateRegion?
         #endif
         var installedTerrainIDs: [String] = []
+        var installedWeatherFieldIDs: [String] = []
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tileOverlay = overlay as? MKTileOverlay {
                 return MKTileOverlayRenderer(tileOverlay: tileOverlay)
+            }
+            if overlay is WeatherFieldOverlay {
+                return WeatherFieldOverlayRenderer(overlay: overlay)
             }
             if overlay is ElevationOverlay {
                 return ElevationOverlayRenderer(overlay: overlay)
@@ -446,6 +537,27 @@ struct OfflineBasemapMapView {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // A folded group of ordinary stations. Deliberately plain and
+            // quiet: it is a count, not a station, and it must not compete
+            // with the markers that stayed out of it.
+            if let cluster = annotation as? MKClusterAnnotation {
+                let identifier = StationClusterAnnotationView.reuseIdentifier
+                let view = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
+                    as? StationClusterAnnotationView
+                    ?? StationClusterAnnotationView(annotation: cluster,
+                                                    reuseIdentifier: identifier)
+                view.annotation = cluster
+                // Fades with its members, following the same
+                // recency-is-opacity rule the dots use.
+                let freshest = cluster.memberAnnotations
+                    .compactMap { ($0 as? SiteAnnotation).map(Self.emphasisAlpha(for:)) }
+                    .max() ?? 1
+                view.configure(members: cluster.memberAnnotations.count,
+                               slices: Self.composition(of: cluster),
+                               freshness: freshest)
+                return view
+            }
+
             if let vertex = annotation as? VertexAnnotation {
                 let identifier = "vertex"
                 let view = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
@@ -496,12 +608,27 @@ struct OfflineBasemapMapView {
                 ?? StationDotAnnotationView(annotation: annotation, reuseIdentifier: identifier)
 
             view.annotation = annotation
+            // Ordinary stations fold together when zoomed out; the observer,
+            // objects and hazards never do.
+            view.clusteringIdentifier = (clustersStations && site.mayCluster) ? "station" : nil
             view.configure(tint: Self.tint(for: site),
                            isObserver: site.isObserver,
                            approximate: site.isApproximate,
                            isNode: site.isNode,
                            callsign: site.title,
-                           aprsSymbol: site.aprsSymbol)
+                           aprsSymbol: site.aprsSymbol,
+                           weatherBadge: site.weatherBadge,
+                           isActive: MapActivity.isActive(lastHeard: site.lastHeard, now: Date()))
+            // Fresh stations at full strength, stale ones faded, infrastructure
+            // quieted — so "who's active now" reads at a glance without hiding
+            // anyone. Recency is the map's whole point; let it carry visually.
+            let emphasis = Self.emphasisAlpha(for: site)
+            #if os(macOS)
+            view.alphaValue = emphasis
+            #else
+            view.alpha = emphasis
+            #endif
+            view.displayPriority = Self.displayPriority(for: site, isSelected: site.id == parent.selection)
             view.setOverDarkBasemap(parent.store == nil && parent.basemap.isDark)
             view.setLabelVisible(
                 labelsVisible || site.isObserver || site.id == parent.selection)
@@ -548,7 +675,117 @@ struct OfflineBasemapMapView {
             // Infrastructure wears one colour so it reads apart from
             // traffic; recency still shows through the label and callout.
             if site.isNode { return .systemPurple }
+            // In APRS mode a station is placed at the symbol it beaconed, and
+            // colour keys the *type* the way Xastir does — recency has moved
+            // to opacity (see emphasisAlpha). A looked-up address has no
+            // symbol and no type, so it keeps the recency colour.
+            if let code = site.aprsSymbol?.code { return typeColour(forCode: code) }
             return tint(forSignal: site.signal)
+        }
+
+        /// What a cluster is made of, as ring segments in the same four hues
+        /// the dots and the legend use.
+        ///
+        /// Ordered by the type buckets themselves rather than by count, so the
+        /// ring does not reshuffle its segments every time a station arrives.
+        /// A member with no APRS symbol has no class to show — it is on the
+        /// map from a lookup, not a beacon — and takes a neutral segment
+        /// rather than being counted as something it is not.
+        static func composition(of cluster: MKClusterAnnotation)
+            -> [StationClusterAnnotationView.Slice] {
+            var byBucket: [APRSTypeBucket: Int] = [:]
+            var unclassified = 0
+            for member in cluster.memberAnnotations {
+                guard let site = member as? SiteAnnotation else { continue }
+                if let code = site.aprsSymbol?.code {
+                    byBucket[APRSTypeBucket.of(code: code), default: 0] += 1
+                } else {
+                    unclassified += 1
+                }
+            }
+            var slices = APRSTypeBucket.allCases.compactMap { bucket -> StationClusterAnnotationView.Slice? in
+                guard let count = byBucket[bucket], count > 0 else { return nil }
+                return StationClusterAnnotationView.Slice(
+                    color: typeColour(forBucket: bucket), count: count)
+            }
+            if unclassified > 0 {
+                slices.append(StationClusterAnnotationView.Slice(
+                    color: muted(red: 0.62, green: 0.65, blue: 0.68), count: unclassified))
+            }
+            return slices
+        }
+
+        static func typeColour(forBucket bucket: APRSTypeBucket) -> PlatformColor {
+            switch bucket {
+            case .digipeater: return Self.muted(red: 0.36, green: 0.36, blue: 0.62)
+            case .weather:    return Self.muted(red: 0.20, green: 0.50, blue: 0.56)
+            case .vehicle:    return Self.muted(red: 0.72, green: 0.45, blue: 0.22)
+            case .fixed:      return Self.muted(red: 0.42, green: 0.45, blue: 0.48)
+            }
+        }
+
+        /// The type palette: digipeaters/relays indigo, weather teal, vehicles
+        /// orange, fixed/home gray. Chosen to read as distinct classes at a
+        /// glance and to sit quietly under the basemap — the same four the
+        /// legend and the type filter key.
+        static func typeColour(forCode code: Character) -> PlatformColor {
+            typeColour(forBucket: APRSTypeBucket.of(code: code))
+        }
+
+        /// The system palette is built to be noticed on a white sheet. Fifty
+        /// of those markers over terrain is a field of fluorescent orange with
+        /// a map somewhere beneath it — the reported complaint, and a fair
+        /// one. These are the same four hues pulled toward the paper: still
+        /// four obviously different classes, but sitting *on* the basemap
+        /// rather than shouting over it. Colour that means "look here" is
+        /// spent on hazards and the selection, where it earns its keep.
+        static func muted(red: CGFloat, green: CGFloat, blue: CGFloat) -> PlatformColor {
+            #if os(macOS)
+            return NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+            #else
+            return UIColor(red: red, green: green, blue: blue, alpha: 1)
+            #endif
+        }
+
+        /// How strongly a marker is drawn. Your own station and fresh traffic
+        /// are full strength; older stations fade so a metro full of dots
+        /// still reads as "these few are live". Infrastructure (digis, i-gates)
+        /// is quieted a step so people and vehicles sit on top of it. Faded,
+        /// never hidden — the context is still there when you look for it.
+        static func emphasisAlpha(for site: SiteAnnotation) -> CGFloat {
+            if site.isObserver { return 1 }
+            let base: CGFloat
+            switch site.signal {
+            case .good: base = 1        // within the hour
+            case .fair: base = 0.9      // today
+            case .poor: base = 0.6      // older
+            case .unknown: base = 0.45  // never / long silent
+            }
+            // Infrastructure — NET/ROM nodes and APRS digis/i-gates/repeaters —
+            // is static and numerous, so it recedes a step under the mobiles,
+            // home and weather stations that actually change.
+            return isInfrastructure(site) ? base * 0.7 : base
+        }
+
+        /// A fixed relay rather than traffic: a NET/ROM node, or an APRS
+        /// station whose symbol is a digipeater, i-gate, gateway or repeater.
+        static func isInfrastructure(_ site: SiteAnnotation) -> Bool {
+            if site.isNode { return true }
+            guard let code = site.aprsSymbol?.code else { return false }
+            return APRSStationClass.classify(code: code, hasMotion: false) == .infrastructure
+        }
+
+        /// Where markers overlap, fresher ones win. Your own station, the
+        /// selection, and anything heard today are always drawn; only stale
+        /// dots yield — and they come back as you zoom in. Recent stations are
+        /// never hidden: a metro full of live traffic is signal, not clutter.
+        static func displayPriority(for site: SiteAnnotation, isSelected: Bool) -> MKFeatureDisplayPriority {
+            if site.isObserver || isSelected { return .required }
+            switch site.signal {
+            case .good, .fair: return .required        // active today
+            case .poor: return .defaultHigh            // older — yields to active
+            case .unknown: return .defaultLow          // never/long silent — yields first
+            }
         }
 
         /// The recency colour for a signal level — the shared vocabulary a
@@ -566,6 +803,13 @@ struct OfflineBasemapMapView {
         /// deselection MapKit reports as a side effect is not mistaken for the
         /// operator dismissing a selection.
         var isRebuildingAnnotations = false
+        /// What the layer switches looked like on the previous pass, so a
+        /// deliberate change can be told from arriving traffic.
+        var lastLayerSignature: String = ""
+        /// Mirrors the view's clustering preference so the annotation factory,
+        /// which only has the coordinator, can honour it.
+        var clustersStations = true
+
         /// Set while the map is being driven to match `selection` rather than
         /// by the operator, so the callbacks that causes are not mistaken for
         /// a fresh choice and written back into SwiftUI.
@@ -618,6 +862,18 @@ struct OfflineBasemapMapView {
         }
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            // A cluster is not a station and has nothing to show in a card.
+            // The one useful thing it can do is open: zoom to what is inside.
+            if let cluster = view.annotation as? MKClusterAnnotation {
+                mapView.deselectAnnotation(cluster, animated: false)
+                let coordinates = cluster.memberAnnotations.map(\.coordinate)
+                if let region = MapRegionFit.region(covering: coordinates.map {
+                    GreatCircle.Point(latitude: $0.latitude, longitude: $0.longitude)
+                })?.mkRegion {
+                    mapView.setRegion(region, animated: true)
+                }
+                return
+            }
             guard !isRebuildingAnnotations, !isApplyingSelection,
                   let site = view.annotation as? SiteAnnotation else { return }
             // A selected station's name is always worth ink, even zoomed out.
@@ -859,6 +1115,7 @@ struct OfflineBasemapMapView {
         // million floating-point operations, and rebuilding it because a
         // path link appeared would make every new packet stutter the map.
         let terrainChanged = applyTerrain(to: mapView, coordinator: coordinator)
+        applyWeatherField(to: mapView, coordinator: coordinator)
 
         // Boundaries rebuild only when the layer set itself changes — not,
         // as before, whenever a path link appeared. The two were keyed
@@ -882,6 +1139,7 @@ struct OfflineBasemapMapView {
             let trailIDs = coordinator.trailLineIDs
             let existing = mapView.overlays.filter {
                 !($0 is MKTileOverlay) && !($0 is ElevationOverlay)
+                    && !($0 is WeatherFieldOverlay)
                     && !coverageIDs.contains(ObjectIdentifier($0))
                     && !linkIDs.contains(ObjectIdentifier($0))
                     && !trailIDs.contains(ObjectIdentifier($0))
@@ -1091,6 +1349,20 @@ struct OfflineBasemapMapView {
         return true
     }
 
+    /// Adds or replaces the inferred temperature wash. Its id changes when any
+    /// station's reading does, so a new beacon redraws it and nothing else.
+    private func applyWeatherField(to mapView: MKMapView, coordinator: Coordinator) {
+        let wanted = weatherFieldOverlays.map(\.id)
+        guard coordinator.installedWeatherFieldIDs != wanted else { return }
+        coordinator.installedWeatherFieldIDs = wanted
+        mapView.removeOverlays(mapView.overlays.compactMap { $0 as? WeatherFieldOverlay })
+        // Above the roads but below everything the operator draws, so the
+        // wash never competes with the network it sits behind.
+        for overlay in weatherFieldOverlays {
+            mapView.addOverlay(overlay, level: .aboveRoads)
+        }
+    }
+
     /// Adds or replaces the coverage rings when the estimate changes.
     private func applyCoverage(to mapView: MKMapView, coordinator: Coordinator) {
         // Self-healing: if anything swept the circles off — a basemap
@@ -1150,8 +1422,20 @@ struct OfflineBasemapMapView {
 
     fileprivate func updateMapView(_ mapView: MKMapView, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.structuralMutationsAllowed = Date().timeIntervalSince(
-            context.coordinator.lastStructuralMutation) >= Self.structuralMutationInterval
+        // The throttle exists to absorb packet-rate churn, not to make the
+        // operator wait. Flipping a layer switch changed nothing on screen for
+        // up to ten seconds and then applied in a visible lurch, which reads
+        // as a broken toggle. A change to what the operator asked for bypasses
+        // it; arriving traffic still does not.
+        context.coordinator.clustersStations = clustersStations
+        // Clustering changes which markers exist, so it belongs in the
+        // signature that bypasses the throttle.
+        let layerSignature = layerGeneration + (clustersStations ? "|c" : "|-")
+        let operatorChangedSomething = context.coordinator.lastLayerSignature != layerSignature
+        context.coordinator.lastLayerSignature = layerSignature
+        context.coordinator.structuralMutationsAllowed = operatorChangedSomething
+            || Date().timeIntervalSince(
+                context.coordinator.lastStructuralMutation) >= Self.structuralMutationInterval
         context.coordinator.structuralMutationDidOccur = false
         #if DEBUG
         // Counted, not printed per pass: printing at the rate we are trying
@@ -1190,6 +1474,34 @@ struct OfflineBasemapMapView {
         // only genuinely new or departed stations are added or removed.
         // Keeping identity also means the selected annotation survives
         // updates instead of being torn down and re-selected.
+        // Turning clustering off has to rebuild the markers, not reconfigure
+        // them.
+        //
+        // `clusteringIdentifier` is set in `viewFor`, which MapKit calls when
+        // a view is created — and an annotation folded into a cluster has no
+        // view at all. So the very markers that need telling are the ones
+        // nothing can reach: walking the visible views would change the
+        // identifier on the handful that were never clustered and leave every
+        // clustered one exactly as it was, which is what the operator saw
+        // when the switch appeared to do nothing. Dropping the annotations
+        // makes MapKit discard its cluster groupings; the reconcile below
+        // then adds them all back through `viewFor`, which reads the new
+        // setting. One deliberate rebuild on an explicit switch, which is a
+        // different thing from the automatic churn this class otherwise
+        // works so hard to avoid.
+        if context.coordinator.appliedClustering != clustersStations {
+            context.coordinator.appliedClustering = clustersStations
+            let stale = mapView.annotations.compactMap { $0 as? SiteAnnotation }
+            if !stale.isEmpty {
+                // Suppresses the deselect callback, which would otherwise
+                // write `selection = nil` back into the state driving this
+                // update.
+                context.coordinator.isRebuildingAnnotations = true
+                mapView.removeAnnotations(stale)
+                context.coordinator.isRebuildingAnnotations = false
+            }
+        }
+
         let existing = mapView.annotations.compactMap { $0 as? SiteAnnotation }
         // Tolerant of duplicate ids, not trusting that upstream never emits
         // one: `Dictionary(uniqueKeysWithValues:)` traps on a repeat, and a
@@ -1245,7 +1557,10 @@ struct OfflineBasemapMapView {
                                    approximate: current.isApproximate,
                                    isNode: current.isNode,
                                    callsign: current.title,
-                                   aprsSymbol: current.aprsSymbol)
+                                   aprsSymbol: current.aprsSymbol,
+                                   weatherBadge: current.weatherBadge,
+                                   isActive: MapActivity.isActive(lastHeard: current.lastHeard,
+                                                                  now: Date()))
                 }
             } else {
                 arrived.append(annotation)
@@ -1290,6 +1605,19 @@ struct OfflineBasemapMapView {
             coordinator.isApplyingSelection = true
             DispatchQueue.main.async {
                 mapView.selectAnnotation(match, animated: true)
+                coordinator.isApplyingSelection = false
+            }
+        } else if selection == nil, let selected = mapView.selectedAnnotations.first {
+            // Selection was cleared (the card's close button, a tap on empty
+            // map that the delegate already handled, a station that went
+            // away). MapKit still holds its pick, so the marker's selection
+            // halo would linger — deselect it, on the same guarded hop so the
+            // `didDeselect` it fires reads as the map catching up, not a new
+            // user action.
+            let coordinator = context.coordinator
+            coordinator.isApplyingSelection = true
+            DispatchQueue.main.async {
+                mapView.deselectAnnotation(selected, animated: true)
                 coordinator.isApplyingSelection = false
             }
         }

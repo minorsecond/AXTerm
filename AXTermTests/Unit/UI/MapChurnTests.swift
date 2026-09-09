@@ -172,7 +172,7 @@ final class MapChurnTests: XCTestCase {
         func derive() -> [String: GreatCircle.Point] {
             let entries = HeardStationMap.entries(
                 stations: stations, directory: [:], gatewayGrids: grids,
-                excluding: "K0EPI-7")
+                excluding: ["K0EPI-7"])
             return HeardStationMap.fannedPositions(entries)
         }
 
@@ -200,7 +200,7 @@ final class MapChurnTests: XCTestCase {
         func places(_ stations: [Station]) -> [String: GreatCircle.Point] {
             HeardStationMap.fannedPositions(
                 HeardStationMap.entries(stations: stations, directory: [:],
-                                        gatewayGrids: grids, excluding: "K0EPI-7"))
+                                        gatewayGrids: grids, excluding: ["K0EPI-7"]))
         }
 
         let one = places(before)
