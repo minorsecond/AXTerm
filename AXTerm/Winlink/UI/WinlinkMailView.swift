@@ -1022,7 +1022,9 @@ struct WinlinkMailView: View {
             // Point the adaptive toolbar at this exchange's route so the
             // popover shows the session scope instead of "Global Network".
             sessionCoordinator.selectAdaptiveSession(
-                destination: rung.callsign, path: rung.path.isEmpty ? nil : rung.path)
+                destination: rung.callsign, path: rung.path.isEmpty ? nil : rung.path,
+                radio: sessionCoordinator.radio(preferring: winlinkSettings.preferredRadioID,
+                                                for: destination, path: path))
 
             // Fresh per-transfer stats for the console's Activity pane —
             // link-level RTT/window history stays for continuity.

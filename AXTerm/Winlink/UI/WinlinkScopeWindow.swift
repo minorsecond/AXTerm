@@ -123,19 +123,14 @@ struct WinlinkScopeWindow: View {
         }
         let byCallsign = Dictionary(grouping: stations, by: { $0.callsign.uppercased() })
 
-        let entries = byCallsign.compactMap { callsign, rows -> (
-            id: String, label: String, position: GreatCircle.Point?,
-            signal: StationScope.Signal, subtitle: String, detail: String,
-            isStale: Bool, isApproximate: Bool, isNode: Bool,
-            aprsSymbol: APRSMapSymbol?
-        )? in
+        let entries = byCallsign.compactMap { callsign, rows -> StationScope.SiteDraft? in
             guard let first = rows.first,
                   let center = Maidenhead.center(of: first.gridSquare) else { return nil }
             let quality = bestQuality(for: callsign, rows: rows)
             let signal = signal(for: quality)
             guard showsUnworked || signal != .unknown else { return nil }
 
-            return (
+            return StationScope.SiteDraft(
                 id: callsign,
                 label: callsign,
                 position: GreatCircle.Point(center),
@@ -145,8 +140,7 @@ struct WinlinkScopeWindow: View {
                                grid: first.gridSquare, quality: quality, observer: observer),
                 isStale: signal == .unknown,
                 isApproximate: false,
-                isNode: false,
-                aprsSymbol: nil)
+                isNode: false)
         }
         return StationScope.build(
             observerLabel: observerLabel, observer: observer, entries: entries)

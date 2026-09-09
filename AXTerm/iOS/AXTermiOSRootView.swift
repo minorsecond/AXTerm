@@ -60,6 +60,8 @@ struct AXTermiOSRootView: View {
     /// reads this yet; it exists so the map has one owner on both
     /// platforms rather than a shared instance nobody watches.
     @StateObject private var mapLayerStatus = MapLayerStatus()
+    /// Live traffic for the map's strip — see `MapTrafficFeed`.
+    @StateObject private var mapTraffic = MapTrafficFeed()
     /// Downloaded terrain, owned by the shell for the same reason as on the
     /// Mac: one handle, one warm tile cache.
     @StateObject private var elevation = ElevationStorage()
@@ -165,6 +167,8 @@ struct AXTermiOSRootView: View {
         case radio(RadioID)
         /// The mailbox itself, pushed — the phone's home for it.
         case bbs
+        /// APRS Messages, pushed — the phone's home for it (an iPad tab).
+        case aprsMessages
 
         init(_ tab: SettingsTab) {
             switch tab {
@@ -215,6 +219,34 @@ struct AXTermiOSRootView: View {
         coordinator.applyLocalCallsign(settings.myCallsign)
         coordinator.appSettings = settings
         coordinator.subscribeToPackets(from: client)
+        // APRS messaging, wired exactly as the Mac wires it.
+        if let aprs = client.aprsMessaging {
+            aprs.autoReplyProvider = { APRSMessagingService.AutoReply(rawValue: settings.aprsAutoReplyRaw) ?? .full }
+            aprs.send = { [weak coordinator] out in _ = coordinator?.sendAPRS(out) }
+            aprs.positionInfo = { [weak coordinator] in coordinator?.currentAPRSPositionInfo() }
+            aprs.heardDirect = { [weak client] in
+                Array((client?.stations ?? []).filter { $0.lastVia.isEmpty }.map { $0.call }
+                    .prefix(APRSMessagingService.directsStationLimit))
+            }
+            aprs.versionInfo = {
+                let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+                return v.isEmpty ? "AXTerm" : "AXTerm \(v)"
+            }
+            aprs.startRetryTimer()
+        }
+        // "Who can hear me": flood one unaddressed ?APRS? general query and
+        // fold in whoever answers (real APRS stations only, never packet nodes).
+        let probe = client.aprsProbe
+        probe.aprsStations = { [weak client] in client?.aprsHeardStations() ?? [] }
+        // Sampled when a query goes out, so the results can tell an answer
+        // from a station that beacons often enough to land in any window.
+        probe.beaconIntervals = { [weak client] in client?.aprsBeaconIntervals() ?? [:] }
+        probe.floodQuery = { [weak coordinator] query, reach in
+            (coordinator?.floodAPRS(query.rawValue, reach: reach) ?? 0) > 0
+        }
+        // As on the Mac: the send returns before the radio keys, so a fault
+        // during the listen is what tells the probe the query never went out.
+        client.onLinkError = { [weak probe] message in probe?.transmitDidFail(message) }
         self.sessionCoordinator = coordinator
 
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(
@@ -418,6 +450,13 @@ struct AXTermiOSRootView: View {
                     .tabItem { Label("BBS", systemImage: "tray.full") }
                     .badge(bbsService.suggestions.count)
                     .tag(NavigationItem.bbs)
+
+                if client.aprsMessaging != nil {
+                    withTNCStrip(messages)
+                        .tabItem { Label("Messages", systemImage: "message") }
+                        .badge(client.aprsMessaging?.unreadCount ?? 0)
+                        .tag(NavigationItem.messages)
+                }
             }
 
             withTNCStrip(more)
@@ -676,6 +715,19 @@ struct AXTermiOSRootView: View {
                   remoteMailbox: context.bbsMailboxReplication)
     }
 
+    /// APRS Messages as an iPad tab (its own split view). The engine is wired
+    /// in `init`; this is just the surface.
+    @ViewBuilder
+    private var messages: some View {
+        if let messaging = client.aprsMessaging {
+            APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
+                             myCallsign: settings.myCallsign)
+        } else {
+            Text("APRS messaging is unavailable without a database.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
     /// Which addresses this station accepts calls on, as one value, so one
     /// change handler covers the callsign, the mailbox and Winlink P2P.
     private var serviceAddressSignature: String {
@@ -715,6 +767,7 @@ struct AXTermiOSRootView: View {
                 observerGrid: context.settings.gridSquare,
                 observerPosition: myPosition,
                 myCallsign: settings.myCallsign,
+                ownCallsigns: ownAddresses,
                 lookup: callsignLookup,
                 aliases: nodeAliases,
                 settings: context.settings,
@@ -723,12 +776,46 @@ struct AXTermiOSRootView: View {
                 serviceStore: client.stationServices,
                 onOpenProfile: { profiles.openPage($0) },
                 layerStatus: mapLayerStatus,
+                traffic: mapTraffic,
+                trafficRadios: trafficRadios,
+                hiddenRadios: client.hiddenRadioIDs,
                 focusCallsign: $mapFocusCallsign,
                 elevation: elevation,
-                overlayStore: overlayStore)
+                overlayStore: overlayStore,
+                onBeacon: { sessionCoordinator.sendBeacon(context.settings) },
+                beaconObstacle: { sessionCoordinator.beaconObstacle(context.settings) })
+            // As on the Mac: started with the map, not with the app.
+            .task {
+                let mine = AX25Address(call: settings.myCallsign.uppercased()).call
+                let sessions = sessionCoordinator.sessionManager
+                mapTraffic.follow(client.$packets) { packet in
+                    let answered = packet.to.map { sessions.answers($0) } ?? false
+                    return MapTrafficFeed.Attribution(
+                        isOurs: packet.from?.call.uppercased() == mine,
+                        isForUs: TrafficAddressing.isForUs(
+                            destinationAnswered: answered,
+                            info: packet.info,
+                            ours: sessions.answeredAddresses.map(\.display)))
+                }
+                client.onFrameTransmitted = { [weak mapTraffic] tx in
+                    mapTraffic?.record(MapTrafficFeed.Line(
+                        id: tx.id, at: tx.at, from: tx.from, to: tx.to,
+                        via: tx.via.joined(separator: ","), summary: tx.text,
+                        isOurs: true, isForUs: false, radio: tx.radio))
+                }
+            }
             .navigationTitle("Map")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    /// The radios the map's traffic strip may show — see the Mac's copy.
+    private var trafficRadios: [MapTrafficRadio] {
+        settings.activeRadios
+            .filter { $0.enabled && !client.hiddenRadioIDs.contains($0.id) }
+            .map { MapTrafficRadio(
+                id: $0.id,
+                name: $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name) }
     }
 
     /// Everything that does not earn a permanent tab on a five-tab bar.
@@ -746,6 +833,13 @@ struct AXTermiOSRootView: View {
                                 .badge(bbsService.suggestions.count)
                         }
                         .accessibilityHint("The personal mailbox: mail callers left, who called, the directory and shared files")
+                        if client.aprsMessaging != nil {
+                            NavigationLink(value: SettingsDestination.aprsMessages) {
+                                Label("Messages", systemImage: "message")
+                                    .badge(client.aprsMessaging?.unreadCount ?? 0)
+                            }
+                            .accessibilityHint("APRS text messages, and a probe for who can hear you")
+                        }
                     } footer: {
                         Text(bbsSettings.onAir
                              ? "On air as \(bbsSettings.effectiveCallsign(stationCallsign: settings.myCallsign)). Callers can connect and leave mail."
@@ -889,6 +983,23 @@ struct AXTermiOSRootView: View {
             mailboxSettingsScreen
         case .bbs:
             pushedBBSScreen
+        case .aprsMessages:
+            pushedMessagesScreen
+        }
+    }
+
+    /// APRS Messages on a phone: inside the More stack, drilling into each
+    /// conversation on that same stack (one back button).
+    @ViewBuilder
+    private var pushedMessagesScreen: some View {
+        if let messaging = client.aprsMessaging {
+            APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
+                             myCallsign: settings.myCallsign, presentation: .pushed)
+        } else {
+            Text("APRS messaging is unavailable without a database.")
+                .foregroundStyle(.secondary)
+                .navigationTitle("Messages")
+                .navigationBarTitleDisplayMode(.inline)
         }
     }
 
@@ -967,6 +1078,14 @@ struct AXTermiOSRootView: View {
         return NetworkPath.merging(live + remembered)
     }
 
+    /// Every address this station transmits as. Other SSIDs on the same
+    /// licence are other radios — see `HeardStationMap.entries`.
+    private var ownAddresses: Set<String> {
+        let answered = Set(sessionCoordinator.sessionManager.answeredAddresses
+            .map { $0.display.uppercased() })
+        return answered.isEmpty ? [settings.myCallsign.uppercased()] : answered
+    }
+
     private var resolver: NodeProfileResolver {
         let stations = client.stations
         let heard = HeardStationMap.entries(
@@ -974,7 +1093,7 @@ struct AXTermiOSRootView: View {
             directory: callsignLookup.records,
             gatewayGrids: gatewayGrids,
             announcedGrids: announcedGrids.grids,
-            excluding: settings.myCallsign)
+            excluding: ownAddresses)
         let aliasEntries = HeardStationMap.aliasEntries(
             aliases: nodeAliases.directory,
             usedAliases: HeardStationMap.aliasesInUse(stations),

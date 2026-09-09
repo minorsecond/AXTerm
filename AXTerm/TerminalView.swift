@@ -2457,7 +2457,8 @@ struct TerminalView: View {
         } else {
             path = ""
         }
-        sessionCoordinator.selectAdaptiveSession(destination: destination, path: path)
+        sessionCoordinator.selectAdaptiveSession(destination: destination, path: path,
+                                                 radio: txViewModel.currentSession?.radio)
     }
 
     private func applyAutoPathSuggestionIfNeeded(previousDestination: String, newDestination: String) {

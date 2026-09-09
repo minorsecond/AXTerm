@@ -416,9 +416,17 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
             let payloads = NetRomNodesBroadcast.encode(originAlias: announcement.alias, entries: entries)
             let summary = Self.summarize(alias: announcement.alias, entries: entries)
             var sent = 0
-            for payload in payloads
-            where transport?.sendNodesBroadcast(payload, summary: summary, radio: announcement.radio) == true {
-                sent += 1
+            for (index, payload) in payloads.enumerated() {
+                // One announcement spans several frames (11 destinations each),
+                // so number them — three back-to-back NODES lines read as
+                // (1/3), (2/3), (3/3) instead of looking like three duplicate
+                // broadcasts. The operator note below stays the clean summary.
+                let frameSummary = payloads.count > 1
+                    ? "\(summary) (\(index + 1)/\(payloads.count))"
+                    : summary
+                if transport?.sendNodesBroadcast(payload, summary: frameSummary, radio: announcement.radio) == true {
+                    sent += 1
+                }
             }
             guard sent > 0 else { continue }
             total += sent

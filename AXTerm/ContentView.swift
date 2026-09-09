@@ -63,6 +63,13 @@ struct ContentView: View {
     /// Published by the map so the sidebar's layer rows can be gated and
     /// captioned without recomputing the map's caches on every render.
     @StateObject private var mapLayerStatus = MapLayerStatus()
+    /// Live traffic for the map's strip. Its own object so the map is not
+    /// re-rendered by frames it does not draw — see `MapTrafficFeed`.
+    @StateObject private var mapTraffic = MapTrafficFeed()
+    /// What became of the pings this station sent — see `APRSPingTracker`.
+    /// Held here rather than in the map so an answer that arrives after the
+    /// operator navigates away is still there when they come back.
+    @StateObject private var aprsPings = APRSPingTracker()
     /// Downloaded terrain. Owned here because both the map's predicted-path
     /// layer and the station pages read it, and two handles to one elevation
     /// database would warm two caches for the same tiles.
@@ -154,6 +161,15 @@ struct ContentView: View {
         return NetworkPath.merging(live + remembered)
     }
 
+    /// Every address this station transmits as, SSIDs included. Any *other*
+    /// SSID on the same licence is a different radio — the operator's HT is
+    /// K0EPI-4 — and belongs on the map like any other station.
+    private var ownAddresses: Set<String> {
+        let answered = Set(sessionCoordinator.sessionManager.answeredAddresses
+            .map { $0.display.uppercased() })
+        return answered.isEmpty ? [settings.myCallsign.uppercased()] : answered
+    }
+
     private var macResolver: NodeProfileResolver {
         let stations = client.stations
         let heard = HeardStationMap.entries(
@@ -161,7 +177,7 @@ struct ContentView: View {
             directory: callsignLookup.records,
             gatewayGrids: gatewayGrids,
             announcedGrids: announcedGrids.grids,
-            excluding: settings.myCallsign)
+            excluding: ownAddresses)
         let aliasEntries = HeardStationMap.aliasEntries(
             aliases: nodeAliases.directory,
             usedAliases: HeardStationMap.aliasesInUse(stations),
@@ -208,6 +224,24 @@ struct ContentView: View {
                           uniquingKeysWith: { first, _ in first })
     }
 
+    /// Our own APRS symbol, drawn on the observer marker when the map is
+    /// scoped to a radio that beacons an APRS position — so viewing the map
+    /// "through" a radio that is using APRS shows us as the very symbol we
+    /// put on the air, not the generic home arrow. Nil when no visible radio
+    /// beacons a position, which keeps the plain observer marker for a station
+    /// that isn't running APRS.
+    private var ownAPRSSymbol: APRSMapSymbol? {
+        let visible = settings.activeRadios.filter { !client.hiddenRadioIDs.contains($0.id) }
+        let beaconing = visible.filter {
+            $0.beacon.kind == .aprsPosition && $0.beacon.aprs != nil
+        }
+        // Prefer the primary radio's symbol when more than one is beaconing.
+        let chosen = beaconing.first { $0.id == settings.primaryRadio?.id } ?? beaconing.first
+        guard let aprs = chosen?.beacon.aprs else { return nil }
+        return APRSMapSymbol(table: aprs.symbolTable.first ?? "/",
+                             code: aprs.symbolCode.first ?? "-")
+    }
+
     @Environment(\.openSettings) private var openSettings
 
     @State private var selectedNav: NavigationItem = .terminal
@@ -219,6 +253,9 @@ struct ContentView: View {
     @State private var showingPacketFilters = false
 
     @State private var selection = Set<Packet.ID>()
+    /// The station a map "Message" action is composing to, if any.
+    private struct APRSComposeTarget: Identifiable { let id = UUID(); let call: String }
+    @State private var aprsComposeTarget: APRSComposeTarget?
     /// Surfaced when turning a map layer into a Winlink draft fails.
     @State private var layerSendError: String?
     @State private var inspectorSelection: PacketInspectorSelection?
@@ -310,6 +347,38 @@ struct ContentView: View {
         // launch rather than waiting for a visit to Settings.
         coordinator.applyNetRomNodeSettings(settings)
         coordinator.subscribeToPackets(from: client)
+        // APRS messaging: wire the transmit funnel, the query-answer
+        // providers, and start the ACK-retry sweep. Auto-reply defaults to
+        // full (auto-ACK incoming messages and answer directed queries).
+        if let aprs = client.aprsMessaging {
+            aprs.autoReplyProvider = { APRSMessagingService.AutoReply(rawValue: settings.aprsAutoReplyRaw) ?? .full }
+            aprs.send = { [weak coordinator] out in _ = coordinator?.sendAPRS(out) }
+            aprs.positionInfo = { [weak coordinator] in coordinator?.currentAPRSPositionInfo() }
+            aprs.heardDirect = { [weak client] in
+                Array((client?.stations ?? []).filter { $0.lastVia.isEmpty }.map { $0.call }
+                    .prefix(APRSMessagingService.directsStationLimit))
+            }
+            aprs.versionInfo = {
+                let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+                return v.isEmpty ? "AXTerm" : "AXTerm \(v)"
+            }
+            aprs.startRetryTimer()
+        }
+        // "Who can hear me": flood one unaddressed ?APRS? general query and
+        // fold in whoever answers (real APRS stations only, never packet
+        // nodes). Xastir-style — one transmission, not a directed poll.
+        let probe = client.aprsProbe
+        probe.aprsStations = { [weak client] in client?.aprsHeardStations() ?? [] }
+        // Sampled when a query goes out, so the results can tell an answer
+        // from a station that beacons often enough to land in any window.
+        probe.beaconIntervals = { [weak client] in client?.aprsBeaconIntervals() ?? [:] }
+        probe.floodQuery = { [weak coordinator] query, reach in
+            (coordinator?.floodAPRS(query.rawValue, reach: reach) ?? 0) > 0
+        }
+        // A queued send has already reported success by the time a radio fails
+        // to key, so the probe hears about that the only way it can: a link
+        // fault arriving while it is listening.
+        client.onLinkError = { [weak probe] message in probe?.transmitDidFail(message) }
         _sessionCoordinator = StateObject(wrappedValue: coordinator)
         // The personal mailbox. Built here because this is the one place that
         // holds both the coordinator (which owns inbound calls) and the engine
@@ -545,11 +614,19 @@ struct ContentView: View {
                    coordinator.adaptiveTransmissionEnabled,
                    !coordinator.hasActiveSessions,
                    let integration = client.netRomIntegration,
-                   let sample = Self.aggregateLinkQualityForAdaptive(
+                   case let byRadio = Self.aggregateLinkQualityPerRadio(
                        integration.exportLinkStats(),
                        localCallsign: coordinator.localCallsign
-                   ) {
-                    coordinator.applyLinkQualitySample(lossRate: sample.lossRate, etx: sample.etx, srtt: nil, source: sample.scope.sourceLabel)
+                   ), !byRadio.isEmpty {
+                    // One sample per channel, filed against that channel. The
+                    // blended figure this replaced was wrong for every radio
+                    // that was not average.
+                    for (radio, sample) in byRadio {
+                        coordinator.applyLinkQualitySample(
+                            lossRate: sample.lossRate, etx: sample.etx, srtt: nil,
+                            source: sample.scope.sourceLabel,
+                            scope: .radio(radio))
+                    }
                     didSampleEver = true
                 }
                 let delay = Self.networkSampleDelaySeconds(didSampleEver: didSampleEver, attempts: attempts)
@@ -607,6 +684,8 @@ struct ContentView: View {
                 return
             case .bbs:
                 bbsService.reload()
+                return
+            case .messages:
                 return
             }
         }
@@ -1035,6 +1114,7 @@ struct ContentView: View {
         case .map: searchModel.scope = .terminal
         case .mail: searchModel.scope = .terminal  // Mail has its own in-pane search
         case .bbs: searchModel.scope = .terminal    // The mailbox filters in-pane
+        case .messages: searchModel.scope = .terminal  // Messages filter in-pane
         //case .raw: searchModel.scope = .terminal // Fallback or new scope if needed
         }
     }
@@ -1045,7 +1125,7 @@ struct ContentView: View {
             connectCoordinator.activeContext = .terminal
         case .routes:
             connectCoordinator.activeContext = .routes
-        case .packets, .analytics, .mail, .map, .bbs, .nodes:
+        case .packets, .analytics, .mail, .map, .bbs, .nodes, .messages:
             connectCoordinator.activeContext = .unknown
         }
     }
@@ -1158,7 +1238,8 @@ struct ContentView: View {
                 .help("Show every radio's traffic together, interleaved.")
 
                 ForEach(summaries, id: \.id) { radio in
-                    RadioRowView(radio: radio, isShown: radioShownBinding(radio.id))
+                    RadioRowView(radio: radio, isShown: radioShownBinding(radio.id),
+                                 families: radioFamilies[radio.id] ?? [])
                         .contextMenu {
                             switch radio.status {
                             case .connected:
@@ -1176,9 +1257,37 @@ struct ContentView: View {
                                 SettingsRouter.shared.navigate(to: .radios, radio: radio.id)
                             }
                         }
+
+                    // The map layers that only mean anything for what this
+                    // radio carries, under the radio itself. A flat list of
+                    // every layer could not say that "Transmitted Positions"
+                    // is an APRS idea, so leaving it on emptied the map of a
+                    // packet channel's stations.
+                    if sidebarSection == .mapLayers,
+                       let families = mapLayerPlan.perRadio[radio.id], !families.isEmpty {
+                        MapLayerToggles(status: mapLayerStatus, scope: .families(families))
+                            .padding(.leading, 14)
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .disabled(client.hiddenRadioIDs.contains(radio.id))
+                            .opacity(client.hiddenRadioIDs.contains(radio.id) ? 0.5 : 1)
+                    }
                 }
             }
         }
+    }
+
+    /// What each radio has been heard carrying. Drives the row's badge and
+    /// which layers are filed under it.
+    private var radioFamilies: [RadioID: Set<RadioTrafficFamily>] {
+        RadioTrafficClassifier.families(from: client.stations)
+    }
+
+    /// Which family's layers sit under which radio, and which are left in the
+    /// shared Layers section.
+    private var mapLayerPlan: MapLayerPlacement.Plan {
+        MapLayerPlacement.plan(families: radioFamilies,
+                               radios: client.radioSummaries.map(\.id))
     }
 
     private func radioShownBinding(_ id: RadioID) -> Binding<Bool> {
@@ -1325,7 +1434,13 @@ struct ContentView: View {
             case .radio:
                 EmptyView()   // Drawn above, where its three sections belong.
             case .mapLayers:
-                MapLayerRows(status: mapLayerStatus, radioScope: radioScopeNote)
+                // With one radio, or before any traffic has been classified,
+                // every layer stays in one list — there is no second network
+                // to separate it from.
+                MapLayerRows(status: mapLayerStatus, radioScope: radioScopeNote,
+                             scope: settings.hasMultipleRadios && mapLayerPlan.isGrouped
+                                 ? .shared(mapLayerPlan.orphans)
+                                 : .everything)
             case .mailFolders:
                 WinlinkFolderRows(viewModel: mailboxVM)
             case .bbsPanes:
@@ -1561,6 +1676,7 @@ struct ContentView: View {
         switch item {
         case .mail: winlinkContext.unreadCount
         case .bbs: bbsService.suggestions.count
+        case .messages: client.aprsMessaging?.unreadCount ?? 0
         default: 0
         }
     }
@@ -1575,6 +1691,7 @@ struct ContentView: View {
         case .map: return "map"
         case .mail: return "envelope"
         case .bbs: return "tray.full"
+        case .messages: return "message"
         //case .raw: return "doc.text"
         }
     }
@@ -1688,15 +1805,31 @@ struct ContentView: View {
         }
     }
 
+    /// The radios the map's traffic strip may show: enabled, and not hidden
+    /// on the map. Hiding a radio hides its traffic with its stations — they
+    /// are one channel, and showing the traffic without the dots is what had
+    /// AX.25 frames scrolling past an operator watching APRS.
+    private var trafficRadios: [MapTrafficRadio] {
+        settings.activeRadios
+            .filter { $0.enabled && !client.hiddenRadioIDs.contains($0.id) }
+            .map { MapTrafficRadio(
+                id: $0.id,
+                name: $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name) }
+    }
+
     private var stationsMapDetail: some View {
         StationsMapView(
             stations: client.stations.filter(client.isVisible),
+            objects: client.aprsObjects,
+            alerts: client.aprsAlerts,
+            probe: client.aprsProbe,
             recentPackets: Array(client.packets.suffix(600)),
             gatewayGrids: gatewayGrids,
             announcedGrids: announcedGrids.grids,
             observerGrid: winlinkContext.settings.gridSquare,
             observerPosition: myPosition,
             myCallsign: settings.myCallsign,
+            ownCallsigns: ownAddresses,
             lookup: callsignLookup,
             aliases: nodeAliases,
             settings: winlinkContext.settings,
@@ -1708,11 +1841,102 @@ struct ContentView: View {
             onConnect: { call in
                 connectFromProfile(macResolver.profile(for: call))
             },
+            onMessage: { call in aprsComposeTarget = APRSComposeTarget(call: call.uppercased()) },
+            onQuery: { ask in
+                // Reach is the operator's, not a default: a direct query with
+                // no path answers "can you hear me" and nothing else, while
+                // the radio's own APRS path reaches the stations a digipeater
+                // hop away — most of the channel — but proves only
+                // reachability.
+                let path = ask.reach == .direct
+                    ? []
+                    : sessionCoordinator.aprsPath(forRadio: nil, addressee: ask.callsign)
+                _ = sessionCoordinator.sendAPRS(APRSOutbound(
+                    info: APRSMessage.directedQueryInfo(to: ask.callsign, query: ask.token),
+                    addressee: ask.callsign,
+                    path: path,
+                    radioID: nil))
+                aprsPings.record(ping: ask.callsign, query: ask.token, reach: ask.reach)
+            },
+            pingState: { aprsPings.outcome(for: $0) },
+            // What we have heard from the station, so a ping goes out at a
+            // reach that can actually span the gap.
+            reachAdvice: { [weak client] call in
+                client?.stations.first { $0.call.caseInsensitiveCompare(call) == .orderedSame }?
+                    .reachAdvice ?? .neverHeard
+            },
+            repeatsUs: { aprsPings.repeatedUs($0) },
             layerStatus: mapLayerStatus,
+            traffic: mapTraffic,
+            trafficRadios: trafficRadios,
+            hiddenRadios: client.hiddenRadioIDs,
             focusCallsign: .constant(nil),
             elevation: elevation,
             overlayStore: overlayStore,
-            onSendLayer: layerSendAction)
+            onSendLayer: layerSendAction,
+            ownAPRSSymbol: ownAPRSSymbol,
+            onBeacon: { sessionCoordinator.sendBeacon(settings) },
+            beaconObstacle: { sessionCoordinator.beaconObstacle(settings) })
+        // Started here rather than at launch: the strip costs nothing until
+        // the operator opens the map, and `absorb` fills it from the engine's
+        // log the moment it does.
+        .task {
+            let mine = AX25Address(call: settings.myCallsign.uppercased()).call
+            let sessions = sessionCoordinator.sessionManager
+            mapTraffic.follow(client.$packets) { packet in
+                let answered = packet.to.map { sessions.answers($0) } ?? false
+                return MapTrafficFeed.Attribution(
+                    // "Ours" is the licence, not the SSID: a station's beacon,
+                    // its node and its BBS are all the operator's own traffic.
+                    isOurs: packet.from?.call.uppercased() == mine,
+                    isForUs: TrafficAddressing.isForUs(
+                        destinationAnswered: answered,
+                        info: packet.info,
+                        ours: sessions.answeredAddresses.map(\.display)))
+            }
+            // A ping is only half an exchange until something comes back.
+            // Two kinds of evidence, and they are not equal: a station that
+            // addresses us has proved it heard us, while one that merely
+            // transmits has proved nothing unless the timing is improbable
+            // for it — see `APRSPingTracker`.
+            aprsPings.beaconInterval = { [weak client] call in
+                client?.aprsBeaconIntervals()[call.uppercased()]
+            }
+            // Our own frames come back off the air when a digipeater repeats
+            // them, and they are the only proof of reception a silent station
+            // ever gives us. Matched on the licence rather than the SSID: the
+            // digi repeats whichever of our addresses transmitted.
+            aprsPings.isOurs = { call in
+                call.uppercased().split(separator: "-").first.map(String.init) == mine
+            }
+            aprsPings.follow(client.packetPublisher)
+            aprsPings.startExpiry()
+            client.aprsMessaging?.onDirectedTraffic = { [weak aprsPings] call in
+                aprsPings?.noteDirectedReply(from: call)
+            }
+            // Our own frames never enter the packet log — see
+            // `PacketEngine.onFrameTransmitted`. Without this the strip showed
+            // a busy channel and no sign of our own beacon going out.
+            client.onFrameTransmitted = { [weak mapTraffic] tx in
+                mapTraffic?.record(MapTrafficFeed.Line(
+                    id: tx.id, at: tx.at, from: tx.from, to: tx.to,
+                    via: tx.via.joined(separator: ","), summary: tx.text,
+                    isOurs: true, isForUs: false, radio: tx.radio,
+                    // Handed to the radio is not on the air. Where the radio
+                    // can tell us the difference, say so until it does.
+                    transmit: tx.awaitsKeying ? .pending : nil))
+            }
+            client.onTransmitOutcome = { [weak mapTraffic] radio, onAir, dropped in
+                mapTraffic?.resolveTransmits(radio: radio, onAir: onAir, dropped: dropped)
+            }
+        }
+        .sheet(item: $aprsComposeTarget) { target in
+            APRSComposeSheet(myCallsign: settings.myCallsign, initialTo: target.call) { to, text in
+                client.aprsMessaging?.sendMessage(
+                    to: to, text: text, from: settings.myCallsign,
+                    path: sessionCoordinator.aprsPath(forRadio: nil), radioID: nil)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1837,6 +2061,14 @@ struct ContentView: View {
                     remoteMailbox: winlinkContext.bbsMailboxReplication,
                     pane: $bbsPane
                 )
+            case .messages:
+                if let messaging = client.aprsMessaging {
+                    APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
+                                     myCallsign: settings.myCallsign)
+                } else {
+                    Text("APRS messaging is unavailable without a database.")
+                        .foregroundStyle(.secondary)
+                }
             //case .raw:
             //    RawView(
             //        chunks: client.rawChunks,
@@ -2627,6 +2859,28 @@ struct ContentView: View {
     /// evidence gates), and the shared channel's third-party traffic is still
     /// real evidence about the conditions my next transmission will face.
     /// Per spec 4.2 both tiers feed the EWMAs only, never streaks/probes.
+    /// The same aggregation, one answer per radio.
+    ///
+    /// A delivery probability is a property of a path between two antennas, so
+    /// evidence from one radio says nothing about another's channel. This used
+    /// to be a single blended figure applied to every transmission on every
+    /// radio: a station with a clean UHF link and a marginal VHF one got one
+    /// answer that libelled the good channel and flattered the bad one.
+    ///
+    /// A radio with too little evidence is simply absent — it must never
+    /// borrow another's.
+    nonisolated static func aggregateLinkQualityPerRadio(
+        _ records: [LinkStatRecord], localCallsign: String? = nil
+    ) -> [RadioID: (lossRate: Double, etx: Double, scope: AdaptiveAggregateScope)] {
+        var out: [RadioID: (lossRate: Double, etx: Double, scope: AdaptiveAggregateScope)] = [:]
+        for (radio, subset) in Dictionary(grouping: records, by: \.radioID) {
+            if let sample = aggregateLinkQualityForAdaptive(subset, localCallsign: localCallsign) {
+                out[radio] = sample
+            }
+        }
+        return out
+    }
+
     nonisolated static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord], localCallsign: String? = nil) -> (lossRate: Double, etx: Double, scope: AdaptiveAggregateScope)? {
         let minObs = 5
 

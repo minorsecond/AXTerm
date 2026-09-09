@@ -109,6 +109,43 @@ final class PacketEngine: ObservableObject {
     /// Called when an I-frame (AXDP/user payload) is successfully transmitted.
     /// Parameter: payload byte count. Used for sender progress highlighting.
     var onUserFrameTransmitted: ((Int) -> Void)?
+    /// A link reported a fault. Set by the app layer for anything that has to
+    /// know a transmission may not have reached the air — the APRS
+    /// reachability probe, whose queued send has already returned success by
+    /// the time the radio fails to key.
+    var onLinkError: ((String) -> Void)?
+
+    /// One frame this station put on the air.
+    ///
+    /// Our own transmissions never enter `packets` — that array is what was
+    /// *heard*, and a frame we sent is only heard if something repeats it —
+    /// so anything that shows both directions of a channel has to be told
+    /// separately. Without this the map's traffic strip showed a busy channel
+    /// and no sign of the operator's own beacon, which is the one frame they
+    /// are usually watching for.
+    var onFrameTransmitted: ((TransmittedFrame) -> Void)?
+
+    /// A frame handed to the radio, reduced to what a log line needs.
+    struct TransmittedFrame: Sendable {
+        let id: UUID
+        let at: Date
+        let from: String
+        let to: String
+        let via: [String]
+        /// The payload as text, or the control frame's name when it has none.
+        let text: String
+        let radio: RadioID
+        /// True when this radio can say whether the frame reached the air, so
+        /// the line can be shown as pending until it does. False for a
+        /// hardware TNC, which accepts the bytes and reports nothing further.
+        let awaitsKeying: Bool
+    }
+
+    /// The radio keyed, or gave up, on frames it was holding. Counts, not
+    /// identities: frame identity is lost at the KISS boundary, and the
+    /// transmitter is strictly in order, so the oldest pending frame is the
+    /// one this is about.
+    var onTransmitOutcome: ((RadioID, _ onAir: Int, _ dropped: Int) -> Void)?
 
     // MARK: - Debug Logging (Debug Builds Only)
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
@@ -165,6 +202,90 @@ final class PacketEngine: ObservableObject {
     private(set) var terminalSessions: SQLiteTerminalSessionStore?
     /// The personal mailbox: messages left by callers, and who called.
     private(set) var bbsMessages: SQLiteBBSMessageStore?
+
+    /// APRS text messaging + queries: inbound parse/auto-reply and the
+    /// outbound ack/retry log. Nil when the app runs without a database.
+    private(set) var aprsMessaging: APRSMessagingService?
+
+    /// The "who can hear me" reachability probe. No database needed; the app
+    /// wires its transmit/heard/candidate closures.
+    let aprsProbe = APRSReachabilityProbe()
+
+    /// Objects and items heard on the air: fires, closures, shelters, aid
+    /// stations, hazards. The one incident-reporting channel that needs
+    /// nothing upstream — see Docs/APRSObjects.md.
+    @Published private(set) var aprsObjects = APRSObjectStore()
+
+    /// NWS watches and warnings relayed onto APRS. Internet-fed upstream, so
+    /// every one carries the time we heard it — see `APRSWeatherAlert`.
+    @Published private(set) var aprsAlerts = APRSWeatherAlertStore()
+
+    /// Files an NWS alert, if this bulletin is one.
+    private func recordWeatherAlert(from packet: Packet, sentBy station: String) {
+        guard !packet.info.isEmpty,
+              case .bulletin(let id, let text)? = APRSMessage.parse(info: packet.info),
+              let alert = APRSWeatherAlert.classify(
+                bulletinID: id, text: text, from: station, heard: packet.timestamp)
+        else { return }
+        if aprsAlerts.record(alert) {
+            TxLog.inbound(.frame, "NWS alert relayed onto APRS", [
+                "severity": alert.severity.label,
+                "gateway": alert.source,
+            ])
+        }
+    }
+
+    /// Files an object or item report, if this packet is one.
+    private func recordAPRSObject(from packet: Packet, sentBy station: String) {
+        guard !packet.info.isEmpty,
+              let report = APRSObjectReport.parse(info: packet.info) else { return }
+        if aprsObjects.record(report, from: station, at: packet.timestamp) {
+            TxLog.inbound(.frame, "APRS object heard", [
+                "name": report.name,
+                "from": station,
+                "live": String(report.isLive),
+                "symbol": report.symbolLabel,
+            ])
+        }
+    }
+
+    /// The APRS stations we've heard — real positions only, never plain AX.25
+    /// nodes/BBSes — as reachability-probe snapshots, excluding us. The probe
+    /// floods one `?APRS?` and folds these in as replies arrive, so no scope or
+    /// cap is applied here: scope is a view filter and the flood reaches
+    /// everyone in earshot regardless.
+    func aprsHeardStations() -> [APRSReachabilityProbe.HeardStation] {
+        let ours = Set(aprsOurCallsigns())
+        return stations.compactMap { station in
+            guard let aprs = station.aprs else { return nil }
+            let call = station.call.uppercased()
+            guard !ours.contains(call) else { return nil }
+            let hasMotion = (aprs.speedKnots ?? 0) > 0
+            return APRSReachabilityProbe.HeardStation(
+                callsign: call,
+                lastHeard: station.lastHeard,
+                direct: station.lastVia.isEmpty,
+                stationClass: APRSStationClass.classify(code: aprs.symbolCode,
+                                                        hasMotion: hasMotion))
+        }
+    }
+
+    /// How often each station we have heard normally transmits, by callsign.
+    ///
+    /// The probe needs this to tell an answer from a coincidence: a station
+    /// beaconing every few seconds lands inside any listening window and proves
+    /// nothing by it, while one that beacons every ten minutes transmitting
+    /// fifteen seconds after a query is worth reporting. Computed from the
+    /// packet log in one pass, at the moment the query goes out — a station's
+    /// cadence does not change inside a two-minute window.
+    func aprsBeaconIntervals() -> [String: TimeInterval] {
+        var times: [String: [Date]] = [:]
+        for packet in packets {
+            guard let from = packet.from?.display.uppercased() else { continue }
+            times[from, default: []].append(packet.timestamp)
+        }
+        return times.compactMapValues { APRSAnswerEvidence.typicalInterval(of: $0) }
+    }
 
     /// NET/ROM persistence for saving/loading routing state.
     private var netRomPersistence: NetRomPersistence?
@@ -226,10 +347,21 @@ final class PacketEngine: ObservableObject {
     /// every radio's traffic interleaved: the universal view. A hidden radio
     /// still receives and still counts; it is only not drawn. Kept per
     /// device, like the map's layer toggles.
+    /// Written to the settings store's own defaults, **not**
+    /// `UserDefaults.standard`.
+    ///
+    /// This was the one piece of engine state that ignored the injected store
+    /// and went straight to the process-wide domain. In the app the two are the
+    /// same object, so nothing changed for an operator; everywhere else they
+    /// are not. A `--test-mode` instance, which exists to keep its settings out
+    /// of the real ones, read and rewrote the operator's actual hidden radios;
+    /// and every unit test that built an engine shared this key with every
+    /// other one, however carefully it isolated its own suite — which is what
+    /// made `RadioVisibilityTests` fail at random under the parallel run.
     @Published var hiddenRadioIDs: Set<RadioID> = [] {
         didSet {
             guard hiddenRadioIDs != oldValue else { return }
-            UserDefaults.standard.set(hiddenRadioIDs.map(\.rawValue).sorted(), forKey: Self.hiddenRadiosKey)
+            settings.defaults.set(hiddenRadioIDs.map(\.rawValue).sorted(), forKey: Self.hiddenRadiosKey)
         }
     }
     static let hiddenRadiosKey = "radios.hidden"
@@ -366,7 +498,7 @@ final class PacketEngine: ObservableObject {
         self.maxConsoleLines = maxConsoleLines
         self.maxRawChunks = maxRawChunks
         self.settings = settings
-        self.hiddenRadioIDs = Set((UserDefaults.standard.stringArray(forKey: Self.hiddenRadiosKey) ?? [])
+        self.hiddenRadioIDs = Set((settings.defaults.stringArray(forKey: Self.hiddenRadiosKey) ?? [])
             .map(RadioID.init(rawValue:)))
         self.packetStore = packetStore
         self.consoleStore = consoleStore
@@ -397,6 +529,8 @@ final class PacketEngine: ObservableObject {
                 // that path.
                 self.loadLifetimeStationCounts()
                 self.bbsMessages = SQLiteBBSMessageStore(dbQueue: queue)
+                self.aprsMessaging = APRSMessagingService(
+                    store: SQLiteAPRSMessageStore(dbQueue: queue))
                 // A path nobody has seen for a fortnight is not evidence any
                 // more; leaving it in would draw a neighbour that moved away.
                 // Discarded deliberately: pruning is housekeeping, and a
@@ -496,6 +630,10 @@ final class PacketEngine: ObservableObject {
     /// "connect, drop, connect" loop a resume after the settings pane used to
     /// produce.
     func connectUsingSettings() {
+        // A fresh connect attempt drops the stale failure banner; if this
+        // attempt fails too, the error is set again. Without this, the red
+        // banner outlived a successful manual reconnect.
+        lastError = nil
         // This call brings the links into line with whatever the settings say
         // right now, so any "settings changed while suspended" baseline is by
         // definition already satisfied.
@@ -681,6 +819,18 @@ final class PacketEngine: ObservableObject {
             let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: txDesc, via: frame.path.digis.map { $0.display }, messageType: .prompt)
             appendConsoleLine(line, category: .packet, packetID: nil, byteCount: txDesc.utf8.count)
         }
+        // Announced at hand-off, not at completion: "we keyed" is what an
+        // operator watching the channel needs to see, and the completion
+        // callback for a queued KISS write can be a long way behind the air.
+        onFrameTransmitted?(TransmittedFrame(
+            id: frame.id,
+            at: Date(),
+            from: frame.source.display,
+            to: frame.destination.display,
+            via: frame.path.digis.map(\.display),
+            text: Self.transmittedText(frame, description: txControlFrameDescription(frame)),
+            radio: frame.radio,
+            awaitsKeying: settings.radio(frame.radio)?.kind == .modem))
         eventLogger?.log(
             level: .info,
             category: .transmission,
@@ -959,7 +1109,8 @@ final class PacketEngine: ObservableObject {
                 pid: decoded.pid, info: decoded.info, rawAx25: ax25Data, kissEndpoint: tcpEndpoint,
                 radioID: radio, kissPort: kissPort, linkDescription: linkDescription)
             if let src = decoded.from?.display {
-                stationTracker.noteHeard(src, on: radio, at: now, via: StationTracker.heardVia(copy))
+                stationTracker.noteHeard(src, on: radio, at: now, via: StationTracker.heardVia(copy),
+                                         packet: copy)
                 stations = stationTracker.stations
             }
             observePacketForNetRom(copy)
@@ -1057,6 +1208,8 @@ final class PacketEngine: ObservableObject {
         guard let stationCall = packet.from?.display, !packet.isOwnEcho else { return }
         stationTracker.update(with: packet)
         stations = stationTracker.stations
+        recordAPRSObject(from: packet, sentBy: stationCall)
+        recordWeatherAlert(from: packet, sentBy: stationCall)
         if let heardCount = stationTracker.heardCount(for: stationCall) {
             SentryManager.shared.addBreadcrumb(
                 category: "stations.update.on_packet_insert",
@@ -1238,6 +1391,22 @@ final class PacketEngine: ObservableObject {
 
     /// Build a richer control frame description for outbound frames.
     /// Returns nil if the frame doesn't have enough info for a richer description.
+    /// One line of what a transmitted frame said.
+    ///
+    /// A beacon or a message has a payload; an RR, a SABM or a UA does not,
+    /// and naming the frame is more use to somebody watching a connect than
+    /// an empty line would be. Newlines are collapsed because the strip this
+    /// feeds is one row per frame.
+    nonisolated static func transmittedText(_ frame: OutboundFrame, description: String?) -> String {
+        let payload = (frame.displayInfo ?? "")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        if !payload.isEmpty { return payload }
+        if let description, !description.isEmpty { return description }
+        return frame.frameType.uppercased()
+    }
+
     private func txControlFrameDescription(_ frame: OutboundFrame) -> String? {
         guard let controlByte = frame.controlByte else { return nil }
         let decoded = AX25ControlFieldDecoder.decode(control: controlByte, controlByte1: nil)
@@ -1443,9 +1612,7 @@ final class PacketEngine: ObservableObject {
     /// A station is hidden only when every radio that heard it is hidden, so
     /// one heard on both radios stays one dot on the map.
     func isVisible(_ station: Station) -> Bool {
-        guard !hiddenRadioIDs.isEmpty else { return true }
-        let heardOn = station.heardOn.isEmpty ? [RadioID.primary] : station.heardOn
-        return heardOn.contains { !hiddenRadioIDs.contains($0) }
+        RadioVisibility.isVisible(station, hidden: hiddenRadioIDs)
     }
 
     static func connectionStatus(for state: KISSLinkState) -> ConnectionStatus {
@@ -1556,6 +1723,10 @@ final class PacketEngine: ObservableObject {
         // Check for AXDP capabilities in UI frames
         detectAXDPCapabilities(from: packet)
 
+        // Parse APRS message-class frames (messages, acks, queries, bulletins)
+        // and let the messaging service store them and auto-reply.
+        detectAPRSMessage(from: packet)
+
         // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) AND the user is
         // part of the session – SessionCoordinator will deliver reassembled chat via
         // appendSessionChatLine. For monitored traffic (other stations' sessions),
@@ -1644,6 +1815,49 @@ final class PacketEngine: ObservableObject {
 
     /// Detect and store AXDP capabilities from packet payload (UI frames).
     /// Capability discovery happens via PING/PONG message exchange.
+    /// Hand an inbound UI frame to the APRS messaging service when it is a
+    /// message-class frame (`:` message/ack/rej or `?` query). Direct-vs-
+    /// digipeated is read from the H-bit so the service can tell a direct copy
+    /// from a relayed one, and the reply path is the reverse of the used digis.
+    private func detectAPRSMessage(from packet: Packet) {
+        guard let svc = aprsMessaging,
+              packet.frameType == .ui, !packet.isOwnEcho,
+              let sender = packet.from?.display,
+              let parsed = APRSMessage.parse(info: packet.info) else { return }
+        let usedDigis = packet.via.filter { $0.repeated }
+        let context = APRSMessagingService.InboundContext(
+            sender: sender,
+            ourCalls: aprsOurCallsigns(),
+            radioID: packet.radioID?.rawValue,
+            replyPath: usedDigis.reversed().map { $0.display },
+            viaDirect: usedDigis.isEmpty,
+            receivedAt: packet.timestamp,
+            // `?APRST` answers with the whole received path, so it needs the
+            // destination and every digipeater — used or not — not just the
+            // used ones the reply path is built from.
+            destination: packet.toDisplay,
+            // The has-been-repeated bit is part of the path, and `?APRST`
+            // quotes the path verbatim: a real Xastir answers a digipeated
+            // query "PATH= ORACLE-1>APZAXT,RFDIGI-1*" and an un-digipeated
+            // copy of the same query "…,WIDE1-1" with no star. `display`
+            // deliberately omits it everywhere else, so it is added here.
+            viaPath: packet.via.map { $0.repeated ? $0.display + "*" : $0.display })
+        svc.receive(parsed, context: context)
+    }
+
+    /// Every callsign that names us for "is this message addressed to me" —
+    /// the station call and each radio's resolved call+SSID.
+    private func aprsOurCallsigns() -> [String] {
+        var calls: Set<String> = []
+        let station = settings.myCallsign
+        if !station.isEmpty { calls.insert(station.uppercased()) }
+        for radio in settings.activeRadios {
+            let call = radio.resolvedCallsign(station: station)
+            if !call.isEmpty { calls.insert(call.uppercased()) }
+        }
+        return Array(calls)
+    }
+
     private func detectAXDPCapabilities(from packet: Packet) {
         guard let fromAddress = packet.from else { return }
 
@@ -2700,6 +2914,18 @@ extension PacketEngine: RadioManagerDelegate {
         if previous?.dcd != telemetry.dcd {
             TxLog.debug(.modem, telemetry.dcd ? "Carrier detected" : "Channel clear", ["link": link.endpointDescription])
         }
+        // What actually reached the air since the last report. A first report
+        // carries the counters' whole history, which is not news about any
+        // frame this session is showing, so it resolves nothing.
+        if let previous {
+            let onAir = Int(telemetry.framesSent &- previous.framesSent)
+            let dropped = Int(telemetry.framesDropped &- previous.framesDropped)
+            if onAir > 0 || dropped > 0 {
+                for radio in manager.radios(onLink: link.key) {
+                    onTransmitOutcome?(radio, onAir, dropped)
+                }
+            }
+        }
     }
 
     func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateRigStatus status: RigStatus, model: String?) {
@@ -2728,6 +2954,10 @@ extension PacketEngine: RadioManagerDelegate {
         case .connected:
             addSystemLine("Connected to \(endpoint)", category: .connection)
             eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)
+            // A link that just came up clears its own error; recompute the
+            // engine-level banner from what is still failed, so a recovered
+            // radio takes the red banner down instead of it staying up forever.
+            recomputeConnectionError()
             SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Connected", level: .info, data: nil)
             // Ask the TNC to name itself — an advisory SetHardware frame on
             // the link, never transmitted on RF. Direwolf answers; anything
@@ -2755,8 +2985,21 @@ extension PacketEngine: RadioManagerDelegate {
         refreshLinkSummary()
     }
 
+    /// Recompute the top connection banner from the links that are failed
+    /// *now*. Each `LinkSession` clears its own `lastError` on `.connected`, so
+    /// a recovered radio drops out and the banner clears once nothing is
+    /// failed — fixing the banner that used to stay up permanently after any
+    /// failure because nothing ever cleared the engine-level error.
+    private func recomputeConnectionError() {
+        let stillFailed = radioManager.sessions.values.first {
+            $0.state == .failed && $0.lastError != nil
+        }
+        lastError = stillFailed?.lastError
+    }
+
     func radioManager(_ manager: RadioManager, link: LinkSession, didError message: String) {
         lastError = message
+        onLinkError?(message)
         LinkDebugLog.shared.recordParseError(message: "Link error: \(message)")
         addErrorLine(message, category: .connection)
         eventLogger?.log(level: .error, category: .connection, message: message, metadata: nil)

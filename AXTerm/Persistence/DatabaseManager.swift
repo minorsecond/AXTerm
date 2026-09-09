@@ -805,6 +805,12 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 31, name: "addRadioToLinkQualityHistory") { db in
             try addRadioToLinkQualityHistory(db)
         }
+        registerReportedMigration(&migrator, version: 32, name: "createAPRSMessages") { db in
+            try createAPRSMessages(db)
+        }
+        registerReportedMigration(&migrator, version: 33, name: "addPathToAPRSMessages") { db in
+            try addPathToAPRSMessages(db)
+        }
         return migrator
     }()
 

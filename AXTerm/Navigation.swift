@@ -14,6 +14,7 @@ nonisolated enum NavigationItem: String, Hashable, CaseIterable {
     case map = "Map"
     case mail = "Mail"
     case bbs = "BBS"
+    case messages = "Messages"
     //case raw = "Raw"
 }
 
@@ -35,6 +36,7 @@ extension NavigationItem {
         case .map: return "6"
         case .mail: return "7"
         case .bbs: return "8"
+        case .messages: return "9"
         }
     }
 }
