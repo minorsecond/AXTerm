@@ -142,4 +142,39 @@ final class CIVFrameTests: XCTestCase {
         XCTAssertEqual(CIVKnownRadios.describe(0xA4), "IC-705 (A4)")
         XCTAssertEqual(CIVKnownRadios.describe(0x12), "radio 12")
     }
+
+    /// A dropped UDP packet truncates a scope frame; the acknowledgement that
+    /// follows must still be found. Framing on the FIRST preamble pair and the
+    /// FIRST terminator makes the half scope frame swallow the ack whole.
+    func testATruncatedScopeFrameDoesNotSwallowTheNextAck() {
+        var parser = CIVFrameParser()
+        // FE FE E0 A4 27 00 <waveform, cut off mid-frame — no FD>
+        let truncatedScope: [UInt8] = [0xFE, 0xFE, 0xE0, 0xA4, 0x27, 0x00, 0x01, 0x02, 0x03]
+        let ack: [UInt8] = [0xFE, 0xFE, 0xE0, 0xA4, 0xFB, 0xFD]
+        let frames = parser.feed(Data(truncatedScope + ack))
+        XCTAssertTrue(frames.contains { $0.isOK && $0.from == 0xA4 },
+                      "the PTT ack was eaten by the truncated scope frame")
+    }
+
+    /// The same wreck arriving in pieces, as UDP delivers it.
+    func testTheAckSurvivesWhenTheWreckAndTheAckArriveSeparately() {
+        var parser = CIVFrameParser()
+        XCTAssertTrue(parser.feed(Data([0xFE, 0xFE, 0xE0, 0xA4, 0x27, 0x00, 0xFE, 0x11, 0x42])).isEmpty,
+                      "no terminator yet, so nothing is a frame")
+        let frames = parser.feed(Data([0xFE, 0xFE, 0xE0, 0xA4, 0xFB, 0xFD]))
+        XCTAssertEqual(frames.count, 1)
+        XCTAssertTrue(frames.first?.isOK ?? false)
+    }
+
+    /// Anchoring on the last preamble must not eat a good frame that simply
+    /// follows another good frame in one read.
+    func testTwoWholeFramesInOneReadBothSurvive() {
+        var parser = CIVFrameParser()
+        let scope: [UInt8] = [0xFE, 0xFE, 0xE0, 0xA4, 0x27, 0x00, 0x01, 0xFD]
+        let ack: [UInt8] = [0xFE, 0xFE, 0xE0, 0xA4, 0xFB, 0xFD]
+        let frames = parser.feed(Data(scope + ack))
+        XCTAssertEqual(frames.count, 2, "a complete scope frame is still a frame of its own")
+        XCTAssertEqual(frames.first?.command, 0x27)
+        XCTAssertTrue(frames.last?.isOK ?? false)
+    }
 }

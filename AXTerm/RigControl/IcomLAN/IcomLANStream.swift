@@ -56,6 +56,10 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     private var pingTimer: DispatchSourceTimer?
     private var idleTimer: DispatchSourceTimer?
     private var lastTrackedAt: Double = 0
+    /// When the radio last sent us anything at all — ping, idle, audio or
+    /// payload. Over UDP this is the only evidence the radio still exists;
+    /// `IcomLANLiveness` turns it into a verdict. Zero until first contact.
+    private(set) var lastInboundAt: Double = 0
     private var expecting: [(id: UUID, match: (Data) -> Bool, resume: (Data) -> Void)] = []
 
     /// Optional handshake trace for live debugging. Enabled when
@@ -98,6 +102,12 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         remoteID = 0
         isReady = false
         reservedLocalPort = nil
+        // Including when we last heard anything. Left over from the previous
+        // session it is not silence, it is a different session's history, and
+        // the liveness watchdog's first tick reads it as a radio that has
+        // been dead for as long as the reconnect took — killing a session one
+        // second after it connected.
+        lastInboundAt = 0
         let params = NWParameters.udp
         params.allowLocalEndpointReuse = true
         // The radio checks our session ID against the source of our
@@ -378,6 +388,9 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         isReady = false
         connection?.cancel()
         connection = nil
+        // A disconnected stream has heard nothing. Anything else would be
+        // this session's history answering for the next one's.
+        lastInboundAt = 0
         for e in expecting { e.resume(Data()) }
         expecting.removeAll()
     }
@@ -447,7 +460,14 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
 
     // MARK: - Inbound
 
-    private func handle(_ d: Data) {
+    /// Internal rather than private so a test can feed it a datagram without
+    /// a socket: what counts as a sign of life is the whole point.
+    func handle(_ d: Data) {
+        // Stamped first, and for *every* datagram. Pings and idles return
+        // early below and are the only things a radio sends when nothing is
+        // happening — a liveness stamp taken any further down would call a
+        // healthy but quiet radio dead.
+        lastInboundAt = Self.now
         if !IcomLAN.isPing(d) && !IcomLAN.isIdle(d) {
             trace("RX " + d.prefix(48).map { String(format: "%02x", $0) }.joined())
         }
@@ -479,6 +499,12 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
             return
         }
         onPacket?(d)
+    }
+
+    /// How long the radio has said nothing, or nil before first contact.
+    var silence: TimeInterval? {
+        guard lastInboundAt > 0 else { return nil }
+        return Self.now - lastInboundAt
     }
 
     static var now: Double { CFAbsoluteTimeGetCurrent() }

@@ -36,6 +36,10 @@ nonisolated final class CIVClient: @unchecked Sendable {
 
     var onUnsolicited: (@Sendable (CIVFrame) -> Void)?
     var onTransportState: (@Sendable (CIVTransportState) -> Void)?
+    /// The port died under us. Separate from `onTransportState`, which the
+    /// PTT controller owns: the link needs the same news and there is only
+    /// one of that hook.
+    var onTransportFailure: (@Sendable (String) -> Void)?
 
     private let queue = DispatchQueue(label: "com.axterm.civ.client")
     private var parser = CIVFrameParser()
@@ -111,6 +115,77 @@ nonisolated final class CIVClient: @unchecked Sendable {
         let reply = try await request(CIVCommand.readPTT(radio: radioAddress, controller: controllerAddress),
                                       expecting: .reply(command: 0x1C, subcommand: 0x00))
         return reply.data.first == 0x01
+    }
+
+    /// Everything about the receive path the radio will tell us.
+    ///
+    /// Each read is independent and best-effort: a radio that does not answer
+    /// one subcommand should still be judged on the rest, and an audit that
+    /// throws away nine good answers because of a tenth helps nobody. What
+    /// could not be read keeps its benign default, so the audit never invents
+    /// a fault out of a missing reply.
+    func readReceiveSettings(mode: RigMode, filter: Int, dataMode: Bool) async -> RigReceiveAudit.Settings {
+        func byte(_ frame: CIVFrame, _ command: UInt8, _ sub: UInt8?) async -> UInt8? {
+            try? await request(frame, expecting: .reply(command: command, subcommand: sub)).data.first
+        }
+        func level(_ frame: CIVFrame, _ command: UInt8, _ sub: UInt8?) async -> Int? {
+            guard let d = try? await request(frame, expecting: .reply(command: command, subcommand: sub)).data,
+                  let value = CIVBCD.meter(d) else { return nil }
+            return Int((Double(value) / 255 * 100).rounded())
+        }
+        let r = radioAddress, c = controllerAddress
+        // BCD, so 0x10 reads as 10 dB rather than 16.
+        let attenuator = await byte(CIVCommand.readAttenuator(radio: r, controller: c), 0x11, nil)
+        let preamp = await byte(CIVCommand.readPreamp(radio: r, controller: c), 0x16, 0x02)
+        let nb = await byte(CIVCommand.readNoiseBlanker(radio: r, controller: c), 0x16, 0x22)
+        let nr = await byte(CIVCommand.readNoiseReduction(radio: r, controller: c), 0x16, 0x40)
+        let rfGain = await level(CIVCommand.readRFGain(radio: r, controller: c), 0x14, 0x02)
+        let squelch = await level(CIVCommand.readSquelchLevel(radio: r, controller: c), 0x14, 0x03)
+        let anyAnswer = attenuator != nil || preamp != nil || nb != nil
+            || nr != nil || rfGain != nil || squelch != nil
+        return RigReceiveAudit.Settings(
+            attenuatorDB: attenuator.map { Int($0 >> 4) * 10 + Int($0 & 0x0F) } ?? 0,
+            preamp: Int(preamp ?? 1),
+            noiseBlanker: nb == 0x01,
+            noiseReduction: nr == 0x01,
+            rfGainPercent: rfGain ?? 100,
+            squelchPercent: squelch ?? 0,
+            mode: mode, filter: filter, dataMode: dataMode, answered: anyAnswer)
+    }
+
+    /// Make one correction the audit asked for. Each is a setting whose right
+    /// value for packet is a fact rather than a preference — see
+    /// `RigReceiveAudit.Correction`.
+    func apply(_ correction: RigReceiveAudit.Correction, mode: RigMode) async throws {
+        let r = radioAddress, c = controllerAddress
+        let command: CIVFrame
+        switch correction {
+        case .attenuatorOff:     command = CIVCommand.setAttenuatorOff(radio: r, controller: c)
+        case .rfGainFull:        command = CIVCommand.setRFGain(255, radio: r, controller: c)
+        case .squelchOpen:       command = CIVCommand.setSquelchLevel(0, radio: r, controller: c)
+        case .noiseReductionOff: command = CIVCommand.setNoiseReduction(false, radio: r, controller: c)
+        case .noiseBlankerOff:   command = CIVCommand.setNoiseBlanker(false, radio: r, controller: c)
+        case .widestFilter:      command = CIVCommand.setMode(mode, filter: 1, radio: r, controller: c)
+        }
+        _ = try await request(command, expecting: .acknowledgement)
+    }
+
+    /// The radio's audio output level, 0-255, as CI-V reports it.
+    func readAFOutputLevel() async throws -> Int {
+        let reply = try await request(
+            CIVCommand.readMenuItem(.usbAFOutputLevel, radio: radioAddress, controller: controllerAddress),
+            expecting: .reply(command: 0x1A, subcommand: 0x05))
+        // The reply echoes the item number before the value.
+        guard let value = CIVBCD.meter(Array(reply.data.dropFirst(2))) else {
+            throw CIVError.unexpectedResponse(command: 0x1A)
+        }
+        return value
+    }
+
+    func setAFOutputLevel(_ value: Int) async throws {
+        _ = try await request(
+            CIVCommand.setAFOutputLevel(value, radio: radioAddress, controller: controllerAddress),
+            expecting: .acknowledgement)
     }
 
     func readFrequency() async throws -> Int {
@@ -276,6 +351,7 @@ nonisolated final class CIVClient: @unchecked Sendable {
         case .opening, .open: parser.reset()
         }
         onTransportState?(state)
+        if case .failed(let reason) = state { onTransportFailure?(reason) }
     }
 
     private func failAll(_ error: CIVError) {

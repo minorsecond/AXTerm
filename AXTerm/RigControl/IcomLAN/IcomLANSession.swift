@@ -75,6 +75,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     private var serialReorder = SequenceReorderBuffer(holdSeconds: 0.1)
     private var audioReorder = SequenceReorderBuffer(holdSeconds: 0.1)
     private var reorderTimer: DispatchSourceTimer?
+    private var livenessTimer: DispatchSourceTimer?
     private var recentAudioSizes: [Int] = []
     private var openTask: Task<Void, Error>?
 
@@ -201,6 +202,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         openTask = nil
         renewTimer?.cancel(); renewTimer = nil
         reorderTimer?.cancel(); reorderTimer = nil
+        livenessTimer?.cancel(); livenessTimer = nil
         let teardown = { [self] in
             if state == .connected || state == .connecting {
                 if !authID.isEmpty {
@@ -246,6 +248,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
             guard !isFailed else { return }
             renewTimer?.cancel(); renewTimer = nil
             reorderTimer?.cancel(); reorderTimer = nil
+            livenessTimer?.cancel(); livenessTimer = nil
             // Release the token before dropping the socket, exactly as a
             // clean close does. Without this the radio keeps our session in
             // its single client slot until the token times out (tens of
@@ -387,6 +390,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
                 audio.startKeepalive(pingSequence: 1, idlePackets: false)
                 startRenewals()
                 startReorderTicks()
+                startLivenessWatch()
                 state = .connected
                 resolveConnect(.success(()))
             } catch {
@@ -454,6 +458,38 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         }
         t.resume()
         reorderTimer = t
+    }
+
+    /// Fail the session when the radio goes quiet.
+    ///
+    /// The token renewal below is a liveness check of a sort, but a slow one:
+    /// it can take two minutes to conclude, and it only ever watched the
+    /// control stream's *answers*. This watches all three streams' inbound
+    /// traffic, which over UDP is the only evidence the radio is still there
+    /// at all — see `IcomLANLiveness`.
+    private func startLivenessWatch() {
+        livenessTimer?.cancel()
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + 1, repeating: 1)
+        t.setEventHandler { [weak self] in
+            guard let self, self.isConnected else { return }
+            // Control and audio only. Both carry traffic continuously once
+            // connected — the radio pings us on control several times a
+            // second, and audio is a packet every few milliseconds (measured
+            // at over a hundred in ten seconds by `IcomLANLiveTests`). The
+            // serial stream is deliberately left out: CI-V flows only when
+            // somebody has something to say, so quiet there is ordinary and
+            // failing on it would drop a working radio.
+            //
+            // The quieter of the two decides. Audio stopping while control
+            // still pings is a radio we have gone deaf to, which is the
+            // symptom the operator reported, not a healthy link.
+            let silences = [self.control.silence, self.audio.silence].compactMap { $0 }
+            guard let longest = silences.max() else { return }
+            if let why = IcomLANLiveness.complaint(silentFor: longest) { self.fail(why) }
+        }
+        t.resume()
+        livenessTimer = t
     }
 
     private func startRenewals() {

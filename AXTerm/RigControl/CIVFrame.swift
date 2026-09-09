@@ -86,13 +86,44 @@ nonisolated struct CIVFrameParser: Sendable {
             }
             if start > 0 { buffer.removeFirst(start) }
             guard let end = buffer.firstIndex(of: CIVFrame.terminator) else { return frames }
-            let candidate = Array(buffer[0...end])
+            let span = Array(buffer[0...end])
             buffer.removeFirst(end + 1)
+            // Frame from the LAST preamble pair in the span, not the first.
+            //
+            // A CI-V frame is the bytes between a preamble pair and the next
+            // terminator, which is only true while every frame arrives whole.
+            // The IC-705's spectrum scope breaks that: its waveform payload is
+            // raw binary, so a scope frame whose tail is lost — routine over
+            // Wi-Fi, where these arrive by the hundred — leaves a headless
+            // `FE FE E0 A4 27 00 …` with no terminator of its own. Framing on
+            // the first preamble then runs that wreck all the way to the *next*
+            // frame's terminator and swallows it whole. What it swallows is
+            // whatever we were waiting on, and over the WLAN that is usually
+            // the PTT acknowledgement: the transmitter never keys and the radio
+            // looks, from here, like it is ignoring CI-V.
+            //
+            // The frame that owns this terminator begins at the last preamble
+            // pair before it, so start there. Real command frames cannot
+            // contain `FE` in their data — CI-V reserves it — so this only ever
+            // discards junk.
+            let candidate = Self.lastFrameStart(in: span).map { Array(span[$0...]) } ?? span
             if let frame = CIVFrame.parse(candidate) { frames.append(frame) }
         }
     }
 
     mutating func reset() { buffer.removeAll() }
+
+    /// The index of the last `FE FE` in `bytes`, which is where the frame
+    /// ending at `bytes`'s terminator begins.
+    private static func lastFrameStart(in bytes: [UInt8]) -> Int? {
+        guard bytes.count >= 2 else { return nil }
+        var index = bytes.count - 2
+        while index >= 0 {
+            if bytes[index] == CIVFrame.preamble, bytes[index + 1] == CIVFrame.preamble { return index }
+            index -= 1
+        }
+        return nil
+    }
 }
 
 /// CI-V's binary-coded decimal conventions.

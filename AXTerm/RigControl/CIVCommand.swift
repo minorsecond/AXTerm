@@ -85,6 +85,67 @@ nonisolated enum CIVCommand {
         frame(radio, controller, 0x15, 0x01)
     }
 
+    // MARK: - Receive setup
+    //
+    // The standard, well-documented Icom subcommands only. CI-V has many more,
+    // and a subcommand whose meaning on this radio is uncertain is not worth a
+    // wrong answer about why the operator cannot hear anybody.
+
+    /// Attenuator, `11`. `00` is off; otherwise the value is the dB.
+    static func readAttenuator(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x11, nil)
+    }
+
+    /// Preamp, `16 02`. `00` off, `01` P.AMP1, `02` P.AMP2.
+    static func readPreamp(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x02)
+    }
+
+    /// Noise blanker on/off, `16 22`.
+    static func readNoiseBlanker(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x22)
+    }
+
+    /// Noise reduction on/off, `16 40`.
+    static func readNoiseReduction(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x40)
+    }
+
+    /// RF gain, `14 02`, as 0000-0255.
+    static func readRFGain(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x14, 0x02)
+    }
+
+    /// Squelch level, `14 03`, as 0000-0255. 0 is fully open.
+    static func readSquelchLevel(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x14, 0x03)
+    }
+
+    /// RF gain, `14 02`, 0-255.
+    static func setRFGain(_ value: Int, radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x14, 0x02, CIVBCD.meterBytes(value))
+    }
+
+    /// Squelch level, `14 03`, 0-255. 0 is fully open.
+    static func setSquelchLevel(_ value: Int, radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x14, 0x03, CIVBCD.meterBytes(value))
+    }
+
+    /// Noise blanker on/off, `16 22`.
+    static func setNoiseBlanker(_ on: Bool, radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x22, [on ? 0x01 : 0x00])
+    }
+
+    /// Noise reduction on/off, `16 40`.
+    static func setNoiseReduction(_ on: Bool, radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x40, [on ? 0x01 : 0x00])
+    }
+
+    /// Turn the attenuator off, `11 00`.
+    static func setAttenuatorOff(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x11, nil, [0x00])
+    }
+
     static func readSMeter(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
         frame(radio, controller, 0x15, 0x02)
     }
