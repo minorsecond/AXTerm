@@ -203,8 +203,17 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         #if os(macOS)
         if radio.modemRigLink == .lan {
             if radio.lanHost.isEmpty { return "Enter the radio's Wi-Fi address." }
-            if radio.lanUsername.isEmpty || !radio.hasLANPassword { return "Enter the radio's network username and password." }
-            return nil
+            if radio.lanUsername.isEmpty { return "Enter the radio's network username." }
+            // Read the password now, not the profile's remembered flag: a
+            // rebuild's new code signature can leave it saved but unreadable,
+            // and sending an empty password would look like a wrong one.
+            switch RadioSecrets.readLANPassword(for: radio.id) {
+            case .found: return nil
+            case .absent: return "Enter the radio's network password."
+            case .unreadable(let status):
+                return KeychainStore.ReadOutcome.unreadable(status).operatorAdvice
+                    ?? "The saved password could not be read \u{2014} re-enter it once."
+            }
         }
         if radio.audioInputDeviceUID.isEmpty || radio.audioOutputDeviceUID.isEmpty {
             return "Choose an audio input and output device for this radio."

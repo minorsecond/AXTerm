@@ -94,6 +94,31 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
 
     var txLevelDBFS: Float { -40 + 40 * Float(max(0, min(100, txAudioLevel))) / 100 }
 
+    /// Tilt hypotheses for the demodulator, one slicer each.
+    ///
+    /// A receiver's audio is never flat. FM de-emphasis, the radio's data-jack
+    /// response and the IC-705's WLAN codec all leave one AFSK tone louder
+    /// than the other, and a single slicer at 0 dB assumes they arrive equal.
+    /// Measured on the bench (`AFSKSensitivityBenchTests`) at 12 dB SNR with
+    /// 6 dB of tilt, spreading the hypotheses recovers frames a centre slicer
+    /// loses outright, and costs nothing when the path happens to be flat.
+    ///
+    /// This is not a theoretical improvement. Comparing K0EPI-7's reception
+    /// against the APRS-IS feed on 2026-09-09 showed the station hearing 14%
+    /// of frames as original transmissions where every Direwolf-based igate on
+    /// the same channel averaged 73% — Direwolf has run several slicers for
+    /// years. The radio was not at fault: squelch open, FM-D, not narrow.
+    /// Nine hypotheses at 1.5 dB, spanning ±6 dB.
+    ///
+    /// Both the spacing and the span are measured, not chosen. Widening the
+    /// span past ±6 buys nothing at all (±9 and ±12 score identically);
+    /// halving the step from 3 dB to 1.5 dB takes the hardest bench condition
+    /// — 6 dB SNR with 6 dB of tilt — from 15 frames of 40 to 24. A power
+    /// detector in noise picks up a positive bias on *both* tones, so the best
+    /// threshold sits away from the arithmetic answer and a finer comb lands
+    /// nearer it; a wider one only adds slicers nothing is near.
+    static let slicerTwistsDB: [Float] = [-6, -4.5, -3, -1.5, 0, 1.5, 3, 4.5, 6]
+
     var softModemConfiguration: SoftModemConfiguration {
         var c = SoftModemConfiguration()
         c.mode = mode
@@ -106,6 +131,7 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
         c.persist = persistence
         c.slotTimeMs = slotTimeMs
         c.txLevelDBFS = txLevelDBFS
+        c.slicerTwistsDB = Self.slicerTwistsDB
         c.pttWatchdogSeconds = Double(maxTransmitSeconds)
         return c
     }

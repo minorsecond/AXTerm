@@ -229,6 +229,20 @@ struct TransmissionSettingsView: View {
                 }
             }
 
+            PreferencesSection("APRS Messaging") {
+                Picker("Auto-reply", selection: Binding(
+                    get: { APRSMessagingService.AutoReply(rawValue: settings.aprsAutoReplyRaw) ?? .full },
+                    set: { settings.aprsAutoReplyRaw = $0.rawValue })) {
+                    Text("Full — ACK + answer queries").tag(APRSMessagingService.AutoReply.full)
+                    Text("ACK only").tag(APRSMessagingService.AutoReply.ackOnly)
+                    Text("Manual — never auto-transmit").tag(APRSMessagingService.AutoReply.manual)
+                }
+                Text("What AXTerm transmits on its own — under your callsign — when an "
+                     + "APRS message or directed query addressed to you arrives. Full auto-ACKs "
+                     + "messages and answers ?APRSP / ?VER / ?APRSD; Manual sends nothing until you do.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             PreferencesSection("Ping", id: .ping) {
                 Text("Asks stations whether they can hear this one, using a frame "
                      + "any AX.25 station answers — no connection, nothing opened. "

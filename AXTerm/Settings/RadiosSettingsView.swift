@@ -364,13 +364,20 @@ struct RadioDetailView: View {
                         } else {
                             textBeaconEditor
                         }
-                        LabeledContent("Via digipeaters") {
-                            TextField("direct", text: beaconBinding(\.path))
-                                .textFieldStyle(.roundedBorder)
-                                .frame(maxWidth: 160)
+                        if beaconBinding(\.kind).wrappedValue == .aprsPosition {
+                            // One path per radio: an APRS beacon and an APRS
+                            // ping ask the same question of the same channel.
+                            aprsPathRow
+                        } else {
+                            LabeledContent("Via digipeaters") {
+                                TextField("direct", text: beaconBinding(\.path))
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(maxWidth: 160)
+                            }
                         }
                         Stepper("Send every \(beaconBinding(\.intervalMinutes).wrappedValue) min",
                                 value: beaconBinding(\.intervalMinutes), in: 5...240, step: 5)
+                        beaconNowRow
                     }
                 } header: {
                     Text("Beacon")
@@ -393,12 +400,20 @@ struct RadioDetailView: View {
                         }
                     }
                     Toggle("Answer mailbox calls", isOn: serviceBinding(\.answersMailbox))
+                    Toggle("APRS on this radio", isOn: aprsServiceBinding)
+                        .disabled(beaconForcesAPRS)
+                        .help(beaconForcesAPRS
+                              ? "On automatically — this radio beacons an APRS position, so its channel is APRS."
+                              : "This radio's channel is APRS: APRS messages and the \u{201C}Who can hear me\u{201D} query may go out on it. Leave off for a node or BBS frequency.")
+                    if settings.radio(radioID)?.handlesAPRS == true { aprsPathRow }
                 } header: {
                     Text("Services on this radio")
                 } footer: {
                     Text("Every service runs on every radio unless switched off here. Whether a "
                          + "service runs at all is set under Transmission and BBS; these rows only "
-                         + "say which radios it uses (the mailbox is one shared store).")
+                         + "say which radios it uses (the mailbox is one shared store). APRS only "
+                         + "goes out on radios switched on here, so a node frequency is never "
+                         + "flooded with an APRS query.")
                 }
 
                 Section {
@@ -480,6 +495,96 @@ struct RadioDetailView: View {
     }
 
     private var stationCallsign: String { settings.myCallsign.uppercased() }
+
+    /// The digipeater path for everything APRS this radio sends.
+    ///
+    /// Its own row, above the beacon's, because nothing on APRS is repeated
+    /// unless the frame asks: a station with no path is heard only by whoever
+    /// is in direct earshot, whatever its antenna. Presets rather than a bare
+    /// field because the two paths worth using are conventions, not
+    /// preferences — and typing is still allowed, because a local network with
+    /// a named digipeater is a real answer the presets cannot know.
+    @ViewBuilder
+    private var aprsPathRow: some View {
+        let path = aprsPathBinding.wrappedValue
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("APRS path") {
+                HStack(spacing: 8) {
+                    TextField("direct", text: aprsPathBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 160)
+                    Menu {
+                        ForEach(APRSPath.presets, id: \.self) { preset in
+                            Button(APRSPath.label(preset)) { aprsPathBinding.wrappedValue = preset }
+                        }
+                    } label: {
+                        Image(systemName: "list.bullet")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 28)
+                    .help("Common paths.")
+                }
+            }
+            if case let .failure(problem) = BeaconPlan.planPath(path) {
+                Text(problem.operatorText)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(Self.pathExplanation(path))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let advice = APRSPath.advice(path) {
+                    Text(advice)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// What a path costs and what it buys, in the operator's terms.
+    static func pathExplanation(_ path: String) -> String {
+        let total = APRSPath.transmissions(path)
+        if total == 1 {
+            return "Direct only — heard by stations in range of this radio, and no further. "
+                + "Nothing on APRS is repeated unless the frame asks."
+        }
+        return "Asks for \(total - 1) digipeater hop\(total - 1 == 1 ? "" : "s"): "
+            + "\(total) transmissions of every frame. Used by the position beacon, "
+            + "Ping and messages you send."
+    }
+
+    /// Beacon this radio now, and say why not when it cannot.
+    ///
+    /// The interval is a floor of five minutes and usually half an hour, so
+    /// without this the only way to see whether a beacon works was to wait for
+    /// it — and an APRS beacon with no fix simply did nothing, silently.
+    @ViewBuilder
+    private var beaconNowRow: some View {
+        let obstacle = SessionCoordinator.shared?.beaconObstacle(for: radioID, settings: settings)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Button("Send one now") {
+                    SessionCoordinator.shared?.sendBeacon(for: radioID, settings: settings)
+                }
+                .disabled(obstacle != nil)
+                Text(obstacle == nil
+                     ? "Goes out on this radio immediately."
+                     : "Cannot send yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let obstacle {
+                Text(obstacle)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 
     @ViewBuilder
     private var textBeaconEditor: some View {
@@ -627,6 +732,32 @@ struct RadioDetailView: View {
                 settings.updateRadio(radioID) { $0[keyPath: keyPath] = value }
                 // The node's L2 aliases are registered when configured, not
                 // when announced.
+                SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
+
+    /// True when this radio beacons an APRS position, which makes its channel
+    /// APRS by definition — the APRS toggle is then forced on and read-only.
+    private var beaconForcesAPRS: Bool {
+        settings.radio(radioID)?.beacon.kind == .aprsPosition
+    }
+
+    /// The APRS toggle shows the *effective* state (`handlesAPRS`, so a
+    /// position-beaconing radio reads on) but only ever writes the operator's
+    /// explicit `aprsEnabled` bit.
+    private var aprsServiceBinding: Binding<Bool> {
+        Binding(
+            get: { settings.radio(radioID)?.handlesAPRS ?? false },
+            set: { value in settings.updateRadio(radioID) { $0.aprsEnabled = value } })
+    }
+
+    /// This radio's APRS path, resolving an older build's beacon path on
+    /// first read so an upgrade never silently shortens a station's reach.
+    private var aprsPathBinding: Binding<String> {
+        Binding(
+            get: { settings.radio(radioID)?.effectiveAPRSPath ?? "" },
+            set: { value in
+                settings.updateRadio(radioID) { $0.aprsPath = value.uppercased() }
                 SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
             })
     }

@@ -74,6 +74,28 @@ final class ConnectionTransportViewModel: ObservableObject {
     }
     
     @Published var connectionStatus: ConnectionStatus = .disconnected
+    /// This radio's own link state, not the primary's — so a second radio's
+    /// form tells the truth about itself.
+    @Published private(set) var radioState: KISSLinkState = .disconnected
+    /// Why the manager refused this radio's link, recorded the last time it
+    /// reconciled. `radioUnavailableReason` prefers this, then falls back to
+    /// a live check so an empty field warns before the operator even connects.
+    @Published private(set) var managerUnavailableReason: String?
+
+    /// Whether this radio's own link is up (what the tests need).
+    var radioConnected: Bool { radioState == .connected }
+    var radioConnectionStatus: ConnectionStatus { ConnectionStatus(linkState: radioState) }
+
+    /// Why this radio has no link. Only the sound modem produces these
+    /// reasons, so it is scoped to that transport — a Wi-Fi warning must
+    /// never linger on the Network tab. The live check catches a missing
+    /// field before the manager has even tried; the manager's own reason
+    /// covers a genuine failure to open.
+    var radioUnavailableReason: String? {
+        guard selectedTransport == .modem, !radioConnected,
+              let profile = settings.radio(radioID), profile.enabled else { return nil }
+        return RadioManager.unsupportedReason(for: profile) ?? managerUnavailableReason
+    }
     
     @Published var serialDevices: [SerialDevice] = []
     @Published var selectedSerialDevicePath: String = "" {
@@ -198,7 +220,11 @@ final class ConnectionTransportViewModel: ObservableObject {
         if lanHost != profile.lanHost { lanHost = profile.lanHost }
         if lanControlPort != profile.lanControlPort { lanControlPort = profile.lanControlPort }
         if lanUsername != profile.lanUsername { lanUsername = profile.lanUsername }
-        if hasLANPassword != profile.hasLANPassword { hasLANPassword = profile.hasLANPassword }
+        // Show "stored" only when this build can actually read the password.
+        // The profile's flag remembers that one was set; a rebuild can leave
+        // it saved but unlockable, and the form must not claim otherwise.
+        let passwordReadable = RadioSecrets.hasLANPassword(for: radioID)
+        if hasLANPassword != passwordReadable { hasLANPassword = passwordReadable }
 
         let primary = settings.primaryRadio?.id == radioID
         if isPrimary != primary { isPrimary = primary }
@@ -254,6 +280,18 @@ final class ConnectionTransportViewModel: ObservableObject {
         packetEngine.$mobilinkdInputLevel
             .receive(on: RunLoop.main)
             .assign(to: &$mobilinkdInputLevelState)
+
+        // This radio's own link state and why it might have none.
+        packetEngine.radioManager.$radioStates
+            .receive(on: RunLoop.main)
+            .map { [radioID] in $0[radioID] ?? .disconnected }
+            .removeDuplicates()
+            .assign(to: &$radioState)
+        packetEngine.radioManager.$unavailableReasons
+            .receive(on: RunLoop.main)
+            .map { [radioID] in $0[radioID] }
+            .removeDuplicates()
+            .assign(to: &$managerUnavailableReason)
 
         // Bind Serial Discovery with Grace Period Logic
         serialDiscovery.$devices
@@ -477,6 +515,13 @@ final class ConnectionTransportViewModel: ObservableObject {
         packetEngine.disconnect(reason: "operator disconnected from Connection settings")
     }
 
+    /// Bring this radio's link up. Reconciles every enabled radio, which
+    /// keeps links that are already up and opens the ones that are not — so
+    /// a second radio connects without disturbing the first.
+    func connectThisRadio() {
+        packetEngine.connectUsingSettings()
+    }
+
     // MARK: - Safe Selection Handling
     
     /// Called by UI when user changes transport selection.
@@ -639,7 +684,11 @@ final class ConnectionTransportViewModel: ObservableObject {
     /// Store the Wi-Fi password in the Keychain, or clear it with an empty
     /// string. The value never touches the profile or its JSON.
     func setLANPassword(_ password: String) {
-        let stored = RadioSecrets.setLANPassword(password, for: radioID)
+        // Strip stray edge whitespace or a trailing newline — a password
+        // pasted from a manager often carries one, and the radio would
+        // reject it exactly like a wrong password, with nothing to see.
+        let cleaned = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stored = RadioSecrets.setLANPassword(cleaned, for: radioID)
         hasLANPassword = stored
         update { $0.hasLANPassword = stored }
     }
@@ -648,12 +697,22 @@ final class ConnectionTransportViewModel: ObservableObject {
     @Published private(set) var audioDevices: [ModemAudioDevice] = []
     /// The modem's levels, carrier and PTT, while it runs.
     @Published private(set) var modemTelemetry: ModemTelemetry?
+    /// What the last receive audit found, worst first.
+    @Published private(set) var receiveFindings: [RigReceiveAudit.Finding] = []
+    /// The audit's own answer, shown beside the audit's own buttons. Sharing
+    /// `modemActionMessage` put it in the Transmit section, rows away from the
+    /// button that produced it, which reads as nothing having happened.
+    @Published private(set) var receiveActionMessage: String?
+    @Published private(set) var auditingReceive = false
     /// The radio's frequency and mode, while CI-V is up.
     @Published private(set) var rigStatus: RigStatus?
     /// The last answer to Identify, or the reason there was none.
     @Published private(set) var identifyResult: String?
     @Published private(set) var isIdentifying = false
     @Published private(set) var isSendingTestTone = false
+    /// The Wi-Fi reachability test: whether it is running, and its verdict.
+    @Published private(set) var isTestingLAN = false
+    @Published private(set) var lanTestResult: String?
     /// What the last modem action had to say when it could not be done.
     @Published private(set) var modemActionMessage: String?
 
@@ -704,6 +763,61 @@ final class ConnectionTransportViewModel: ObservableObject {
         }
         #else
         identifyResult = "The sound modem needs a Mac."
+        #endif
+    }
+
+    /// Prove the radio answers over Wi-Fi: log in, wait for it to name
+    /// itself, then let go — without starting the modem or its audio. It
+    /// reports the radio it reached, or why it could not.
+    func testLANConnection() {
+        #if os(macOS)
+        guard !isTestingLAN else { return }
+        if radioConnected {
+            lanTestResult = "Already connected\(rigModel.isEmpty ? "." : " to \(rigModel).")"
+            return
+        }
+        guard let config = settings.radio(radioID)?.modemConfig?.lanConfiguration,
+              !config.host.isEmpty else {
+            lanTestResult = "Enter the radio's address first."
+            return
+        }
+        guard !config.username.isEmpty else {
+            lanTestResult = "Enter the radio's username first."
+            return
+        }
+        switch RadioSecrets.readLANPassword(for: radioID) {
+        case .found: break
+        case .absent:
+            lanTestResult = "Enter the radio's password first."
+            return
+        case .unreadable(let status):
+            lanTestResult = KeychainStore.ReadOutcome.unreadable(status).operatorAdvice
+                ?? "The saved password could not be read \u{2014} re-enter it once."
+            return
+        }
+        isTestingLAN = true
+        lanTestResult = nil
+        Task { [weak self] in
+            let session = IcomLANSession(configuration: config)
+            do {
+                try await session.open()
+                let name = session.radioName.isEmpty ? "the radio" : session.radioName
+                session.close()
+                await MainActor.run {
+                    self?.lanTestResult = "Reached \(name)."
+                    self?.isTestingLAN = false
+                }
+            } catch {
+                session.close()
+                let message = (error as? IcomLANError)?.message ?? error.localizedDescription
+                await MainActor.run {
+                    self?.lanTestResult = "No answer: \(message)"
+                    self?.isTestingLAN = false
+                }
+            }
+        }
+        #else
+        lanTestResult = "The sound modem needs a Mac."
         #endif
     }
 
@@ -758,6 +872,79 @@ final class ConnectionTransportViewModel: ObservableObject {
 
     /// Push the modem's mode to the radio: FM-D or USB-D, DATA MOD USB, AF
     /// squelch open, USB SEND off. The view confirms first.
+    /// Ask the radio why it might not be hearing anybody, and say what it
+    /// answered. Read-only — nothing here changes a setting.
+    func auditRadioReceive() {
+        receiveActionMessage = nil
+        #if os(macOS)
+        guard let link = modemLink, link.state == .connected else {
+            receiveActionMessage = "Connect the radio first."
+            return
+        }
+        receiveFindings = []
+        auditingReceive = true
+        Task { [weak self] in
+            let result = await link.auditReceive()
+            self?.auditingReceive = false
+            self?.receiveFindings = result.findings
+            self?.receiveActionMessage = result.summary
+        }
+        #else
+        receiveActionMessage = "A radio needs a Mac."
+        #endif
+    }
+
+    /// Make the corrections the last audit found. Read the list first — this
+    /// changes the operator's radio.
+    func fixRadioReceive() {
+        #if os(macOS)
+        guard let link = modemLink, link.state == .connected else {
+            receiveActionMessage = "Connect the radio first."
+            return
+        }
+        let findings = receiveFindings
+        auditingReceive = true
+        Task { [weak self] in
+            let done = await link.applyReceiveCorrections(findings)
+            let after = await link.auditReceive()
+            self?.auditingReceive = false
+            self?.receiveFindings = after.findings
+            self?.receiveActionMessage = done.isEmpty
+                ? "Nothing here is ours to change."
+                : "Changed: " + done.joined(separator: ", ") + ". " + after.summary
+        }
+        #endif
+    }
+
+    /// Drive the radio's audio output until the modem sees a usable level.
+    func calibrateRadioLevel() {
+        #if os(macOS)
+        guard let link = modemLink, link.state == .connected else {
+            receiveActionMessage = "Connect the radio first."
+            return
+        }
+        auditingReceive = true
+        Task { [weak self] in
+            let outcome = await link.calibrateReceiveLevel()
+            self?.auditingReceive = false
+            switch outcome {
+            case .alreadyRight(let peak):
+                self?.receiveActionMessage = String(format: "Level is fine at %.0f dBFS.", peak)
+            case .adjusted(let from, let to, let peak):
+                self?.receiveActionMessage = String(
+                    format: "Audio output %d \u{2192} %d; the modem now sees %.0f dBFS.", from, to, peak)
+            case .controlDoesNothing:
+                self?.receiveActionMessage = "That control does not feed the modem on this link \u{2014} "
+                    + "the level was moved a long way and the audio did not follow. Set the level on the radio."
+            case .nothingHeard:
+                self?.receiveActionMessage = "Nothing was received while measuring. Try again when the channel is busy."
+            case .unavailable(let why):
+                self?.receiveActionMessage = why
+            }
+        }
+        #endif
+    }
+
     func configureRadioForPacket() {
         modemActionMessage = nil
         #if os(macOS)

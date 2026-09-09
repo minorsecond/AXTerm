@@ -96,6 +96,12 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     var pings: Bool = true
     var announcesNode: Bool = true
     var answersMailbox: Bool = true
+    /// Whether this radio carries APRS — its channel is an APRS channel, so
+    /// APRS messages and the "Who can hear me" query may go out on it. Off by
+    /// default so a node/BBS radio on a packet frequency is never flooded with
+    /// `?APRS?`; a radio that beacons an APRS position is APRS regardless (see
+    /// `handlesAPRS`). Turn this on for an APRS radio that doesn't beacon.
+    var aprsEnabled: Bool = false
     /// The alias this radio's node announces under when the NET/ROM node
     /// identity is per radio. Empty means the station alias.
     var netRomAlias: String = ""
@@ -106,9 +112,37 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     /// This radio's own digipeater. Off by default; a radio only repeats
     /// other people's traffic when the operator turns it on here.
     var digi: DigiConfig = DigiConfig()
+
+    /// The digipeater path everything APRS from this radio asks for — the
+    /// position beacon, a directed query (the map's Ping) and a message.
+    ///
+    /// One field rather than one per feature, because on the air it is one
+    /// decision: a path is how far this station reaches, and a station that
+    /// beacons two hops out and pings direct is answering the same question
+    /// two different ways.
+    ///
+    /// Nil means the operator has never set it, and an APRS-position beacon's
+    /// own path is used instead — that is where the setting lived before, and
+    /// silently dropping it would shrink a working station's coverage on
+    /// upgrade. Empty string means direct, deliberately.
+    var aprsPath: String?
     /// Removed radios are archived, not deleted, so rows that name them keep
     /// resolving to a name.
     var archived: Bool = false
+
+    /// The APRS path actually used, resolving the pre-`aprsPath` settings of
+    /// an older build to the beacon path they were written in.
+    var effectiveAPRSPath: String {
+        if let aprsPath { return aprsPath }
+        return beacon.kind == .aprsPosition ? beacon.path : ""
+    }
+
+    /// Whether APRS traffic belongs on this radio. True when the operator
+    /// switched APRS on, or when the radio already beacons an APRS position
+    /// (in which case its channel is APRS by definition, so no separate
+    /// toggle is needed). Used to scope APRS messaging and the reachability
+    /// flood to APRS channels only.
+    var handlesAPRS: Bool { aprsEnabled || beacon.kind == .aprsPosition }
 
     init(id: RadioID, name: String) {
         self.id = id
@@ -170,9 +204,11 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         pings = try c.decodeIfPresent(Bool.self, forKey: .pings) ?? true
         announcesNode = try c.decodeIfPresent(Bool.self, forKey: .announcesNode) ?? true
         answersMailbox = try c.decodeIfPresent(Bool.self, forKey: .answersMailbox) ?? true
+        aprsEnabled = try c.decodeIfPresent(Bool.self, forKey: .aprsEnabled) ?? false
         netRomAlias = try c.decodeIfPresent(String.self, forKey: .netRomAlias) ?? ""
         beacon = try c.decodeIfPresent(BeaconConfig.self, forKey: .beacon) ?? BeaconConfig()
         digi = try c.decodeIfPresent(DigiConfig.self, forKey: .digi) ?? DigiConfig()
+        aprsPath = try c.decodeIfPresent(String.self, forKey: .aprsPath)
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
     }
 

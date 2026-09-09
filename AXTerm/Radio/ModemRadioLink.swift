@@ -28,6 +28,11 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     private(set) var rigModel: String?
 
     var onRigStatus: (@Sendable (RigStatus) -> Void)?
+    /// A receive setting became wrong while we were running.
+    var onReceiveDrift: (@Sendable ([RigReceiveAudit.Finding]) -> Void)?
+    /// What the last audit found, so the watch can report changes rather than
+    /// the standing state.
+    private var lastAudit: [RigReceiveAudit.Finding] = []
     var onTelemetry: (@Sendable (ModemTelemetry) -> Void)? {
         didSet { modem.engine.onTelemetry = onTelemetry }
     }
@@ -41,6 +46,19 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     private var closeTask: Task<Void, Never>?
     private weak var _delegate: KISSLinkDelegate?
     private let deliver: SoftModemLink.Deliver
+
+    // MARK: Auto-reconnect
+    // A quit or an Xcode rebuild leaves the IC-705 holding its single client
+    // slot for tens of seconds, so the first reopen after a relaunch usually
+    // fails — the radio hasn't let go yet. Rather than make the operator mash
+    // Reconnect, retry on a bounded backoff that outlasts the slot timeout,
+    // stopping on success or an explicit close.
+    private var wantsOpen = false
+    private var reconnectAttempt = 0
+    private var reconnectTask: Task<Void, Never>?
+    private static let maxReconnectAttempts = 8
+    private static let baseReconnectDelay: TimeInterval = 3
+    private static let maxReconnectDelay: TimeInterval = 30
 
     /// What the "Software" row shows: this modem, its mode.
     var identity: String {
@@ -98,6 +116,33 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// connect, but a radio that ignores that still gets heard.
     private func attachRig() {
         rig?.onUnsolicited = { [weak self] frame in self?.absorbUnsolicited(frame) }
+        rig?.onTransportFailure = { [weak self] reason in self?.rigDied(reason) }
+    }
+
+    /// The radio went away while we were using it.
+    ///
+    /// Every failure path in `open()` reports itself; this is the one *after*
+    /// the link is up, and it had none. From the operator's log of
+    /// 2026-09-09: the UDP sockets to the IC-705 died at 11:48:49Z, the
+    /// session failed, the CI-V client failed its requests — and the link went
+    /// on reporting `.connected` for two hours, with the modem running against
+    /// a radio that was no longer listening. Over the WLAN there is no port to
+    /// notice going away, so this news is the only news there is.
+    private func rigDied(_ reason: String) {
+        deliver { [weak self] in
+            guard let self else { return }
+            // A close in flight is not a failure, and a link already failed
+            // must not restart the backoff from a second report.
+            guard self.wantsOpen, self.state != .failed else { return }
+            let message = "Lost the radio: \(reason)"
+            self.pollTask?.cancel()
+            self.pollTask = nil
+            self.modem.close()
+            self.lock.withLock { self.phase = .failed(message) }
+            self._delegate?.linkDidError(message)
+            self._delegate?.linkDidChangeState(.failed)
+            self.scheduleReconnect()
+        }
     }
 
     private func absorbUnsolicited(_ frame: CIVFrame) {
@@ -141,6 +186,24 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         return (transport, client, ptt)
     }
 
+    /// What to tell the operator when the CI-V port opened but the radio
+    /// never answered on it.
+    ///
+    /// Over the WLAN the login names the radio, so `identify` is best-effort
+    /// and every setup command is `try?` — deliberately, because the radio's
+    /// scope flood can bury a reply without the link being broken. The cost
+    /// is that a genuinely dead control channel looks exactly like a healthy
+    /// one until the first transmission, where it surfaces as a bare "PTT
+    /// failed: timeout" seconds into an operation the operator has already
+    /// committed to. Receive still works without CI-V; keying does not.
+    static func civSilenceComplaint(identified: Bool, statusAnswered: Bool, address: UInt8) -> String? {
+        guard !identified, !statusAnswered else { return nil }
+        return String(format: "The radio is connected but has not answered any CI-V command. "
+                      + "Receive works; transmit cannot key over CI-V until it does. "
+                      + "Check the radio's CI-V address (this modem is asking for %02X) and its CI-V settings.",
+                      address)
+    }
+
     // MARK: - KISSLink
 
     var state: KISSLinkState {
@@ -170,6 +233,9 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
 
     func open() {
         guard state == .disconnected || state == .failed else { return }
+        wantsOpen = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
         guard let rig, let civTransport else {
             lock.withLock { phase = .modemOpen }
             modem.open()
@@ -196,6 +262,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                 // trust the session's name and let identify be best-effort;
                 // over USB a wrong radio or dead port must still fail here,
                 // before the audio devices are grabbed.
+                var identified = false
                 if let session = lanSession {
                     rigModel = session.radioName.isEmpty ? "IC-705" : session.radioName
                     // Silence the spectrum-scope flood first. Until it stops,
@@ -205,19 +272,50 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                     // a moment to go quiet before anything that needs a reply.
                     try? await rig.setScopeDataOutput(false)
                     try? await Task.sleep(for: .milliseconds(300))
-                    if (try? await rig.identify()) == nil {
-                        // The bus is busy; the login already proved the radio.
-                    }
+                    if (try? await rig.identify()) != nil { identified = true }
+                    // else: the bus is busy; the login already proved the radio.
                 } else {
                     let address = try await rig.identify()
                     rigModel = CIVKnownRadios.model(forAddress: address) ?? String(format: "Icom %02X", address)
+                    identified = true
                 }
                 try? await rig.setTransceive(false)
                 if config.setsRadioModeOnConnect { try? await rig.configureForPacket(config.mode, dataMod: config.rigLink == .lan ? .wlan : .usb) }
-                await refreshRigStatus()
-                lock.withLock { phase = .modemOpen }
-                modem.open()
-                startPolling()
+                let answered = await refreshRigStatus()
+                // Over the WLAN identify is allowed to fail, so nothing above
+                // this point insists on a reply. If nothing answered either,
+                // the control channel is dead and the operator would not find
+                // out until the first transmission failed to key. Say it now.
+                if let complaint = Self.civSilenceComplaint(identified: identified, statusAnswered: answered,
+                                                            address: config.civAddress) {
+                    deliver { [weak self] in self?._delegate?.linkDidError(complaint) }
+                }
+                // The audio and polling start on the delivery (main) queue,
+                // where close() flips `wantsOpen`. A close that raced this
+                // open must win: without this guard a close during rig
+                // bring-up returned, then this task resurrected the modem —
+                // starting a fresh DSP thread and re-keying a radio the
+                // operator had just released (the orphan `com.axterm.modem.dsp`
+                // thread seen surviving quit).
+                deliver { [weak self] in
+                    guard let self else { return }
+                    guard self.wantsOpen else {
+                        self.civTransport?.close()
+                        self.rig?.close()
+                        self.lock.withLock { self.phase = .idle }
+                        return
+                    }
+                    self.lock.withLock { self.phase = .modemOpen }
+                    self.modem.open()
+                    self.startPolling()
+                    self.reconnectAttempt = 0   // rig up; failures start fresh
+                    // Baseline the watch, so the first pass reports what
+                    // changed rather than the state we connected to.
+                    Task { [weak self] in
+                        guard let self else { return }
+                        self.lastAudit = await self.auditReceive().findings
+                    }
+                }
             } catch {
                 let message = "Radio control failed: \((error as? CIVError)?.message ?? String(describing: error))"
                 lock.withLock { phase = .failed(message) }
@@ -225,7 +323,29 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                 deliver { [weak self] in
                     self?._delegate?.linkDidError(message)
                     self?._delegate?.linkDidChangeState(.failed)
+                    self?.scheduleReconnect()
                 }
+            }
+        }
+    }
+
+    /// After a failed open, try again on a growing backoff — the radio's held
+    /// slot frees within tens of seconds — until it connects, the attempt cap
+    /// is hit, or `close()` says to stop. Called on the delivery (main) queue,
+    /// which is the only place the reconnect bookkeeping is touched.
+    private func scheduleReconnect() {
+        guard wantsOpen, reconnectAttempt < Self.maxReconnectAttempts else { return }
+        reconnectAttempt += 1
+        let backoff = min(Self.baseReconnectDelay * pow(2, Double(reconnectAttempt - 1)),
+                          Self.maxReconnectDelay)
+        let delay = backoff + Double.random(in: 0...0.5)   // jitter
+        reconnectTask?.cancel()
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.deliver { [weak self] in
+                guard let self, self.wantsOpen, self.state == .failed else { return }
+                self.open()
             }
         }
     }
@@ -235,6 +355,10 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// port close. A close that raced the unkey would leave the radio
     /// transmitting; this order cannot.
     func close() {
+        wantsOpen = false
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttempt = 0
         pollTask?.cancel()
         pollTask = nil
         modem.close()
@@ -349,16 +473,131 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
 
     // MARK: - Rig status
 
-    private func refreshRigStatus() async {
-        guard let rig else { return }
+    /// - Returns: whether the radio answered any of the three reads. A
+    ///   caller bringing the link up uses that to tell a working CI-V port
+    ///   from a silent one, because the reads themselves are best-effort.
+    @discardableResult
+    private func refreshRigStatus() async -> Bool {
+        guard let rig else { return false }
         var status = rigStatus
-        if let hz = try? await rig.readFrequency() { status.frequencyHz = hz }
-        if let mode = try? await rig.readMode() { status.mode = mode.mode; status.filter = mode.filter }
-        if let data = try? await rig.readDataMode() { status.dataMode = data }
+        var answered = false
+        if let hz = try? await rig.readFrequency() { status.frequencyHz = hz; answered = true }
+        if let mode = try? await rig.readMode() { status.mode = mode.mode; status.filter = mode.filter; answered = true }
+        if let data = try? await rig.readDataMode() { status.dataMode = data; answered = true }
         status.ptt = modem.telemetry.ptt
         status.updatedAt = Date()
         lock.withLock { _rigStatus = status }
         onRigStatus?(status)
+        return answered
+    }
+
+    /// Ask the radio why it might not be hearing anybody.
+    ///
+    /// Reads the receive path's settings over CI-V and judges them
+    /// (`RigReceiveAudit`). An attenuator left on, RF gain backed off or a
+    /// narrow FM filter each cost exactly the margin a distant station needs,
+    /// and each is invisible from the Mac until the radio is asked.
+    ///
+    /// Read-only: nothing here changes a setting. What to do about a finding
+    /// is the operator's call, on their radio.
+    func auditReceive() async -> RigReceiveAudit.Result {
+        guard let rig else {
+            return .unavailable("this radio has no CI-V link, so it can only be asked by hand.")
+        }
+        guard rig.isOpen else {
+            return .unavailable("the CI-V link is not open.")
+        }
+        let status = rigStatus
+        // Every read is best-effort, so a radio that answers none of them
+        // still returns an empty finding list. That would read as "nothing is
+        // wrong", which is the one thing it must not say — so the reads are
+        // required to have produced at least one answer.
+        let settings = await rig.readReceiveSettings(mode: status.mode ?? .fm,
+                                                     filter: Int(status.filter ?? 1),
+                                                     dataMode: status.dataMode ?? true)
+        guard settings.answered else {
+            return .unavailable("the radio did not answer any of them.")
+        }
+        return .checked(RigReceiveAudit.findings(settings))
+    }
+
+    /// Make the corrections the audit asked for, and report what changed.
+    ///
+    /// Only settings whose right value for packet is a fact: the attenuator,
+    /// RF gain, squelch, the noise processing and the FM filter. The mode and
+    /// the preamp are named by the audit and deliberately left alone — the
+    /// operator may be in USB on purpose, and whether a preamp helps is a
+    /// judgement about the band.
+    func applyReceiveCorrections(_ findings: [RigReceiveAudit.Finding]) async -> [String] {
+        guard let rig, rig.isOpen else { return [] }
+        let mode = rigStatus.mode ?? .fm
+        var done: [String] = []
+        for finding in findings {
+            guard let correction = finding.correction else { continue }
+            do {
+                try await rig.apply(correction, mode: mode)
+                done.append(finding.title)
+            } catch {
+                done.append("\(finding.title) — the radio refused")
+            }
+        }
+        if !done.isEmpty { _ = await refreshRigStatus() }
+        return done
+    }
+
+    /// What the level loop concluded.
+    enum LevelOutcome: Equatable, Sendable {
+        /// The peak is inside the window; nothing to do.
+        case alreadyRight(peakDBFS: Float)
+        case adjusted(from: Int, to: Int, peakDBFS: Float)
+        /// The level moved a long way and the audio did not follow, so this is
+        /// not the control that feeds the modem.
+        case controlDoesNothing
+        /// Nothing was being received, so there was nothing to measure.
+        case nothingHeard
+        case unavailable(String)
+    }
+
+    /// Drive the radio's audio output until the modem sees a usable peak.
+    ///
+    /// The demodulator is level-independent between the rails, so this is not
+    /// chasing a number — it is keeping the audio off both of them. It also
+    /// checks its own actuator: the IC-705's WLAN audio does not necessarily
+    /// follow the same control as its USB audio, and a loop that turns a knob
+    /// connected to nothing while reporting success would be worse than not
+    /// having one.
+    func calibrateReceiveLevel(passes: Int = 6,
+                               settle: @Sendable () async -> Void = {
+                                   try? await Task.sleep(for: .seconds(3))
+                               }) async -> LevelOutcome {
+        guard let rig, rig.isOpen else { return .unavailable("The radio's CI-V link is not open.") }
+        guard var level = try? await rig.readAFOutputLevel() else {
+            return .unavailable("The radio would not report its audio output level.")
+        }
+        let startedAt = level
+        var startPeak: Float?
+
+        for _ in 0..<passes {
+            await settle()
+            let peak = modem.telemetry.rxPeakDBFS
+            guard peak > RigAudioLevel.silenceDBFS else { return .nothingHeard }
+            if startPeak == nil { startPeak = peak }
+            guard let next = RigAudioLevel.adjust(current: level, peakDBFS: peak) else {
+                return level == startedAt ? .alreadyRight(peakDBFS: peak)
+                                          : .adjusted(from: startedAt, to: level, peakDBFS: peak)
+            }
+            guard (try? await rig.setAFOutputLevel(next)) != nil else {
+                return .unavailable("The radio refused to set its audio output level.")
+            }
+            level = next
+            if let first = startPeak,
+               RigAudioLevel.actuatorIsDead(levelChange: level - startedAt,
+                                            peakChangeDB: modem.telemetry.rxPeakDBFS - first) {
+                _ = try? await rig.setAFOutputLevel(startedAt)
+                return .controlDoesNothing
+            }
+        }
+        return .adjusted(from: startedAt, to: level, peakDBFS: modem.telemetry.rxPeakDBFS)
     }
 
     /// Every five seconds while the modem is idle; once only when the
@@ -367,13 +606,35 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         pollTask?.cancel()
         guard config.followsRadioFrequency else { return }
         pollTask = Task { [weak self] in
+            var sinceAudit = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard let self, !Task.isCancelled else { return }
                 if self.modem.telemetry.ptt { continue }
                 await self.refreshRigStatus()
+                // The receive audit is six CI-V reads, so it runs on its own
+                // slower beat — often enough to catch a setting changed by
+                // hand, rarely enough not to sit on the bus.
+                sinceAudit += 1
+                if sinceAudit >= 24 {
+                    sinceAudit = 0
+                    await self.watchForReceiveDrift()
+                }
             }
         }
+    }
+
+    /// Re-audit, and report only what is newly wrong.
+    private func watchForReceiveDrift() async {
+        let result = await auditReceive()
+        guard case .checked(let now) = result else { return }
+        let new = RigReceiveAudit.newFindings(from: lastAudit, to: now)
+        lastAudit = now
+        guard !new.isEmpty else { return }
+        let notice = "The radio changed under us: "
+            + new.map { $0.title.lowercased() }.joined(separator: ", ") + "."
+        deliver { [weak self] in self?._delegate?.linkDidError(notice) }
+        onReceiveDrift?(new)
     }
 }
 

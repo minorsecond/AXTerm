@@ -30,8 +30,14 @@ final class RadioVisibilityTests: XCTestCase {
 
     /// A station is hidden only when every radio that heard it is hidden, so
     /// one heard on both radios stays one dot on the map.
-    @MainActor func testAStationStaysVisibleWhileAnyRadioThatHeardItIsShown() async {
-        let engine = PacketEngine(settings: AppSettingsStore(defaults: UserDefaults(suiteName: "RadioVisibilityTests.\(UUID().uuidString)")!))
+    ///
+    /// Asks the rule directly. It used to build a whole `PacketEngine`, which
+    /// made it the one impure test in this file and a flaky one: the engine
+    /// persisted `hiddenRadioIDs` to `UserDefaults.standard` rather than to the
+    /// store it was handed, so every test that built an engine shared this key
+    /// with every other, and under the parallel run the set was occasionally
+    /// not empty by the time the first assertion ran.
+    func testAStationStaysVisibleWhileAnyRadioThatHeardItIsShown() {
         var both = Station(call: "K0NTS", lastHeard: Date(), heardCount: 2)
         both.perRadio = [base: .init(lastHeard: Date(), heardCount: 1, lastVia: []),
                          uhf: .init(lastHeard: Date(), heardCount: 1, lastVia: [])]
@@ -39,13 +45,49 @@ final class RadioVisibilityTests: XCTestCase {
         onlyBase.perRadio = [base: .init(lastHeard: Date(), heardCount: 1, lastVia: [])]
         let legacy = Station(call: "N0CALL", lastHeard: Date(), heardCount: 1)
 
-        XCTAssertTrue(engine.isVisible(both))
-        engine.hiddenRadioIDs = [base]
-        XCTAssertTrue(engine.isVisible(both), "still heard on UHF")
-        XCTAssertFalse(engine.isVisible(onlyBase))
-        XCTAssertFalse(engine.isVisible(legacy), "a station from before radios existed was heard on the primary")
-        engine.hiddenRadioIDs = []
-        XCTAssertTrue(engine.isVisible(legacy))
+        XCTAssertTrue(RadioVisibility.isVisible(both, hidden: []))
+        XCTAssertTrue(RadioVisibility.isVisible(both, hidden: [base]), "still heard on UHF")
+        XCTAssertFalse(RadioVisibility.isVisible(onlyBase, hidden: [base]))
+        XCTAssertFalse(RadioVisibility.isVisible(legacy, hidden: [base]),
+                       "a station from before radios existed was heard on the primary")
+        XCTAssertTrue(RadioVisibility.isVisible(legacy, hidden: []))
+    }
+
+    /// Hiding every radio that heard a station is the only way to hide it.
+    func testHidingEveryRadioThatHeardItHidesIt() {
+        var both = Station(call: "K0NTS", lastHeard: Date(), heardCount: 2)
+        both.perRadio = [base: .init(lastHeard: Date(), heardCount: 1, lastVia: []),
+                         uhf: .init(lastHeard: Date(), heardCount: 1, lastVia: [])]
+        XCTAssertFalse(RadioVisibility.isVisible(both, hidden: [base, uhf]))
+    }
+
+    /// Hiding a radio that never heard this station changes nothing about it.
+    func testHidingAnUnrelatedRadioLeavesAStationAlone() {
+        var onlyUHF = Station(call: "W0ARP", lastHeard: Date(), heardCount: 1)
+        onlyUHF.perRadio = [uhf: .init(lastHeard: Date(), heardCount: 1, lastVia: [])]
+        XCTAssertTrue(RadioVisibility.isVisible(onlyUHF, hidden: [base]))
+    }
+
+    /// The engine's hidden-radio set must land in the store it was given.
+    ///
+    /// It used to go to `UserDefaults.standard` regardless, which leaked three
+    /// ways: a `--test-mode` instance rewrote the operator's real setting, unit
+    /// tests contaminated each other through it, and an injected suite was
+    /// silently ignored. This is the only test here that builds an engine, and
+    /// it does so precisely to pin that down.
+    @MainActor func testHiddenRadiosPersistToTheInjectedStoreNotTheProcessDomain() async throws {
+        let suiteName = "RadioVisibilityTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let untouched = UserDefaults.standard.stringArray(forKey: PacketEngine.hiddenRadiosKey)
+
+        let engine = PacketEngine(settings: AppSettingsStore(defaults: defaults))
+        engine.hiddenRadioIDs = [uhf]
+
+        XCTAssertEqual(defaults.stringArray(forKey: PacketEngine.hiddenRadiosKey), ["uhf"],
+                       "written to the store the engine was handed")
+        XCTAssertEqual(UserDefaults.standard.stringArray(forKey: PacketEngine.hiddenRadiosKey), untouched,
+                       "and nowhere else — this is what made the suite flaky")
     }
 
     /// A one-radio station has no names, so no row names a radio.

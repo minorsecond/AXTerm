@@ -348,6 +348,44 @@ struct ModemRadioSection: View {
                 Text("Radio setup")
                 Text(viewModel.modemMode.radioSetupNote)
             }
+            LabeledContent {
+                Button(viewModel.auditingReceive ? "Checking\u{2026}" : "Check reception\u{2026}") {
+                    viewModel.auditRadioReceive()
+                }
+                .disabled(viewModel.auditingReceive)
+                .controlSize(.small)
+            } label: {
+                Text("Why can't I hear anybody?")
+                Text("Reads the radio's receive settings and says which of them are costing you range.")
+            }
+            if let message = viewModel.receiveActionMessage {
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(viewModel.receiveFindings) { finding in
+                ModemReceiveFindingRow(finding: finding)
+            }
+            if viewModel.receiveFindings.contains(where: { $0.correction != nil }) {
+                LabeledContent {
+                    Button("Fix these") { viewModel.fixRadioReceive() }
+                        .disabled(viewModel.auditingReceive)
+                        .controlSize(.small)
+                } label: {
+                    Text("Correct them")
+                    Text("Changes only the settings whose right value for packet is not a matter of taste \u{2014} not the mode, not the preamp.")
+                }
+            }
+            LabeledContent {
+                Button("Set audio level\u{2026}") { viewModel.calibrateRadioLevel() }
+                    .disabled(viewModel.auditingReceive)
+                    .controlSize(.small)
+            } label: {
+                Text("Receive audio level")
+                Text("Listens for a few packets and drives the radio's audio output until the modem sees a usable peak.")
+            }
             .confirmationDialog("Set the radio for packet?", isPresented: $confirmingSetup, titleVisibility: .visible) {
                 Button("Set radio") { viewModel.configureRadioForPacket() }
                 Button("Cancel", role: .cancel) {}
@@ -374,6 +412,44 @@ struct ModemRadioSection: View {
                 "CI-V Transceive: OFF.",
                 "TX Delay (HF, 50 M, 144 M, 430 M): OFF; the modem's TXDELAY covers it.",
                 "The frequency is not touched."].joined(separator: "\n")
+    }
+}
+
+/// One thing the radio's own settings say about its ability to receive.
+struct ModemReceiveFindingRow: View {
+    let finding: RigReceiveAudit.Finding
+
+    var body: some View {
+        LabeledContent {
+            Text(finding.fix)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: 320, alignment: .leading)
+        } label: {
+            Label {
+                Text(finding.title)
+            } icon: {
+                Image(systemName: icon).foregroundStyle(tint)
+            }
+            Text(finding.detail)
+        }
+    }
+
+    private var icon: String {
+        switch finding.severity {
+        case .blocking: return "exclamationmark.triangle.fill"
+        case .degrading: return "exclamationmark.circle"
+        case .suggestion: return "lightbulb"
+        }
+    }
+
+    private var tint: Color {
+        switch finding.severity {
+        case .blocking: return .orange
+        case .degrading: return .yellow
+        case .suggestion: return .secondary
+        }
     }
 }
 

@@ -18,7 +18,8 @@ final class StationTrackerRadioTests: XCTestCase {
         var tracker = StationTracker()
         tracker.update(with: packet(from: "K0NTS", at: 10, radio: a))
         // The same transmission, heard by the other radio: a fold, not a packet.
-        tracker.noteHeard("K0NTS", on: b, at: Date(timeIntervalSince1970: 10.3), via: [])
+        tracker.noteHeard("K0NTS", on: b, at: Date(timeIntervalSince1970: 10.3), via: [],
+                          packet: packet(from: "K0NTS", at: 10, radio: b))
         tracker.update(with: packet(from: "K0NTS", at: 20, radio: a))
 
         let station = tracker.stations.first { $0.call == "K0NTS" }!
@@ -117,7 +118,8 @@ final class StationTrackerRadioTests: XCTestCase {
     /// first hearing always arrives as a packet.
     func testAFoldForAnUnknownStationIsIgnored() {
         var tracker = StationTracker()
-        tracker.noteHeard("NOBODY", on: a, at: Date(), via: [])
+        tracker.noteHeard("NOBODY", on: a, at: Date(), via: [],
+                          packet: packet(from: "NOBODY", at: 0, radio: a))
         XCTAssertTrue(tracker.stations.isEmpty)
     }
 }

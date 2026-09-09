@@ -23,6 +23,14 @@ nonisolated enum RadioSecrets {
         store.string(account: lanAccount(id))
     }
 
+    /// The full read, so callers can tell "no password saved" from "a
+    /// password is saved this build cannot unlock" — the latter is what a
+    /// rebuild's new code signature causes, and it must not read as a wrong
+    /// password to the radio.
+    static func readLANPassword(for id: RadioID) -> KeychainStore.ReadOutcome {
+        store.read(account: lanAccount(id))
+    }
+
     static func hasLANPassword(for id: RadioID) -> Bool {
         if case .found = store.read(account: lanAccount(id)) { return true }
         return false

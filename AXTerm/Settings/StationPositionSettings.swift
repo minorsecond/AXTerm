@@ -293,7 +293,14 @@ struct StationPositionSettings: View {
             return "Location access is denied. Grant it in System Settings \u{203A} "
                 + "Privacy & Security \u{203A} Location Services."
         case .timeout:
-            return "No fix within the time allowed."
+            #if os(macOS)
+            return "Couldn't get a location in time. A Mac has no GPS — it locates by "
+                + "Wi\u{2011}Fi, so make sure Wi\u{2011}Fi is on (even on Ethernet) and "
+                + "Location Services are enabled, then try again."
+            #else
+            return "Couldn't get a location in time. Check that Location Services are on "
+                + "and try again, ideally with a clear view of the sky."
+            #endif
         case .unavailable(let reason):
             return "Location unavailable: \(reason)"
         }

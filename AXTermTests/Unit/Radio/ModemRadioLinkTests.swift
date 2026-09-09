@@ -217,5 +217,86 @@ final class ModemRadioLinkTests: XCTestCase {
         await waitUntil { transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 00 FD") }
         XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 1C 00 00 FD"), "never leave the radio keyed")
     }
+
+    // MARK: - A silent CI-V port
+
+    /// Over the WLAN nothing on the open path insists on a reply: the login
+    /// names the radio, so `identify` and every setup command are allowed to
+    /// fail quietly. That is deliberate, and it means a control channel that
+    /// answers nothing at all reaches the operator as a bare "PTT failed:
+    /// timeout" partway through their first transmission — the report that
+    /// started this. Bring-up decides whether to say so up front instead.
+    // MARK: - Losing the radio after it is up
+
+    /// From the operator's log of 2026-09-09: the UDP sockets to the IC-705
+    /// died at 11:48:49Z, the radio dropped the session, and AXTerm went on
+    /// showing "connected" for two hours without receiving another frame.
+    ///
+    /// The session noticed. `LANCIVTransport` turned it into a failed
+    /// transport, `CIVClient` failed the requests in flight — and there the
+    /// news stopped, because nothing between the CI-V client and the link
+    /// carried it any further. Everything before this point tests the failure
+    /// path during `open()`; this is the one after it, which is the one an
+    /// operator actually lives with.
+    func testARigThatDiesAfterOpeningFailsTheLink() async {
+        let (link, transport, _, spy) = makeLink(config())
+        link.open()
+        await waitUntil { link.state == .connected }
+
+        transport.fail("Socket is not connected")
+
+        await waitUntil { link.state == .failed }
+        XCTAssertEqual(link.state, .failed, "the radio is gone; the link must say so")
+        XCTAssertTrue(spy.states.contains(.failed), "the delegate was never told: \(spy.states)")
+        XCTAssertTrue(spy.errors.contains { $0.contains("Socket is not connected") },
+                      "the reason must reach the operator: \(spy.errors)")
+    }
+
+    /// A dead radio is a reason to try again — the same growing backoff a
+    /// failed open uses. Losing the link is the more common case of the two
+    /// and had no recovery at all.
+    func testALostRadioIsRetried() async {
+        let (link, transport, _, _) = makeLink(config())
+        link.open()
+        await waitUntil { link.state == .connected }
+        transport.fail("Socket is not connected")
+        await waitUntil { link.state == .failed }
+        XCTAssertEqual(link.state, .failed, "the loss must register before recovery means anything")
+
+        // The reconnect is scheduled, so the link comes back on its own.
+        await waitUntil(8) { link.state == .connected }
+        XCTAssertEqual(link.state, .connected, "no attempt was made to get the radio back")
+    }
+
+    /// ...but not after the operator has closed it. A reconnect that outlives
+    /// `close()` re-keys a radio somebody deliberately released.
+    func testAClosedLinkIsNotReconnected() async {
+        let (link, transport, _, _) = makeLink(config())
+        link.open()
+        await waitUntil { link.state == .connected }
+        link.close()
+        transport.fail("Socket is not connected")
+
+        await waitUntil(1) { link.state != .disconnected }
+        XCTAssertEqual(link.state, .disconnected,
+                       "a closed link must stay closed — not reopen, and not be "
+                       + "reported as failed when the operator was the one who let go")
+    }
+
+    func testAnAnsweringRadioIsNotComplainedAbout() {
+        XCTAssertNil(ModemRadioLink.civSilenceComplaint(identified: true, statusAnswered: true, address: 0xA4))
+        XCTAssertNil(ModemRadioLink.civSilenceComplaint(identified: true, statusAnswered: false, address: 0xA4),
+                     "identify alone proves the port")
+        XCTAssertNil(ModemRadioLink.civSilenceComplaint(identified: false, statusAnswered: true, address: 0xA4),
+                     "a frequency read alone proves it too — identify may be buried by the scope flood")
+    }
+
+    func testARadioThatAnswersNothingIsReportedWithTheAddressAsked() throws {
+        let complaint = try XCTUnwrap(ModemRadioLink.civSilenceComplaint(identified: false, statusAnswered: false,
+                                                                        address: 0xA4))
+        XCTAssertTrue(complaint.contains("A4"), "the address we asked for is the first thing to check")
+        XCTAssertTrue(complaint.lowercased().contains("receive works"),
+                      "say what still works, so this does not read as a dead radio")
+    }
 }
 #endif

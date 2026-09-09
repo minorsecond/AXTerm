@@ -96,6 +96,7 @@ final class AppSettingsStore: ObservableObject {
     static let digipeatAliasKey = "digipeatAlias"
     static let terminalFontSizeKey = "terminalFontSize"
     static let beaconTextKey = "beaconText"
+    static let aprsAutoReplyKey = "aprs.autoReply"
     static let beaconMinutesKey = "beaconMinutes"
     static let beaconPathKey = "beaconPath"
     /// Set once the station-wide beacon has been seeded onto the first radio's
@@ -632,6 +633,13 @@ final class AppSettingsStore: ObservableObject {
         didSet { defaults.set(beaconPath, forKey: Self.beaconPathKey) }
     }
 
+    /// How much AXTerm auto-replies to inbound APRS: "full" (ack + answer
+    /// queries), "ackOnly", or "manual". Transmits under the operator's call,
+    /// so it is a persisted, operator-owned choice.
+    @Published var aprsAutoReplyRaw: String {
+        didSet { defaults.set(aprsAutoReplyRaw, forKey: Self.aprsAutoReplyKey) }
+    }
+
     // MARK: - Ping
 
     @Published var pingEnabled: Bool {
@@ -956,7 +964,11 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistRawClearedAt() }
     }
 
-    private let defaults: UserDefaults
+    /// The domain this store reads and writes. Not private: anything that
+    /// persists a scrap of state alongside these settings must use the same
+    /// domain, or it escapes both the test-mode isolation and the injected
+    /// suite a test hands in.
+    let defaults: UserDefaults
 
     init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
@@ -1220,6 +1232,7 @@ final class AppSettingsStore: ObservableObject {
         self.beaconText = storedBeaconText
         self.beaconMinutes = storedBeaconMinutes
         self.beaconPath = storedBeaconPath
+        self.aprsAutoReplyRaw = defaults.string(forKey: Self.aprsAutoReplyKey) ?? "full"
         self.pingEnabled = storedPingEnabled
         self.pingWindowStartHour = storedPingStart
         self.pingWindowEndHour = storedPingEnd
