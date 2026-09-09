@@ -1448,6 +1448,57 @@ final class SessionCoordinator: ObservableObject {
         packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radioID])).")
     }
 
+    // MARK: - APRS objects
+
+    /// Transmit an object report, or the kill that removes one.
+    ///
+    /// Objects go out on the APRS radio's own beacon path, because that is
+    /// the path the operator has already decided reaches the people who need
+    /// to see their traffic — an object placed direct when every other frame
+    /// from this station is digipeated would be visible to almost nobody.
+    ///
+    /// One frame, once. APRS objects are conventionally re-beaconed while
+    /// they remain true, and doing that on a timer is a decision about
+    /// occupying a shared channel that belongs to the operator, not to a
+    /// default. `APRSObjectStore.liveWindow` expires an unrepeated object
+    /// after six hours, ours included.
+    @discardableResult
+    func sendAPRSObject(name: String, live: Bool,
+                        latitude: Double, longitude: Double,
+                        symbolTable: Character, symbolCode: Character,
+                        comment: String, settings: AppSettingsStore,
+                        now: Date = Date()) -> String? {
+        let radios = settings.activeRadios.filter { $0.enabled }
+        guard let radio = radios.first(where: { $0.beacon.kind == .aprsPosition })
+                ?? radios.first else {
+            let why = "no radio is enabled"
+            packetEngine?.appendSystemNotification("Object not sent: \(why).")
+            return why
+        }
+        let info = APRSObjectReport.objectInfo(
+            name: name, live: live, latitude: latitude, longitude: longitude,
+            symbolTable: symbolTable, symbolCode: symbolCode,
+            comment: comment, at: now)
+        let frame = AX25FrameBuilder.buildUI(
+            from: sessionManager.localAddress(for: radio.id),
+            to: AX25Address(call: APRSBeacon.tocall, ssid: 0),
+            via: DigiPath.from(APRSPath.digis(radio.effectiveAPRSPath)),
+            pid: 0xF0,
+            payload: Data(info.utf8),
+            displayInfo: info).onRadio(radio.id)
+        transmit(frame, staggeredBy: 0)
+        // Our own frames never come back through the packet log, so the store
+        // has to be told directly or the object we just placed is invisible on
+        // the map that placed it.
+        packetEngine?.recordOwnAPRSObject(
+            info, from: sessionManager.localAddress(for: radio.id).display, at: now)
+        let trimmed = APRSObjectReport.wireName(name).trimmingCharacters(in: .whitespaces)
+        packetEngine?.appendSystemNotification(
+            live ? "Object \u{201C}\(trimmed)\u{201D} sent\(radioSuffix([radio.id]))."
+                 : "Object \u{201C}\(trimmed)\u{201D} stood down\(radioSuffix([radio.id])).")
+        return nil
+    }
+
     /// Why "beacon now" would put nothing on the air, for the station as a
     /// whole. Nil when at least one radio can beacon.
     ///

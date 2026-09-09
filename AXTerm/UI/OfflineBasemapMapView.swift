@@ -71,6 +71,11 @@ struct OfflineBasemapMapView {
     @Binding var drawing: MapDrawingSession
     /// Called when a tap lands on the map in a drawing mode.
     var onDrawTap: (CLLocationCoordinate2D) -> Void = { _ in }
+    /// Secondary click on open map — right button, a two-finger trackpad
+    /// click, or Control-click, all of which AppKit reports the same way.
+    /// The place-an-object affordance: the Mac idiom for "act on this point"
+    /// is a secondary click, not a long press, and a drag must not become one.
+    var onSecondaryClick: (CLLocationCoordinate2D) -> Void = { _ in }
     @Binding var selection: String?
     /// Region to show. Changes here move the camera; the operator panning
     /// does not write back, so the map does not fight them.
@@ -394,6 +399,24 @@ struct OfflineBasemapMapView {
             let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
             parent.onDrawTap(coordinate)
         }
+
+        /// A secondary click on open map offers to place an object there.
+        ///
+        /// Suppressed while drawing — the drawing tools own the map then, and
+        /// a stray right-click producing a transmit sheet in the middle of
+        /// tracing an evacuation zone would be its own kind of accident. Also
+        /// suppressed over a marker, where the click means that station.
+        #if os(macOS)
+        @objc func handleSecondaryClick(_ recognizer: NSClickGestureRecognizer) {
+            guard !parent.drawing.isDrawing, let mapView else { return }
+            let point = recognizer.location(in: mapView)
+            for annotationView in mapView.annotations.compactMap({ mapView.view(for: $0) })
+            where annotationView.frame.contains(point) {
+                return
+            }
+            parent.onSecondaryClick(mapView.convert(point, toCoordinateFrom: mapView))
+        }
+        #endif
 
         /// Runs alongside MapKit's own recognisers rather than replacing them,
         /// so panning and pinch-zoom keep working while drawing.
@@ -1009,6 +1032,21 @@ struct OfflineBasemapMapView {
             action: #selector(Coordinator.handleTap(_:)))
         tap.delegate = context.coordinator
         mapView.addGestureRecognizer(tap)
+
+        // Secondary click, for placing an object at a point. buttonMask 0x2
+        // is the right button, which is also what AppKit reports for a
+        // two-finger trackpad click and for Control-click, so all three work
+        // without asking which the operator has. There is no equivalent on
+        // iOS — a long press there means something else already — so the
+        // affordance is deliberately Mac-only rather than approximated.
+        #if os(macOS)
+        let secondary = NSClickGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleSecondaryClick(_:)))
+        secondary.buttonMask = 0x2
+        secondary.delegate = context.coordinator
+        mapView.addGestureRecognizer(secondary)
+        #endif
 
         if let region {
             mapView.setRegion(region, animated: false)

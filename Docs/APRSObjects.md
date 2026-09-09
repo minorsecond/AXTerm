@@ -166,3 +166,49 @@ with the station of that name.
   definition messages, partial calibration, and the raw-count rule.
 - `AXTermTests/Unit/APRS/APRSWeatherAlertTests.swift` — the two-signal
   classifier, severity ordering, and staleness.
+
+## Placing and standing down
+
+Until now this layer was read-only. Placing an object is the only map action
+that keys the radio on the operator's behalf, and it writes into a namespace
+shared with every other station on the channel, so the affordance is built
+around the two things that can go wrong socially rather than technically.
+
+**Input, on macOS.** Secondary click on open map. `buttonMask 0x2` is the
+right button, which is also what AppKit reports for a two-finger trackpad
+click and for Control-click, so all three work without asking the operator
+which they have. It is suppressed while a drawing tool is active — the drawing
+tools own the map then — and over a marker, where the click means that
+station. There is no iOS equivalent and none is approximated: a long press
+there already means something else.
+
+**Not the same thing as Mark.** The drawing strip's *Mark* saves a shape to a
+scratch layer on this device. An object transmits. The two are deliberately
+separate affordances with separate wording, because an operator who thinks
+they are drawing a private note and actually keys the radio is the worst
+outcome this feature has.
+
+**Name collisions.** APRS keys objects by name alone across the whole channel,
+with no authentication anywhere in it. Transmitting an object named `AID` when
+another station already has a live `AID` replaces theirs on every receiver in
+range — in an incident net, one agency's marker silently overwriting another's.
+`APRSObjectPlacement.problem` catches that before the button enables, matching
+case- and padding-insensitively because that is how the key works everywhere
+else. Re-sending *our own* name is not a collision: it is how an object is
+moved or its comment corrected, and the format offers no other way.
+
+**Whose object may be stood down.** APRS honours a kill from anyone. The
+button is offered only for our own anyway, because an operator who can stand
+down another agency's road closure with one click will eventually do it by
+accident. The help text says a kill is a transmission and not a local delete,
+or the operator expects the wrong map to change.
+
+**Our own object on our own map.** Transmitted frames never enter the packet
+log, so `SessionCoordinator.sendAPRSObject` tells `APRSObjectStore` directly.
+Without that the operator places a closure, the sheet dismisses, and nothing
+appears — the same silence the pending-transmission work exists to remove.
+
+**One frame, once.** Objects are conventionally re-beaconed while they remain
+true. Doing that on a timer is a decision about occupying a shared channel
+that belongs to the operator, not to a default, so it is not done;
+`liveWindow` expires an unrepeated object after six hours, ours included.

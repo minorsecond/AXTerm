@@ -235,6 +235,19 @@ final class PacketEngine: ObservableObject {
         }
     }
 
+    /// File an object we transmitted ourselves.
+    ///
+    /// Our own frames never enter the packet log, so nothing else would ever
+    /// tell the store about them: an operator would place a road closure, see
+    /// the sheet dismiss, and watch nothing appear — the same silence the
+    /// pending-transmission work exists to remove. It lands here under our own
+    /// callsign, which is also what makes `mayRemove` recognise it as ours.
+    @MainActor
+    func recordOwnAPRSObject(_ info: String, from station: String, at when: Date = Date()) {
+        guard let report = APRSObjectReport.parse(info: Data(info.utf8)) else { return }
+        _ = aprsObjects.record(report, from: station, at: when)
+    }
+
     /// Files an object or item report, if this packet is one.
     private func recordAPRSObject(from packet: Packet, sentBy station: String) {
         guard !packet.info.isEmpty,

@@ -59,6 +59,8 @@ struct StationMapView: View {
     /// which is the only one that can host overlays and intercept taps.
     var drawing: Binding<MapDrawingSession>?
     var onDrawTap: (CLLocationCoordinate2D) -> Void = { _ in }
+    /// Secondary click on open map — see `OfflineBasemapMapView`.
+    var onSecondaryClick: (CLLocationCoordinate2D) -> Void = { _ in }
     /// Measured coverage around the observer, drawn as two rings. Nil
     /// draws nothing — no evidence, no ring.
     var coverage: CoverageEstimate.Ring?
@@ -112,6 +114,7 @@ struct StationMapView: View {
             clustersStations: clustersStations,
             drawing: drawing ?? .constant(MapDrawingSession()),
             onDrawTap: onDrawTap,
+            onSecondaryClick: onSecondaryClick,
             selection: $selection,
             region: MapRegionFit.region(covering: framingPoints)?.mkRegion,
             coverage: coverage)

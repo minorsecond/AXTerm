@@ -1876,6 +1876,14 @@ struct ContentView: View {
             onSendLayer: layerSendAction,
             ownAPRSSymbol: ownAPRSSymbol,
             onBeacon: { sessionCoordinator.sendBeacon(settings) },
+            // Placing and standing down are the same frame with one byte
+            // different, so they are one hook rather than two.
+            onPlaceObject: { name, live, latitude, longitude, table, code, comment in
+                sessionCoordinator.sendAPRSObject(
+                    name: name, live: live, latitude: latitude, longitude: longitude,
+                    symbolTable: table, symbolCode: code, comment: comment,
+                    settings: settings)
+            },
             beaconObstacle: { sessionCoordinator.beaconObstacle(settings) })
         // Started here rather than at launch: the strip costs nothing until
         // the operator opens the map, and `absorb` fills it from the engine's

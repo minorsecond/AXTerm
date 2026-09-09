@@ -332,6 +332,12 @@ struct StationsMapView: View {
     /// their own position, and until now the only way to key a beacon was
     /// three levels into Settings.
     var onBeacon: (() -> Void)?
+    /// Transmit an object, or the kill that removes one. Returns a problem to
+    /// show the operator, or nil when the frame went out.
+    var onPlaceObject: ((_ name: String, _ live: Bool,
+                         _ latitude: Double, _ longitude: Double,
+                         _ symbolTable: Character, _ symbolCode: Character,
+                         _ comment: String) -> String?)?
     /// Why that would do nothing — no radio with a beacon on, no fix yet, a
     /// path that does not validate. Nil when the beacon can go out.
     var beaconObstacle: (() -> String?)?
@@ -344,6 +350,14 @@ struct StationsMapView: View {
     /// How far a directed query travels. Shared with `APRSAskStationSheet` so
     /// the quick menu and the dialog cannot disagree about what the operator
     /// last chose.
+    /// Where a secondary click landed, while the compose sheet is up.
+    /// A struct rather than a bare coordinate so `sheet(item:)` can drive it.
+    struct PendingObject: Identifiable {
+        let id = UUID()
+        let coordinate: CLLocationCoordinate2D
+    }
+    @State private var pendingObject: PendingObject?
+
     @AppStorage("aprs.ask.reach") private var askReachRaw: String = APRSProbeReach.direct.rawValue
 
     private var askReach: APRSProbeReach {
@@ -944,6 +958,17 @@ struct StationsMapView: View {
         return StationScope.build(
             observerLabel: stationScope.observerLabel,
             sites: stationScope.sites + objectSites(observer: observer))
+    }
+
+    /// One of our own live objects, by the site id the card was built from.
+    /// Nil for a station, for somebody else's object, and for one that has
+    /// aged out — a stand-down for something no longer live would transmit a
+    /// kill for an object nobody is showing.
+    private func ourObject(siteID: String) -> APRSObjectStore.Placed? {
+        objects.live().first {
+            Self.objectSiteID($0.report.key) == siteID
+                && APRSObjectPlacement.mayRemove($0, ourAddresses: ownCallsigns)
+        }
     }
 
     /// The heard objects as map sites. Ids are prefixed so an object named
@@ -1909,9 +1934,27 @@ struct StationsMapView: View {
                                overlays: overlayStore.visibleLayers,
                                drawing: $drawing,
                                onDrawTap: handleDrawTap,
+                               onSecondaryClick: { coordinate in
+                                   // Only where placing is possible at all.
+                                   guard onPlaceObject != nil else { return }
+                                   pendingObject = PendingObject(coordinate: coordinate)
+                               },
                                coverage: coverageRing,
                                selection: $selection)
             .overlay(alignment: .bottomTrailing) { selectionCard }
+            .sheet(item: $pendingObject) { pending in
+                APRSPlaceObjectSheet(
+                    coordinate: pending.coordinate,
+                    liveObjects: objects.live(),
+                    ourAddresses: ownCallsigns,
+                    onTransmit: { name, table, code, comment in
+                        onPlaceObject?(name, true,
+                                       pending.coordinate.latitude,
+                                       pending.coordinate.longitude,
+                                       table, code, comment)
+                    },
+                    onCancel: { pendingObject = nil })
+            }
             .sheet(item: $askTarget) { target in
                 APRSAskStationSheet(
                     callsign: target.callsign,
@@ -2069,6 +2112,23 @@ struct StationsMapView: View {
                         }
                         .controlSize(.small)
                         .help("Send \(site.label) an APRS text message.")
+                    }
+                    // Standing down an object we placed. Offered only for
+                    // our own: APRS honours a kill from anyone, which is
+                    // exactly why the button is withheld — an operator who
+                    // can stand down another agency's road closure with one
+                    // click will eventually do it by accident.
+                    if let placed = ourObject(siteID: site.id), let onPlaceObject {
+                        Button(role: .destructive) {
+                            _ = onPlaceObject(placed.report.name, false,
+                                              placed.report.latitude, placed.report.longitude,
+                                              placed.report.symbolTable, placed.report.symbolCode,
+                                              "")
+                        } label: {
+                            Label("Stand Down", systemImage: "xmark.circle")
+                        }
+                        .controlSize(.small)
+                        .help(APRSObjectPlacement.removalExplanation(placed))
                     }
                     if let onQuery, site.supportsAPRSContact {
                         // The operator's standing preference, overridden only
