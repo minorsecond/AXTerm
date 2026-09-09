@@ -211,3 +211,65 @@ extension APRSObjectReport {
             ?? "\(symbolTable)\(symbolCode)"
     }
 }
+
+// MARK: - Composing
+
+extension APRSObjectReport {
+
+    /// The nine characters an object name occupies on the wire.
+    ///
+    /// Exactly nine, space padded — the parser above finds the state byte at a
+    /// fixed offset, and so does every other implementation. A name longer
+    /// than nine is truncated rather than refused, because the alternative is
+    /// an operator marking a road closure in an emergency and being told no
+    /// by a text field.
+    static func wireName(_ raw: String) -> String {
+        let cleaned = raw.trimmingCharacters(in: .whitespaces)
+            // `!` and `_` terminate an item name, and a `;` or `)` at the
+            // front would be read as a second report. Stripping them is the
+            // only way a typed name can be guaranteed to survive the round
+            // trip it is about to make.
+            .filter { !"!_;)".contains($0) }
+        return String(cleaned.prefix(9)).padding(toLength: 9, withPad: " ", startingAt: 0)
+    }
+
+    /// Whether a typed name can be transmitted at all.
+    static func isTransmittableName(_ raw: String) -> Bool {
+        !wireName(raw).trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// `;NAMEXXXXX*DDHHMMz<position><comment>`.
+    ///
+    /// The timestamp is the transmitting station's clock in UTC, which is what
+    /// the format asks for. Receivers are not obliged to trust it — ours
+    /// deliberately does not, and stales objects by when *it* heard them.
+    static func objectInfo(name: String, live: Bool,
+                           latitude: Double, longitude: Double,
+                           symbolTable: Character, symbolCode: Character,
+                           comment: String = "", at when: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let parts = calendar.dateComponents([.day, .hour, .minute], from: when)
+        let stamp = String(format: "%02d%02d%02dz",
+                           parts.day ?? 1, parts.hour ?? 0, parts.minute ?? 0)
+        let position = APRSBeacon.latitudeField(latitude, ambiguity: 0)
+            + String(symbolTable)
+            + APRSBeacon.longitudeField(longitude, ambiguity: 0)
+            + String(symbolCode)
+        return ";" + wireName(name) + (live ? "*" : "_") + stamp + position
+            + comment.replacingOccurrences(of: "\n", with: " ")
+    }
+
+    /// The kill form of an object already placed: same name, same position,
+    /// `_` instead of `*`.
+    ///
+    /// A kill has to carry a position even though the object is being removed,
+    /// because the format has no shorter form — and because a receiver that
+    /// never heard the original still has to be able to parse it.
+    static func killInfo(name: String, latitude: Double, longitude: Double,
+                         symbolTable: Character, symbolCode: Character,
+                         at when: Date) -> String {
+        objectInfo(name: name, live: false, latitude: latitude, longitude: longitude,
+                   symbolTable: symbolTable, symbolCode: symbolCode, at: when)
+    }
+}
