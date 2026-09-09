@@ -266,6 +266,29 @@ extension APRSObjectReport {
     /// A kill has to carry a position even though the object is being removed,
     /// because the format has no shorter form — and because a receiver that
     /// never heard the original still has to be able to parse it.
+    /// This report as it would go out again now.
+    ///
+    /// Re-announcing carries a *fresh* timestamp rather than replaying the
+    /// original: an object timestamp says when the report was made, and a
+    /// receiver weighing a six-hour-old hazard against a current one is
+    /// reading exactly that field. It is also what keeps a re-announcement
+    /// from being byte-identical to the last one, which a digipeater's
+    /// duplicate suppression would drop.
+    ///
+    /// Nil for an item (`)`), which has no timestamp and which this station
+    /// never transmits — an item under our callsign is somebody else's.
+    ///
+    /// Course and speed are not carried. Nothing here places a moving object,
+    /// and inventing a heading for something that has none is worse than
+    /// omitting it.
+    func reannounced(at when: Date) -> String? {
+        guard kind == .object, isLive else { return nil }
+        return APRSObjectReport.objectInfo(
+            name: name, live: true, latitude: latitude, longitude: longitude,
+            symbolTable: symbolTable, symbolCode: symbolCode,
+            comment: comment, at: when)
+    }
+
     static func killInfo(name: String, latitude: Double, longitude: Double,
                          symbolTable: Character, symbolCode: Character,
                          at when: Date) -> String {

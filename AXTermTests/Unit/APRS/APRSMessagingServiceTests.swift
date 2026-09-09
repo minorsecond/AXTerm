@@ -91,6 +91,60 @@ final class APRSMessagingServiceTests: XCTestCase {
         XCTAssertEqual(sent.first?.info, APRSMessage.messageInfo(to: "W0ARP", text: "AXTerm 1.0", number: nil))
     }
 
+    // MARK: - ?APRSO
+
+    private func object(_ name: String) -> String {
+        APRSObjectReport.objectInfo(name: name, live: true, latitude: 39.6, longitude: -104.7,
+                                    symbolTable: "/", symbolCode: "-", at: t0)
+    }
+
+    /// The answer is object reports, not a message about them — the same shape
+    /// as the `?APRSP` position answer, so every station in range files them.
+    func testObjectQueryBroadcastsOurObjects() async throws {
+        let svc = try makeService()
+        svc.ownObjects = { [self.object("ROADCLOSE"), self.object("AID")] }
+        svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSO"), context: ctx())
+        XCTAssertEqual(sent.count, 2)
+        XCTAssertTrue(sent.allSatisfy { $0.info.hasPrefix(";") },
+                      "an object answer is an object report, not prose: \(sent.map(\.info))")
+        // Addressed so the transmit layer knows which radio to answer on, the
+        // same as every other query answer.
+        XCTAssertTrue(sent.allSatisfy { $0.addressee == "W0ARP" })
+    }
+
+    /// Owning none still answers. Silence is what a station that never heard of
+    /// the query sends, and the asker cannot tell those apart.
+    func testObjectQueryWithNothingToSendStillAnswers() async throws {
+        let svc = try makeService()
+        svc.ownObjects = { [] }
+        svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSO"), context: ctx())
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.first?.info,
+                       APRSMessage.messageInfo(to: "W0ARP", text: "No objects", number: nil))
+    }
+
+    /// A cap that drops objects quietly answers the question wrong while
+    /// reporting success. Falsify by returning nil from `objectAnswerNote`
+    /// when `total > sent`.
+    func testObjectQueryCapsTheBurstAndSaysHowManyWereLeft() async throws {
+        let svc = try makeService()
+        let many = (1...12).map { self.object("OBJ\($0)") }
+        svc.ownObjects = { many }
+        svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSO"), context: ctx())
+        let objects = sent.filter { $0.info.hasPrefix(";") }
+        XCTAssertEqual(objects.count, APRSMessagingService.objectsPerQueryLimit)
+        XCTAssertEqual(sent.last?.info,
+                       APRSMessage.messageInfo(to: "W0ARP", text: "8 of 12 objects sent",
+                                               number: nil))
+    }
+
+    func testObjectQueryIsNotAnsweredWhenAutoReplyIsOff() async throws {
+        let svc = try makeService(auto: .ackOnly)
+        svc.ownObjects = { [self.object("ROADCLOSE")] }
+        svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSO"), context: ctx())
+        XCTAssertTrue(sent.isEmpty)
+    }
+
     func testDirectsQueryListsHeardDirect() async throws {
         let svc = try makeService()
         svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSD"), context: ctx())

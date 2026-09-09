@@ -358,6 +358,24 @@ struct ContentView: View {
                 Array((client?.stations ?? []).filter { $0.lastVia.isEmpty }.map { $0.call }
                     .prefix(APRSMessagingService.directsStationLimit))
             }
+            // Objects we own, most urgent first — `live()` already sorts
+            // that way, and the cap in `objectAnswers` depends on it. Each is
+            // rebuilt with the current time rather than replayed: see
+            // `reannounced(at:)`.
+            aprs.ownObjects = { [weak client, weak coordinator] in
+                guard let client else { return [] }
+                // The same set `mayRemove` uses: every address this station
+                // answers to, not just the configured callsign. An object
+                // placed from a second radio's SSID is still ours.
+                let answered = Set((coordinator?.sessionManager.answeredAddresses ?? [])
+                    .map { $0.display.uppercased() })
+                let ours = answered.isEmpty ? [settings.myCallsign.uppercased()] : Array(answered)
+                let oursSet = Set(ours)
+                let asOf = Date()
+                return client.aprsObjects.live()
+                    .filter { oursSet.contains($0.reportedBy.uppercased()) }
+                    .compactMap { $0.report.reannounced(at: asOf) }
+            }
             aprs.versionInfo = {
                 let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
                 return v.isEmpty ? "AXTerm" : "AXTerm \(v)"

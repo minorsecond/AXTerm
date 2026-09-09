@@ -64,6 +64,9 @@ final class APRSMessagingService: ObservableObject {
     var versionInfo: () -> String = { "AXTerm" }
     /// Stations we have heard directly, for `?APRSD`.
     var heardDirect: () -> [String] = { [] }
+    /// The objects this station owns, as info fields ready to transmit, for
+    /// `?APRSO`. Most urgent first — see `objectAnswers`.
+    var ownObjects: () -> [String] = { [] }
 
     private let store: APRSMessageStore
     private var seq: Int
@@ -252,6 +255,24 @@ final class APRSMessagingService: ObservableObject {
             }
         } else if q.hasPrefix("?APRSV") || q.hasPrefix("?VER") {
             emitMessage(to: ctx.sender, text: versionInfo(), ctx: ctx)
+        } else if q.hasPrefix("?APRSO") {
+            // An object report is a broadcast even when a directed query
+            // prompted it — the same shape as the `?APRSP` answer above. Every
+            // station in range files it, not just the one who asked, which is
+            // the point: this is how an incident map stays discoverable
+            // without anybody re-beaconing on a timer.
+            //
+            // Xastir marks this query "NOT IMPLEMENTED YET" (`db.c`), so in
+            // practice the asker will be another AXTerm more often than not.
+            let all = ownObjects()
+            let sending = Self.objectAnswers(all)
+            for info in sending {
+                emit(APRSOutbound(info: info, addressee: ctx.sender,
+                                  path: ctx.replyPath, radioID: ctx.radioID))
+            }
+            if let note = Self.objectAnswerNote(total: all.count, sent: sending.count) {
+                emitMessage(to: ctx.sender, text: note, ctx: ctx)
+            }
         } else if q.hasPrefix("?APRSD") {
             // "Directs=" then a space before *each* callsign, so a station list
             // reads "Directs= W0ARP N0CALL-9" with the leading space. Xastir
@@ -313,6 +334,38 @@ final class APRSMessagingService: ObservableObject {
     /// by the message budget, and a station that has heard fifty others is not
     /// answering a useful question by naming all of them.
     static let directsStationLimit = 16
+
+    /// How many objects one `?APRSO` answer will transmit.
+    ///
+    /// Each object is its own frame, so an unbounded answer turns somebody's
+    /// one-frame question into a minute of everybody's airtime. Eight is about
+    /// six seconds at 1200 baud.
+    static let objectsPerQueryLimit = 8
+
+    /// The objects to transmit in answer to `?APRSO`.
+    ///
+    /// The order is the caller's and it matters: `APRSObjectStore.live()` sorts
+    /// most urgent first, which is what makes truncating safe. Truncation is
+    /// never silent — `objectAnswerNote` says how many were left behind,
+    /// because a cap that drops things quietly reports success while answering
+    /// the question wrong.
+    static func objectAnswers(_ objects: [String],
+                              limit: Int = objectsPerQueryLimit) -> [String] {
+        Array(objects.prefix(limit))
+    }
+
+    /// What to say in words alongside the object frames, or nil when the
+    /// frames said everything.
+    ///
+    /// Owning none still gets an answer. Silence is what a station that has
+    /// never heard of `?APRSO` sends, and the asker cannot tell the two apart;
+    /// Xastir answers an empty `?APRSD` with a bare "Directs=" for the same
+    /// reason.
+    static func objectAnswerNote(total: Int, sent: Int) -> String? {
+        if total == 0 { return "No objects" }
+        if total > sent { return "\(sent) of \(total) objects sent" }
+        return nil
+    }
 
     /// The answer to `?APRST` / `?PING?`: the path the query travelled to
     /// reach us.

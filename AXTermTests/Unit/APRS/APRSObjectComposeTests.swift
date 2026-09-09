@@ -133,3 +133,53 @@ final class APRSObjectComposeTests: XCTestCase {
         XCTAssertEqual(back.comment, "water and shade")
     }
 }
+
+/// Re-announcing an object we already own.
+///
+/// Used to answer `?APRSO`, and by "move" — both need the same thing, which is
+/// the report as it would go out *now* rather than a replay of the frame it
+/// arrived in.
+final class APRSObjectReannounceTests: XCTestCase {
+
+    private let placed = Date(timeIntervalSince1970: 1_757_419_200)   // 091200z
+
+    private func report(_ info: String) throws -> APRSObjectReport {
+        try XCTUnwrap(APRSObjectReport.parse(info: Data(info.utf8)))
+    }
+
+    /// The whole point of rebuilding rather than replaying: a replayed frame is
+    /// byte-identical, and an object timestamp is what a receiver reads to
+    /// weigh a six-hour-old hazard against a current one.
+    func testReannouncingCarriesTheCurrentTimeNotTheOriginal() throws {
+        let original = APRSObjectReport.objectInfo(
+            name: "ROADCLOSE", live: true, latitude: 39.6117, longitude: -104.7317,
+            symbolTable: "\\", symbolCode: "x", comment: "US-85 washed out", at: placed)
+        let again = try XCTUnwrap(report(original).reannounced(at: placed.addingTimeInterval(3600)))
+        XCTAssertNotEqual(again, original, "a replay would be dropped as a duplicate")
+        XCTAssertTrue(again.contains("091300z"), again)
+        // Everything a receiver acts on survives the round trip.
+        let back = try report(again)
+        XCTAssertEqual(back.name, "ROADCLOSE")
+        XCTAssertEqual(back.symbolTable, "\\")
+        XCTAssertEqual(back.symbolCode, "x")
+        XCTAssertEqual(back.comment, "US-85 washed out")
+        XCTAssertTrue(back.isLive)
+    }
+
+    /// A killed object is not re-announced. Answering `?APRSO` with something
+    /// we stood down would resurrect it on every receiver in range.
+    func testAKilledObjectIsNotReannounced() throws {
+        let killed = APRSObjectReport.killInfo(
+            name: "ROADCLOSE", latitude: 39.6117, longitude: -104.7317,
+            symbolTable: "/", symbolCode: "-", at: placed)
+        XCTAssertNil(try report(killed).reannounced(at: placed))
+    }
+
+    /// Items carry no timestamp and this station never transmits one, so an
+    /// item under our callsign is somebody else's and not ours to repeat.
+    func testAnItemIsNotReannounced() throws {
+        let item = try report(")AIDSTN!3936.70N/10443.90W-water")
+        XCTAssertEqual(item.kind, .item)
+        XCTAssertNil(item.reannounced(at: placed))
+    }
+}

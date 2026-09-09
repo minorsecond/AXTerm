@@ -42,7 +42,8 @@ reply.
   reachability. A **reject** fails it.
 - A **directed query** is answered in Full mode: `?APRSP` → our position;
   `?APRST`/`?PING?` → `PATH= <sender>><the digipeaters it came through>`;
-  `?APRSV`/`?VER` → version; `?APRSD` → the stations we've heard direct.
+  `?APRSV`/`?VER` → version; `?APRSD` → the stations we've heard direct;
+  `?APRSO` → the objects we own, as object reports.
   `?APRST` used to answer with a position, which answers `?APRSP`'s question
   instead of its own — the query asks *how your frame reached me*, and the
   path is the only thing that answers it.
@@ -121,6 +122,33 @@ thing that matters**:
 | `?APRSS` | status | no — a broadcast |
 | `?APRSO` | objects & items | no — a broadcast |
 | `?APRSM` | held messages | **yes** |
+
+### Answering `?APRSO`
+
+The objects this station owns go back out as ordinary object reports — the same
+shape as the `?APRSP` answer, so every station in range files them and not only
+the asker. That is the point: it keeps an incident map discoverable without
+anybody re-beaconing on a timer, which is a claim on a shared channel that
+belongs to the operator rather than to a default (see `Docs/APRSObjects.md`).
+
+Each is rebuilt at the moment it goes out (`APRSObjectReport.reannounced(at:)`),
+never replayed. An object timestamp says when the report was made, and a
+receiver weighing a six-hour-old hazard against a current one is reading exactly
+that field; a replay is also byte-identical to the last one, which a
+digipeater's duplicate suppression drops.
+
+The burst is capped at `objectsPerQueryLimit` — eight, roughly six seconds at
+1200 baud — because one station's one-frame question should not become a minute
+of everybody's airtime. `live()` hands them over most-urgent first, which is
+what makes truncating safe, and the cap is never silent: `objectAnswerNote`
+sends *"8 of 12 objects sent"* alongside. Owning none still answers, with *"No
+objects"*, because silence is what a station that never heard of the query
+sends and the asker cannot tell those two apart.
+
+Xastir does not answer this one. `db.c` recognises `?APRSO` as a legal query and
+marks it `// NOT IMPLEMENTED YET`, so in practice the asker will be another
+AXTerm more often than not. Implementing it is still right — it is APRS 1.01
+ch.15 — but nobody should expect the channel to be full of them.
 
 `APRSDirectedQuery.answer` carries that distinction and the UI shows it on every
 row as *Replies to you* vs *Broadcasts*, because it is the one fact an operator
