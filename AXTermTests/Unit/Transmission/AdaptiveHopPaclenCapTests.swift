@@ -135,21 +135,21 @@ final class AdaptiveHopPaclenCapTests: XCTestCase {
         defer { SessionCoordinator.shared = nil }
         coordinator.adaptiveTransmissionEnabled = true
 
-        let twoDigi = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: "DRLNOD,FNKTWN")
-        let direct = RouteAdaptiveKey(destination: "KB5YZB-1", pathSignature: "")
+        let twoDigi = AdaptiveScope.route(radio: .primary, destination: "KB5YZB-7", path: "DRLNOD,FNKTWN")
+        let direct = AdaptiveScope.route(radio: .primary, destination: "KB5YZB-1", path: "")
         for _ in 0..<200 {
             coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 4.0,
-                                               source: "session", routeKey: twoDigi,
+                                               source: "session", scope: twoDigi,
                                                newFrames: 1, retransmits: 0)
             coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 4.0,
-                                               source: "session", routeKey: direct,
+                                               source: "session", scope: direct,
                                                newFrames: 1, retransmits: 0)
         }
 
-        let capped = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "DRLNOD,FNKTWN")
+        let capped = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "DRLNOD,FNKTWN", .primary)
         XCTAssertEqual(capped?.paclen, 128,
                        "two digi hops cap the session config at 128")
-        let uncapped = coordinator.sessionManager.getConfigForDestination?("KB5YZB-1", "")
+        let uncapped = coordinator.sessionManager.getConfigForDestination?("KB5YZB-1", "", .primary)
         XCTAssertEqual(uncapped?.paclen, 256,
                        "the direct route to another station is not dragged down")
     }

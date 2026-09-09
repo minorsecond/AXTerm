@@ -114,7 +114,7 @@ final class SREJManagerTests: XCTestCase {
     override func setUp() {
         super.setUp()
         manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
-        manager.getConfigForDestination = { _, _ in
+        manager.getConfigForDestination = { _, _, _ in
             AX25SessionConfig(windowSize: 4, srejEnabled: true)
         }
     }

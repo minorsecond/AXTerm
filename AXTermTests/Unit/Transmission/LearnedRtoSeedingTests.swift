@@ -73,17 +73,17 @@ final class LearnedRtoSeedingTests: XCTestCase {
         coordinator.adaptiveTransmissionEnabled = true
 
         // Learn RTT ≈ 5 s on the DRLNOD route → currentRto = 10 s.
-        let key = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: "DRLNOD")
+        let key = AdaptiveScope.route(radio: .primary, destination: "KB5YZB-7", path: "DRLNOD")
         coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 5.0,
-                                           source: "session", routeKey: key,
+                                           source: "session", scope: key,
                                            newFrames: 1, retransmits: 0)
 
-        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "DRLNOD")
+        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "DRLNOD", .primary)
         XCTAssertEqual(config?.learnedPathRto ?? -1, 10.0, accuracy: 0.01,
                        "fresh cache entry's currentRto becomes the learned seed")
 
         // A DIFFERENT path for the same destination has no entry → no seed.
-        let other = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "FNKTWN")
+        let other = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "FNKTWN", .primary)
         XCTAssertNil(other?.learnedPathRto,
                      "learned values are strictly per-route")
     }
@@ -92,13 +92,13 @@ final class LearnedRtoSeedingTests: XCTestCase {
         let coordinator = SessionCoordinator()
         defer { SessionCoordinator.shared = nil }
         coordinator.adaptiveTransmissionEnabled = true
-        let key = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: "DRLNOD")
+        let key = AdaptiveScope.route(radio: .primary, destination: "KB5YZB-7", path: "DRLNOD")
         coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 5.0,
-                                           source: "session", routeKey: key,
+                                           source: "session", scope: key,
                                            newFrames: 1, retransmits: 0)
 
         coordinator.adaptiveTransmissionEnabled = false
-        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "DRLNOD")
+        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "DRLNOD", .primary)
         XCTAssertNil(config?.learnedPathRto,
                      "opted-out users get vanilla timers — learned data must not leak in")
     }
@@ -109,12 +109,12 @@ final class LearnedRtoSeedingTests: XCTestCase {
         coordinator.adaptiveTransmissionEnabled = true
 
         // A freak fast sample: srtt 0.4 s → currentRto would be ~0.8-3 s.
-        let key = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: "DRLNOD")
+        let key = AdaptiveScope.route(radio: .primary, destination: "KB5YZB-7", path: "DRLNOD")
         coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 0.4,
-                                           source: "session", routeKey: key,
+                                           source: "session", scope: key,
                                            newFrames: 1, retransmits: 0)
 
-        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "DRLNOD")
+        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", "DRLNOD", .primary)
         XCTAssertGreaterThanOrEqual(config?.learnedPathRto ?? 0, 4.0,
                                     "seed floor: never below 4 s regardless of how fast one sample was")
     }
@@ -126,15 +126,15 @@ final class LearnedRtoSeedingTests: XCTestCase {
         defer { SessionCoordinator.shared = nil }
         coordinator.adaptiveTransmissionEnabled = true
 
-        let key = RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1")
+        let key = AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: "DIGI-1")
         coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 5.0,
-                                           source: "session", routeKey: key,
+                                           source: "session", scope: key,
                                            newFrames: 1, retransmits: 0)
 
         // An active session to the destination forces the merged-config path.
         _ = coordinator.sessionManager.session(for: AX25Address(call: "PEER", ssid: 0),
                                                path: DigiPath.from(["DIGI-1"]))
-        let merged = coordinator.sessionManager.getConfigForDestination?("PEER-0", "OTHER")
+        let merged = coordinator.sessionManager.getConfigForDestination?("PEER-0", "OTHER", .primary)
         XCTAssertNil(merged?.learnedPathRto,
                      "merged configs mix routes — a route-specific RTO has no meaning there")
     }

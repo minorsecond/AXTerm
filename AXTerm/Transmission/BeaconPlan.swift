@@ -79,6 +79,18 @@ nonisolated enum BeaconPlan {
         let bytes = body.utf8.count
         guard bytes <= maxTextBytes else { return .failure(.textTooLong(bytes: bytes)) }
 
+        switch planPath(path) {
+        case let .failure(problem): return .failure(problem)
+        case let .success(digis): return .success(Beacon(text: body, digis: digis))
+        }
+    }
+
+    /// The path half on its own.
+    ///
+    /// An APRS position beacon has no operator-written text to validate — its
+    /// info field is generated from a fix — but it has the same path, and
+    /// checking a path used to mean inventing a body to hang it on.
+    static func planPath(_ path: String) -> Result<[String], Problem> {
         let tokens = path
             .split(whereSeparator: { $0 == "," || $0.isWhitespace })
             .map { String($0).uppercased() }
@@ -88,7 +100,7 @@ nonisolated enum BeaconPlan {
         for token in tokens where !isCallsignShaped(token) {
             return .failure(.malformedDigi(token))
         }
-        return .success(Beacon(text: body, digis: tokens))
+        return .success(tokens)
     }
 
     /// Loose on purpose. `WIDE1-1` and `DRL` are both legitimate here and

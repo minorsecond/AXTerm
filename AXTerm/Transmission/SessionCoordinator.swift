@@ -15,10 +15,6 @@ import CommonCrypto
 // MARK: - Per-route adaptive cache
 
 /// Key for per-route adaptive cache (destination + path so direct vs via digi are separate).
-nonisolated struct RouteAdaptiveKey: Hashable, Sendable {
-    let destination: String
-    let pathSignature: String
-}
 
 /// Digipeater hop count encoded in a route's path signature
 /// (DigiPath.display: "" for direct, "DRLNOD" for one hop, "DRLNOD,FNKTWN" …).
@@ -156,6 +152,9 @@ final class SessionCoordinator: ObservableObject {
     /// One beacon timer per radio: each radio beacons its own content on its
     /// own interval, so a packet node and an APRS node share nothing.
     private var beaconTimers: [RadioID: Timer] = [:]
+    /// The interval each armed beacon timer was built with, so re-applying
+    /// settings can tell a real change from a no-op.
+    private var beaconIntervals: [RadioID: TimeInterval] = [:]
 
     /// Asks stations whether they can hear us, on the operator's terms.
     let pingProber = PingProber()
@@ -376,10 +375,18 @@ final class SessionCoordinator: ObservableObject {
 
     /// Per-route learned adaptive params so multiple connections (e.g. same peer direct vs via digi) don't overwrite each other.
     /// Key: (destination, pathSignature); value: learned settings + last update time for TTL invalidation.
-    private var adaptiveCache: [RouteAdaptiveKey: CachedAdaptiveEntry] = [:]
+    /// Everything the tuner has learned, keyed by what it is about.
+    ///
+    /// Was `[RouteAdaptiveKey: …]` — a destination and a path with no radio in
+    /// it — beside a single application-wide `globalAdaptiveSettings`. So a
+    /// station reachable on two radios was one entry, and the network-inference
+    /// fallback was one figure applied to every transmission on every radio.
+    /// paclen and window are properties of a channel; two radios are two
+    /// channels. See `AdaptiveScope`.
+    private var adaptiveByScope: [AdaptiveScope: CachedAdaptiveEntry] = [:]
 
     /// TTL for per-route cache: after this many seconds without a sample for that route, we fall back to global.
-    private static let adaptiveCacheTTLSeconds: TimeInterval = 30 * 60  // 30 minutes
+    private static let adaptiveByScopeTTLSeconds: TimeInterval = 30 * 60  // 30 minutes
 
     /// Reassembly buffer for fragmented AXDP messages over connected-mode I-frames.
     /// Key: "callsign-path"; value: accumulated bytes.
@@ -412,7 +419,8 @@ final class SessionCoordinator: ObservableObject {
     /// Returns the effective adaptive settings for a given destination and path,
     /// resolving per-route cache, per-station overrides, and global fallback.
     /// Used by the UI (AdaptiveStatusChip) to show what parameters are actually in effect.
-    func effectiveAdaptiveSettings(destination: String? = nil, path: String? = nil) -> TxAdaptiveSettings {
+    func effectiveAdaptiveSettings(destination: String? = nil, path: String? = nil,
+                                   radio: RadioID? = nil) -> TxAdaptiveSettings {
         guard let dest = destination, !dest.isEmpty, adaptiveTransmissionEnabled else {
             return globalAdaptiveSettings
         }
@@ -424,20 +432,78 @@ final class SessionCoordinator: ObservableObject {
         // (session learner uses session.path.display which is uppercased,
         //  but compose view passes raw user input which may be lowercase)
         let pathSig = (path ?? "").uppercased()
-        let key = RouteAdaptiveKey(destination: canon, pathSignature: pathSig)
-        if let cached = adaptiveCache[key], !isAdaptiveCacheEntryExpired(cached) {
-            return cached.settings
+        // Route first, then the channel it rides on, then the operator's
+        // baseline — never another radio's experience.
+        let scope = canonicalScope(.route(radio: radio ?? primaryRadioID,
+                                          destination: canon, path: pathSig))
+        var candidate: AdaptiveScope? = scope
+        while let current = candidate {
+            if let cached = adaptiveByScope[current], !isAdaptiveCacheEntryExpired(cached) {
+                return cached.settings
+            }
+            candidate = current.fallback
         }
         return globalAdaptiveSettings
     }
 
-    func adaptiveSessionID(destination: String, path: String?) -> AdaptiveSessionID {
-        let canon = canonicalDestination(destination)
-        let normalizedPath = (path ?? "").uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        return "\(canon)|\(normalizedPath)"
+    /// A scope with its destination canonicalised the way every other lookup
+    /// in this file does it, so `PEER-0` and `PEER` are one route rather than
+    /// two that each learn half as fast. `AdaptiveScope` case-folds and trims;
+    /// SSID canonicalisation lives here because that is where the rule lives.
+    private func canonicalScope(_ scope: AdaptiveScope) -> AdaptiveScope {
+        guard let route = scope.route else { return scope }
+        return .route(radio: scope.radio,
+                      destination: canonicalDestination(route.destination),
+                      path: route.path)
     }
 
-    func selectAdaptiveSession(destination: String?, path: String?) {
+    /// Whether attribution is worth showing. With one radio, naming it on
+    /// every row is noise; with several, an unattributed figure is ambiguous.
+    var hasMultipleRadios: Bool {
+        (packetEngine?.radioManager.profiles.filter { $0.enabled }.count ?? 0) > 1
+    }
+
+    /// A radio's name as the operator set it, for messages that must say which
+    /// channel a figure came from — a per-radio number nobody can attribute is
+    /// worse than a global one.
+    func radioName(_ id: RadioID) -> String? {
+        packetEngine?.radioManager.profile(id)?.name
+    }
+
+    /// The radio to assume when a caller has not said. Callers that predate
+    /// radios, and UI asking "what would this look like", land here.
+    var primaryRadioID: RadioID {
+        packetEngine?.radioManager.primaryRadioID ?? .primary
+    }
+
+    /// What configuration to *use* for a scope: itself if it has learned
+    /// anything, else the channel under it, else the operator's baseline.
+    private func resolvedSettings(for scope: AdaptiveScope) -> TxAdaptiveSettings {
+        let live = adaptiveByScope.compactMapValues { isAdaptiveCacheEntryExpired($0) ? nil : $0.settings }
+        return AdaptiveScope.resolve(scope, in: live, baseline: globalAdaptiveSettings)
+    }
+
+    /// The entry a scope *learns* into. A scope learns only from evidence
+    /// about itself: seeding from the channel was tried in both directions and
+    /// broke route isolation each time — see `AdaptiveScope.resolve`.
+    private func learningEntry(for scope: AdaptiveScope) -> TxAdaptiveSettings {
+        if let cached = adaptiveByScope[scope], !isAdaptiveCacheEntryExpired(cached) {
+            return cached.settings
+        }
+        return TxAdaptiveSettings()
+    }
+
+    /// The key the *display* filed a figure under. It has to carry the radio
+    /// for the same reason `AdaptiveScope` does: a channel-wide figure has no
+    /// destination and no path, so without the radio every radio's channel
+    /// collapsed onto one entry and the last one to learn overwrote the rest.
+    func adaptiveSessionID(radio: RadioID, destination: String, path: String?) -> AdaptiveSessionID {
+        let canon = canonicalDestination(destination)
+        let normalizedPath = (path ?? "").uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(radio.rawValue)|\(canon)|\(normalizedPath)"
+    }
+
+    func selectAdaptiveSession(destination: String?, path: String?, radio: RadioID? = nil) {
         guard let destination else {
             adaptiveStatusStore.setSelectedSession(id: nil)
             return
@@ -447,7 +513,9 @@ final class SessionCoordinator: ObservableObject {
             adaptiveStatusStore.setSelectedSession(id: nil)
             return
         }
-        adaptiveStatusStore.setSelectedSession(id: adaptiveSessionID(destination: normalizedDestination, path: path))
+        adaptiveStatusStore.setSelectedSession(
+            id: adaptiveSessionID(radio: radio ?? primaryRadioID,
+                                  destination: normalizedDestination, path: path))
     }
 
     /// Sync AX.25 session config from global adaptive settings so both messaging and file transfer use the same window size, RTO bounds, and retries.
@@ -513,7 +581,7 @@ final class SessionCoordinator: ObservableObject {
     /// Returns nil if nothing changed.
     private func adaptiveChangeMessage(
         old: AdaptiveSnapshot, new: TxAdaptiveSettings,
-        source: String, routeKey: RouteAdaptiveKey?
+        source: String, scope: AdaptiveScope?
     ) -> String? {
         var parts: [String] = []
         let newSnap = AdaptiveSnapshot(from: new)
@@ -531,9 +599,8 @@ final class SessionCoordinator: ObservableObject {
 
         let reason = new.windowSize.adaptiveReason ?? new.paclen.adaptiveReason ?? "updated"
         let ctx: String
-        if let key = routeKey {
-            let path = key.pathSignature.isEmpty ? "direct" : "via \(key.pathSignature)"
-            ctx = "[\(source): \(key.destination) \(path)]"
+        if let scope {
+            ctx = "[\(source): \(scope.label { self.radioName($0) })]"
         } else {
             ctx = "[\(source)]"
         }
@@ -553,7 +620,7 @@ final class SessionCoordinator: ObservableObject {
         etx: Double,
         srtt: Double?,
         source: String = "session",
-        routeKey: RouteAdaptiveKey? = nil,
+        scope: AdaptiveScope? = nil,
         newFrames: Int = 1,
         retransmits: Int? = nil
     ) {
@@ -561,18 +628,29 @@ final class SessionCoordinator: ObservableObject {
             TxLog.adaptiveSampleIgnored(reason: "adaptive disabled", lossRate: lossRate, etx: etx)
             return
         }
-        if let key = routeKey {
-            // Normalize destination for consistent cache lookups (PEER-0 and PEER map to same key)
-            let normalizedKey = RouteAdaptiveKey(destination: canonicalDestination(key.destination), pathSignature: key.pathSignature)
-            var entry = adaptiveCache[normalizedKey]?.settings ?? TxAdaptiveSettings()
+        if let rawScope = scope {
+            let scope = canonicalScope(rawScope)
+            // One sample teaches the route it rode and the channel underneath
+            // it: the channel figure is the aggregate of everything on that
+            // radio, and it is what a route nobody has used yet inherits.
+            for taught in scope.scopesToTeach where taught != scope {
+                var channel = learningEntry(for: taught)
+                channel.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss,
+                                              etx: etx, srtt: srtt,
+                                              newFrames: newFrames, retransmits: retransmits)
+                adaptiveByScope[taught] = CachedAdaptiveEntry(settings: channel, lastUpdated: Date())
+            }
+            let normalizedKey = scope
+            var entry = learningEntry(for: normalizedKey)
             // Hop-scaled paclen ceiling for this route: applied before every
             // update so both fresh entries and inherited state respect it.
             let paclenBeforeCeiling = entry.paclen.currentAdaptive
-            entry.applyPaclenCeiling(forHops: hopCount(inPathSignature: normalizedKey.pathSignature))
+            entry.applyPaclenCeiling(forHops: hopCount(inPathSignature: normalizedKey.route?.path ?? ""))
             if entry.paclen.currentAdaptive < paclenBeforeCeiling {
                 TxLog.debug(.adaptive, "Hop ceiling clamped paclen", [
-                    "destination": normalizedKey.destination,
-                    "path": normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature,
+                    "destination": normalizedKey.route?.destination ?? "",
+                    "path": (normalizedKey.route?.path).flatMap { $0.isEmpty ? "direct" : $0 } ?? "direct",
+                    "radio": radioName(normalizedKey.radio) ?? normalizedKey.radio.rawValue,
                     "from": paclenBeforeCeiling,
                     "to": entry.paclen.currentAdaptive
                 ])
@@ -586,8 +664,9 @@ final class SessionCoordinator: ObservableObject {
                 // what flood control drops first. Transition edge only — a
                 // route already at K=1 never repeats the warning.
                 TxLog.warning(.adaptive, "Adaptive collapsed to stop-and-wait", [
-                    "destination": normalizedKey.destination,
-                    "path": normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature,
+                    "destination": normalizedKey.route?.destination ?? "",
+                    "path": (normalizedKey.route?.path).flatMap { $0.isEmpty ? "direct" : $0 } ?? "direct",
+                    "radio": radioName(normalizedKey.radio) ?? normalizedKey.radio.rawValue,
                     "smoothedLoss": String(format: "%.2f", entry.lossRateEWMA ?? lossRate),
                     "paclen": entry.paclen.currentAdaptive
                 ])
@@ -597,17 +676,28 @@ final class SessionCoordinator: ObservableObject {
                 // level so the crumb survives flood control and shows up
                 // attached to any later Sentry event for this session.
                 TxLog.warning(.adaptive, "Adaptive upgrade rolled back", [
-                    "destination": normalizedKey.destination,
-                    "path": normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature,
+                    "destination": normalizedKey.route?.destination ?? "",
+                    "path": (normalizedKey.route?.path).flatMap { $0.isEmpty ? "direct" : $0 } ?? "direct",
+                    "radio": radioName(normalizedKey.radio) ?? normalizedKey.radio.rawValue,
                     "nextUpgradeNeeds": entry.upgradeStreakRequirement,
                     "rollbacksTotal": entry.metrics.probeRollbacks
                 ])
             }
-            adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
+            adaptiveByScope[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
+            // With nothing selected the toolbar shows a channel, and which
+            // one has to be a fixed choice: picking whichever learned most
+            // recently makes the figure flip between radios every poll.
+            if normalizedKey.route == nil {
+                adaptiveStatusStore.setDefaultChannel(
+                    id: adaptiveSessionID(radio: primaryRadioID, destination: "", path: ""))
+            }
             adaptiveStatusStore.updateSession(
-                id: adaptiveSessionID(destination: normalizedKey.destination, path: normalizedKey.pathSignature),
-                destination: normalizedKey.destination,
-                pathSignature: normalizedKey.pathSignature,
+                id: adaptiveSessionID(radio: normalizedKey.radio,
+                                      destination: normalizedKey.route?.destination ?? "",
+                                      path: normalizedKey.route?.path ?? ""),
+                destination: normalizedKey.route?.destination ?? "",
+                pathSignature: normalizedKey.route?.path ?? "",
+                radio: normalizedKey.radio,
                 settings: entry,
                 lossRate: lossRate,
                 etx: etx,
@@ -626,9 +716,9 @@ final class SessionCoordinator: ObservableObject {
                 window: a.windowSize.effectiveValue,
                 paclen: a.paclen.effectiveValue,
                 maxRetries: a.maxRetries.effectiveValue,
-                reason: reason + " [route \(normalizedKey.destination) \(normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature)]"
+                reason: reason + " [\(normalizedKey.label { radioName($0) })]"
             )
-            if let msg = adaptiveChangeMessage(old: before, new: entry, source: source, routeKey: normalizedKey) {
+            if let msg = adaptiveChangeMessage(old: before, new: entry, source: source, scope: normalizedKey) {
                 packetEngine?.appendSystemNotification(msg)
             }
         } else {
@@ -662,7 +752,7 @@ final class SessionCoordinator: ObservableObject {
                 maxRetries: a.maxRetries.effectiveValue,
                 reason: reason
             )
-            if let msg = adaptiveChangeMessage(old: before, new: globalAdaptiveSettings, source: source, routeKey: nil) {
+            if let msg = adaptiveChangeMessage(old: before, new: globalAdaptiveSettings, source: source, scope: nil) {
                 packetEngine?.appendSystemNotification(msg)
             }
             syncSessionManagerConfigFromAdaptive()
@@ -672,7 +762,7 @@ final class SessionCoordinator: ObservableObject {
 
     /// True if cached entry is older than TTL (route-level cache invalidation).
     private func isAdaptiveCacheEntryExpired(_ entry: CachedAdaptiveEntry) -> Bool {
-        Date().timeIntervalSince(entry.lastUpdated) > Self.adaptiveCacheTTLSeconds
+        Date().timeIntervalSince(entry.lastUpdated) > Self.adaptiveByScopeTTLSeconds
     }
 
     /// True only on the transition edge into stop-and-wait — the headline
@@ -749,10 +839,12 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Conservative merge of configs for a destination: min window, max RTO, max retries. Used when 2+ sessions exist to same peer so we don't flip parameters between connections or corrupt transmissions.
-    private func mergedConfigForDestination(_ destination: String) -> AX25SessionConfig {
+    private func mergedConfigForDestination(_ destination: String, radio: RadioID) -> AX25SessionConfig {
         var configs: [AX25SessionConfig] = [configFromAdaptive(globalAdaptiveSettings)]
         let canon = canonicalDestination(destination)
-        for (key, entry) in adaptiveCache where key.destination == canon && !isAdaptiveCacheEntryExpired(entry) {
+        for (key, entry) in adaptiveByScope
+        where key.radio == radio && key.route?.destination == canon
+              && !isAdaptiveCacheEntryExpired(entry) {
             configs.append(configFromAdaptive(entry.settings))
         }
         guard let first = configs.first else { return AX25SessionConfig() }
@@ -780,8 +872,8 @@ final class SessionCoordinator: ObservableObject {
     /// Remove expired entries from per-route cache (call periodically or when looking up).
     private func pruneExpiredAdaptiveCache() {
         let now = Date()
-        adaptiveCache = adaptiveCache.filter { _, entry in
-            now.timeIntervalSince(entry.lastUpdated) <= Self.adaptiveCacheTTLSeconds
+        adaptiveByScope = adaptiveByScope.filter { _, entry in
+            now.timeIntervalSince(entry.lastUpdated) <= Self.adaptiveByScopeTTLSeconds
         }
     }
 
@@ -789,7 +881,7 @@ final class SessionCoordinator: ObservableObject {
     func clearAllLearned() {
         globalAdaptiveSettings = TxAdaptiveSettings()
         useDefaultConfigForDestinations.removeAll()
-        adaptiveCache.removeAll()
+        adaptiveByScope.removeAll()
         syncSessionManagerConfigFromAdaptive()
         TxLog.adaptiveCleared(reason: "clear all – reset to defaults (routes + global)")
         objectWillChange.send()
@@ -1092,6 +1184,35 @@ final class SessionCoordinator: ObservableObject {
             })
     }
 
+    /// Does this frame's destination name a station somebody is calling?
+    ///
+    /// Only connected mode puts a station's address in the destination field.
+    /// A UI frame's destination is not an address at all: APRS puts a tocall
+    /// there (APRS 1.01 ch.5) and Mic-E overloads it with the latitude, the
+    /// message bits and the N/S and E/W signs (ch.10). `S8RVTQ` is a
+    /// latitude; `APMI04` is a software version. Both are six alphanumerics
+    /// containing a digit, so they pass every callsign shape test there is —
+    /// which is why the frame type, not the spelling, has to decide.
+    ///
+    /// This matters because the far end of the candidate list transmits: the
+    /// prober sends an XID, then a DISC if that goes unanswered. From the
+    /// operator's log of 2026-09-09 — a Mic-E position from NK7W-9 overheard,
+    /// then an XID and a DISC addressed to its latitude.
+    nonisolated static func addressesAStation(_ decoded: AX25ControlFieldDecoded) -> Bool {
+        guard decoded.frameClass == .U else {
+            // I and S frames exist only inside a link, so their destination
+            // is a station by construction.
+            return decoded.frameClass == .I || decoded.frameClass == .S
+        }
+        switch decoded.uType {
+        case .SABM, .SABME, .DISC, .UA, .DM, .FRMR, .XID:
+            return true
+        case .UI, .UNKNOWN, .none:
+            // UI is connectionless; UNKNOWN covers TEST, which is too.
+            return false
+        }
+    }
+
     /// Remember a station somebody else was calling.
     private func noteOverheardCallee(_ call: String) {
         let key = PingPolicy.normalize(call)
@@ -1106,7 +1227,7 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Stations worth asking, with where each came from.
-    private func pingCandidates() -> [PingPolicy.Candidate] {
+    func pingCandidates() -> [PingPolicy.Candidate] {
         let mine = Set(sessionManager.answeredAddresses.map { $0.display.uppercased() })
         var seen = Set<String>()
         var candidates: [PingPolicy.Candidate] = []
@@ -1243,21 +1364,71 @@ final class SessionCoordinator: ObservableObject {
     /// interval — an announcement nobody asked for should not be the
     /// reward for ticking a checkbox.
     private func scheduleBeacon(_ settings: AppSettingsStore) {
-        beaconTimers.values.forEach { $0.invalidate() }
-        beaconTimers.removeAll()
         // Each radio's beacon is its own: content, path and interval live on
         // the radio, so an added radio never inherits another's beacon and a
         // packet node and an APRS node do not cross-transmit.
-        for radio in settings.activeRadios where radio.enabled && radio.beacon.enabled {
-            // Arm the timer for any enabled beacon; the send builds the frame
-            // from the radio's kind (text or APRS) and no-ops if it cannot.
+        let wanted = settings.activeRadios.filter { $0.enabled && $0.beacon.enabled }
+        let wantedIDs = Set(wanted.map(\.id))
+
+        // Beacons that no longer exist stop.
+        for (id, timer) in beaconTimers where !wantedIDs.contains(id) {
+            timer.invalidate()
+            beaconTimers.removeValue(forKey: id)
+            beaconIntervals.removeValue(forKey: id)
+        }
+
+        for radio in wanted {
             let interval = TimeInterval(max(5, radio.beacon.intervalMinutes) * 60)
             let id = radio.id
+            // A running countdown is left alone. This is called on every
+            // keystroke in the beacon editor, and re-arming each time restarted
+            // a 30-minute countdown from zero — the beacon an operator had just
+            // finished configuring then never went out, because configuring it
+            // again postponed it. Only a changed interval re-arms.
+            if beaconTimers[id] != nil, beaconIntervals[id] == interval { continue }
+            beaconTimers[id]?.invalidate()
             let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.sendBeacon(for: id, settings: settings) }
             }
             RunLoop.main.add(timer, forMode: .common)
             beaconTimers[id] = timer
+            beaconIntervals[id] = interval
+        }
+    }
+
+    /// Why this radio's beacon cannot go out right now, or nil when it can.
+    ///
+    /// The APRS path used to fail silently: no fix, no frame, no line anywhere
+    /// saying so, and an operator watching a configured beacon do nothing.
+    func beaconObstacle(for radioID: RadioID, settings: AppSettingsStore) -> String? {
+        guard let radio = settings.radio(radioID) else { return "This radio is gone." }
+        guard radio.enabled else { return "This radio is switched off." }
+        guard radio.beacon.enabled else { return "The beacon is switched off for this radio." }
+        let path = radio.beacon.kind == .aprsPosition
+            ? radio.effectiveAPRSPath : radio.beacon.path
+        if case let .failure(problem) = BeaconPlan.planPath(path) {
+            return problem.operatorText
+        }
+        switch radio.beacon.kind {
+        case .text:
+            if case let .failure(problem) = BeaconPlan.plan(
+                text: radio.beacon.text, path: radio.beacon.path) {
+                return problem.operatorText
+            }
+            return nil
+        case .aprsPosition:
+            guard let aprs = radio.beacon.aprs else {
+                return "This beacon has no position settings yet."
+            }
+            if aprs.useGPS {
+                guard aprsLocationProvider?() != nil else {
+                    return "No position fix yet, so there is nothing to beacon. "
+                        + "Turn off \"Use GPS position\" to send a fixed one."
+                }
+            } else if aprs.latitude == nil || aprs.longitude == nil {
+                return "Set a latitude and longitude, or switch on \"Use GPS position\"."
+            }
+            return nil
         }
     }
 
@@ -1265,19 +1436,54 @@ final class SessionCoordinator: ObservableObject {
     /// radio's own config at send time so an edit takes effect at the next
     /// beacon rather than the next launch.
     func sendBeacon(for radioID: RadioID, settings: AppSettingsStore) {
-        guard let radio = settings.radio(radioID), radio.beacon.enabled,
-              let (frame, note) = buildBeaconFrame(for: radio) else { return }
+        guard let radio = settings.radio(radioID), radio.beacon.enabled else { return }
+        guard let (frame, note) = buildBeaconFrame(for: radio) else {
+            let why = beaconObstacle(for: radioID, settings: settings)
+                ?? "the beacon could not be built"
+            packetEngine?.appendSystemNotification(
+                "Beacon not sent\(radioSuffix([radioID])): \(why)")
+            return
+        }
         transmit(frame, staggeredBy: 0)
         packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radioID])).")
+    }
+
+    /// Why "beacon now" would put nothing on the air, for the station as a
+    /// whole. Nil when at least one radio can beacon.
+    ///
+    /// One working beacon is enough for the button to do something, so a
+    /// second radio with no GPS fix is not a reason to complain — only a
+    /// station where *every* beacon is blocked has an obstacle worth showing.
+    func beaconObstacle(_ settings: AppSettingsStore) -> String? {
+        let radios = settings.activeRadios.filter { $0.enabled && $0.beacon.enabled }
+        guard !radios.isEmpty else {
+            return "No radio has a beacon switched on. Settings > Radios > Beacon."
+        }
+        let obstacles = radios.compactMap { beaconObstacle(for: $0.id, settings: settings) }
+        return obstacles.count == radios.count ? obstacles.first : nil
     }
 
     /// Beacon every radio that has one, now — the "Send beacon now" button.
     /// Staggered so two radios on one frequency do not key up together.
     func sendBeacon(_ settings: AppSettingsStore) {
         let radios = settings.activeRadios.filter { $0.enabled && $0.beacon.enabled }
+        // A button that silently does nothing is the failure this whole area
+        // started with: the operator concluded the beacon was broken when it
+        // was only unconfigured.
+        guard !radios.isEmpty else {
+            packetEngine?.appendSystemNotification(
+                "Beacon not sent: \(beaconObstacle(settings) ?? "no radio has a beacon switched on")")
+            return
+        }
         var index = 0
         for radio in radios {
-            guard let (frame, note) = buildBeaconFrame(for: radio) else { continue }
+            guard let (frame, note) = buildBeaconFrame(for: radio) else {
+                let why = beaconObstacle(for: radio.id, settings: settings)
+                    ?? "the beacon could not be built"
+                packetEngine?.appendSystemNotification(
+                    "Beacon not sent\(radioSuffix([radio.id])): \(why)")
+                continue
+            }
             transmit(frame, staggeredBy: index)
             packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radio.id])).")
             index += 1
@@ -1333,17 +1539,153 @@ final class SessionCoordinator: ObservableObject {
             comment: aprs.comment,
             compressed: aprs.compressed)
         let info = APRSBeacon.infoField(report)
-        // Reuse the beacon path validator; the destination is the APRS tocall.
-        guard case let .success(planned) = BeaconPlan.plan(text: info, path: radio.beacon.path)
+        // The radio's APRS path, not the beacon's: one station reaches one
+        // distance, and a station that beacons two hops out but pings direct
+        // is answering the same question two different ways. Only the path
+        // needs validating — the info field is generated, not typed, so the
+        // text rules do not apply to it.
+        guard case let .success(digis) = BeaconPlan.planPath(radio.effectiveAPRSPath)
         else { return nil }
         let frame = AX25FrameBuilder.buildUI(
             from: sessionManager.localAddress(for: radio.id),
             to: AX25Address(call: APRSBeacon.tocall, ssid: 0),
-            via: DigiPath.from(planned.digis),
+            via: DigiPath.from(digis),
             pid: 0xF0,
             payload: Data(info.utf8),
             displayInfo: info).onRadio(radio.id)
-        return (frame, "APRS position sent")
+        let pathText = digis.isEmpty ? "direct" : "via \(digis.joined(separator: " → "))"
+        return (frame, "APRS position sent \(pathText)")
+    }
+
+    /// Transmit a prepared APRS message-class frame — an auto-ACK, a query
+    /// answer, or an operator's message — reusing the beacon's UI-frame path.
+    /// The radio is the one the exchange named (an ack goes out the radio that
+    /// heard the message); failing that, the first connected radio, else the
+    /// primary. Returns whether the frame was accepted by the link.
+    @discardableResult
+    func sendAPRS(_ out: APRSOutbound) -> Bool {
+        guard let rid = aprsRadio(forRadio: out.radioID, addressee: out.addressee)
+        else { return false }
+        let frame = AX25FrameBuilder.buildUI(
+            from: sessionManager.localAddress(for: rid),
+            // The tocall, always — never the addressee.
+            //
+            // An APRS frame's AX.25 destination identifies the *software* that
+            // sent it (APRS 1.01 ch. 5: a generic APRS address, a software
+            // tocall, or a Mic-E position); the recipient is the nine-character
+            // addressee inside the information field. Every message-class frame
+            // on this channel does it that way — the third-party headers an
+            // i-gate relays read `K0VJ-10>APFII0`, `SOTA>APZS20` — and Xastir
+            // transmits everything as `UNPROTO <tocall> VIA <path>`
+            // (`interface.c`). Ours read `K0EPI-7>AD1CT-4`, which parsers
+            // tolerate but which makes our frames the only ones on the air that
+            // cannot be attributed to a piece of software.
+            to: AX25Address(call: APRSBeacon.tocall, ssid: 0),
+            via: DigiPath.from(out.path),
+            pid: 0xF0,
+            payload: Data(out.info.utf8),
+            displayInfo: out.info).onRadio(rid)
+        return transmit(frame, staggeredBy: 0)
+    }
+
+    /// The radio an APRS transmission will leave on.
+    ///
+    /// Named separately from `sendAPRS` because the caller has to know it
+    /// first: the path a frame should carry belongs to the radio that sends
+    /// it, and until this has run there is no radio to ask.
+    func aprsRadio(forRadio raw: String?, addressee: String = "") -> RadioID? {
+        if let raw { return RadioID(rawValue: raw) }
+        let connectedAPRS = connectedAPRSRadios()
+        // The radio that last heard them, when it heard them recently enough
+        // to still be the channel they are on. Two radios are two channels; a
+        // station worked on 144.390 is not reachable by transmitting on the
+        // node frequency, and picking "the first connected APRS radio" is a
+        // coin toss dressed as a decision. Xastir has the same rule
+        // (`messages.c`: heard via TNC in the past hour → that port).
+        if !addressee.isEmpty,
+           let heard = APRSRadioChoice.radioThatHeard(
+            addressee, in: packetEngine?.stations ?? [],
+            now: Date(), eligible: Set(connectedAPRS)) {
+            return heard
+        }
+        // A new message with no route of its own belongs on an APRS radio,
+        // not just whatever connected first.
+        if let aprs = connectedAPRS.first { return aprs }
+        if let connected = serviceRadios({ _ in true }).first { return connected }
+        return packetEngine?.radioManager.primaryRadioID
+    }
+
+    /// The digipeater path an APRS transmission should ask for, from the radio
+    /// that will send it.
+    ///
+    /// Nothing on APRS is repeated unless the frame asks, so a ping or a
+    /// message sent with no path reaches only stations in direct earshot —
+    /// which is what every one of ours did until this existed. A reply keeps
+    /// the path the message arrived by and does not come through here.
+    func aprsPath(forRadio raw: String?, addressee: String = "") -> [String] {
+        guard let rid = aprsRadio(forRadio: raw, addressee: addressee),
+              let radio = appSettings?.radio(rid) else { return [] }
+        return APRSPath.digis(radio.effectiveAPRSPath)
+    }
+
+    /// Transmit an unaddressed APRS info field (a general query) on **every
+    /// connected radio**, staggered, and report how many it actually left on.
+    /// "Who can hear me" is a per-channel question, so the flood belongs on
+    /// each channel we're really on — not just the first radio `sendAPRS`
+    /// would pick, which on a multi-radio station could be the wrong one. A
+    /// return of 0 means nothing reached the air (no radio is connected), so
+    /// the caller can say so instead of listening for replies that can't come.
+    func floodAPRS(_ info: String, reach: APRSProbeReach = .direct) -> Int {
+        var sent = 0
+        for rid in connectedAPRSRadios() {
+            // Each radio's own path: a flood on two radios is two channels
+            // being asked, and they may reach different distances. Xastir does
+            // the same thing per interface (`select_unproto_path`).
+            let path = reach == .wide
+                ? APRSPath.digis(appSettings?.radio(rid)?.effectiveAPRSPath ?? "") : []
+            let frame = AX25FrameBuilder.buildUI(
+                from: sessionManager.localAddress(for: rid),
+                to: AX25Address(call: APRSBeacon.tocall, ssid: 0),
+                via: DigiPath.from(path),
+                pid: 0xF0,
+                payload: Data(info.utf8),
+                displayInfo: info).onRadio(rid)
+            if transmit(frame, staggeredBy: sent) { sent += 1 }
+        }
+        return sent
+    }
+
+    /// The enabled, connected radios that carry APRS (`handlesAPRS`) — the
+    /// only channels a `?APRS?` flood or an unrouted APRS message belongs on.
+    /// Empty when no APRS radio is up, so callers can say "nothing on the air"
+    /// rather than flooding a node/BBS frequency.
+    func connectedAPRSRadios() -> [RadioID] {
+        guard let appSettings else { return [] }
+        let isConnected: (RadioID) -> Bool = { [weak self] in
+            self?.packetEngine?.radioManager.state(of: $0) == .connected
+        }
+        let enabled = appSettings.activeRadios.filter(\.enabled)
+        // With one radio there is no other channel to confuse it with, and the
+        // per-radio APRS toggle isn't even shown, so the lone radio is the APRS
+        // radio by definition. With several, only the ones flagged APRS.
+        let eligible = appSettings.hasMultipleRadios
+            ? enabled.filter(\.handlesAPRS)
+            : enabled
+        return eligible.map(\.id).filter(isConnected)
+    }
+
+    /// Our current APRS position info field, taken from the first radio
+    /// configured for an APRS position beacon (GPS or manual, as set). Nil
+    /// when no radio beacons a position or no fix is available — used to
+    /// answer a `?APRSP` query.
+    func currentAPRSPositionInfo() -> String? {
+        guard let settings = appSettings else { return nil }
+        for radio in settings.activeRadios where radio.beacon.kind == .aprsPosition {
+            if let (frame, _) = buildAPRSBeaconFrame(for: radio) {
+                return String(data: frame.payload, encoding: .utf8)
+            }
+        }
+        return nil
     }
 
     // MARK: - Services across radios
@@ -1516,10 +1858,9 @@ final class SessionCoordinator: ObservableObject {
         }
 
         sessionManager.onLinkQualitySample = { [weak self] session, sample in
-            let routeKey = RouteAdaptiveKey(
-                destination: session.remoteAddress.display.uppercased(),
-                pathSignature: session.path.display
-            )
+            let scope = AdaptiveScope.route(radio: session.radio,
+                                            destination: session.remoteAddress.display,
+                                            path: session.path.display)
             self?.applyLinkQualitySample(
                 lossRate: sample.lossRate,
                 forwardLoss: sample.forwardLoss,
@@ -1527,13 +1868,13 @@ final class SessionCoordinator: ObservableObject {
                 etx: sample.etx,
                 srtt: sample.srtt,
                 source: "session",
-                routeKey: routeKey,
+                scope: scope,
                 newFrames: sample.newFrames,
                 retransmits: sample.retransmits
             )
         }
 
-        sessionManager.getConfigForDestination = { [weak self] destination, pathSignature in
+        sessionManager.getConfigForDestination = { [weak self] destination, pathSignature, radio in
             TxLog.debug(.session, "getConfigForDestination invoked", [
                 "dest": destination,
                 "hasSelf": "\(self != nil)",
@@ -1558,16 +1899,19 @@ final class SessionCoordinator: ObservableObject {
             }
             // When multiple connections exist to the same destination, use a conservative merged config so we don't flip parameters between connections or change settings mid-transmission.
             if self.activeSessionCount(forDestination: destination) >= 1 {
-                return self.mergedConfigForDestination(destination)
+                return self.mergedConfigForDestination(destination, radio: radio)
             }
-            let key = RouteAdaptiveKey(destination: canonicalDestination(destination), pathSignature: pathSignature)
-            if let cached = self.adaptiveCache[key], !self.isAdaptiveCacheEntryExpired(cached) {
+            let key = self.canonicalScope(.route(radio: radio, destination: destination,
+                                                 path: pathSignature))
+            if let cached = self.adaptiveByScope[key], !self.isAdaptiveCacheEntryExpired(cached) {
                 // Single writer of learnedPathRto: a fresh entry for THIS
                 // exact route seeds the connect timer with its measured
                 // full-path RTO (clamped; never hop-scaled downstream).
                 return self.configFromAdaptive(cached.settings, learnedPathRto: cached.settings.currentRto)
             }
-            return self.configFromAdaptive(self.globalAdaptiveSettings)
+            // Nothing for this exact route: inherit the channel before the
+            // baseline, so a new route on a known radio does not start over.
+            return self.configFromAdaptive(self.resolvedSettings(for: key))
         }
 
         // Wire up session state changes for capability discovery
@@ -1668,21 +2012,21 @@ final class SessionCoordinator: ObservableObject {
                 // the safe direction for a link that just failed.
                 let dest = session.remoteAddress.display.uppercased()
                 let pathSig = session.path.display
-                let routeKey = RouteAdaptiveKey(
-                    destination: canonicalDestination(dest),
-                    pathSignature: pathSig
-                )
-                let sessionID = self.adaptiveSessionID(destination: routeKey.destination, path: routeKey.pathSignature)
+                let routeKey = self.canonicalScope(.route(radio: session.radio,
+                                                          destination: dest, path: pathSig))
+                let sessionID = self.adaptiveSessionID(radio: session.radio,
+                                                       destination: canonicalDestination(dest),
+                                                       path: pathSig)
                 self.adaptiveStatusStore.removeSession(id: sessionID)
                 let pathDesc = pathSig.isEmpty ? "direct" : "via \(pathSig)"
-                if let cached = self.adaptiveCache[routeKey] {
+                if let cached = self.adaptiveByScope[routeKey] {
                     let cachedSnap = AdaptiveSnapshot(from: cached.settings)
                     let defaultSnap = AdaptiveSnapshot(from: TxAdaptiveSettings())
                     if cachedSnap.k != defaultSnap.k || cachedSnap.p != defaultSnap.p
                         || cachedSnap.n2 != defaultSnap.n2
                         || (cachedSnap.rto != nil && cachedSnap.rto != defaultSnap.rto)
                     {
-                        let ttlMinutes = Int(Self.adaptiveCacheTTLSeconds / 60)
+                        let ttlMinutes = Int(Self.adaptiveByScopeTTLSeconds / 60)
                         self.packetEngine?.appendSystemNotification(
                             "Adaptive: Session ended — learned parameters kept \(ttlMinutes) min for reconnect (\(dest) \(pathDesc))"
                         )
@@ -2202,7 +2546,10 @@ final class SessionCoordinator: ObservableObject {
 
     // MARK: - Packet Handling
 
-    private func handleIncomingPacket(_ packet: Packet) {
+    /// Internal, not private, so `OverheardCalleeTests` can drive a real
+    /// overheard frame through it: the rule below is only worth anything if
+    /// this is where it is applied.
+    func handleIncomingPacket(_ packet: Packet) {
         guard let from = packet.from, let to = packet.to else {
             return
         }
@@ -2222,7 +2569,7 @@ final class SessionCoordinator: ObservableObject {
             if decoded.frameClass == .U {
                 onForeignUFrame?(from.display, to.display, decoded.uType)
             }
-            noteOverheardCallee(to.display)
+            if Self.addressesAStation(decoded) { noteOverheardCallee(to.display) }
             TxLog.debug(.session, "Packet not addressed to this station", [
                 "from": from.display,
                 "to": to.display,

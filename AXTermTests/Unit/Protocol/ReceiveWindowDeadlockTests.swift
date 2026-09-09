@@ -32,7 +32,7 @@ final class ReceiveWindowDeadlockTests: XCTestCase {
 
     /// Brings up a session with our transmit window pinned to `k`.
     private func connectedSession(k: Int) -> AX25Session {
-        manager.getConfigForDestination = { _, _ in
+        manager.getConfigForDestination = { _, _, _ in
             AX25SessionConfig(windowSize: k, maxRetries: 15)
         }
         _ = manager.handleInboundSABM(

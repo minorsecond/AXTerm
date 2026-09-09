@@ -77,4 +77,30 @@ final class BeaconPlanTests: XCTestCase {
             XCTAssertEqual(problem, .malformedDigi(bad.uppercased()), bad)
         }
     }
+
+    // MARK: - Path on its own
+
+    /// An APRS position beacon has no operator-written text — its info field
+    /// is generated from a fix — but it has the same path. Validating it used
+    /// to mean inventing a body to hang the path on.
+    func testAPathValidatesWithoutABody() {
+        guard case let .success(digis) = BeaconPlan.planPath("WIDE1-1, WIDE2-1") else {
+            return XCTFail("a normal APRS path should plan")
+        }
+        XCTAssertEqual(digis, ["WIDE1-1", "WIDE2-1"])
+    }
+
+    func testAnEmptyPathIsDirectAndFine() {
+        guard case let .success(digis) = BeaconPlan.planPath("") else {
+            return XCTFail("direct is a path")
+        }
+        XCTAssertTrue(digis.isEmpty)
+    }
+
+    func testABadDigipeaterStillFails() {
+        guard case let .failure(problem) = BeaconPlan.planPath("WIDE1-1, TOOLONGCALL") else {
+            return XCTFail("that is not a callsign")
+        }
+        XCTAssertEqual(problem, .malformedDigi("TOOLONGCALL"))
+    }
 }

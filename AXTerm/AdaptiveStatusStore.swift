@@ -62,6 +62,9 @@ nonisolated struct AdaptiveParams: Sendable, Equatable {
     let updatedAt: Date
     let destination: String?
     let pathSignature: String?
+    /// Which channel this figure is about. Nil for the operator's baseline,
+    /// which belongs to no radio.
+    let radio: RadioID?
 
     // Learning state — what the controller decides on and what it has done,
     // so the UI can show its work rather than bare verdicts.
@@ -87,7 +90,8 @@ nonisolated struct AdaptiveParams: Sendable, Equatable {
         srtt: Double?,
         updatedAt: Date,
         destination: String?,
-        pathSignature: String?
+        pathSignature: String?,
+        radio: RadioID? = nil
     ) {
         self.k = settings.windowSize.effectiveValue
         self.p = settings.paclen.effectiveValue
@@ -102,6 +106,7 @@ nonisolated struct AdaptiveParams: Sendable, Equatable {
         self.updatedAt = updatedAt
         self.destination = destination
         self.pathSignature = pathSignature
+        self.radio = radio
         self.smoothedLoss = settings.lossRateEWMA
         self.smoothedEtx = settings.etxEWMA
         self.successStreak = settings.successStreak
@@ -153,6 +158,14 @@ final class AdaptiveStatusStore: ObservableObject {
     @Published var globalAdaptive: AdaptiveParams?
     @Published var sessionAdaptiveByID: [AdaptiveSessionID: AdaptiveParams] = [:]
     @Published var selectedSessionID: AdaptiveSessionID?
+    /// Which channel to show when the operator has not selected a session.
+    ///
+    /// `globalAdaptive` is the operator's baseline — the configured settings,
+    /// which belong to no radio and never see a link sample. Showing it as the
+    /// live figure meant the toolbar read "All channels" with no ETX, no loss
+    /// and "no qualifying link samples yet" while both radios were learning
+    /// and saying so in the log. The default is a real channel, named.
+    @Published var defaultChannelID: AdaptiveSessionID?
     @Published var globalETXHistory = AdaptiveRingBuffer<AdaptiveETXSample>(capacity: 900)
     @Published var sessionETXHistoryByID: [AdaptiveSessionID: AdaptiveRingBuffer<AdaptiveETXSample>] = [:]
 
@@ -170,24 +183,45 @@ final class AdaptiveStatusStore: ObservableObject {
     /// where isolated deallocating deinit triggers task-local scope corruption.
     nonisolated deinit {}
 
+    /// The scope the UI is showing: the operator's selection if it has a
+    /// figure, else the default channel, else nothing (the baseline).
+    var effectiveScopeID: AdaptiveSessionID? {
+        if let selectedSessionID, sessionAdaptiveByID[selectedSessionID] != nil {
+            return selectedSessionID
+        }
+        if let defaultChannelID, sessionAdaptiveByID[defaultChannelID] != nil {
+            return defaultChannelID
+        }
+        return nil
+    }
+
     var effectiveAdaptive: AdaptiveParams? {
-        if let selectedSessionID, let session = sessionAdaptiveByID[selectedSessionID] {
-            return session
+        if let id = effectiveScopeID, let scoped = sessionAdaptiveByID[id] {
+            return scoped
         }
         return globalAdaptive
+    }
+
+    func setDefaultChannel(id: AdaptiveSessionID?) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.setDefaultChannel(id: id) }
+            return
+        }
+        guard defaultChannelID != id else { return }
+        defaultChannelID = id
     }
 
     /// The timespan the ETX chart covers for the current scope — surfaced in
     /// the UI so the chart says what it shows.
     var effectiveETXWindow: TimeInterval {
-        if let selectedSessionID, sessionETXHistoryByID[selectedSessionID] != nil {
+        if let id = effectiveScopeID, sessionETXHistoryByID[id] != nil {
             return sessionWindow
         }
         return globalWindow
     }
 
     var effectiveETXHistory: [AdaptiveETXSample] {
-        if let selectedSessionID, let history = sessionETXHistoryByID[selectedSessionID] {
+        if let id = effectiveScopeID, let history = sessionETXHistoryByID[id] {
             return trimToWindow(history.elements, window: sessionWindow)
         }
         return trimToWindow(globalETXHistory.elements, window: globalWindow)
@@ -242,6 +276,7 @@ final class AdaptiveStatusStore: ObservableObject {
         id: AdaptiveSessionID,
         destination: String,
         pathSignature: String,
+        radio: RadioID? = nil,
         settings: TxAdaptiveSettings,
         lossRate: Double?,
         etx: Double?,
@@ -254,6 +289,7 @@ final class AdaptiveStatusStore: ObservableObject {
                     id: id,
                     destination: destination,
                     pathSignature: pathSignature,
+                    radio: radio,
                     settings: settings,
                     lossRate: lossRate,
                     etx: etx,
@@ -267,7 +303,7 @@ final class AdaptiveStatusStore: ObservableObject {
             settings: settings,
             lossRate: lossRate, etx: etx, srtt: srtt,
             updatedAt: updatedAt,
-            destination: destination, pathSignature: pathSignature
+            destination: destination, pathSignature: pathSignature, radio: radio
         )
 
         if let etx {

@@ -177,3 +177,71 @@ final class AdaptiveNetworkPollFilterTests: XCTestCase {
                        "A channel with no qualifying evidence must not be polled every second forever")
     }
 }
+
+
+/// The network-inference fallback, split by radio.
+///
+/// This is the sample that fires when no session is open, and it used to be a
+/// single figure computed across every radio and then applied to transmissions
+/// on all of them. A station with a clean UHF link and a marginal VHF one got
+/// one blended answer that was wrong for both.
+final class AdaptiveNetworkPerRadioTests: XCTestCase {
+
+    private let vhf = RadioID(rawValue: "vhf")
+    private let uhf = RadioID(rawValue: "uhf")
+
+    private func record(_ from: String, _ to: String, df: Double, radio: RadioID) -> LinkStatRecord {
+        LinkStatRecord(fromCall: from, toCall: to, quality: 200, lastUpdated: Date(),
+                       dfEstimate: df, drEstimate: df, duplicateCount: 0,
+                       observationCount: 50, radioID: radio)
+    }
+
+    /// Two channels, two answers, and neither is the average of the other.
+    func testEachRadioGetsItsOwnFigure() throws {
+        let records = [
+            record("K0EPI", "W0ARP", df: 0.95, radio: uhf),
+            record("K0EPI", "N0CALL", df: 0.95, radio: uhf),
+            record("K0EPI", "KB5YZB", df: 0.45, radio: vhf),
+            record("K0EPI", "DRLNOD", df: 0.45, radio: vhf),
+        ]
+        let byRadio = ContentView.aggregateLinkQualityPerRadio(records, localCallsign: "K0EPI")
+        XCTAssertEqual(Set(byRadio.keys), [vhf, uhf])
+
+        let clean = try XCTUnwrap(byRadio[uhf])
+        let marginal = try XCTUnwrap(byRadio[vhf])
+        XCTAssertEqual(clean.lossRate, 0.05, accuracy: 0.02)
+        XCTAssertEqual(marginal.lossRate, 0.55, accuracy: 0.02)
+        XCTAssertLessThan(clean.etx, marginal.etx)
+    }
+
+    /// A radio with too little evidence says nothing rather than guessing —
+    /// and crucially does not borrow the other radio's evidence.
+    func testARadioWithNoEvidenceIsAbsentRatherThanBorrowing() {
+        let records = [
+            record("K0EPI", "W0ARP", df: 0.95, radio: uhf),
+            LinkStatRecord(fromCall: "K0EPI", toCall: "KB5YZB", quality: 10, lastUpdated: Date(),
+                           dfEstimate: 0.45, drEstimate: 0.45, duplicateCount: 0,
+                           observationCount: 1, radioID: vhf),
+        ]
+        let byRadio = ContentView.aggregateLinkQualityPerRadio(records, localCallsign: "K0EPI")
+        XCTAssertEqual(Set(byRadio.keys), [uhf], "the VHF radio has one observation, not evidence")
+    }
+
+    /// The blend this replaced: had the two channels been averaged, the answer
+    /// would have been wrong for both. Pinned so nobody reintroduces it.
+    func testTheBlendedFigureIsWrongForBothChannels() throws {
+        let records = [
+            record("K0EPI", "W0ARP", df: 0.95, radio: uhf),
+            record("K0EPI", "KB5YZB", df: 0.45, radio: vhf),
+        ]
+        let blended = try XCTUnwrap(
+            ContentView.aggregateLinkQualityForAdaptive(records, localCallsign: "K0EPI"))
+        let byRadio = ContentView.aggregateLinkQualityPerRadio(records, localCallsign: "K0EPI")
+        let clean = try XCTUnwrap(byRadio[uhf])
+        let marginal = try XCTUnwrap(byRadio[vhf])
+        XCTAssertGreaterThan(blended.lossRate, clean.lossRate + 0.1,
+                             "the blend libels the good channel")
+        XCTAssertLessThan(blended.lossRate, marginal.lossRate - 0.1,
+                          "and flatters the bad one")
+    }
+}

@@ -148,9 +148,9 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         let session = connectSession(manager: coordinator.sessionManager,
                                      destination: remote, path: path)
 
-        let key = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: path.display)
+        let key = AdaptiveScope.route(radio: .primary, destination: "KB5YZB-7", path: path.display)
         coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 5.0,
-                                           source: "session", routeKey: key,
+                                           source: "session", scope: key,
                                            newFrames: 1, retransmits: 0)
 
         // The peer disconnects normally — the REAL teardown path, so this
@@ -159,7 +159,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         _ = coordinator.sessionManager.handleInboundDISC(from: remote, path: path, radio: .primary)
         XCTAssertEqual(session.state, .disconnected, "precondition: real teardown ran")
 
-        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", path.display)
+        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", path.display, .primary)
         XCTAssertEqual(config?.learnedPathRto ?? -1, 10.0, accuracy: 0.01,
                        "the learned full-path RTO must survive disconnect and seed the reconnect")
     }
@@ -188,7 +188,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         }
         XCTAssertEqual(session.state, .error, "precondition: N2 exhausted the link")
 
-        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", path.display)
+        let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", path.display, .primary)
         XCTAssertEqual(config?.windowSize, 1,
                        "stop-and-wait skepticism carries into the reconnect")
         XCTAssertEqual(config?.paclen, 64,
@@ -240,9 +240,9 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         let path = DigiPath.from(["DRLNOD"])
         _ = connectSession(manager: coordinator.sessionManager, destination: remote, path: path)
 
-        let key = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: path.display)
+        let key = AdaptiveScope.route(radio: .primary, destination: "KB5YZB-7", path: path.display)
         coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 5.0,
-                                           source: "session", routeKey: key,
+                                           source: "session", scope: key,
                                            newFrames: 1, retransmits: 0)
 
         _ = coordinator.sessionManager.handleInboundDISC(from: remote, path: path, radio: .primary)

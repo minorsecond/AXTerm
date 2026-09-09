@@ -171,3 +171,115 @@ final class AdaptiveStatusStoreTests: XCTestCase {
         XCTAssertEqual(history.first?.etx ?? 0, 2.1, accuracy: 0.001)
     }
 }
+
+/// What the toolbar shows when nobody has selected a session.
+///
+/// The adaptive tuner keeps its state per channel and per route. The display
+/// did not: its key was `destination|path`, and a channel-wide figure has
+/// neither, so every radio's channel collapsed onto one entry — and the
+/// toolbar itself showed `globalAdaptive`, the operator's configured baseline,
+/// which no link sample ever touches. On a two-radio station that read
+/// "All channels · K2 P128 N2 15" with ETX, loss and RTO all blank and
+/// "waiting for evidence" underneath, while the log showed both radios
+/// learning from real traffic.
+@MainActor
+final class AdaptiveChannelScopeDisplayTests: XCTestCase {
+
+    private func settings(k: Int, p: Int) -> TxAdaptiveSettings {
+        var s = TxAdaptiveSettings()
+        s.windowSize.currentAdaptive = k
+        s.paclen.currentAdaptive = p
+        s.maxRetries.currentAdaptive = 15
+        return s
+    }
+
+    private let direwolf = RadioID(rawValue: "direwolf")
+    private let ic705 = RadioID(rawValue: "ic705")
+
+    /// The defect itself: the key the coordinator files a channel figure
+    /// under. A channel scope has no destination and no path, so if the key
+    /// does not carry the radio, both radios write to the same entry and the
+    /// last one to learn erases the other.
+    func testEachRadiosChannelGetsItsOwnKey() {
+        let coordinator = SessionCoordinator()
+        let a = coordinator.adaptiveSessionID(radio: direwolf, destination: "", path: "")
+        let b = coordinator.adaptiveSessionID(radio: ic705, destination: "", path: "")
+        XCTAssertNotEqual(a, b, "both radios' channels collapsed onto one entry")
+    }
+
+    /// And the same route reached over two radios is two routes.
+    func testTheSameRouteOverTwoRadiosGetsTwoKeys() {
+        let coordinator = SessionCoordinator()
+        XCTAssertNotEqual(
+            coordinator.adaptiveSessionID(radio: direwolf, destination: "N0HI-7", path: "WIDE1-1"),
+            coordinator.adaptiveSessionID(radio: ic705, destination: "N0HI-7", path: "WIDE1-1"))
+    }
+
+    /// Two radios' channel figures are different measurements of different
+    /// channels and must not overwrite each other.
+    func testEachRadiosChannelKeepsItsOwnFigures() {
+        let store = AdaptiveStatusStore()
+        store.updateSession(id: "\(direwolf.rawValue)||", destination: "", pathSignature: "",
+                            radio: direwolf, settings: settings(k: 2, p: 128),
+                            lossRate: 0.19, etx: 3.43, srtt: nil)
+        store.updateSession(id: "\(ic705.rawValue)||", destination: "", pathSignature: "",
+                            radio: ic705, settings: settings(k: 1, p: 64),
+                            lossRate: 0.59, etx: 5.83, srtt: nil)
+
+        XCTAssertEqual(store.sessionAdaptiveByID["\(direwolf.rawValue)||"]?.k, 2)
+        XCTAssertEqual(store.sessionAdaptiveByID["\(direwolf.rawValue)||"]?.etx, 3.43)
+        XCTAssertEqual(store.sessionAdaptiveByID["\(ic705.rawValue)||"]?.k, 1)
+        XCTAssertEqual(store.sessionAdaptiveByID["\(ic705.rawValue)||"]?.etx, 5.83)
+    }
+
+    /// With nothing selected the toolbar shows a real channel, not the
+    /// baseline — and says which channel it is.
+    func testTheDefaultChannelIsShownInsteadOfTheBaseline() {
+        let store = AdaptiveStatusStore()
+        store.updateGlobal(settings: settings(k: 2, p: 128),
+                           lossRate: nil, etx: nil, srtt: nil)
+        XCTAssertNil(store.effectiveAdaptive?.radio, "the baseline belongs to no radio")
+
+        store.updateSession(id: "\(ic705.rawValue)||", destination: "", pathSignature: "",
+                            radio: ic705, settings: settings(k: 1, p: 64),
+                            lossRate: 0.59, etx: 5.83, srtt: nil)
+        store.setDefaultChannel(id: "\(ic705.rawValue)||")
+
+        XCTAssertEqual(store.effectiveAdaptive?.radio, ic705)
+        XCTAssertEqual(store.effectiveAdaptive?.etx, 5.83,
+                       "the figure shown must be one a link sample produced")
+        XCTAssertEqual(AdaptiveScopeLabel.text(for: store.effectiveAdaptive,
+                                               radioName: { _ in "IC-705" },
+                                               hasMultipleRadios: true),
+                       "IC-705 channel")
+    }
+
+    /// A selected session still wins over the default channel.
+    func testASelectedRouteStillWins() {
+        let store = AdaptiveStatusStore()
+        store.updateSession(id: "\(ic705.rawValue)||", destination: "", pathSignature: "",
+                            radio: ic705, settings: settings(k: 1, p: 64),
+                            lossRate: 0.59, etx: 5.83, srtt: nil)
+        store.setDefaultChannel(id: "\(ic705.rawValue)||")
+        store.updateSession(id: "\(ic705.rawValue)|N0HI-7|WIDE1-1",
+                            destination: "N0HI-7", pathSignature: "WIDE1-1",
+                            radio: ic705, settings: settings(k: 4, p: 256),
+                            lossRate: 0.01, etx: 1.05, srtt: nil)
+        store.setSelectedSession(id: "\(ic705.rawValue)|N0HI-7|WIDE1-1")
+
+        XCTAssertEqual(store.effectiveAdaptive?.k, 4)
+        XCTAssertEqual(store.effectiveAdaptive?.destination, "N0HI-7")
+    }
+
+    /// The default falling away — the radio goes, its entry goes — must not
+    /// leave the toolbar showing a stale channel's numbers.
+    func testAMissingDefaultFallsBackToTheBaseline() {
+        let store = AdaptiveStatusStore()
+        store.updateGlobal(settings: settings(k: 2, p: 128),
+                           lossRate: nil, etx: nil, srtt: nil)
+        store.setDefaultChannel(id: "\(ic705.rawValue)||")
+        XCTAssertNil(store.effectiveScopeID)
+        XCTAssertEqual(store.effectiveAdaptive?.k, 2)
+        XCTAssertNil(store.effectiveAdaptive?.radio)
+    }
+}

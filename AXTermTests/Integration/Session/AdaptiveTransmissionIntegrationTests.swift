@@ -40,8 +40,8 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         let peerA = AX25Address(call: "PEER", ssid: 0)
         let peerB = AX25Address(call: "OTHER", ssid: 1)
 
-        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
-        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: 1.0, source: "session", routeKey: RouteAdaptiveKey(destination: "OTHER-1", pathSignature: "WIDE1-1"))
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: ""))
+        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: 1.0, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "OTHER-1", path: "WIDE1-1"))
 
         let sessionA = coordinator.sessionManager.session(for: peerA, path: DigiPath())
         let sessionB = coordinator.sessionManager.session(for: peerB, path: DigiPath.from(["WIDE1-1"]))
@@ -51,8 +51,8 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
 
         coordinator.clearAllLearned()
 
-        let configAAfter = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
-        let configBAfter = coordinator.sessionManager.getConfigForDestination?("OTHER-1", "WIDE1-1") ?? AX25SessionConfig()
+        let configAAfter = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary) ?? AX25SessionConfig()
+        let configBAfter = coordinator.sessionManager.getConfigForDestination?("OTHER-1", "WIDE1-1", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(configAAfter.windowSize, 2, "After clear, PEER route uses global default")
         XCTAssertEqual(configBAfter.windowSize, 2, "After clear, OTHER route uses global default")
     }
@@ -68,9 +68,9 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
 
         // Spec 4.2: the direct route earns its larger window with a streak.
         for _ in 0..<10 {
-            coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""), newFrames: 1, retransmits: 0)
+            coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: ""), newFrames: 1, retransmits: 0)
         }
-        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"), newFrames: 1, retransmits: 1)
+        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: "DIGI-1"), newFrames: 1, retransmits: 1)
 
         // Live sessions: the merged branch counts only sessions that are
         // actually up — ended ones lingering in the dictionary must not force
@@ -84,13 +84,13 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         let sessionVia = coordinator.sessionManager.session(for: peer, path: DigiPath.from(["DIGI-1"]))
         coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath.from(["DIGI-1"]), radio: .primary)
 
-        let merged = coordinator.sessionManager.getConfigForDestination?("PEER-0", "other") ?? AX25SessionConfig()
+        let merged = coordinator.sessionManager.getConfigForDestination?("PEER-0", "other", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(merged.windowSize, 1, "Merged uses min(window) across routes")
 
         XCTAssertEqual(sessionDirect.stateMachine.config.windowSize, 3, "Direct had good link at creation")
         XCTAssertEqual(sessionVia.stateMachine.config.windowSize, 1, "Via had high loss at creation")
 
-        coordinator.applyLinkQualitySample(lossRate: 0.02, etx: 1.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""), newFrames: 1, retransmits: 0)
+        coordinator.applyLinkQualitySample(lossRate: 0.02, etx: 1.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: ""), newFrames: 1, retransmits: 0)
         let sameDirect = coordinator.sessionManager.existingSession(for: peer, path: DigiPath())
         XCTAssertNotNil(sameDirect)
         XCTAssertEqual(sameDirect!.stateMachine.config.windowSize, 3, "Existing session config must not change after new samples")
@@ -102,7 +102,7 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         defer { SessionCoordinator.shared = nil }
 
         coordinator.adaptiveTransmissionEnabled = false
-        var config = coordinator.sessionManager.getConfigForDestination?("VANILLA-0", "") ?? AX25SessionConfig()
+        var config = coordinator.sessionManager.getConfigForDestination?("VANILLA-0", "", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(config.windowSize, 4)
         XCTAssertEqual(config.maxRetries, 10)
 
@@ -111,7 +111,7 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         coordinator.syncSessionManagerConfigFromAdaptive()
         coordinator.useDefaultConfigForDestinations.insert("VANILLA-0")
 
-        config = coordinator.sessionManager.getConfigForDestination?("VANILLA-0", "") ?? AX25SessionConfig()
+        config = coordinator.sessionManager.getConfigForDestination?("VANILLA-0", "", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(config.windowSize, 4, "Overridden station (e.g. vanilla) gets default config")
     }
 
@@ -122,9 +122,9 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
 
         coordinator.adaptiveTransmissionEnabled = true
         coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = true
-        coordinator.applyLinkQualitySample(lossRate: 0.08, etx: 1.2, srtt: 1.5, source: "session", routeKey: RouteAdaptiveKey(destination: "AXDP-0", pathSignature: ""))
+        coordinator.applyLinkQualitySample(lossRate: 0.08, etx: 1.2, srtt: 1.5, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "AXDP-0", path: ""))
 
-        let config = coordinator.sessionManager.getConfigForDestination?("AXDP-0", "") ?? AX25SessionConfig()
+        let config = coordinator.sessionManager.getConfigForDestination?("AXDP-0", "", .primary) ?? AX25SessionConfig()
         XCTAssertGreaterThanOrEqual(config.windowSize, 2)
         XCTAssertLessThanOrEqual(config.windowSize, 7)
         XCTAssertGreaterThanOrEqual(config.rtoMin ?? 0, 1.0)
@@ -150,7 +150,7 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         coordinator.globalAdaptiveSettings.maxRetries.manualValue = 5
         coordinator.globalAdaptiveSettings.maxRetries.mode = .manual
         coordinator.syncSessionManagerConfigFromAdaptive()
-        coordinator.applyLinkQualitySample(lossRate: 0.5, etx: 5.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
+        coordinator.applyLinkQualitySample(lossRate: 0.5, etx: 5.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: ""))
 
         let sameSession = coordinator.sessionManager.existingSession(for: peer, path: DigiPath())
         XCTAssertNotNil(sameSession)

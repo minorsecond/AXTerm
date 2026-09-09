@@ -579,7 +579,12 @@ final class AX25SessionManager: ObservableObject {
     var onOutboundAckReceived: ((AX25Session, Int) -> Void)?
 
     /// When set, used to get session config per route (destination + path) so direct vs via-digi use separate learned params. If nil, use defaultConfig.
-    var getConfigForDestination: ((String, String) -> AX25SessionConfig)?
+    /// Adaptive configuration for an outgoing link.
+    ///
+    /// Takes the radio as well as the destination and path: paclen and window
+    /// are properties of the channel, so the same station reached on two
+    /// radios is two different sets of answers. See `AdaptiveScope`.
+    var getConfigForDestination: ((String, String, RadioID) -> AX25SessionConfig)?
 
     // MARK: - AX.25 2.2 negotiation (XID)
 
@@ -880,7 +885,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         let pathSignature = path.display
-        var config = getConfigForDestination?(destination.display, pathSignature) ?? defaultConfig
+        var config = getConfigForDestination?(destination.display, pathSignature, radio) ?? defaultConfig
         // A completed XID exchange binds every future session with this
         // station: SREJ and the peer's receive ceilings apply whether the
         // next link is opened by us or by an inbound SABM.
@@ -1703,7 +1708,7 @@ final class AX25SessionManager: ObservableObject {
                 "peer": source.display
             ])
             let pathSignature = path.display
-            var config = getConfigForDestination?(source.display, pathSignature) ?? defaultConfig
+            var config = getConfigForDestination?(source.display, pathSignature, radio) ?? defaultConfig
             // Honor a completed XID exchange (see session(for:)): the SABM
             // following our XID response must open the link with what the
             // response promised.
