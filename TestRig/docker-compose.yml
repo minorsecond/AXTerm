@@ -41,6 +41,170 @@ services:
       - "8011:8011"
     restart: unless-stopped
 
+  # --- aprs: the reference implementation, on the air ------------------
+  # Real Xastir as an APRS station on the shared channel, so "AXTerm matches
+  # Xastir" becomes a claim a test can fail instead of a comment. See
+  # xastir/Dockerfile for why it needs a pty bridge and a virtual X server.
+  #
+  #   docker compose --profile aprs up -d
+  #
+  # XASTIR-1 answers queries and beacons; XASTIR-2 is deliberately configured
+  # not to beacon at all, so a query answer cannot be confused with a posit
+  # that was coming anyway — the exact ambiguity APRSAnswerEvidence exists for.
+  xastir:
+    profiles: ["aprs"]
+    build: ./xastir
+    depends_on:
+      - kisshub
+    networks:
+      channel:
+        ipv4_address: 172.28.99.40
+    environment:
+      CALLSIGN: "XASTIR-1"
+      HUB_HOST: "kisshub"
+      HUB_PORT: "8010"
+      STATION_LAT: "3936.700N"
+      STATION_LONG: "10443.900W"
+      POSIT_RATE: "600"
+    restart: unless-stopped
+
+  xastir-quiet:
+    profiles: ["aprs"]
+    build: ./xastir
+    depends_on:
+      - kisshub
+    networks:
+      channel:
+        ipv4_address: 172.28.99.41
+    environment:
+      CALLSIGN: "XASTIR-2"
+      HUB_HOST: "kisshub"
+      HUB_PORT: "8010"
+      STATION_LAT: "3940.000N"
+      STATION_LONG: "10450.000W"
+      DISABLE_POSIT_TX: "1"
+      POSIT_RATE: "86400"
+    restart: unless-stopped
+
+  # --- rfnet: everything over real AFSK, one modem per station ---------
+  # A genuinely live-RF version of the aprs profile. No frame-copying hub:
+  # every station has its own Direwolf, all of them playing into and listening
+  # to one shared PulseAudio null sink. Each frame is modulated to 1200-baud
+  # AFSK, mixed into the same audio, and demodulated by every other modem —
+  # with its own DCD, TXDELAY and slot timing. Two stations that key together
+  # garble each other for real.
+  #
+  #   docker compose --profile rfnet up -d
+  #   # AXTerm / the oracle script -> 127.0.0.1:8013
+  #
+  # Slower and lossier than the hub, which is the point: it is the closest the
+  # rig gets to the air, and answers that survive it survive a real channel.
+  rf-ether:
+    profiles: ["rfnet"]
+    build: ./pulse
+    networks:
+      channel:
+        ipv4_address: 172.28.99.50
+    environment:
+      ETHER_VOLUME: "25%"
+
+  # One modem per station. KISS ports differ only so the logs are readable.
+  modem-a:
+    profiles: ["rfnet"]
+    build: ./direwolf
+    depends_on: [rf-ether]
+    networks:
+      channel:
+        ipv4_address: 172.28.99.51
+    environment:
+      PULSE_SERVER: "tcp:172.28.99.50:4713"
+      MYCALL: "XASTIR-1"
+      KISSPORT: "8001"
+    restart: unless-stopped
+
+  modem-b:
+    profiles: ["rfnet"]
+    build: ./direwolf
+    depends_on: [rf-ether]
+    networks:
+      channel:
+        ipv4_address: 172.28.99.52
+    environment:
+      PULSE_SERVER: "tcp:172.28.99.50:4713"
+      MYCALL: "XASTIR-2"
+      KISSPORT: "8001"
+    restart: unless-stopped
+
+  # The modem AXTerm (or scripts/xastir_oracle.py) connects to, so our frames
+  # are modulated by a radio of our own rather than injected into a hub.
+  modem-us:
+    profiles: ["rfnet"]
+    build: ./direwolf
+    depends_on: [rf-ether]
+    networks:
+      channel:
+        ipv4_address: 172.28.99.53
+    ports:
+      - "8013:8001"
+    environment:
+      PULSE_SERVER: "tcp:172.28.99.50:4713"
+      MYCALL: "K0EPI-7"
+      KISSPORT: "8001"
+    restart: unless-stopped
+
+  # A digipeater and nothing else — the AD1CT case, reproduced.
+  #
+  # It repeats WIDEn-N traffic with callsign substitution, and answers no query
+  # ever, because there is no APRS application behind the modem. That is the
+  # single most common station on a real APRS channel and the one that made
+  # "it hears me but won't answer" look like a bug.
+  modem-digi:
+    profiles: ["rfnet"]
+    build: ./direwolf
+    depends_on: [rf-ether]
+    networks:
+      channel:
+        ipv4_address: 172.28.99.56
+    environment:
+      PULSE_SERVER: "tcp:172.28.99.50:4713"
+      MYCALL: "RFDIGI-1"
+      KISSPORT: "8001"
+      DIGIPEAT: "DIGIPEAT 0 0 ^WIDE[3-7]-[1-7]$$ ^WIDE[12]-[12]$$ TRACE"
+    restart: unless-stopped
+
+  xastir-rf-a:
+    profiles: ["rfnet"]
+    build: ./xastir
+    depends_on: [modem-a]
+    networks:
+      channel:
+        ipv4_address: 172.28.99.54
+    environment:
+      CALLSIGN: "XASTIR-1"
+      HUB_HOST: "172.28.99.51"      # its own modem's KISS port, not a hub
+      HUB_PORT: "8001"
+      STATION_LAT: "3936.700N"
+      STATION_LONG: "10443.900W"
+      POSIT_RATE: "600"
+    restart: unless-stopped
+
+  xastir-rf-b:
+    profiles: ["rfnet"]
+    build: ./xastir
+    depends_on: [modem-b]
+    networks:
+      channel:
+        ipv4_address: 172.28.99.55
+    environment:
+      CALLSIGN: "XASTIR-2"
+      HUB_HOST: "172.28.99.52"
+      HUB_PORT: "8001"
+      STATION_LAT: "3940.000N"
+      STATION_LONG: "10450.000W"
+      DISABLE_POSIT_TX: "1"
+      POSIT_RATE: "86400"
+    restart: unless-stopped
+
   # --- dual: a second frequency ---------------------------------------
   # hub B on :8020 with its own node, and a bridge node with one port on
   # each hub. Point one AXTerm radio at :8010 and another at :8020.

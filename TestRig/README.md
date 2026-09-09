@@ -248,3 +248,122 @@ These live tools are the sibling of the deterministic Swift fuzz suite
 (`NodeSurfaceFuzzTests`, `AX25FuzzTests`, `AX25SessionFuzzTests`): the
 Swift ones gate every build; these prove the whole app survives the
 same abuse as a running process.
+## The Xastir oracle (`--profile aprs`)
+
+    docker compose --profile aprs up -d
+
+Runs real **Xastir 2.1.8** as an APRS station on the shared channel, so
+"AXTerm matches Xastir" is a claim a test can fail instead of a comment.
+`XASTIR-1` answers queries and beacons; `XASTIR-2` never beacons, so an answer
+cannot be confused with a posit that was coming anyway.
+
+Two things about Xastir shape the container (`xastir/Dockerfile`):
+
+- **No network-KISS device type.** `enum Device_Types` offers serial KISS,
+  kernel AX.25 or AGWPE — nothing that dials a TCP KISS port. `socat` bridges a
+  pty to the hub and Xastir opens it as `DEVICE_SERIAL_KISS_TNC` (type 10).
+- **No headless mode.** It is X11/Motif, so it runs under Xvfb. Nothing ever
+  looks at the frame buffer.
+
+Three config traps, all of which fail silently and cost an hour each:
+
+| Key | Trap |
+| --- | --- |
+| `DEVICE0_SPEED` | The **termios constant**, not a baud rate. `B9600` is `13`; writing `9600` fails `cfsetispeed` and reports only "Error opening interface 0 Hard Fail". The real error is behind `debug_level & 2` — set `XASTIR_DEBUG=2`. |
+| `STATION_LAT` / `STATION_LONG` | Exactly `DDMM.mmmN` / `DDDMM.mmmW`. Anything else is silently replaced with `0000.000N`. |
+| `STATION_MESSAGE_TYPE` | A **character**, used directly as the APRS data-type identifier. Writing `0` does not mean "type zero" — it makes the DTI the literal `'0'` and every posit malformed. Use `=`. |
+
+Capture fixtures with `scripts/xastir_oracle.py`; see `Docs/APRSMessaging.md`.
+
+## Over the air for real (`--profile rfnet`)
+
+    docker compose --profile rfnet up -d
+    # AXTerm / scripts/xastir_oracle.py -> 127.0.0.1:8013
+
+The `aprs` profile puts Xastir on the kisshub, which *copies* frames between
+clients — a channel model. `rfnet` removes the model: **one Direwolf per
+station**, all of them playing into and listening to a single shared PulseAudio
+null sink (`pulse/`). Every frame is AFSK-modulated at 1200 baud and
+demodulated by a separate modem with its own DCD, TXDELAY and slot timing, and
+two stations that key together garble each other in the audio domain.
+
+    xastir-rf-a ──pty──▶ modem-a ─┐
+    xastir-rf-b ──pty──▶ modem-b ─┼──▶ rf-ether (null sink + monitor)
+    AXTerm :8013 ───────▶ modem-us ┘
+
+Measured against the hub: identical protocol answers, 1.9–3.9 s instead of
+~0.9 s. `XastirRFParityTests` pins both facts.
+
+Traps found building it, all of which present as "it just sits there":
+
+- **`docker compose restart` strands Xastir.** It opens its KISS pty once at
+  startup and never reopens it, so a socat that exits and respawns hands it a
+  fresh `/dev/pts` while Xastir holds the dead one — the station looks healthy
+  and hears nothing. socat now uses `forever,retry` so the process, and the
+  pty, survive a TNC restart.
+- **Restart leaves state behind.** `/tmp/.X99-lock` makes Xvfb refuse, and
+  `~/.xastir/xastir.pid` records pid 1 — which always exists in a container, so
+  Xastir's "another instance is running" check can never pass again. The
+  entrypoint clears both.
+- **PulseAudio needs `module-native-protocol-unix` too.** With only the TCP
+  module the modems connect fine but the container's own `pactl` cannot, so
+  `set-default-sink` and the channel level fail "Connection refused" and the
+  misconfiguration shows up only as an overdriven channel.
+- **A null sink's monitor is full-scale**, so Direwolf reports `audio level =
+  198` and warns. It decodes, but clipping makes collisions destructive for the
+  wrong reason. `ETHER_VOLUME` attenuates the sink.
+
+### The digipeater that never answers
+
+`rfnet` includes `modem-digi` — a Direwolf with `DIGIPEAT` and no APRS
+application behind it. It repeats WIDEn-N traffic with callsign substitution
+and answers no query, ever, which is the most common station on a real APRS
+channel and the one that makes "it hears me but won't answer" look like a bug.
+
+One probe captures the whole thing: a `?APRSP` sent to the digipeater *via*
+`WIDE1-1` comes back repeated by it — proof it received us — with no answer
+attached. `RFDigipeaterEvidenceTests` runs those exact frames through AXTerm's
+real `AX25.decodeFrame` and the live `APRSPingTracker` subscription, so the
+"it hears us but did not answer" line is derived from bytes that were on a
+channel rather than from a hand-built fixture.
+
+Its counter-case matters as much: a beacon sent *direct* is never digipeated,
+because there is no path to repeat — which is why a silent direct ping says
+nothing about whether the station heard you.
+
+### Proving AXTerm's own transmissions
+
+`scripts/axterm_onair.py` transmits AXTerm's queries, ping, message and beacon
+and records the channel's response; `AXTermOnAirTests` asserts AXTerm's
+production builders emit those exact bytes. See `Docs/APRSMessaging.md`.
+
+The beacon frames are the half that no reply can prove: nothing answers a
+beacon. The script therefore also scrapes `modem-a`'s log for Direwolf's own
+decode of each frame it sent, which is how the **compressed** beacon is held to
+the fix it encoded — base-91 is where a wrong divisor still yields a
+well-formed frame at the wrong place.
+
+### Every APRS type, on the air (`scripts/aprs_zoo.py`)
+
+    docker compose --profile rfnet up -d
+    cd scripts
+    python3 aprs_zoo.py --out ../../AXTermTests/Fixtures/aprs-zoo.json
+
+Transmits one frame of every APRS type AXTerm can read — Mic-E, compressed and
+uncompressed positions, object, item, telemetry, weather, status — through a
+real modem, and records Direwolf's decode of each. `APRSZooTests` asserts
+AXTerm's parsers agree.
+
+These types are **parse-only** in AXTerm, so they can never be proven by a
+round trip through it; something else has to put them on the channel and a
+different implementation has to say what they mean.
+
+Two traps, both found the hard way:
+
+- **Match the decode by content, not by address.** Two probes share
+  `SIMLA>APMI06` (telemetry and status), and keying the log scrape on
+  `SRC>DEST` silently handed the status frame the telemetry decode. Each frame
+  carries a `needle` — a fragment unique to it — for this reason.
+- **Direwolf does not always leave a blank line** between a frame and a reply
+  that arrives on its heels, so a decode block ends at the next `[` as well as
+  at a blank line (`decode_block` in `xastir_oracle.py`).

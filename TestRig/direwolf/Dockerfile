@@ -7,7 +7,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
         direwolf pulseaudio libasound2-plugins alsa-utils \
     && rm -rf /var/lib/apt/lists/*
-COPY direwolf.conf /etc/direwolf.conf
+COPY direwolf.conf.in /etc/direwolf.conf.in
 COPY asound.conf /etc/asound.conf
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

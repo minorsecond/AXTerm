@@ -1,10 +1,16 @@
 ADEVICE default
 ACHANNELS 1
 CHANNEL 0
-MYCALL N0CALL
+MYCALL @MYCALL@
 MODEM 1200
-KISSPORT 8001
-AGWPORT 8000
+KISSPORT @KISSPORT@
+AGWPORT 0
 TXDELAY 10
 TXTAIL 5
 DWAIT 0
+
+# Optional. A modem with this set is a digipeater and nothing else: it repeats
+# frames whose path names it, and answers no queries at all, because there is
+# no APRS application behind it. That combination is not a misconfiguration —
+# it is what most digipeaters on the air actually are.
+@DIGIPEAT@
