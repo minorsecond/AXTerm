@@ -1,0 +1,55 @@
+{
+  "captured_at": "2026-09-09T21:59:03Z",
+  "stamp": "091200z",
+  "channel": "rfnet: 1200-baud AFSK through a real modem, decoded by Direwolf",
+  "note": "AXTerm's object encoder, proven against an implementation that is not AXTerm. Frames built by this script independently; APRSObjectOnAirTests asserts AXTerm emits the same bytes. Regenerate with TestRig/scripts/axterm_object_onair.py.",
+  "frames": [
+    {
+      "name": "object-place",
+      "info": ";ROADCLOSE*091200z3936.70N/10443.90W-US-85 washed out",
+      "info_hex": "3b524f4144434c4f53452a3039313230307a333933362e37304e2f31303434332e3930572d55532d383520776173686564206f7574",
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f03b524f4144434c4f53452a3039313230307a333933362e37304e2f31303434332e3930572d55532d383520776173686564206f7574",
+      "needle": "ROADCLOSE",
+      "decoded_by_direwolf": [
+        "Object, \"ROADCLOSE\", House, Experimental",
+        "N 39 36.7000, W 104 43.9000",
+        "US-85 washed out"
+      ]
+    },
+    {
+      "name": "object-kill",
+      "info": ";ROADCLOSE_091200z3936.70N/10443.90W-",
+      "info_hex": "3b524f4144434c4f53455f3039313230307a333933362e37304e2f31303434332e3930572d",
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f03b524f4144434c4f53455f3039313230307a333933362e37304e2f31303434332e3930572d",
+      "needle": "ROADCLOSE",
+      "decoded_by_direwolf": [
+        "Object, \"ROADCLOSE\", House, Experimental",
+        "N 39 36.7000, W 104 43.9000",
+        "US-85 washed out"
+      ]
+    },
+    {
+      "name": "object-alternate-table",
+      "info": ";FIRE     *091200z3936.00N\\10442.00W!structure fire",
+      "info_hex": "3b4649524520202020202a3039313230307a333933362e30304e5c31303434322e303057217374727563747572652066697265",
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f03b4649524520202020202a3039313230307a333933362e30304e5c31303434322e303057217374727563747572652066697265",
+      "needle": "FIRE",
+      "decoded_by_direwolf": [
+        "Object, \"FIRE\", Emergency!, Experimental",
+        "N 39 36.0000, W 104 42.0000",
+        "structure fire"
+      ]
+    },
+    {
+      "name": "object-truncated-name",
+      "info": ";EVACUATIO*091200z3930.00N/10448.00W+",
+      "info_hex": "3b45564143554154494f2a3039313230307a333933302e30304e2f31303434382e3030572b",
+      "frame_hex": "82a0b482b0a8e09ea48286988a6303f03b45564143554154494f2a3039313230307a333933302e30304e2f31303434382e3030572b",
+      "needle": "EVACUATI",
+      "decoded_by_direwolf": [
+        "Object, \"EVACUATIO\", Red Cross, Experimental",
+        "N 39 30.0000, W 104 48.0000"
+      ]
+    }
+  ]
+}
