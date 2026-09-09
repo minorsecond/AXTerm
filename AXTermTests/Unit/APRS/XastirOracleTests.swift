@@ -288,11 +288,15 @@ final class XastirDifferentialTests: XCTestCase {
         XCTAssertEqual(info, try xastirsAnswer("?APRSP"))
     }
 
-    /// The gap this whole exercise exposed: the Ask sheet offers seven queries
-    /// and we answer four. The other three must produce *no transmission* —
-    /// not a wrong answer, not a position — exactly as Xastir produces none.
+    /// The gap this whole exercise exposed: the Ask sheet offers more queries
+    /// than we answer, and the ones we do not answer must produce *no
+    /// transmission* — not a wrong answer, not a position — exactly as Xastir
+    /// produces none.
+    ///
+    /// `?APRSO` used to be on this list and is deliberately not any more; see
+    /// `testWeAnswerTheObjectQueryThatXastirDoesNot`.
     func testTheQueriesWeDoNotImplementTransmitNothing() async throws {
-        for query in ["?APRSS", "?APRSO", "?APRSM", "?APRSH K0EPI", "?IGATE?", "?WX?"] {
+        for query in ["?APRSS", "?APRSM", "?APRSH K0EPI", "?IGATE?", "?WX?"] {
             sent = []
             let svc = try standIn()
             svc.receive(.directedQuery(addressee: "XASTIR-1", query: query),
@@ -300,6 +304,28 @@ final class XastirDifferentialTests: XCTestCase {
             XCTAssertTrue(sent.isEmpty,
                           "\(query) put \(sent.map(\.info)) on the air; Xastir answers nothing")
         }
+    }
+
+    /// One deliberate divergence, recorded here so it stays deliberate.
+    ///
+    /// Xastir recognises `?APRSO` as a legal query and answers nothing —
+    /// `db.c` marks it `// NOT IMPLEMENTED YET`. We answer it, because it is
+    /// APRS 1.01 ch.15 and because placing objects made it a real question:
+    /// a station asking what objects we hold should not get the same silence
+    /// as from a station that never heard of the query.
+    ///
+    /// This test exists because the differential suite failed when `?APRSO`
+    /// started answering, which is exactly what it is for. Differing from
+    /// Xastir is allowed; differing by accident is not.
+    func testWeAnswerTheObjectQueryThatXastirDoesNot() async throws {
+        sent = []
+        let svc = try standIn()
+        svc.ownObjects = { [] }
+        svc.receive(.directedQuery(addressee: "XASTIR-1", query: "?APRSO"),
+                    context: asAsked("ORACLE-1"))
+        XCTAssertEqual(sent.count, 1, "silence is what Xastir sends; we say something")
+        XCTAssertEqual(sent.first?.info,
+                       APRSMessage.messageInfo(to: "ORACLE-1", text: "No objects", number: nil))
     }
 
     /// Case, again — but as a transmission test rather than a catalogue one.
