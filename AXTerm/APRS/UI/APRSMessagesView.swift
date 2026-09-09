@@ -27,6 +27,7 @@ struct APRSMessagesView: View {
 
     @State private var selectedPeer: String?
     @State private var showNewMessage = false
+    @State private var showNewBulletin = false
     @State private var showProbe = false
     @State private var draft = ""
 
@@ -60,6 +61,12 @@ struct APRSMessagesView: View {
                 messaging.sendMessage(to: to, text: text, from: myCallsign,
                                       path: outgoingPath(), radioID: nil)
                 selectedPeer = to.uppercased()
+            }
+        }
+        .sheet(isPresented: $showNewBulletin) {
+            APRSBulletinComposeSheet(myCallsign: myCallsign) { identifier, group, text in
+                messaging.sendBulletin(identifier: identifier, group: group, text: text,
+                                       from: myCallsign, path: outgoingPath(), radioID: nil)
             }
         }
         .sheet(isPresented: $showProbe) {
@@ -130,6 +137,11 @@ struct APRSMessagesView: View {
             Button { showNewMessage = true } label: {
                 Label("New message", systemImage: "square.and.pencil")
             }
+            // Distinct from a message on purpose. One goes to a station and
+            // asks for an ack; the other goes to everybody and nobody answers.
+            Button { showNewBulletin = true } label: {
+                Label("New bulletin", systemImage: "megaphone")
+            }
         }
     }
 
@@ -184,7 +196,8 @@ struct APRSMessagesView: View {
                 composeBar(to: thread.peer)
             } else {
                 Divider()
-                Text("Bulletins are broadcast to everyone and can't be replied to.")
+                Text("Bulletins are broadcast to everyone and can't be replied to. "
+                     + "Use New bulletin to send one.")
                     .font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(8)

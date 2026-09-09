@@ -449,6 +449,33 @@ final class APRSMessagingService: ObservableObject {
         return rec
     }
 
+    /// Broadcast a bulletin to the whole channel.
+    ///
+    /// Not numbered and not retried, and both of those are the protocol rather
+    /// than thrift. A message number requests an ack, and a bulletin goes to
+    /// every station in range — asking for one would have all of them answer at
+    /// once. Re-sending is the operator's to decide and replaces our own
+    /// earlier bulletin in that slot; there is nothing here to retry *to*.
+    ///
+    /// - Returns: the reason it was not sent, or nil.
+    @discardableResult
+    func sendBulletin(identifier: Character, group: String = "", text: String,
+                      from localCall: String, path: [String],
+                      radioID: String?) -> APRSBulletin.Problem? {
+        if let problem = APRSBulletin.problem(identifier: identifier, group: group, text: text) {
+            return problem
+        }
+        let slot = APRSBulletin.addressee(identifier: identifier, group: group)
+        let body = text.trimmingCharacters(in: .whitespaces)
+        persist(APRSMessageRecord(
+            direction: .outgoing, kind: .bulletin, localCall: localCall, peer: slot,
+            text: body, radioID: radioID, path: path, createdAt: now(),
+            state: .sent, isRead: true))
+        emit(APRSOutbound(info: APRSBulletin.info(identifier: identifier, group: group, text: body),
+                          addressee: slot, path: path, radioID: radioID))
+        return nil
+    }
+
     /// Send a directed query (e.g. `?APRSP`) to a station. Unnumbered.
     func sendQuery(_ query: String, to peer: String, from localCall: String,
                    path: [String], radioID: String?) {

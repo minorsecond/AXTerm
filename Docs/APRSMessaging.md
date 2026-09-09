@@ -123,6 +123,37 @@ thing that matters**:
 | `?APRSO` | objects & items | no — a broadcast |
 | `?APRSM` | held messages | **yes** |
 
+## Bulletins (`APRSBulletin`, `APRSBulletinComposeSheet`)
+
+Objects say *where*; bulletins say *what*. `:BLN1␣␣␣␣␣:Net control 147.105,
+check in` reaches every station in range with no addressee anyone answers to,
+and every client shows it apart from ordinary traffic. Until this existed
+AXTerm could read them and not write one, which left the app able to mark a
+road closed but not announce the net coordinating around it.
+
+**A slot is per station.** `BLN1` from here and `BLN1` from another station are
+two different bulletins; re-sending our own replaces our own earlier one on
+every receiver. That is the *opposite* of an object name, which is a key across
+the whole channel — so there is no collision check here and there should not be
+one. Nobody can overwrite our bulletin and we cannot overwrite theirs. The sheet
+says so, because sending the same slot twice is both how a correction is made
+and how a careless second send erases the first.
+
+`0`–`9` are bulletins, `A`–`Z` announcements (same frame; the convention is
+that an announcement stays up longer and is repeated less). A group narrows the
+audience — `BLN1ARES` — inside the same nine characters.
+
+**Never numbered, never retried.** Both are the protocol rather than thrift: a
+message number requests an ack, and a bulletin goes to everyone, so asking for
+one would have the whole channel answer at once. There is nothing to retry
+*to*. Re-sending is the operator's decision and replaces rather than repeats.
+
+`APRSBulletin.problem` refuses an empty bulletin, a bad identifier, a group that
+will not fit or is not alphanumeric, text past 67 characters (saying how far
+over, because "too long" leaves the operator counting), and the characters APRS
+reserves inside message text — `{` opens a message number, `|` and `~` are the
+spec's. A bulletin carrying one is read as protocol by somebody downstream.
+
 ### Answering `?APRSO`
 
 The objects this station owns go back out as ordinary object reports — the same

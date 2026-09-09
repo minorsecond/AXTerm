@@ -13,7 +13,7 @@ nonisolated struct APRSMessageRecord: Identifiable, Equatable, Sendable {
     /// What kind of message-class frame this is.
     enum Kind: String, Codable, Sendable {
         case message    // person-to-person text
-        case bulletin   // BLN… broadcast, read-only
+        case bulletin   // BLN… broadcast: no addressee, never acked
         case query      // a directed query we sent or received (?APRSP …)
     }
 

@@ -91,6 +91,36 @@ final class APRSMessagingServiceTests: XCTestCase {
         XCTAssertEqual(sent.first?.info, APRSMessage.messageInfo(to: "W0ARP", text: "AXTerm 1.0", number: nil))
     }
 
+    // MARK: - Bulletins
+
+    func testSendingABulletinBroadcastsItAndRecordsItAsOurs() async throws {
+        let svc = try makeService()
+        let refusal = svc.sendBulletin(identifier: "1", text: "Net control 147.105",
+                                       from: "K0EPI-7", path: [], radioID: "radio-primary")
+        XCTAssertNil(refusal)
+        XCTAssertEqual(sent.first?.info, ":BLN1     :Net control 147.105")
+        XCTAssertEqual(sent.first?.addressee, "BLN1")
+        let rec = try XCTUnwrap(svc.messages.first)
+        XCTAssertEqual(rec.kind, .bulletin)
+        XCTAssertEqual(rec.direction, .outgoing)
+        XCTAssertEqual(rec.peer, "BLN1")
+        // Never acked, so never retried: a pending bulletin would sit in the
+        // ladder forever waiting for an answer nobody sends.
+        XCTAssertNil(rec.number)
+        XCTAssertNil(rec.nextRetryAt)
+    }
+
+    /// A refused bulletin transmits nothing and records nothing. Half of it
+    /// going out would be worse than none.
+    func testARefusedBulletinIsNotTransmitted() async throws {
+        let svc = try makeService()
+        let refusal = svc.sendBulletin(identifier: "1", text: "brace } is fine but { is not",
+                                       from: "K0EPI-7", path: [], radioID: nil)
+        XCTAssertEqual(refusal, .reservedCharacter("{"))
+        XCTAssertTrue(sent.isEmpty)
+        XCTAssertTrue(svc.messages.isEmpty)
+    }
+
     // MARK: - ?APRSO
 
     private func object(_ name: String) -> String {
