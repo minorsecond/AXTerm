@@ -40,6 +40,11 @@ final class MapLayerStatus: ObservableObject {
     /// weather stations have been heard to infer a field at all. Nil also
     /// disables the switch: a layer that cannot draw anything should say why
     /// rather than sit there looking broken.
+    /// The area barometric picture, when enough stations report one. Not a
+    /// layer: nothing is drawn for it, and it stays useful whether or not the
+    /// weather wash is switched on.
+    @Published var pressure: APRSPressureNowcast.Nowcast?
+
     @Published var weatherFieldCaption: String?
 
     /// Which field parameters have enough stations reporting to be drawn.

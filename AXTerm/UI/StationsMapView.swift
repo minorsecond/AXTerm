@@ -681,6 +681,15 @@ struct StationsMapView: View {
         // Say why it cannot be drawn, rather than greying out a switch and
         // leaving the operator to guess. Two stations reporting the chosen
         // reading is the floor: one is a reading, not a field.
+        // Barometric tendency, which is the one predictive thing RF carries.
+        // Built from every station reporting one, not only those inside the
+        // weather field's coverage radius: a fall two counties away is still
+        // the thing arriving here in three hours.
+        layerStatus.pressure = APRSPressureNowcast.build(
+            stations.compactMap { station in
+                APRSWeatherTrend.pressureTendency(station.weatherHistory, now: Date())
+                    .map { .init(call: station.call, perThreeHours: $0.perThreeHours) }
+            })
         if let field = weatherField {
             layerStatus.weatherFieldCaption = field.summary(
                 inFahrenheit: settings.distanceUnitIsMiles)

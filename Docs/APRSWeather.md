@@ -110,3 +110,41 @@ it would leak into all of them.
 - `AXTermTests/Unit/Station/HeardStationWeatherTests.swift` — the reading
   surviving a position beacon that carries none, the card lines, the staleness
   rule, and the badge reaching the marker without contaminating the callsign.
+
+## Pressure tendency — the area nowcast
+
+`APRSPressureNowcast` turns the per-station tendencies in `APRSWeatherTrend`
+into one statement about the channel. It is the only genuinely predictive
+product RF carries: radar, lightning and warnings are all the internet, while
+barometric pressure arrives in every APRS weather report as `bnnnnn`.
+
+**Why tendency and not pressure.** Absolute pressure falls about 1 mb per 8 m
+of altitude, and this channel's stations run from roughly 1500 m to over
+3000 m — a spread of ~180 mb. APRS 1.01 says the field is reduced to sea
+level, but plenty of stations are misconfigured or do not reduce at all, so an
+absolute-pressure field would largely map who has set their WX3in1 up
+correctly. Whatever offset a station carries, it carries in both readings and
+it subtracts out of the change. That is what makes a tendency built from
+strangers' weather stations worth trusting, and it is pinned by
+`testAConstantPerStationOffsetCannotAffectTheVerdict`.
+
+**What it refuses to claim.**
+
+| guard | value | why |
+|---|---|---|
+| minimum span | 45 min | jitter over a short elapsed time divides into a dramatic rate |
+| reading freshness | 1 h | a forecast from a dead station is the worst thing this app could print |
+| window | 3 h | the standard every published interpretation is written against |
+| stations for an area | 3 | one barometer is a station reading, two that disagree are nothing |
+| agreement for an area | 0.7 | four falling is a system; three falling and three rising is noise |
+
+Below the last two the nowcast is still produced — a steep fall next door is
+worth seeing — but `isAreaWide` is false and the caveat says which.
+
+**The middle station, not the average.** A barometer stuck at a wild rate is
+the commonest failure on a channel of amateur weather stations, and a mean
+lets one of them invert the verdict. A station inside the steady band counts
+towards neither direction, so a quiet day cannot read as a confident system.
+
+Thresholds are the standard synoptic ones, in `APRSWeatherTrend.Outlook`:
+±1.0 mb/3h for falling/rising, ±3.5 for rapid.

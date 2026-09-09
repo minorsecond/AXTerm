@@ -182,6 +182,39 @@ struct MapLayerToggles: View {
                       + "About thirty fixes per station are kept whatever this is set to.")
             }
 
+            // A statement, not a layer: there is nothing to switch on, and it
+            // reads as a line of weather rather than a control. Shown only
+            // when a barometer has actually reported, because "steady" and
+            // "nobody is reporting" are different and must not look alike.
+            if let pressure = status.pressure {
+                VStack(alignment: .leading, spacing: 1) {
+                    Label(pressure.headline, systemImage: pressure.outlook.symbol)
+                        .font(.callout)
+                        .foregroundStyle(pressure.outlook.isNotable && pressure.isAreaWide
+                                         ? Color.orange : Color.primary)
+                    if let caveat = pressure.caveat {
+                        Text(caveat)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else if let steepest = pressure.steepest {
+                        Text("Steepest at \(steepest.call), "
+                             + String(format: "%+.1f mb/3h", steepest.perThreeHours))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .help("Barometric tendency over the last three hours, from the weather "
+                      + "stations this radio has heard. The change is used rather than the "
+                      + "pressure itself because a station's altitude and its sea-level "
+                      + "reduction cancel out of a difference \u{2014} absolute readings "
+                      + "across this much terrain would mostly map who has configured their "
+                      + "station correctly. Falling pressure means unsettled weather "
+                      + "approaching; a fall past about 3.5 mb in three hours usually brings "
+                      + "wind with it. It is a handful of amateur barometers, not a forecast.")
+
+                Divider()
+            }
+
             layer("Weather Field", "thermometer.medium",
                   isOn: $showsWeatherField,
                   caption: status.weatherFieldCaption ?? status.weatherFieldUnavailableReason,
