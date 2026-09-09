@@ -174,6 +174,14 @@ that keys the radio on the operator's behalf, and it writes into a namespace
 shared with every other station on the channel, so the affordance is built
 around the two things that can go wrong socially rather than technically.
 
+**Input, on iOS.** No gesture, because there isn't a good one: a long press
+already means something else, and this view does not track the map's centre, so
+a crosshair would be guessing at where the operator meant. Placing and moving
+both use **our own position** — the one point on this screen known exactly, and
+the field case anyway: you are standing at the aid station when you mark it, and
+you walk to the new spot to move it. Disabled with an explanation when there is
+no fix, rather than silently absent.
+
 **Input, on macOS.** Secondary click on open map. `buttonMask 0x2` is the
 right button, which is also what AppKit reports for a two-finger trackpad
 click and for Control-click, so all three work without asking the operator

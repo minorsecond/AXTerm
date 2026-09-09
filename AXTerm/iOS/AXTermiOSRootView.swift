@@ -780,6 +780,7 @@ struct AXTermiOSRootView: View {
         NavigationStack {
             StationsMapView(
                 stations: client.stations,
+                probe: client.aprsProbe,
                 recentPackets: Array(client.packets.suffix(600)),
                 gatewayGrids: gatewayGrids,
                 observerGrid: context.settings.gridSquare,
@@ -800,8 +801,14 @@ struct AXTermiOSRootView: View {
                 focusCallsign: $mapFocusCallsign,
                 elevation: elevation,
                 overlayStore: overlayStore,
-                onBeacon: { sessionCoordinator.sendBeacon(context.settings) },
-                beaconObstacle: { sessionCoordinator.beaconObstacle(context.settings) })
+                onBeacon: { sessionCoordinator.sendBeacon(settings) },
+                onPlaceObject: { name, live, latitude, longitude, table, code, comment in
+                    sessionCoordinator.sendAPRSObject(
+                        name: name, live: live, latitude: latitude, longitude: longitude,
+                        symbolTable: table, symbolCode: code, comment: comment,
+                        settings: settings)
+                },
+                beaconObstacle: { sessionCoordinator.beaconObstacle(settings) })
             // As on the Mac: started with the map, not with the app.
             .task {
                 let mine = AX25Address(call: settings.myCallsign.uppercased()).call

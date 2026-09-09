@@ -1660,6 +1660,28 @@ struct StationsMapView: View {
     /// station directory.
     @ViewBuilder
     private var actionsMenu: some View {
+        #if os(iOS)
+        // The Mac places by secondary-clicking a spot. A touch screen has no
+        // such gesture — a long press already means something else — and this
+        // view does not track the map's centre, so inventing a crosshair here
+        // would be guessing at where the operator meant. Our own position is
+        // the one point on the map this screen knows exactly, and it is also
+        // the field case: you are standing at the aid station when you mark it.
+        Button {
+            guard let here = observer else { return }
+            pendingObject = PendingObject(
+                coordinate: CLLocationCoordinate2D(latitude: here.latitude,
+                                                   longitude: here.longitude))
+        } label: {
+            Label("Place Object Here", systemImage: "mappin.and.ellipse")
+        }
+        .disabled(observer == nil || onPlaceObject == nil)
+        if observer == nil {
+            Text("No position yet \u{2014} set a grid square or wait for a fix")
+        }
+        Divider()
+        #endif
+
         if !unplaced.isEmpty || showsDirectoryNodes {
             Button {
                 Task { await lookUpUnplaced() }
@@ -2159,6 +2181,7 @@ struct StationsMapView: View {
                         // own name as no collision. Arming here and finishing
                         // with the ordinary secondary click keeps the confirm
                         // step that a drag would skip.
+                        #if os(macOS)
                         Button {
                             movingObject = placed
                         } label: {
@@ -2167,6 +2190,22 @@ struct StationsMapView: View {
                         .controlSize(.small)
                         .help("Then secondary-click where \u{201C}\(placed.report.name)\u{201D} "
                               + "should go. It moves on every station that hears it.")
+                        #else
+                        // No secondary click to arm, so nothing to arm: the
+                        // move goes to where the operator is standing, which
+                        // is the reason to move one from a phone.
+                        Button {
+                            guard let here = observer else { return }
+                            pendingObject = PendingObject(
+                                coordinate: CLLocationCoordinate2D(latitude: here.latitude,
+                                                                   longitude: here.longitude),
+                                moving: placed)
+                        } label: {
+                            Label("Move Here", systemImage: "mappin.and.ellipse")
+                        }
+                        .controlSize(.small)
+                        .disabled(observer == nil)
+                        #endif
                     }
                     if let placed = ourObject(siteID: site.id), let onPlaceObject {
                         Button(role: .destructive) {
