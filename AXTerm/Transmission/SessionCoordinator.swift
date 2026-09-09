@@ -1467,7 +1467,8 @@ final class SessionCoordinator: ObservableObject {
                         latitude: Double, longitude: Double,
                         symbolTable: Character, symbolCode: Character,
                         comment: String, settings: AppSettingsStore,
-                        now: Date = Date()) -> String? {
+                        now: Date = Date(),
+                        repeatingIfKilled: Bool = true) -> String? {
         let radios = settings.activeRadios.filter { $0.enabled }
         guard let radio = radios.first(where: { $0.beacon.kind == .aprsPosition })
                 ?? radios.first else {
@@ -1493,10 +1494,58 @@ final class SessionCoordinator: ObservableObject {
         packetEngine?.recordOwnAPRSObject(
             info, from: sessionManager.localAddress(for: radio.id).display, at: now)
         let trimmed = APRSObjectReport.wireName(name).trimmingCharacters(in: .whitespaces)
-        packetEngine?.appendSystemNotification(
-            live ? "Object \u{201C}\(trimmed)\u{201D} sent\(radioSuffix([radio.id]))."
-                 : "Object \u{201C}\(trimmed)\u{201D} stood down\(radioSuffix([radio.id])).")
+        if live {
+            packetEngine?.appendSystemNotification(
+                "Object \u{201C}\(trimmed)\u{201D} sent\(radioSuffix([radio.id])).")
+        } else if repeatingIfKilled {
+            // Said once, up front, because the repeats occupy a shared channel
+            // for the next few minutes and the operator is the one answering
+            // for that. The repeats themselves are silent: four notifications
+            // saying the same thing would be noise, and the traffic log already
+            // shows every transmission.
+            packetEngine?.appendSystemNotification(
+                "Object \u{201C}\(trimmed)\u{201D} stood down\(radioSuffix([radio.id]))"
+                + " \u{2014} repeating \(APRSObjectKillRepeat.ladder.count)\u{d7} over the "
+                + "next few minutes so it lands.")
+            scheduleKillRepeats(name: name, latitude: latitude, longitude: longitude,
+                                symbolTable: symbolTable, symbolCode: symbolCode,
+                                settings: settings)
+        }
         return nil
+    }
+
+    /// Transmit the stand-down again on a decaying ladder.
+    ///
+    /// A kill that is lost to a collision leaves the object standing on every
+    /// receiver that heard the placement, and nothing tells the operator who
+    /// sent it. Each repeat re-stamps — the frame is rebuilt at the moment it
+    /// goes out rather than replayed — because an object timestamp carries
+    /// minutes, and a replayed frame inside the dedupe window is dropped by
+    /// the digipeaters this most needs to reach.
+    ///
+    /// These live only as long as the app does. A stand-down interrupted by a
+    /// quit is one transmission, which is what it was before this existed.
+    private func scheduleKillRepeats(name: String, latitude: Double, longitude: Double,
+                                     symbolTable: Character, symbolCode: Character,
+                                     settings: AppSettingsStore) {
+        let key = APRSObjectKillRepeat.key(name)
+        var elapsed: TimeInterval = 0
+        for delay in APRSObjectKillRepeat.ladder {
+            elapsed += delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + elapsed) { [weak self] in
+                guard let self else { return }
+                let liveNow = self.packetEngine?.aprsObjects.live() ?? []
+                guard APRSObjectKillRepeat.stillWanted(key: key, liveObjects: liveNow) else {
+                    // Something holds the name again — ours or a stranger's.
+                    // Sending now would remove theirs from the whole channel.
+                    return
+                }
+                _ = self.sendAPRSObject(
+                    name: name, live: false, latitude: latitude, longitude: longitude,
+                    symbolTable: symbolTable, symbolCode: symbolCode, comment: "",
+                    settings: settings, repeatingIfKilled: false)
+            }
+        }
     }
 
     /// Why "beacon now" would put nothing on the air, for the station as a

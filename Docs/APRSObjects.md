@@ -232,8 +232,28 @@ true. Doing that on a timer is a decision about occupying a shared channel
 that belongs to the operator, not to a default, so it is not done;
 `liveWindow` expires an unrepeated object after six hours, ours included.
 
-A stand-down is sent once for the same reason, and there it costs more. A
-placement that fails to arrive is visible to nobody and harms nothing; a kill
+A stand-down is the exception, because there the asymmetry runs the other way.
+A placement that fails to arrive is visible to nobody and harms nothing; a kill
 that fails leaves the object standing on every receiver that heard the
 placement, with nothing to clear it until `liveWindow` runs out — and the
-operator who sent it has no way to tell. That is a known gap, not a decision.
+operator who sent it has no way to tell. So `APRSObjectKillRepeat.ladder`
+repeats it at 60 s, 120 s and 240 s: four frames over seven minutes, then
+silence. Bounded news, not a claim being maintained.
+
+Two things about that ladder are not adjustable by taste. **Nothing in it is
+shorter than a minute**, because an object timestamp is `DDHHMMz` — minutes, no
+seconds — so two kills inside one minute encode to byte-identical frames and a
+digipeater's duplicate suppression (Direwolf's `DEDUPE`, 30 s by default) drops
+the second; a repeat nobody repeats is not a repeat. Each repeat is therefore
+**rebuilt at the moment it goes out**, not replayed. And **a queued repeat is
+abandoned the moment anything is live under that name again** — ours or a
+stranger's. Stand down `AID`, place `AID` again, and a repeat still in the queue
+would kill the new one on the whole channel; if the name was taken by another
+agency in the gap, it would remove theirs and nothing here would ever say so.
+
+The repeats are silent. The stand-down is announced once, up front, and says
+that it will repeat — the operator is the one answering for a few minutes of a
+shared channel — but four notifications saying the same thing would be noise
+when the traffic log already shows every transmission. They live only as long as
+the app: a stand-down interrupted by a quit is one transmission, which is what
+it was before any of this existed.
