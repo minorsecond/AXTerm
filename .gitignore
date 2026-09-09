@@ -135,3 +135,9 @@ Docker/.env
 *.log
 .aider*
 full_log*.txt
+
+# Local scratch — 25 MB of modem cross-validation output
+tmp/
+
+# Editor/agent local config
+.claude/
