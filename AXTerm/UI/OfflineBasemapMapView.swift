@@ -76,6 +76,14 @@ struct OfflineBasemapMapView {
     /// The place-an-object affordance: the Mac idiom for "act on this point"
     /// is a secondary click, not a long press, and a drag must not become one.
     var onSecondaryClick: (CLLocationCoordinate2D) -> Void = { _ in }
+    /// Site ids the operator may drag — our own live objects, and nothing
+    /// else. A station's marker is a report of where it said it was; dragging
+    /// it would be editing somebody else's claim.
+    var draggableSiteIDs: Set<String> = []
+    /// Where a dragged object was dropped. Deliberately *not* a move: the
+    /// marker snaps back and this opens the confirm sheet, because the object
+    /// has not moved anywhere until the channel has been told.
+    var onObjectDragged: ((String, CLLocationCoordinate2D) -> Void)?
     @Binding var selection: String?
     /// Region to show. Changes here move the camera; the operator panning
     /// does not write back, so the map does not fight them.
@@ -658,6 +666,10 @@ struct OfflineBasemapMapView {
             // The callout has to earn the tap: a bubble carrying only the
             // callsign already on the label says nothing the map did not.
             view.detailCalloutAccessoryView = Self.calloutDetail(for: site)
+            // Only our own objects. A station's marker is its report of where
+            // it said it was, and dragging that would be editing somebody
+            // else's claim about themselves.
+            view.isDraggable = parent.draggableSiteIDs.contains(site.id)
             return view
         }
 
@@ -881,6 +893,42 @@ struct OfflineBasemapMapView {
                 else { continue }
                 view.setLabelVisible(
                     labelsVisible || site.isObserver || site.id == parent.selection)
+            }
+        }
+
+        /// Where each dragged marker started, so it can be put back.
+        private var dragOrigins: [String: CLLocationCoordinate2D] = [:]
+
+        /// Dragging an object stages a move; it does not make one.
+        ///
+        /// The marker returns to where it was and the drop opens the same
+        /// sheet the secondary click opens. Until Transmit is pressed the
+        /// object has not moved — every other station still has it where it
+        /// was — and a marker that stayed at the drop point would be showing
+        /// the operator something that is not true of the channel. It is also
+        /// what makes the gesture safe: a slipped trackpad costs a dialog,
+        /// not a transmission.
+        func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView,
+                     didChange newState: MKAnnotationView.DragState,
+                     fromOldState oldState: MKAnnotationView.DragState) {
+            guard let site = view.annotation as? SiteAnnotation else { return }
+            switch newState {
+            case .starting:
+                dragOrigins[site.id] = site.coordinate
+            case .ending:
+                let dropped = site.coordinate
+                if let origin = dragOrigins.removeValue(forKey: site.id) {
+                    site.coordinate = origin
+                }
+                view.dragState = .none
+                parent.onObjectDragged?(site.id, dropped)
+            case .canceling:
+                if let origin = dragOrigins.removeValue(forKey: site.id) {
+                    site.coordinate = origin
+                }
+                view.dragState = .none
+            default:
+                break
             }
         }
 

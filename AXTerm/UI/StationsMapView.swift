@@ -255,6 +255,19 @@ struct StationsMapView: View {
             + "|own:" + ownObjectToken
     }
 
+    /// The markers the operator may drag: our own live objects only.
+    ///
+    /// Dragging is the gesture people reach for, and it is safe here only
+    /// because the drop opens the confirm sheet rather than transmitting.
+    /// Withheld entirely when this map cannot place at all, so a read-only
+    /// map has no gesture that implies it can.
+    private var draggableSiteIDs: Set<String> {
+        guard onPlaceObject != nil, showsObjects else { return [] }
+        return Set(objects.live()
+            .filter { APRSObjectPlacement.mayRemove($0, ourAddresses: ownCallsigns) }
+            .map { Self.objectSiteID($0.report.key) })
+    }
+
     private var ownObjectToken: String {
         MapLayerGeneration.ownObjectToken(objects.live(), ours: ownCallsigns)
     }
@@ -1994,6 +2007,14 @@ struct StationsMapView: View {
                                    guard onPlaceObject != nil else { return }
                                    pendingObject = PendingObject(coordinate: coordinate,
                                                                  moving: movingObject)
+                                   movingObject = nil
+                               },
+                               draggableSiteIDs: draggableSiteIDs,
+                               onObjectDragged: { siteID, coordinate in
+                                   // The drop stages a move and nothing more.
+                                   guard let placed = ourObject(siteID: siteID) else { return }
+                                   pendingObject = PendingObject(coordinate: coordinate,
+                                                                 moving: placed)
                                    movingObject = nil
                                },
                                coverage: coverageRing,

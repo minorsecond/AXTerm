@@ -210,13 +210,26 @@ moved or its comment corrected, and the format offers no other way.
 `APRSObjectPlacement.problem` treats our own name as no collision, and why
 without that check there would be no way to move anything at all.
 
-It is armed from the object's own card and finished with the ordinary
-secondary click, not by dragging the marker. A drag that transmits is one
-slipped trackpad away from moving somebody's road closure by accident and there
-is no undo on a shared channel; routing it through the same sheet keeps the step
-where nothing keys the radio until the operator presses Transmit. The armed
-state gets a banner with a Cancel, because a mode you cannot see is one you
-cancel by clicking somewhere else — and here clicking somewhere else transmits.
+**Drag the marker**, or arm *Move…* from the card and secondary-click the new
+spot. Both end in the same place: the compose sheet, pre-filled, with nothing
+transmitted until the operator presses Transmit.
+
+Dragging was refused at first on the grounds that a slipped trackpad would move
+somebody's road closure with no undo. That objection dissolves once the drop
+*stages* a move rather than making one — a slip costs a dialog. So the marker
+**snaps back to where it was** on drop and the sheet opens: until the channel
+has been told, the object has not moved, and a marker sitting at the drop point
+would be showing the operator something untrue of every other station. Only our
+own live objects are draggable; a station's marker is its own report of where it
+said it was, and dragging that would be editing somebody else's claim.
+
+Drag needs the MapKit renderer, which is used for the offline basemap and
+whenever overlays, terrain or drawing are in play. On a bare Apple basemap with
+none of those the map is SwiftUI's, which has no annotation drag — the card's
+*Move…* works everywhere and is the fallback. The armed state gets a banner
+with a Cancel and also replaces the button on the card, because a mode you
+cannot see is one you cancel by clicking somewhere else, and here clicking
+somewhere else transmits.
 
 The sheet opens pre-filled, which means recovering the choice from the two
 symbol bytes (`Choice.matching`). `APRSObjectSymbolTests` holds that every

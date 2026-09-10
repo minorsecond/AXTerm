@@ -61,6 +61,9 @@ struct StationMapView: View {
     var onDrawTap: (CLLocationCoordinate2D) -> Void = { _ in }
     /// Secondary click on open map — see `OfflineBasemapMapView`.
     var onSecondaryClick: (CLLocationCoordinate2D) -> Void = { _ in }
+    var draggableSiteIDs: Set<String> = []
+    var onObjectDragged: ((String, CLLocationCoordinate2D) -> Void)?
+
     /// Measured coverage around the observer, drawn as two rings. Nil
     /// draws nothing — no evidence, no ring.
     var coverage: CoverageEstimate.Ring?
@@ -115,6 +118,8 @@ struct StationMapView: View {
             drawing: drawing ?? .constant(MapDrawingSession()),
             onDrawTap: onDrawTap,
             onSecondaryClick: onSecondaryClick,
+            draggableSiteIDs: draggableSiteIDs,
+            onObjectDragged: onObjectDragged,
             selection: $selection,
             region: MapRegionFit.region(covering: framingPoints)?.mkRegion,
             coverage: coverage)
