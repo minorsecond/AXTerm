@@ -1055,6 +1055,39 @@ struct OfflineBasemapMapView {
         #endif
     }
 
+    /// How long a press has to hold still before MapKit starts dragging a
+    /// marker rather than panning the map.
+    ///
+    /// MapKit drives `isDraggable` from a press recogniser of its own with
+    /// the system default half-second hold. On a trackpad that reads as a
+    /// broken feature: the operator grabs their object, the map slides
+    /// instead, and it takes several goes to discover that the trick is to
+    /// hold still first. Half a second is right for a touch screen, where a
+    /// long press is a deliberate idiom; it is far too long for a pointer
+    /// that is already exactly on the thing it means to move.
+    ///
+    /// Applied by walking `gestureRecognizers`, which is ordinary public API
+    /// on the view \u{2014} the only guess is *which* recogniser, and being
+    /// wrong costs nothing: not finding one leaves today's behaviour, which
+    /// is the behaviour we are improving on.
+    ///
+    /// Only while something on this map is actually draggable, so a map with
+    /// no objects of ours keeps stock press timing.
+    private static let dragPressDuration: TimeInterval = 0.15
+    private static let systemPressDuration: TimeInterval = 0.5
+
+    private static func tuneDragPress(on mapView: MKMapView, wanted: Bool) {
+        let target = wanted ? dragPressDuration : systemPressDuration
+        for recognizer in mapView.gestureRecognizers ?? [] {
+            #if os(macOS)
+            guard let press = recognizer as? NSPressGestureRecognizer else { continue }
+            #else
+            guard let press = recognizer as? UILongPressGestureRecognizer else { continue }
+            #endif
+            if press.minimumPressDuration != target { press.minimumPressDuration = target }
+        }
+    }
+
     fileprivate func makeMapView(context: Context) -> MKMapView {
         let mapView = StableFrameMapView()
         mapView.delegate = context.coordinator
@@ -1508,6 +1541,7 @@ struct OfflineBasemapMapView {
 
     fileprivate func updateMapView(_ mapView: MKMapView, context: Context) {
         context.coordinator.parent = self
+        Self.tuneDragPress(on: mapView, wanted: !draggableSiteIDs.isEmpty)
         // The throttle exists to absorb packet-rate churn, not to make the
         // operator wait. Flipping a layer switch changed nothing on screen for
         // up to ten seconds and then applied in a visible lurch, which reads

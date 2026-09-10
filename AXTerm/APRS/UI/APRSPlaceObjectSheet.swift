@@ -26,17 +26,22 @@ struct APRSPlaceObjectSheet: View {
     /// keeps the one thing that matters: nothing keys the radio until the
     /// operator presses Transmit.
     var moving: APRSObjectStore.Placed?
+    /// The operator's distance unit, for "Moves 1.4 mi WNW".
+    var distanceInMiles: Bool = true
 
     @State private var name: String
     @State private var comment: String
     @State private var choice: Choice
     @State private var failure: String?
+    /// A move shows only what changed until this is set. See `movePreview`.
+    @State private var editingDetails = false
     @FocusState private var nameFocused: Bool
 
     init(coordinate: CLLocationCoordinate2D,
          liveObjects: [APRSObjectStore.Placed],
          ourAddresses: Set<String>,
          moving: APRSObjectStore.Placed? = nil,
+         distanceInMiles: Bool = true,
          onTransmit: @escaping (_ name: String, _ symbolTable: Character,
                                 _ symbolCode: Character, _ comment: String) -> String?,
          onCancel: @escaping () -> Void) {
@@ -44,6 +49,7 @@ struct APRSPlaceObjectSheet: View {
         self.liveObjects = liveObjects
         self.ourAddresses = ourAddresses
         self.moving = moving
+        self.distanceInMiles = distanceInMiles
         self.onTransmit = onTransmit
         self.onCancel = onCancel
         _name = State(initialValue: moving?.report.name ?? "")
@@ -134,10 +140,96 @@ struct APRSPlaceObjectSheet: View {
         !name.trimmingCharacters(in: .whitespaces).isEmpty && problem == nil
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(moving == nil ? "Place an object" : "Move object")
-                .font(.headline)
+
+    /// How far the drop moved the object, or nil when it barely moved.
+    private var movedSummary: String? {
+        guard let moving else { return nil }
+        return APRSObjectMove.summary(
+            from: GreatCircle.Point(latitude: moving.report.latitude,
+                                    longitude: moving.report.longitude),
+            to: GreatCircle.Point(latitude: coordinate.latitude,
+                                  longitude: coordinate.longitude),
+            inMiles: distanceInMiles)
+    }
+
+    /// Hoisted out of the builder: a long conditional string inside a
+    /// `VStack` is what the type checker chokes on.
+    private var footnote: String {
+        moving == nil
+            ? "Transmits to every station in range. It stays on their maps until you "
+                + "stand it down or six hours pass without anyone repeating it."
+            : "Transmits to every station in range. Each one replaces the position it "
+                + "already had for this object."
+    }
+
+    private static func coordinateText(_ latitude: Double, _ longitude: Double) -> String {
+        String(format: "%.4f, %.4f", latitude, longitude)
+    }
+
+    /// A move, shown as a move.
+    ///
+    /// The full form asks what this object *is* \u{2014} name, kind, comment
+    /// \u{2014} which is the placement decision, and it was already made.
+    /// Re-asking it on a drag buries the only thing that changed and invites
+    /// edits nobody came here to make. So the identity is stated rather than
+    /// offered, and Edit details is there for the times the comment really
+    /// does need fixing too.
+    @ViewBuilder
+    private func movePreview(_ placed: APRSObjectStore.Placed) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(APRSObjectReport.wireName(placed.report.name)
+                        .trimmingCharacters(in: .whitespaces))
+                    .font(.system(.body, design: .monospaced))
+                Text("\u{00B7}").foregroundStyle(.secondary)
+                Text(choice.asOthersSeeIt).foregroundStyle(.secondary)
+            }
+            if !placed.report.comment.isEmpty {
+                Text(placed.report.comment)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
+                GridRow {
+                    Text("From").foregroundStyle(.secondary)
+                    Text(Self.coordinateText(placed.report.latitude, placed.report.longitude))
+                        .font(.system(.caption, design: .monospaced))
+                }
+                GridRow {
+                    Text("To").foregroundStyle(.secondary)
+                    Text(Self.coordinateText(coordinate.latitude, coordinate.longitude))
+                        .font(.system(.caption, design: .monospaced))
+                }
+            }
+            .font(.caption)
+
+            if let movedSummary {
+                Label("Moves " + movedSummary, systemImage: "arrow.turn.down.right")
+                    .font(.callout)
+            } else {
+                // Not refused \u{2014} an operator may well mean a twenty-metre
+                // nudge \u{2014} but said out loud, because an accidental drag
+                // looks exactly like this and nothing else would tell them.
+                Label("Less than \(Int(APRSObjectMove.restingMetres)) m from where it is now.",
+                      systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button("Edit details\u{2026}") { editingDetails = true }
+                .controlSize(.small)
+                .padding(.top, 2)
+        }
+    }
+
+    /// Name, kind and comment: the placement decision, and what Edit details
+    /// reopens on a move.
+    @ViewBuilder
+    private var placementForm: some View {
             Text(String(format: "%.4f, %.4f", coordinate.latitude, coordinate.longitude))
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -173,6 +265,19 @@ struct APRSPlaceObjectSheet: View {
                     .foregroundStyle(.secondary)
             }
 
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(moving == nil ? "Place an object" : "Move object")
+                .font(.headline)
+
+            if let moving, !editingDetails {
+                movePreview(moving)
+            } else {
+                placementForm
+            }
+
             if let problem {
                 Label(problem.message, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
@@ -184,8 +289,7 @@ struct APRSPlaceObjectSheet: View {
                     .foregroundStyle(.red)
             }
 
-            Text("Transmits to every station in range. It stays on their maps until you "
-                 + "stand it down or six hours pass without anyone repeating it.")
+            Text(footnote)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -201,7 +305,8 @@ struct APRSPlaceObjectSheet: View {
         }
         .padding(16)
         .frame(width: 380)
-        .onAppear { nameFocused = true }
+        .onAppear { nameFocused = moving == nil }
+        .onChange(of: editingDetails) { _, opened in nameFocused = opened }
     }
 
     private func transmit() {

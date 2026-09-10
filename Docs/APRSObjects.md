@@ -223,6 +223,27 @@ would be showing the operator something untrue of every other station. Only our
 own live objects are draggable; a station's marker is its own report of where it
 said it was, and dragging that would be editing somebody else's claim.
 
+MapKit drives `isDraggable` from a press recogniser with the system's
+half-second hold, and on a trackpad that reads as a broken feature: you grab
+your object, the map slides, and it takes several goes to discover the trick is
+to hold still first. `tuneDragPress` walks `mapView.gestureRecognizers` and
+drops the hold to 0.15 s while anything on the map is draggable, restoring the
+default when nothing is. Half a second is right for a touch screen, where a
+long press is a deliberate idiom; it is far too long for a pointer already
+sitting on the thing it means to move. The only guess is *which* recogniser,
+and being wrong costs nothing — not finding one leaves the old behaviour.
+
+**The drop shows a move, not a placement.** The full form asks what the object
+*is* — name, kind, comment — and that decision was already made when it was
+placed. Re-asking it on a drag buries the one thing that changed and invites
+edits nobody came to make. So a move states the identity read-only and leads
+with the change: from, to, and `APRSObjectMove.summary` — "Moves 1.4 mi WNW".
+A drop within `restingMetres` (30 m) says so rather than claiming "0.0 mi N",
+because an accidental drag looks exactly like that and nothing else on screen
+would tell the operator. It is reported, not refused: a twenty-metre nudge is a
+legitimate thing to mean. *Edit details…* reopens the full form for the times
+the comment needs fixing too.
+
 Drag needs the MapKit renderer: SwiftUI's `Map` has no annotation drag.
 `StationMapView` takes the MapKit path for the offline basemap, and whenever
 overlays, terrain or a drawing binding are in play — and `StationsMapView`

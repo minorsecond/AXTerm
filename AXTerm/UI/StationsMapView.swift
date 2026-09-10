@@ -2026,6 +2026,7 @@ struct StationsMapView: View {
                     liveObjects: objects.live(),
                     ourAddresses: ownCallsigns,
                     moving: pending.moving,
+                    distanceInMiles: settings.distanceUnitIsMiles,
                     onTransmit: { name, table, code, comment in
                         onPlaceObject?(name, true,
                                        pending.coordinate.latitude,
