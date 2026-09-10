@@ -62,6 +62,43 @@ nonisolated enum StationPlausibility {
                                           : .plausible
     }
 
+    /// How to describe where a position came from, given what the geometry
+    /// says about it.
+    ///
+    /// The card used to state "APRS position (heard over the air)" for every
+    /// transmitted fix — including stations this same type had already set
+    /// aside as too far to have been heard. KC0AUH-2, 394 km away, was
+    /// counted in the sidebar's "4 too far to have been heard" while its own
+    /// card asserted the opposite. The app knew; the sentence did not.
+    ///
+    /// The claim is therefore made only when it holds. Beyond range the line
+    /// says what is certain — the distance — and stops short of naming a
+    /// mechanism: a relay, an igate, or a genuinely exceptional path are all
+    /// possible, and the frame does not say which. `APRSFrameOrigin` answers
+    /// that separately, from what the frame states outright.
+    static func positionSourceLine(source: String,
+                                   verdict: Verdict,
+                                   inMiles: Bool = false) -> String {
+        switch verdict {
+        case .plausible, .unknown:
+            return "Position from \(source) (heard over the air)."
+        case .beyondRadioRange(let kilometres):
+            // States the distance and the rule, not the physics. Whether a
+            // path is possible depends on both stations' altitude, the
+            // terrain between them and the day's propagation — a mountaintop
+            // digipeater works stations a flat threshold calls impossible.
+            // The map needs a cutoff to keep one far station from stretching
+            // the zoom; that cutoff is a display rule, and saying so is
+            // honest where "beyond radio range" would be a claim we cannot
+            // back with what the frame carries.
+            let distance = DistanceDisplay.string(kilometres: kilometres, inMiles: inMiles)
+            let limit = DistanceDisplay.string(kilometres: defaultRangeKilometres,
+                                               inMiles: inMiles)
+            return "Position from \(source). At \(distance) it is further than the "
+                 + "\(limit) this map treats as directly hearable."
+        }
+    }
+
     /// Splits entries into what to show and what to set aside.
     ///
     /// Returns both halves rather than filtering in place, because the count

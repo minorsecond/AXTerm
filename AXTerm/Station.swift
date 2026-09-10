@@ -93,6 +93,11 @@ nonisolated struct Station: Identifiable, Hashable {
         var weather: APRSWeather
     }
 
+    /// How this station's traffic last reached the air, when the frame said
+    /// so outright — off a transmitter, or off the internet through a
+    /// gateway. `.radio` is the absence of a claim, not proof of one.
+    var frameOrigin: APRSFrameOrigin = .radio
+
     /// The station's latest telemetry frame and whatever it has said the
     /// channels mean. Held separately from weather because it is arbitrary:
     /// a creek gauge, a battery bank and a repeater's power all arrive here.

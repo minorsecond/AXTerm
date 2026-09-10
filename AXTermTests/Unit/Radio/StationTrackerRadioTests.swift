@@ -83,6 +83,48 @@ final class StationTrackerRadioTests: XCTestCase {
         XCTAssertEqual(rebuiltStation.track.count, 2, "the movement track survives a rebuild")
     }
 
+    /// A rebuild keeps telemetry AND the definitions that give it meaning.
+    ///
+    /// Real capture, SIMLA 2026-09-10: the definitions had last been heard
+    /// fourteen hours and two launches earlier, so after every restart the
+    /// station card read "185 (raw)" while `EQNS.` sat unread in the packet
+    /// history — the rebuild replayed positions but not telemetry.
+    func testRebuildKeepsTelemetryAndItsDefinitions() {
+        func frame(_ info: String, at: TimeInterval) -> Packet {
+            Packet(timestamp: Date(timeIntervalSince1970: at),
+                   from: AX25Address(call: "SIMLA"), to: AX25Address(call: "APMI06"),
+                   via: [], frameType: .ui, control: 0x03, info: Data(info.utf8),
+                   rawAx25: Data([0x01]), radioID: a)
+        }
+        let packets = [
+            frame(":SIMLA    :PARM.Vin,Rx1h,Dg1h,Eff1h,A5,O1,O2,O3,O4,I1,I2,I3,I4", at: 10),
+            frame(":SIMLA    :UNIT.Volt,Pkt,Pkt,Pcnt,None,On,On,On,On,Hi,Hi,Hi,Hi", at: 11),
+            frame(":SIMLA    :EQNS.0,0.075,0,0,10,0,0,10,0,0,1,0,0,0,0", at: 12),
+            frame("T#018,185,104,025,072,000,00000000", at: 20),
+        ]
+
+        var live = StationTracker()
+        for p in packets { live.update(with: p) }
+
+        var rebuilt = StationTracker()
+        rebuilt.rebuild(from: packets)
+
+        let station = rebuilt.stations.first { $0.call == "SIMLA" }!
+        XCTAssertNotNil(station.telemetry, "rebuild must keep the T# frame")
+        XCTAssertNotNil(station.telemetryDefinition, "rebuild must keep PARM/UNIT/EQNS")
+
+        let readings = station.telemetryReadings
+        XCTAssertEqual(readings.count, 5, "five analogue channels were replayed")
+        XCTAssertEqual(readings[0].name, "Vin")
+        XCTAssertEqual(readings[0].unit, "Volt")
+        XCTAssertTrue(readings[0].isCalibrated, "EQNS was in the history; nothing may read raw")
+        XCTAssertEqual(readings[0].value, 13.875, accuracy: 0.0001, "185 x 0.075 V")
+
+        XCTAssertEqual(readings.map(\.value),
+                       live.stations.first { $0.call == "SIMLA" }!.telemetryReadings.map(\.value),
+                       "rebuild agrees with live tracking")
+    }
+
     /// Frames from before radios existed belong to the primary.
     func testAPacketWithNoRadioIsHeardOnThePrimary() {
         var tracker = StationTracker()

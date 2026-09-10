@@ -40,7 +40,16 @@ final class HeardStationPositionSourceTests: XCTestCase {
         let e = try XCTUnwrap(entries.first)
         XCTAssertEqual(e.origin, .transmittedAPRS)
         XCTAssertEqual(e.position?.latitude ?? 0, beacon.lat, accuracy: 1e-6)
-        XCTAssertEqual(e.positionSource, "APRS position (heard over the air)")
+        // The entry states the fact; whether it was "heard over the air"
+        // depends on geometry the entry does not have, and is decided by
+        // StationPlausibility.positionSourceLine — see
+        // StationPlausibilityWordingTests.
+        XCTAssertEqual(e.positionSource, "APRS position")
+        XCTAssertEqual(
+            StationPlausibility.positionSourceLine(
+                source: try XCTUnwrap(e.positionSource),
+                verdict: .plausible),
+            "Position from APRS position (heard over the air).")
     }
 
     func testLicencePreferenceUsesTheLicenceAddressAndTagsItDerived() throws {

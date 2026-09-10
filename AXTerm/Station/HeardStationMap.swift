@@ -52,6 +52,11 @@ nonisolated enum HeardStationMap {
         /// Where the position came from, or nil if unplaced.
         var position: GreatCircle.Point?
         var positionSource: String?
+
+        /// How this station's traffic reached the air, when a frame said so.
+        /// Defaulted so entries built from a lookup — which have no frame
+        /// behind them — make no claim either way.
+        var frameOrigin: APRSFrameOrigin = .radio
         /// What the position actually describes — which is a different
         /// question from how precise it is.
         var confidence: PositionConfidence = .gridSquare
@@ -74,6 +79,13 @@ nonisolated enum HeardStationMap {
         /// The APRS symbol this station beaconed, set only when placed at its
         /// own transmitted fix.
         var aprsSymbol: APRSMapSymbol?
+        /// Altitude the station transmitted, in feet (`/A=` or Mic-E).
+        ///
+        /// It was parsed and then dropped — nothing outside the parser read
+        /// it. On this channel it is not a curiosity: WA6IFI-6 beacons from
+        /// 12,349 ft and repeats stations 292 km out, which is the difference
+        /// between a path that works and one the geometry says cannot.
+        var altitudeFeet: Int?
 
         /// The last weather this station reported, and when. Unlike the
         /// symbol, this is carried whichever point the marker sits on: the
@@ -171,12 +183,17 @@ nonisolated enum HeardStationMap {
                     callsign: call, heardCount: station.heardCount,
                     lastHeard: station.lastHeard, lastVia: station.lastVia,
                     position: GreatCircle.Point(latitude: aprs.latitude, longitude: aprs.longitude),
-                    positionSource: "APRS position (heard over the air)",
+                    // Just the fact. Whether it was "heard over the air"
+                    // depends on geometry the entry does not have, and is
+                    // decided by StationPlausibility.positionSourceLine.
+                    positionSource: "APRS position",
+                    frameOrigin: station.frameOrigin,
                     confidence: .exact,
                     gridSquare: record?.gridSquare?.uppercased(),
                     name: record?.name, locality: record?.locality,
                     origin: .transmittedAPRS,
                     aprsSymbol: APRSMapSymbol(table: aprs.symbolTable, code: aprs.symbolCode),
+                    altitudeFeet: aprs.altitudeFeet,
                     weather: station.weather, weatherHeard: station.weatherHeard,
                     weatherHistory: station.weatherHistory,
                     telemetry: station.telemetryReadings,
@@ -221,6 +238,7 @@ nonisolated enum HeardStationMap {
                 confidence: confidence, gridSquare: gridSquare,
                 name: record?.name, locality: record?.locality,
                 origin: position == nil ? .unplaced : .licenceOrGrid,
+                altitudeFeet: station.aprs?.altitudeFeet,
                 weather: station.weather, weatherHeard: station.weatherHeard,
                 weatherHistory: station.weatherHistory,
                 telemetry: station.telemetryReadings,
@@ -550,6 +568,10 @@ nonisolated enum HeardStationMap {
                                     kilometres: kilometres, inMiles: distanceInMiles),
                                 bearing, GreatCircle.compassPoint(bearing)))
         }
+        if let feet = entry.altitudeFeet {
+            lines.append(AltitudeDisplay.string(feet: feet, inFeet: distanceInMiles)
+                         + " above sea level")
+        }
         lines.append("\(entry.heardCount) packet\(entry.heardCount == 1 ? "" : "s") heard")
         if let lastHeard = entry.lastHeard {
             lines.append("Last heard \(lastHeard.formatted(.relative(presentation: .named)))")
@@ -557,9 +579,23 @@ nonisolated enum HeardStationMap {
         if !entry.lastVia.isEmpty {
             lines.append("Via \(entry.lastVia.joined(separator: " \u{2192} "))")
         }
+        if case .gatedOntoRF(_, let gateway) = entry.frameOrigin {
+            lines.append("")
+            lines.append("Relayed onto RF by \(gateway) \u{2014} its traffic reaches "
+                       + "this channel from the internet, not from its own transmitter.")
+        } else if entry.frameOrigin == .internetPath {
+            lines.append("")
+            lines.append("Its path is marked as having come from the internet, "
+                       + "not from a transmitter this station can be heard on.")
+        }
         if let source = entry.positionSource {
             lines.append("")
-            lines.append("Position from \(source).")
+            lines.append(StationPlausibility.positionSourceLine(
+                source: source,
+                verdict: StationPlausibility.verdict(observer: observer,
+                                                     station: entry.position,
+                                                     confidence: entry.confidence),
+                inMiles: distanceInMiles))
         }
         return lines.joined(separator: "\n")
     }

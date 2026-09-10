@@ -63,6 +63,19 @@ nonisolated struct StationTracker {
     /// Attach an APRS position from this packet, if it carries one. A fix is
     /// added to the trail only when the station has actually moved, so a fixed
     /// station beaconing every few minutes does not grow an endless track.
+    /// Files how this frame reached the air, when it says so outright.
+    ///
+    /// Only ever upgraded away from `.radio` by a frame that carries the
+    /// claim: a station that gates some traffic and beacons the rest should
+    /// read as gated, because that is the fact worth knowing. A later plain
+    /// frame does not clear it — absence of a marker is not evidence of RF.
+    static func applyOrigin(_ station: inout Station, packet: Packet) {
+        guard !packet.info.isEmpty else { return }
+        let origin = APRSFrameOrigin.classify(info: packet.info,
+                                              via: packet.via.map(\.display))
+        if origin.isFromInternet { station.frameOrigin = origin }
+    }
+
     static func applyAPRS(_ station: inout Station, packet: Packet) {
         #if DEBUG
         aprsTrace(packet)
@@ -165,6 +178,7 @@ nonisolated struct StationTracker {
             Self.note(&stations[index], radio: radio, at: packet.timestamp, via: via, packet: packet)
             Self.applyAPRS(&stations[index], packet: packet)
             Self.applyTelemetry(&stations[index], packet: packet)
+            Self.applyOrigin(&stations[index], packet: packet)
         } else {
             var station = Station(
                 call: call,
@@ -176,6 +190,7 @@ nonisolated struct StationTracker {
             Self.note(&station, radio: radio, at: packet.timestamp, via: via, packet: packet)
             Self.applyAPRS(&station, packet: packet)
             Self.applyTelemetry(&station, packet: packet)
+            Self.applyOrigin(&station, packet: packet)
             stations.append(station)
             stationIndex[call] = stations.count - 1
         }
@@ -336,6 +351,14 @@ nonisolated struct StationTracker {
         for packet in positionPackets {
             guard let call = packet.from?.display, let index = stationIndex[call] else { continue }
             Self.applyAPRS(&stations[index], packet: packet)
+            // Telemetry rides the same replay for the same reason, and the
+            // definitions matter more than the frame: a station broadcasts
+            // PARM/UNIT/EQNS roughly hourly and we hear a fraction of those,
+            // so a rebuild that dropped them left every channel reading
+            // "185 (raw)" for hours with the calibration sitting unread in
+            // the packet history (SIMLA, 2026-09-10).
+            Self.applyTelemetry(&stations[index], packet: packet)
+            Self.applyOrigin(&stations[index], packet: packet)
         }
     }
 
