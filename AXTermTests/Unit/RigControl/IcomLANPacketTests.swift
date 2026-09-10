@@ -188,6 +188,51 @@ final class IcomLANPacketTests: XCTestCase {
         XCTAssertEqual(IcomLAN.parseStatus(Data(benign)), .other)
     }
 
+    // MARK: - Which packets answer a login
+
+    func testAnAuthFailedStatusAnswersALoginAndRefusesIt() {
+        // The refusal that costs an operator their evening: the radio is
+        // still holding its single network-control slot from an unclean
+        // exit and says so out-of-band, not in a login reply. Treating it
+        // as an answer is what lets the login ladder retry until the slot
+        // times out instead of failing on the first attempt.
+        var authFailed = [UInt8](repeating: 0, count: 80)
+        authFailed[0] = 0x50
+        authFailed[48] = 0xFF; authFailed[49] = 0xFF; authFailed[50] = 0xFF; authFailed[51] = 0xFD
+        XCTAssertTrue(IcomLAN.isLoginAnswer(Data(authFailed)))
+        XCTAssertTrue(IcomLAN.isLoginRefusal(Data(authFailed)))
+    }
+
+    func testARejectedLoginReplyAnswersAndRefuses() {
+        var b = bytes("60000000000002000b4bd82cdd17905000000050020000000000e665710c3fdb00000000000000000000000000000000000000000000000000000000000000004654544800000000000000000000000001000000000000000000000000000000")
+        b.replaceSubrange(48..<52, with: [0xFF, 0xFF, 0xFF, 0xFE])
+        XCTAssertTrue(IcomLAN.isLoginAnswer(b))
+        XCTAssertTrue(IcomLAN.isLoginRefusal(b))
+    }
+
+    func testAnAcceptedLoginReplyAnswersWithoutRefusing() {
+        let d = bytes("60000000000002000b4bd82cdd17905000000050020000000000e665710c3fdb00000000000000000000000000000000000000000000000000000000000000004654544800000000000000000000000001000000000000000000000000000000")
+        XCTAssertEqual(IcomLAN.parseLoginReply(d)?.accepted, true, "fixture should be an accepted login")
+        XCTAssertTrue(IcomLAN.isLoginAnswer(d))
+        XCTAssertFalse(IcomLAN.isLoginRefusal(d))
+    }
+
+    func testRoutineStatusPacketsDoNotAnswerALogin() {
+        // The radio emits status periodically. If those counted as answers
+        // the ladder would wake on the first one and read it as a refusal,
+        // burning all five attempts against a radio that never said no.
+        var benign = [UInt8](repeating: 0, count: 80)
+        benign[0] = 0x50; benign[48] = 0x10
+        XCTAssertEqual(IcomLAN.parseStatus(Data(benign)), .other)
+        XCTAssertFalse(IcomLAN.isLoginAnswer(Data(benign)))
+        XCTAssertFalse(IcomLAN.isLoginRefusal(Data(benign)))
+
+        var disconnected = [UInt8](repeating: 0, count: 80)
+        disconnected[0] = 0x50
+        disconnected[64] = 0x01
+        XCTAssertFalse(IcomLAN.isLoginAnswer(Data(disconnected)))
+    }
+
     func testAnAudioDatagramFromTheRadioYieldsItsPCM() {
         // A real 664-byte audio datagram header, padded to length with zeros.
         var d = bytes("9802000000000100b774b8d96c4f3a9b8101b9b0000002800000")

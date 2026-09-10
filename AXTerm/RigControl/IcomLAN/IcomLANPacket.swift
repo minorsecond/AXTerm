@@ -204,6 +204,25 @@ nonisolated enum IcomLAN {
         case other
     }
 
+    /// True when this control packet is the radio's answer to a login.
+    ///
+    /// The radio answers in one of two shapes: a login reply, or — when a
+    /// previous session still holds its single network-control slot — an
+    /// asynchronous auth-failed status. A client that waits only for the
+    /// first shape stalls until its timeout on the second, and never gets
+    /// to retry.
+    static func isLoginAnswer(_ d: Data) -> Bool {
+        parseLoginReply(d) != nil || parseStatus(d) == .authFailed
+    }
+
+    /// True when that answer is a refusal. A held slot and a wrong password
+    /// are byte-for-byte identical here, which is why the caller retries
+    /// rather than giving up on the first one.
+    static func isLoginRefusal(_ d: Data) -> Bool {
+        if let reply = parseLoginReply(d) { return !reply.accepted }
+        return parseStatus(d) == .authFailed
+    }
+
     static func parseStatus(_ d: Data) -> Status? {
         guard d.count == 80, d[d.startIndex] == 0x50 else { return nil }
         let b = [UInt8](d)

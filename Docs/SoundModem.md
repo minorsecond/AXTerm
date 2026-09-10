@@ -404,6 +404,22 @@ the Mac's Keychain via `RadioSecrets`, never in the radio list or its JSON).
   releases the token and sends the disconnect before the sockets close, and
   the hello retries for a few seconds so a reconnect after a dropped client
   recovers once the radio lets go.
+- **A refused login means "wait", not "wrong password".** After an unclean
+  exit — an Xcode stop, a crash, a lost network, none of which run any
+  cleanup we could write — the radio holds its one slot for tens of seconds
+  and refuses a fresh login the whole time, with a refusal byte-for-byte
+  identical to a bad password. So `performOpen` resends the login five
+  times over 12.5 s and only then reports bad credentials.
+
+  The radio refuses in **either of two shapes**: a login reply saying
+  `accepted=false`, or an asynchronous auth-failed *status* packet. Both
+  must feed the ladder. They did not: the ladder waited only for a reply,
+  so a status refusal fell through to `handleControl`, which failed the
+  connect on the first attempt and skipped all five retries — which is why
+  a relaunch after an unclean exit needed the operator to power-cycle the
+  radio. `IcomLAN.isLoginAnswer` / `isLoginRefusal` are the rule, pinned in
+  `IcomLANPacketTests`; routine periodic status must *not* count as an
+  answer, or the ladder burns its attempts on a radio that never said no.
 
 ### Noticing that the radio has gone
 

@@ -71,6 +71,9 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     private var authOK = false
     private var requestSent = false
     private var connectionOpened = false
+    /// True while the login ladder is running. A refusal that arrives as
+    /// a status packet belongs to the ladder, not to `handleControl`.
+    private var loggingIn = false
     private var finishConnect: ((Result<Void, Error>) -> Void)?
     private var serialReorder = SequenceReorderBuffer(holdSeconds: 0.1)
     private var audioReorder = SequenceReorderBuffer(holdSeconds: 0.1)
@@ -120,6 +123,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         authOK = false
         requestSent = false
         connectionOpened = false
+        loggingIn = false
         finishConnect = nil
         recentAudioSizes = []
         serialReorder.reset()
@@ -152,6 +156,8 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         // on its own and the next attempt is accepted. This is the same
         // stale-session behaviour every Icom LAN client has to absorb.
         var login: IcomLAN.LoginReply?
+        loggingIn = true
+        defer { loggingIn = false }
         for attempt in 0..<Self.loginAttempts {
             try Task.checkCancellation()
             let tokenRequest = (UInt8.random(in: 0...255), UInt8.random(in: 0...255))
@@ -159,10 +165,22 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
                                               tokenRequest: tokenRequest, username: c.username, password: c.password,
                                               program: c.program))
             control.trace("login sent (attempt \(attempt + 1))")
-            let loginReply = try await control.expect(timeout: c.timeout, what: "login") { IcomLAN.parseLoginReply($0) != nil }
-            let reply = IcomLAN.parseLoginReply(loginReply)!
-            control.trace("login accepted=\(reply.accepted) (attempt \(attempt + 1))")
-            if reply.accepted { login = reply; break }
+            // The radio refuses a held slot in one of two ways: a login reply
+            // saying accepted=false, or an asynchronous auth-failed status
+            // packet. They mean the same thing, so both have to feed this
+            // ladder. Waiting only for the reply meant a status refusal fell
+            // through to handleControl, which failed the whole connect on the
+            // first attempt — the retry written for exactly this condition
+            // never ran, and every relaunch after an unclean exit needed the
+            // operator to power-cycle the radio.
+            let answer = try await control.expect(timeout: c.timeout, what: "login",
+                                                  IcomLAN.isLoginAnswer)
+            if let reply = IcomLAN.parseLoginReply(answer) {
+                control.trace("login accepted=\(reply.accepted) (attempt \(attempt + 1))")
+                if reply.accepted { login = reply; break }
+            } else {
+                control.trace("login refused by status packet (attempt \(attempt + 1))")
+            }
             if attempt + 1 < Self.loginAttempts {
                 try await Task.sleep(nanoseconds: UInt64(Self.loginRetryDelay * 1_000_000_000))
             }
@@ -348,7 +366,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
             // afterwards the radio still emits periodic status and only a
             // clean radio-disconnect ends the session.
             switch status {
-            case .authFailed where !connectionOpened:
+            case .authFailed where !connectionOpened && !loggingIn:
                 resolveConnect(.failure(IcomLANError.rejected("the radio refused the login (another client may be connected)")))
             case .radioDisconnected:
                 if connectionOpened { fail(IcomLANError.radioDisconnected.message) }
