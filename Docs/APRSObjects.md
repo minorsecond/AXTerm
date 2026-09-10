@@ -223,13 +223,17 @@ would be showing the operator something untrue of every other station. Only our
 own live objects are draggable; a station's marker is its own report of where it
 said it was, and dragging that would be editing somebody else's claim.
 
-Drag needs the MapKit renderer, which is used for the offline basemap and
-whenever overlays, terrain or drawing are in play. On a bare Apple basemap with
-none of those the map is SwiftUI's, which has no annotation drag — the card's
-*Move…* works everywhere and is the fallback. The armed state gets a banner
-with a Cancel and also replaces the button on the card, because a mode you
-cannot see is one you cancel by clicking somewhere else, and here clicking
-somewhere else transmits.
+Drag needs the MapKit renderer: SwiftUI's `Map` has no annotation drag.
+`StationMapView` takes the MapKit path for the offline basemap, and whenever
+overlays, terrain or a drawing binding are in play — and `StationsMapView`
+always passes a drawing binding, so **the Stations map is always MapKit and
+drag is always available there**. The SwiftUI path is reached only by
+`WinlinkScopeWindow`, which offers no draggable markers at all. The card's
+*Move…* therefore is not a fallback for a renderer that cannot drag; it is the
+discoverable path to the same staging, and the precise one when the marker sits
+under a cluster. The armed state gets a banner with a Cancel and also replaces
+the button on the card, because a mode you cannot see is one you cancel by
+clicking somewhere else, and here clicking somewhere else transmits.
 
 The sheet opens pre-filled, which means recovering the choice from the two
 symbol bytes (`Choice.matching`). `APRSObjectSymbolTests` holds that every

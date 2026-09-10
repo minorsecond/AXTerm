@@ -375,7 +375,7 @@ struct StationsMapView: View {
         if let moving = movingObject {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
-                Text("Secondary-click where \u{201C}\(moving.report.name)\u{201D} should go")
+                Text("Drag \u{201C}\(moving.report.name)\u{201D}, or secondary-click where it should go")
                     .font(.callout)
                 Button("Cancel") { movingObject = nil }
                     .controlSize(.small)
@@ -2209,16 +2209,17 @@ struct StationsMapView: View {
                     if let placed = ourObject(siteID: site.id), onPlaceObject != nil {
                         // APRS has no move: re-sending under a name we already
                         // own is the move, which is why `problem` treats our
-                        // own name as no collision. Arming here and finishing
-                        // with the ordinary secondary click keeps the confirm
-                        // step that a drag would skip.
+                        // own name as no collision. Dragging the marker does
+                        // the same thing and is what people reach for first;
+                        // this button is the discoverable path to it, and the
+                        // precise one when the marker is under a cluster.
                         #if os(macOS)
                         // Armed state is shown on the card as well as in the
                         // banner. The card is what the operator is already
                         // looking at, and a button that appears to do nothing
                         // is worse than no button.
                         if movingObject?.report.key == placed.report.key {
-                            Text("Secondary-click the new spot")
+                            Text("Drag it, or secondary-click the new spot")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Button("Cancel") { movingObject = nil }
@@ -2231,8 +2232,9 @@ struct StationsMapView: View {
                                       systemImage: "arrow.up.and.down.and.arrow.left.and.right")
                             }
                             .controlSize(.small)
-                            .help("Then secondary-click where \u{201C}\(placed.report.name)"
-                                  + "\u{201D} should go. It moves on every station that hears it.")
+                            .help("Drag \u{201C}\(placed.report.name)\u{201D} to the new spot, or"
+                                  + " secondary-click it. Either way you confirm before it goes out,"
+                                  + " and it moves on every station that hears it.")
                         }
                         #else
                         // No secondary click to arm, so nothing to arm: the
