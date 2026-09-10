@@ -221,13 +221,33 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var aprsAlerts = APRSWeatherAlertStore()
 
     /// Files an NWS alert, if this bulletin is one.
-    private func recordWeatherAlert(from packet: Packet, sentBy station: String) {
-        guard !packet.info.isEmpty,
+    /// APRS only ever rides in a UI frame with PID 0xF0, so nothing else may
+    /// reach the incident layers.
+    ///
+    /// Without this, text inside a connected-mode session is read as APRS. A
+    /// BBS directory listing begins with `)` — the APRS *item* DTI — and the
+    /// log holds 368 such I-frames (`)  18536 free  (A,B,H,J,K,L,R,S,V,`).
+    /// Every one of them is currently rejected by the name rules, measured
+    /// against the real payloads, so this changes no present behaviour. It is
+    /// here because the failure mode if one ever did parse is a fabricated
+    /// hazard on an emergency map, and because the replay path already
+    /// filtered this way while the live path did not — two paths disagreeing
+    /// about what counts as APRS is how the other two bugs in this area
+    /// happened.
+    private static func carriesAPRS(_ packet: Packet) -> Bool {
+        packet.frameType == .ui && packet.pid == 0xF0 && !packet.info.isEmpty
+    }
+
+    /// - Parameter announce: false when replaying stored history, which files
+    ///   the same alerts again and must not reprint hours of them.
+    private func recordWeatherAlert(from packet: Packet, sentBy station: String,
+                                    announce: Bool = true) {
+        guard Self.carriesAPRS(packet),
               case .bulletin(let id, let text)? = APRSMessage.parse(info: packet.info),
               let alert = APRSWeatherAlert.classify(
                 bulletinID: id, text: text, from: station, heard: packet.timestamp)
         else { return }
-        if aprsAlerts.record(alert) {
+        if aprsAlerts.record(alert), announce {
             TxLog.inbound(.frame, "NWS alert relayed onto APRS", [
                 "severity": alert.severity.label,
                 "gateway": alert.source,
@@ -249,10 +269,13 @@ final class PacketEngine: ObservableObject {
     }
 
     /// Files an object or item report, if this packet is one.
-    private func recordAPRSObject(from packet: Packet, sentBy station: String) {
-        guard !packet.info.isEmpty,
+    ///
+    /// - Parameter announce: false when replaying stored history.
+    private func recordAPRSObject(from packet: Packet, sentBy station: String,
+                                  announce: Bool = true) {
+        guard Self.carriesAPRS(packet),
               let report = APRSObjectReport.parse(info: packet.info) else { return }
-        if aprsObjects.record(report, from: station, at: packet.timestamp) {
+        if aprsObjects.record(report, from: station, at: packet.timestamp), announce {
             TxLog.inbound(.frame, "APRS object heard", [
                 "name": report.name,
                 "from": station,
@@ -1010,7 +1033,12 @@ final class PacketEngine: ObservableObject {
                 debugTrace("Mobilinkd Auto-Gain Updated", ["radio": radio.rawValue, "newGain": gain])
             }
         } else {
-            debugTrace("Mobilinkd Telemetry", ["hex": hexPrefix(telemetryData)])
+            // Not "Mobilinkd Telemetry": the Mobilinkd parsers above simply
+            // share KISS SetHardware (0x06) with everything else that rides
+            // it, so naming the unrecognised case after them made a Direwolf
+            // link look like it had a Mobilinkd on it. Say what is true —
+            // a hardware frame nothing here understands.
+            debugTrace("Unrecognised KISS hardware frame", ["hex": hexPrefix(telemetryData)])
         }
         LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
             timestamp: Date(), direction: .rx, rawBytes: telemetryData,
@@ -2121,9 +2149,50 @@ final class PacketEngine: ObservableObject {
         return merged
     }
 
-    private func rebuildStations(from packets: [Packet]) {
+    /// Internal, not private, so a test can prove the incident layers are
+    /// actually rebuilt here — testing the seed function alone would pass even
+    /// if nothing ever called it, which was the bug.
+    func rebuildStations(from packets: [Packet]) {
         stationTracker.rebuild(from: packets)
         stations = stationTracker.stations
+        seedAPRSLayersIfEmpty(from: packets)
+    }
+
+    /// Replays the incident layers — objects, items and NWS alerts — from the
+    /// stored packet log.
+    ///
+    /// `updateMHeard` files these as they arrive and nothing ever rebuilt
+    /// them, so every launch started the incident map empty while the packets
+    /// that made it sat in the log. A repeater object came back on its next
+    /// beacon and hid the bug; the cases the layer exists for did not. A
+    /// one-shot hazard — a fire, a road closure, an aid station placed once —
+    /// and any object whose sender had since gone off the air were gone for
+    /// good. `liveWindow` compounded it: with an empty store, an object's age
+    /// was measured from app start rather than from the last time anyone
+    /// actually repeated it.
+    ///
+    /// Seeded only into an empty store, never over live state. `record`
+    /// overwrites `heard` and increments `timesHeard`, so replaying the log on
+    /// a mid-session rebuild — a radio reconnect calls this too — would drag
+    /// current objects backwards in time, possibly out of `live()`, and
+    /// double-count their repeats. It would also wipe objects we placed
+    /// ourselves, which never enter the packet log at all
+    /// (`recordOwnAPRSObject`).
+    func seedAPRSLayersIfEmpty(from packets: [Packet]) {
+        let seedObjects = aprsObjects.placed.isEmpty && aprsObjects.killed.isEmpty
+        let seedAlerts = aprsAlerts.alerts.isEmpty
+        guard seedObjects || seedAlerts else { return }
+        // Ascending time order is required, not cosmetic: a kill retires the
+        // placement before it, and a move supersedes it. Replayed out of
+        // order, a stood-down hazard comes back as live.
+        let ordered = packets
+            .filter { !$0.isOwnEcho && Self.carriesAPRS($0) }
+            .sorted { $0.timestamp < $1.timestamp }
+        for packet in ordered {
+            guard let station = packet.from?.display else { continue }
+            if seedObjects { recordAPRSObject(from: packet, sentBy: station, announce: false) }
+            if seedAlerts { recordWeatherAlert(from: packet, sentBy: station, announce: false) }
+        }
     }
 
     private func persistPacket(_ packet: Packet) {
