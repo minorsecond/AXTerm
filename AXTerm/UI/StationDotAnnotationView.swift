@@ -460,9 +460,8 @@ final class StationDotAnnotationView: MKAnnotationView {
         // glyph image up front, because whether one exists decides the size.
         let glyphImage: CGImage? = (!isNode && !approximate)
             ? aprsSymbol.flatMap {
-                APRSGlyphRasterizer.image(
-                    systemName: APRSSymbolGlyph.systemImage(table: $0.table, code: $0.code),
-                    diameter: Self.aprsSize)
+                APRSGlyphRasterizer.image(table: $0.table, code: $0.code,
+                                          diameter: Self.aprsSize)
             }
             : nil
 

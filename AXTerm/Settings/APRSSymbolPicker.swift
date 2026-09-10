@@ -43,6 +43,11 @@ struct APRSSymbolPicker: View {
                     dismiss()
                 } label: {
                     HStack(spacing: 10) {
+                        // The symbol itself. Choosing one from a list of
+                        // names and byte pairs meant picking blind.
+                        APRSSymbolView(table: symbol.table, code: symbol.code, size: 18)
+                            .foregroundStyle(.primary)
+                            .frame(width: 22)
                         // Table + code, monospaced, as the on-air bytes.
                         Text("\(String(symbol.table))\(String(symbol.code))")
                             .font(.system(.body, design: .monospaced))

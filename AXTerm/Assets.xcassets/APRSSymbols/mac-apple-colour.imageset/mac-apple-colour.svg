@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+<defs><clipPath id="fruit"><path d="M12 9.2 C10.6 7 7.6 6.3 5.4 8.1 C2.6 10.4 2.4 15 4.5 18.4 C5.9 20.7 7.8 21.8 9.4 21.4 C10.5 21.1 11.2 20.8 12 20.8 C12.8 20.8 13.5 21.1 14.6 21.4 C16.2 21.8 18.1 20.7 19.5 18.4 C21.6 15 21.4 10.4 18.6 8.1 C16.4 6.3 13.4 7 12 9.2 Z"/></clipPath></defs>
+<g clip-path="url(#fruit)"><rect x="0" y="6.6" width="24" height="2.487" fill="#009DDC"/><rect x="0" y="9.067" width="24" height="2.487" fill="#963D97"/><rect x="0" y="11.534" width="24" height="2.487" fill="#E03A3E"/><rect x="0" y="14.001" width="24" height="2.487" fill="#F5821F"/><rect x="0" y="16.468" width="24" height="2.487" fill="#FDB827"/><rect x="0" y="18.935" width="24" height="2.487" fill="#61BB46"/></g>
+<path fill="#61BB46" d="M11.4 9 C11.6 7 12 5.4 13 4 L14.2 4.7 C13.3 5.9 12.9 7.3 12.7 9 Z"/><path fill="#61BB46" d="M13.6 5.4 C15.1 3.5 17.5 3.1 19 3.4 C18.9 5.2 17.4 7.2 15 7.4 C14.1 7.4 13.6 6.6 13.6 5.4 Z"/>
+</svg>
