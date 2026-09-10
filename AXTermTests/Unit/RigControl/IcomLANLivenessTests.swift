@@ -115,5 +115,65 @@ final class IcomLANLivenessTests: XCTestCase {
         stream.handle(IcomLAN.control(.idle, local: 1, remote: 2))
         XCTAssertGreaterThan(stream.lastInboundAt, 0)
     }
+
+    // MARK: - The stream that was never spoken to
+
+    /// log12, 2026-09-10. Ten minutes with no audio from the IC-705, the radio
+    /// showing no client, and AXTerm still reporting "connected" — the word
+    /// "stopped answering" appears zero times in 56,576 lines.
+    ///
+    /// `silence` returned nil for a stream that had heard nothing, the
+    /// session's `compactMap` dropped the nil, and the audio path was excluded
+    /// from the watch that exists to catch exactly this. The link then rested
+    /// on control's pings, which never stop.
+    func testAConnectedStreamThatHasNeverBeenSpokenToIsStillJudged() {
+        let audio = IcomLANStream(name: "audio", queue: DispatchQueue(label: "test"))
+        audio.beginListening(now: IcomLANStream.now - 600)
+
+        let silence = try? XCTUnwrap(audio.silence)
+        XCTAssertNotNil(audio.silence,
+                        "a connected stream must always report a silence, or it "
+                        + "drops out of the watchdog entirely")
+        XCTAssertGreaterThan(silence ?? 0, IcomLANLiveness.silenceLimit)
+        XCTAssertNotNil(IcomLANLiveness.complaint(silentFor: audio.silence ?? 0))
+    }
+
+    /// The composition the session performs, verbatim: control alive, audio
+    /// never heard. Before the fix this evaluated to control's silence alone.
+    func testAudioSilenceDecidesEvenWhenAudioNeverArrived() {
+        let queue = DispatchQueue(label: "test")
+        let control = IcomLANStream(name: "control", queue: queue)
+        let audio = IcomLANStream(name: "audio", queue: queue)
+        control.beginListening(now: IcomLANStream.now - 600)
+        audio.beginListening(now: IcomLANStream.now - 600)
+        // The radio keeps pinging control and sends no audio at all.
+        control.handle(IcomLAN.control(.idle, local: 1, remote: 2))
+
+        let silences = [control.silence, audio.silence].compactMap { $0 }
+        XCTAssertEqual(silences.count, 2, "neither stream may drop out of the watch")
+        let longest = try? XCTUnwrap(silences.max())
+        XCTAssertNotNil(IcomLANLiveness.complaint(silentFor: longest ?? 0),
+                        "audio dead for ten minutes must fail the link even while "
+                        + "control is still being answered")
+    }
+
+    /// And the regression that fix must not reintroduce: a session that just
+    /// connected is not dead, it is new.
+    func testAFreshlyConnectedStreamIsNotJudgedImmediately() {
+        let stream = IcomLANStream(name: "audio", queue: DispatchQueue(label: "test"))
+        stream.beginListening()
+        XCTAssertNil(IcomLANLiveness.complaint(silentFor: stream.silence ?? 0),
+                     "killing a session one second after it connects is the bug "
+                     + "this whole clock was reset to avoid")
+    }
+
+    /// A stream that is not connected has nothing to answer for.
+    func testADisconnectedStreamReportsNoSilence() {
+        let stream = IcomLANStream(name: "audio", queue: DispatchQueue(label: "test"))
+        stream.beginListening(now: IcomLANStream.now - 600)
+        stream.disconnect()
+        XCTAssertNil(stream.silence, "a closed stream is not a silent radio")
+    }
 }
+
 #endif

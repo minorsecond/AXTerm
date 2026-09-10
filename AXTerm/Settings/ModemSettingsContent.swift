@@ -190,6 +190,46 @@ struct ModemLevelMeter: View {
     }
 }
 
+/// The radio's own CI-V address. Every CI-V frame is addressed to it, so a
+/// wrong one is total silence — the radio ignores us and there is nothing to
+/// see. Shared by the USB and Wi-Fi sections because it applies to both.
+struct ModemCIVAddressRow: View {
+    @ObservedObject var viewModel: ConnectionTransportViewModel
+
+    var body: some View {
+            LabeledContent("CI-V address") {
+                TextField("A4", text: $viewModel.civAddressHex)
+                    .labelsHidden()
+                    .frame(width: 60)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+            }
+            .help("The radio's own CI-V address in hex. IC-705: A4. IC-7300: 94. IC-9700: 98. The radio's menu shows it under CI-V.")
+    }
+}
+
+/// CI-V over Wi-Fi: only the address is the operator's to set.
+///
+/// The serial-port picker has no meaning here (the network session *is* the
+/// CI-V port) and keying is always the CI-V command, since the WLAN carries
+/// no control lines. But the address is used exactly as it is over USB, and
+/// leaving it off this screen made it unreachable for the one radio most
+/// likely to need it changed.
+struct ModemLANRigSection: View {
+    @ObservedObject var viewModel: ConnectionTransportViewModel
+
+    var body: some View {
+        Section {
+            ModemCIVAddressRow(viewModel: viewModel)
+        } header: {
+            Text("Rig control (CI-V)")
+        } footer: {
+            Text("Over Wi-Fi the radio's network session carries CI-V, so there is no port to choose and keying is "
+                 + "always the CI-V command. The address must still match the one in the radio's CI-V menu.")
+        }
+    }
+}
+
 /// CI-V: the port, the address, and what the radio says when asked.
 struct ModemRigSection: View {
     @ObservedObject var viewModel: ConnectionTransportViewModel
@@ -209,14 +249,7 @@ struct ModemRigSection: View {
             }
             .help("The radio's control port. An IC-705 over USB shows two usbmodem ports; the lower-numbered one is Port A, the CI-V port.")
 
-            LabeledContent("CI-V address") {
-                TextField("A4", text: $viewModel.civAddressHex)
-                    .labelsHidden()
-                    .frame(width: 60)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-            }
-            .help("The radio's own CI-V address in hex. IC-705: A4. IC-7300: 94. IC-9700: 98. The radio's menu shows it under CI-V.")
+            ModemCIVAddressRow(viewModel: viewModel)
 
             Picker("Keying", selection: $viewModel.pttMethod) {
                 ForEach(ModemPTTMethod.allCases, id: \.self) { method in

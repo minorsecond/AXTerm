@@ -74,6 +74,56 @@ final class CIVClientTests: XCTestCase {
         }
     }
 
+    // MARK: - Asking the whole bus who is there
+
+    /// The fault this exists for: every command times out, and "check the
+    /// address and the CI-V settings" is two guesses. A radio living on
+    /// another address answers a broadcast, and names itself.
+    func testAProbeFindsARadioOnAnotherAddress() async {
+        let (client, transport) = makeClient()
+        transport.responder = { frame in
+            guard frame.to == CIVFrame.broadcast, frame.command == 0x19 else { return nil }
+            return FakeCIVTransport.reply(0x19, 0x00, [0x5E], from: 0x5E)
+        }
+        let found = await client.probeAddress()
+        XCTAssertEqual(found, 0x5E, "the answering address is the one to configure")
+        XCTAssertEqual(transport.written.first?.to, CIVFrame.broadcast,
+                       "a probe is addressed to every radio, not to the one we already failed to reach")
+    }
+
+    /// The other half of the fork: nothing at all answers, so the address was
+    /// never the problem.
+    func testAProbeThatNothingAnswersReportsNothing() async {
+        let (client, transport) = makeClient(timeout: 0.05)
+        transport.responder = { _ in nil }
+        let found = await client.probeAddress()
+        XCTAssertNil(found)
+    }
+
+    /// With echo-back on, our own broadcast comes back from the controller
+    /// address. Reading that as an answer would report the radio as living
+    /// at `E0` — us — and send the operator to configure a lie.
+    func testAProbeDoesNotMistakeItsOwnEchoForAnAnswer() async {
+        let (client, transport) = makeClient(timeout: 0.05)
+        transport.responder = { frame in frame.encoded().map { $0 } }
+        let found = await client.probeAddress()
+        XCTAssertNil(found, "an echo is not an answer")
+    }
+
+    /// The relaxed acceptance belongs to the probe alone. An ordinary command
+    /// answered by a foreign address is still not an answer — matching it
+    /// would let a second radio on the bus drive this one's PTT.
+    func testAnOrdinaryRequestIsStillNotAnsweredByAForeignAddress() async {
+        let (client, transport) = makeClient(timeout: 0.05)
+        transport.responder = { _ in FakeCIVTransport.reply(0x19, 0x00, [0x5E], from: 0x5E) }
+        do {
+            _ = try await client.identify()
+            XCTFail("a reply from 5E must not satisfy a request addressed to A4")
+        } catch {
+            XCTAssertEqual(error as? CIVError, .timeout(command: 0x19))
+        }
+    }
+
     func testIdentifyAndReads() async throws {
         let (client, transport) = makeClient()
         transport.responder = { [self] in ic705($0) }

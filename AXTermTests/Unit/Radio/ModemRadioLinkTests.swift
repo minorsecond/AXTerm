@@ -298,5 +298,35 @@ final class ModemRadioLinkTests: XCTestCase {
         XCTAssertTrue(complaint.lowercased().contains("receive works"),
                       "say what still works, so this does not read as a dead radio")
     }
+
+    /// A radio that answers a broadcast from somewhere else is a
+    /// misconfiguration with one fix, and the complaint should name it
+    /// rather than list the things to go and check.
+    func testABroadcastAnswerFromAnotherAddressNamesTheFix() throws {
+        let complaint = try XCTUnwrap(ModemRadioLink.civSilenceComplaint(
+            identified: false, statusAnswered: false, address: 0xA4, answeringAddress: 0x5E))
+        XCTAssertTrue(complaint.contains("5E"), "the address that answered is the fix")
+        XCTAssertTrue(complaint.contains("A4"), "and the one we were asking for is the mistake")
+        XCTAssertFalse(complaint.contains("switched off"),
+                       "CI-V plainly is not off — something just answered on it")
+    }
+
+    /// Silence to a broadcast rules the address out entirely, so the
+    /// complaint must stop suggesting it as the thing to check.
+    func testSilenceToABroadcastRulesTheAddressOut() throws {
+        let complaint = try XCTUnwrap(ModemRadioLink.civSilenceComplaint(
+            identified: false, statusAnswered: false, address: 0xA4, answeringAddress: nil))
+        XCTAssertTrue(complaint.lowercased().contains("nothing answered a broadcast"),
+                      "say that the wider question was asked, and drew a blank")
+        XCTAssertTrue(complaint.contains("A4"))
+    }
+
+    /// The awkward third case: the broadcast is answered by the very address
+    /// we are using. The address is exonerated; the replies are going missing.
+    func testAnAnswerFromOurOwnAddressExoneratesIt() throws {
+        let complaint = try XCTUnwrap(ModemRadioLink.civSilenceComplaint(
+            identified: false, statusAnswered: false, address: 0xA4, answeringAddress: 0xA4))
+        XCTAssertTrue(complaint.lowercased().contains("the address is right"))
+    }
 }
 #endif

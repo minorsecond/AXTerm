@@ -60,6 +60,8 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     /// payload. Over UDP this is the only evidence the radio still exists;
     /// `IcomLANLiveness` turns it into a verdict. Zero until first contact.
     private(set) var lastInboundAt: Double = 0
+    /// When `connect()` last ran. Zero while disconnected.
+    private(set) var connectedAt: Double = 0
     private var expecting: [(id: UUID, match: (Data) -> Bool, resume: (Data) -> Void)] = []
 
     /// Optional handshake trace for live debugging. Enabled when
@@ -108,6 +110,15 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         // been dead for as long as the reconnect took — killing a session one
         // second after it connected.
         lastInboundAt = 0
+        // When this session started listening. Silence is measured from here
+        // until the radio first speaks, so a stream that never delivers a
+        // single datagram is still judged. Without it `silence` stayed nil
+        // for such a stream, `compactMap` dropped it from the watchdog, and
+        // an audio path that never came up was excluded from the very check
+        // that exists to catch it — the link then rode on control's pings and
+        // reported "connected" indefinitely (log12, 2026-09-10: ten minutes
+        // of dead audio, no verdict).
+        beginListening()
         let params = NWParameters.udp
         params.allowLocalEndpointReuse = true
         // The radio checks our session ID against the source of our
@@ -347,9 +358,21 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         }
     }
 
+    /// Datagrams actually handed to the socket, and datagrams thrown away
+    /// because the stream was not ready. The second number has no other
+    /// witness: a not-ready stream swallows every write in silence, which
+    /// looks exactly like a radio that is ignoring us.
+    private(set) var sentPackets = 0
+    private(set) var droppedSends = 0
+
     func send(_ data: Data) {
         trace("TX " + data.prefix(48).map { String(format: "%02x", $0) }.joined())
-        guard isReady, let connection else { trace("send skipped (not ready)"); return }
+        guard isReady, let connection else {
+            droppedSends += 1
+            trace("send skipped (not ready)")
+            return
+        }
+        sentPackets += 1
         connection.send(content: data, completion: .contentProcessed { [weak self] error in
             if let error { self?.trace("send failed: " + error.localizedDescription) }
         })
@@ -391,6 +414,7 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         // A disconnected stream has heard nothing. Anything else would be
         // this session's history answering for the next one's.
         lastInboundAt = 0
+        connectedAt = 0
         for e in expecting { e.resume(Data()) }
         expecting.removeAll()
     }
@@ -501,10 +525,30 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         onPacket?(d)
     }
 
-    /// How long the radio has said nothing, or nil before first contact.
+    /// Starts the clock that `silence` measures against before first contact.
+    ///
+    /// Internal rather than private so a test can put a stream in the state
+    /// `connect()` leaves it in without opening a socket — the hole this
+    /// closes is precisely "connected and never spoken to", which cannot be
+    /// reached any other way.
+    func beginListening(now: Double = IcomLANStream.now) {
+        connectedAt = now
+    }
+
+    /// How long the radio has said nothing on this stream, or nil when the
+    /// stream is not connected and there is nothing to judge.
+    ///
+    /// Before first contact this counts from `connectedAt`, not from zero.
+    /// The two are different questions that were once the same answer: a
+    /// stream carrying a *previous* session's stamp must not be judged (it
+    /// killed sessions one second after connecting), but a stream that has
+    /// simply never been spoken to must be — that is a radio we never reached,
+    /// and it is indistinguishable, from the operator's side, from one that
+    /// left.
     var silence: TimeInterval? {
-        guard lastInboundAt > 0 else { return nil }
-        return Self.now - lastInboundAt
+        let since = max(lastInboundAt, connectedAt)
+        guard since > 0 else { return nil }
+        return Self.now - since
     }
 
     static var now: Double { CFAbsoluteTimeGetCurrent() }

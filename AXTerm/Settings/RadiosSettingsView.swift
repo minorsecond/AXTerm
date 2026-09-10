@@ -262,8 +262,13 @@ struct RadioDetailView: View {
             if viewModel.selectedTransport == .modem {
                 // Over Wi-Fi the CI-V port is the network session itself, so
                 // the serial-port section only makes sense for a USB radio.
+                // The address is not the port, though: it is addressed on
+                // both links, and hiding it here left a Wi-Fi operator no way
+                // to correct the one setting that silences CI-V outright.
                 if viewModel.modemRigLink == .usb {
                     ModemRigSection(viewModel: viewModel)
+                } else {
+                    ModemLANRigSection(viewModel: viewModel)
                 }
                 ModemTransmitSection(viewModel: viewModel)
                 ModemRadioSection(viewModel: viewModel)

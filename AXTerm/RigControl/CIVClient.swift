@@ -46,6 +46,17 @@ nonisolated final class CIVClient: @unchecked Sendable {
     private var pending: [Request] = []
     private var inFlight: Request?
 
+    // Evidence for the one failure this class cannot currently explain: the
+    // port opens, every command times out, and the operator is told the radio
+    // "has not answered any CI-V command". That sentence is a guess. These
+    // counters make it a measurement — silence and a rejected-by-address
+    // answer look identical from outside, and they need opposite fixes.
+    private var bytesIn = 0
+    private var framesIn = 0
+    private var framesDropped = 0
+    private var reportedFirstBytes = false
+    private var droppedReports = 0
+
     private enum Expectation {
         /// A set: `FB` or `FA`.
         case acknowledgement
@@ -57,10 +68,15 @@ nonisolated final class CIVClient: @unchecked Sendable {
         let frame: CIVFrame
         let expectation: Expectation
         let continuation: CheckedContinuation<CIVFrame, Error>
+        /// A probe asks the whole bus, so it is the one request an address we
+        /// were not addressing is allowed to answer.
+        let acceptsAnyRadio: Bool
         var timeout: DispatchWorkItem?
-        init(frame: CIVFrame, expectation: Expectation, continuation: CheckedContinuation<CIVFrame, Error>) {
+        init(frame: CIVFrame, expectation: Expectation, acceptsAnyRadio: Bool = false,
+             continuation: CheckedContinuation<CIVFrame, Error>) {
             self.frame = frame
             self.expectation = expectation
+            self.acceptsAnyRadio = acceptsAnyRadio
             self.continuation = continuation
         }
     }
@@ -95,6 +111,27 @@ nonisolated final class CIVClient: @unchecked Sendable {
         guard let found = reply.data.first else { throw CIVError.unexpectedResponse(command: 0x19) }
         guard found == radioAddress else { throw CIVError.wrongRadio(found: found, expected: radioAddress) }
         return found
+    }
+
+    /// Ask every address on the bus who is there, and report whoever answers.
+    ///
+    /// A CI-V radio answers a frame addressed to `00`, replying from its own
+    /// address. That one broadcast separates the two faults that are
+    /// indistinguishable from outside once `identify` has timed out: a radio
+    /// set to an address this modem is not asking for (it answers, from some
+    /// other address) and a CI-V channel that is switched off or not reaching
+    /// the radio at all (nothing answers). They need opposite fixes, and
+    /// until now the operator was told to go and check both.
+    ///
+    /// Returns the address that answered, or `nil` on silence.
+    func probeAddress() async -> UInt8? {
+        let frame = CIVCommand.identify(radio: CIVFrame.broadcast, controller: controllerAddress)
+        let reply = try? await request(frame, expecting: .reply(command: 0x19, subcommand: 0x00),
+                                       acceptingAnyRadio: true)
+        // The header's `from` is the address the bus actually routes on; the
+        // payload repeats it, and a radio that disagrees with itself is not
+        // worth trusting over the envelope it sent.
+        return reply?.from
     }
 
     func setPTT(_ on: Bool) async throws {
@@ -273,14 +310,17 @@ nonisolated final class CIVClient: @unchecked Sendable {
 
     // MARK: - Request/response
 
-    private func request(_ frame: CIVFrame, expecting: Expectation) async throws -> CIVFrame {
+    private func request(_ frame: CIVFrame, expecting: Expectation,
+                         acceptingAnyRadio: Bool = false) async throws -> CIVFrame {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 guard self.transport.state == .open else {
                     continuation.resume(throwing: CIVError.notOpen)
                     return
                 }
-                self.pending.append(Request(frame: frame, expectation: expecting, continuation: continuation))
+                self.pending.append(Request(frame: frame, expectation: expecting,
+                                            acceptsAnyRadio: acceptingAnyRadio,
+                                            continuation: continuation))
                 self.advance()
             }
         }
@@ -294,6 +334,16 @@ nonisolated final class CIVClient: @unchecked Sendable {
         let timeout = DispatchWorkItem { [weak self] in
             guard let self, self.inFlight === request else { return }
             self.inFlight = nil
+            // The moment that matters. "PTT failed: timeout" says nothing
+            // about whether the radio is mute or merely unheard; these
+            // counters separate the two.
+            TxLog.warning(.modem, "CI-V: no answer", [
+                "command": String(format: "%02X", request.frame.command),
+                "sent": request.frame.encoded().map { String(format: "%02x", $0) }.joined(),
+                "bytesInSinceOpen": self.bytesIn,
+                "framesInSinceOpen": self.framesIn,
+                "framesDiscarded": self.framesDropped,
+                "after": String(format: "%.2fs", self.requestTimeout)])
             request.continuation.resume(throwing: CIVError.timeout(command: request.frame.command))
             self.advance()
         }
@@ -313,9 +363,40 @@ nonisolated final class CIVClient: @unchecked Sendable {
 
     /// Queue-only.
     private func received(_ data: Data) {
+        bytesIn += data.count
+        if !reportedFirstBytes {
+            reportedFirstBytes = true
+            TxLog.debug(.modem, "CI-V: first bytes from the radio", [
+                "count": data.count,
+                "hex": data.prefix(16).map { String(format: "%02x", $0) }.joined()])
+        }
         for frame in parser.feed(data) {
+            framesIn += 1
             if CIVFilter.isEcho(frame, radio: radioAddress) { continue }
-            guard frame.from == radioAddress, CIVFilter.isForUs(frame, controller: controllerAddress) else { continue }
+            // While a probe is in flight, any address may answer it — that is
+            // the whole point. Our own broadcast coming back with echo-back
+            // on is not an answer, so the sender must not be us.
+            let answersProbe = (inFlight?.acceptsAnyRadio ?? false)
+                && frame.from != controllerAddress
+                && frame.to == controllerAddress
+            guard answersProbe
+                    || (frame.from == radioAddress
+                        && CIVFilter.isForUs(frame, controller: controllerAddress)) else {
+                framesDropped += 1
+                // A radio answering from an address we are not asking for is
+                // the likeliest cause of total silence, and it is dropped
+                // here without a word. Say it — a few times, not forever.
+                if droppedReports < 3 {
+                    droppedReports += 1
+                    TxLog.debug(.modem, "CI-V: frame discarded", [
+                        "from": String(format: "%02X", frame.from),
+                        "to": String(format: "%02X", frame.to),
+                        "command": String(format: "%02X", frame.command),
+                        "weExpectFrom": String(format: "%02X", radioAddress),
+                        "weAre": String(format: "%02X", controllerAddress)])
+                }
+                continue
+            }
             if let request = inFlight, frame.to == controllerAddress, matches(frame, request.expectation) {
                 request.timeout?.cancel()
                 inFlight = nil
@@ -348,7 +429,10 @@ nonisolated final class CIVClient: @unchecked Sendable {
         switch state {
         case .closed: failAll(CIVError.notOpen)
         case .failed(let reason): failAll(CIVError.transport(reason))
-        case .opening, .open: parser.reset()
+        case .opening, .open:
+            parser.reset()
+            bytesIn = 0; framesIn = 0; framesDropped = 0
+            reportedFirstBytes = false; droppedReports = 0
         }
         onTransportState?(state)
         if case .failed(let reason) = state { onTransportFailure?(reason) }

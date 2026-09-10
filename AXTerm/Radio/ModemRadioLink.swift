@@ -196,12 +196,31 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// one until the first transmission, where it surfaces as a bare "PTT
     /// failed: timeout" seconds into an operation the operator has already
     /// committed to. Receive still works without CI-V; keying does not.
-    static func civSilenceComplaint(identified: Bool, statusAnswered: Bool, address: UInt8) -> String? {
+    /// - Parameter answeringAddress: who replied to a broadcast asking the
+    ///   whole bus, when one was sent. It turns the advice from "check two
+    ///   things" into the one thing that is actually wrong.
+    static func civSilenceComplaint(identified: Bool, statusAnswered: Bool, address: UInt8,
+                                    answeringAddress: UInt8? = nil) -> String? {
         guard !identified, !statusAnswered else { return nil }
-        return String(format: "The radio is connected but has not answered any CI-V command. "
-                      + "Receive works; transmit cannot key over CI-V until it does. "
-                      + "Check the radio's CI-V address (this modem is asking for %02X) and its CI-V settings.",
-                      address)
+        let opening = "The radio is connected but has not answered any CI-V command. "
+            + "Receive works; transmit cannot key over CI-V until it does. "
+        switch answeringAddress {
+        case .some(let found) where found != address:
+            // The radio is there and talking; we were calling the wrong name.
+            return opening + String(format: "A radio answered a broadcast from address %02X, "
+                                    + "but this modem is asking for %02X. "
+                                    + "Set the modem's CI-V address to %02X.", found, address, found)
+        case .some:
+            // It answered the broadcast on the very address we use, so the
+            // address is right and something else is eating the replies.
+            return opening + String(format: "It answered a broadcast from %02X, the address this modem "
+                                    + "is already using, so the address is right and the replies are "
+                                    + "being lost rather than never sent.", address)
+        case .none:
+            return opening + String(format: "Nothing answered a broadcast to every address either, "
+                                    + "so CI-V is switched off at the radio or not reaching it "
+                                    + "(this modem is asking for %02X).", address)
+        }
     }
 
     // MARK: - KISSLink
@@ -286,9 +305,18 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                 // this point insists on a reply. If nothing answered either,
                 // the control channel is dead and the operator would not find
                 // out until the first transmission failed to key. Say it now.
-                if let complaint = Self.civSilenceComplaint(identified: identified, statusAnswered: answered,
-                                                            address: config.civAddress) {
-                    deliver { [weak self] in self?._delegate?.linkDidError(complaint) }
+                if Self.civSilenceComplaint(identified: identified, statusAnswered: answered,
+                                            address: config.civAddress) != nil {
+                    // Nothing has answered. Before blaming the address, ask
+                    // the whole bus who is there: a radio on another address
+                    // and a CI-V channel that is not there at all produce
+                    // exactly the same silence, and want opposite fixes.
+                    let answering = await rig.probeAddress()
+                    if let complaint = Self.civSilenceComplaint(identified: identified, statusAnswered: answered,
+                                                               address: config.civAddress,
+                                                               answeringAddress: answering) {
+                        deliver { [weak self] in self?._delegate?.linkDidError(complaint) }
+                    }
                 }
                 // The audio and polling start on the delivery (main) queue,
                 // where close() flips `wantsOpen`. A close that raced this

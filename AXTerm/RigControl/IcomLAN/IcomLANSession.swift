@@ -48,7 +48,15 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     var onAudio: (@Sendable (Data?) -> Void)?
 
     private(set) var state: State = .idle {
-        didSet { if oldValue != state { onState?(state) } }
+        didSet {
+            guard oldValue != state else { return }
+            // Every transition, in the operator's console. The liveness watch
+            // bails on anything but `.connected`, so which state it bailed
+            // into — and when — is half the diagnosis.
+            TxLog.debug(.modem, "IcomLAN state", [
+                "from": String(describing: oldValue), "to": String(describing: state)])
+            onState?(state)
+        }
     }
     /// What the radio called itself in the connection reply, e.g. "IC-705".
     private(set) var radioName: String = ""
@@ -79,6 +87,22 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     private var audioReorder = SequenceReorderBuffer(holdSeconds: 0.1)
     private var reorderTimer: DispatchSourceTimer?
     private var livenessTimer: DispatchSourceTimer?
+    /// Whether the last tick was watching, so standing down is reported once
+    /// rather than every second.
+    private var livenessWasWatching = false
+    /// Whether the "nothing judged" state has already been reported for this
+    /// watch. It is a bug state, not a periodic one, so it is said once.
+    private var livenessReportedUnjudged = false
+    /// Ticks since the watch started, so the heartbeat can be periodic. The
+    /// count itself is logged: a gap in it is a stalled queue, which reads
+    /// nothing like a quiet radio.
+    private var livenessTicks = 0
+    /// CI-V writes asked for, and writes refused because the session was not
+    /// connected. Paired with the stream's own sent/dropped counts, these say
+    /// whether our commands are reaching the air at all — the half of "the
+    /// radio never answered" that nothing else measures.
+    private var civWrites = 0
+    private var civWritesRefused = 0
     private var recentAudioSizes: [Int] = []
     private var openTask: Task<Void, Error>?
 
@@ -221,6 +245,10 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         renewTimer?.cancel(); renewTimer = nil
         reorderTimer?.cancel(); reorderTimer = nil
         livenessTimer?.cancel(); livenessTimer = nil
+        // A cancelled watch and a watch that never noticed anything produce
+        // exactly the same log — nothing. Say which one this was.
+        TxLog.debug(.modem, "IcomLAN liveness: watch cancelled by close()",
+                    ["state": String(describing: state)])
         let teardown = { [self] in
             if state == .connected || state == .connecting {
                 if !authID.isEmpty {
@@ -262,6 +290,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
 
     private func fail(_ why: String) {
         control.trace("session fail: " + why)
+        TxLog.warning(.modem, "IcomLAN session failed", ["why": why, "state": String(describing: state)])
         queue.async { [self] in
             guard !isFailed else { return }
             renewTimer?.cancel(); renewTimer = nil
@@ -288,7 +317,11 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     /// limit are split; CI-V frames never are that long.
     func sendSerial(_ bytes: Data) {
         queue.async { [self] in
-            guard isConnected else { return }
+            guard isConnected else {
+                civWritesRefused += 1
+                return
+            }
+            civWrites += 1
             var rest = bytes
             while !rest.isEmpty {
                 let chunk = rest.prefix(80)
@@ -485,12 +518,50 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     /// control stream's *answers*. This watches all three streams' inbound
     /// traffic, which over UDP is the only evidence the radio is still there
     /// at all — see `IcomLANLiveness`.
+    /// One line per second is noise; one line never is unfalsifiable. log12
+    /// (2026-09-10) had ten minutes of dead audio and no verdict, and no way
+    /// to tell whether the watch ran, bailed, or was never started. Every
+    /// thirty ticks is ~120 lines an hour and settles that question outright.
+    private static let livenessHeartbeatTicks = 30
+
+    /// Liveness goes out as `.modem`, deliberately: that is the category
+    /// carrying `[MODEM]` in the console log the operator exports, so these
+    /// lines land in the same stream, on the same clock, as the last traffic
+    /// before a drop. Console output needs Wire debug enabled — same as the
+    /// `[MODEM]` lines themselves.
+    private func livenessLog(_ message: String, _ data: [String: Any] = [:]) {
+        var payload = data
+        payload["tick"] = livenessTicks
+        payload["state"] = String(describing: state)
+        TxLog.debug(.modem, "IcomLAN liveness: " + message, payload)
+    }
+
     private func startLivenessWatch() {
         livenessTimer?.cancel()
+        livenessWasWatching = false
+        livenessReportedUnjudged = false
+        livenessTicks = 0
+        TxLog.debug(.modem, "IcomLAN liveness: watch started", [
+            "limit": IcomLANLiveness.silenceLimit, "interval": 1.0])
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + 1, repeating: 1)
         t.setEventHandler { [weak self] in
-            guard let self, self.isConnected else { return }
+            guard let self else { return }
+            // Say when the watch stands down, because its silence looks
+            // exactly like a healthy link. log12 (2026-09-10) holds ten
+            // minutes of dead audio, no verdict, and no way to tell whether
+            // the watchdog ran, bailed here, or never started — which cost a
+            // diagnosis. Traced on the transition, not once a second.
+            self.livenessTicks += 1
+            if !self.isConnected {
+                if self.livenessWasWatching {
+                    self.livenessWasWatching = false
+                    self.livenessReportedUnjudged = false
+                    self.livenessLog("standing down — session is no longer connected")
+                }
+                return
+            }
+            self.livenessWasWatching = true
             // Control and audio only. Both carry traffic continuously once
             // connected — the radio pings us on control several times a
             // second, and audio is a packet every few milliseconds (measured
@@ -503,8 +574,41 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
             // still pings is a radio we have gone deaf to, which is the
             // symptom the operator reported, not a healthy link.
             let silences = [self.control.silence, self.audio.silence].compactMap { $0 }
-            guard let longest = silences.max() else { return }
-            if let why = IcomLANLiveness.complaint(silentFor: longest) { self.fail(why) }
+            guard let longest = silences.max() else {
+                if !self.livenessReportedUnjudged {
+                    self.livenessReportedUnjudged = true
+                    self.livenessLog("no stream reports a silence — nothing can be judged")
+                }
+                return
+            }
+            // CI-V is reported but never judged — quiet there is ordinary,
+            // and failing on it would drop a working radio. It is here
+            // because a dead CI-V stream and a radio ignoring CI-V produce
+            // the same complaint ("has not answered any CI-V command") and
+            // need opposite fixes.
+            let detail: [String: Any] = [
+                "quiet": String(format: "%.1fs", longest),
+                "control": String(format: "%.1fs", self.control.silence ?? -1),
+                "audio": String(format: "%.1fs", self.audio.silence ?? -1),
+                "civ": String(format: "%.1fs", self.serial.silence ?? -1),
+                "civAsked": self.civWrites,
+                "civRefused": self.civWritesRefused,
+                "civSent": self.serial.sentPackets,
+                "civDropped": self.serial.droppedSends]
+            // Half the limit is the interesting part: quiet enough to record,
+            // not yet a verdict. A log that jumps straight from healthy to
+            // failed says nothing about how it got there.
+            if longest >= IcomLANLiveness.silenceLimit / 2 {
+                self.livenessLog("approaching the limit", detail)
+            } else if self.livenessTicks % Self.livenessHeartbeatTicks == 0 {
+                // Proof the timer is running. Its absence is the single most
+                // useful thing this log can say.
+                self.livenessLog("healthy", detail)
+            }
+            if let why = IcomLANLiveness.complaint(silentFor: longest) {
+                self.livenessLog("FAILING the link", detail)
+                self.fail(why)
+            }
         }
         t.resume()
         livenessTimer = t
