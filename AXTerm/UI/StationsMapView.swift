@@ -252,6 +252,11 @@ struct StationsMapView: View {
             trackWindowMinutes: trackWindowMinutes,
             falloffMinutes: falloffMinutes,
             hiddenRadios: hiddenRadios)
+            + "|own:" + ownObjectToken
+    }
+
+    private var ownObjectToken: String {
+        MapLayerGeneration.ownObjectToken(objects.live(), ours: ownCallsigns)
     }
 
     /// Which families each radio has heard, from the traffic itself. The map's
@@ -1994,10 +1999,6 @@ struct StationsMapView: View {
                                coverage: coverageRing,
                                selection: $selection)
             .overlay(alignment: .bottomTrailing) { selectionCard }
-            // Armed state has to be visible and escapable. A mode you cannot
-            // see is a mode you cancel by clicking something else, and here
-            // clicking something else transmits.
-            .overlay(alignment: .top) { movingBanner }
             .sheet(item: $pendingObject) { pending in
                 APRSPlaceObjectSheet(
                     coordinate: pending.coordinate,
@@ -2027,6 +2028,15 @@ struct StationsMapView: View {
             MapDrawingToolbar(session: $drawing, onComplete: finishShape,
                               showsModePicker: showsDrawingModePicker)
                 .padding(.top, 8)
+
+            // Last in the stack, so it draws over the drawing strip rather
+            // than under it — where it was invisible, which made Move look
+            // like a button that did nothing. Armed state has to be visible
+            // and escapable: a mode you cannot see is a mode you cancel by
+            // clicking something else, and here clicking something else
+            // transmits.
+            movingBanner
+                .padding(.top, 52)
         }
     }
 
@@ -2182,14 +2192,27 @@ struct StationsMapView: View {
                         // with the ordinary secondary click keeps the confirm
                         // step that a drag would skip.
                         #if os(macOS)
-                        Button {
-                            movingObject = placed
-                        } label: {
-                            Label("Move\u{2026}", systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+                        // Armed state is shown on the card as well as in the
+                        // banner. The card is what the operator is already
+                        // looking at, and a button that appears to do nothing
+                        // is worse than no button.
+                        if movingObject?.report.key == placed.report.key {
+                            Text("Secondary-click the new spot")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Cancel") { movingObject = nil }
+                                .controlSize(.small)
+                        } else {
+                            Button {
+                                movingObject = placed
+                            } label: {
+                                Label("Move\u{2026}",
+                                      systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+                            }
+                            .controlSize(.small)
+                            .help("Then secondary-click where \u{201C}\(placed.report.name)"
+                                  + "\u{201D} should go. It moves on every station that hears it.")
                         }
-                        .controlSize(.small)
-                        .help("Then secondary-click where \u{201C}\(placed.report.name)\u{201D} "
-                              + "should go. It moves on every station that hears it.")
                         #else
                         // No secondary click to arm, so nothing to arm: the
                         // move goes to where the operator is standing, which

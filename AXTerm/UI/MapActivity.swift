@@ -74,4 +74,28 @@ nonisolated enum MapLayerGeneration {
             + "|\(trackWindowMinutes)|\(falloffMinutes)"
             + "|\(hiddenRadios.map(\.rawValue).sorted().joined(separator: ","))"
     }
+
+    /// The part of the signature that covers objects *this station* placed.
+    ///
+    /// The annotation throttle exists to absorb packet-rate churn, and a
+    /// stranger's object is exactly that — it waits its turn with everything
+    /// arriving. An object we just transmitted is not churn: the operator
+    /// pressed Transmit and then watched nothing happen for up to ten seconds,
+    /// which is the same silence the pending-transmission work exists to
+    /// remove.
+    ///
+    /// Position and symbol are in the token as well as the name, so a move and
+    /// a corrected symbol land as promptly as a first placement. Sorted, so
+    /// dictionary order in the store cannot make an unchanged map look
+    /// changed and defeat the throttle on every pass.
+    static func ownObjectToken(_ objects: [APRSObjectStore.Placed],
+                               ours: Set<String>) -> String {
+        let mine = Set(ours.map { $0.uppercased() })
+        return objects
+            .filter { mine.contains($0.reportedBy.uppercased()) }
+            .map { "\($0.report.key)@\($0.report.latitude),\($0.report.longitude)"
+                 + "\($0.report.symbolTable)\($0.report.symbolCode)" }
+            .sorted()
+            .joined(separator: ";")
+    }
 }
