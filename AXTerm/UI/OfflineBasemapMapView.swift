@@ -88,6 +88,9 @@ struct OfflineBasemapMapView {
     /// Region to show. Changes here move the camera; the operator panning
     /// does not write back, so the map does not fight them.
     var region: MKCoordinateRegion?
+    /// Where the operator has moved the camera, so it can be reopened there.
+    /// Throttled inside the coordinator — panning fires this continuously.
+    var onRegionChanged: ((MapStartRegion) -> Void)?
     /// Measured coverage rings around the observer. Nil draws none.
     var coverage: CoverageEstimate.Ring?
 
@@ -856,6 +859,8 @@ struct OfflineBasemapMapView {
         /// two names worth ink at any zoom.
         var labelsVisible = true
 
+        private var lastRegionReportAt: CFAbsoluteTime = 0
+
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             #if DEBUG
             // A region that oscillates moves every marker at once, which is
@@ -875,6 +880,18 @@ struct OfflineBasemapMapView {
                 }
             }
             lastLoggedRegion = region
+
+            // Remember where the operator is looking. Throttled because a
+            // single pan fires this dozens of times, and unthrottled it would
+            // be a write per frame.
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastRegionReportAt > 0.6 {
+                lastRegionReportAt = now
+                parent.onRegionChanged?(MapStartRegion(
+                    latitude: region.center.latitude, longitude: region.center.longitude,
+                    latitudeDelta: region.span.latitudeDelta,
+                    longitudeDelta: region.span.longitudeDelta))
+            }
             #endif
             let shows = MapLabelPolicy.showsLabels(
                 latitudeDelta: mapView.region.span.latitudeDelta)

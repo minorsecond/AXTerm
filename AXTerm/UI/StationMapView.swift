@@ -121,7 +121,8 @@ struct StationMapView: View {
             draggableSiteIDs: draggableSiteIDs,
             onObjectDragged: onObjectDragged,
             selection: $selection,
-            region: MapRegionFit.region(covering: framingPoints)?.mkRegion,
+            region: openingRegion,
+            onRegionChanged: { MapStartRegion.save($0) },
             coverage: coverage)
         .modifier(MapTopBleed())
         .overlay(alignment: .bottomLeading) {
@@ -286,6 +287,26 @@ struct StationMapView: View {
     /// (field capture 2026-08-28 19:36). The nodes stay on the map; the
     /// camera just does not chase them. When only nodes are placed, they
     /// are all there is to frame.
+    /// Where to open: the last place the operator looked, then their own
+    /// position at a span that suits VHF packet, and only then the framing
+    /// that fits everything heard — which on a wide channel is three states.
+    private var openingRegion: MKCoordinateRegion? {
+        let fit = MapRegionFit.region(covering: framingPoints).map {
+            MapStartRegion(latitude: $0.centerLatitude, longitude: $0.centerLongitude,
+                           latitudeDelta: $0.latitudeDelta, longitudeDelta: $0.longitudeDelta)
+        }
+        let start = MapStartRegion.opening(saved: MapStartRegion.load(),
+                                           observerLatitude: observer.latitude,
+                                           observerLongitude: observer.longitude,
+                                           fitEverything: fit)
+        return start.map {
+            MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude),
+                span: MKCoordinateSpan(latitudeDelta: $0.latitudeDelta,
+                                       longitudeDelta: $0.longitudeDelta))
+        }
+    }
+
     private var framingPoints: [GreatCircle.Point] {
         let stationPoints = scope.sites.filter { !$0.isNode }
             .compactMap { coordinates[$0.id] }
@@ -322,9 +343,7 @@ struct StationMapView: View {
                     // Our beaconed APRS symbol, so the home marker shows the
                     // very glyph we put on the air. The tinted ring still
                     // reads as "you".
-                    Image(systemName: APRSSymbolGlyph.systemImage(
-                        table: ownAPRSSymbol.table, code: ownAPRSSymbol.code))
-                        .font(.system(size: 12, weight: .black))
+                    APRSSymbolView(table: ownAPRSSymbol.table, code: ownAPRSSymbol.code, size: 13)
                         .foregroundStyle(.tint)
                 } else {
                     Image(systemName: "location.north.fill")
@@ -402,9 +421,8 @@ struct StationMapView: View {
                     // dot and given a dark edge so it reads white on any
                     // recency colour, because the symbol is the whole point of
                     // an APRS marker.
-                    Image(systemName: APRSSymbolGlyph.systemImage(
-                        table: symbol.table, code: symbol.code))
-                        .font(.system(size: diameter * 0.72, weight: .black))
+                    APRSSymbolView(table: symbol.table, code: symbol.code,
+                                   size: diameter * 0.78)
                         .foregroundStyle(.white)
                         .shadow(color: .black.opacity(0.5), radius: 1)
                 }
