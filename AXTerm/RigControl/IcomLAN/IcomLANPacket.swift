@@ -295,20 +295,42 @@ nonisolated enum IcomLAN {
         return Data(out)
     }
 
-    /// CI-V bytes, verbatim, after a 21-byte header.
+    /// CI-V bytes, verbatim, after a 21-byte header:
+    /// `C1`, the payload length as a little-endian `u16`, then the send
+    /// sequence as a big-endian `u16`.
     static func serialData(_ bytes: Data, sendSequence: UInt16, local: UInt32, remote: UInt32) -> Data {
-        let n = UInt8(clamping: bytes.count)
-        var out = Header(length: UInt32(21 + Int(n)), type: 0, sequence: 0, senderID: local, receiverID: remote).bytes
-        out += [0xC1, n, 0x00, UInt8(sendSequence >> 8), UInt8(sendSequence & 0xFF)]
-        out += [UInt8](bytes.prefix(Int(n)))
+        let n = bytes.count
+        var out = Header(length: UInt32(21 + n), type: 0, sequence: 0, senderID: local, receiverID: remote).bytes
+        out += [0xC1, UInt8(n & 0xFF), UInt8((n >> 8) & 0xFF),
+                UInt8(sendSequence >> 8), UInt8(sendSequence & 0xFF)]
+        out += [UInt8](bytes)
         return Data(out)
     }
 
     /// The CI-V bytes inside a serial data packet, or nil for anything else.
+    ///
+    /// The length after `C1` is sixteen bits, little-endian — not eight.
+    /// Reading only the low byte works for every frame this app sends, and
+    /// fails for the one thing the radio sends in bulk: spectrum-scope
+    /// waveform packets, 497 bytes of payload carrying `F1 01` where a
+    /// one-byte reader sees 241 (measured against the IC-705, 2026-09-13).
+    ///
+    /// The consequence was not "scope data is ignored", which would have been
+    /// harmless. These packets are numbered in the same sequence as every
+    /// other packet on the CI-V stream, so dropping them here — before
+    /// `SequenceReorderBuffer` ever sees them — tore a hole in that sequence
+    /// for every single one. The buffer then waited on packets that had
+    /// already arrived and been thrown away, asked for them again, and
+    /// released nothing; genuine replies queued behind the gaps and never
+    /// came out. That is the "has not answered any CI-V command" the client's
+    /// counters were added to explain and could not: the bytes were arriving
+    /// and the frames were real, one layer below anything that was measuring.
     static func serialPayload(_ d: Data) -> Data? {
-        guard d.count >= 22, let h = Header.parse(d), h.length == UInt32(d.count) else { return nil }
+        guard d.count >= 21, let h = Header.parse(d), h.length == UInt32(d.count) else { return nil }
         let b = [UInt8](d)
-        guard b[16] == 0xC1, Int(b[17]) == d.count - 21 else { return nil }
+        guard b[16] == 0xC1 else { return nil }
+        let payloadLength = Int(b[17]) | Int(b[18]) << 8
+        guard payloadLength == d.count - 21 else { return nil }
         return Data(b[21...])
     }
 

@@ -290,7 +290,11 @@ nonisolated final class CIVClient: @unchecked Sendable {
     /// link the audio arrives on the WLAN codec (0x02), and picking the
     /// wrong one keys an unmodulated carrier — a bare CW line on the
     /// waterfall — because the modulator listens to a dead input.
-    enum DataModSource: UInt8 { case usb = 0x01, wlan = 0x02 }
+    /// Menu item 0119: `00` MIC, `01` USB, `02` MIC and USB, `03` WLAN.
+    /// `wlan` was `0x02` — MIC and USB — so the network path selected the
+    /// microphone and keyed an unmodulated carrier, exactly the fault the
+    /// note above warns about. An IC-705 working over its WLAN answers `03`.
+    enum DataModSource: UInt8 { case mic = 0x00, usb = 0x01, micAndUSB = 0x02, wlan = 0x03 }
 
     func configureForPacket(_ mode: ModemMode, dataMod: DataModSource = .usb) async throws {
         switch mode {
