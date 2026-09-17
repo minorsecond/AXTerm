@@ -17,17 +17,24 @@ nonisolated struct AnalyticsAggregator {
         /// lists agree with the graph and the health panel; `.ssid` counts each
         /// SSID separately.
         let stationIdentityMode: StationIdentityMode
+        /// Which radios count. Carried in the options because the SQLite
+        /// aggregation runs from columns rather than from packets the caller
+        /// could filter first, and without it the summary counted hidden
+        /// radios and never moved when one was toggled (2026-09-17).
+        let radioSelection: AnalyticsRadioSelection
 
         init(
             includeViaDigipeaters: Bool,
             histogramBinCount: Int,
             topLimit: Int,
-            stationIdentityMode: StationIdentityMode = .ssid
+            stationIdentityMode: StationIdentityMode = .ssid,
+            radioSelection: AnalyticsRadioSelection = .everything
         ) {
             self.includeViaDigipeaters = includeViaDigipeaters
             self.histogramBinCount = histogramBinCount
             self.topLimit = topLimit
             self.stationIdentityMode = stationIdentityMode
+            self.radioSelection = radioSelection
         }
     }
 
@@ -38,7 +45,13 @@ nonisolated struct AnalyticsAggregator {
         options: Options,
         timeframeInterval: DateInterval? = nil
     ) -> AnalyticsAggregationResult {
-        let events = packets.map { PacketEvent(packet: $0) }
+        // Applied here as well as in SQL so both aggregation paths answer the
+        // same question given the same options.
+        let selection = options.radioSelection
+        let scoped = selection.admitsEveryRadio
+            ? packets
+            : packets.filter { selection.admits($0.radioID ?? .primary) }
+        let events = scoped.map { PacketEvent(packet: $0) }
 
         let summary = computeSummary(events: events, includeVia: options.includeViaDigipeaters, identityMode: options.stationIdentityMode)
         let series = computeSeries(

@@ -426,6 +426,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             channels: radioChannels, hidden: hiddenRadioIDs)
     }
 
+    /// The same scope as a value, for the aggregation that runs in SQLite.
+    private var radioSelection: AnalyticsRadioSelection {
+        AnalyticsRadioFilter.selection(
+            scope: selectedRadioScope,
+            channels: radioChannels, hidden: hiddenRadioIDs)
+    }
+
     /// Precomputes analytics caches while the dashboard is not visible, so first open is fast.
     /// Safe to call repeatedly; only the first invocation performs work.
     func prewarmIfNeeded(with packets: [Packet]) {
@@ -1160,7 +1167,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             windowStart: bucketSnapshot.normalizedStart(for: timeframeInterval.start, calendar: calendar),
             customStart: customRangeStart,
             customEnd: customRangeEnd,
-            ignoredServiceEndpointsHash: ignoredServiceEndpointsHash()
+            ignoredServiceEndpointsHash: ignoredServiceEndpointsHash(),
+            // Two scopes can hold the same number of packets, so without this
+            // a radio toggle could be served the other scope's cached result.
+            radioSelection: radioSelection
         )
 
         if loopDetection.record(reason: reason) {
@@ -1219,7 +1229,11 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             includeViaDigipeaters: includeViaSnapshot,
             histogramBinCount: AnalyticsStyle.Histogram.binCount,
             topLimit: AnalyticsStyle.Tables.topLimit,
-            stationIdentityMode: stationIdentityMode
+            stationIdentityMode: stationIdentityMode,
+            // The database provider aggregates from columns and cannot be
+            // handed pre-filtered packets, so the scope travels with the
+            // options instead.
+            radioSelection: radioSelection
         )
         let provider = databaseAggregationProvider
         if showLoadingState {
@@ -2143,6 +2157,7 @@ private struct AggregationCacheKey: Hashable {
     let customStart: Date
     let customEnd: Date
     let ignoredServiceEndpointsHash: Int
+    let radioSelection: AnalyticsRadioSelection
 }
 
 private struct GraphCacheKey: Hashable {

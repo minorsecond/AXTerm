@@ -99,25 +99,49 @@ nonisolated enum AnalyticsRadioFilter {
                       scope: AnalyticsRadioScope,
                       channels: [AnalyticsRadioChannel],
                       hidden: Set<RadioID>) -> [Packet] {
+        let selection = selection(scope: scope, channels: channels, hidden: hidden)
         // With one channel and nothing hidden there is nothing to scope, so
         // the array is returned untouched — the single-radio case pays nothing.
-        if hidden.isEmpty, scope == .all { return packets }
+        guard !selection.admitsEveryRadio else { return packets }
+        return packets.filter { selection.admits($0.radioID ?? .primary) }
+    }
 
-        let allowed: Set<RadioID>?
+    /// The same decision as a value, for the aggregation that runs in SQLite
+    /// and so cannot filter packets before counting them.
+    static func selection(scope: AnalyticsRadioScope,
+                          channels: [AnalyticsRadioChannel],
+                          hidden: Set<RadioID>) -> AnalyticsRadioSelection {
         switch scope {
         case .all:
-            allowed = nil
+            return AnalyticsRadioSelection(hidden: hidden, channelRadios: nil)
         case .channel(let id):
             // A selection whose channel has vanished (its radio left) falls
             // back to every visible radio rather than showing nothing.
-            allowed = channels.first { $0.id == id }?.radioIDs
+            return AnalyticsRadioSelection(
+                hidden: hidden,
+                channelRadios: channels.first { $0.id == id }?.radioIDs)
         }
+    }
+}
 
-        return packets.filter { packet in
-            let radio = packet.radioID ?? .primary
-            if hidden.contains(radio) { return false }
-            if let allowed { return allowed.contains(radio) }
-            return true
-        }
+/// Which radios a scope admits.
+///
+/// Hidden radios are always denied. A chosen channel additionally restricts to
+/// its members. A radio in neither list — one that has since disconnected but
+/// whose traffic is still inside the timeframe — is admitted, so history does
+/// not disappear when a radio is unplugged.
+nonisolated struct AnalyticsRadioSelection: Hashable, Sendable {
+    var hidden: Set<RadioID> = []
+    var channelRadios: Set<RadioID>?
+
+    /// Nothing to filter: every stored radio counts.
+    static let everything = AnalyticsRadioSelection()
+
+    var admitsEveryRadio: Bool { hidden.isEmpty && channelRadios == nil }
+
+    func admits(_ radio: RadioID) -> Bool {
+        if hidden.contains(radio) { return false }
+        if let channelRadios { return channelRadios.contains(radio) }
+        return true
     }
 }

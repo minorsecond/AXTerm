@@ -37,8 +37,18 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
 
     func loadPackets(in timeframe: DateInterval) throws -> [Packet] {
         try dbQueue.read { db in
+            // A database opened straight from disk is never migrated — a
+            // snapshot kept from an older build is missing whatever columns
+            // that build did not have — so a read may only name the ones it
+            // finds. An absent radio reads as the primary one, which is what
+            // every row written before radios were separable belonged to.
+            let radioColumn = try Self.selectableColumn("radioID", in: db)
+            let bytesColumn = try Self.selectableColumn("infoBytes", in: db)
+            let hexColumn = try Self.selectableColumn("infoHex", in: db)
             let sql = """
-                SELECT id, receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType, controlHex, pid, infoText, infoLen
+                SELECT id, receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType,
+                       controlHex, pid, infoText, infoLen,
+                       \(bytesColumn), \(hexColumn), \(radioColumn)
                 FROM \(PacketRecord.databaseTableName)
                 WHERE receivedAt >= ? AND receivedAt < ? AND direction = 'rx'
                 -- Heard traffic only. Since 2026-09-17 this table also holds what
@@ -60,7 +70,24 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 let pidValue: Int? = row["pid"]
                 let infoText: String? = row["infoText"]
                 let infoLen: Int = row["infoLen"]
-                let payload = infoLen > 0 ? Data(count: infoLen) : Data()
+                let storedBytes: Data? = row["infoBytes"]
+                let storedHex: String? = row["infoHex"]
+                let radioIDRaw: String? = row["radioID"]
+                // The real payload, not a run of zeros the right length. The
+                // first byte is the APRS data type, which is the only thing
+                // that distinguishes a Mic-E destination (a latitude) from a
+                // station, so a zeroed payload silently turned every Mic-E
+                // beacon into a phantom node on the graph (2026-09-17).
+                let payload: Data
+                if let storedBytes, !storedBytes.isEmpty {
+                    payload = storedBytes
+                } else if let storedHex, !storedHex.isEmpty {
+                    payload = PacketEncoding.decodeHex(storedHex)
+                } else {
+                    // Neither column held anything: fall back to the recorded
+                    // length so byte totals stay right, with no content to read.
+                    payload = infoLen > 0 ? Data(count: infoLen) : Data()
+                }
 
                 return Packet(
                     id: id,
@@ -74,10 +101,32 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                     info: payload,
                     rawAx25: Data(),
                     kissEndpoint: nil,
-                    infoText: infoText
+                    infoText: infoText,
+                    // Without this every stored frame came back belonging to no
+                    // radio, which the analytics scope reads as the primary one:
+                    // hiding that radio emptied the page and showing it drew
+                    // every other radio's traffic too (2026-09-17).
+                    radioID: RadioID(rawValue: radioIDRaw ?? RadioID.primary.rawValue)
                 )
             }
         }
+    }
+
+    /// A SELECT expression for `column`, or a NULL of the same name when the
+    /// database does not have it. Reads run against databases this build never
+    /// migrated — a kept snapshot, a fixture — and naming a column that is not
+    /// there fails the whole query rather than the one field.
+    private static func selectableColumn(
+        _ column: String,
+        in db: Database,
+        as expression: String? = nil,
+        alias: String? = nil
+    ) throws -> String {
+        let name = alias ?? column
+        let present = try db.columns(in: PacketRecord.databaseTableName)
+            .contains { $0.name == column }
+        guard present else { return "NULL AS \(name)" }
+        return "\(expression ?? column) AS \(name)"
     }
 
     func deleteAll() throws {
@@ -154,12 +203,51 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 return Self.emptyAggregation(interval: timeframe, bucket: bucket, calendar: calendar)
             }
 
+            // The radio scope has to reach the query: this path aggregates
+            // from columns, so the caller cannot filter the packets first, and
+            // without it the summary counted every radio and sat unchanged when
+            // the operator hid one (2026-09-17). A row written before the radio
+            // column existed reads as the primary radio, matching `toPacket()`.
+            var arguments: [String: (any DatabaseValueConvertible)?] = ["start": start, "end": end]
+            var radioClause = ""
+            let selection = options.radioSelection
+            // As in `loadPackets`: an un-migrated snapshot may not have these.
+            let radioExpression = try db.columns(in: PacketRecord.databaseTableName)
+                .contains { $0.name == "radioID" } ? "radioID" : "NULL"
+            let dataTypeColumn = try Self.selectableColumn(
+                "infoHex", in: db, as: "substr(infoHex, 1, 2)", alias: "infoDataType")
+
+            /// Names one radio id as a bound argument and returns its placeholder.
+            func bind(_ rawValue: String, _ name: String) -> String {
+                arguments[name] = rawValue
+                return ":\(name)"
+            }
+
+            if !selection.hidden.isEmpty {
+                let primary = bind(RadioID.primary.rawValue, "primaryRadio")
+                let placeholders = selection.hidden.map(\.rawValue).sorted()
+                    .enumerated()
+                    .map { bind($0.element, "hiddenRadio\($0.offset)") }
+                radioClause += " AND COALESCE(\(radioExpression), \(primary)) NOT IN (\(placeholders.joined(separator: ", ")))"
+            }
+            if let channelRadios = selection.channelRadios {
+                guard !channelRadios.isEmpty else {
+                    return Self.emptyAggregation(interval: timeframe, bucket: bucket, calendar: calendar)
+                }
+                let primary = bind(RadioID.primary.rawValue, "primaryRadio")
+                let placeholders = channelRadios.map(\.rawValue).sorted()
+                    .enumerated()
+                    .map { bind($0.element, "channelRadio\($0.offset)") }
+                radioClause += " AND COALESCE(\(radioExpression), \(primary)) IN (\(placeholders.joined(separator: ", ")))"
+            }
+            let args = StatementArguments(arguments)
+
             let baseSQL = """
-                SELECT receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType, controlHex, infoText, infoLen
+                SELECT receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType,
+                       controlHex, infoText, infoLen, \(dataTypeColumn)
                 FROM \(PacketRecord.databaseTableName)
-                WHERE receivedAt >= ? AND receivedAt < ? AND direction = 'rx'
+                WHERE receivedAt >= :start AND receivedAt < :end\(radioClause)
             """
-            let args: StatementArguments = [start, end]
 
             var totalPackets = 0
             var totalPayloadBytes = 0
@@ -221,7 +309,15 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 let fromDisplay = CallsignNormalizer.display(call: fromCall, ssid: fromSSID)
                 let toDisplay = CallsignNormalizer.display(call: toCall, ssid: toSSID)
                 let from = StationNormalizer.normalize(fromDisplay)
-                let to = StationNormalizer.normalize(toDisplay)
+                // An APRS destination holds a latitude or the sender's software
+                // name, so it is not a station and must not be counted as one —
+                // the same rule PacketEvent applies on the in-memory path.
+                let dataTypeHex: String? = row["infoDataType"]
+                let destinationIsData = APRSDestinationAddress.carriesDataRatherThanAStation(
+                    frameType: FrameType(rawValue: frameTypeRaw) ?? .unknown,
+                    destinationCall: toCall,
+                    firstInfoByte: dataTypeHex.flatMap { UInt8($0, radix: 16) })
+                let to = destinationIsData ? nil : StationNormalizer.normalize(toDisplay)
                 let identityMode = options.stationIdentityMode
                 // Only digipeaters that actually repeated the frame (H bit set) count as
                 // observed stations — mirrors AnalyticsAggregator's in-memory semantics.

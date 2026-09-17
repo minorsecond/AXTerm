@@ -36,11 +36,26 @@ nonisolated enum APRSDestinationAddress {
     /// UI frames whose destination is genuinely an address, so neither rule may
     /// reach beyond the two shapes it knows.
     static func carriesDataRatherThanAStation(_ packet: Packet) -> Bool {
-        guard packet.frameType == .ui else { return false }
-        if let dataType = packet.info.first, micEDataTypes.contains(dataType) {
+        carriesDataRatherThanAStation(
+            frameType: packet.frameType,
+            destinationCall: packet.to?.call ?? "",
+            firstInfoByte: packet.info.first)
+    }
+
+    /// The same decision from loose parts, for the SQLite aggregation path,
+    /// which reads columns rather than assembling a `Packet`. Both callers go
+    /// through here so the stored and in-memory aggregations cannot disagree
+    /// about what counts as a station.
+    static func carriesDataRatherThanAStation(
+        frameType: FrameType,
+        destinationCall: String,
+        firstInfoByte: UInt8?
+    ) -> Bool {
+        guard frameType == .ui else { return false }
+        if let firstInfoByte, micEDataTypes.contains(firstInfoByte) {
             return true
         }
-        let destination = (packet.to?.call ?? "").uppercased()
+        let destination = destinationCall.uppercased()
         return destination.range(of: tocallPattern, options: [.regularExpression]) != nil
     }
 }
