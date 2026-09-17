@@ -39,6 +39,23 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
     /// of its radios on the same frequency. Kept in the log, counted for no
     /// station and fed to no metric.
     let isOwnEcho: Bool
+    /// Which way this frame went.
+    ///
+    /// Until 2026-09-17 every stored packet was `rx`: the log held 863
+    /// frames heard and not one frame sent, because the only trace a
+    /// transmission left was a line of console text and an in-memory ring
+    /// buffer that died with the process. After a restart the operator
+    /// could not answer whether a beacon had actually gone out.
+    let direction: Direction
+
+    nonisolated enum Direction: String, Codable, Sendable {
+        case rx
+        /// Handed to the TNC, which is not the same as radiated. Bytes
+        /// reaching Direwolf says nothing about what left the antenna
+        /// (transmission spec, 3.2), so this is the truthful claim: these
+        /// are the bytes we gave the link, at the moment we gave them.
+        case tx
+    }
 
     /// True when every digipeater in the path has set its has-been-repeated (H)
     /// bit, or the path is empty (direct frame).
@@ -199,8 +216,10 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
         radioID: RadioID? = nil,
         kissPort: UInt8 = 0,
         linkDescription: String? = nil,
-        isOwnEcho: Bool = false
+        isOwnEcho: Bool = false,
+        direction: Direction = .rx
     ) {
+        self.direction = direction
         self.id = id
         self.timestamp = timestamp
         self.from = from

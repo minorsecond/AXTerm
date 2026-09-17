@@ -909,9 +909,51 @@ final class PacketEngine: ObservableObject {
             }
         }
 
+        // The log has always held what we heard and never what we sent, so
+        // a beacon that went out left nothing behind a restart could find.
+        // Decoded back from the bytes on the wire rather than rebuilt from
+        // the frame we started with, so what is stored is what was sent and
+        // the Packets view renders it exactly as it renders a received one.
+        //
+        // At hand-off, and deliberately: a KISS write reaching the TNC is
+        // the last moment this side can speak to (spec 3.2), the completion
+        // callback can lag the air by a long way, and a frame dropped from
+        // the log because its callback never came is the one an operator
+        // most needs to see.
+        persistTransmittedFrame(ax25Data, frame: frame, link: activeLink, port: port)
+
         activeLink.send(kissData) { error in
             sendCompletion(error)
         }
+    }
+
+    /// Store a frame we transmitted, on the same path a received one takes.
+    ///
+    /// Never blocks or fails a send: `persistPacket` hands off to a Task and
+    /// returns, and a frame we cannot decode is logged raw rather than
+    /// dropped — being unable to read our own bytes back is itself worth
+    /// keeping.
+    private func persistTransmittedFrame(_ ax25Data: Data, frame: OutboundFrame,
+                                         link: LinkSession, port: UInt8) {
+        let decoded = AX25.decodeFrame(ax25: ax25Data)
+        let packet = Packet(
+            id: frame.id,
+            timestamp: Date(),
+            from: decoded?.from ?? frame.source,
+            to: decoded?.to ?? frame.destination,
+            via: decoded?.via ?? frame.path.digis,
+            frameType: decoded?.frameType ?? .unknown,
+            control: decoded?.control ?? 0,
+            controlByte1: decoded?.controlByte1,
+            pid: decoded?.pid,
+            info: decoded?.info ?? frame.payload,
+            rawAx25: ax25Data,
+            radioID: frame.radio,
+            kissPort: port,
+            linkDescription: link.endpointDescription,
+            direction: .tx
+        )
+        persistPacket(packet)
     }
 
     // MARK: - Mobilinkd Commands

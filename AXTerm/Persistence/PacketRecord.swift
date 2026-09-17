@@ -75,7 +75,7 @@ nonisolated struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Ha
         self.id = packet.id
         self.receivedAt = packet.timestamp
         self.ax25Timestamp = nil
-        self.direction = "rx"
+        self.direction = packet.direction.rawValue
         self.source = "kiss"
         self.fromCall = from.call
         self.fromSSID = from.ssid
