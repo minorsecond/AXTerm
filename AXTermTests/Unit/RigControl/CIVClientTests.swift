@@ -304,4 +304,63 @@ final class CIVClientTests: XCTestCase {
         XCTAssertEqual(transport.modemLines.last?.rts, false)
         XCTAssertFalse(ptt.isKeyed)
     }
+    // MARK: - Packet setup
+
+    /// Over the network there is no shared bus to quiet, and CI-V Transceive
+    /// is the one setting the operator is told to switch on when CI-V goes
+    /// quiet. Setting the radio up must not switch it off behind them.
+    func testPacketSetupLeavesTransceiveAloneWhenThereIsNoBus() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = ic705
+        try await client.configureForPacket(.afsk1200, dataMod: .wlan, quietTheBus: false)
+
+        let transceive = transport.written.filter {
+            $0.command == 0x1A && $0.subcommand == 0x05 && $0.data.starts(with: [0x01, 0x31])
+        }
+        XCTAssertTrue(transceive.isEmpty,
+                      "wrote transceive-off over a link with no bus to quiet")
+
+        let dataMod = transport.written.filter {
+            $0.command == 0x1A && $0.subcommand == 0x05 && $0.data.starts(with: [0x01, 0x19])
+        }
+        XCTAssertEqual(dataMod.first?.data.last, 0x03, "the rest of the setup still goes")
+    }
+
+    /// On a shared serial bus it is still worth quieting.
+    func testPacketSetupStillQuietsASharedBus() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = ic705
+        try await client.configureForPacket(.afsk1200, dataMod: .usb, quietTheBus: true)
+
+        let transceive = transport.written.filter {
+            $0.command == 0x1A && $0.subcommand == 0x05 && $0.data.starts(with: [0x01, 0x31])
+        }
+        XCTAssertEqual(transceive.first?.data.last, 0x00)
+    }
+
+    /// `configureForPacket` has to name the input the audio actually arrives
+    /// on, in the radio's own numbering.
+    ///
+    /// IC-705 CI-V Reference Guide, set-mode item 0119 ("MOD Input > DATA
+    /// MOD"): `00=MIC, 01=USB, 02=MIC, USB, 03=WLAN`. AXTerm sent 02 for the
+    /// Wi-Fi link until 2026-09-17 — that is "MIC, USB", so the radio
+    /// modulated from the microphone and the USB port while the packet audio
+    /// came in over the network. It keyed up and transmitted the room, and
+    /// no digipeater that heard it could decode a frame.
+    func testPacketSetupNamesTheModulationInputTheRadioUnderstands() async throws {
+        for (link, expected) in [(CIVClient.DataModSource.usb, UInt8(0x01)),
+                                 (CIVClient.DataModSource.wlan, UInt8(0x03))] {
+            let (client, transport) = makeClient()
+            transport.responder = ic705
+            try await client.configureForPacket(.afsk1200, dataMod: link)
+
+            let dataMod = transport.written.filter {
+                $0.command == 0x1A && $0.subcommand == 0x05
+                    && $0.data.starts(with: [0x01, 0x19])
+            }
+            XCTAssertEqual(dataMod.count, 1, "\(link) wrote \(dataMod.count) DATA MOD frames")
+            XCTAssertEqual(dataMod.first?.data.last, expected,
+                           "\(link) must write item 0119 = \(expected), not \(dataMod.first?.data.last ?? 0)")
+        }
+    }
 }

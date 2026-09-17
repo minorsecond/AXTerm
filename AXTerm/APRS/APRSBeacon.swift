@@ -107,7 +107,11 @@ nonisolated enum APRSBeacon {
         let lon = base91(lonVal, width: 4)
 
         var cs = "  "                         // two spaces = no course/speed
-        var typeByte = Character(UnicodeScalar(33 + 0b100000)!)  // GGA, current
+        // Bit 5 set: GPS fix current. Bits 3-4 clear: NMEA source "other".
+        // Bits 0-2 clear: origin "compressed". A receiver never reads this
+        // one — the spec has it ignore s and T whenever c is a space — so it
+        // only has to be a legal printable byte.
+        var typeByte = Character(UnicodeScalar(33 + 0b100000)!)
         if let cse = r.courseSpeed {
             let course = (((cse.courseDegrees % 360) + 360) % 360)
             let c = Character(UnicodeScalar(33 + course / 4)!)   // 0..89
@@ -115,7 +119,11 @@ nonisolated enum APRSBeacon {
             let s = Int((log(Double(max(0, cse.speedKnots)) + 1) / log(1.08)).rounded())
             let sc = Character(UnicodeScalar(33 + min(89, max(0, s)))!)
             cs = String(c) + String(sc)
-            typeByte = Character(UnicodeScalar(33 + 0b111010)!)  // course/speed, current, other
+            // Bit 5: GPS fix current. Bits 3-4 = 11: NMEA source RMC, which
+            // is the sentence course and speed come from. Bits 0-2 = 010:
+            // origin "software". Read by receivers here, because c is not a
+            // space.
+            typeByte = Character(UnicodeScalar(33 + 0b111010)!)
         }
 
         var s = "!" + String(r.symbolTable) + lat + lon + String(r.symbolCode) + cs + String(typeByte)

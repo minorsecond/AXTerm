@@ -287,12 +287,33 @@ nonisolated final class CIVClient: @unchecked Sendable {
     /// transceive off (a clean bus), the radio's own TX delays off.
     /// Where the radio takes its DATA-mode modulation from. Over USB the
     /// audio arrives on the USB codec (0x01); over the LAN/RS-BA1 network
-    /// link the audio arrives on the WLAN codec (0x02), and picking the
-    /// wrong one keys an unmodulated carrier — a bare CW line on the
-    /// waterfall — because the modulator listens to a dead input.
-    enum DataModSource: UInt8 { case usb = 0x01, wlan = 0x02 }
+    /// link it arrives on the WLAN codec (0x03), and picking the wrong one
+    /// keys an unmodulated carrier — a bare CW line on the waterfall —
+    /// because the modulator listens to a dead input.
+    ///
+    /// Values from the IC-705 CI-V Reference Guide, set-mode item 0119
+    /// ("MOD Input > DATA MOD"): `00=MIC, 01=USB, 02=MIC, USB, 03=WLAN`.
+    ///
+    /// `wlan` was 0x02 until 2026-09-17, which is the radio's "MIC, USB" —
+    /// so connecting over Wi-Fi told the radio to take modulation from the
+    /// microphone and the USB port, neither of which carries the packet
+    /// audio arriving over the network. The radio keyed and sent the room.
+    /// Exactly the failure the note above describes, caused from here.
+    enum DataModSource: UInt8 {
+        case mic = 0x00
+        case usb = 0x01
+        case micAndUSB = 0x02
+        case wlan = 0x03
+    }
 
-    func configureForPacket(_ mode: ModemMode, dataMod: DataModSource = .usb) async throws {
+    /// - Parameter quietTheBus: whether to switch CI-V Transceive off.
+    ///   Worth it on a shared serial bus, where the radio's unsolicited
+    ///   broadcasts collide with replies. Over the network there is no bus —
+    ///   the session is point to point — and the setting is persistent, so
+    ///   leaving it off is a change to the operator's radio that outlives
+    ///   AXTerm and that nothing here ever undoes (2026-09-17).
+    func configureForPacket(_ mode: ModemMode, dataMod: DataModSource = .usb,
+                            quietTheBus: Bool = true) async throws {
         switch mode {
         case .afsk1200: try await setMode(.fm, filter: 1)
         case .afsk300: try await setMode(.usb, filter: 1)
@@ -302,7 +323,7 @@ nonisolated final class CIVClient: @unchecked Sendable {
         try await setMenuItem(.dataMod, [dataMod.rawValue])
         try await setMenuItem(.usbAFSquelch, [0x00])
         try await setMenuItem(.usbSend, [0x00])
-        try await setTransceive(false)
+        if quietTheBus { try await setTransceive(false) }
         for item in [CIVCommand.MenuItem.txDelayHF, .txDelay50M, .txDelay144M, .txDelay430M] {
             try await setMenuItem(item, [0x00])
         }
