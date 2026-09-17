@@ -124,4 +124,44 @@ final class IcomLANSettleTests: XCTestCase {
         XCTAssertNil(IcomLANError.denial(for: .notAvailable))
         XCTAssertNil(IcomLANError.denial(for: .wifiDenied))
     }
+
+    // MARK: - What a socket state means to a waiting handshake
+
+    /// The lockout of 2026-09-17, at the level the handler decides it.
+    ///
+    /// A denied path parks NWConnection in .waiting and reports nothing, so
+    /// waiting it out costs the whole handshake window and ends in a
+    /// timeout naming the radio. A named refusal has to end the wait.
+    func testADeniedPathEndsTheWaitInsteadOfRidingItOut() {
+        let waiting = NWConnection.State.waiting(.posix(.ENETDOWN))
+
+        XCTAssertEqual(IcomLANSocketOutcome.of(waiting, denial: .localNetworkDenied),
+                       .fail(.localNetworkDenied))
+        XCTAssertEqual(IcomLANSocketOutcome.of(waiting, denial: nil), .keepWaiting,
+                       "a network that is merely down may yet come up")
+    }
+
+    /// A denial explains a dead socket better than the POSIX error does.
+    func testAFailedSocketPrefersTheRefusalWeCanName() {
+        let failed = NWConnection.State.failed(.posix(.ECONNREFUSED))
+
+        XCTAssertEqual(IcomLANSocketOutcome.of(failed, denial: .localNetworkDenied),
+                       .fail(.localNetworkDenied))
+
+        guard case .fail(let fallback) = IcomLANSocketOutcome.of(failed, denial: nil) else {
+            return XCTFail("a failed socket is a failure")
+        }
+        if case .network = fallback {} else {
+            XCTFail("with nothing to name, the socket's own error stands: \(fallback)")
+        }
+    }
+
+    func testReadyAndCancelledSpeakForThemselves() {
+        XCTAssertEqual(IcomLANSocketOutcome.of(.ready, denial: nil), .ready)
+        XCTAssertEqual(IcomLANSocketOutcome.of(.ready, denial: .localNetworkDenied), .ready,
+                       "a socket that came up is up, whatever the path said on the way")
+        XCTAssertEqual(IcomLANSocketOutcome.of(.cancelled, denial: nil),
+                       .fail(.network("cancelled")))
+        XCTAssertEqual(IcomLANSocketOutcome.of(.setup, denial: nil), .keepWaiting)
+    }
 }

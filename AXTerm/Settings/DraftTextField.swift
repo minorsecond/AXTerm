@@ -14,6 +14,37 @@ import SwiftUI
 /// focused, the draft uncommitted, and the button acting on the previous
 /// value — a radio's Wi-Fi address typed in full, and "Enter the radio's
 /// address first." next to it, with an empty `lanHost` on disk.
+/// When a draft is worth writing back, and how long typing has to stop
+/// first.
+///
+/// Lives outside the view so the timing is testable. The rule it encodes is
+/// what made LAN settings usable at all: on macOS a button does not take
+/// focus from a text field, so a commit that waits for focus loss never
+/// runs when the operator types an address and clicks Test connection.
+nonisolated enum DraftCommitRule {
+
+    /// Long enough that a burst of keystrokes is still one write, short
+    /// enough to have landed by the time a hand reaches a button.
+    static let quietPeriod = Duration.milliseconds(400)
+
+    /// Whether the draft says anything the bound value does not.
+    static func needsCommit(draft: String, text: String) -> Bool { draft != text }
+
+    /// Waits out the quiet period, then reports whether the write should
+    /// still happen. Restarted by every keystroke at the call site, so it
+    /// only ever returns true once the operator has stopped typing.
+    ///
+    /// `sleep` is a seam for tests; nothing else should pass it.
+    static func awaitQuiet(draft: String, text: String,
+                           quiet: Duration = quietPeriod,
+                           sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) })
+    async -> Bool {
+        guard needsCommit(draft: draft, text: text) else { return false }
+        do { try await sleep(quiet) } catch { return false }
+        return !Task.isCancelled
+    }
+}
+
 struct DraftTextField: View {
     let titleKey: String
     @Binding var text: String
@@ -22,12 +53,6 @@ struct DraftTextField: View {
 
     @State private var draft = ""
     @FocusState private var focused: Bool
-
-    /// How long typing has to pause before the draft is written back.
-    ///
-    /// Long enough that a burst of keystrokes is still one write, short
-    /// enough to have landed by the time a hand reaches a button.
-    private static let quietPeriod = Duration.milliseconds(400)
 
     init(_ titleKey: String,
          text: Binding<String>,
@@ -52,10 +77,7 @@ struct DraftTextField: View {
             // operator stops typing. This is what makes the value land
             // without anything having to take the focus away.
             .task(id: draft) {
-                guard draft != text else { return }
-                try? await Task.sleep(for: Self.quietPeriod)
-                guard !Task.isCancelled else { return }
-                commit()
+                if await DraftCommitRule.awaitQuiet(draft: draft, text: text) { commit() }
             }
     }
 

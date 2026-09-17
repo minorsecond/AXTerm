@@ -78,6 +78,32 @@ nonisolated enum IcomLANError: Error, Equatable, Sendable {
     }
 }
 
+/// What a socket state means to a handshake still waiting on it.
+///
+/// Pulled out of the state handler so the decisions can be checked without
+/// a live socket. The one that matters is `.waiting`: macOS refusing local
+/// network access parks the connection there and reports nothing, so the
+/// old handler sat through the handshake's whole window and then blamed the
+/// radio for not answering (2026-09-17).
+nonisolated enum IcomLANSocketOutcome: Equatable {
+    case ready
+    case keepWaiting
+    case fail(IcomLANError)
+
+    /// `denial` is what macOS says about the path, when it is a refusal we
+    /// can name. A named refusal ends the wait; anything else is the
+    /// network being slow, which is worth waiting out.
+    static func of(_ state: NWConnection.State, denial: IcomLANError?) -> IcomLANSocketOutcome {
+        switch state {
+        case .ready: return .ready
+        case .failed(let error): return .fail(denial ?? .network(error.localizedDescription))
+        case .cancelled: return .fail(.network("cancelled"))
+        case .waiting: return denial.map(IcomLANSocketOutcome.fail) ?? .keepWaiting
+        default: return .keepWaiting
+        }
+    }
+}
+
 /// One of the three UDP streams to the radio.
 ///
 /// Owns the socket, the session IDs, the handshake, the keepalives and the
@@ -260,28 +286,18 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
                     }
                     self.receiveLoop()
                     if !resumed { resumed = true; continuation.resume() }
-                case .failed(let error):
-                    self.isReady = false
-                    self.trace("socket failed: " + error.localizedDescription)
-                    let why = self.denialNow()?.message ?? error.localizedDescription
-                    if !resumed { resumed = true; continuation.resume(throwing: self.denialNow() ?? IcomLANError.network(error.localizedDescription)) }
-                    else { self.onFailure?(why) }
-                case .cancelled:
-                    self.isReady = false
-                    self.trace("socket cancelled")
-                    if !resumed { resumed = true; continuation.resume(throwing: IcomLANError.network("cancelled")) }
-                // A path macOS will never satisfy is not worth waiting out.
-                // Local network access denied leaves the connection parked
-                // here indefinitely; without this the handshake burns its
-                // whole window and then blames the radio.
-                case .waiting(let error):
-                    self.trace("socket waiting: " + error.localizedDescription)
-                    if let denial = self.denialNow(), !resumed {
-                        resumed = true
-                        continuation.resume(throwing: denial)
-                    }
                 default:
-                    break
+                    switch IcomLANSocketOutcome.of(state, denial: self.denialNow()) {
+                    case .ready:
+                        break  // handled above
+                    case .keepWaiting:
+                        self.trace("socket \(state)")
+                    case .fail(let why):
+                        self.isReady = false
+                        self.trace("socket \(state): " + why.message)
+                        if !resumed { resumed = true; continuation.resume(throwing: why) }
+                        else { self.onFailure?(why.message) }
+                    }
                 }
             }
             connection.start(queue: queue)

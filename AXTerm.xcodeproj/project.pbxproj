@@ -409,6 +409,7 @@
 			files = (
 			);
 			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
 			);
 			name = "Stamp git commit for Sentry";
 			outputPaths = (
