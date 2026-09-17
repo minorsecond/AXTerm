@@ -40,22 +40,30 @@ nonisolated enum IcomLANError: Error, Equatable, Sendable {
 
     /// What to tell the operator when macOS refuses the LAN.
     ///
-    /// Under a debugger the app is not the one being asked. macOS attributes
-    /// a privacy request to the *responsible* process, and for a build
-    /// launched by Xcode that is Xcode — so AXTerm's own switch can sit there
-    /// turned on while every socket to the radio is refused. Pointing at the
-    /// app's switch in that state is advice that cannot work.
+    /// Only what is known. macOS does not say which identity it judged, and
+    /// this refusal is intermittent in practice: the same build is refused
+    /// on one attempt and satisfied on the next, and a second copy of the
+    /// app starting (a test host shares the bundle identifier) can take the
+    /// running one's sockets down with it.
+    ///
+    /// An earlier version of this message asserted that a debugged build is
+    /// judged as Xcode and told the operator to turn Xcode on. That was
+    /// inferred from debugserver being the parent process, never checked,
+    /// and Xcode does not necessarily even appear in that list. Naming the
+    /// wrong switch is the failure this whole message exists to avoid, so
+    /// this one names the switch we know of and stops (2026-09-17).
     static func localNetworkDenialAdvice(debugged: Bool) -> String {
         let setting = "System Settings \u{203A} Privacy & Security \u{203A} Local Network"
+        var advice = "macOS is refusing this build access to devices on your network, which is "
+            + "not something the radio can answer for. Check AXTerm under " + setting + "; if it "
+            + "is already on, switching it off and back on can clear it, because a rebuilt copy "
+            + "may be judged as a different app."
         if debugged {
-            return "macOS is blocking this build from reaching devices on your network. It is "
-                + "running under the debugger, so the permission macOS checks belongs to Xcode, "
-                + "not to AXTerm \u{2014} turn Xcode on under " + setting + ", or launch the "
-                + "built app on its own instead of from Xcode."
+            advice += " This copy is running under a debugger, and a second copy of the app "
+                + "(a test run shares its identifier) can take the running one's connection "
+                + "down with it."
         }
-        return "macOS is blocking AXTerm from reaching devices on your network. Turn AXTerm on "
-            + "under " + setting + ". A rebuilt copy can count as a new app, so the switch may "
-            + "need turning off and back on after a rebuild."
+        return advice
     }
 
     /// Whether a debugger is attached, by the documented P_TRACED check.

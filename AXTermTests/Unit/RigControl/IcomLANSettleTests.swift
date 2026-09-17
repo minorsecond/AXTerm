@@ -107,14 +107,16 @@ final class IcomLANSettleTests: XCTestCase {
     /// one macOS reads — the responsible process is Xcode. Sending the
     /// operator to AXTerm's switch there is advice that cannot work, and
     /// cost an hour on 2026-09-17 with the switch already turned on.
-    func testUnderADebuggerTheAdviceNamesXcode() {
-        let debugged = IcomLANError.localNetworkDenialAdvice(debugged: true)
-        XCTAssertTrue(debugged.contains("Xcode"), debugged)
-
-        let shipped = IcomLANError.localNetworkDenialAdvice(debugged: false)
-        XCTAssertFalse(shipped.contains("Xcode"),
-                       "nobody running the shipped app has Xcode to turn on")
-        XCTAssertTrue(shipped.contains("AXTerm"), shipped)
+    func testTheAdviceNamesOnlyTheSwitchWeKnowOf() {
+        for debugged in [true, false] {
+            let advice = IcomLANError.localNetworkDenialAdvice(debugged: debugged)
+            XCTAssertTrue(advice.contains("AXTerm"), advice)
+            XCTAssertTrue(advice.contains("Local Network"), advice)
+            XCTAssertFalse(advice.contains("Xcode"),
+                           "which identity macOS judged is not known, and this message said it "
+                           + "was Xcode for half a day on an inference nobody checked")
+        }
+        XCTAssertTrue(IcomLANError.localNetworkDenialAdvice(debugged: true).contains("debugger"))
     }
 
     /// A path can be unsatisfied for reasons that really are the network's.
