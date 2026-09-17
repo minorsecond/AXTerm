@@ -16,7 +16,8 @@ final class AdaptiveNetworkPollFilterTests: XCTestCase {
     private func makeStat(
         from: String, to: String,
         df: Double, dr: Double?,
-        obs: Int = 10
+        obs: Int = 10,
+        session: Int = 10
     ) -> LinkStatRecord {
         LinkStatRecord(
             fromCall: from,
@@ -26,7 +27,8 @@ final class AdaptiveNetworkPollFilterTests: XCTestCase {
             dfEstimate: df,
             drEstimate: dr,
             duplicateCount: 0,
-            observationCount: obs
+            observationCount: obs,
+            sessionEvidenceCount: session
         )
     }
 
@@ -193,7 +195,8 @@ final class AdaptiveNetworkPerRadioTests: XCTestCase {
     private func record(_ from: String, _ to: String, df: Double, radio: RadioID) -> LinkStatRecord {
         LinkStatRecord(fromCall: from, toCall: to, quality: 200, lastUpdated: Date(),
                        dfEstimate: df, drEstimate: df, duplicateCount: 0,
-                       observationCount: 50, radioID: radio)
+                       observationCount: 50, radioID: radio,
+                       sessionEvidenceCount: 50)
     }
 
     /// Two channels, two answers, and neither is the average of the other.
@@ -221,7 +224,8 @@ final class AdaptiveNetworkPerRadioTests: XCTestCase {
             record("K0EPI", "W0ARP", df: 0.95, radio: uhf),
             LinkStatRecord(fromCall: "K0EPI", toCall: "KB5YZB", quality: 10, lastUpdated: Date(),
                            dfEstimate: 0.45, drEstimate: 0.45, duplicateCount: 0,
-                           observationCount: 1, radioID: vhf),
+                           observationCount: 1, radioID: vhf,
+                           sessionEvidenceCount: 1),
         ]
         let byRadio = ContentView.aggregateLinkQualityPerRadio(records, localCallsign: "K0EPI")
         XCTAssertEqual(Set(byRadio.keys), [uhf], "the VHF radio has one observation, not evidence")

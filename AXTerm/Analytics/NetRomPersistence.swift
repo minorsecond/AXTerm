@@ -113,6 +113,7 @@ nonisolated private struct LinkStatDBRecord: Codable, FetchableRecord, Persistab
     let dupCount: Int
     let ewmaQuality: Int
     let obsCount: Int  // observation count for evidence rehydration
+    let sessionObsCount: Int  // of those, how many were connected-mode frames
 }
 
 /// GRDB record for snapshot metadata.
@@ -202,6 +203,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 t.column("dupCount", .integer).notNull().defaults(to: 0)
                 t.column("ewmaQuality", .integer).notNull().defaults(to: 0)
                 t.column("obsCount", .integer).notNull().defaults(to: 0)  // observation count for evidence rehydration
+                t.column("sessionObsCount", .integer).notNull().defaults(to: 0)  // of those, connected-mode frames
                 t.primaryKey(["radioID", "fromCall", "toCall"])
             }
 
@@ -226,6 +228,10 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
             try migrateAddObsCountColumn(db)
             // Migration: key the three tables by radio as well as callsign.
             try migrateAddRadioKey(db)
+            // Migration: record how much of a link's evidence was connected-mode.
+            // After migrateAddRadioKey, which rebuilds the table without it.
+            try migrateAddSessionObsCountColumn(db)
+            // One-off: clear routing state produced by the APRS faults.
         }
     }
 
@@ -286,6 +292,25 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 ALTER TABLE link_stats_v2 RENAME TO link_stats;
                 """)
         }
+    }
+
+    /// Adds the sessionObsCount column to link_stats if it doesn't exist.
+    ///
+    /// Existing rows default to **0**, which is the opposite of what obsCount
+    /// does below and is deliberate. obsCount defaults to 1 so a restored link
+    /// is not mistaken for one with no evidence at all. This column answers a
+    /// narrower question: may this link speak about packet loss? For a row
+    /// written before the column existed we do not know, and guessing yes
+    /// would let a beacon-only link go on feeding the adaptive tuner the very
+    /// figure this column exists to exclude. Guessing no costs one link's
+    /// contribution until its next connected-mode frame, which restores it.
+    private func migrateAddSessionObsCountColumn(_ db: Database) throws {
+        let columns = try db.columns(in: "link_stats")
+        guard !columns.contains(where: { $0.name == "sessionObsCount" }) else { return }
+        try db.execute(sql: "ALTER TABLE link_stats ADD COLUMN sessionObsCount INTEGER NOT NULL DEFAULT 0")
+        #if DEBUG
+        print("[NETROM:PERSISTENCE] Migrated link_stats table: added sessionObsCount column")
+        #endif
     }
 
     /// Adds the obsCount column to link_stats if it doesn't exist.
@@ -416,7 +441,8 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                     drEstimate: stat.drEstimate,
                     dupCount: stat.duplicateCount,
                     ewmaQuality: stat.quality,
-                    obsCount: stat.observationCount  // Persist evidence count for rehydration
+                    obsCount: stat.observationCount,  // Persist evidence count for rehydration
+                    sessionObsCount: stat.sessionEvidenceCount
                 )
                 try record.insert(db)
             }
@@ -442,7 +468,8 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                     drEstimate: record.drEstimate,
                     duplicateCount: record.dupCount,
                     observationCount: record.obsCount,  // Load persisted evidence count
-                    radioID: RadioID(rawValue: record.radioID)
+                    radioID: RadioID(rawValue: record.radioID),
+                    sessionEvidenceCount: record.sessionObsCount
                 )
             }
         }
@@ -520,7 +547,8 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                     drEstimate: stat.drEstimate,
                     dupCount: stat.duplicateCount,
                     ewmaQuality: stat.quality,
-                    obsCount: stat.observationCount  // Persist evidence count for rehydration
+                    obsCount: stat.observationCount,  // Persist evidence count for rehydration
+                    sessionObsCount: stat.sessionEvidenceCount
                 )
                 try record.insert(db)
             }

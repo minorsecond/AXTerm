@@ -632,10 +632,15 @@ struct ContentView: View {
                    coordinator.adaptiveTransmissionEnabled,
                    !coordinator.hasActiveSessions,
                    let integration = client.netRomIntegration,
+                   case let records = integration.exportLinkStats(),
+                   case let aprsOnly = Self.radiosCarryingOnlyAPRS(families: radioFamilies),
                    case let byRadio = Self.aggregateLinkQualityPerRadio(
-                       integration.exportLinkStats(),
-                       localCallsign: coordinator.localCallsign
-                   ), !byRadio.isEmpty {
+                       records, localCallsign: coordinator.localCallsign
+                   ), !byRadio.isEmpty || !aprsOnly.isEmpty {
+                    // Said whether or not any radio produced a figure: a
+                    // station with one APRS radio and nothing else has no
+                    // figure to show and the most to explain.
+                    coordinator.adaptiveStatusStore.setRadiosCarryingOnlyAPRS(aprsOnly)
                     // One sample per channel, filed against that channel. The
                     // blended figure this replaced was wrong for every radio
                     // that was not average.
@@ -2907,8 +2912,38 @@ struct ContentView: View {
         return out
     }
 
+    /// How many observations a link needs before it is allowed to speak.
+    /// Shared so the figure and the explanation for its absence agree about
+    /// which links were considered.
+    nonisolated static let adaptiveMinObservations = 5
+
+    /// Radios carrying APRS and nothing else, which the tuner cannot learn
+    /// from and which are worth naming rather than leaving blank.
+    ///
+    /// Read from the frames each radio has actually decoded, the same source
+    /// as the AX.25 and APRS badges on the radio rows. The first version of
+    /// this asked the link statistics instead, counting links with no
+    /// connected-mode evidence recorded against them, and it was wrong the
+    /// moment it shipped: every link restored from a database written before
+    /// that column existed comes back with a zero, so a two-way AX.25 radio
+    /// in the middle of a session was announced as hearing only beacons
+    /// (2026-09-17). An absent count is not evidence of absence, and a notice
+    /// that makes a positive claim needs positive evidence behind it.
+    ///
+    /// A radio that has heard nothing classifiable is not included. Silence is
+    /// a radio that has not started, which is a different thing from one that
+    /// cannot learn.
+    nonisolated static func radiosCarryingOnlyAPRS(
+        families: [RadioID: Set<RadioTrafficFamily>]
+    ) -> [RadioID] {
+        families.compactMap { radio, carried in
+            carried.contains(.aprs) && !carried.contains(.ax25) ? radio : nil
+        }
+        .sorted(by: RadioID.deterministicOrder)
+    }
+
     nonisolated static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord], localCallsign: String? = nil) -> (lossRate: Double, etx: Double, scope: AdaptiveAggregateScope)? {
-        let minObs = 5
+        let minObs = Self.adaptiveMinObservations
 
         func aggregate(_ subset: [LinkStatRecord]) -> (lossRate: Double, etx: Double)? {
             // A row qualifies on real forward evidence alone. Requiring BOTH
@@ -2918,9 +2953,29 @@ struct ContentView: View {
             // An unmeasured reverse direction uses the symmetry prior (dr = df),
             // the standard ETX assumption for an unmeasured return path. A
             // MEASURED bad dr still counts against the row.
+            //
+            // The session-evidence gate is the third condition and the one
+            // that matters most on an APRS radio. A link we only ever listen
+            // to can report that a frame arrived and can never report that
+            // one did not: a beacon we missed leaves no retransmission, no
+            // REJ, no gap. Its delivery estimate therefore settles at
+            // whatever credit an arrival earns, which for a UI beacon is 0.4
+            // and for a NET/ROM broadcast 0.8. Fed to the tuner those read as
+            // 60% and 20% loss, the second sitting exactly on the
+            // stop-and-wait trigger, and neither is a measurement of
+            // anything. Field capture 2026-09-17: the IC-705 on 144.390,
+            // beaconing happily and digipeated twice, reported loss=0.60
+            // etx=6.21 and was clamped to K=1 paclen=64 with no way out,
+            // because every further beacon pushed the figure toward 0.4
+            // rather than toward health.
+            //
+            // A radio with nothing but beacons now produces no sample at all
+            // and keeps the operator's configured settings, which is the
+            // honest answer to a question its traffic cannot address.
             let valid = subset.filter { r in
                 r.observationCount >= minObs
                     && (r.dfEstimate ?? 0) > 0.05
+                    && r.sessionEvidenceCount > 0
             }
             guard !valid.isEmpty else { return nil }
             let etxValues = valid.map { r -> Double in

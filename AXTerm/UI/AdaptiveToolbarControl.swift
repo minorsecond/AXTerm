@@ -97,6 +97,8 @@ private struct AdaptivePopoverContent: View {
                 learningStatus(adaptive: adaptive)
             }
 
+            listenOnlyRadiosNote
+
             chartSection
 
             HStack(spacing: 10) {
@@ -169,6 +171,49 @@ private struct AdaptivePopoverContent: View {
                 .fill(Color(platform: .platformCardBackground).opacity(0.55))
         )
         .help("The adaptive controller only upgrades after a sustained clean streak, and every upgrade runs a trial: a retransmission during the trial rolls it back and doubles the streak required next time.")
+    }
+
+    /// Radios the tuner has nothing to learn from, and why.
+    ///
+    /// Without this a radio simply does not appear, and the operator is left
+    /// to work out whether it is starting up, misconfigured or broken. An
+    /// APRS radio is none of those. It is doing its job, and its job produces
+    /// no evidence about loss.
+    @ViewBuilder
+    private var listenOnlyRadiosNote: some View {
+        if !store.radiosCarryingOnlyAPRS.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(store.radiosCarryingOnlyAPRS, id: \.rawValue) { radio in
+                    HStack(alignment: .top, spacing: 5) {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(radioName(radio)) carries APRS only")
+                                .font(.system(size: 11, weight: .medium))
+                            Text("A beacon that goes missing leaves no trace, so there is "
+                                 + "no loss here to measure. This radio keeps the settings "
+                                 + "you configured.")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(platform: .platformCardBackground).opacity(0.55))
+            )
+            .help("Adaptive tuning reads packet loss, and packet loss can only be counted where a lost frame leaves a trace: a retransmission, a reject, a duplicate. Connected-mode traffic leaves all three. A beacon leaves none, so a radio hearing only beacons is left on the settings you chose.")
+        }
+    }
+
+    private func radioName(_ radio: RadioID) -> String {
+        SessionCoordinator.shared?.radioName(radio) ?? radio.rawValue
     }
 
     /// The link the RTT/Window charts describe: the selected adaptive

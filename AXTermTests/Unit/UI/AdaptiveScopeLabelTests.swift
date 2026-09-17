@@ -44,7 +44,7 @@ final class AdaptiveScopeLabelTests: XCTestCase {
         let p = params(destination: nil, path: nil, radio: nil)
         XCTAssertEqual(AdaptiveScopeLabel.text(for: p, radioName: { _ in "IC-705" },
                                                hasMultipleRadios: true),
-                       "All channels")
+                       "Configured defaults")
     }
 
     /// A radio whose name we cannot resolve still gets said, rather than the

@@ -147,6 +147,17 @@ nonisolated struct LinkStats: Equatable {
     /// Timestamp of last observation.
     let lastUpdate: Date?
 
+    /// How many observations came from connected-mode frames (I, S, and the
+    /// non-UI U frames that open and close a session).
+    ///
+    /// Loss is only observable where a lost frame leaves a trace: a
+    /// retransmission, a REJ, a duplicate. A UI frame we never heard leaves
+    /// none, so a link carrying only beacons can report that frames arrived
+    /// and can never report that one did not. Its delivery estimate settles
+    /// at whatever credit an arrival earns and means nothing. This count is
+    /// how a reader tells the two apart.
+    let sessionEvidenceCount: Int
+
     /// Empty stats for unknown links.
     static let empty = LinkStats(
         observationCount: 0,
@@ -154,7 +165,8 @@ nonisolated struct LinkStats: Equatable {
         dfEstimate: nil,
         drEstimate: nil,
         ewmaQuality: 0,
-        lastUpdate: nil
+        lastUpdate: nil,
+        sessionEvidenceCount: 0
     )
 }
 
@@ -182,7 +194,10 @@ nonisolated struct LinkStatRecord: Equatable {
     /// about the same station is kept apart, never blended in.
     let radioID: RadioID
 
-    init(fromCall: String, toCall: String, quality: Int, lastUpdated: Date, dfEstimate: Double? = nil, drEstimate: Double? = nil, duplicateCount: Int = 0, observationCount: Int = 0, radioID: RadioID = .primary) {
+    /// Observations from connected-mode frames. See `LinkStats`.
+    let sessionEvidenceCount: Int
+
+    init(fromCall: String, toCall: String, quality: Int, lastUpdated: Date, dfEstimate: Double? = nil, drEstimate: Double? = nil, duplicateCount: Int = 0, observationCount: Int = 0, radioID: RadioID = .primary, sessionEvidenceCount: Int = 0) {
         self.fromCall = fromCall
         self.toCall = toCall
         self.quality = quality
@@ -192,6 +207,7 @@ nonisolated struct LinkStatRecord: Equatable {
         self.duplicateCount = duplicateCount
         self.observationCount = observationCount
         self.radioID = radioID
+        self.sessionEvidenceCount = sessionEvidenceCount
     }
 }
 
@@ -279,6 +295,11 @@ nonisolated struct LinkQualityEstimator {
         // the frame's original sender (field capture 2026-08-23: a successful
         // SABM/UA handshake left df=0.0 because the UA carried no weight).
         let isConnectionResponse = decoded.uType == .UA || decoded.uType == .DM
+        // I and S frames only exist inside a session, and a U frame that is
+        // not UI is one being set up or torn down. Those are the frames whose
+        // loss we can actually see, so they are the ones that qualify a link
+        // to speak about loss at all.
+        let isSessionEvidence = RadioTrafficClassifier.isSessionEvidence(packet.frameType)
 
         // Forward evidence (data progress / routing broadcast / UI beacon).
         if classification.forwardEvidenceWeight > 0 && !isRetry {
@@ -287,6 +308,7 @@ nonisolated struct LinkQualityEstimator {
                 value: classification.forwardEvidenceWeight,
                 timestamp: timestamp,
                 isDuplicate: false,
+                isSessionEvidence: isSessionEvidence,
                 config: config
             )
         }
@@ -298,6 +320,7 @@ nonisolated struct LinkQualityEstimator {
                 value: 0.0,
                 timestamp: timestamp,
                 isDuplicate: true,
+                isSessionEvidence: isSessionEvidence,
                 config: config
             )
         }
@@ -467,7 +490,8 @@ nonisolated struct LinkQualityEstimator {
                     drEstimate: linkStats.drEstimate,
                     duplicateCount: linkStats.duplicateCount,
                     observationCount: linkStats.observationCount,
-                    radioID: key.radio
+                    radioID: key.radio,
+                    sessionEvidenceCount: linkStats.sessionEvidenceCount
                 )
             }
             .sorted { ($0.radioID.rawValue, $0.fromCall, $0.toCall) < ($1.radioID.rawValue, $1.fromCall, $1.toCall) }
@@ -501,6 +525,7 @@ nonisolated struct LinkQualityEstimator {
                 restoredReverseEstimate: record.drEstimate,
                 restoredObservationCount: record.observationCount,
                 restoredDuplicateCount: record.duplicateCount,
+                restoredSessionEvidenceCount: record.sessionEvidenceCount,
                 restoredQuality: record.quality
             )
         }
@@ -517,6 +542,10 @@ nonisolated struct LinkQualityEstimator {
     /// Add forward-channel evidence to an arbitrary directional link — used
     /// when a frame carries evidence about the OPPOSITE direction (a UA
     /// proving the SABM arrived, a REJ proving an inbound I-frame was lost).
+    ///
+    /// Every caller is a session frame (a REJ reporting a lost I-frame, a UA
+    /// or DM answering a SABM or DISC), so the evidence always counts toward
+    /// the link's session total.
     private mutating func applyDirectionalForward(from: String, to: String, radio: RadioID, value: Double, timestamp: Date) {
         let key = LinkKey(radio: radio, from: from, to: to)
         var s = stats[key] ?? DirectionalLinkStats(
@@ -528,6 +557,7 @@ nonisolated struct LinkQualityEstimator {
             value: value,
             timestamp: timestamp,
             isDuplicate: false,
+            isSessionEvidence: true,
             config: config
         )
         stats[key] = s
@@ -544,6 +574,7 @@ nonisolated struct LinkQualityEstimator {
             value: value,
             timestamp: timestamp,
             isDuplicate: false,
+            isSessionEvidence: true,
             config: config
         )
         stats[reverseKey] = reverseStats
@@ -602,6 +633,10 @@ nonisolated private struct Observation {
     let timestamp: Date
     let channel: EvidenceChannel
     let isDuplicate: Bool
+    /// Whether this observation came from a connected-mode frame, which is
+    /// the only kind that can also report a loss. Carried per observation so
+    /// it ages out with the sliding window instead of standing forever.
+    let isSessionEvidence: Bool
 }
 
 /// Statistics for a single directional link (A→B).
@@ -632,10 +667,12 @@ nonisolated private struct DirectionalLinkStats {
     var restoredReverseEstimate: Double?
     var restoredObservationCount: Int
     var restoredDuplicateCount: Int
+    var restoredSessionEvidenceCount: Int
     /// Lifetime evidence credit transferred from restored state when live
     /// observations resume — restarts must not re-darken minObs gates.
     var carriedObservationCount: Int = 0
     var carriedDuplicateCount: Int = 0
+    var carriedSessionEvidenceCount: Int = 0
     var restoredQuality: Int?
 
     /// EWMA sample counts per channel, seeded at 1 for the cold-start prior.
@@ -661,6 +698,7 @@ nonisolated private struct DirectionalLinkStats {
         restoredReverseEstimate: Double? = nil,
         restoredObservationCount: Int = 0,
         restoredDuplicateCount: Int = 0,
+        restoredSessionEvidenceCount: Int = 0,
         restoredQuality: Int? = nil
     ) {
         self.forwardEstimate = nil
@@ -674,6 +712,7 @@ nonisolated private struct DirectionalLinkStats {
         self.restoredReverseEstimate = restoredReverseEstimate
         self.restoredObservationCount = restoredObservationCount
         self.restoredDuplicateCount = restoredDuplicateCount
+        self.restoredSessionEvidenceCount = restoredSessionEvidenceCount
         self.restoredQuality = restoredQuality
         // Restored evidence counts toward the EWMA warm-up (plus the prior), so an
         // imported link continues where it left off instead of re-warming from
@@ -696,9 +735,12 @@ nonisolated private struct DirectionalLinkStats {
         value: Double,
         timestamp: Date,
         isDuplicate: Bool,
+        isSessionEvidence: Bool,
         config: LinkQualityConfig
     ) {
-        observations.append(Observation(timestamp: timestamp, channel: channel, isDuplicate: isDuplicate))
+        observations.append(Observation(timestamp: timestamp, channel: channel,
+                                        isDuplicate: isDuplicate,
+                                        isSessionEvidence: isSessionEvidence))
         lastUpdated = timestamp
 
         // Revive from tombstone if new evidence arrives
@@ -721,10 +763,12 @@ nonisolated private struct DirectionalLinkStats {
         // K0NTS-1→N3HYM-15 dropped 7→1 on the first post-restart frame).
         carriedObservationCount += restoredObservationCount
         carriedDuplicateCount += restoredDuplicateCount
+        carriedSessionEvidenceCount += restoredSessionEvidenceCount
         restoredForwardEstimate = nil
         restoredReverseEstimate = nil
         restoredObservationCount = 0
         restoredDuplicateCount = 0
+        restoredSessionEvidenceCount = 0
         restoredQuality = nil
 
         switch channel {
@@ -799,25 +843,30 @@ nonisolated private struct DirectionalLinkStats {
     func toLinkStats(using config: LinkQualityConfig) -> LinkStats {
         let liveTotal = observations.count
         let liveDups = observations.elements.filter { $0.isDuplicate }.count
+        let liveSession = observations.elements.filter { $0.isSessionEvidence }.count
 
         let total: Int
         let dups: Int
+        let session: Int
         let df: Double?
         let dr: Double?
 
         if liveTotal > 0 {
             total = liveTotal + carriedObservationCount
             dups = liveDups + carriedDuplicateCount
+            session = liveSession + carriedSessionEvidenceCount
             df = forwardEstimate
             dr = reverseEstimate
         } else if restoredObservationCount > 0 {
             total = restoredObservationCount
             dups = restoredDuplicateCount
+            session = restoredSessionEvidenceCount
             df = restoredForwardEstimate
             dr = restoredReverseEstimate
         } else {
             total = 0
             dups = 0
+            session = 0
             df = nil
             dr = nil
         }
@@ -828,7 +877,8 @@ nonisolated private struct DirectionalLinkStats {
             dfEstimate: df,
             drEstimate: dr,
             ewmaQuality: quality(using: config),
-            lastUpdate: lastUpdated
+            lastUpdate: lastUpdated,
+            sessionEvidenceCount: session
         )
     }
 

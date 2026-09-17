@@ -127,7 +127,7 @@ extension AdaptiveParams {
             return "\(successStreak) of \(upgradeStreakRequirement) clean frames toward the next upgrade"
         }
         if metrics.samplesSeen == 0 {
-            return "Waiting for evidence — no qualifying link samples yet"
+            return "Waiting for evidence: no connected-mode traffic to learn from yet"
         }
         return qualityLabel
     }
@@ -200,6 +200,23 @@ final class AdaptiveStatusStore: ObservableObject {
             return scoped
         }
         return globalAdaptive
+    }
+
+    /// Radios carrying APRS and nothing else, which the tuner cannot learn
+    /// from.
+    ///
+    /// Kept so the popover can name them. A radio with no adaptive figure is
+    /// otherwise indistinguishable from one that is broken, and an APRS radio
+    /// will never have a figure however long the operator waits for one.
+    @Published var radiosCarryingOnlyAPRS: [RadioID] = []
+
+    func setRadiosCarryingOnlyAPRS(_ radios: [RadioID]) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.setRadiosCarryingOnlyAPRS(radios) }
+            return
+        }
+        guard radiosCarryingOnlyAPRS != radios else { return }
+        radiosCarryingOnlyAPRS = radios
     }
 
     func setDefaultChannel(id: AdaptiveSessionID?) {

@@ -476,6 +476,19 @@ final class SessionCoordinator: ObservableObject {
         packetEngine?.radioManager.primaryRadioID ?? .primary
     }
 
+    /// Which channel the toolbar falls back to when the operator has selected
+    /// nothing: the primary radio when it has a figure, otherwise the first
+    /// radio that does, in a fixed order so the display cannot flip between
+    /// radios on successive polls.
+    ///
+    /// Pure so the choice can be tested without a coordinator, a radio or a
+    /// packet engine.
+    nonisolated static func defaultChannelRadio(among channels: [RadioID],
+                                                primary: RadioID) -> RadioID? {
+        if channels.contains(primary) { return primary }
+        return channels.sorted(by: RadioID.deterministicOrder).first
+    }
+
     /// What configuration to *use* for a scope: itself if it has learned
     /// anything, else the channel under it, else the operator's baseline.
     private func resolvedSettings(for scope: AdaptiveScope) -> TxAdaptiveSettings {
@@ -687,9 +700,23 @@ final class SessionCoordinator: ObservableObject {
             // With nothing selected the toolbar shows a channel, and which
             // one has to be a fixed choice: picking whichever learned most
             // recently makes the figure flip between radios every poll.
+            //
+            // The primary radio when it has a figure, and otherwise the first
+            // channel that does. Pinning it to the primary unconditionally
+            // read fine while every radio produced a figure, and stopped the
+            // day one of them legitimately could not: a station whose primary
+            // is its APRS radio saw the toolbar show configured defaults with
+            // no ETX and no loss, while the AX.25 radio beside it was learning
+            // normally one scope over and saying so in the log. An APRS radio
+            // carries no connected-mode traffic and so never earns a channel
+            // figure. That is correct, and it must not silence the radio that
+            // did (2026-09-17).
             if normalizedKey.route == nil {
-                adaptiveStatusStore.setDefaultChannel(
-                    id: adaptiveSessionID(radio: primaryRadioID, destination: "", path: ""))
+                let channels = adaptiveByScope.keys.filter { $0.route == nil }.map(\.radio)
+                if let chosen = Self.defaultChannelRadio(among: channels, primary: primaryRadioID) {
+                    adaptiveStatusStore.setDefaultChannel(
+                        id: adaptiveSessionID(radio: chosen, destination: "", path: ""))
+                }
             }
             adaptiveStatusStore.updateSession(
                 id: adaptiveSessionID(radio: normalizedKey.radio,
@@ -954,10 +981,20 @@ final class SessionCoordinator: ObservableObject {
         // is safe to broadcast. See `NetRomAdvertisableRoutes`.
         driver.advertisableRoutesProvider = { [weak self] in
             guard let self, let integration = self.packetEngine?.netRomIntegration else { return [] }
+            // Only what this radio can actually reach.
+            //
+            // The broadcast goes out on one radio, and routes and neighbours
+            // have been per-radio for a while, but this provider asked for all
+            // of them. A station with an APRS radio alongside a packet radio
+            // therefore advertised its 144.390 traffic to the packet network,
+            // over the air, every few minutes (2026-09-17). A route reachable
+            // on another antenna is not reachable through this one, and
+            // promising it to the channel is a claim we cannot honour.
             let decision = NetRomAdvertisableRoutes.decide(
                 routes: integration.currentRoutes(),
                 neighbors: integration.currentNeighbors(),
-                now: Date())
+                now: Date(),
+                radio: self.primaryRadioID)
             if !decision.withheld.isEmpty {
                 TxLog.debug(.session, "Routes withheld from NODES broadcast", [
                     "count": decision.withheld.count,
