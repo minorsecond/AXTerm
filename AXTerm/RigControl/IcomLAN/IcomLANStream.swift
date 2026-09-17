@@ -200,6 +200,9 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     /// I-am-here (which carries the radio's session ID), ready.
     func connect(host: String, port: UInt16, timeout: Double = 2) async throws {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else { throw IcomLANError.network("bad port \(port)") }
+        guard AppEnvironment.mayConnect(to: host) else {
+            throw IcomLANError.network("a test host may not reach \(host)")
+        }
         // This stream object is reused across connect/disconnect cycles, so
         // every per-session counter must start fresh — the radio treats a new
         // localID as a new session and expects its tracked sequence to begin

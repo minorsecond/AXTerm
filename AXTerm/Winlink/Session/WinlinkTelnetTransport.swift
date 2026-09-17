@@ -54,6 +54,10 @@ final class WinlinkTelnetTransport: WinlinkTransport {
     }
 
     func open() async throws {
+        guard AppEnvironment.mayConnect(to: host) else {
+            throw NSError(domain: "WinlinkTelnetTransport", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "a test host may not reach \(host)"])
+        }
         let connection = NWConnection(
             host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: port)!,

@@ -70,6 +70,12 @@ final class KISSLinkNetwork: KISSLink, @unchecked Sendable {
             return
         }
 
+        guard AppEnvironment.mayConnect(to: host) else {
+            setState(.failed)
+            notifyError("a test host may not reach \(host)")
+            return
+        }
+
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
 
