@@ -166,4 +166,24 @@ final class IcomLANSettleTests: XCTestCase {
                        .fail(.network("cancelled")))
         XCTAssertEqual(IcomLANSocketOutcome.of(.setup, denial: nil), .keepWaiting)
     }
+
+    // MARK: - What actually earns a wait
+
+    /// A launch where the first attempt failed must not make the second one
+    /// wait. Nothing was granted, so the radio has nothing to let go of, and
+    /// the operator watches a progress spinner for fifteen seconds for no
+    /// reason. Reported as "it waits a while before connecting" the same day
+    /// the settle shipped.
+    func testAnAttemptThatNeverGotInLeavesNothingToSettle() {
+        // A failed attempt records no close time at all.
+        XCTAssertEqual(IcomLANSession.settleRemaining(now: 1_000, lastCloseAt: 0), 0)
+    }
+
+    /// And a session that did come up still owes the wait, which is the
+    /// whole reason the settle exists.
+    func testASessionThatCameUpStillOwesTheWait() {
+        let closed = 1_000.0
+        XCTAssertEqual(IcomLANSession.settleRemaining(now: closed, lastCloseAt: closed),
+                       IcomLANSession.settleAfterClose)
+    }
 }

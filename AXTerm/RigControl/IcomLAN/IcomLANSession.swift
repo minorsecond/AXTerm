@@ -287,7 +287,15 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
                                                           local: serial.localID, remote: serial.remoteID))
                 }
             }
-            lastCloseAt = IcomLANStream.now
+            // Only a session the radio actually granted leaves a slot to
+            // release. An attempt that never got in — the login refused, the
+            // socket unroutable, the first control packet unanswered — took
+            // nothing from the radio, so making the next try wait fifteen
+            // seconds for it to let go of nothing is delay for its own sake.
+            // That is what made a fresh launch sit there: the first attempt
+            // failed, armed the settle, and the retry that would have
+            // connected immediately waited out the full window (2026-09-17).
+            if connectionOpened { lastCloseAt = IcomLANStream.now }
             audio.disconnect()
             serial.disconnect()
             control.disconnect()
