@@ -28,6 +28,33 @@ final class CIVFrameTests: XCTestCase {
         XCTAssertEqual(hex(CIVCommand.readDataMode()), "FE FE A4 E0 1A 06 FD")
     }
 
+    /// Every set-mode item number, as the IC-705 CI-V Reference Guide
+    /// prints it. Checked against the guide on 2026-09-17, the day a wrong
+    /// constant two lines away from these (DATA MOD 02 instead of 03) put a
+    /// carrier on the air modulated from a dead input for days without one
+    /// error anywhere. The radio accepts any item number in range and sets
+    /// whatever it names, so a typo here is silent by construction: nothing
+    /// short of listening to the result finds it.
+    ///
+    /// 0040 is absent on purpose. TX delay runs 0038 HF, 0039 50M, 0041
+    /// 144M, 0042 430M, and closing that gap to make the cases consecutive
+    /// would move two of them onto the wrong setting.
+    func testTheMenuItemNumbersMatchTheReference() {
+        let expected: [(CIVCommand.MenuItem, Int)] = [
+            (.txDelayHF, 38), (.txDelay50M, 39), (.txDelay144M, 41), (.txDelay430M, 42),
+            (.usbAFOutputSelect, 109), (.usbAFOutputLevel, 110), (.usbAFSquelch, 111),
+            (.usbModLevel, 116), (.dataOffMod, 118), (.dataMod, 119),
+            (.usbSend, 125), (.usbKeyingCW, 126), (.usbKeyingRTTY, 127),
+            (.civTransceive, 131), (.civUSBEchoBack, 132), (.usbBFunction, 133),
+        ]
+        for (item, number) in expected {
+            XCTAssertEqual(item.rawValue, number,
+                           String(format: "menu item %04d", number))
+        }
+        XCTAssertEqual(Set(expected.map(\.1)).count, expected.count,
+                       "two items on one number means one of them is wrong")
+    }
+
     func testMenuItemsAndMeters() {
         XCTAssertEqual(hex(CIVCommand.setTransceive(false)), "FE FE A4 E0 1A 05 01 31 00 FD")
         XCTAssertEqual(hex(CIVCommand.setEchoBack(false)), "FE FE A4 E0 1A 05 01 32 00 FD")

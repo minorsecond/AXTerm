@@ -303,6 +303,14 @@ final class IcomLANWiFiRegressionTests: XCTestCase {
             XCTAssertEqual(CIVCommand.subcommandLength(command), 1,
                            String(format: "%02X takes a subcommand", command))
         }
+        // And the table still has to say no. Returning 1 for everything
+        // passes the loop above while folding a byte of data into the
+        // subcommand of every reply that never had one.
+        for command: UInt8 in [0x03, 0x04, 0x05, 0x06, 0x18] {
+            XCTAssertEqual(CIVCommand.subcommandLength(command), 0,
+                           String(format: "%02X takes no subcommand", command))
+        }
+
         // The radio's real answer to `1F 00`: MY call sign, K0EPI.
         let bytes: [UInt8] = [0xFE, 0xFE, 0xE1, 0xA4, 0x1F, 0x00,
                               0x4B, 0x30, 0x45, 0x50, 0x49, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0xFD]
