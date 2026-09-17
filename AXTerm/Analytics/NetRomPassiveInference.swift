@@ -77,12 +77,29 @@ final class NetRomPassiveInference {
         // This includes both packets addressed to us AND third-party traffic
         guard !packet.via.isEmpty else { return }
 
-        _ = packet.via.compactMap { normalize($0.display) }
+        // A beacon says where a station is, never that a circuit can be opened
+        // to it. Treating digipeated APRS as routing evidence filled the table
+        // with stations on the APRS frequency and then advertised them to the
+        // packet network in NODES broadcasts, promising circuits to trackers
+        // and weather stations that have no connected-mode stack at all
+        // (2026-09-17). A NET/ROM broadcast is a UI frame too and is
+        // classified separately, so node tables still learn normally.
+        guard classification != .uiBeacon else { return }
+
         // Prefer the actual repeated chain (H-bit set) when present; this reflects
         // the path that truly delivered the frame to us.
+        //
+        // Aliases are dropped before the next hop is picked. A digipeater
+        // consumes the alias it answered and sets the H bit on it, so a frame
+        // repeated by WQ8M-9 for WIDE1-1 arrives as `WQ8M-9*,WIDE1*,WIDE2-1`
+        // and the last repeated entry is the alias, not the station. Taking it
+        // literally made WIDE1 a neighbour and hung every station heard
+        // through any fill-in digi off it (2026-09-17). The station that
+        // actually keyed up is the last repeated entry that is a real node.
         let repeatedViaNormalized = packet.via
             .filter(\.repeated)
             .compactMap { normalize($0.display) }
+            .filter { CallsignValidator.isValidRoutingNode($0) }
         // Inference should represent routes that actually carried traffic. If no
         // repeated hops were observed, treat this as ambiguous and skip inference.
         guard !repeatedViaNormalized.isEmpty else { return }

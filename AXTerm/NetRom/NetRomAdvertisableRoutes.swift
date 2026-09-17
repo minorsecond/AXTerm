@@ -61,11 +61,20 @@ nonisolated enum NetRomAdvertisableRoutes {
     }
 
     /// Filter the route table down to promises this station can keep.
+    /// - Parameter radio: the radio the broadcast will go out on. Routes and
+    ///   neighbours belonging to any other radio are dropped before anything
+    ///   else is considered, because a destination reachable on one antenna is
+    ///   not reachable through another and a NODES entry is a promise that it
+    ///   is. Nil considers every radio, which is only correct for a station
+    ///   with one.
     static func decide(
         routes: [RouteInfo],
         neighbors: [NeighborInfo],
-        now: Date
+        now: Date,
+        radio: RadioID? = nil
     ) -> Decision {
+        let routes = radio.map { r in routes.filter { $0.radioID == r } } ?? routes
+        let neighbors = radio.map { r in neighbors.filter { $0.radioID == r } } ?? neighbors
         var live: [String: NeighborInfo] = [:]
         for neighbor in neighbors
         where now.timeIntervalSince(neighbor.lastSeen) <= maxNeighborSilence {

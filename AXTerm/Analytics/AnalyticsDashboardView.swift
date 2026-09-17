@@ -149,8 +149,13 @@ struct AnalyticsDashboardView: View {
             // when nothing changed.
             pushRadioContext()
         }
-        .onReceive(packetEngine.$hiddenRadioIDs) { _ in
-            pushRadioContext()
+        .onReceive(packetEngine.$hiddenRadioIDs) { hidden in
+            // The emitted value, not a re-read of the property. @Published
+            // publishes in willSet, so at this point the engine still holds
+            // the set from before the operator's toggle, and pushing that put
+            // analytics one change behind: hide a radio and its traffic stayed
+            // on the page (2026-09-17).
+            pushRadioContext(hidden: hidden)
         }
         .onChange(of: viewModel.viewState.selectedNodeID) { _, newValue in
             packetEngine.selectedStationCall = newValue
@@ -172,11 +177,14 @@ struct AnalyticsDashboardView: View {
     /// view model, so analytics can scope to a channel and drop hidden radios.
     /// Frequencies come from the rig where it reports them, else the radio's
     /// stored frequency; radios with neither are each their own channel.
-    private func pushRadioContext() {
+    /// - Parameter hidden: the hidden set to apply. Defaults to the engine's
+    ///   current one, which is right everywhere except inside that property's
+    ///   own publisher, where the new value has not been stored yet.
+    private func pushRadioContext(hidden: Set<RadioID>? = nil) {
         let radios = packetEngine.radioSummaries.map {
             AnalyticsRadioChannel.Radio(id: $0.id, name: $0.name, frequencyHz: $0.frequencyHz)
         }
-        let hidden = packetEngine.hiddenRadioIDs
+        let hidden = hidden ?? packetEngine.hiddenRadioIDs
         viewModel.updateRadioContext(
             channels: AnalyticsRadioChannel.channels(radios: radios, hidden: hidden),
             hidden: hidden)

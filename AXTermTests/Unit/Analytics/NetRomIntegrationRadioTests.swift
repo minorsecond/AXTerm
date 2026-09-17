@@ -61,11 +61,18 @@ final class NetRomIntegrationRadioTests: XCTestCase {
         let integration = makeIntegration()
         let t = Date(timeIntervalSince1970: 1_700_002_000)
         // Third-party W0FAR heard via a repeated digipeater W0DIGI, on UHF.
+        //
+        // Connected-mode rather than a plain beacon, because a beacon no longer
+        // infers a route at all: it says where a station is and never that a
+        // circuit can be opened to it. This test is about which radio an
+        // inferred route belongs to, so it needs a frame that legitimately
+        // infers one (2026-09-17).
         func digipeated(_ offset: TimeInterval) -> Packet {
             Packet(timestamp: t.addingTimeInterval(offset),
-                   from: AX25Address(call: "W0FAR"), to: AX25Address(call: "CQ"),
+                   from: AX25Address(call: "W0FAR"), to: AX25Address(call: "W0NEAR"),
                    via: [AX25Address(call: "W0DIGI", repeated: true)],
-                   frameType: .ui, control: 0x03, info: Data("DATA".utf8),
+                   frameType: .i, control: UInt8((Int(offset) % 8) << 1),
+                   controlByte1: 0x00, info: Data("DATA".utf8),
                    rawAx25: Data([0x01]), radioID: uhf)
         }
         for i in 0..<3 { integration.observePacket(digipeated(Double(i)), timestamp: t.addingTimeInterval(Double(i))) }

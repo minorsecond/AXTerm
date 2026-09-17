@@ -232,6 +232,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
             // After migrateAddRadioKey, which rebuilds the table without it.
             try migrateAddSessionObsCountColumn(db)
             // One-off: clear routing state produced by the APRS faults.
+            try purgeAPRSPollutedRouting(db)
         }
     }
 
@@ -292,6 +293,51 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 ALTER TABLE link_stats_v2 RENAME TO link_stats;
                 """)
         }
+    }
+
+    /// Clears routing state that two fixed faults had already written.
+    ///
+    /// Until 2026-09-17 the passive inference read the next hop from the last
+    /// repeated via entry, which for a digipeated APRS frame is the alias the
+    /// digipeater consumed rather than the digipeater itself, and it accepted
+    /// a beacon as evidence of a routable path. Together those filled the table
+    /// with APRS stations reached "via WIDE1", and the node broadcast then
+    /// advertised them to the packet network over the air.
+    ///
+    /// The code no longer produces any of it, but the rows are persisted and
+    /// would keep being advertised until they aged out. So they go now:
+    ///
+    /// - anything routed through a path alias, which is never a station;
+    /// - every inferred route and neighbour, because the good ones cannot be
+    ///   told from the bad ones after the fact and they re-learn within
+    ///   minutes from live traffic.
+    ///
+    /// Routes from real node broadcasts are untouched. Runs once, recorded in
+    /// `netrom_purges` so a later launch leaves the re-learned table alone.
+    private func purgeAPRSPollutedRouting(_ db: Database) throws {
+        let purgeID = "aprs-polluted-routing-2026-09-17"
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS netrom_purges (
+                id TEXT PRIMARY KEY,
+                appliedAt DOUBLE NOT NULL);
+            """)
+        let done = try Bool.fetchOne(
+            db, sql: "SELECT EXISTS(SELECT 1 FROM netrom_purges WHERE id = ?)",
+            arguments: [purgeID]) ?? false
+        guard !done else { return }
+
+        let aliasTest = """
+            %@ GLOB 'WIDE*' OR %@ GLOB 'TRACE*' OR %@ GLOB 'RELAY*'
+            """
+        let routeAlias = String(format: aliasTest, "origin", "origin", "origin")
+        let neighborAlias = String(format: aliasTest, "call", "call", "call")
+        try db.execute(sql: "DELETE FROM netrom_routes WHERE (\(routeAlias)) OR sourceType = 'inferred'")
+        try db.execute(sql: "DELETE FROM netrom_neighbors WHERE (\(neighborAlias)) OR sourceType = 'inferred'")
+        try db.execute(sql: "INSERT INTO netrom_purges (id, appliedAt) VALUES (?, ?)",
+                       arguments: [purgeID, Date().timeIntervalSince1970])
+        #if DEBUG
+        print("[NETROM:PERSISTENCE] Purged routing state written by the APRS faults")
+        #endif
     }
 
     /// Adds the sessionObsCount column to link_stats if it doesn't exist.

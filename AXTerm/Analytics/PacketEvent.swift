@@ -24,7 +24,12 @@ nonisolated struct PacketEvent: Hashable, Sendable {
     init(packet: Packet) {
         timestamp = packet.timestamp
         from = StationNormalizer.normalize(packet.fromDisplay)
-        to = StationNormalizer.normalize(packet.toDisplay)
+        // An APRS destination is a coordinate or a software name, so it is
+        // dropped rather than drawn. Every analytics path reads events through
+        // here, so one decision scopes the whole page.
+        to = APRSDestinationAddress.carriesDataRatherThanAStation(packet)
+            ? nil
+            : StationNormalizer.normalize(packet.toDisplay)
         via = packet.via.compactMap { StationNormalizer.normalize($0.display) }
         repeatedVia = packet.via.filter(\.repeated).compactMap { StationNormalizer.normalize($0.display) }
         frameType = packet.frameType
