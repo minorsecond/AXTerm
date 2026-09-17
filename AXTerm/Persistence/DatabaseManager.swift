@@ -811,6 +811,14 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 33, name: "addPathToAPRSMessages") { db in
             try addPathToAPRSMessages(db)
         }
+        // Written against a schema that stopped at four and arriving into
+        // one at thirty-three. GRDB runs migrations in registration order
+        // and records them by name, so the number is only ever what the
+        // telemetry says — and "v5" running thirty-fourth is a report
+        // nobody can act on.
+        registerReportedMigration(&migrator, version: 34, name: "createOutboundMessage") { db in
+            try createOutboundMessageTable(db)
+        }
         return migrator
     }()
 
