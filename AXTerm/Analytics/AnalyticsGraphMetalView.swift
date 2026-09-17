@@ -1493,11 +1493,37 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         circleVertexBuffer = makeCircleVertexBuffer(device: device)
 
         let sampleCount = view.sampleCount
+
+        // Every shader this view needs, resolved before anything is built
+        // from them.
+        //
+        // The do/catch below was written to let a broken pipeline degrade to
+        // an empty graph, and for a missing shader it could never run: Metal's
+        // validation layer asserts on a nil vertexFunction and aborts the
+        // process inside makeRenderPipelineState, so nothing is thrown and
+        // nothing is caught. A missing metallib took the whole app down on the
+        // first visit to Analytics instead of drawing nothing and saying why
+        // (2026-09-17).
+        //
+        // A library can be absent for reasons that have nothing to do with the
+        // operator: a build whose Metal sources did not compile, or a bundle
+        // deleted underneath a running copy. Neither is worth a crash.
         let library = device.makeDefaultLibrary()
+        guard let nodeVertex = library?.makeFunction(name: "graphNodeVertex"),
+              let edgeVertex = library?.makeFunction(name: "graphEdgeVertex"),
+              let solidFragment = library?.makeFunction(name: "graphSolidFragment") else {
+            self.nodePipeline = nil
+            self.edgePipeline = nil
+            Telemetry.capture(
+                message: "Metal shader library unavailable, graph will not render",
+                data: ["device": device.name, "hasLibrary": library != nil]
+            )
+            return
+        }
 
         let nodePipeline = MTLRenderPipelineDescriptor()
-        nodePipeline.vertexFunction = library?.makeFunction(name: "graphNodeVertex")
-        nodePipeline.fragmentFunction = library?.makeFunction(name: "graphSolidFragment")
+        nodePipeline.vertexFunction = nodeVertex
+        nodePipeline.fragmentFunction = solidFragment
         nodePipeline.colorAttachments[0].pixelFormat = view.colorPixelFormat
         nodePipeline.rasterSampleCount = sampleCount
         nodePipeline.colorAttachments[0].isBlendingEnabled = true
@@ -1509,8 +1535,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         nodePipeline.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
         let edgePipeline = MTLRenderPipelineDescriptor()
-        edgePipeline.vertexFunction = library?.makeFunction(name: "graphEdgeVertex")
-        edgePipeline.fragmentFunction = library?.makeFunction(name: "graphSolidFragment")
+        edgePipeline.vertexFunction = edgeVertex
+        edgePipeline.fragmentFunction = solidFragment
         edgePipeline.colorAttachments[0].pixelFormat = view.colorPixelFormat
         edgePipeline.rasterSampleCount = sampleCount
         edgePipeline.colorAttachments[0].isBlendingEnabled = true
