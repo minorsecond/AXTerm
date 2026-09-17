@@ -46,6 +46,68 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertFalse(controller.isInserted)
     }
 
+    // MARK: Insertion before the app exists
+
+    /// The launch crash of 2026-09-17.
+    ///
+    /// AppKit registers its own defaults from `+[NSApplication initialize]`,
+    /// which posts `UserDefaults.didChangeNotification` before NSApp exists.
+    /// Inserting a status item from that notification builds an NSWindow,
+    /// which calls `+sharedApplication`, which builds a second
+    /// NSApplication, which registers defaults, which posts again — until
+    /// AppKit traps. Nothing may go into the bar until there is an app.
+    func testNothingIsInsertedBeforeTheAppIsRunning() {
+        XCTAssertFalse(StatusItemController.shouldInsert(
+            runInMenuBar: true, appIsRunning: false),
+            "inserting before NSApp exists recurses into AppKit until it traps")
+        XCTAssertFalse(StatusItemController.shouldInsert(
+            runInMenuBar: nil, appIsRunning: false))
+        XCTAssertFalse(StatusItemController.shouldInsert(
+            runInMenuBar: false, appIsRunning: false))
+    }
+
+    /// The setting is still honoured once there is an app — the guard must
+    /// delay the menu bar item, not suppress it.
+    func testTheSettingIsHonouredOnceTheAppIsRunning() {
+        XCTAssertTrue(StatusItemController.shouldInsert(
+            runInMenuBar: true, appIsRunning: true))
+        XCTAssertFalse(StatusItemController.shouldInsert(
+            runInMenuBar: false, appIsRunning: true))
+    }
+
+    /// No stored preference means the shipped default, not "on".
+    func testAnUnsetPreferenceFallsBackToTheDefault() {
+        XCTAssertEqual(
+            StatusItemController.shouldInsert(runInMenuBar: nil, appIsRunning: true),
+            AppSettingsStore.defaultRunInMenuBar)
+    }
+
+    /// Constructing the controller is what `AXTermApp.init()` does, long
+    /// before `App.main()` brings NSApplication up. It must not reach for
+    /// the status bar on the way through.
+    func testConstructionDoesNotInsertOnItsOwn() {
+        let settings = AppSettingsStore(
+            defaults: UserDefaults(suiteName: "status-item-construction-tests")!)
+        settings.defaults.set(true, forKey: AppSettingsStore.runInMenuBarKey)
+        defer {
+            UserDefaults.standard.removePersistentDomain(
+                forName: "status-item-construction-tests")
+        }
+
+        let controller = StatusItemController(
+            client: PacketEngine(settings: settings),
+            settings: settings,
+            inspectionRouter: PacketInspectionRouter(),
+            defaults: settings.defaults)
+        defer { controller.setInserted(false) }
+
+        XCTAssertEqual(controller.isInserted,
+                       StatusItemController.shouldInsert(
+                           runInMenuBar: true,
+                           appIsRunning: NSApp != nil && NSApp.isRunning),
+                       "construction must defer to the same rule, not its own")
+    }
+
     func testTheMenuIsBuiltFromLiveStateWhenItOpens() async {
         let (controller, _) = makeController()
         controller.setInserted(true)

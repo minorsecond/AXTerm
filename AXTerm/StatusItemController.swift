@@ -65,14 +65,41 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             object: defaults, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.syncInsertion() }
         }
-        if NSApp != nil, NSApp.isRunning { syncInsertion() }
+        syncInsertion()
     }
 
+    /// The pure half: whether a status item belongs in the bar, given the
+    /// stored preference and whether there is yet an app to put it in.
+    ///
+    /// `appIsRunning` is not a nicety. AppKit registers its own defaults
+    /// from `+[NSApplication initialize]`, which posts
+    /// `UserDefaults.didChangeNotification`, so the observer in `init` runs
+    /// before NSApp exists. Inserting there builds an NSStatusBarWindow; an
+    /// NSWindow calls `+sharedApplication`; with no NSApp yet that
+    /// constructs a *second* NSApplication, whose own init registers
+    /// defaults, which posts again, which lands back here. AppKit traps on
+    /// the third instance (2026-09-17).
+    ///
+    /// Reachable only with "Run in menu bar" switched on, since that is the
+    /// only case that inserts anything — which made it a crash on every
+    /// launch, from a setting the operator could no longer get in to switch
+    /// back off.
+    static func shouldInsert(runInMenuBar: Bool?, appIsRunning: Bool) -> Bool {
+        guard appIsRunning else { return false }
+        return runInMenuBar ?? AppSettingsStore.defaultRunInMenuBar
+    }
+
+    /// Applies the operator's choice, once there is an app to apply it to.
+    ///
+    /// Answering false before launch is safe rather than merely quiet:
+    /// `setInserted(false)` with nothing inserted touches no AppKit at all.
+    /// And `NSApp.isRunning` is already true when
+    /// `didFinishLaunchingNotification` posts, so the observer in `init`
+    /// still inserts the item on an ordinary launch.
     private func syncInsertion() {
-        let wanted = defaults.object(forKey: AppSettingsStore.runInMenuBarKey) == nil
-            ? AppSettingsStore.defaultRunInMenuBar
-            : defaults.bool(forKey: AppSettingsStore.runInMenuBarKey)
-        setInserted(wanted)
+        setInserted(Self.shouldInsert(
+            runInMenuBar: defaults.object(forKey: AppSettingsStore.runInMenuBarKey) as? Bool,
+            appIsRunning: NSApp != nil && NSApp.isRunning))
     }
 
     func setInserted(_ inserted: Bool) {
