@@ -36,7 +36,20 @@ final class WinlinkSyncController: ObservableObject {
     /// nothing to do is one small fetch.
     static let periodicInterval: TimeInterval = 120
 
-    private let engine: WinlinkSyncEngine
+    /// Whether this controller has an engine to run, or only a reason it
+    /// has none.
+    ///
+    /// One value rather than an optional engine beside an optional reason:
+    /// two fields that must always agree are two fields a later change can
+    /// set independently.
+    private enum Mode {
+        case ready(WinlinkSyncEngine)
+        /// Sync cannot run on this device, and this is what to tell the
+        /// operator about it.
+        case unavailable(String)
+    }
+
+    private let mode: Mode
     private let isEnabled: @MainActor () -> Bool
     private var timerTask: Task<Void, Never>?
     /// Guards against a periodic tick landing on top of a session-triggered
@@ -48,7 +61,18 @@ final class WinlinkSyncController: ObservableObject {
     private var lastCompletedAt: Date?
 
     init(engine: WinlinkSyncEngine, isEnabled: @escaping @MainActor () -> Bool) {
-        self.engine = engine
+        self.mode = .ready(engine)
+        self.isEnabled = isEnabled
+    }
+
+    /// A controller that exists only to say why it cannot run.
+    ///
+    /// Handing back nil instead would take the status row away with it, and
+    /// the operator would be left with a switch that reads on and a mailbox
+    /// that never moves. That silence is the failure this file has already
+    /// been bitten by once.
+    init(unavailable reason: String, isEnabled: @escaping @MainActor () -> Bool) {
+        self.mode = .unavailable(reason)
         self.isEnabled = isEnabled
     }
 
@@ -57,6 +81,11 @@ final class WinlinkSyncController: ObservableObject {
     /// Returns nil when the store cannot sync — a device with no database
     /// has no mailbox to share, and that should be an absent feature rather
     /// than one that fails on use.
+    ///
+    /// A build that cannot open the CloudKit container is the other case,
+    /// and it gets a controller rather than a nil: there is a mailbox here,
+    /// the operator can still reach for the switch, and what they need back
+    /// is the reason it will not move.
     static func cloudKit(store: WinlinkSyncStore?,
                          identityStore: WinlinkIdentitySyncSource.Store? = nil,
                          contactStore: ContactStore? = nil,
@@ -74,7 +103,20 @@ final class WinlinkSyncController: ObservableObject {
             log("Unavailable — the mailbox database cannot sync on this device")
             return nil
         }
-        let transport = CloudKitSyncTransport()
+        guard let transport = CloudKitSyncTransport() else {
+            // Not nil: the operator can still switch sync on, and when they
+            // do they get a sentence explaining why nothing happens instead
+            // of a row that never appears.
+            let reason = "This build of AXTerm is not signed for iCloud, so sync cannot run."
+            Telemetry.breadcrumb(
+                category: "winlink.sync",
+                message: "Sync unavailable: the build carries no iCloud container entitlement",
+                data: ["container": CloudKitSyncTransport.defaultContainerID],
+                level: .warning)
+            log("Unavailable — this build carries no entitlement for "
+                + "\(CloudKitSyncTransport.defaultContainerID), so CloudKit cannot be opened")
+            return WinlinkSyncController(unavailable: reason, isEnabled: isEnabled)
+        }
 
         var sources = WinlinkMessageSyncSource.sources(store: store, deviceID: transport.deviceID)
         // The operator's own details. Without these the policy declares them
@@ -195,7 +237,7 @@ final class WinlinkSyncController: ObservableObject {
     /// of one. Reporting it as a failed sync put a red badge on the header
     /// for a condition the next attempt cleared, and made the operator press
     /// a button the app could have pressed itself (2026-08-28).
-    private func runWithRetries() async throws -> WinlinkSyncEngine.Report {
+    private func runWithRetries(_ engine: WinlinkSyncEngine) async throws -> WinlinkSyncEngine.Report {
         var attempt = 1
         while true {
             do {
@@ -231,6 +273,20 @@ final class WinlinkSyncController: ObservableObject {
             Self.log("Skipped — mailbox sync is switched off on this device")
             return
         }
+        let engine: WinlinkSyncEngine
+        switch mode {
+        case .ready(let ready):
+            engine = ready
+        case .unavailable(let reason):
+            status = .unavailable(reason)
+            Telemetry.breadcrumb(
+                category: "winlink.sync",
+                message: "Skipped: sync cannot run on this device",
+                data: ["reason": reason],
+                level: .warning)
+            Self.log("Skipped — \(reason)")
+            return
+        }
         guard inFlight == nil else {
             Telemetry.breadcrumb(
                 category: "winlink.sync",
@@ -249,7 +305,7 @@ final class WinlinkSyncController: ObservableObject {
                 self.lastCompletedAt = Date()
             }
             do {
-                let report = try await self.runWithRetries()
+                let report = try await self.runWithRetries(engine)
                 if report.skippedNoAccount {
                     // Not a failure. An operator in the field with no signal
                     // should see why nothing moved, not an error.
@@ -316,8 +372,8 @@ extension WinlinkSyncController.Status {
             return "Mail stays on this device. Nothing is sent to iCloud."
         case .syncing:
             return "Fetching changes from the operator's other devices, merging them, then pushing this device's."
-        case .unavailable:
-            return "Sync is on, but this device cannot reach the account. Mail is unaffected \u{2014} the app works alone and will catch up when the account returns."
+        case .unavailable(let why):
+            return "\(why)\n\nMail is unaffected: the app works alone, and sync picks up by itself if the obstacle clears."
         case .failed(let message, let at):
             return "The pass at \(Self.relative(at)) failed: \(message). Nothing was lost; the next pass retries from the last confirmed position."
         case .idle(let report, _):

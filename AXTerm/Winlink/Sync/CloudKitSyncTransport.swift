@@ -38,8 +38,15 @@ nonisolated final class CloudKitSyncTransport: WinlinkSyncTransport, @unchecked 
     private var zoneReady = false
     private let lock = NSLock()
 
-    init(containerID: String = defaultContainerID,
-         deviceID: String = WinlinkSyncDevice.identifier()) {
+    /// Nil when this build carries no entitlement for the container.
+    ///
+    /// Refused here rather than deferred to the first pass, because
+    /// `CKContainer(identifier:)` traps rather than throws: there is no
+    /// later point at which the call becomes recoverable, so it has to not
+    /// happen. See `CloudKitEntitlement`.
+    init?(containerID: String = defaultContainerID,
+          deviceID: String = WinlinkSyncDevice.identifier()) {
+        guard CloudKitEntitlement.permits(containerID) else { return nil }
         self.container = CKContainer(identifier: containerID)
         self.database = container.privateCloudDatabase
         self.zoneID = CKRecordZone.ID(zoneName: Self.zoneName, ownerName: CKCurrentUserDefaultName)

@@ -165,6 +165,40 @@ final class WinlinkSyncControllerTests: XCTestCase {
         XCTAssertTrue(status.detail.contains("re-read everything"))
     }
 
+    // MARK: Builds that cannot sync
+
+    /// A build with no iCloud entitlement has to say so.
+    ///
+    /// The alternative the app shipped with was worse than quiet: opening
+    /// the container crashed the process at launch. What replaced it must
+    /// not swing to the other extreme and leave the operator with a switch
+    /// that reads on and a mailbox that never moves.
+    func testABuildThatCannotSyncExplainsItself() async {
+        let reason = "This build of AXTerm is not signed for iCloud, so sync cannot run."
+        let controller = WinlinkSyncController(unavailable: reason, isEnabled: { true })
+
+        controller.onForeground()
+        try? await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(controller.status, .unavailable(reason))
+        XCTAssertEqual(controller.status.summary, reason)
+        XCTAssertTrue(controller.status.detail.contains(reason))
+    }
+
+    /// The off switch still wins, so the toolbar indicator — which hides
+    /// itself only on `.disabled` — does not start nagging about iCloud at
+    /// an operator who never asked for sync.
+    func testABuildThatCannotSyncStillReadsAsOffWhenTheSwitchIsOff() async {
+        let controller = WinlinkSyncController(
+            unavailable: "not signed for iCloud", isEnabled: { false })
+
+        controller.onForeground()
+        controller.syncNow()
+        try? await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(controller.status, .disabled)
+    }
+
     // MARK: Device identity
 
     /// The identifier must survive relaunches, or every restart would look
