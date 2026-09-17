@@ -34,6 +34,25 @@ nonisolated enum CoverageEstimate {
     /// and antennas with ladders; a UA from last month proves last month.
     static let evidenceWindow: TimeInterval = 14 * 24 * 3600
 
+    /// What proved the far end decoded us.
+    ///
+    /// The two modes leave different evidence and the difference is not
+    /// cosmetic. Connected mode needs someone willing to answer, so the ring
+    /// only grows where the operator went looking. A digipeat arrives unasked
+    /// with every beacon, so the APRS ring fills in on its own and says more
+    /// about where our signal lands than about who will talk to us.
+    ///
+    /// Kept apart rather than pooled: one ring built from both would answer
+    /// neither question.
+    enum Evidence: Equatable, Sendable {
+        /// A UA, DM or FRMR to our frames: the far end decoded us and said so.
+        case answered
+        /// A digipeater put one of our own frames back on the air. Proof it
+        /// decoded the frame, and the only evidence that costs the operator
+        /// nothing to collect.
+        case digipeated
+    }
+
     struct Ring: Equatable, Sendable {
         /// Half the stations that answered are inside this.
         var typicalKm: Double
@@ -41,6 +60,7 @@ nonisolated enum CoverageEstimate {
         var reachKm: Double
         var stationCount: Int
         var farthestCallsign: String
+        var evidence: Evidence = .answered
 
         /// Tooltip prose: what the rings mean and where they came from.
         var summary: String { summary(inMiles: true) }
@@ -48,15 +68,28 @@ nonisolated enum CoverageEstimate {
         func summary(inMiles: Bool) -> String {
             let reach = DistanceDisplay.string(kilometres: reachKm, inMiles: inMiles)
             let typical = DistanceDisplay.string(kilometres: typicalKm, inMiles: inMiles)
+            let source: String
+            switch evidence {
+            case .answered:
+                source = String(
+                    format: "measured from the %d station%@ that answered this station "
+                    + "directly (a UA, DM or FRMR to our frames proves they decoded us; "
+                    + "calls that went unanswered do not count)",
+                    stationCount, stationCount == 1 ? "" : "s")
+            case .digipeated:
+                source = String(
+                    format: "measured from the %d digipeater%@ that put our own frames back "
+                    + "on the air (repeating a frame proves it decoded the frame; a station "
+                    + "that only heard us relayed by somebody else does not count)",
+                    stationCount, stationCount == 1 ? "" : "s")
+            }
             return String(
-                format: "Estimated coverage, measured from the %d station%@ that "
-                + "answered this station directly (a UA, DM or FRMR to our frames "
-                + "proves they decoded us; calls that went unanswered do not count). "
-                + "Inner ring: half of them are within "
-                + "%@. Outer ring: the farthest answer came from %@ at %@. "
-                + "Measurements, not a propagation model — terrain will bend both.",
-                stationCount, stationCount == 1 ? "" : "s",
-                typical, farthestCallsign, reach)
+                format: "Estimated coverage, %@. Inner ring: half of them are within %@. "
+                + "Outer ring: the farthest %@ came from %@ at %@. Measurements, not a "
+                + "propagation model \u{2014} terrain will bend both.",
+                source, typical,
+                evidence == .digipeated ? "repeat" : "answer",
+                farthestCallsign, reach)
         }
     }
 
@@ -110,5 +143,45 @@ nonisolated enum CoverageEstimate {
             reachKm: farthest.km,
             stationCount: sorted.count,
             farthestCallsign: farthest.callsign)
+    }
+
+    /// Coverage from APRS evidence: who put our own frames back on the air.
+    ///
+    /// The connected-mode ring above refuses digipeated evidence, and is
+    /// right to: an answer that arrived through a digipeater proves the
+    /// digipeater's coverage rather than ours. Here the digipeater *is* the
+    /// measurement. It heard our beacon and repeated it, so it decoded us,
+    /// and its position is a point inside our footprint by the same standard
+    /// the other ring applies to a UA.
+    ///
+    /// It also fills in on its own. The other ring only grows where the
+    /// operator went looking for someone to talk to; this one arrives with
+    /// every beacon whether anyone is listening or not.
+    ///
+    /// Nothing weaker counts. A station that merely transmitted soon after
+    /// we did is `likely`, not proof, and the tracker that grades it says so
+    /// — pooling that in here would be the overclaiming both it and this
+    /// file exist to avoid.
+    static func digipeatRing(repeaters: [String: Date],
+                             positions: [String: GreatCircle.Point],
+                             observer: GreatCircle.Point,
+                             now: Date = Date()) -> Ring? {
+        let cutoff = now.addingTimeInterval(-evidenceWindow)
+        var distances: [(callsign: String, km: Double)] = []
+        for (callsign, at) in repeaters {
+            let call = callsign.trimmingCharacters(in: .whitespaces).uppercased()
+            guard at >= cutoff, !call.isEmpty, let position = positions[call] else { continue }
+            distances.append((call, GreatCircle.kilometres(from: observer, to: position)))
+        }
+
+        guard !distances.isEmpty else { return nil }
+        let sorted = distances.sorted { $0.km < $1.km }
+        let farthest = sorted[sorted.count - 1]
+        return Ring(
+            typicalKm: sorted[(sorted.count - 1) / 2].km,
+            reachKm: farthest.km,
+            stationCount: sorted.count,
+            farthestCallsign: farthest.callsign,
+            evidence: .digipeated)
     }
 }

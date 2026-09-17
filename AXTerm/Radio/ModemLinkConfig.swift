@@ -74,9 +74,19 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
     /// absent from the CI-V reference guide, which never mentions it. `E0` is
     /// the USB port's controller; the network link has its own. An operator
     /// who has deliberately set some other address still gets it.
-    var effectiveCIVControllerAddress: UInt8 {
-        rigLink == .lan && civControllerAddress == 0xE0 ? 0xE1 : civControllerAddress
-    }
+    /// The controller address to speak from. The operator's choice, always.
+    ///
+    /// This used to force 0xE1 over the network link, on a measurement taken
+    /// against this radio on 2026-09-13. Merged 2026-09-17 and it stopped
+    /// CI-V dead: every command went out as `FE FE A4 E1 ...`, the radio
+    /// echoed each one back and answered none, so PTT timed out and the
+    /// station could not transmit at all. From 0xE0 the same radio answers
+    /// in milliseconds.
+    ///
+    /// Whatever was true in September, it is not true of this radio now, and
+    /// a hard-coded override cannot be argued with from the settings window.
+    /// The address is configurable; a station that needs 0xE1 can say so.
+    var effectiveCIVControllerAddress: UInt8 { civControllerAddress }
     var pttMethod: ModemPTTMethod = .civ
 
     var txDelayMs = 300

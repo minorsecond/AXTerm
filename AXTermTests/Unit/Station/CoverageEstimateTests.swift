@@ -132,4 +132,84 @@ final class CoverageEstimateTests: XCTestCase {
         XCTAssertEqual(ring?.stationCount, 1)
         XCTAssertEqual(ring!.typicalKm, ring!.reachKm, accuracy: 0.001)
     }
+
+    // MARK: - APRS: who put our frames back on the air
+
+    private func here() -> GreatCircle.Point {
+        GreatCircle.Point(latitude: 39.6125, longitude: -104.7328)
+    }
+
+    /// A digipeater that repeated our beacon decoded our beacon. That is the
+    /// same standard the connected-mode ring applies to a UA, and it is the
+    /// only evidence an APRS station collects without going looking for it.
+    func testADigipeaterThatRepeatedUsIsAMeasuredPoint() {
+        let now = Date()
+        let ring = CoverageEstimate.digipeatRing(
+            repeaters: ["AD1CT": now, "WQ8M-9": now],
+            positions: [
+                "AD1CT": GreatCircle.Point(latitude: 39.6227, longitude: -104.7726),
+                "WQ8M-9": GreatCircle.Point(latitude: 39.5580, longitude: -104.7942),
+            ],
+            observer: here(), now: now)
+
+        XCTAssertEqual(ring?.stationCount, 2)
+        XCTAssertEqual(ring?.evidence, .digipeated)
+        XCTAssertEqual(ring?.farthestCallsign, "WQ8M-9")
+    }
+
+    /// Kept apart from the connected-mode ring on purpose. One answers "who
+    /// will talk to me", the other "where does my beacon land", and a single
+    /// figure built from both answers neither.
+    func testTheTwoKindsOfRingSayDifferentThings() throws {
+        let now = Date()
+        let ring = CoverageEstimate.digipeatRing(
+            repeaters: ["AD1CT": now],
+            positions: ["AD1CT": GreatCircle.Point(latitude: 39.6227, longitude: -104.7726)],
+            observer: here(), now: now)
+
+        let summary = try XCTUnwrap(ring?.summary(inMiles: true))
+        XCTAssertTrue(summary.contains("digipeater"), summary)
+        XCTAssertTrue(summary.contains("repeating a frame proves"), summary)
+        XCTAssertFalse(summary.contains("UA, DM or FRMR"),
+                       "that is the other ring's evidence, and saying so here would be a lie")
+    }
+
+    /// Propagation shifts with seasons and antennas with ladders. A repeat
+    /// from last month proves last month.
+    func testStaleRepeatsDoNotCount() {
+        let now = Date()
+        let old = now.addingTimeInterval(-CoverageEstimate.evidenceWindow - 60)
+        XCTAssertNil(CoverageEstimate.digipeatRing(
+            repeaters: ["AD1CT": old],
+            positions: ["AD1CT": GreatCircle.Point(latitude: 39.6227, longitude: -104.7726)],
+            observer: here(), now: now))
+    }
+
+    /// A repeater we cannot place tells us nothing about distance, so it is
+    /// not a measurement. Better no ring than a ring drawn round the ones we
+    /// happen to have coordinates for and claimed as all of them.
+    func testARepeaterWithNoKnownPositionIsNotCounted() {
+        let now = Date()
+        let ring = CoverageEstimate.digipeatRing(
+            repeaters: ["AD1CT": now, "NOWHERE": now],
+            positions: ["AD1CT": GreatCircle.Point(latitude: 39.6227, longitude: -104.7726)],
+            observer: here(), now: now)
+        XCTAssertEqual(ring?.stationCount, 1)
+    }
+
+    func testNothingHasRepeatedUsYet() {
+        XCTAssertNil(CoverageEstimate.digipeatRing(
+            repeaters: [:], positions: [:], observer: here()))
+    }
+
+    /// Callsigns arrive from the air in whatever case the sender used.
+    func testCallsignsAreMatchedWithoutCaringAboutCase() {
+        let now = Date()
+        let ring = CoverageEstimate.digipeatRing(
+            repeaters: [" ad1ct ": now],
+            positions: ["AD1CT": GreatCircle.Point(latitude: 39.6227, longitude: -104.7726)],
+            observer: here(), now: now)
+        XCTAssertEqual(ring?.stationCount, 1)
+        XCTAssertEqual(ring?.farthestCallsign, "AD1CT")
+    }
 }

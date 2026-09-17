@@ -280,20 +280,24 @@ final class IcomLANWiFiRegressionTests: XCTestCase {
         }
     }
 
-    /// The WLAN answers E1. A cable keeps E0, and a deliberate choice wins.
-    func testTheWLANLinkSpeaksFromE1() {
-        var lan = ModemLinkConfig()
-        lan.rigLink = .lan
-        XCTAssertEqual(lan.effectiveCIVControllerAddress, 0xE1)
+    /// The link does not get to pick the controller address.
+    ///
+    /// An override forcing 0xE1 over the network link shipped on
+    /// 2026-09-17 and stopped CI-V dead: every command went out from E1,
+    /// the radio echoed each one and answered none, PTT timed out, and the
+    /// station could not key at all. The address is the operator's setting
+    /// and nothing may quietly substitute another.
+    func testTheLinkDoesNotSubstituteAControllerAddress() {
+        for link in [ModemRigLink.lan, .usb] {
+            var config = ModemLinkConfig()
+            config.rigLink = link
+            XCTAssertEqual(config.effectiveCIVControllerAddress, 0xE0,
+                           "\(link) must not rewrite the default")
 
-        var usb = ModemLinkConfig()
-        usb.rigLink = .usb
-        XCTAssertEqual(usb.effectiveCIVControllerAddress, 0xE0)
-
-        var chosen = ModemLinkConfig()
-        chosen.rigLink = .lan
-        chosen.civControllerAddress = 0xE4
-        XCTAssertEqual(chosen.effectiveCIVControllerAddress, 0xE4, "an explicit address is the operator's")
+            config.civControllerAddress = 0xE4
+            XCTAssertEqual(config.effectiveCIVControllerAddress, 0xE4,
+                           "\(link) must not rewrite an explicit choice either")
+        }
     }
 
     /// `1F` and `23` take a subcommand; without them in the table their
