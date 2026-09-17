@@ -69,6 +69,20 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
         dsn != nil && enabledByUser
     }
 
+    /// Whether a DSN is configured, for callers that want only that one bit.
+    ///
+    /// A `static let`, so it is resolved once and then free to read. The
+    /// settings pane shows it, and a SwiftUI body runs on every redraw —
+    /// building a whole configuration there is what put a `git` subprocess
+    /// on the main thread in the first place.
+    ///
+    /// Neither the Info.plist nor the environment changes while the process
+    /// runs, so there is nothing to invalidate.
+    static let isDSNConfigured: Bool = resolveDSN(
+        environmentValue: ProcessInfo.processInfo.environment[environmentVariableDSNKey],
+        infoPlistValue: InfoPlistReader(bundle: .main).string(forKey: infoPlistDSNKey)
+    ) != nil
+
     // MARK: - Loading
 
     /// Load configuration from Info.plist, environment variables, and user settings.
@@ -147,19 +161,25 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
         return nil
     }
 
+    /// The commit this build came from, or nil when nothing recorded one.
+    ///
+    /// Build-time only. A fourth branch used to shell out to `git rev-parse`
+    /// in the working directory, which never worked and eventually crashed
+    /// the app: every scheme sets `useCustomWorkingDirectory = "NO"`, so a
+    /// launched app's working directory is `/`, where there is no checkout to
+    /// read. It returned nil after forking a process, and it did that from
+    /// inside a SwiftUI body (2026-09-16).
+    ///
+    /// To tag developer builds, set `SENTRY_GIT_COMMIT` at build time the way
+    /// CI already sets `GITHUB_SHA`. The xcconfigs ship it as `unknown`,
+    /// which `sanitizeGitCommit` reads as absent.
     static func resolveGitCommit(infoPlistValue: String?, environmentVariables: [String: String]) -> String? {
         for key in environmentVariableGitCommitKeys {
             if let value = sanitizeGitCommit(environmentVariables[key]) {
                 return value
             }
         }
-        if let value = sanitizeGitCommit(infoPlistValue) {
-            return value
-        }
-        if let value = readGitCommitFromRepository() {
-            return value
-        }
-        return nil
+        return sanitizeGitCommit(infoPlistValue)
     }
 
     // MARK: - Private Helpers
@@ -229,38 +249,6 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
             return nil
         }
         return value
-    }
-
-    /// Reads the commit from the checkout the app was launched from.
-    ///
-    /// Only ever true for a developer build run out of the repository, which
-    /// is the only place a working tree exists. iOS has no subprocesses at
-    /// all, so there the release comes from the Info.plist alone — the same
-    /// path a shipped Mac build takes.
-    private static func readGitCommitFromRepository() -> String? {
-        #if os(macOS)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["rev-parse", "--short=12", "HEAD"]
-        process.currentDirectoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-
-        let stdout = Pipe()
-        process.standardOutput = stdout
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let data = stdout.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8)
-            return sanitizeGitCommit(output)
-        } catch {
-            return nil
-        }
-        #else
-        return nil
-        #endif
     }
 
     private static func clampSampleRate(_ rate: Double) -> Double {

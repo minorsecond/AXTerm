@@ -192,6 +192,33 @@ final class ObservabilityTests: XCTestCase {
         XCTAssertEqual(resolved, "plist-hash")
     }
 
+    /// Nothing supplies a commit, so nothing is reported.
+    ///
+    /// The point is what does *not* happen: this used to fork `git` and wait
+    /// on it, and when a SwiftUI body asked for a configuration the wait
+    /// re-entered the display cycle and took the app down.
+    func testResolveGitCommit_isNilWhenNothingRecordedOne() {
+        XCTAssertNil(SentryConfiguration.resolveGitCommit(
+            infoPlistValue: nil, environmentVariables: [:]))
+    }
+
+    /// The value the xcconfigs actually ship. It must read as absent rather
+    /// than tagging every build with the string "unknown".
+    func testResolveGitCommit_treatsTheShippedPlaceholderAsAbsent() {
+        XCTAssertNil(SentryConfiguration.resolveGitCommit(
+            infoPlistValue: "unknown", environmentVariables: [:]))
+    }
+
+    /// A settings row reads this on every redraw, so it has to be a plain
+    /// read of an already-resolved value.
+    func testIsDSNConfigured_matchesTheLoadedConfiguration() {
+        let loaded = SentryConfiguration.load(
+            infoPlist: InfoPlistReader(bundle: .main),
+            environmentVariables: ProcessInfo.processInfo.environment
+        )
+        XCTAssertEqual(SentryConfiguration.isDSNConfigured, loaded.dsn != nil)
+    }
+
     // MARK: - Packet Payload Tests
 
     func testPacketSentryPayload_redactsContentsByDefault() {

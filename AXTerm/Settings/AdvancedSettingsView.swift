@@ -59,7 +59,10 @@ struct AdvancedSettingsView: View {
                 Toggle("Send packet contents", isOn: $settings.sentrySendPacketContents)
                     .disabled(!settings.sentryEnabled)
                 
-                Text(SentryConfiguration.load(settings: settings).dsn == nil ? "DSN: Not configured" : "DSN: Configured")
+                // The one bit this row needs, read from a value resolved
+                // once. Loading a whole configuration here ran on every
+                // redraw of the pane.
+                Text(SentryConfiguration.isDSNConfigured ? "DSN: Configured" : "DSN: Not configured")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
