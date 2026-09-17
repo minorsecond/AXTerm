@@ -51,6 +51,16 @@ nonisolated enum CoverageEstimate {
         /// decoded the frame, and the only evidence that costs the operator
         /// nothing to collect.
         case digipeated
+        /// A frame of theirs reached us with nothing between: their
+        /// transmitter to our receiver. The other direction, and usually the
+        /// longer one — a hilltop digipeater is heard from well outside the
+        /// range of the home station listening to it.
+        case heardDirect
+
+        /// Which way the signal travelled. The two directions are different
+        /// distances and a ring that did not say which it measured would be
+        /// read as the other one.
+        var isTransmit: Bool { self != .heardDirect }
     }
 
     struct Ring: Equatable, Sendable {
@@ -82,13 +92,26 @@ nonisolated enum CoverageEstimate {
                     + "on the air (repeating a frame proves it decoded the frame; a station "
                     + "that only heard us relayed by somebody else does not count)",
                     stationCount, stationCount == 1 ? "" : "s")
+            case .heardDirect:
+                source = String(
+                    format: "measured from the %d station%@ we decoded with no digipeater in "
+                    + "the path (a repeated frame proves the digipeater reached us and says "
+                    + "nothing about who sent it, so it does not count)",
+                    stationCount, stationCount == 1 ? "" : "s")
+            }
+            let farthestLabel: String
+            switch evidence {
+            case .answered: farthestLabel = "answer"
+            case .digipeated: farthestLabel = "repeat"
+            case .heardDirect: farthestLabel = "decode"
             }
             return String(
-                format: "Estimated coverage, %@. Inner ring: half of them are within %@. "
+                format: "%@, %@. Inner ring: half of them are within %@. "
                 + "Outer ring: the farthest %@ came from %@ at %@. Measurements, not a "
                 + "propagation model \u{2014} terrain will bend both.",
+                evidence.isTransmit ? "Estimated coverage" : "Estimated receive range",
                 source, typical,
-                evidence == .digipeated ? "repeat" : "answer",
+                farthestLabel,
                 farthestCallsign, reach)
         }
     }
@@ -166,9 +189,33 @@ nonisolated enum CoverageEstimate {
                              positions: [String: GreatCircle.Point],
                              observer: GreatCircle.Point,
                              now: Date = Date()) -> Ring? {
+        ring(from: repeaters, evidence: .digipeated, positions: positions,
+             observer: observer, now: now)
+    }
+
+    /// The receive ring: how far this station can hear, from the stations it
+    /// decoded with nothing in between.
+    ///
+    /// The other direction entirely, and it is the one that fills in fastest,
+    /// because every station on the channel contributes to it whether or not
+    /// it has ever heard us.
+    static func receiveRing(heardDirect: [String: Date],
+                            positions: [String: GreatCircle.Point],
+                            observer: GreatCircle.Point,
+                            now: Date = Date()) -> Ring? {
+        ring(from: heardDirect, evidence: .heardDirect, positions: positions,
+             observer: observer, now: now)
+    }
+
+    /// Shared arithmetic for the rings built from "who, and when last".
+    private static func ring(from sightings: [String: Date],
+                             evidence: Evidence,
+                             positions: [String: GreatCircle.Point],
+                             observer: GreatCircle.Point,
+                             now: Date) -> Ring? {
         let cutoff = now.addingTimeInterval(-evidenceWindow)
         var distances: [(callsign: String, km: Double)] = []
-        for (callsign, at) in repeaters {
+        for (callsign, at) in sightings {
             let call = callsign.trimmingCharacters(in: .whitespaces).uppercased()
             guard at >= cutoff, !call.isEmpty, let position = positions[call] else { continue }
             distances.append((call, GreatCircle.kilometres(from: observer, to: position)))
@@ -182,6 +229,36 @@ nonisolated enum CoverageEstimate {
             reachKm: farthest.km,
             stationCount: sorted.count,
             farthestCallsign: farthest.callsign,
-            evidence: .digipeated)
+            evidence: evidence)
+    }
+}
+
+/// Which coverage rings the map draws, and in what order.
+///
+/// The two rings measure different things and are collected differently, so
+/// the operator chooses them separately: a station with both radios can show
+/// the connected-mode footprint, the APRS one, both, or neither. Drawn
+/// together they have to be told apart, which is why evidence travels with
+/// each ring rather than being inferred from its position in the list.
+nonisolated enum CoverageRingSelection {
+
+    /// The rings to draw, answered first so the connected-mode ring keeps the
+    /// colour it has always had when it is the only one on the map.
+    ///
+    /// Order is fixed rather than following which is larger: a ring that
+    /// changed colour when the other one grew past it would be unreadable.
+    static func rings(answered: CoverageEstimate.Ring?,
+                      showsAnswered: Bool,
+                      digipeated: CoverageEstimate.Ring?,
+                      showsDigipeated: Bool,
+                      received: [CoverageEstimate.Ring] = [],
+                      showsReceived: Bool = false) -> [CoverageEstimate.Ring] {
+        var rings: [CoverageEstimate.Ring] = []
+        if showsAnswered, let answered { rings.append(answered) }
+        if showsDigipeated, let digipeated { rings.append(digipeated) }
+        // The receive rings last, so a transmit ring keeps its colour and its
+        // place whatever the other direction is doing.
+        if showsReceived { rings.append(contentsOf: received) }
+        return rings
     }
 }

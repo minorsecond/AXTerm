@@ -171,6 +171,22 @@ struct MapLegend: View {
     /// True when coverage rings are on the map, so the legend explains
     /// what each ring means without the operator having to find the chip.
     var showsCoverage = false
+    /// Which coverage rings are on the map. With both drawn the legend has to
+    /// name each one's evidence and colour, or the two purple circles are
+    /// unexplained.
+    var coverageEvidence: [CoverageEstimate.Evidence] = [.answered]
+
+    /// What each ring measured, for the legend's tooltip.
+    private func coverageLegendHelp(_ evidence: CoverageEstimate.Evidence) -> String {
+        switch evidence {
+        case .answered:
+            return "The inner ring: half the stations that answered you directly are inside it. An answer \u{2014} a UA, DM or FRMR to your frames \u{2014} proves that station decoded your transmitter, so it is a measured point in your footprint. Where your signal reliably works."
+        case .digipeated:
+            return "The inner ring: half the digipeaters that put your own beacons back on the air are inside it. Repeating a frame proves the repeater decoded it, so each one is a measured point in your footprint. This ring fills in on its own with every beacon."
+        case .heardDirect:
+            return "The other direction: how far you can hear. Half the stations you decoded with no digipeater in the path are inside this ring. A repeated frame proves the digipeater reached you and says nothing about who sent it, so it does not count here."
+        }
+    }
     /// True when the node directory layer is drawn, so the diamond shape
     /// is explained where the colours are.
     var showsNodes = false
@@ -334,25 +350,31 @@ struct MapLegend: View {
 
             if showsCoverage {
                 Divider().padding(.vertical, 1)
-                HStack(spacing: 6) {
-                    Circle()
-                        .strokeBorder(.blue.opacity(0.8), lineWidth: 1.5)
-                        .frame(width: 14, height: 14)
-                    Text("Typical coverage")
-                        .font(.caption)
-                    Spacer(minLength: 0)
+                ForEach(coverageEvidence, id: \.self) { evidence in
+                    let tint = evidence.ringColor
+                    let qualifier = coverageEvidence.count > 1
+                        ? " (" + evidence.ringLabel.lowercased() + ")"
+                        : ""
+                    HStack(spacing: 6) {
+                        Circle()
+                            .strokeBorder(tint.opacity(0.8), lineWidth: 1.5)
+                            .frame(width: 14, height: 14)
+                        Text((evidence.isTransmit ? "Typical coverage" : "Typical hearing") + qualifier)
+                            .font(.caption)
+                        Spacer(minLength: 0)
+                    }
+                    .help(coverageLegendHelp(evidence))
+                    HStack(spacing: 6) {
+                        Circle()
+                            .strokeBorder(tint.opacity(0.6),
+                                          style: StrokeStyle(lineWidth: 1.2, dash: [2, 1.5]))
+                            .frame(width: 14, height: 14)
+                        Text((evidence.isTransmit ? "Farthest proof" : "Farthest decode") + qualifier)
+                            .font(.caption)
+                        Spacer(minLength: 0)
+                    }
+                    .help("The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach \u{2014} not a promise, and not a propagation model. Terrain will bend both rings.")
                 }
-                .help("The inner ring: half the stations that answered you directly are inside it. An answer \u{2014} a UA, DM or FRMR to your frames \u{2014} proves that station decoded your transmitter, so it is a measured point in your footprint. Where your signal reliably works.")
-                HStack(spacing: 6) {
-                    Circle()
-                        .strokeBorder(.blue.opacity(0.6),
-                                      style: StrokeStyle(lineWidth: 1.2, dash: [2, 1.5]))
-                        .frame(width: 14, height: 14)
-                    Text("Farthest answer")
-                        .font(.caption)
-                    Spacer(minLength: 0)
-                }
-                .help("The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach \u{2014} not a promise, and not a propagation model. Terrain will bend both rings.")
             }
 
             // A fixed width, not a maximum. Under the legend's `fixedSize()`

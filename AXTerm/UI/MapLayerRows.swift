@@ -88,6 +88,7 @@ struct MapLayerToggles: View {
     @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = false
     @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = false
     @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = true
+    @AppStorage("stations.showsAPRSCoverageRing") private var showsAPRSCoverageRing = true
     @AppStorage("stations.hidesDistantStations") private var hidesDistantStations = false
     @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = true
     @AppStorage("stations.showsObjects") private var showsObjects = true
@@ -258,6 +259,15 @@ struct MapLayerToggles: View {
                       + "measured it.")
             }
 
+            layer("Coverage Rings", "circle.dashed",
+                  isOn: $showsAPRSCoverageRing,
+                  help: "Both directions of this radio's reach. Purple is how far you are "
+                      + "heard: the digipeaters that put your own beacons back on the air, "
+                      + "which proves they decoded you. Teal is how far you hear: the "
+                      + "stations you decoded with no digipeater in the path. They are "
+                      + "rarely the same distance, and the purple one fills in on its own "
+                      + "with every beacon. Measurements, not a propagation model.")
+
             layer("Objects & Hazards", "exclamationmark.triangle.fill",
                   isOn: $showsObjects,
                   caption: status.objectCaption,
@@ -272,10 +282,12 @@ struct MapLayerToggles: View {
         if scope.includes(.ax25) {
             layer("Coverage Rings", "circle.dashed",
                   isOn: $showsCoverageRing,
-                  help: "Rings drawn from the stations that answered you directly \u{2014} a UA, DM "
-                      + "or FRMR to your frames proves they decoded you. Those are "
-                      + "connected-mode replies, which is why this sits with the packet "
-                      + "layers. Measurements, not a propagation model.")
+                  help: "Both directions of this radio's reach. Blue is how far you are "
+                      + "heard: the stations that answered you directly, since a UA, DM or "
+                      + "FRMR to your frames proves they decoded you. It only grows where "
+                      + "you went looking for someone to talk to. Teal is how far you hear: "
+                      + "the stations you decoded with no digipeater in the path. "
+                      + "Measurements, not a propagation model.")
 
             layer("Observed Paths", "point.topleft.down.to.point.bottomright.curvepath",
                   isOn: $showsPaths,

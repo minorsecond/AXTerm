@@ -70,6 +70,12 @@ struct ContentView: View {
     /// Held here rather than in the map so an answer that arrives after the
     /// operator navigates away is still there when they come back.
     @StateObject private var aprsPings = APRSPingTracker()
+    /// Who has decoded us and who we have decoded, for the map's coverage
+    /// rings. Seeded from history rather than built live only — see
+    /// `CoverageEvidenceStore`.
+    @StateObject private var coverageEvidence = CoverageEvidenceStore()
+    /// Keeps the coverage store fed while history loads — see its `seed`.
+    @State private var loadedHistoryObserver: AnyCancellable?
     /// Downloaded terrain. Owned here because both the map's predicted-path
     /// layer and the station pages read it, and two handles to one elevation
     /// database would warm two caches for the same tiles.
@@ -1882,6 +1888,11 @@ struct ContentView: View {
                 aprsPings.record(ping: ask.callsign, query: ask.token, reach: ask.reach)
             },
             pingState: { aprsPings.outcome(for: $0) },
+            // Both directions of coverage, narrowed to the radios that carry
+            // each family: a station heard on 2 m APRS says nothing about
+            // what the packet radio on another band can hear.
+            coverageEvidence: MapCoverageEvidence(coverageEvidence.evidence,
+                                                  families: radioFamilies),
             // What we have heard from the station, so a ping goes out at a
             // reach that can actually span the gap.
             reachAdvice: { [weak client] call in
@@ -1941,6 +1952,22 @@ struct ContentView: View {
                 call.uppercased().split(separator: "-").first.map(String.init) == mine
             }
             aprsPings.follow(client.packetPublisher)
+            // Coverage has two directions and both are measured from frames
+            // already on disk, so the rings start from the history rather
+            // than waiting for the next beacon to come back.
+            coverageEvidence.isOurs = { call in
+                call.uppercased().split(separator: "-").first.map(String.init) == mine
+            }
+            coverageEvidence.seed(client.packets)
+            coverageEvidence.follow(client.packetPublisher)
+            // History is read after launch, so the buffer here may still be
+            // empty or hold only what arrived in the last second. Seeding is
+            // idempotent and only rescans when the run has at least doubled.
+            loadedHistoryObserver = client.$packets
+                .receive(on: DispatchQueue.main)
+                .sink { [weak store = coverageEvidence] packets in
+                    store?.seed(packets)
+                }
             aprsPings.startExpiry()
             client.aprsMessaging?.onDirectedTraffic = { [weak pings = aprsPings] call in
                 pings?.noteDirectedReply(from: call)

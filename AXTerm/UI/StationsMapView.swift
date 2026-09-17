@@ -78,6 +78,9 @@ struct StationsMapView: View {
     /// What became of the last ping to a station, for the card to report.
     /// Nil leaves the card silent about it.
     var pingState: ((String) -> APRSPingTracker.Ping?)?
+    /// Who has decoded us and who we have decoded, per radio family. Both
+    /// directions of coverage are measured from these.
+    var coverageEvidence: MapCoverageEvidence = MapCoverageEvidence()
 
     /// What we have heard from a station, for judging how far to ask it.
     /// A closure rather than the station list itself: this view already takes
@@ -175,6 +178,7 @@ struct StationsMapView: View {
     /// draw only when at least one station has answered us directly, and
     /// knowing one's own footprint is half of why a coverage map exists.
     @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = true
+    @AppStorage("stations.showsAPRSCoverageRing") private var showsAPRSCoverageRing = true
     /// Whether to place a station at its own transmitted APRS fix (on) or at
     /// its licence/registry point (off). Only matters for stations that have
     /// both; the default prefers the station's own beacon.
@@ -882,15 +886,48 @@ struct StationsMapView: View {
         entries.filter { $0.isNodeAlias && $0.isPlaced }.count
     }
 
-    /// Measured coverage, or nil when the toggle is off or nothing has
-    /// answered this station directly.
-    private var coverageRing: CoverageEstimate.Ring? {
-        guard showsCoverageRing, let observer else { return nil }
-        return CoverageEstimate.ring(
-            paths: networkPaths,
-            ownAddresses: [myCallsign],
-            positions: networkPositions,
-            observer: observer)
+    /// The coverage rings to draw: the connected-mode footprint, the APRS
+    /// one, both, or neither, according to the switches under each radio.
+    ///
+    /// Each is computed only when its switch is on. Both are measurements of
+    /// this station's own transmitter, from different evidence, so they are
+    /// kept apart rather than pooled into one ring that would answer neither
+    /// question.
+    private var coverageRings: [CoverageEstimate.Ring] {
+        guard let observer else { return [] }
+        let answered = showsCoverageRing
+            ? CoverageEstimate.ring(
+                paths: networkPaths,
+                ownAddresses: [myCallsign],
+                positions: networkPositions,
+                observer: observer)
+            : nil
+        let digipeated = showsAPRSCoverageRing
+            ? CoverageEstimate.digipeatRing(
+                repeaters: coverageEvidence.repeatedUsAPRS,
+                positions: networkPositions,
+                observer: observer)
+            : nil
+        // Hearing is the other direction and it is measured per family: a
+        // station heard direct on 2 m APRS says nothing about what the packet
+        // radio on another band can hear.
+        var received: [CoverageEstimate.Ring] = []
+        if showsCoverageRing,
+           let ax25 = CoverageEstimate.receiveRing(
+            heardDirect: coverageEvidence.heardDirectAX25,
+            positions: networkPositions, observer: observer) {
+            received.append(ax25)
+        }
+        if showsAPRSCoverageRing,
+           let aprs = CoverageEstimate.receiveRing(
+            heardDirect: coverageEvidence.heardDirectAPRS,
+            positions: networkPositions, observer: observer) {
+            received.append(aprs)
+        }
+        return CoverageRingSelection.rings(
+            answered: answered, showsAnswered: showsCoverageRing,
+            digipeated: digipeated, showsDigipeated: showsAPRSCoverageRing,
+            received: received, showsReceived: true)
     }
 
     /// Stations set aside as impossible to have heard over the air.
@@ -1714,6 +1751,7 @@ struct StationsMapView: View {
                      + "into heard stations · \(aliases.directory.allEntries.count) known")
             }
             Toggle("Coverage Rings", isOn: $showsCoverageRing)
+            Toggle("APRS Coverage Rings", isOn: $showsAPRSCoverageRing)
 
             Divider()
             Menu {
@@ -2079,7 +2117,7 @@ struct StationsMapView: View {
                                                                  moving: placed)
                                    movingObject = nil
                                },
-                               coverage: coverageRing,
+                               coverageRings: coverageRings,
                                selection: $selection)
             .overlay(alignment: .bottomTrailing) { selectionCard }
             .sheet(item: $pendingObject) { pending in

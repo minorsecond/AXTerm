@@ -91,8 +91,9 @@ struct OfflineBasemapMapView {
     /// Where the operator has moved the camera, so it can be reopened there.
     /// Throttled inside the coordinator — panning fires this continuously.
     var onRegionChanged: ((MapStartRegion) -> Void)?
-    /// Measured coverage rings around the observer. Nil draws none.
-    var coverage: CoverageEstimate.Ring?
+    /// Measured coverage rings around the observer, one pair per ring.
+    /// Empty draws none.
+    var coverageRings: [CoverageEstimate.Ring] = []
 
     // MARK: - Annotations
 
@@ -354,7 +355,10 @@ struct OfflineBasemapMapView {
         /// dashed outer ring.
         var coverageCircles: [MKCircle] = []
         var dashedCoverageIDs: Set<ObjectIdentifier> = []
-        var installedCoverage: CoverageEstimate.Ring?
+        /// What each coverage circle was measured from, so the renderer can
+        /// colour the rings apart when several are drawn at once.
+        var coverageEvidence: [ObjectIdentifier: CoverageEstimate.Evidence] = [:]
+        var installedCoverage: [CoverageEstimate.Ring] = []
         /// The clustering setting the markers on screen were built with, so a
         /// change to it can be told from an ordinary update.
         var appliedClustering: Bool?
@@ -552,11 +556,14 @@ struct OfflineBasemapMapView {
                 if coverageCircles.contains(where: { $0 === circle }) {
                     let renderer = MKCircleRenderer(circle: circle)
                     let dashed = dashedCoverageIDs.contains(ObjectIdentifier(circle))
-                    renderer.strokeColor = PlatformColor.systemBlue
-                        .withAlphaComponent(dashed ? 0.6 : 0.8)
+                    // Several rings can be on the map at once, measuring
+                    // different things in different directions, so the colour
+                    // has to come from the evidence rather than a default.
+                    let tint = (coverageEvidence[ObjectIdentifier(circle)] ?? .answered)
+                        .ringPlatformColor
+                    renderer.strokeColor = tint.withAlphaComponent(dashed ? 0.6 : 0.8)
                     renderer.lineWidth = 2.5
-                    renderer.fillColor = dashed
-                        ? nil : PlatformColor.systemBlue.withAlphaComponent(0.08)
+                    renderer.fillColor = dashed ? nil : tint.withAlphaComponent(0.08)
                     if dashed { renderer.lineDashPattern = [6, 5] }
                     return renderer
                 }
@@ -1509,25 +1516,32 @@ struct OfflineBasemapMapView {
            !coordinator.coverageCircles.allSatisfy({ circle in
                mapView.overlays.contains { $0 === circle }
            }) {
-            coordinator.installedCoverage = nil
+            coordinator.installedCoverage = []
         }
-        guard coordinator.installedCoverage != coverage else { return }
+        guard coordinator.installedCoverage != coverageRings else { return }
         #if DEBUG
         print("[MAPDIAG] coverage rebuild")
         #endif
-        coordinator.installedCoverage = coverage
+        coordinator.installedCoverage = coverageRings
         mapView.removeOverlays(coordinator.coverageCircles)
         coordinator.coverageCircles = []
         coordinator.dashedCoverageIDs = []
-        guard let coverage else { return }
-        let inner = MKCircle(center: observer.clCoordinate,
-                             radius: coverage.typicalKm * 1000)
-        let outer = MKCircle(center: observer.clCoordinate,
-                             radius: coverage.reachKm * 1000)
-        coordinator.coverageCircles = [inner, outer]
-        coordinator.dashedCoverageIDs = [ObjectIdentifier(outer)]
-        mapView.addOverlay(inner, level: .aboveRoads)
-        mapView.addOverlay(outer, level: .aboveRoads)
+        coordinator.coverageEvidence = [:]
+        for ring in coverageRings {
+            let inner = MKCircle(center: observer.clCoordinate,
+                                 radius: ring.typicalKm * 1000)
+            let outer = MKCircle(center: observer.clCoordinate,
+                                 radius: ring.reachKm * 1000)
+            coordinator.coverageCircles.append(contentsOf: [inner, outer])
+            coordinator.dashedCoverageIDs.insert(ObjectIdentifier(outer))
+            // Evidence has to travel with the circle: the renderer is handed
+            // an overlay and nothing else, so without this every pair after
+            // the first would be drawn in the first pair's colour.
+            coordinator.coverageEvidence[ObjectIdentifier(inner)] = ring.evidence
+            coordinator.coverageEvidence[ObjectIdentifier(outer)] = ring.evidence
+            mapView.addOverlay(inner, level: .aboveRoads)
+            mapView.addOverlay(outer, level: .aboveRoads)
+        }
     }
 
     /// Evidence decides the colour, so the map reads at a glance: green has

@@ -64,9 +64,9 @@ struct StationMapView: View {
     var draggableSiteIDs: Set<String> = []
     var onObjectDragged: ((String, CLLocationCoordinate2D) -> Void)?
 
-    /// Measured coverage around the observer, drawn as two rings. Nil
-    /// draws nothing — no evidence, no ring.
-    var coverage: CoverageEstimate.Ring?
+    /// Measured coverage around the observer, an inner and outer ring per
+    /// entry. Empty draws nothing: no evidence, no ring.
+    var coverageRings: [CoverageEstimate.Ring] = []
     @Binding var selection: String?
 
     private var hasNodeSites: Bool { scope.sites.contains(where: \.isNode) }
@@ -123,12 +123,14 @@ struct StationMapView: View {
             selection: $selection,
             region: openingRegion,
             onRegionChanged: { MapStartRegion.save($0) },
-            coverage: coverage)
+            coverageRings: coverageRings)
         .modifier(MapTopBleed())
         .overlay(alignment: .bottomLeading) {
             if !legendGivesWayToSelection {
                 MapLegend(kind: legend, overDarkBasemap: store == nil && basemap.isDark,
-                          showsCoverage: coverage != nil, showsNodes: hasNodeSites,
+                          showsCoverage: !coverageRings.isEmpty,
+                          coverageEvidence: coverageRings.map(\.evidence),
+                          showsNodes: hasNodeSites,
                           showsPositionSource: !aprsSymbols.isEmpty)
                     .padding(10)
             }
@@ -155,15 +157,16 @@ struct StationMapView: View {
             // Coverage rings under everything: measured footprint, drawn
             // from the stations that answered us direct. Inner ring is
             // the median answered distance, outer the farthest.
-            if let coverage {
+            ForEach(Array(coverageRings.enumerated()), id: \.offset) { _, ring in
+                let tint = ring.evidence.ringColor
                 MapCircle(center: observer.clCoordinate,
-                          radius: coverage.typicalKm * 1000)
-                    .foregroundStyle(.tint.opacity(0.08))
-                    .stroke(.tint.opacity(0.55), lineWidth: 1.5)
+                          radius: ring.typicalKm * 1000)
+                    .foregroundStyle(tint.opacity(0.08))
+                    .stroke(tint.opacity(0.55), lineWidth: 1.5)
                 MapCircle(center: observer.clCoordinate,
-                          radius: coverage.reachKm * 1000)
+                          radius: ring.reachKm * 1000)
                     .foregroundStyle(.clear)
-                    .stroke(.tint.opacity(0.4),
+                    .stroke(tint.opacity(0.4),
                             style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
             }
 
@@ -208,7 +211,9 @@ struct StationMapView: View {
         .overlay(alignment: .bottomLeading) {
             if !legendGivesWayToSelection {
                 MapLegend(kind: legend, overDarkBasemap: basemap.isDark,
-                          showsCoverage: coverage != nil, showsNodes: hasNodeSites,
+                          showsCoverage: !coverageRings.isEmpty,
+                          coverageEvidence: coverageRings.map(\.evidence),
+                          showsNodes: hasNodeSites,
                           showsPositionSource: !aprsSymbols.isEmpty)
                     .padding(10)
                     // The map ignores the safe area so the terrain runs to
@@ -265,18 +270,27 @@ struct StationMapView: View {
     /// paths so the offline basemap explains itself the same way.
     @ViewBuilder
     private var coverageChip: some View {
-        if let coverage {
-            Label("Coverage ~" + DistanceDisplay.string(
-                    kilometres: coverage.reachKm, inMiles: distanceInMiles),
-                  systemImage: "dot.radiowaves.left.and.right")
-                .font(.caption)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.regularMaterial, in: Capsule())
-                .padding(8)
-                .help(coverage.summary(inMiles: distanceInMiles))
-                .accessibilityLabel(coverage.summary)
+        // One chip per ring. With both on the map an unqualified "Coverage"
+        // would name two different measurements, so each says which evidence
+        // it came from as soon as there is more than one.
+        VStack(alignment: .trailing, spacing: 4) {
+            ForEach(Array(coverageRings.enumerated()), id: \.offset) { _, ring in
+                Label(coverageChipText(ring), systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.regularMaterial, in: Capsule())
+                    .help(ring.summary(inMiles: distanceInMiles))
+                    .accessibilityLabel(ring.summary)
+            }
         }
+        .padding(8)
+    }
+
+    private func coverageChipText(_ ring: CoverageEstimate.Ring) -> String {
+        let reach = DistanceDisplay.string(kilometres: ring.reachKm, inMiles: distanceInMiles)
+        guard coverageRings.count > 1 else { return "Coverage ~" + reach }
+        return ring.evidence.ringLabel + " ~" + reach
     }
 
     /// What the camera frames: the observer and the *heard* stations.
