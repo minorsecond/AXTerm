@@ -30,6 +30,91 @@ enum TransportSelection: String, CaseIterable, Identifiable {
     }
 }
 
+/// The one question the form asks about how a radio is reached.
+///
+/// The sound modem's own link — a USB cable, or the radio's Wi-Fi — used to
+/// be a second segmented control nested inside the modem's fields. Sitting
+/// directly under the transport picker it read as a peer of it rather than a
+/// detail of it, and it silently governed which of two further sections
+/// appeared further down the form. Flattened into the list, there is one
+/// question with one answer (2026-09-17).
+enum RadioLinkChoice: String, CaseIterable, Identifiable {
+    case network
+    case serial
+    case ble
+    case modemUSB
+    case modemWiFi
+
+    var id: String { rawValue }
+
+    var transport: TransportSelection {
+        switch self {
+        case .network: .network
+        case .serial: .serial
+        case .ble: .ble
+        case .modemUSB, .modemWiFi: .modem
+        }
+    }
+
+    /// Nil for the TNC transports, which have no modem link to set.
+    var rigLink: ModemRigLink? {
+        switch self {
+        case .modemUSB: .usb
+        case .modemWiFi: .lan
+        case .network, .serial, .ble: nil
+        }
+    }
+
+    /// Names the thing on the other end, because that is the choice — a TNC
+    /// AXTerm talks to, or a radio AXTerm demodulates itself.
+    var title: String {
+        switch self {
+        case .network: "Network TNC"
+        case .serial: "Serial TNC"
+        case .ble: "Bluetooth LE TNC"
+        case .modemUSB: "Sound modem \u{2014} USB cable"
+        case .modemWiFi: "Sound modem \u{2014} Wi-Fi (Icom LAN)"
+        }
+    }
+
+    /// One line under the picker, so the choice can be made without already
+    /// knowing what the words mean.
+    var summary: String {
+        switch self {
+        case .network:
+            "A TNC reached over TCP \u{2014} Direwolf on this Mac, or on another machine."
+        case .serial:
+            "A hardware TNC on a serial or USB port."
+        case .ble:
+            "A Bluetooth LE TNC, such as a Mobilinkd."
+        case .modemUSB:
+            "No TNC. This Mac decodes the radio's audio through a USB sound device and keys it over a CI-V serial port."
+        case .modemWiFi:
+            "No TNC. This Mac reaches the radio over the radio's own Wi-Fi \u{2014} Icom's network protocol, the one RS-BA1 and wfview use \u{2014} which carries the audio and CI-V together."
+        }
+    }
+
+    static func of(transport: TransportSelection, rigLink: ModemRigLink) -> RadioLinkChoice {
+        switch transport {
+        case .network: .network
+        case .serial: .serial
+        case .ble: .ble
+        case .modem: rigLink == .lan ? .modemWiFi : .modemUSB
+        }
+    }
+
+    /// What the picker offers. The sound modem needs a Mac's sound devices
+    /// and serial ports; elsewhere it shows only for a radio that already is
+    /// one, so the operator can see and change it.
+    static func selectable(including current: RadioLinkChoice) -> [RadioLinkChoice] {
+        #if os(macOS)
+        return allCases
+        #else
+        return allCases.filter { $0.transport != .modem || $0 == current }
+        #endif
+    }
+}
+
 /// The form behind one radio: every field of its profile as a published
 /// value, the transport discovery it needs, and the link as the engine
 /// reports it.
@@ -535,6 +620,24 @@ final class ConnectionTransportViewModel: ObservableObject {
         }
     }
     
+    /// Both halves of the one link choice, dispatched like the transport
+    /// change below it.
+    ///
+    /// The modem's link is written first: switching a sound modem from USB
+    /// to Wi-Fi does not change the transport at all, and
+    /// `userDidChangeTransport` returns early when it has not changed.
+    func userDidChangeLink(_ choice: RadioLinkChoice) {
+        let rig = choice.rigLink
+        let transport = choice.transport
+        guard transport != selectedTransport
+                || (rig != nil && rig != modemRigLink) else { return }
+
+        Task { @MainActor in
+            if let rig, rig != self.modemRigLink { self.modemRigLink = rig }
+            if transport != self.selectedTransport { self.selectedTransport = transport }
+        }
+    }
+
     func userDidChangeSerialDevice(_ newPath: String) {
         guard newPath != selectedSerialDevicePath else { return }
         
@@ -776,23 +879,25 @@ final class ConnectionTransportViewModel: ObservableObject {
             lanTestResult = "Already connected\(rigModel.isEmpty ? "." : " to \(rigModel).")"
             return
         }
-        guard let config = settings.radio(radioID)?.modemConfig?.lanConfiguration,
-              !config.host.isEmpty else {
-            lanTestResult = "Enter the radio's address first."
+        // One validator, not two. `unsupportedReason` is the same check the
+        // manager applies before it opens a link and the same sentence the
+        // form already shows above the Connect button, so the test button
+        // and the rest of the pane can no longer disagree.
+        //
+        // The three guards that used to live here said "Enter the radio's
+        // address first." for a missing address, a radio that is not a sound
+        // modem, and a radio that could not be found at all — pointing at a
+        // field that was often filled in correctly (2026-09-17).
+        guard let profile = settings.radio(radioID) else {
+            lanTestResult = "This radio is no longer in the list."
             return
         }
-        guard !config.username.isEmpty else {
-            lanTestResult = "Enter the radio's username first."
+        guard let config = profile.modemConfig?.lanConfiguration else {
+            lanTestResult = "This radio is not set up as a sound modem."
             return
         }
-        switch RadioSecrets.readLANPassword(for: radioID) {
-        case .found: break
-        case .absent:
-            lanTestResult = "Enter the radio's password first."
-            return
-        case .unreadable(let status):
-            lanTestResult = KeychainStore.ReadOutcome.unreadable(status).operatorAdvice
-                ?? "The saved password could not be read \u{2014} re-enter it once."
+        if let reason = RadioManager.unsupportedReason(for: profile) {
+            lanTestResult = reason
             return
         }
         isTestingLAN = true

@@ -202,6 +202,45 @@ final class ConnectionTransportViewModelModemTests: XCTestCase {
         XCTAssertFalse(ssb.contains("FM-D"))
     }
 
+    /// The advice has to name the modulation source the link actually uses.
+    ///
+    /// `configureForPacket` sends DATA MOD = WLAN over the radio's Wi-Fi and
+    /// USB over a cable. The sheet and the note under the mode picker said
+    /// USB either way, so a Wi-Fi operator following them set the radio to
+    /// take modulation from a cable that is not there — it keys up and
+    /// carries silence, which is indistinguishable from a dead antenna
+    /// (2026-09-17).
+    func testTheSetupAdviceFollowsTheLink() {
+        let wifi = ModemRadioSection.setupDescription(for: .afsk1200, rigLink: .lan)
+        XCTAssertTrue(wifi.contains("DATA MOD input: WLAN."), wifi)
+        XCTAssertFalse(wifi.contains("DATA MOD input: USB."), wifi)
+
+        let cable = ModemRadioSection.setupDescription(for: .afsk1200, rigLink: .usb)
+        XCTAssertTrue(cable.contains("DATA MOD input: USB."), cable)
+
+        XCTAssertTrue(ModemMode.afsk1200.radioSetupNote(rigLink: .lan).contains("DATA MOD set to WLAN"))
+        XCTAssertTrue(ModemMode.afsk1200.radioSetupNote(rigLink: .usb).contains("DATA MOD set to USB"))
+    }
+
+    /// The value the radio actually wants for each link.
+    ///
+    /// From the IC-705 CI-V Reference Guide, set-mode item 0119 ("MOD Input
+    /// > DATA MOD"): `00=MIC, 01=USB, 02=MIC, USB, 03=WLAN`. `wlan` was
+    /// 0x02 — "MIC, USB" — so a Wi-Fi radio was told to modulate from the
+    /// microphone and the USB port while the packet audio arrived over the
+    /// network. It keyed up and transmitted the room, and nothing that heard
+    /// it could decode a frame (2026-09-17).
+    func testDataModCarriesTheRadiosOwnCodes() {
+        XCTAssertEqual(CIVClient.DataModSource.mic.rawValue, 0x00)
+        XCTAssertEqual(CIVClient.DataModSource.usb.rawValue, 0x01)
+        XCTAssertEqual(CIVClient.DataModSource.micAndUSB.rawValue, 0x02)
+        XCTAssertEqual(CIVClient.DataModSource.wlan.rawValue, 0x03,
+                       "0x02 is the radio's \"MIC, USB\", which modulates from neither the "
+                       + "network nor anything else carrying packet audio")
+        XCTAssertNotEqual(CIVClient.DataModSource.wlan.rawValue,
+                          CIVClient.DataModSource.micAndUSB.rawValue)
+    }
+
     /// Nothing about the modem leaks into a TNC radio's form.
     func testATCPRadioHasNoModemState() async {
         settings.updateRadio(radioID) { $0.kind = .tcp }

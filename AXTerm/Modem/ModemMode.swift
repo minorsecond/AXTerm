@@ -63,11 +63,22 @@ nonisolated enum ModemMode: String, Codable, CaseIterable, Sendable {
     }
 
     /// What the radio must be set to for this mode, in the operator's words.
-    var radioSetupNote: String {
+    /// What to set on the radio itself, for this mode and this link.
+    ///
+    /// The modulation source is the part that depends on the link: audio
+    /// arriving over the radio's own Wi-Fi does not modulate anything while
+    /// DATA MOD still says USB, and the radio keys up carrying silence. This
+    /// note said USB whichever link was in use (2026-09-17).
+    func radioSetupNote(rigLink: ModemRigLink = .usb) -> String {
+        let modSource = rigLink == .lan ? "WLAN" : "USB"
         switch self {
-        case .afsk1200: return "Radio in FM with data mode on (FM-D), DATA MOD set to USB."
-        case .afsk300: return "Radio in USB with data mode on (USB-D), a filter of at least 1.8 kHz; tune 1.7 kHz below the channel."
-        case .g3ruh9600RxIF: return "USB AF/IF Output set to IF. Receive only on this radio."
+        case .afsk1200:
+            return "Radio in FM with data mode on (FM-D), DATA MOD set to \(modSource)."
+        case .afsk300:
+            return "Radio in USB with data mode on (USB-D), DATA MOD set to \(modSource), "
+                + "a filter of at least 1.8 kHz; tune 1.7 kHz below the channel."
+        case .g3ruh9600RxIF:
+            return "USB AF/IF Output set to IF. Receive only on this radio."
         }
     }
 }

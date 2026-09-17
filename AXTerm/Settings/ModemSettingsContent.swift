@@ -19,13 +19,9 @@ struct ModemSettingsContent: View {
             set: { viewModel.userDidChangeAudioOutput($0) })
 
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Connection:", selection: $viewModel.modemRigLink) {
-                Text("USB cable").tag(ModemRigLink.usb)
-                Text("Wi-Fi (Icom LAN)").tag(ModemRigLink.lan)
-            }
-            .pickerStyle(.segmented)
-            .help("How AXTerm reaches the radio. USB uses a sound device and a CI-V serial port. Wi-Fi uses Icom's network protocol, the same one wfview and RS-BA1 use \u{2014} the radio carries audio and CI-V over the air.")
-
+            // USB or Wi-Fi is chosen in the form's one link picker, above.
+            // Asking again here, in a segmented control directly under that
+            // one, made the two read as peers.
             if viewModel.modemRigLink == .lan {
                 lanFields
             } else {
@@ -37,7 +33,7 @@ struct ModemSettingsContent: View {
                     Text(mode.title).tag(mode)
                 }
             }
-            Text(viewModel.modemMode.radioSetupNote)
+            Text(viewModel.modemMode.radioSetupNote(rigLink: viewModel.modemRigLink))
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -102,9 +98,11 @@ struct ModemSettingsContent: View {
                 .help("Logs in to the radio over Wi-Fi and waits for it to name itself, then lets go \u{2014} without starting the modem. It confirms the address, username and password reach the radio before you connect for real.")
             }
         }
-        Text("This is the radio's own Wi-Fi link \u{2014} Icom's network protocol, the one RS-BA1 and wfview use, not a KISS TNC. "
-             + "Turn Network Control ON on the radio and use its Network User name and password; the password is kept in your Mac's Keychain. "
-             + "(The Network transport is a different thing \u{2014} a separate TNC such as Direwolf \u{2014} so a Wi-Fi radio needs its address only here.)")
+        // What the operator has to go and do on the radio. What this link
+        // *is* now sits under the picker that chose it, so it is not
+        // repeated here.
+        Text("Turn Network Control on in the radio's menu, then use its Network User name and "
+             + "password here. The password is kept in your Mac's Keychain.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -379,7 +377,7 @@ struct ModemRadioSection: View {
                     .controlSize(.small)
             } label: {
                 Text("Radio setup")
-                Text(viewModel.modemMode.radioSetupNote)
+                Text(viewModel.modemMode.radioSetupNote(rigLink: viewModel.modemRigLink))
             }
             LabeledContent {
                 Button(viewModel.auditingReceive ? "Checking\u{2026}" : "Check reception\u{2026}") {
@@ -423,7 +421,7 @@ struct ModemRadioSection: View {
                 Button("Set radio") { viewModel.configureRadioForPacket() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text(Self.setupDescription(for: viewModel.modemMode))
+                Text(Self.setupDescription(for: viewModel.modemMode, rigLink: viewModel.modemRigLink))
             }
         } header: {
             Text("Radio")
@@ -431,7 +429,11 @@ struct ModemRadioSection: View {
     }
 
     /// Exactly what `configureForPacket` pushes, in the operator's words.
-    static func setupDescription(for mode: ModemMode) -> String {
+    ///
+    /// `configureForPacket` sends `.wlan` over the radio's Wi-Fi and `.usb`
+    /// over a cable, so this has to say the same or the sheet is describing a
+    /// different write from the one the button makes.
+    static func setupDescription(for mode: ModemMode, rigLink: ModemRigLink = .usb) -> String {
         let modeLine: String
         switch mode {
         case .afsk1200: modeLine = "Mode FM with data mode on (FM-D)."
@@ -439,7 +441,7 @@ struct ModemRadioSection: View {
         case .g3ruh9600RxIF: modeLine = "Mode FM with data mode on (FM-D)."
         }
         return [modeLine,
-                "DATA MOD input: USB.",
+                "DATA MOD input: \(rigLink == .lan ? "WLAN" : "USB").",
                 "USB AF squelch: OFF (open), so the modem hears the channel.",
                 "USB SEND: OFF (AXTerm keys the radio over CI-V).",
                 "CI-V Transceive: OFF.",

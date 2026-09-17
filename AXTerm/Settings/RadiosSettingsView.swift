@@ -173,6 +173,26 @@ private struct RadioListRow: View {
     }
 }
 
+/// The two halves of a radio's form, once there are enough radios to have
+/// halves: reaching it, and what it does once reached.
+///
+/// Only shown for a second radio. One radio's form carries no name,
+/// callsign, beacon, services or digipeater rows at all, so there is nothing
+/// to divide and a picker over a single page would be furniture.
+enum RadioPage: String, CaseIterable, Identifiable {
+    case connection
+    case onAir
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .connection: "Connection"
+        case .onAir: "On the air"
+        }
+    }
+}
+
 /// One radio's form: how its TNC is reached and the link as it stands — and,
 /// once there are several radios, what it is called and whether it is on.
 ///
@@ -188,6 +208,12 @@ struct RadioDetailView: View {
     var onAddSecondRadio: (() -> Void)?
 
     @State private var showingSymbolPicker = false
+    @State private var page: RadioPage = .connection
+
+    /// One radio has no pages, so its connection rows are always showing.
+    private var showsConnection: Bool {
+        !settings.hasMultipleRadios || page == .connection
+    }
 
     init(radioID: RadioID, settings: AppSettingsStore, client: PacketEngine,
          onAddSecondRadio: (() -> Void)? = nil) {
@@ -199,14 +225,17 @@ struct RadioDetailView: View {
     }
 
     var body: some View {
-        let transportBinding = Binding<TransportSelection>(
-            get: { viewModel.selectedTransport },
-            set: { viewModel.userDidChangeTransport($0) }
+        let linkBinding = Binding<RadioLinkChoice>(
+            get: {
+                RadioLinkChoice.of(transport: viewModel.selectedTransport,
+                                   rigLink: viewModel.modemRigLink)
+            },
+            set: { viewModel.userDidChangeLink($0) }
         )
 
         Form {
             // A name and a switch only mean something against other radios.
-            if settings.hasMultipleRadios {
+            if settings.hasMultipleRadios, page == .connection {
                 Section {
                     DraftTextField("Name", text: $viewModel.name, prompt: RadioProfile.defaultName(for: profile))
                     Toggle("Enabled", isOn: $viewModel.enabled)
@@ -221,7 +250,7 @@ struct RadioDetailView: View {
 
             // With one radio its callsign is the station callsign, set under
             // General; a second field saying the same thing would be noise.
-            if settings.hasMultipleRadios {
+            if settings.hasMultipleRadios, page == .onAir {
                 Section {
                     CallsignField(title: stationCallsign.isEmpty ? "NOCALL" : stationCallsign,
                                   text: $viewModel.callsign)
@@ -235,128 +264,133 @@ struct RadioDetailView: View {
                 }
             }
 
-            Section {
-                Picker("Transport", selection: transportBinding) {
-                    ForEach(TransportSelection.selectable(including: viewModel.selectedTransport)) { type in
-                        Text(type.rawValue).tag(type)
+            if showsConnection {
+                Section {
+                    Picker("Reached by", selection: linkBinding) {
+                        ForEach(RadioLinkChoice.selectable(including: linkBinding.wrappedValue)) { choice in
+                            Text(choice.title).tag(choice)
+                        }
                     }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-
-                switch viewModel.selectedTransport {
-                case .network:
-                    NetworkSettingsContent(viewModel: viewModel)
-                case .serial:
-                    SerialSettingsContent(viewModel: viewModel)
-                case .ble:
-                    BLESettingsContent(viewModel: viewModel)
-                case .modem:
-                    ModemSettingsContent(viewModel: viewModel)
-                }
-            } header: {
-                Text("Transport")
-            }
-
-            #if os(macOS)
-            if viewModel.selectedTransport == .modem {
-                // Over Wi-Fi the CI-V port is the network session itself, so
-                // the serial-port section only makes sense for a USB radio.
-                // The address is not the port, though: it is addressed on
-                // both links, and hiding it here left a Wi-Fi operator no way
-                // to correct the one setting that silences CI-V outright.
-                if viewModel.modemRigLink == .usb {
-                    ModemRigSection(viewModel: viewModel)
-                } else {
-                    ModemLANRigSection(viewModel: viewModel)
-                }
-                ModemTransmitSection(viewModel: viewModel)
-                ModemRadioSection(viewModel: viewModel)
-            }
-            #endif
-
-            Section {
-                ConnectionStatusView(status: viewModel.radioConnectionStatus)
-
-                // Why this radio has no link — an empty address, a missing
-                // audio device — so "Disconnected" is not the whole story.
-                if !viewModel.radioConnected, let reason = viewModel.radioUnavailableReason {
-                    Label(reason, systemImage: "exclamationmark.triangle.fill")
+                    Text(linkBinding.wrappedValue.summary)
                         .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-
-                if viewModel.selectedTransport == .modem, viewModel.radioConnected {
-                    ModemStatusRows(viewModel: viewModel)
-                }
-
-                // What is on the other end of the link. Direwolf answers the
-                // in-band KISS hardware query with its name and version; a
-                // silent TNC is plain KISS, which is itself the answer.
-                if viewModel.radioConnected,
-                   viewModel.selectedTransport == .network || viewModel.selectedTransport == .modem {
-                    if let identity = viewModel.tncIdentity {
-                        LabeledContent {
-                            HStack(spacing: 6) {
-                                Text(identity)
-                                    .font(.system(.body, design: .monospaced))
-                                if TNCIdentifier.isDirewolf(identity) {
-                                    Text("Direwolf")
-                                        .font(.caption2.weight(.semibold))
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 1)
-                                        .background(Capsule().fill(Color.green.opacity(0.2)))
-                                        .foregroundStyle(.green)
-                                }
-                            }
-                        } label: {
-                            Text("Software")
-                        }
-                        .help("The TNC named itself over the KISS hardware "
-                              + "query — asked and answered on this TCP link, "
-                              + "nothing transmitted on the air.")
-                    } else {
-                        LabeledContent {
-                            Button("Ask") { viewModel.identifyTNC() }
-                                .controlSize(.small)
-                        } label: {
-                            Text("Software")
-                            Text("Has not identified itself — plain KISS, "
-                                 + "or the query went unanswered.")
-                        }
-                        .help("Sends the KISS SetHardware \u{201C}TNC:\u{201D} query. "
-                              + "Direwolf answers with its version; hardware "
-                              + "TNCs that don't implement the extension "
-                              + "ignore it. Nothing is transmitted on RF.")
-                    }
-                }
-
-                // Connect this radio. Opening reconciles every enabled
-                // radio, so a second radio comes up without disturbing the
-                // first. Disconnect stops all links, so it is offered only
-                // from the first radio, where it reads as "stop".
-                if viewModel.radioConnectionStatus == .connecting {
-                    Label("Connecting\u{2026}", systemImage: "hourglass")
                         .foregroundStyle(.secondary)
-                } else if viewModel.radioConnected {
-                    if viewModel.isPrimary {
-                        Button { viewModel.disconnect() } label: {
-                            Label("Disconnect", systemImage: "bolt.horizontal.circle.fill")
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    switch viewModel.selectedTransport {
+                    case .network:
+                        NetworkSettingsContent(viewModel: viewModel)
+                    case .serial:
+                        SerialSettingsContent(viewModel: viewModel)
+                    case .ble:
+                        BLESettingsContent(viewModel: viewModel)
+                    case .modem:
+                        ModemSettingsContent(viewModel: viewModel)
+                    }
+                } header: {
+                    Text("Transport")
+                }
+
+                #if os(macOS)
+                if viewModel.selectedTransport == .modem {
+                    // Over Wi-Fi the CI-V port is the network session itself, so
+                    // the serial-port section only makes sense for a USB radio.
+                    // The address is not the port, though: it is addressed on
+                    // both links, and hiding it here left a Wi-Fi operator no way
+                    // to correct the one setting that silences CI-V outright.
+                    if viewModel.modemRigLink == .usb {
+                        ModemRigSection(viewModel: viewModel)
+                    } else {
+                        ModemLANRigSection(viewModel: viewModel)
+                    }
+                    ModemTransmitSection(viewModel: viewModel)
+                    ModemRadioSection(viewModel: viewModel)
+                }
+                #endif
+
+                Section {
+                    ConnectionStatusView(status: viewModel.radioConnectionStatus)
+
+                    // Why this radio has no link — an empty address, a missing
+                    // audio device — so "Disconnected" is not the whole story.
+                    if !viewModel.radioConnected, let reason = viewModel.radioUnavailableReason {
+                        Label(reason, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    if viewModel.selectedTransport == .modem, viewModel.radioConnected {
+                        ModemStatusRows(viewModel: viewModel)
+                    }
+
+                    // What is on the other end of the link. Direwolf answers the
+                    // in-band KISS hardware query with its name and version; a
+                    // silent TNC is plain KISS, which is itself the answer.
+                    if viewModel.radioConnected,
+                       viewModel.selectedTransport == .network || viewModel.selectedTransport == .modem {
+                        if let identity = viewModel.tncIdentity {
+                            LabeledContent {
+                                HStack(spacing: 6) {
+                                    Text(identity)
+                                        .font(.system(.body, design: .monospaced))
+                                    if TNCIdentifier.isDirewolf(identity) {
+                                        Text("Direwolf")
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 1)
+                                            .background(Capsule().fill(Color.green.opacity(0.2)))
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                            } label: {
+                                Text("Software")
+                            }
+                            .help("The TNC named itself over the KISS hardware "
+                                  + "query — asked and answered on this TCP link, "
+                                  + "nothing transmitted on the air.")
+                        } else {
+                            LabeledContent {
+                                Button("Ask") { viewModel.identifyTNC() }
+                                    .controlSize(.small)
+                            } label: {
+                                Text("Software")
+                                Text("Has not identified itself — plain KISS, "
+                                     + "or the query went unanswered.")
+                            }
+                            .help("Sends the KISS SetHardware \u{201C}TNC:\u{201D} query. "
+                                  + "Direwolf answers with its version; hardware "
+                                  + "TNCs that don't implement the extension "
+                                  + "ignore it. Nothing is transmitted on RF.")
+                        }
+                    }
+
+                    // Connect this radio. Opening reconciles every enabled
+                    // radio, so a second radio comes up without disturbing the
+                    // first. Disconnect stops all links, so it is offered only
+                    // from the first radio, where it reads as "stop".
+                    if viewModel.radioConnectionStatus == .connecting {
+                        Label("Connecting\u{2026}", systemImage: "hourglass")
+                            .foregroundStyle(.secondary)
+                    } else if viewModel.radioConnected {
+                        if viewModel.isPrimary {
+                            Button { viewModel.disconnect() } label: {
+                                Label("Disconnect", systemImage: "bolt.horizontal.circle.fill")
+                            }
+                        } else {
+                            Text("Connected. Disconnecting from the first radio stops every radio.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     } else {
-                        Text("Connected. Disconnecting from the first radio stops every radio.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Button { viewModel.connectThisRadio() } label: {
+                            Label("Connect", systemImage: "bolt.horizontal.circle")
+                        }
+                        .disabled(!viewModel.enabled || viewModel.radioUnavailableReason != nil)
                     }
-                } else {
-                    Button { viewModel.connectThisRadio() } label: {
-                        Label("Connect", systemImage: "bolt.horizontal.circle")
-                    }
-                    .disabled(!viewModel.enabled || viewModel.radioUnavailableReason != nil)
                 }
             }
 
-            if settings.hasMultipleRadios {
+
+            if settings.hasMultipleRadios, page == .onAir {
                 Section {
                     Toggle("Beacon on this radio", isOn: beaconBinding(\.enabled))
                     if beaconBinding(\.enabled).wrappedValue {
@@ -468,6 +502,24 @@ struct RadioDetailView: View {
             }
         }
         .formStyle(.grouped)
+        // Pinned rather than scrolled with the rows. Inside the Form it left
+        // the page it was switching, so a form scrolled past its first
+        // section showed neither which page it was on nor a way back.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if settings.hasMultipleRadios {
+                VStack(spacing: 0) {
+                    Picker("Page", selection: $page) {
+                        ForEach(RadioPage.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    Divider()
+                }
+                .background(.bar)
+            }
+        }
         .sheet(isPresented: $showingSymbolPicker) {
             APRSSymbolPicker(
                 selectedTable: currentSymbol.table,
