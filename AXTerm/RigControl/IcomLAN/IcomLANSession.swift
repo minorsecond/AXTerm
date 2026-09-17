@@ -277,25 +277,40 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         TxLog.debug(.modem, "IcomLAN liveness: watch cancelled by close()",
                     ["state": String(describing: state)])
         let teardown = { [self] in
-            if state == .connected || state == .connecting {
-                if !authID.isEmpty {
-                    control.sendTracked(IcomLAN.token(.release, local: control.localID, remote: control.remoteID,
-                                                      innerSequence: nextInner(), authID: authID))
-                }
-                if serial.remoteID != 0 {
-                    serial.sendTracked(IcomLAN.serialOpen(false, sendSequence: nextSerialSequence(),
-                                                          local: serial.localID, remote: serial.remoteID))
-                }
+            // Say goodbye whenever there is something to say goodbye with,
+            // whatever state we think we are in.
+            //
+            // This used to run only from .connected or .connecting, so every
+            // failure path — macOS refusing the network, the sockets dying
+            // with ENOTCONN, a liveness verdict — went straight to .failed
+            // and released nothing. The radio kept the slot and the operator
+            // got "closing the app doesn't release the 705", which is exactly
+            // what it did (2026-09-17).
+            //
+            // A release the radio has already acted on is ignored. A release
+            // never sent costs the operator their radio until the slot times
+            // out on its own, so the asymmetry only points one way.
+            if !authID.isEmpty, control.remoteID != 0 {
+                control.sendTracked(IcomLAN.token(.release, local: control.localID, remote: control.remoteID,
+                                                  innerSequence: nextInner(), authID: authID))
             }
-            // Only a session the radio actually granted leaves a slot to
-            // release. An attempt that never got in — the login refused, the
-            // socket unroutable, the first control packet unanswered — took
-            // nothing from the radio, so making the next try wait fifteen
-            // seconds for it to let go of nothing is delay for its own sake.
-            // That is what made a fresh launch sit there: the first attempt
-            // failed, armed the settle, and the retry that would have
-            // connected immediately waited out the full window (2026-09-17).
-            if connectionOpened { lastCloseAt = IcomLANStream.now }
+            if serial.remoteID != 0 {
+                serial.sendTracked(IcomLAN.serialOpen(false, sendSequence: nextSerialSequence(),
+                                                      local: serial.localID, remote: serial.remoteID))
+            }
+            // A slot is taken the moment the radio accepts a login, not when
+            // the whole connection succeeds. Keying only on connectionOpened
+            // was too narrow and cost an afternoon: an attempt that logged in
+            // and then lost the network left the radio holding the slot, the
+            // retry went straight in with no settle, and the radio granted
+            // audio without CI-V — receive and carrier detect worked while
+            // every CI-V command went unanswered and PTT timed out.
+            //
+            // Still not armed by an attempt that got nowhere. A socket macOS
+            // refused, or a radio that never answered the first control
+            // packet, took nothing and owes nothing, which is what stopped a
+            // fresh launch sitting there for fifteen seconds (2026-09-17).
+            if connectionOpened || authID.isEmpty == false { lastCloseAt = IcomLANStream.now }
             audio.disconnect()
             serial.disconnect()
             control.disconnect()
