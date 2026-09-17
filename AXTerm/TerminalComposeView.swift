@@ -353,8 +353,8 @@ private struct RoutingCapsuleButton: View {
                         onAutoConnect: onAutoConnect,
                         isLocked: isLocked,
                         onRequestChange: onRequestChange.map { action in
-                            { [weak popoverManager] in
-                                popoverManager?.close()
+                            { [weak popovers = popoverManager] in
+                                popovers?.close()
                                 action()
                             }
                         }

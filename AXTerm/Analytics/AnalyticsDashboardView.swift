@@ -2568,21 +2568,19 @@ private struct TimeSeriesChart: View {
                     .foregroundStyle(Color(platform: .systemGray).opacity(0.10))
                 }
 
+                // The deployment target is macOS 15.6, so the macOS 13 check
+                // this used to carry was always true and the second branch
+                // was unreachable. It was not free: an if/else inside a chart
+                // builds _ConditionalContent, whose ChartContent conformance
+                // only exists on macOS 27, so a dead branch made the chart
+                // depend on an OS none of our users are on.
                 ForEach(points, id: \.bucket) { point in
-                    if #available(macOS 13.0, *) {
-                        LineMark(
-                            x: .value("Time", point.bucket),
-                            y: .value(valueLabel, point.value)
-                        )
-                        .interpolationMethod(AnalyticsStyle.Chart.smoothLines ? .catmullRom : .linear)
-                        .foregroundStyle(AnalyticsStyle.Colors.accent)
-                    } else {
-                        LineMark(
-                            x: .value("Time", point.bucket),
-                            y: .value(valueLabel, point.value)
-                        )
-                        .foregroundStyle(AnalyticsStyle.Colors.accent)
-                    }
+                    LineMark(
+                        x: .value("Time", point.bucket),
+                        y: .value(valueLabel, point.value)
+                    )
+                    .interpolationMethod(AnalyticsStyle.Chart.smoothLines ? .catmullRom : .linear)
+                    .foregroundStyle(AnalyticsStyle.Colors.accent)
                 }
 
                 // Highlight selected point with a rule mark

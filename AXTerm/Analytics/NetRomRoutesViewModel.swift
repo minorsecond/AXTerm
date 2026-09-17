@@ -986,9 +986,13 @@ final class NetRomRoutesViewModel: ObservableObject {
         lastRebuildResult = nil
 
         Task {
-            let result = await engine.debugRebuildNetRomFromPackets { [weak self] progress in
+            // Named rather than plain [weak self]: the enclosing Task already
+            // holds self, so a capture under the same name reads as two
+            // different ownerships of one thing. A separate binding says what
+            // this actually is — a weak handle used only to report progress.
+            let result = await engine.debugRebuildNetRomFromPackets { [weak model = self] progress in
                 Task { @MainActor in
-                    self?.rebuildProgress = progress
+                    model?.rebuildProgress = progress
                 }
             }
 

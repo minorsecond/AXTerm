@@ -25,7 +25,7 @@ nonisolated struct StationTracker {
     /// line per UI frame showing the destination, the info bytes, and whether
     /// the position parser accepted it — so we can see WHY a station falls back
     /// to a licence address instead of its beaconed fix.
-    nonisolated(unsafe) private static let aprsTraceEnabled =
+    private static let aprsTraceEnabled =
         ProcessInfo.processInfo.environment["AXTERM_APRS_TRACE"] == "1"
 
     static func aprsTrace(_ packet: Packet) {

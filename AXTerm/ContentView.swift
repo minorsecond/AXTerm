@@ -607,8 +607,8 @@ struct ContentView: View {
             // to publish. Wired here because this is the one place holding
             // both, and it keeps the store from reaching up into analytics
             // for packets and inferred roles.
-            analyticsViewModel.onStationDirectoryChanged = { [weak winlinkContext] directory in
-                winlinkContext?.publishLocalActivity(directory, callsign: settings.myCallsign)
+            analyticsViewModel.onStationDirectoryChanged = { [weak context = winlinkContext] directory in
+                context?.publishLocalActivity(directory, callsign: settings.myCallsign)
             }
         }
         .onReceive(client.$packets) { packets in
@@ -1925,8 +1925,8 @@ struct ContentView: View {
             // addresses us has proved it heard us, while one that merely
             // transmits has proved nothing unless the timing is improbable
             // for it — see `APRSPingTracker`.
-            aprsPings.beaconInterval = { [weak client] call in
-                client?.aprsBeaconIntervals()[call.uppercased()]
+            aprsPings.beaconInterval = { [weak engine = client] call in
+                engine?.aprsBeaconIntervals()[call.uppercased()]
             }
             // Our own frames come back off the air when a digipeater repeats
             // them, and they are the only proof of reception a silent station
@@ -1937,14 +1937,14 @@ struct ContentView: View {
             }
             aprsPings.follow(client.packetPublisher)
             aprsPings.startExpiry()
-            client.aprsMessaging?.onDirectedTraffic = { [weak aprsPings] call in
-                aprsPings?.noteDirectedReply(from: call)
+            client.aprsMessaging?.onDirectedTraffic = { [weak pings = aprsPings] call in
+                pings?.noteDirectedReply(from: call)
             }
             // Our own frames never enter the packet log — see
             // `PacketEngine.onFrameTransmitted`. Without this the strip showed
             // a busy channel and no sign of our own beacon going out.
-            client.onFrameTransmitted = { [weak mapTraffic] tx in
-                mapTraffic?.record(MapTrafficFeed.Line(
+            client.onFrameTransmitted = { [weak traffic = mapTraffic] tx in
+                traffic?.record(MapTrafficFeed.Line(
                     id: tx.id, at: tx.at, from: tx.from, to: tx.to,
                     via: tx.via.joined(separator: ","), summary: tx.text,
                     isOurs: true, isForUs: false, radio: tx.radio,
@@ -1952,8 +1952,8 @@ struct ContentView: View {
                     // can tell us the difference, say so until it does.
                     transmit: tx.awaitsKeying ? .pending : nil))
             }
-            client.onTransmitOutcome = { [weak mapTraffic] radio, onAir, dropped in
-                mapTraffic?.resolveTransmits(radio: radio, onAir: onAir, dropped: dropped)
+            client.onTransmitOutcome = { [weak traffic = mapTraffic] radio, onAir, dropped in
+                traffic?.resolveTransmits(radio: radio, onAir: onAir, dropped: dropped)
             }
         }
         .sheet(item: $aprsComposeTarget) { target in

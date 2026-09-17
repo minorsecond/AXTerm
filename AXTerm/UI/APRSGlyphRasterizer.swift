@@ -22,7 +22,7 @@ nonisolated enum APRSGlyphRasterizer {
     // Keyed by the whole symbol at a size, so the same glyph is drawn once for
     // the life of the app. APRS symbols are a small fixed set.
     nonisolated(unsafe) private static var cache: [String: CGImage] = [:]
-    nonisolated(unsafe) private static let lock = NSLock()
+    private static let lock = NSLock()
 
     /// Pixels per point in the images this returns. A SwiftUI `Image` needs it
     /// to land at the right size.
