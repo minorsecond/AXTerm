@@ -173,7 +173,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         // than over the direct serial bus.
         let timeout: TimeInterval = session != nil ? 1.2 : 0.5
         let client = CIVClient(transport: transport, radioAddress: config.civAddress,
-                               controllerAddress: config.civControllerAddress, requestTimeout: timeout)
+                               controllerAddress: config.effectiveCIVControllerAddress, requestTimeout: timeout)
         let ptt: PTTController
         // The WLAN has no control lines: keying there is the CI-V command.
         let method: ModemPTTMethod = (session != nil && (config.pttMethod == .rts || config.pttMethod == .dtr)) ? .civ : config.pttMethod
@@ -523,7 +523,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
             ? LANCIVTransport(session: IcomLANSession(configuration: config.lanConfiguration))
             : makeTransport(config.civSerialPath)
         let client = CIVClient(transport: transport, radioAddress: config.civAddress,
-                               controllerAddress: config.civControllerAddress)
+                               controllerAddress: config.effectiveCIVControllerAddress)
         client.open()
         defer { client.close() }
         // The WLAN login takes a moment; the serial port is open at once.

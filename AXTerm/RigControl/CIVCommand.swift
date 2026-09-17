@@ -13,7 +13,13 @@ nonisolated enum CIVCommand {
     /// CI-V has no in-band marker; this is the reference guide's table.
     static func subcommandLength(_ command: UInt8) -> Int {
         switch command {
-        case 0x07, 0x0E, 0x0F, 0x13, 0x14, 0x15, 0x16, 0x19, 0x1A, 0x1B, 0x1C, 0x1E, 0x21, 0x25, 0x26, 0x27:
+        // A command missing here does not fail loudly: its reply parses with
+        // the subcommand folded into the data, so a reader waiting on
+        // `.reply(command:subcommand:)` never matches and the radio looks
+        // mute. `1F` (DV call signs) and `23` (GPS) were missing, and the
+        // radio had been answering both all along.
+        case 0x07, 0x0E, 0x0F, 0x13, 0x14, 0x15, 0x16, 0x19, 0x1A, 0x1B, 0x1C, 0x1E,
+             0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28:
             return 1
         default:
             return 0

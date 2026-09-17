@@ -241,3 +241,80 @@ final class IcomLANPacketTests: XCTestCase {
         XCTAssertEqual(pcm?.count, 640, "24-byte header stripped, 640 bytes of PCM")
     }
 }
+
+/// The three faults that between them made CI-V over the radio's WLAN
+/// impossible, pinned against bytes captured from an IC-705 on 2026-09-13.
+///
+/// Each one on its own produces the same symptom — a radio that works on a
+/// cable and answers nothing over Wi-Fi — which is why fixing any one of them
+/// alone looked like no progress at all.
+final class IcomLANWiFiRegressionTests: XCTestCase {
+
+    /// A scope waveform packet as the radio actually sends it: 518 bytes on
+    /// the wire, 497 of payload, `F1 01` in the length field. Read as one
+    /// byte that is 241, the packet is rejected — and because these packets
+    /// share the CI-V stream's sequence numbering, rejecting them stalls the
+    /// reorder buffer and every genuine reply behind it.
+    func testTheRadiosLongPacketsParse() {
+        let payload = [UInt8](repeating: 0xAA, count: 497)
+        var packet = IcomLAN.Header(length: 518, type: 0, sequence: 0x9300,
+                                    senderID: 0x94A50D62, receiverID: 0x030ECA1F).bytes
+        packet += [0xC1, 0xF1, 0x01, 0x00, 0x93]
+        packet += payload
+        XCTAssertEqual(packet.count, 518)
+        XCTAssertEqual(IcomLAN.serialPayload(Data(packet))?.count, 497, "497 is F1 01, not F1")
+    }
+
+    func testShortFramesStillRoundTrip() {
+        let frame = CIVCommand.setScopeDataOutput(false).encoded()
+        let packet = IcomLAN.serialData(frame, sendSequence: 1, local: 0x030ECA1F, remote: 0x94A50D62)
+        XCTAssertEqual([UInt8](packet)[16...20], [0xC1, 0x08, 0x00, 0x00, 0x01])
+        XCTAssertEqual(IcomLAN.serialPayload(packet), frame)
+    }
+
+    func testLengthsAcrossTheByteBoundary() {
+        for n in [1, 80, 254, 255, 256, 497, 1000] {
+            let payload = Data((0..<n).map { UInt8($0 & 0xFF) })
+            let packet = IcomLAN.serialData(payload, sendSequence: 7, local: 3, remote: 4)
+            XCTAssertEqual(IcomLAN.serialPayload(packet), payload, "\(n) bytes must survive")
+        }
+    }
+
+    /// The WLAN answers E1. A cable keeps E0, and a deliberate choice wins.
+    func testTheWLANLinkSpeaksFromE1() {
+        var lan = ModemLinkConfig()
+        lan.rigLink = .lan
+        XCTAssertEqual(lan.effectiveCIVControllerAddress, 0xE1)
+
+        var usb = ModemLinkConfig()
+        usb.rigLink = .usb
+        XCTAssertEqual(usb.effectiveCIVControllerAddress, 0xE0)
+
+        var chosen = ModemLinkConfig()
+        chosen.rigLink = .lan
+        chosen.civControllerAddress = 0xE4
+        XCTAssertEqual(chosen.effectiveCIVControllerAddress, 0xE4, "an explicit address is the operator's")
+    }
+
+    /// `1F` and `23` take a subcommand; without them in the table their
+    /// replies match no request and six working commands read as missing.
+    func testTheSubcommandTableCoversTheDVAndGPSCommands() {
+        for command: UInt8 in [0x1F, 0x20, 0x22, 0x23, 0x24, 0x28] {
+            XCTAssertEqual(CIVCommand.subcommandLength(command), 1,
+                           String(format: "%02X takes a subcommand", command))
+        }
+        // The radio's real answer to `1F 00`: MY call sign, K0EPI.
+        let bytes: [UInt8] = [0xFE, 0xFE, 0xE1, 0xA4, 0x1F, 0x00,
+                              0x4B, 0x30, 0x45, 0x50, 0x49, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0xFD]
+        let frame = CIVFrame.parse(bytes)
+        XCTAssertEqual(frame?.subcommand, 0x00, "without this the reply matches no request")
+        XCTAssertEqual(String(decoding: frame?.data ?? [], as: UTF8.self)
+            .trimmingCharacters(in: .whitespaces), "K0EPI")
+    }
+
+    /// DATA MOD over the WLAN is 03. 02 is MIC and USB — a dead input.
+    func testWLANModulationIsThree() {
+        XCTAssertEqual(CIVClient.DataModSource.wlan.rawValue, 0x03)
+        XCTAssertEqual(CIVClient.DataModSource.micAndUSB.rawValue, 0x02)
+    }
+}

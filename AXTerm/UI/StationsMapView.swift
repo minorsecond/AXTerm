@@ -370,6 +370,33 @@ struct StationsMapView: View {
     /// last chose.
     /// Where a secondary click landed, while the compose sheet is up.
     /// A struct rather than a bare coordinate so `sheet(item:)` can drive it.
+    /// The Find Positions button's tooltip.
+    ///
+    /// Hoisted out of the `.help` modifier it used to live in. Inline it was
+    /// a ternary wrapped around two concatenations, one of which held another
+    /// ternary and a call inside a string interpolation — and the type
+    /// checker gave up on it outright, which failed the whole target rather
+    /// than just this view. Written as statements it costs the compiler
+    /// nothing and reads better besides.
+    private var findPositionsHelp: String {
+        guard settings.callsignLookupEnabled else {
+            return "Turn on \u{201C}Look up callsigns online\u{201D} in Settings \u{2192} Winlink first. "
+                 + "It is off by default because a lookup tells a third party which stations you are hearing."
+        }
+        let candidates = HeardStationMap.lookupCandidates(unplaced, aliases: aliases.directory).count
+        var text = "Tries the \(candidates) unplaced callsigns again."
+        if showsDirectoryNodes {
+            text += " With the node directory shown, each press also looks up "
+                  + "as many as forty directory operators — the ones most nodes "
+                  + "vouch for first — so the layer fills in a batch at a time "
+                  + "rather than flooding the lookup service."
+        }
+        text += " Lookups run on their own as stations are heard; this is for retrying the ones"
+              + " that failed — after the network came back, say. Answers are cached permanently"
+              + " and keep working offline."
+        return text
+    }
+
     @ViewBuilder
     private var movingBanner: some View {
         if let moving = movingObject {
@@ -1337,16 +1364,7 @@ struct StationsMapView: View {
                     }
                 }
                 .disabled(isLookingUp || !settings.callsignLookupEnabled)
-                .help(settings.callsignLookupEnabled
-                      ? "Tries the \(HeardStationMap.lookupCandidates(unplaced, aliases: aliases.directory).count) unplaced callsigns again."
-                        + (showsDirectoryNodes
-                           ? " With the node directory shown, each press also looks up "
-                             + "as many as forty directory operators — the ones most nodes "
-                             + "vouch for first — so the layer fills in a batch at a time "
-                             + "rather than flooding the lookup service."
-                           : "")
-                        + " Lookups run on their own as stations are heard; this is for retrying the ones that failed — after the network came back, say. Answers are cached permanently and keep working offline."
-                      : "Turn on \u{201C}Look up callsigns online\u{201D} in Settings \u{2192} Winlink first. It is off by default because a lookup tells a third party which stations you are hearing.")
+                .help(findPositionsHelp)
             }
             if modeRaw == "Map" {
                 MapBasemapPicker(basemap: Binding(

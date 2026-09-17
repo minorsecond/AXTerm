@@ -66,6 +66,17 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
     var lanPassword = ""
     var civAddress: UInt8 = 0xA4
     var civControllerAddress: UInt8 = 0xE0
+
+    /// The address to speak from on this link.
+    ///
+    /// Over the WLAN the radio addresses its own output to `E1` and answers
+    /// nothing sent from `E0` — measured against an IC-705 on 2026-09-13, and
+    /// absent from the CI-V reference guide, which never mentions it. `E0` is
+    /// the USB port's controller; the network link has its own. An operator
+    /// who has deliberately set some other address still gets it.
+    var effectiveCIVControllerAddress: UInt8 {
+        rigLink == .lan && civControllerAddress == 0xE0 ? 0xE1 : civControllerAddress
+    }
     var pttMethod: ModemPTTMethod = .civ
 
     var txDelayMs = 300
