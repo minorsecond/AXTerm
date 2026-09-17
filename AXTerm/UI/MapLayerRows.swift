@@ -77,6 +77,60 @@ nonisolated enum MapLayerScope: Equatable, Sendable {
     }
 }
 
+/// A radio's layers behind one line.
+///
+/// With two radios the sidebar ran to about twenty-five rows and the radios
+/// themselves, which are what the section is for, were pushed off the top.
+/// Collapsed by default, remembered per radio, and the closed line says how
+/// many of the layers are on: the state stays visible, which is the whole
+/// reason these are not in a menu.
+struct CollapsibleMapLayerToggles: View {
+
+    @ObservedObject var status: MapLayerStatus
+    var scope: MapLayerScope
+    /// Remembered per radio, so opening one radio's layers does not open the
+    /// other's and the choice survives a relaunch.
+    var expansionKey: String
+
+    @AppStorage private var isExpanded: Bool
+
+    init(status: MapLayerStatus, scope: MapLayerScope, expansionKey: String) {
+        self.status = status
+        self.scope = scope
+        self.expansionKey = expansionKey
+        _isExpanded = AppStorage(wrappedValue: false, expansionKey)
+    }
+
+    var body: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Text("Map layers")
+                    .font(.caption)
+                Spacer(minLength: 4)
+                if !isExpanded {
+                    Text(MapLayerCatalog.summaryText(in: scope))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("What the map draws for this radio. Collapsed, the count is how many of "
+              + "its layers are switched on.")
+
+        if isExpanded {
+            MapLayerToggles(status: status, scope: scope)
+                .padding(.leading, 12)
+        }
+    }
+}
+
 /// The layer switches themselves, with no Section around them so they can sit
 /// under a radio's row as easily as in a section of their own.
 struct MapLayerToggles: View {
@@ -448,7 +502,12 @@ struct MapLayerToggles: View {
                 Label(title, systemImage: symbol)
             }
             .disabled(!enabled)
-            if let caption {
+            // A caption earns its line when the layer is on and might be
+            // drawing nothing, or when it is unavailable and has to say why.
+            // Under a layer that is simply switched off it restates the
+            // switch, and a second line per layer is most of what made this
+            // list too long to read.
+            if let caption, isOn.wrappedValue || !enabled {
                 Text(caption)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)

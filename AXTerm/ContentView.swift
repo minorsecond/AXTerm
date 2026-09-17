@@ -1292,14 +1292,19 @@ struct ContentView: View {
                     // every layer could not say that "Transmitted Positions"
                     // is an APRS idea, so leaving it on emptied the map of a
                     // packet channel's stations.
+                    // Nothing while the radio is hidden: its layers cannot
+                    // draw anything, and four dimmed rows that do nothing are
+                    // four rows of the list spent saying so.
                     if sidebarSection == .mapLayers,
+                       !client.hiddenRadioIDs.contains(radio.id),
                        let families = mapLayerPlan.perRadio[radio.id], !families.isEmpty {
-                        MapLayerToggles(status: mapLayerStatus, scope: .families(families))
+                        CollapsibleMapLayerToggles(
+                            status: mapLayerStatus,
+                            scope: .families(families),
+                            expansionKey: "stations.expandedRadioLayers." + radio.id.rawValue)
                             .padding(.leading, 14)
                             .toggleStyle(.switch)
                             .controlSize(.mini)
-                            .disabled(client.hiddenRadioIDs.contains(radio.id))
-                            .opacity(client.hiddenRadioIDs.contains(radio.id) ? 0.5 : 1)
                     }
                 }
             }
