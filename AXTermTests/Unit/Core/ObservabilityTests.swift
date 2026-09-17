@@ -204,6 +204,21 @@ final class ObservabilityTests: XCTestCase {
 
     /// The value the xcconfigs actually ship. It must read as absent rather
     /// than tagging every build with the string "unknown".
+    /// The shape Scripts/stamp-git-commit.sh writes: a short SHA, with a
+    /// suffix when the tree it was built from had uncommitted changes.
+    /// Nothing may narrow this to bare hex, or a dirty build would report
+    /// no commit at all and we would be back where we started.
+    func testResolveGitCommit_keepsWhatTheBuildScriptStamps() {
+        XCTAssertEqual(
+            SentryConfiguration.resolveGitCommit(
+                infoPlistValue: "f5f682c1c67f", environmentVariables: [:]),
+            "f5f682c1c67f")
+        XCTAssertEqual(
+            SentryConfiguration.resolveGitCommit(
+                infoPlistValue: "f5f682c1c67f-dirty", environmentVariables: [:]),
+            "f5f682c1c67f-dirty")
+    }
+
     func testResolveGitCommit_treatsTheShippedPlaceholderAsAbsent() {
         XCTAssertNil(SentryConfiguration.resolveGitCommit(
             infoPlistValue: "unknown", environmentVariables: [:]))
