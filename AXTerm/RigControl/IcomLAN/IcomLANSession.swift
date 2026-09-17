@@ -69,6 +69,8 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     private var replyID: [UInt8]?
     private var tokenAccepted = false
     private var innerSequence: UInt16 = 0
+    /// When this session last let go of the radio, for `settleRemaining`.
+    private var lastCloseAt: Double = 0
     private var serialSendSequence: UInt16 = 0
     private var audioSendSequence: UInt16 = 1
     private var renewTimer: DispatchSourceTimer?
@@ -108,6 +110,23 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
 
     var isConnected: Bool { state == .connected }
     var roundTrip: Double { control.roundTrip }
+
+    /// How long the CI-V stream has been quiet, or nil before it opens.
+    ///
+    /// The liveness watch deliberately never judges this — quiet CI-V is
+    /// ordinary, and failing on it would drop a working radio. It is worth
+    /// *reporting*, though: an attached stream idles continuously, so a
+    /// stream carrying traffic while the CI-V client has read nothing means
+    /// the radio is there and ignoring CI-V, and a stream gone quiet means
+    /// the stream itself never came up. Those need opposite fixes and
+    /// produce the same complaint without this.
+    var civStreamSilence: TimeInterval? { serial.silence }
+
+    /// True when the CI-V stream bound a different source port from the one
+    /// its session ID was built from. The radio checks the two against each
+    /// other and silently refuses the stream when they disagree, which looks
+    /// from here exactly like a radio with CI-V switched off.
+    var civSourcePortMismatched: Bool { serial.pinnedPortMismatch }
     var audioPacketsLost: Int { audioReorder.lost }
 
     init(configuration: Configuration) {
@@ -152,6 +171,14 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         recentAudioSizes = []
         serialReorder.reset()
         audioReorder.reset()
+
+        let settle = Self.settleRemaining(now: IcomLANStream.now, lastCloseAt: lastCloseAt)
+        if settle > 0 {
+            TxLog.debug(.modem, "IcomLAN: letting the radio release the last session",
+                        ["waiting": String(format: "%.1fs", settle)])
+            try await Task.sleep(for: .seconds(settle))
+        }
+
         state = .connecting
         let task = Task { [self] in try await performOpen() }
         openTask = task
@@ -260,6 +287,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
                                                           local: serial.localID, remote: serial.remoteID))
                 }
             }
+            lastCloseAt = IcomLANStream.now
             audio.disconnect()
             serial.disconnect()
             control.disconnect()
@@ -278,6 +306,40 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     }
 
     private static let queueKey = DispatchSpecificKey<Void>()
+
+    /// How long to leave the radio alone after letting go of it, before
+    /// logging in again.
+    ///
+    /// The radio keeps one session. `close()` sends the token release and
+    /// tears the sockets down in the same breath, so the release is not
+    /// acknowledged and the radio can still be holding the old session when
+    /// the next login arrives. It then answers the login, carries audio, and
+    /// never attaches CI-V — a session that looks connected here and reads
+    /// as disconnected on the radio, with transmit dead (2026-09-17).
+    ///
+    /// Fifteen seconds, from the operator's log of 2026-09-17. A reconnect
+    /// 15s after a close answered CI-V on the first command; two reconnects
+    /// about 5s after a close did not — one recovered on its own six seconds
+    /// into the session, the other lost the radio entirely and failed with
+    /// "the radio did not answer (control I-am-here)". Five was a guess and
+    /// it was too small; the login retry path below budgets 12.5s against
+    /// the same timeout, which is the same order.
+    ///
+    /// It only ever delays a reconnect, never a first connect, and only by
+    /// what is left of the period.
+    static let settleAfterClose: TimeInterval = 15
+
+    /// What is left of the settle period, or zero when the radio has been
+    /// left alone long enough — or was never connected in this session.
+    ///
+    /// Clamped at both ends. `CFAbsoluteTimeGetCurrent` is wall clock and can
+    /// step backwards, and an elapsed time of −100s would otherwise ask the
+    /// operator to wait 105 seconds to reconnect.
+    static func settleRemaining(now: Double, lastCloseAt: Double,
+                                settle: TimeInterval = settleAfterClose) -> TimeInterval {
+        guard lastCloseAt > 0 else { return 0 }
+        return min(settle, max(0, settle - (now - lastCloseAt)))
+    }
 
     /// How many times to resend a rejected login before giving up, and how
     /// long to wait between tries. Chosen to outlast the radio's stale-slot

@@ -8,16 +8,73 @@ nonisolated enum IcomLANError: Error, Equatable, Sendable {
     case radioDisconnected
     case network(String)
     case notConnected
+    case localNetworkDenied
 
     var message: String {
         switch self {
-        case .timeout(let what): return "the radio did not answer (\(what)). Is its WLAN on and Network Control enabled?"
+        // The radio keeps one session and takes its time releasing it, so
+        // this is far more often the previous connection still being held
+        // than a radio with its networking off — especially right after the
+        // app is killed and relaunched, which never sends a clean release.
+        // Blaming WLAN first sent the operator to check settings that were
+        // fine while the next attempt was already about to succeed
+        // (2026-09-17).
+        case .timeout(let what):
+            return "the radio did not answer (\(what)). It keeps one session at a time and can "
+                + "hold the last one for a few seconds \u{2014} the next attempt usually gets in. "
+                + "If it keeps failing, check the radio's WLAN and that Network Control is on."
         case .badCredentials: return "the radio refused the username or password. Check the radio's Network User name and its password (on an IC-705: Menu \u{203A} Set \u{203A} Network), and that they match what you entered here."
         case .rejected(let why): return why
         case .radioDisconnected: return "the radio ended the connection"
         case .network(let why): return why
         case .notConnected: return "not connected to the radio"
+        // macOS, not the radio. Every socket to a LAN address is refused
+        // until AXTerm is allowed local network access, and the refusal is
+        // silent: the connection sits in .waiting forever and the handshake
+        // simply runs out. Reported as a timeout it reads as a dead radio,
+        // which is why this branch exists (2026-09-17).
+        case .localNetworkDenied:
+            return Self.localNetworkDenialAdvice(debugged: Self.isBeingDebugged())
         }
+    }
+
+    /// What to tell the operator when macOS refuses the LAN.
+    ///
+    /// Under a debugger the app is not the one being asked. macOS attributes
+    /// a privacy request to the *responsible* process, and for a build
+    /// launched by Xcode that is Xcode — so AXTerm's own switch can sit there
+    /// turned on while every socket to the radio is refused. Pointing at the
+    /// app's switch in that state is advice that cannot work.
+    static func localNetworkDenialAdvice(debugged: Bool) -> String {
+        let setting = "System Settings \u{203A} Privacy & Security \u{203A} Local Network"
+        if debugged {
+            return "macOS is blocking this build from reaching devices on your network. It is "
+                + "running under the debugger, so the permission macOS checks belongs to Xcode, "
+                + "not to AXTerm \u{2014} turn Xcode on under " + setting + ", or launch the "
+                + "built app on its own instead of from Xcode."
+        }
+        return "macOS is blocking AXTerm from reaching devices on your network. Turn AXTerm on "
+            + "under " + setting + ". A rebuilt copy can count as a new app, so the switch may "
+            + "need turning off and back on after a rebuild."
+    }
+
+    /// Whether a debugger is attached, by the documented P_TRACED check.
+    static func isBeingDebugged() -> Bool {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0 else { return false }
+        return (info.kp_proc.p_flag & P_TRACED) != 0
+    }
+
+    /// The denial macOS reports on an unsatisfied path, when it is one we
+    /// can name. Everything else stays whatever the caller was going to
+    /// say — a path can be unsatisfied for reasons that really are the
+    /// network's fault.
+    static func denial(for reason: NWPath.UnsatisfiedReason?) -> IcomLANError? {
+        guard let reason else { return nil }
+        if case .localNetworkDenied = reason { return .localNetworkDenied }
+        return nil
     }
 }
 
@@ -32,6 +89,24 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     let queue: DispatchQueue
     private(set) var localID: UInt32 = 0
     private(set) var remoteID: UInt32 = 0
+
+    /// The port the socket actually bound, when it could be read, and
+    /// whether it disagrees with the one we reserved and pinned to.
+    ///
+    /// The radio checks the low 16 bits of our session ID against the source
+    /// port of our packets. We reserve a port, pin the socket to it with
+    /// `requiredLocalEndpoint`, and build the ID from the reservation — but
+    /// nothing has ever checked that the pin landed. Reserving is a bind,
+    /// read, close, rebind, so there is a window in which something else can
+    /// take the port, and `allowLocalEndpointReuse` means a collision need
+    /// not fail loudly. When it happens the radio accepts the login and
+    /// silently refuses this stream's connection request, which is
+    /// indistinguishable from a radio with CI-V switched off.
+    private(set) var boundPort: UInt16?
+    var pinnedPortMismatch: Bool {
+        guard let reserved = reservedLocalPort, let bound = boundPort else { return false }
+        return reserved != bound
+    }
     /// The last measured ping round trip, seconds.
     private(set) var roundTrip: Double = 0
 
@@ -104,6 +179,7 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         remoteID = 0
         isReady = false
         reservedLocalPort = nil
+        boundPort = nil
         // Including when we last heard anything. Left over from the previous
         // session it is not silence, it is a different session's history, and
         // the liveness watchdog's first tick reads it as a radio that has
@@ -171,27 +247,50 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
                             ?? (self.localID & 0xFFFF)
                         self.localID = realBase | low
                     }
+                    self.boundPort = Self.portFromEndpoint(ep)
                     self.trace("socket ready, actual source \(String(describing: ep)), reserved \(String(describing: self.reservedLocalPort)), localID \(String(format: "%08x", self.localID))")
+                    if self.pinnedPortMismatch {
+                        // Not fatal here — the radio decides — but it is the
+                        // one thing that makes a stream come up and then
+                        // carry nothing, so say it where it will be read.
+                        TxLog.debug(.modem, "IcomLAN: source port pin did not land",
+                                    ["stream": self.name,
+                                     "reserved": self.reservedLocalPort.map(String.init) ?? "-",
+                                     "bound": self.boundPort.map(String.init) ?? "-"])
+                    }
                     self.receiveLoop()
                     if !resumed { resumed = true; continuation.resume() }
                 case .failed(let error):
                     self.isReady = false
                     self.trace("socket failed: " + error.localizedDescription)
-                    if !resumed { resumed = true; continuation.resume(throwing: IcomLANError.network(error.localizedDescription)) }
-                    else { self.onFailure?(error.localizedDescription) }
+                    let why = self.denialNow()?.message ?? error.localizedDescription
+                    if !resumed { resumed = true; continuation.resume(throwing: self.denialNow() ?? IcomLANError.network(error.localizedDescription)) }
+                    else { self.onFailure?(why) }
                 case .cancelled:
                     self.isReady = false
                     self.trace("socket cancelled")
                     if !resumed { resumed = true; continuation.resume(throwing: IcomLANError.network("cancelled")) }
+                // A path macOS will never satisfy is not worth waiting out.
+                // Local network access denied leaves the connection parked
+                // here indefinitely; without this the handshake burns its
+                // whole window and then blames the radio.
                 case .waiting(let error):
                     self.trace("socket waiting: " + error.localizedDescription)
+                    if let denial = self.denialNow(), !resumed {
+                        resumed = true
+                        continuation.resume(throwing: denial)
+                    }
                 default:
                     break
                 }
             }
             connection.start(queue: queue)
             queue.asyncAfter(deadline: .now() + timeout) {
-                if !resumed { resumed = true; continuation.resume(throwing: IcomLANError.timeout("\(self.name) socket")) }
+                if !resumed {
+                    resumed = true
+                    continuation.resume(
+                        throwing: self.denialNow() ?? IcomLANError.timeout("\(self.name) socket"))
+                }
             }
         }
 
@@ -213,8 +312,11 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
                 break
             }
             trace("are-you-there attempt \(attempt + 1) unanswered, retrying")
+            // No point spending the rest of the window on a socket macOS
+            // has already refused to route.
+            if let denial = denialNow() { throw denial }
         }
-        guard let answer = here else { throw IcomLANError.timeout("\(name) I-am-here") }
+        guard let answer = here else { throw denialNow() ?? IcomLANError.timeout("\(name) I-am-here") }
         remoteID = IcomLAN.Header.parse(answer)!.senderID
         trace("got I-am-here")
         let ready = IcomLAN.control(.ready, sequence: 1, local: localID, remote: remoteID)
@@ -223,6 +325,12 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
             d.count == 16 && d[d.startIndex + 4] == 0x06
         }
         trace("handshake complete")
+    }
+
+    /// What macOS says about this socket's path right now, when it is a
+    /// refusal we can name rather than a network that is merely down.
+    private func denialNow() -> IcomLANError? {
+        IcomLANError.denial(for: connection?.currentPath?.unsatisfiedReason)
     }
 
     /// Our source toward `host`: the dotted IPv4 string to pin the socket

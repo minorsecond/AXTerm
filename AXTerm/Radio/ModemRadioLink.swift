@@ -199,11 +199,36 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// - Parameter answeringAddress: who replied to a broadcast asking the
     ///   whole bus, when one was sent. It turns the advice from "check two
     ///   things" into the one thing that is actually wrong.
+    /// - Parameter civStreamSilence: how long the WLAN CI-V stream has been
+    ///   quiet, when there is one. An attached stream idles continuously, so
+    ///   traffic on it while nothing has been read tells the operator the
+    ///   radio is there and ignoring CI-V rather than unreachable — the one
+    ///   distinction the old wording asked them to guess at.
+    /// Quiet shorter than this means the stream is carrying traffic. An
+    /// attached CI-V stream idles several times a second, so anything inside
+    /// a few seconds is alive and anything beyond it is not.
+    static let streamAliveWithin: TimeInterval = 5
+
+    /// - Parameter sourcePortMismatched: the CI-V stream bound a different
+    ///   source port from the one its session ID was built from. The radio
+    ///   checks the two against each other and refuses the stream without
+    ///   saying so, so this produces the same silence as a radio with CI-V
+    ///   switched off — and reconnecting is what fixes it, not the menus.
     static func civSilenceComplaint(identified: Bool, statusAnswered: Bool, address: UInt8,
-                                    answeringAddress: UInt8? = nil) -> String? {
+                                    answeringAddress: UInt8? = nil,
+                                    civStreamSilence: TimeInterval? = nil,
+                                    sourcePortMismatched: Bool = false) -> String? {
         guard !identified, !statusAnswered else { return nil }
         let opening = "The radio is connected but has not answered any CI-V command. "
             + "Receive works; transmit cannot key over CI-V until it does. "
+        if sourcePortMismatched {
+            // Ours, not the radio's, and no amount of changing its menus
+            // will help — so say so before any advice about them.
+            return opening
+                + "This Mac could not hold the source port the CI-V session was addressed "
+                + "from, so the radio is refusing that stream and nothing on the radio needs "
+                + "changing. Disconnect and connect again."
+        }
         switch answeringAddress {
         case .some(let found) where found != address:
             // The radio is there and talking; we were calling the wrong name.
@@ -217,9 +242,27 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                                     + "is already using, so the address is right and the replies are "
                                     + "being lost rather than never sent.", address)
         case .none:
-            return opening + String(format: "Nothing answered a broadcast to every address either, "
-                                    + "so CI-V is switched off at the radio or not reaching it "
-                                    + "(this modem is asking for %02X).", address)
+            let nothingAnswered = String(format: "Nothing answered a broadcast to every address "
+                                         + "either (this modem is asking for %02X). ", address)
+            switch civStreamSilence {
+            case .some(let quiet) where quiet <= streamAliveWithin:
+                // The radio is keeping the stream alive and still says
+                // nothing, so it is reachable and refusing to talk.
+                return opening + nothingAnswered
+                    + "The CI-V stream itself is alive — the radio is sending on it — so it is "
+                    + "reachable and CI-V is switched off at the radio. Turn CI-V Transceive on "
+                    + "and check the radio's CI-V address."
+            case .some:
+                // Nothing at all on the stream: it never attached, which a
+                // reconnect too soon after a disconnect will do.
+                return opening
+                    + "Nothing is arriving on the CI-V stream at all, so it never came up. The "
+                    + "radio holds one session for tens of seconds after a disconnect — wait, then "
+                    + "connect again."
+            case .none:
+                return opening + nothingAnswered
+                    + "CI-V is switched off at the radio or not reaching it."
+            }
         }
     }
 
@@ -298,15 +341,28 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                     rigModel = CIVKnownRadios.model(forAddress: address) ?? String(format: "Icom %02X", address)
                     identified = true
                 }
-                try? await rig.setTransceive(false)
-                if config.setsRadioModeOnConnect { try? await rig.configureForPacket(config.mode, dataMod: config.rigLink == .lan ? .wlan : .usb) }
+                // Quieting the bus writes a persistent radio menu item, so
+                // it belongs behind the switch that says AXTerm may write
+                // them — and never over the network, where there is no
+                // shared bus to quiet and the operator needs the setting on.
+                // It was unconditional until 2026-09-17, which left the app
+                // advising the operator to turn on a setting it switched off
+                // at every connect.
+                if config.setsRadioModeOnConnect {
+                    try? await rig.configureForPacket(
+                        config.mode,
+                        dataMod: config.rigLink == .lan ? .wlan : .usb,
+                        quietTheBus: config.rigLink != .lan)
+                }
                 let answered = await refreshRigStatus()
                 // Over the WLAN identify is allowed to fail, so nothing above
                 // this point insists on a reply. If nothing answered either,
                 // the control channel is dead and the operator would not find
                 // out until the first transmission failed to key. Say it now.
                 if Self.civSilenceComplaint(identified: identified, statusAnswered: answered,
-                                            address: config.civAddress) != nil {
+                                            address: config.civAddress,
+                                            civStreamSilence: lanSession?.civStreamSilence,
+                                            sourcePortMismatched: lanSession?.civSourcePortMismatched ?? false) != nil {
                     // Nothing has answered. Before blaming the address, ask
                     // the whole bus who is there: a radio on another address
                     // and a CI-V channel that is not there at all produce
@@ -314,7 +370,9 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                     let answering = await rig.probeAddress()
                     if let complaint = Self.civSilenceComplaint(identified: identified, statusAnswered: answered,
                                                                address: config.civAddress,
-                                                               answeringAddress: answering) {
+                                                               answeringAddress: answering,
+                                                               civStreamSilence: lanSession?.civStreamSilence,
+                                                               sourcePortMismatched: lanSession?.civSourcePortMismatched ?? false) {
                         deliver { [weak self] in self?._delegate?.linkDidError(complaint) }
                     }
                 }
@@ -476,7 +534,8 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         }
         if case .failed(let reason) = transport.state { throw CIVError.transport(reason) }
         let address = try await client.identify()
-        try? await client.setTransceive(false)
+        // Identifying a radio is a read. It does not get to change its menus.
+        if config.rigLink != .lan { try? await client.setTransceive(false) }
         var status = RigStatus()
         if let hz = try? await client.readFrequency() { status.frequencyHz = hz }
         if let mode = try? await client.readMode() { status.mode = mode.mode; status.filter = mode.filter }

@@ -69,7 +69,16 @@ final class ModemRadioLinkTests: XCTestCase {
 
     // MARK: - Opening
 
-    func testOpeningIdentifiesQuietsTheBusReadsTheRadioAndConnects() async {
+    /// Opening identifies the radio and reads it. It does not rewrite its
+    /// menus.
+    ///
+    /// Quieting the bus used to happen on every connect regardless of the
+    /// "set the radio for packet" switch. CI-V Transceive is a persistent
+    /// menu item and nothing here ever put it back, so an operator who
+    /// switched that off to stop AXTerm touching their radio had it touched
+    /// anyway, every time — and the app ended up advising them to turn on a
+    /// setting it was switching off (2026-09-17).
+    func testOpeningIdentifiesReadsTheRadioAndConnectsWithoutRewritingIt() async {
         let (link, transport, _, spy) = makeLink(config())
         link.open()
         XCTAssertEqual(link.state, .connecting, "CI-V first")
@@ -82,7 +91,9 @@ final class ModemRadioLinkTests: XCTestCase {
 
         let written = transport.written.map(hex)
         XCTAssertEqual(written.first, "FE FE A4 E0 19 00 FD", "who are you")
-        XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 31 00 FD"), "transceive off")
+        XCTAssertFalse(written.contains("FE FE A4 E0 1A 05 01 31 00 FD"),
+                       "CI-V Transceive is the operator's setting and survives us; "
+                       + "do not switch it off unasked")
         XCTAssertFalse(written.contains { $0.hasPrefix("FE FE A4 E0 06") }, "the mode is the operator's unless asked")
         await waitUntil { spy.states.last == .connected }
         XCTAssertEqual(spy.states.last, .connected)
@@ -101,6 +112,8 @@ final class ModemRadioLinkTests: XCTestCase {
         XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 19 01 FD"), "DATA MOD = USB")
         XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 11 00 FD"), "AF squelch open")
         XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 25 00 FD"), "USB SEND off")
+        XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 31 00 FD"),
+                      "asked to set the radio up over a cable, the bus is still quieted")
         link.close()
     }
 
@@ -319,6 +332,70 @@ final class ModemRadioLinkTests: XCTestCase {
         XCTAssertTrue(complaint.lowercased().contains("nothing answered a broadcast"),
                       "say that the wider question was asked, and drew a blank")
         XCTAssertTrue(complaint.contains("A4"))
+    }
+
+    /// A CI-V stream carrying traffic while nothing has been read means the
+    /// radio is reachable and refusing to talk. Told to "check whether CI-V
+    /// is reaching the radio", an operator goes looking at the network,
+    /// which is the one thing already proven to work (2026-09-17).
+    func testALiveStreamSaysTheRadioIsReachableAndIgnoringCIV() throws {
+        let complaint = try XCTUnwrap(ModemRadioLink.civSilenceComplaint(
+            identified: false, statusAnswered: false, address: 0xA4,
+            answeringAddress: nil, civStreamSilence: 0.0))
+        XCTAssertTrue(complaint.contains("stream itself is alive"), complaint)
+        XCTAssertTrue(complaint.contains("switched off at the radio"), complaint)
+        XCTAssertFalse(complaint.contains("not reaching it"),
+                       "it plainly is reaching it — the stream is carrying traffic")
+    }
+
+    /// The opposite reading of the same silence, and the opposite fix.
+    func testADeadStreamSaysItNeverCameUp() throws {
+        let complaint = try XCTUnwrap(ModemRadioLink.civSilenceComplaint(
+            identified: false, statusAnswered: false, address: 0xA4,
+            answeringAddress: nil,
+            civStreamSilence: ModemRadioLink.streamAliveWithin + 1))
+        XCTAssertTrue(complaint.contains("never came up"), complaint)
+        XCTAssertTrue(complaint.lowercased().contains("wait"),
+                      "the radio holds its one session for a while — say so")
+        XCTAssertFalse(complaint.contains("switched off at the radio"),
+                       "nothing has been heard from the radio, so it cannot be blamed for its menus")
+    }
+
+    /// A serial CI-V radio has no stream to report on, so the wording must
+    /// stay as it was rather than claim a measurement it does not have.
+    func testNoStreamReportedKeepsTheOlderWording() throws {
+        let complaint = try XCTUnwrap(ModemRadioLink.civSilenceComplaint(
+            identified: false, statusAnswered: false, address: 0xA4,
+            answeringAddress: nil, civStreamSilence: nil))
+        XCTAssertTrue(complaint.contains("switched off at the radio or not reaching it"), complaint)
+    }
+
+    /// When the fault is ours, say so first and stop sending the operator to
+    /// the radio's menus.
+    ///
+    /// The radio checks the low 16 bits of our session ID against the source
+    /// port our packets actually come from. We reserve a port and pin to it,
+    /// but the pin can fail to land, and then the radio refuses that stream
+    /// without a word — identical silence to CI-V being switched off, and an
+    /// operator who goes and turns CI-V Transceive on has changed nothing
+    /// that matters (2026-09-17).
+    func testAMissedSourcePortBlamesUsAndNotTheRadio() throws {
+        let complaint = try XCTUnwrap(ModemRadioLink.civSilenceComplaint(
+            identified: false, statusAnswered: false, address: 0xA4,
+            answeringAddress: nil, civStreamSilence: 0.0, sourcePortMismatched: true))
+        XCTAssertTrue(complaint.contains("could not hold the source port"), complaint)
+        XCTAssertTrue(complaint.lowercased().contains("connect again"), complaint)
+        XCTAssertFalse(complaint.contains("Transceive"),
+                       "the radio's menus are not the problem and must not be offered as one")
+        XCTAssertFalse(complaint.contains("switched off at the radio"), complaint)
+    }
+
+    /// Without that evidence the older readings stand.
+    func testALandedPinStillReadsTheStream() throws {
+        let complaint = try XCTUnwrap(ModemRadioLink.civSilenceComplaint(
+            identified: false, statusAnswered: false, address: 0xA4,
+            answeringAddress: nil, civStreamSilence: 0.0, sourcePortMismatched: false))
+        XCTAssertTrue(complaint.contains("switched off at the radio"), complaint)
     }
 
     /// The awkward third case: the broadcast is answered by the very address
