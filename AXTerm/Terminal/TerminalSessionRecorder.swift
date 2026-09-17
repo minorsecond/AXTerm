@@ -57,14 +57,23 @@ nonisolated final class TerminalSessionRecorder: @unchecked Sendable {
         persist(updated)
     }
 
+    /// How many lines may accumulate in memory before the session is
+    /// written again.
+    ///
+    /// A write per line would put disk I/O on the path a frame takes to the
+    /// screen, and a write only at the end loses the whole conversation when
+    /// the process does not come back. This bounds what a crash costs to the
+    /// last few exchanges rather than all of them.
+    static let linesBetweenFlushes = 25
+
     /// One line of the conversation.
     ///
-    /// Appended in memory and written when the session ends, not on every
-    /// line: a busy exchange is hundreds of lines and a database write per
-    /// line would put disk I/O on the path a frame takes to the screen.
+    /// Held in memory and written every `linesBetweenFlushes`, so a session
+    /// interrupted by a crash still has most of itself on disk under the
+    /// `.live` outcome that startup will cap.
     func recorded(line: String, for id: String, sent: Bool, bytes: Int) {
-        lock.withLock {
-            guard var session = open[id] else { return }
+        let toFlush: TerminalSession? = lock.withLock {
+            guard var session = open[id] else { return nil }
             if !session.transcript.isEmpty { session.transcript += "\n" }
             session.transcript += line
             if sent {
@@ -75,13 +84,26 @@ nonisolated final class TerminalSessionRecorder: @unchecked Sendable {
                 session.bytesReceived += bytes
             }
             open[id] = session
+
+            let lines = session.framesSent + session.framesReceived
+            let sinceFlush = lines - (flushedAt[id] ?? 0)
+            guard sinceFlush >= Self.linesBetweenFlushes else { return nil }
+            flushedAt[id] = lines
+            return session
         }
+        guard let toFlush else { return }
+        persist(toFlush)
     }
+
+    /// Line count at each session's last write, so the interval is measured
+    /// per session rather than across all of them at once.
+    private var flushedAt: [String: Int] = [:]
 
     /// The session ended, however it ended.
     func ended(id: String, outcome: TerminalSession.Outcome, at when: Date = Date()) {
         let finished: TerminalSession? = lock.withLock {
             guard var session = open.removeValue(forKey: id) else { return nil }
+            flushedAt[id] = nil
             session.outcome = outcome
             session.endedAt = when
             return session

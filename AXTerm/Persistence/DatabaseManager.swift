@@ -819,6 +819,13 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 34, name: "createOutboundMessage") { db in
             try createOutboundMessageTable(db)
         }
+        registerReportedMigration(&migrator, version: 35, name: "linkPacketsToFlows") { db in
+            try linkPacketsToFlows(db)
+        }
+        registerReportedMigration(&migrator, version: 36,
+                                  name: "allowSessionlessOutboundMessages") { db in
+            try allowSessionlessOutboundMessages(db)
+        }
         return migrator
     }()
 

@@ -16,6 +16,19 @@ final class TerminalSessionRecorderTests: XCTestCase {
         func setTags(_ tags: [String], for id: UUID) throws {}
         func setNote(_ note: String?, for id: UUID) throws {}
         func tagCounts() throws -> [String: Int] { [:] }
+        var capCalls: [Date] = []
+        func capInterruptedSessions(at when: Date) throws -> Int {
+            capCalls.append(when)
+            let live = saved.filter { $0.outcome == .live }
+            saved = saved.map { session in
+                guard session.outcome == .live else { return session }
+                var capped = session
+                capped.outcome = .lost
+                capped.endedAt = when
+                return capped
+            }
+            return live.count
+        }
     }
 
     private let t0 = Date(timeIntervalSince1970: 1_756_000_000)

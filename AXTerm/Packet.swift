@@ -39,6 +39,18 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
     /// of its radios on the same frequency. Kept in the log, counted for no
     /// station and fed to no metric.
     let isOwnEcho: Bool
+    /// The session this frame belonged to, when it belonged to one.
+    ///
+    /// Null for most traffic and always will be: a beacon, a NET/ROM
+    /// broadcast, a frame from a station we are not talking to. What it
+    /// buys is the connected exchange read back in order, both directions,
+    /// with every retry present as its own row — which neither the session
+    /// row (totals only) nor the outbound queue (our half only) can show.
+    let sessionId: UUID?
+    /// The queued message this frame was part of delivering. One message
+    /// costs many frames, and a retry is another frame against the same
+    /// message, which is how the cost becomes visible.
+    let messageId: UUID?
     /// Which way this frame went.
     ///
     /// Until 2026-09-17 every stored packet was `rx`: the log held 863
@@ -217,9 +229,13 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
         kissPort: UInt8 = 0,
         linkDescription: String? = nil,
         isOwnEcho: Bool = false,
-        direction: Direction = .rx
+        direction: Direction = .rx,
+        sessionId: UUID? = nil,
+        messageId: UUID? = nil
     ) {
         self.direction = direction
+        self.sessionId = sessionId
+        self.messageId = messageId
         self.id = id
         self.timestamp = timestamp
         self.from = from

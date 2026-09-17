@@ -40,7 +40,10 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
             let sql = """
                 SELECT id, receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType, controlHex, pid, infoText, infoLen
                 FROM \(PacketRecord.databaseTableName)
-                WHERE receivedAt >= ? AND receivedAt < ?
+                WHERE receivedAt >= ? AND receivedAt < ? AND direction = 'rx'
+                -- Heard traffic only. Since 2026-09-17 this table also holds what
+                -- this station transmitted, and counting our own frames as
+                -- stations heard would inflate every figure derived from it.
                 ORDER BY receivedAt ASC
             """
             let rows = try Row.fetchAll(db, sql: sql, arguments: [timeframe.start, timeframe.end])
@@ -128,6 +131,10 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
     func loadAllChronological() throws -> [PacketRecord] {
         try dbQueue.read { db in
             try PacketRecord
+                // Replay means what the station heard. Feeding our own
+                // transmissions back through the decoder would have this
+                // station answering itself.
+                .filter(Column("direction") == "rx")
                 .order(Column("receivedAt").asc)
                 .fetchAll(db)
         }
@@ -150,7 +157,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
             let baseSQL = """
                 SELECT receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType, controlHex, infoText, infoLen
                 FROM \(PacketRecord.databaseTableName)
-                WHERE receivedAt >= ? AND receivedAt < ?
+                WHERE receivedAt >= ? AND receivedAt < ? AND direction = 'rx'
             """
             let args: StatementArguments = [start, end]
 
@@ -353,7 +360,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
             sql: """
                 SELECT infoLen
                 FROM \(PacketRecord.databaseTableName)
-                WHERE receivedAt >= ? AND receivedAt < ? AND infoLen > 0
+                WHERE receivedAt >= ? AND receivedAt < ? AND infoLen > 0 AND direction = 'rx'
             """,
             arguments: [start, end]
         )

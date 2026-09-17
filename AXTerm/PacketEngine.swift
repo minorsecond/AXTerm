@@ -558,7 +558,23 @@ final class PacketEngine: ObservableObject {
                 self.stationServices = SQLiteStationServiceStore(dbQueue: queue)
                 self.networkPaths = SQLiteNetworkPathStore(dbQueue: queue)
                 self.stationStats = SQLiteStationStatsStore(dbQueue: queue)
-                self.terminalSessions = SQLiteTerminalSessionStore(dbQueue: queue)
+                let sessions = SQLiteTerminalSessionStore(dbQueue: queue)
+                self.terminalSessions = sessions
+                // Nothing is connected at this point, so any session still
+                // marked live belongs to a process that did not come back:
+                // force quit, power cut, debugger stopped. Capped here, once,
+                // before anything can open a new one — otherwise the history
+                // says "Still connected" about a contact that ended days ago.
+                do {
+                    let capped = try sessions.capInterruptedSessions()
+                    if capped > 0 {
+                        TxLog.debug(.session, "Capped sessions left open by a previous run",
+                                   ["count": capped])
+                    }
+                } catch {
+                    TxLog.warning(.session, "Could not cap interrupted sessions",
+                                  ["error": String(describing: error)])
+                }
                 // Lifetime counts for stations already on the list. One pass
                 // over v_station_counts, held rather than re-asked: the
                 // sidebar draws on every packet and this must never be in
@@ -951,7 +967,9 @@ final class PacketEngine: ObservableObject {
             radioID: frame.radio,
             kissPort: port,
             linkDescription: link.endpointDescription,
-            direction: .tx
+            direction: .tx,
+            // Already on the frame; it had simply never been written down.
+            sessionId: frame.sessionId
         )
         persistPacket(packet)
     }

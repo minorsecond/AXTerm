@@ -15,6 +15,18 @@ nonisolated protocol TerminalSessionStoring: Sendable {
     func setNote(_ note: String?, for id: UUID) throws
     /// Every tag in use, with how many sessions carry it.
     func tagCounts() throws -> [String: Int]
+    /// Cap sessions left open by a process that did not come back.
+    ///
+    /// A session is written the moment it begins, which is what makes a
+    /// crash survivable, and it carries `.live` until something closes it.
+    /// Nothing is connected at launch, so a `.live` row found then belonged
+    /// to a process that died: the app was force quit, the machine lost
+    /// power, the debugger stopped it. Left alone the row says "Still
+    /// connected" in the history for ever.
+    ///
+    /// Returns how many were capped.
+    @discardableResult
+    func capInterruptedSessions(at when: Date) throws -> Int
 }
 
 nonisolated final class SQLiteTerminalSessionStore: TerminalSessionStoring, @unchecked Sendable {
@@ -28,6 +40,23 @@ nonisolated final class SQLiteTerminalSessionStore: TerminalSessionStoring, @unc
     /// Upsert, because a session is written when it opens and again as it
     /// runs. Only the fields that can change are updated: the callsign, path
     /// and start time are what the row *is*.
+    /// Marked `.lost` rather than given an outcome of its own: from the far
+    /// end's point of view a controller that vanished is exactly a link that
+    /// dropped, and the replication layer already maps `.live` to `.lost`
+    /// for the same reason.
+    @discardableResult
+    func capInterruptedSessions(at when: Date = Date()) throws -> Int {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                UPDATE terminal_sessions
+                SET outcome = ?, endedAt = ?
+                WHERE outcome = ?
+                """, arguments: [TerminalSession.Outcome.lost.rawValue, when,
+                                  TerminalSession.Outcome.live.rawValue])
+            return db.changesCount
+        }
+    }
+
     func save(_ session: TerminalSession) throws {
         try dbQueue.write { db in
             try db.execute(sql: """

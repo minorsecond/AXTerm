@@ -15,6 +15,11 @@ nonisolated struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Ha
     var receivedAt: Date
     var ax25Timestamp: Date?
     var direction: String
+    /// The terminal_sessions row this frame belonged to, when it belonged
+    /// to one. Null is the normal case.
+    var sessionId: String?
+    /// The outbound_message this frame helped deliver.
+    var messageId: String?
     var source: String
     var fromCall: String
     var fromSSID: Int
@@ -76,6 +81,8 @@ nonisolated struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Ha
         self.receivedAt = packet.timestamp
         self.ax25Timestamp = nil
         self.direction = packet.direction.rawValue
+        self.sessionId = packet.sessionId?.uuidString
+        self.messageId = packet.messageId?.uuidString
         self.source = "kiss"
         self.fromCall = from.call
         self.fromSSID = from.ssid
@@ -146,7 +153,13 @@ nonisolated struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Ha
             infoText: infoText,
             radioID: RadioID(rawValue: radioID ?? RadioID.primary.rawValue),
             kissPort: UInt8(clamping: kissPortNibble ?? 0),
-            linkDescription: linkDescription
+            linkDescription: linkDescription,
+            // A frame read back must say which way it went and what it
+            // belonged to, or a stored transmission returns as a reception
+            // and a flow loses its members on the way out of the database.
+            direction: Packet.Direction(rawValue: direction) ?? .rx,
+            sessionId: sessionId.flatMap(UUID.init(uuidString:)),
+            messageId: messageId.flatMap(UUID.init(uuidString:))
         )
     }
 }
