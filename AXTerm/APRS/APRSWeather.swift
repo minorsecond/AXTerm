@@ -72,14 +72,14 @@ extension APRSWeather {
     ///
     /// - Returns: nil when nothing parsed, so "no weather" never arrives as an
     ///   empty reading.
-    static func parse(_ payload: String, form: Form) -> APRSWeather? {
+    nonisolated static func parse(_ payload: String, form: Form) -> APRSWeather? {
         scan(payload, form: form).weather
     }
 
     /// The weather fields at the start of `payload` and whatever follows them.
     /// The split matters: the tail is the station's own comment, and it has to
     /// survive as the comment rather than be eaten as data.
-    static func scan(_ payload: String, form: Form) -> (weather: APRSWeather?, comment: String) {
+    nonisolated static func scan(_ payload: String, form: Form) -> (weather: APRSWeather?, comment: String) {
         var weather = APRSWeather()
         let chars = Array(payload)
         var index = 0

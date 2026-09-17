@@ -193,13 +193,13 @@ nonisolated struct APRSTelemetry: Equatable, Sendable {
     }
 }
 
-private extension Array {
+nonisolated private extension Array {
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
     }
 }
 
-private extension String {
+nonisolated private extension String {
     /// Empty channel names are common padding in `PARM`; they mean "unused",
     /// which is an absence rather than a name of "".
     var nonEmpty: String? { isEmpty ? nil : self }

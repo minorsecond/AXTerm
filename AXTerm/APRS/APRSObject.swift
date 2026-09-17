@@ -149,7 +149,7 @@ extension APRSObjectReport {
     /// "this is a marker", and leaves the actual meaning to the name and
     /// comment the operator wrote — which are shown in full and never
     /// summarised.
-    enum Urgency: Int, Comparable, Sendable {
+    nonisolated enum Urgency: Int, Comparable, Sendable {
         case marker
         case notable
         case hazard
@@ -164,7 +164,7 @@ extension APRSObjectReport {
     /// treating the two alike would raise a hazard banner for every sheriff's
     /// office on the map and teach the operator to ignore it. Kept small for
     /// the same reason: a list that flags everything flags nothing.
-    private static let hazardSymbols: Set<String> = [
+    nonisolated private static let hazardSymbols: Set<String> = [
         "\\!",   // EMERGENCY
         "/:",    // fire
         "\\:",   // fire (alternate)
@@ -176,7 +176,7 @@ extension APRSObjectReport {
     ]
 
     /// Symbols that mean somewhere to go, or something worth knowing about.
-    private static let notableSymbols: Set<String> = [
+    nonisolated private static let notableSymbols: Set<String> = [
         "/+",    // Red Cross
         "/a",    // ambulance
         "/h",    // hospital
@@ -194,12 +194,12 @@ extension APRSObjectReport {
     /// The symbol as the tables key it. An overlay (a digit or letter in the
     /// table position) is an alternate-table symbol wearing a character, so it
     /// reads as `\` for classification.
-    private var symbolKey: String {
+    nonisolated private var symbolKey: String {
         let table: Character = (symbolTable == "/") ? "/" : "\\"
         return "\(table)\(symbolCode)"
     }
 
-    var urgency: Urgency {
+    nonisolated var urgency: Urgency {
         if Self.hazardSymbols.contains(symbolKey) { return .hazard }
         if Self.notableSymbols.contains(symbolKey) { return .notable }
         return .marker
@@ -223,7 +223,7 @@ extension APRSObjectReport {
     /// than nine is truncated rather than refused, because the alternative is
     /// an operator marking a road closure in an emergency and being told no
     /// by a text field.
-    static func wireName(_ raw: String) -> String {
+    nonisolated static func wireName(_ raw: String) -> String {
         let cleaned = raw.trimmingCharacters(in: .whitespaces)
             // `!` and `_` terminate an item name, and a `;` or `)` at the
             // front would be read as a second report. Stripping them is the
@@ -234,7 +234,7 @@ extension APRSObjectReport {
     }
 
     /// Whether a typed name can be transmitted at all.
-    static func isTransmittableName(_ raw: String) -> Bool {
+    nonisolated static func isTransmittableName(_ raw: String) -> Bool {
         !wireName(raw).trimmingCharacters(in: .whitespaces).isEmpty
     }
 

@@ -6,7 +6,7 @@
 import Foundation
 import GRDB
 
-extension DatabaseManager {
+nonisolated extension DatabaseManager {
 
     /// Ties a logged frame to the exchange it belonged to.
     ///

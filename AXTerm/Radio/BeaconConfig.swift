@@ -4,7 +4,7 @@ import Foundation
 /// beacon AXTerm has always sent; `.aprsPosition` (wired in a later phase) is
 /// a proper APRS position report. Kept as a raw-string enum so an older build
 /// decodes an unknown future kind to `.text` rather than throwing.
-enum BeaconKind: String, Codable, Sendable, CaseIterable, Identifiable {
+nonisolated enum BeaconKind: String, Codable, Sendable, CaseIterable, Identifiable {
     case text
     case aprsPosition
 
@@ -22,7 +22,7 @@ enum BeaconKind: String, Codable, Sendable, CaseIterable, Identifiable {
 /// radio's 144.390 APRS channel. Every field is defaulted and decoded
 /// defensively (`decodeIfPresent`) so the struct can grow across phases
 /// without breaking older saved settings, exactly like `RadioProfile`.
-struct BeaconConfig: Codable, Equatable, Sendable {
+nonisolated struct BeaconConfig: Codable, Equatable, Sendable {
     /// Off by default: a newly added radio does not beacon until the operator
     /// configures it. The first/only radio is turned on by migration from the
     /// legacy station-wide beacon, so single-radio stations are unchanged.

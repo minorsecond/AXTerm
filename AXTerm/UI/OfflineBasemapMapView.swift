@@ -790,7 +790,7 @@ struct OfflineBasemapMapView {
         /// still reads as "these few are live". Infrastructure (digis, i-gates)
         /// is quieted a step so people and vehicles sit on top of it. Faded,
         /// never hidden — the context is still there when you look for it.
-        static func emphasisAlpha(for site: SiteAnnotation) -> CGFloat {
+        nonisolated static func emphasisAlpha(for site: SiteAnnotation) -> CGFloat {
             if site.isObserver { return 1 }
             let base: CGFloat
             switch site.signal {

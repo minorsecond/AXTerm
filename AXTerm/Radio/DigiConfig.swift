@@ -3,7 +3,7 @@ import Foundation
 /// A radio's APRS digipeater settings. Off by default: a radio volunteers its
 /// transmitter for other stations' traffic only when the operator turns this
 /// on, and only on that radio's channel. Decoded defensively so it can grow.
-struct DigiConfig: Codable, Equatable, Sendable {
+nonisolated struct DigiConfig: Codable, Equatable, Sendable {
     var enabled: Bool = false
     /// Repeat a `WIDE1-1` fill-in hop (home/fill-in digi behaviour).
     var fillIn: Bool = true

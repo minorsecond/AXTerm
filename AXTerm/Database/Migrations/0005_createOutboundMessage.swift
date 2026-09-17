@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-extension DatabaseManager {
+nonisolated extension DatabaseManager {
     static func createOutboundMessageTable(_ db: Database) throws {
         try db.create(table: OutboundMessage.databaseTableName) { table in
             table.column("id", .text).primaryKey()

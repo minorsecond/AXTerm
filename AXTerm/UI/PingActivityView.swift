@@ -318,7 +318,7 @@ struct PingActivityView: View {
 
     // MARK: - Wording
 
-    static func latency(_ rtt: TimeInterval) -> String {
+    nonisolated static func latency(_ rtt: TimeInterval) -> String {
         rtt < 1 ? String(format: "%.0f ms", rtt * 1000) : String(format: "%.1f s", rtt)
     }
 
