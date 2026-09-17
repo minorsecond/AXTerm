@@ -378,7 +378,7 @@ struct MapLegend: View {
 }
 
 /// Basemap picker, shared by every map surface.
-struct MapBasemapPicker: View {
+struct MapBasemapPicker<Extra: View>: View {
     @Binding var basemap: MapBasemap
     /// Omit `.none` where a scope mode already exists separately.
     var includesNone = false
@@ -386,6 +386,17 @@ struct MapBasemapPicker: View {
     /// otherwise it draws an empty map that reads as a bug rather than as an
     /// empty cupboard.
     var includesOffline = false
+    /// What the button says. The basemap's own name by default; a caller that
+    /// has folded other drawing settings in underneath wants a name that
+    /// covers all of them.
+    var title: String?
+    /// Further sections for the same menu.
+    ///
+    /// Terrain shading is a second answer to "how is the ground drawn", and
+    /// on the station map it used to be a separate menu sitting beside this
+    /// one. Two buttons for one question is how a control row grows past
+    /// what anyone reads.
+    @ViewBuilder var extra: () -> Extra
 
     var body: some View {
         Menu {
@@ -401,11 +412,20 @@ struct MapBasemapPicker: View {
                 }
                 .help(option.summary)
             }
+            extra()
         } label: {
-            Label(basemap.rawValue, systemImage: basemap.systemImage)
+            Label(title ?? basemap.rawValue, systemImage: basemap.systemImage)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Basemap for this map. Satellite and hybrid show terrain, which is what actually decides whether a path works. Any of them can be captured for offline use.")
+    }
+}
+
+extension MapBasemapPicker where Extra == EmptyView {
+    init(basemap: Binding<MapBasemap>, includesNone: Bool = false,
+         includesOffline: Bool = false, title: String? = nil) {
+        self.init(basemap: basemap, includesNone: includesNone,
+                  includesOffline: includesOffline, title: title) { EmptyView() }
     }
 }

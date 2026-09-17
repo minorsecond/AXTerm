@@ -1353,44 +1353,17 @@ struct StationsMapView: View {
 
             probeMenu
 
-            if !unplaced.isEmpty || showsDirectoryNodes {
-                Button {
-                    Task { await lookUpUnplaced() }
-                } label: {
-                    if isLookingUp {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Label("Find Positions", systemImage: "mappin.and.ellipse")
-                    }
-                }
-                .disabled(isLookingUp || !settings.callsignLookupEnabled)
-                .help(findPositionsHelp)
-            }
             if modeRaw == "Map" {
-                MapBasemapPicker(basemap: Binding(
-                    get: { basemap }, set: { basemapRaw = $0.rawValue }),
-                    includesOffline: offlineTiles.hasStoredTiles)
-
-                Button {
-                    showingOfflineMaps = true
-                } label: {
-                    Label(offlineTiles.hasStoredTiles
-                          ? "Offline Map (\(offlineTiles.statistics.sizeDescription))"
-                          : "Offline Map\u{2026}",
-                          systemImage: "square.stack.3d.down.right")
-                }
-                .help("Store map tiles on this device so the map keeps working with no network — the situation this app exists for. Import a file or download the area you are looking at.")
+                MapBasemapPicker(
+                    basemap: Binding(get: { basemap }, set: { basemapRaw = $0.rawValue }),
+                    includesOffline: offlineTiles.hasStoredTiles,
+                    title: "Style") {
+                        terrainMenuSection
+                    }
 
                 MapOverlayControl(store: overlayStore,
                                   markCoordinate: observer?.clCoordinate,
                                   onSendViaWinlink: onSendLayer)
-                Button {
-                    captureName = defaultCaptureName
-                    showingCapture = true
-                } label: {
-                    Label("Save Offline", systemImage: "square.and.arrow.down")
-                }
-                .help("Captures the area now on screen as an image you keep. MapKit has no offline-tile API, so this is the supported way to take a map somewhere with no signal \u{2014} do it before you leave.")
             }
             Picker("", selection: $modeRaw) {
                 Text("Map").tag("Map")
@@ -1402,54 +1375,20 @@ struct StationsMapView: View {
             .help("Map draws real geography and needs tiles, which need the network. Scope plots bearing and range from positions already cached, and keeps working with everything else down.")
             // The layer toggles live in the sidebar's Layers section and
             // there is deliberately no second copy here.
-            Menu {
-                Picker("Terrain", selection: $terrainStyleRaw) {
-                    Text("No Terrain").tag("")
-                    ForEach(TerrainShading.Style.allCases) { style in
-                        Text(style.label).tag(style.rawValue)
-                    }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-                .disabled(!elevation.hasTerrain)
 
-                Divider()
-                // A menu that says "no data" and stops there leaves the
-                // operator to guess which of the other controls fetches it.
-                // The way to get terrain belongs where its absence is noticed.
-                Button {
-                    showingOfflineMaps = true
-                } label: {
-                    Label(elevation.hasTerrain
-                          ? "Download More Terrain\u{2026}" : "Download Terrain\u{2026}",
-                          systemImage: "arrow.down.circle")
-                }
-                Button {
-                    drawing.begin(.download)
-                } label: {
-                    Label("Draw an Area to Download\u{2026}", systemImage: "square.dashed")
-                }
-                if elevation.hasTerrain {
-                    Text("\(elevation.tileCount) tile\(elevation.tileCount == 1 ? "" : "s") stored")
-                } else {
-                    Text("No terrain data yet")
-                }
+            // Everything that is an errand rather than a setting. These were
+            // seven separate controls in this row, two of them bare icons
+            // sitting side by side that read as one control duplicated.
+            Menu {
+                mapActionsMenuItems
             } label: {
-                Label("Terrain", systemImage: terrainStyle == nil ? "mountain.2" : "mountain.2.fill")
+                Image(systemName: "ellipsis.circle")
+                    .iconHitTarget(iconHitTarget)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Draws the stored elevation data over the basemap. Hillshade lights the ground from the north-west so ridge lines read as ridges \u{2014} the feature that actually blocks a path. Elevation colours absolute height on a fixed scale, so the same colour means the same altitude on every tile. This is the very data the path forecasts are computed from.")
+            .help("Offline data, the station directory, and retrying callsign lookups.")
 
-            if serviceStore != nil {
-                Button {
-                    showingDirectory = true
-                } label: {
-                    Image(systemName: "text.book.closed")
-                        .iconHitTarget(iconHitTarget)
-                }
-                .help("What the stations around here run \u{2014} nodes, bulletin boards, digipeaters and gateways, as they announced themselves in ID and beacon frames. The network's own directory, which nothing else assembles because nobody publishes one.")
-            }
             Button {
                 showsList.toggle()
             } label: {
@@ -1460,6 +1399,111 @@ struct StationsMapView: View {
                             : "Show the station list.")
         }
         .padding(12)
+    }
+
+    /// Terrain shading, as a section of the Style menu.
+    ///
+    /// Basemap and terrain both answer "how is the ground drawn", so they are
+    /// one button. Kept a `@ViewBuilder` section rather than folded into the
+    /// basemap list because terrain is a separate axis: satellite with
+    /// hillshade is a real combination, and a single list of options could
+    /// not express it.
+    @ViewBuilder
+    private var terrainMenuSection: some View {
+        Divider()
+        Picker("Terrain", selection: $terrainStyleRaw) {
+            Text("No Terrain").tag("")
+            ForEach(TerrainShading.Style.allCases) { style in
+                Text(style.label).tag(style.rawValue)
+            }
+        }
+        .pickerStyle(.inline)
+        .disabled(!elevation.hasTerrain)
+
+        // A menu that says "no data" and stops there leaves the operator to
+        // guess which of the other controls fetches it. The way to get
+        // terrain belongs where its absence is noticed.
+        if elevation.hasTerrain {
+            Text("\(elevation.tileCount) terrain tile\(elevation.tileCount == 1 ? "" : "s") stored")
+        } else {
+            Text("No terrain data yet")
+        }
+        Button {
+            showingOfflineMaps = true
+        } label: {
+            Label(elevation.hasTerrain
+                  ? "Download More Terrain\u{2026}" : "Download Terrain\u{2026}",
+                  systemImage: "arrow.down.circle")
+        }
+    }
+
+    /// The map's errands: offline data, the directory, and the lookup retry.
+    ///
+    /// Each of these was its own control in the row. They have nothing in
+    /// common with each other except that none of them is a setting the
+    /// operator changes while reading the map, which is the test for whether
+    /// something has earned permanent space.
+    @ViewBuilder
+    private var mapActionsMenuItems: some View {
+        if modeRaw == "Map" {
+            // Two different things with two confusable names. "Offline Map"
+            // stores real tiles, so the map still pans and zooms with the
+            // network down. "Save Map Image" takes a picture of what is on
+            // screen. The old label for the second was "Save Offline", and
+            // its help text claimed MapKit had no offline-tile API. That was
+            // written before the tile store existed and left standing after,
+            // so the two buttons contradicted each other about what the app
+            // could do.
+            Button {
+                showingOfflineMaps = true
+            } label: {
+                Label(offlineTiles.hasStoredTiles
+                      ? "Offline Map (\(offlineTiles.statistics.sizeDescription))"
+                      : "Offline Map\u{2026}",
+                      systemImage: "square.stack.3d.down.right")
+            }
+            .help("Stores map tiles on this device so the map keeps working with no network \u{2014} the situation this app exists for. Import a file or download the area you are looking at.")
+            Button {
+                drawing.begin(.download)
+            } label: {
+                Label("Draw an Area to Download\u{2026}", systemImage: "square.dashed")
+            }
+            Button {
+                captureName = defaultCaptureName
+                showingCapture = true
+            } label: {
+                Label("Save Map Image\u{2026}", systemImage: "photo")
+            }
+            .help("Takes a picture of the area now on screen and saves it as an image file. A picture, not a map: it does not pan or zoom. For a map that still works offline, use Offline Map above.")
+            Divider()
+        }
+
+        if serviceStore != nil {
+            Button {
+                showingDirectory = true
+            } label: {
+                Label("Station Directory\u{2026}", systemImage: "text.book.closed")
+            }
+            .help("What the stations around here run \u{2014} nodes, bulletin boards, digipeaters and gateways, as they announced themselves in ID and beacon frames. The network's own directory, which nothing else assembles because nobody publishes one.")
+        }
+
+        // Kept, against the first instinct to delete it as redundant.
+        // Lookups do run on their own as stations are heard, so the button is
+        // not how positions normally arrive. It is still the only way to
+        // retry the ones that failed, which is what you want after the network
+        // comes back, and the only way to fill the directory layer in batches.
+        // Redundant in the ordinary case is not the same as redundant.
+        if !unplaced.isEmpty || showsDirectoryNodes {
+            Divider()
+            Button {
+                Task { await lookUpUnplaced() }
+            } label: {
+                Label(isLookingUp ? "Finding Positions\u{2026}" : "Retry Position Lookups",
+                      systemImage: "mappin.and.ellipse")
+            }
+            .disabled(isLookingUp || !settings.callsignLookupEnabled)
+            .help(findPositionsHelp)
+        }
     }
     #endif
 
