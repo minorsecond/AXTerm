@@ -1062,7 +1062,7 @@ final class SessionCoordinator: ObservableObject {
     /// radio — that radio's own callsign under its own alias.
     func announcements() -> [NetRomAnnouncement] {
         guard let appSettings else { return [] }
-        let radios = appSettings.activeRadios.filter { $0.enabled && $0.announcesNode }
+        let radios = appSettings.activeRadios.filter { $0.enabled && $0.mayAnnounceNode }
         let stationNode = CallsignNormalizer.toAddress(localCallsign)
         let stationAlias = netRomDriver.localAlias
         switch appSettings.netRomNodeIdentity {
@@ -1273,7 +1273,7 @@ final class SessionCoordinator: ObservableObject {
         // recently, among those that ping. A station heard only on a radio
         // whose pinging is off is not a candidate; with one radio, every
         // station is heard on it.
-        let pingRadios = serviceRadios(\.pings)
+        let pingRadios = serviceRadios(\.mayPing)
         for station in packetEngine?.stations ?? [] {
             let key = PingPolicy.normalize(station.call)
             // Heard *directly*: a station only ever heard through a
@@ -1837,7 +1837,21 @@ final class SessionCoordinator: ObservableObject {
     /// one radio that is simply the radio, connected or not, exactly as
     /// before radios existed — the engine already refuses frames for a link
     /// that is down.
-    func serviceRadios(_ uses: (RadioProfile) -> Bool) -> [RadioID] {
+/// Whether AXDP may be spoken on a radio.
+    ///
+    /// Not on an APRS channel. AXDP is AXTerm's own extension: nothing else on
+    /// the air implements it, so a probe there is a frame of pure overhead
+    /// broadcast onto a shared beacon frequency, and the negotiation that
+    /// follows a successful one is worse. `runsPacketServices` carries the
+    /// reasoning.
+    ///
+    /// Unknown radios read as allowed, because a session with no radio
+    /// recorded predates per-radio settings and behaved this way already.
+    func axdpAllowed(on radio: RadioID) -> Bool {
+        appSettings?.radio(radio)?.runsPacketServices ?? true
+    }
+
+        func serviceRadios(_ uses: (RadioProfile) -> Bool) -> [RadioID] {
         guard let appSettings else { return [.primary] }
         let enabled = appSettings.activeRadios.filter(\.enabled)
         guard enabled.count > 1 else { return [enabled.first?.id ?? .primary] }
@@ -2302,6 +2316,10 @@ final class SessionCoordinator: ObservableObject {
     private func sendTextProbe(to session: AX25Session) {
         let peerCallsign = session.remoteAddress.display.uppercased()
 
+        guard axdpAllowed(on: session.radio) else {
+            debugAXDP("Text probe withheld: APRS channel", ["peer": peerCallsign])
+            return
+        }
         if isAXDPNotSupported(for: peerCallsign) { return }
         if hasConfirmedAXDPCapability(for: peerCallsign) { return }
         if isCapabilityDiscoveryPending(for: peerCallsign) { return }
@@ -2376,8 +2394,12 @@ final class SessionCoordinator: ObservableObject {
     /// respond with AXDP PONG (also via UI frame).  The peer sent us a text probe,
     /// which proves they understand AXDP — so responding with binary PONG is safe.
     /// Internal access for testability.
-    func handleInboundTextProbe(from: AX25Address, path: DigiPath, payload: Data) {
+    func handleInboundTextProbe(from: AX25Address, path: DigiPath, payload: Data,
+                                radio: RadioID = .primary) {
         guard globalAdaptiveSettings.axdpExtensionsEnabled else { return }
+        // Answering a probe puts a binary PONG on the air. Not on a beacon
+        // channel, however politely we were asked.
+        guard axdpAllowed(on: radio) else { return }
         guard let text = String(data: payload, encoding: .ascii) else { return }
         guard text.hasPrefix("AXDP?") else { return }
 
@@ -2813,7 +2835,7 @@ final class SessionCoordinator: ObservableObject {
         case .UI:
             // Check for text-safe AXDP probe ("AXDP?\r") before binary AXDP check.
             // Text probes don't have AXDP magic, so handleAXDPMessage would skip them.
-            handleInboundTextProbe(from: from, path: path, payload: packet.info)
+            handleInboundTextProbe(from: from, path: path, payload: packet.info, radio: radio)
             // UI frames can also contain binary AXDP messages (capability discovery, file transfers)
             handleAXDPMessage(from: from, path: path, payload: packet.info)
         default:

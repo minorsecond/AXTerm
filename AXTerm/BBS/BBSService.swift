@@ -242,7 +242,7 @@ final class BBSService: ObservableObject {
             myCallsign: answeringCallsign,
             contestedBy: contestedIdentityHolder(),
             currentCaller: live?.callsign,
-            servesThisRadio: coordinator.appSettings?.radio(radio)?.answersMailbox ?? true)
+            servesThisRadio: coordinator.appSettings?.radio(radio)?.mayAnswerMailbox ?? true)
     }
 
     private func handleInbound(_ session: AX25Session) {

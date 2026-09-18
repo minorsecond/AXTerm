@@ -137,12 +137,45 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         return beacon.kind == .aprsPosition ? beacon.path : ""
     }
 
-    /// Whether APRS traffic belongs on this radio. True when the operator
-    /// switched APRS on, or when the radio already beacons an APRS position
-    /// (in which case its channel is APRS by definition, so no separate
-    /// toggle is needed). Used to scope APRS messaging and the reachability
-    /// flood to APRS channels only.
-    var handlesAPRS: Bool { aprsEnabled || beacon.kind == .aprsPosition }
+    /// Whether APRS traffic belongs on this radio. Used to scope APRS
+    /// messaging and the reachability flood to APRS channels only.
+    ///
+    /// This used to read `aprsEnabled || beacon.kind == .aprsPosition`, on the
+    /// reasoning that a radio beaconing an APRS position is on an APRS channel
+    /// by definition and should not need a second switch. The convenience was
+    /// real and the coupling was not visible: switching the beacon's Type back
+    /// to text silently stopped scoping APRS to the radio, from a control that
+    /// says nothing about messaging. The inference survives as a one-time seed
+    /// (`AppSettingsStore.seedAPRSFromBeacon`) rather than as a standing `||`,
+    /// so the switch still lands in the right place on its own and the
+    /// operator can then move it.
+    var handlesAPRS: Bool { aprsEnabled }
+
+    // MARK: - What an APRS channel is not for
+
+    /// Whether the packet-network services may run on this radio.
+    ///
+    /// They may not, on an APRS channel, and this is a rule rather than a
+    /// default the operator can talk us out of. A shared APRS frequency is a
+    /// beacon channel: 144.390 in North America carries every position report
+    /// for hundreds of miles, and a connected-mode session, a NET/ROM NODES
+    /// broadcast every hour, a mailbox answering calls or a capability probe
+    /// for a protocol nobody else implements all take airtime from the one
+    /// thing the channel exists for. Being able to do it is not a reason to.
+    ///
+    /// Written as a guard on the way out rather than as a rule that clears the
+    /// stored switches, so a radio moved to an APRS channel and back finds its
+    /// services where it left them.
+    var runsPacketServices: Bool { !aprsEnabled }
+
+    /// The ping prober may probe from this radio.
+    var mayPing: Bool { pings && runsPacketServices }
+
+    /// The NET/ROM node may announce itself on this radio.
+    var mayAnnounceNode: Bool { announcesNode && runsPacketServices }
+
+    /// The mailbox may answer calls arriving on this radio.
+    var mayAnswerMailbox: Bool { answersMailbox && runsPacketServices }
 
     init(id: RadioID, name: String) {
         self.id = id

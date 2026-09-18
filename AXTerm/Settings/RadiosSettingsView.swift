@@ -203,11 +203,19 @@ enum RadioPage: String, CaseIterable, Identifiable {
 struct RadioDetailView: View {
     let radioID: RadioID
     @ObservedObject var settings: AppSettingsStore
+    /// Read for the harvested station directory, which is what the SSID picker
+    /// annotates itself from on a packet channel.
+    let client: PacketEngine
     @StateObject private var viewModel: ConnectionTransportViewModel
     /// Supplied by the single-radio pane: the one door to a second radio.
     var onAddSecondRadio: (() -> Void)?
 
     @State private var showingSymbolPicker = false
+    /// Whether the identity picker is showing the free-text field rather than
+    /// an SSID under the station callsign. Seeded from what is stored, then
+    /// the operator's, so choosing "Another callsign" does not snap back while
+    /// the field is still empty.
+    @State private var usesOwnCallsign = false
     @State private var page: RadioPage = .connection
 
     /// One radio has no pages, so its connection rows are always showing.
@@ -219,6 +227,7 @@ struct RadioDetailView: View {
          onAddSecondRadio: (() -> Void)? = nil) {
         self.radioID = radioID
         self.settings = settings
+        self.client = client
         self.onAddSecondRadio = onAddSecondRadio
         _viewModel = StateObject(wrappedValue: ConnectionTransportViewModel(
             radioID: radioID, settings: settings, packetEngine: client))
@@ -252,15 +261,24 @@ struct RadioDetailView: View {
             // General; a second field saying the same thing would be noise.
             if settings.hasMultipleRadios, page == .onAir {
                 Section {
-                    CallsignField(title: stationCallsign.isEmpty ? "NOCALL" : stationCallsign,
-                                  text: $viewModel.callsign)
+                    Picker("SSID", selection: ssidBinding) {
+                        ForEach(Array(SSIDConvention.range), id: \.self) { ssid in
+                            ssidRow(ssid).tag(Optional(ssid))
+                        }
+                        Text("Another callsign\u{2026}").tag(Optional<Int>.none)
+                    }
+                    if ssidBinding.wrappedValue == nil {
+                        CallsignField(title: stationCallsign.isEmpty ? "NOCALL" : stationCallsign,
+                                      text: $viewModel.callsign)
+                    }
                 } header: {
                     Text("Identity")
                 } footer: {
-                    Text("Leave empty to operate as \(stationCallsign.isEmpty ? "your station callsign" : stationCallsign). "
-                         + "Give this radio its own SSID when two radios share a frequency, or when a "
-                         + "remote station should be able to reach this radio in particular. A call to "
-                         + "an SSID only one radio uses is answered by that radio whichever link heard it.")
+                    Text(identityFooter)
+                }
+                .onAppear {
+                    usesOwnCallsign = Self.ssidUnderStation(viewModel.callsign,
+                                                            station: stationCallsign) == nil
                 }
             }
 
@@ -394,7 +412,7 @@ struct RadioDetailView: View {
                 Section {
                     Toggle("Beacon on this radio", isOn: beaconBinding(\.enabled))
                     if beaconBinding(\.enabled).wrappedValue {
-                        Picker("Type", selection: beaconBinding(\.kind)) {
+                        Picker("Type", selection: beaconKindBinding) {
                             Text("Text").tag(BeaconKind.text)
                             Text("APRS position").tag(BeaconKind.aprsPosition)
                         }
@@ -427,6 +445,16 @@ struct RadioDetailView: View {
                 }
 
                 Section {
+                    Toggle("APRS on this radio", isOn: aprsServiceBinding)
+                        .help("This radio's channel is APRS: APRS messages and the \u{201C}Who can hear me\u{201D} query may go out on it. Leave off for a node or BBS frequency. Switched on for you the first time this radio is given an APRS position beacon, and yours to change after that.")
+                    if settings.radio(radioID)?.aprsEnabled == true { aprsPathRow }
+                } header: {
+                    Text("APRS")
+                } footer: {
+                    Text(aprsSectionFooter)
+                }
+
+                Section {
                     Toggle("Ping stations", isOn: serviceBinding(\.pings))
                     Toggle("Announce the NET/ROM node", isOn: serviceBinding(\.announcesNode))
                     if serviceBinding(\.announcesNode).wrappedValue {
@@ -439,21 +467,12 @@ struct RadioDetailView: View {
                         }
                     }
                     Toggle("Answer mailbox calls", isOn: serviceBinding(\.answersMailbox))
-                    Toggle("APRS on this radio", isOn: aprsServiceBinding)
-                        .disabled(beaconForcesAPRS)
-                        .help(beaconForcesAPRS
-                              ? "On automatically — this radio beacons an APRS position, so its channel is APRS."
-                              : "This radio's channel is APRS: APRS messages and the \u{201C}Who can hear me\u{201D} query may go out on it. Leave off for a node or BBS frequency.")
-                    if settings.radio(radioID)?.handlesAPRS == true { aprsPathRow }
                 } header: {
-                    Text("Services on this radio")
+                    Text("Packet")
                 } footer: {
-                    Text("Every service runs on every radio unless switched off here. Whether a "
-                         + "service runs at all is set under Transmission and BBS; these rows only "
-                         + "say which radios it uses (the mailbox is one shared store). APRS only "
-                         + "goes out on radios switched on here, so a node frequency is never "
-                         + "flooded with an APRS query.")
+                    Text(packetSectionFooter)
                 }
+                .disabled(isAPRSChannel)
 
                 Section {
                     Toggle("Digipeat on this radio", isOn: digiBinding(\.enabled))
@@ -793,18 +812,19 @@ struct RadioDetailView: View {
             })
     }
 
-    /// True when this radio beacons an APRS position, which makes its channel
-    /// APRS by definition — the APRS toggle is then forced on and read-only.
-    private var beaconForcesAPRS: Bool {
-        settings.radio(radioID)?.beacon.kind == .aprsPosition
-    }
-
-    /// The APRS toggle shows the *effective* state (`handlesAPRS`, so a
-    /// position-beaconing radio reads on) but only ever writes the operator's
-    /// explicit `aprsEnabled` bit.
+    /// The APRS switch: the one place that decides whether this radio's
+    /// channel is APRS.
+    ///
+    /// It used to be forced on and greyed out whenever the beacon was an APRS
+    /// position, on the same reasoning that put `beacon.kind` inside
+    /// `handlesAPRS`. That reasoning is wrong in both places for the same
+    /// reason: beaconing a position on a channel is not a promise that APRS
+    /// messaging and the reachability flood belong there too, and an operator
+    /// who wants the beacon without the rest had no way to say so. Choosing an
+    /// APRS beacon still seeds this switch on; it no longer holds it down.
     private var aprsServiceBinding: Binding<Bool> {
         Binding(
-            get: { settings.radio(radioID)?.handlesAPRS ?? false },
+            get: { settings.radio(radioID)?.aprsEnabled ?? false },
             set: { value in settings.updateRadio(radioID) { $0.aprsEnabled = value } })
     }
 
@@ -821,6 +841,138 @@ struct RadioDetailView: View {
 
     /// Bind one field of this radio's beacon. Writing re-applies so the new
     /// content/interval takes effect at the next beacon rather than at relaunch.
+    /// Whether this radio's channel is APRS, which settles what may run on it.
+    private var isAPRSChannel: Bool {
+        settings.radio(radioID)?.aprsEnabled == true
+    }
+
+    private var aprsSectionFooter: String {
+        "APRS only goes out on radios switched on here, so a node frequency is never flooded "
+            + "with an APRS query. Switching this on turns the packet services below off for "
+            + "this radio: a shared beacon channel is no place for a node broadcast, a mailbox, "
+            + "a ping or an AXDP probe. Your settings are kept, not cleared, and come back if "
+            + "you switch APRS off."
+    }
+
+    private var packetSectionFooter: String {
+        if isAPRSChannel {
+            return "Off while this radio is on an APRS channel. Nothing here has been changed — "
+                + "switch APRS off above and these come back as you left them."
+        }
+        return "Whether a service runs at all is set under Transmission and BBS; these rows only "
+            + "say which radios it uses (the mailbox is one shared store)."
+    }
+
+    // MARK: - Identity
+
+    /// What this radio has been heard carrying, when the traffic settles it.
+    ///
+    /// Both families or neither reads as unsettled. A radio bridging two
+    /// worlds has no single convention to quote, and advice for the wrong one
+    /// is worse than none: `SSIDConvention.detail` shows what it can either
+    /// way rather than picking a side on a coin toss.
+    private var trafficFamily: RadioTrafficFamily? {
+        let families = RadioTrafficClassifier.families(from: client.stations)[radioID] ?? []
+        return families.count == 1 ? families.first : nil
+    }
+
+    /// This radio's SSID, or nil when it operates under a callsign of its own.
+    ///
+    /// Nil is a real choice rather than an empty state: a club call and a
+    /// tactical alias are both legitimate, and a picker that could only count
+    /// to fifteen would have removed them. Choosing an SSID rewrites the
+    /// callsign field, so the stored shape is unchanged and nothing
+    /// downstream learns a new rule.
+    private var ssidBinding: Binding<Int?> {
+        Binding(
+            get: { usesOwnCallsign ? nil : Self.ssidUnderStation(viewModel.callsign,
+                                                                station: stationCallsign) },
+            set: { ssid in
+                guard let ssid else {
+                    // Reveals the free-text field and leaves whatever is in it
+                    // alone, so the operator edits rather than retypes.
+                    usesOwnCallsign = true
+                    return
+                }
+                usesOwnCallsign = false
+                let base = stationCallsign.uppercased()
+                viewModel.callsign = ssid == 0 ? base : "\(base)-\(ssid)"
+            })
+    }
+
+    /// The SSID a callsign carries *under this station's own call*, or nil
+    /// when it is some other identity.
+    ///
+    /// A club call or a tactical alias is its own identity even when it has an
+    /// SSID, so only the station's own base maps back onto the picker.
+    static func ssidUnderStation(_ callsign: String, station: String) -> Int? {
+        if callsign.isEmpty { return 0 }
+        guard let ssid = SSIDConvention.ssid(of: callsign) else {
+            return callsign.uppercased() == station.uppercased() ? 0 : nil
+        }
+        let base = callsign.split(separator: "-", maxSplits: 1).first.map(String.init) ?? ""
+        return base.uppercased() == station.uppercased() ? ssid : nil
+    }
+
+    /// What this station has heard other people use each SSID for.
+    ///
+    /// Recomputed per appearance rather than cached: a settings pane is opened
+    /// rarely and briefly, and a stale table here would be advice that has
+    /// quietly stopped matching the channel.
+    private var ssidUsage: [Int: [StationServiceParser.Service: Int]] {
+        guard let services = try? client.stationServices?.allServices() else { return [:] }
+        return SSIDConvention.localUsage(from: services)
+    }
+
+    @ViewBuilder
+    private func ssidRow(_ ssid: Int) -> some View {
+        let call = stationCallsign.isEmpty ? "NOCALL" : stationCallsign
+        if let detail = SSIDConvention.detail(ssid: ssid,
+                                              family: trafficFamily,
+                                              usage: ssidUsage) {
+            Text("\(ssid == 0 ? call : "\(call)-\(ssid)")  \u{2014}  \(detail)")
+        } else {
+            Text(ssid == 0 ? call : "\(call)-\(ssid)")
+        }
+    }
+
+    private var identityFooter: String {
+        let base = "Give this radio its own SSID when two radios share a frequency, or when a "
+            + "remote station should be able to reach this radio in particular. A call to an "
+            + "SSID only one radio uses is answered by that radio whichever link heard it."
+        switch trafficFamily {
+        case .aprs:
+            return base + " The meanings shown are the published APRS convention, which other "
+                + "people's software reads whatever you meant by it."
+        case .ax25:
+            return base + " Packet has no standard for SSIDs, so the meanings shown are what "
+                + "this station has heard its own neighbours use them for."
+        case nil:
+            return base + " Meanings appear here once this radio has heard enough traffic to "
+                + "tell which kind of channel it is on."
+        }
+    }
+
+    /// The beacon's Type, which seeds `aprsEnabled` when it first becomes an
+    /// APRS position.
+    ///
+    /// Choosing an APRS beacon says the channel is APRS, and making the
+    /// operator then find a second switch to say the same thing is how the old
+    /// `handlesAPRS ||` came to exist. Seeding is the convenience without the
+    /// coupling: switching back to Text leaves the APRS switch where the
+    /// operator last saw it rather than silently reaching over and moving it.
+    private var beaconKindBinding: Binding<BeaconKind> {
+        Binding(
+            get: { settings.radio(radioID)?.beacon.kind ?? .text },
+            set: { kind in
+                settings.updateRadio(radioID) { radio in
+                    radio.beacon.kind = kind
+                    if kind == .aprsPosition { radio.aprsEnabled = true }
+                }
+                SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
+
     private func beaconBinding<V>(_ keyPath: WritableKeyPath<BeaconConfig, V>) -> Binding<V> {
         Binding(
             get: { (settings.radio(radioID)?.beacon ?? BeaconConfig())[keyPath: keyPath] },

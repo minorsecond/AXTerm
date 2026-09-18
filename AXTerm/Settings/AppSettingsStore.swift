@@ -102,6 +102,15 @@ final class AppSettingsStore: ObservableObject {
     /// Set once the station-wide beacon has been seeded onto the first radio's
     /// per-radio `BeaconConfig`; gates that migration to run exactly once.
     static let beaconPerRadioMigratedKey = "beacon.perRadio.migrated.v1"
+    /// Set once each radio that beacons an APRS position has had `aprsEnabled`
+    /// switched on for it; gates that seed to run exactly once.
+    ///
+    /// `RadioProfile.handlesAPRS` used to infer APRS from the beacon kind on
+    /// every read. Removing that inference without seeding would have quietly
+    /// taken APRS messaging away from every station already beaconing a
+    /// position, which is the upgrade regression the inference existed to
+    /// avoid in the first place.
+    static let aprsSeededFromBeaconKey = "radio.aprsEnabled.seededFromBeacon.v1"
 
     /// Off, and empty. A beacon is the operator's own words going out
     /// over their licence; there is no default worth putting on the air
@@ -1260,14 +1269,36 @@ final class AppSettingsStore: ObservableObject {
             Self.testRetainedStores.append(self)
         }
 
+        // A radio already beaconing an APRS position is on an APRS channel, so
+        // it keeps the behaviour it had when `handlesAPRS` inferred that on
+        // every read. Once, then the switch is the operator's.
+        let seededAPRS = Self.seedAPRSFromBeacon(&self.radios, defaults: defaults)
+
         // The first launch after the update: the list was read off the old
         // keys above; write it now so the migration is over before anything
         // else runs, and the old keys are never consulted again.
-        if migratedRadios || seededBeaconOntoRadio { persistRadios() }
+        if migratedRadios || seededBeaconOntoRadio || seededAPRS { persistRadios() }
     }
 
 
     // MARK: - Radios
+
+    /// Switches `aprsEnabled` on for radios that already beacon an APRS
+    /// position, once.
+    ///
+    /// Returns whether anything changed, so the caller knows to persist.
+    static func seedAPRSFromBeacon(_ radios: inout [RadioProfile],
+                                   defaults: UserDefaults) -> Bool {
+        guard !defaults.bool(forKey: aprsSeededFromBeaconKey) else { return false }
+        defaults.set(true, forKey: aprsSeededFromBeaconKey)
+        var changed = false
+        for index in radios.indices where
+            radios[index].beacon.kind == .aprsPosition && !radios[index].aprsEnabled {
+            radios[index].aprsEnabled = true
+            changed = true
+        }
+        return changed
+    }
 
     /// The radios the operator can see: everything not archived.
     var activeRadios: [RadioProfile] { radios.filter { !$0.archived } }
