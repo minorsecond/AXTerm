@@ -29,6 +29,13 @@ nonisolated final class AFSKDemodulator {
     private var markDetector: QuadratureToneDetector
     private var spaceDetector: QuadratureToneDetector
 
+    /// Per-block scratch, grown on demand and reused. The chain used to
+    /// allocate every stage's output on every block.
+    private var baseband: [Float] = []
+    private var filtered: [Float] = []
+    private var mark: [Float] = []
+    private var space: [Float] = []
+
     private struct Slicer {
         let twistGain: Float
         var pll: DigitalPLL
@@ -47,11 +54,16 @@ nonisolated final class AFSKDemodulator {
     /// With one slicer nothing showed; with nine the app would count a packet,
     /// a position or a message more than once.
     private var sampleClock: Int64 = 0
-    /// `sampleClock` in bit times, which is what the window is expressed in.
-    private var bitClock: Int64 { Int64(Double(sampleClock) * mode.baud / demodSampleRate) }
+    /// A sample clock reading in bit times, which is what the window is
+    /// expressed in.
+    private func bitClock(at samples: Int64) -> Int64 {
+        Int64(Double(samples) * mode.baud / demodSampleRate)
+    }
     private var slicers: [Slicer]
     private let discriminationAlpha: Float
     private var dedup = FrameDeduplicator()
+    /// The slicer with no tilt hypothesis; its FCS errors are the honest count.
+    private let centreSlicer: Int
 
     // Telemetry, read from the DSP thread that drives `process`.
     private(set) var framesDecoded: UInt64 = 0
@@ -122,6 +134,7 @@ nonisolated final class AFSKDemodulator {
         self.decimation = d
         self.demodSampleRate = inputSampleRate / Double(d)
         self.slicerTwistsDB = slicerTwistsDB.isEmpty ? [0] : slicerTwistsDB
+        self.centreSlicer = self.slicerTwistsDB.firstIndex(of: 0) ?? 0
 
         if d > 1 {
             // Keep everything below the tones' upper sidebands, kill the rest
@@ -174,68 +187,149 @@ nonisolated final class AFSKDemodulator {
 
     /// Feed one block of input audio (mono, at `inputSampleRate`).
     func process(_ input: [Float], emit: (Event) -> Void) {
-        guard !input.isEmpty else { return }
+        input.withUnsafeBufferPointer { process($0, emit: emit) }
+    }
+
+    func process(_ input: UnsafeBufferPointer<Float>, emit: (Event) -> Void) {
+        guard let base = input.baseAddress, input.count > 0 else { return }
         var peak: Float = 0
         var rms: Float = 0
-        vDSP_maxmgv(input, 1, &peak, vDSP_Length(input.count))
-        vDSP_rmsqv(input, 1, &rms, vDSP_Length(input.count))
+        vDSP_maxmgv(base, 1, &peak, vDSP_Length(input.count))
+        vDSP_rmsqv(base, 1, &rms, vDSP_Length(input.count))
         rxPeak = peak
         rxRMS = rms
 
-        let baseband: [Float]
-        if var dec = decimator {
-            baseband = dec.process(input)
-            decimator = dec
+        let nFiltered: Int
+        if decimator != nil {
+            guard let nb = decimator?.process(input, into: &baseband), nb > 0 else { return }
+            nFiltered = baseband.withUnsafeBufferPointer { bb in
+                prefilter.process(UnsafeBufferPointer(rebasing: bb[0..<nb]), into: &filtered)
+            }
         } else {
-            baseband = input
+            nFiltered = prefilter.process(input, into: &filtered)
         }
-        let filtered = prefilter.process(baseband)
-        guard !filtered.isEmpty else { return }
-        let mark = markDetector.process(filtered)
-        let space = spaceDetector.process(filtered)
-        let n = min(mark.count, space.count)
-        guard n > 0 else { return }
+        guard nFiltered > 0 else { return }
 
-        for k in 0..<n {
-            sampleClock += 1
-            let m = mark[k], s = space[k]
-            // Signal presence, from the untwisted comparison: a real tone
-            // pushes |decision| toward 1, equal powers leave it near 0.
-            let plain = (m - s) / (m + s + 1e-12)
-            toneDiscrimination += (abs(plain) - toneDiscrimination) * discriminationAlpha
-            for index in slicers.indices {
-                let g = slicers[index].twistGain
-                let decision = (m - g * s) / (m + g * s + 1e-12)
-                let level = decision > 0
-                if level != slicers[index].lastLevel {
-                    slicers[index].lastLevel = level
-                    slicers[index].pll.transition(dataDetected: slicers[index].hdlc.activity != .idle)
+        let n: Int = filtered.withUnsafeBufferPointer { f in
+            let block = UnsafeBufferPointer(rebasing: f[0..<nFiltered])
+            let nm = markDetector.process(block, into: &mark)
+            let ns = spaceDetector.process(block, into: &space)
+            return min(nm, ns)
+        }
+        guard n > 0 else { return }
+        slice(n, emit: emit)
+    }
+
+    /// A slicer finishing something on a sample, held until every slicer
+    /// has walked the block.
+    private struct Completion {
+        let sample: Int
+        let slicer: Int
+        let result: HDLCDecoder.Event
+    }
+
+    /// The bit decisions and everything downstream of them, for one block.
+    ///
+    /// Slicer-outer rather than sample-outer: each slicer walks the block
+    /// with its state in a local, written back once, instead of nine array
+    /// elements being reached into on every sample. The element is moved out
+    /// for the walk and initialised back in, which keeps the HDLC decoder's
+    /// byte buffer uniquely owned — a copy would share it and the first byte
+    /// appended would copy the whole thing.
+    ///
+    /// What a slicer finishes is not acted on inside its walk. Completions
+    /// are recorded with their sample, sorted by sample and slicer once the
+    /// array is whole again, and only then run through the deduplicator,
+    /// the counters and `emit`. That is the order the sample-outer loop
+    /// produced, reproduced exactly, and the deduplicator depends on it: its
+    /// window is measured in bit times, and a slicer that had already walked
+    /// past the whole of a long block would have aged its own sightings out
+    /// before the next slicer reported the same frames. Two tests feed a
+    /// whole run in one block and caught precisely that.
+    ///
+    /// The level is the sign of `(mark − gain·space)·(mark + gain·space + ε)`,
+    /// which is the sign of the old normalised quotient in every case that
+    /// arises, for a multiply instead of nine divisions a sample. The
+    /// quotient itself is still taken once per sample, untwisted, for tone
+    /// discrimination, which needs the magnitude.
+    private func slice(_ n: Int, emit: (Event) -> Void) {
+        let baseClock = sampleClock
+        sampleClock += Int64(n)
+        var completions: [Completion] = []
+
+        mark.withUnsafeBufferPointer { mp in
+            space.withUnsafeBufferPointer { sp in
+                let m = mp.baseAddress!, s = sp.baseAddress!
+
+                // Signal presence, from the untwisted comparison: a real tone
+                // pushes |decision| toward 1, equal powers leave it near 0.
+                // `while` rather than `for k in 0..<n` in the two kernels
+                // below: on an unoptimised build a range loop steps through
+                // the Collection protocol witnesses on every iteration, and
+                // a sample of the DSP thread showed those witnesses as its
+                // top two self-time frames.
+                var disc = toneDiscrimination
+                let alpha = discriminationAlpha
+                var k = 0
+                while k < n {
+                    let plain = (m[k] - s[k]) / (m[k] + s[k] + 1e-12)
+                    disc += (abs(plain) - disc) * alpha
+                    k += 1
                 }
-                guard slicers[index].pll.advance() else { continue }
-                let bit = slicers[index].nrzi.decode(level: level)
-                switch slicers[index].hdlc.push(bit: bit) {
-                case .frame(let data):
-                    if dedup.shouldDeliver(data, slicer: index, atBit: bitClock) {
-                        framesDecoded += 1
-                        framesPerSlicer[index] += 1
-                        lastDecodingSlicer = index
-                        emit(.frame(data, slicer: index))
-                    } else {
-                        duplicatesSuppressed += 1
+                toneDiscrimination = disc
+
+                slicers.withUnsafeMutableBufferPointer { table in
+                    guard let first = table.baseAddress else { return }
+                    for index in 0..<table.count {
+                        let slot = first + index
+                        var slicer = slot.move()
+                        let g = slicer.twistGain
+                        var k = 0
+                        while k < n {
+                            defer { k += 1 }
+                            let mk = m[k], gs = g * s[k]
+                            let level = (mk - gs) * (mk + gs + 1e-12) > 0
+                            if level != slicer.lastLevel {
+                                slicer.lastLevel = level
+                                slicer.pll.transition(dataDetected: slicer.hdlc.activity != .idle)
+                            }
+                            guard slicer.pll.advance() else { continue }
+                            let bit = slicer.nrzi.decode(level: level)
+                            let result = slicer.hdlc.push(bit: bit)
+                            switch result {
+                            case .frame, .fcsError:
+                                completions.append(Completion(sample: k, slicer: index, result: result))
+                            case .none, .flag, .abort, .tooLong:
+                                break
+                            }
+                        }
+                        slot.initialize(to: slicer)
                     }
-                case .fcsError:
-                    if index == centreSlicer { fcsErrors += 1 }
-                    emit(.fcsError(slicer: index))
-                case .none, .flag, .abort, .tooLong:
-                    break
                 }
             }
         }
-    }
 
-    /// The slicer with no tilt hypothesis; its FCS errors are the honest count.
-    private var centreSlicer: Int {
-        slicerTwistsDB.firstIndex(of: 0) ?? 0
+        completions.sort { ($0.sample, $0.slicer) < ($1.sample, $1.slicer) }
+        for completion in completions {
+            let index = completion.slicer
+            switch completion.result {
+            case .frame(let data):
+                let atBit = bitClock(at: baseClock + Int64(completion.sample) + 1)
+                if dedup.shouldDeliver(data, slicer: index, atBit: atBit) {
+                    framesDecoded += 1
+                    framesPerSlicer[index] += 1
+                    lastDecodingSlicer = index
+                    emit(.frame(data, slicer: index))
+                } else {
+                    duplicatesSuppressed += 1
+                }
+            case .fcsError:
+                if index == centreSlicer { fcsErrors += 1 }
+                emit(.fcsError(slicer: index))
+            case .none, .flag, .abort, .tooLong:
+                break
+            }
+        }
     }
 
     /// Forget everything about the current signal (after our own transmission).

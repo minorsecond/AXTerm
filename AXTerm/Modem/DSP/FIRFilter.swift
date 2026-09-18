@@ -26,15 +26,20 @@ nonisolated struct FIRFilter: Sendable {
         buffer.reserveCapacity(taps.count + 4096)
     }
 
-    /// Filter (and decimate) one block. Returns the output samples this block
-    /// made available — fewer than the input by the decimation factor, and
-    /// fewer still while the filter fills.
-    mutating func process(_ input: [Float]) -> [Float] {
+    /// Filter (and decimate) one block into `out`, which is grown if it is
+    /// too small and otherwise reused. Returns how many output samples this
+    /// block made available — fewer than the input by the decimation factor,
+    /// and fewer still while the filter fills. `out` may be longer than that.
+    ///
+    /// The caller keeps `out` across blocks. The array-returning form below
+    /// allocated a fresh output every block, and on the demodulator's path
+    /// that was five allocations per block before a single multiply.
+    mutating func process(_ input: UnsafeBufferPointer<Float>, into out: inout [Float]) -> Int {
         buffer.append(contentsOf: input)
         let n = taps.count
-        guard buffer.count >= n else { return [] }
+        guard buffer.count >= n else { return 0 }
         let outCount = (buffer.count - n) / decimation + 1
-        var out = [Float](repeating: 0, count: outCount)
+        if out.count < outCount { out.append(contentsOf: repeatElement(0, count: outCount - out.count)) }
         buffer.withUnsafeBufferPointer { inPtr in
             taps.withUnsafeBufferPointer { tapPtr in
                 out.withUnsafeMutableBufferPointer { outPtr in
@@ -48,7 +53,17 @@ nonisolated struct FIRFilter: Sendable {
                 }
             }
         }
+        // What remains is the tail the next block overlaps: taps − 1 samples,
+        // so this move is small.
         buffer.removeFirst(outCount * decimation)
+        return outCount
+    }
+
+    /// Array in, array out, for callers that do not keep an output buffer.
+    mutating func process(_ input: [Float]) -> [Float] {
+        var out: [Float] = []
+        let n = input.withUnsafeBufferPointer { process($0, into: &out) }
+        if out.count > n { out.removeLast(out.count - n) }
         return out
     }
 

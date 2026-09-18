@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 
 /// The modem's audio over the radio's WLAN: the session's received PCM
@@ -27,8 +28,11 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
     private var txTimer: DispatchSourceTimer?
     private var isRunning = false
     private var captureScratch = [Float](repeating: 0, count: 4096)
+    /// Capture and render run on different queues, so each has its own
+    /// 16-bit staging buffer.
+    private var captureInt16 = [Int16](repeating: 0, count: 4096)
     private var renderScratch = [Float](repeating: 0, count: 960)
-    private var pcmScratch = [UInt8](repeating: 0, count: 1920)
+    private var renderInt16 = [Int16](repeating: 0, count: 960)
     private var wasFeeding = false
     /// Consecutive 20 ms frames the engine has kept quiet; after a few,
     /// nothing is sent until it speaks again.
@@ -101,11 +105,18 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
             bytes = pcm.count
             let n = bytes / 2
             if captureScratch.count < n { captureScratch = [Float](repeating: 0, count: n) }
-            pcm.withUnsafeBytes { raw in
-                let p = raw.bindMemory(to: UInt8.self)
-                for i in 0..<n {
-                    let v = Int16(bitPattern: UInt16(p[2 * i]) | UInt16(p[2 * i + 1]) << 8)
-                    captureScratch[i] = Float(v) / 32768
+            if captureInt16.count < n { captureInt16 = [Int16](repeating: 0, count: n) }
+            // One copy and two vector ops. The byte-at-a-time loop this
+            // replaces ran three bounds-checked reads per sample, sixteen
+            // thousand times a second, on the packet-receive queue. Native
+            // byte order is little-endian on every platform this runs on,
+            // which is the order the radio sends.
+            captureInt16.withUnsafeMutableBytes { raw in _ = pcm.copyBytes(to: raw) }
+            captureInt16.withUnsafeBufferPointer { i16 in
+                captureScratch.withUnsafeMutableBufferPointer { f in
+                    vDSP_vflt16(i16.baseAddress!, 1, f.baseAddress!, 1, vDSP_Length(n))
+                    var scale: Float = 1.0 / 32768   // exact, so identical to the division
+                    vDSP_vsmul(f.baseAddress!, 1, &scale, f.baseAddress!, 1, vDSP_Length(n))
                 }
             }
             captureScratch.withUnsafeBufferPointer { buf in
@@ -117,7 +128,7 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
             bytes = session?.typicalAudioPacketBytes ?? 960
             let n = bytes / 2
             if captureScratch.count < n { captureScratch = [Float](repeating: 0, count: n) }
-            for i in 0..<n { captureScratch[i] = 0 }
+            captureScratch.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(n)) }
             captureScratch.withUnsafeBufferPointer { buf in
                 sink.audioIO(didCapture: UnsafeBufferPointer(rebasing: buf[0..<n]), hostTime: 0)
             }
@@ -132,7 +143,7 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
         guard isRunning, let sink, let session, let format else { return }
         let frames = Int(format.sampleRate * 0.02)
         if renderScratch.count != frames { renderScratch = [Float](repeating: 0, count: frames) }
-        if pcmScratch.count != frames * 2 { pcmScratch = [UInt8](repeating: 0, count: frames * 2) }
+        if renderInt16.count != frames { renderInt16 = [Int16](repeating: 0, count: frames) }
         let written = renderScratch.withUnsafeMutableBufferPointer { sink.audioIO(render: $0) }
         if written == 0 {
             quietFrames += 1
@@ -140,12 +151,20 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
         } else {
             quietFrames = 0
         }
-        for i in 0..<frames {
-            let v = i < written ? max(-1, min(1, renderScratch[i])) : 0
-            let s = Int16(v * 32767)
-            pcmScratch[2 * i] = UInt8(truncatingIfNeeded: s)
-            pcmScratch[2 * i + 1] = UInt8(truncatingIfNeeded: s >> 8)
+        // Zero past what was rendered, clip, scale, truncate toward zero —
+        // the same arithmetic as `Int16(v * 32767)` on a clipped v — as
+        // vector ops rather than a loop of three array writes per sample.
+        renderScratch.withUnsafeMutableBufferPointer { f in
+            let p = f.baseAddress!
+            if written < frames { vDSP_vclr(p + written, 1, vDSP_Length(frames - written)) }
+            var low: Float = -1, high: Float = 1, scale: Float = 32767
+            vDSP_vclip(p, 1, &low, &high, p, 1, vDSP_Length(frames))
+            vDSP_vsmul(p, 1, &scale, p, 1, vDSP_Length(frames))
+            renderInt16.withUnsafeMutableBufferPointer { i16 in
+                vDSP_vfix16(p, 1, i16.baseAddress!, 1, vDSP_Length(frames))
+            }
         }
-        session.sendAudio(pcm: Data(pcmScratch))
+        let pcm = renderInt16.withUnsafeBufferPointer { Data(buffer: UnsafeBufferPointer(rebasing: $0[0..<frames])) }
+        session.sendAudio(pcm: pcm)
     }
 }

@@ -40,7 +40,13 @@ nonisolated final class SPSCRingBuffer: @unchecked Sendable {
         let t = tail.load(ordering: .acquiring)
         let room = capacity - (h - t)
         let n = min(room, samples.count)
-        for i in 0..<n { storage[(h + i) & mask] = base[i] }
+        guard n > 0 else { return 0 }
+        // At most two straight copies: up to the end of the ring, then the
+        // wrap. This was a masked store per sample, on the audio thread.
+        let start = h & mask
+        let first = min(n, capacity - start)
+        (storage + start).update(from: base, count: first)
+        if n > first { storage.update(from: base + first, count: n - first) }
         head.store(h + n, ordering: .releasing)
         return n
     }
@@ -57,7 +63,11 @@ nonisolated final class SPSCRingBuffer: @unchecked Sendable {
         let t = tail.load(ordering: .relaxed)
         let h = head.load(ordering: .acquiring)
         let n = min(h - t, into.count)
-        for i in 0..<n { base[i] = storage[(t + i) & mask] }
+        guard n > 0 else { return 0 }
+        let start = t & mask
+        let first = min(n, capacity - start)
+        base.update(from: storage + start, count: first)
+        if n > first { (base + first).update(from: storage, count: n - first) }
         tail.store(t + n, ordering: .releasing)
         return n
     }

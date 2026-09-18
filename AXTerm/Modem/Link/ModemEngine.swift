@@ -49,6 +49,16 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     private let running = Atomic<Bool>(false)
     /// 0 waiting for the PTT controller, 1 keyed, 2 refused.
     private let pttConfirmation = Atomic<Int>(0)
+    /// Bumped whenever `configuration` is written, so the DSP loop can tell
+    /// there is nothing to re-read without taking the lock.
+    ///
+    /// `iterate` ran `configuration.withLock { $0 }` and compared the result
+    /// to `active` on every pass. The loop wakes at least every 5 ms, so that
+    /// was a lock, a copy of a twenty-field struct carrying two optional
+    /// strings and an array, and a field-by-field `==`, two hundred times a
+    /// second, to notice a change that arrives when the operator opens
+    /// settings. It was a third of the time spent inside `iterate`.
+    private let configurationGeneration = Atomic<UInt64>(0)
     private let wake = DispatchSemaphore(value: 0)
     private let stopped = DispatchSemaphore(value: 0)
     private var thread: Thread?
@@ -63,6 +73,9 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     }
     private var txState: TXState = .idle
     private var active = SoftModemConfiguration()
+    /// The generation `active` was built from. Starts at zero, and `start`
+    /// reads the configuration outright, so the first pass has nothing to do.
+    private var appliedGeneration: UInt64 = 0
     private var sampleRate: Double = 48_000
     private var demodulator: AFSKDemodulator?
     /// Replaced with a rate-derived hold when the engine starts; this is only
@@ -107,6 +120,9 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     func start() throws {
         guard !isRunning else { return }
         active = configuration.withLock { $0 }
+        // Seeded together, so a configuration written before `start` does not
+        // make the first pass re-read something already applied.
+        appliedGeneration = configurationGeneration.load(ordering: .acquiring)
         audio.sink = self
         try audio.start()
         guard let format = audio.format else { throw ModemError.audio("no audio format") }
@@ -177,6 +193,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     /// Apply new settings; takes effect at the next block boundary.
     func update(configuration new: SoftModemConfiguration) {
         configuration.withLock { $0 = new }
+        configurationGeneration.wrappingAdd(1, ordering: .releasing)
         if scheduling == .dedicatedThread { wake.signal() }
     }
 
@@ -228,7 +245,14 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
 
     private func runLoop() {
         while isRunning {
-            _ = wake.wait(timeout: .now() + .milliseconds(5))
+            // Everything that can give this loop work signals `wake`: captured
+            // audio, a queued frame, a tone request, a configuration change,
+            // the PTT confirmation. The timeout is a safety net, so it is long
+            // while the transmitter is idle and short only while it is not.
+            // At 5 ms unconditionally the loop woke two hundred times a second
+            // to find nothing, taking two locks each time to be sure.
+            let timeout: DispatchTimeInterval = txState == .idle ? .milliseconds(100) : .milliseconds(5)
+            _ = wake.wait(timeout: .now() + timeout)
             guard isRunning else { break }
             iterate()
         }
@@ -237,8 +261,12 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
 
     /// One pass: drain captured audio, decode, run the transmitter, report.
     private func iterate() {
-        let config = configuration.withLock { $0 }
-        if config != active { applyConfiguration(config) }
+        let generation = configurationGeneration.load(ordering: .acquiring)
+        if generation != appliedGeneration {
+            appliedGeneration = generation
+            let config = configuration.withLock { $0 }
+            if config != active { applyConfiguration(config) }
+        }
 
         while rxRing.availableToRead >= scratchIn.count {
             let n = scratchIn.withUnsafeMutableBufferPointer { rxRing.read(into: $0) }
