@@ -1848,7 +1848,19 @@ struct ContentView: View {
                 // the camera are warm before the operator clicks Map —
                 // and still where they left them when they come back.
                 if mapKeptAlive || selectedNav == .map {
-                    stationsMapDetail
+                    // The map is mounted the whole time (see below), so
+                    // without this it re-ran its body on every packet on
+                    // every tab — the AttributeGraph/Observation churn that
+                    // held the main thread at 40%% of a core. The box prunes
+                    // that subtree between meaningful changes: its key folds
+                    // in everything the map visibly depends on plus a 1 s
+                    // bucket, and the marker math it guards is already
+                    // 15 s-bucketed, so nothing on screen moves less often
+                    // than it did. Internal state (selection, a drag) changes
+                    // the map's own @State and re-renders it regardless of
+                    // this key, so interaction is untouched.
+                    EquatableBox(key: mapRenderKey) { stationsMapDetail }
+                        .equatable()
                         .opacity(selectedNav == .map ? 1 : 0)
                         .allowsHitTesting(selectedNav == .map)
                         .accessibilityHidden(selectedNav != .map)
@@ -1879,7 +1891,35 @@ struct ContentView: View {
                 name: $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name) }
     }
 
-    private var stationsMapDetail: some View {
+/// Everything the map's appearance depends on, as a cheap string.
+    ///
+    /// Changes here are the only thing that re-renders the map subtree while
+    /// it sits mounted behind another tab or between packets. A one-second
+    /// bucket keeps coverage rings and recency tints feeling live; anything
+    /// structural (a new station, a placed object, an alert, a toggle, the
+    /// tab coming to the front) is named explicitly so it shows at once
+    /// rather than waiting out the bucket.
+    private var mapRenderKey: String {
+        var parts: [String] = []
+        parts.append(selectedNav == .map ? "on" : "off")
+        parts.append(String(Int(Date().timeIntervalSince1970)))   // 1 s bucket
+        parts.append(String(client.stations.count))
+        parts.append(String(client.aprsObjects.live().count))
+        parts.append(String(client.aprsAlerts.alerts.count))
+        parts.append(String(callsignLookup.records.count))
+        parts.append(String(nodeAliases.directory.allEntries.count))
+        parts.append(settings.myCallsign)
+        parts.append(winlinkContext.settings.gridSquare)
+        if let pos = myPosition {
+            parts.append("\(pos.point.latitude),\(pos.point.longitude)")
+        } else {
+            parts.append("-")
+        }
+        parts.append(client.hiddenRadioIDs.map(\.rawValue).sorted().joined(separator: ","))
+        return parts.joined(separator: "|")
+    }
+
+        private var stationsMapDetail: some View {
         StationsMapView(
             stations: client.stations.filter(client.isVisible),
             objects: client.aprsObjects,
