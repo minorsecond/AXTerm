@@ -192,6 +192,38 @@ final class ModemRadioLinkTests: XCTestCase {
 
     // MARK: - Keying
 
+    /// The heart of the flap fix: a connection that comes up does NOT clear the
+    /// reconnect backoff immediately (as the old code did, which let a CI-V
+    /// flap masquerade as success and hammered the radio). It stays until the
+    /// connection has held the stability window.
+    func testABackoffIsNotClearedBeforeTheWindow() async throws {
+        let transport = FakeCIVTransport(); transport.responder = ModemRadioLinkTests.ic705
+        let link = ModemRadioLink(config: config(), audio: SyntheticModemIO(),
+                                  makeTransport: { _ in transport },
+                                  scheduling: .inline, stableConnectionSeconds: 5)
+        link.testReconnectAttempt = 5   // as if we had been retrying
+        link.open()
+        await waitUntil { link.state == .connected }
+        try await Task.sleep(for: .milliseconds(200))   // well inside the 5 s window
+        XCTAssertEqual(link.testReconnectAttempt, 5, "backoff must survive until the connection has held the window")
+        link.close()
+    }
+
+    /// And once the connection has held the window, the backoff is cleared, so a
+    /// genuinely stable radio starts fresh next time.
+    func testABackoffClearsOnceTheConnectionHolds() async throws {
+        let transport = FakeCIVTransport(); transport.responder = ModemRadioLinkTests.ic705
+        let link = ModemRadioLink(config: config(), audio: SyntheticModemIO(),
+                                  makeTransport: { _ in transport },
+                                  scheduling: .inline, stableConnectionSeconds: 0.3)
+        link.testReconnectAttempt = 5
+        link.open()
+        await waitUntil { link.state == .connected }
+        await waitUntil(3) { link.testReconnectAttempt == 0 }
+        XCTAssertEqual(link.testReconnectAttempt, 0, "a connection that outlasts the window clears the backoff")
+        link.close()
+    }
+
     func testATransmissionKeysAndUnkeysOverCIV() async throws {
         let (link, transport, audio, _) = makeLink(config())
         link.open()

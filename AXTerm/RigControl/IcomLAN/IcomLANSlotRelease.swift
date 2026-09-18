@@ -26,13 +26,25 @@ import Darwin
 /// clean close sends, matched on the sender/receiver IDs in its header.
 nonisolated enum IcomLANSlotRelease {
 
-    /// What we keep about the last session we held on a given radio: enough to
-    /// address a `disconnect` at it, and when we last had it so a slot that has
-    /// long since lapsed on its own is left alone.
-    struct Memory: Codable, Equatable {
+    /// One UDP stream of a session we held: enough to address a `disconnect`
+    /// at it. The radio runs the control, CI-V (serial) and audio streams
+    /// separately and can keep the CI-V stream attached to a dead session
+    /// while granting a new one audio, so all of them have to be released, not
+    /// just control.
+    struct Endpoint: Codable, Equatable {
         var localID: UInt32
         var remoteID: UInt32
         var sourcePort: UInt16
+        /// The radio-side port this stream talks to (control 50001, CI-V 50002,
+        /// audio 50003).
+        var radioPort: UInt16
+    }
+
+    /// What we keep about the last session we held on a given radio: every
+    /// stream we can address, and when we last had it so a slot that has long
+    /// since lapsed on its own is left alone.
+    struct Memory: Codable, Equatable {
+        var streams: [Endpoint]
         /// Seconds since the reference date, refreshed whenever we hold or
         /// leave the session, so recency measures from when we last had it.
         var savedAt: TimeInterval
@@ -51,14 +63,15 @@ nonisolated enum IcomLANSlotRelease {
 
     private static func key(for host: String) -> String { "icomLAN.lastSession." + host }
 
-    /// Record the session we hold on `host`. A remote ID of zero or an unknown
-    /// source port means we never really had the slot, so there is nothing to
-    /// reclaim and nothing worth storing.
-    static func remember(host: String, localID: UInt32, remoteID: UInt32, sourcePort: UInt16?,
+    /// Record the streams we hold on `host`. A stream whose remote ID is zero
+    /// or whose source port is unknown never really came up, so it is dropped;
+    /// if nothing remains there is nothing to reclaim and nothing is stored.
+    static func remember(host: String, streams: [Endpoint],
                          now: TimeInterval = Date.timeIntervalSinceReferenceDate,
                          defaults: UserDefaults = .standard) {
-        guard remoteID != 0, let sourcePort else { return }
-        let memory = Memory(localID: localID, remoteID: remoteID, sourcePort: sourcePort, savedAt: now)
+        let usable = streams.filter { $0.remoteID != 0 && $0.sourcePort != 0 }
+        guard !usable.isEmpty else { return }
+        let memory = Memory(streams: usable, savedAt: now)
         if let data = try? JSONEncoder().encode(memory) {
             defaults.set(data, forKey: key(for: host))
         }
@@ -71,6 +84,24 @@ nonisolated enum IcomLANSlotRelease {
 
     static func forget(host: String, defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: key(for: host))
+    }
+
+    /// One disconnect ready to send: the bytes, and where they go from and to.
+    struct ReleasePacket: Equatable {
+        var bytes: Data
+        var radioPort: UInt16
+        var fromPort: UInt16
+    }
+
+    /// The disconnects that release a remembered session — one per stream, so
+    /// the CI-V and audio streams are freed, not just control. Each is a
+    /// `disconnect` (0x05) naming that stream's own session IDs, addressed to
+    /// its radio port and sent from the source port the radio knew it by.
+    static func releasePackets(for memory: Memory) -> [ReleasePacket] {
+        memory.streams.map { stream in
+            ReleasePacket(bytes: IcomLAN.control(.disconnect, local: stream.localID, remote: stream.remoteID),
+                          radioPort: stream.radioPort, fromPort: stream.sourcePort)
+        }
     }
 
     /// Whether a remembered session is recent enough that the radio may still be
@@ -86,14 +117,19 @@ nonisolated enum IcomLANSlotRelease {
     /// settle before it logs in. Best-effort throughout: any failure just means
     /// the connect falls back to the login retry ladder, exactly as before.
     @discardableResult
-    static func reclaim(host: String, controlPort: UInt16,
+    static func reclaim(host: String,
                         now: TimeInterval = Date.timeIntervalSinceReferenceDate,
                         defaults: UserDefaults = .standard) -> Bool {
         guard AppEnvironment.mayConnect(to: host) else { return false }
         guard let memory = recall(host: host, defaults: defaults) else { return false }
         guard isReclaimable(memory, now: now) else { return false }
-        let packet = IcomLAN.control(.disconnect, local: memory.localID, remote: memory.remoteID)
-        return Self.sendDatagram(packet, host: host, port: controlPort, fromPort: memory.sourcePort)
+        var sentAny = false
+        for release in releasePackets(for: memory) {
+            if Self.sendDatagram(release.bytes, host: host, port: release.radioPort, fromPort: release.fromPort) {
+                sentAny = true
+            }
+        }
+        return sentAny
     }
 
     /// Send one datagram twice (UDP drops silently) from a fixed source port

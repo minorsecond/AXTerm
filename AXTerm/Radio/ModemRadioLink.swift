@@ -56,9 +56,24 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     private var wantsOpen = false
     private var reconnectAttempt = 0
     private var reconnectTask: Task<Void, Never>?
+    private var stabilityTask: Task<Void, Never>?
     private static let maxReconnectAttempts = 8
     private static let baseReconnectDelay: TimeInterval = 3
     private static let maxReconnectDelay: TimeInterval = 30
+    /// How long a connection has to hold before its backoff is cleared. A LAN
+    /// session that comes up and then has every CI-V poll ignored drops within
+    /// a second or two; only a connection that outlasts this counts as real.
+    /// Injectable so tests can use a short window instead of real-time waits.
+    let stableConnectionSeconds: TimeInterval
+
+    #if DEBUG
+    /// Test seam: read or seed the reconnect backoff counter, so the "clear
+    /// only when the connection holds" behaviour can be exercised directly.
+    var testReconnectAttempt: Int {
+        get { reconnectAttempt }
+        set { reconnectAttempt = newValue }
+    }
+    #endif
 
     /// What the "Software" row shows: this modem, its mode.
     var identity: String {
@@ -74,6 +89,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
          makeTransport: @escaping (String) -> CIVTransport = ModemRadioLink.defaultSerialTransport,
          makeSession: @escaping (IcomLANSession.Configuration) -> IcomLANSession = { IcomLANSession(configuration: $0) },
          scheduling: ModemEngine.Scheduling = .dedicatedThread,
+         stableConnectionSeconds: TimeInterval = 12,
          deliver: @escaping SoftModemLink.Deliver = { work in
              DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
          }) {
@@ -81,6 +97,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         self.makeTransport = makeTransport
         self.makeSession = makeSession
         self.deliver = deliver
+        self.stableConnectionSeconds = stableConnectionSeconds
         let session: IcomLANSession? = config.rigLink == .lan ? makeSession(config.lanConfiguration) : nil
         self.lanSession = session
         let audioIO: ModemAudioIO
@@ -403,7 +420,15 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                     self.lock.withLock { self.phase = .modemOpen }
                     self.modem.open()
                     self.startPolling()
-                    self.reconnectAttempt = 0   // rig up; failures start fresh
+                    // Clear the backoff only once this connection proves it will
+                    // hold. Doing it the instant the rig came up treated a
+                    // CI-V-ignored flap (audio granted, every poll dropped, gone
+                    // in a second) as a success, so the backoff never grew and
+                    // the app hammered the radio every few seconds — never
+                    // leaving it the quiet window it needs to release a stale
+                    // CI-V attachment from an earlier session. A flap cancels
+                    // this before it fires.
+                    self.scheduleBackoffResetIfStable()
                     // Baseline the watch, so the first pass reports what
                     // changed rather than the state we connected to.
                     Task { [weak self] in
@@ -429,11 +454,14 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// is hit, or `close()` says to stop. Called on the delivery (main) queue,
     /// which is the only place the reconnect bookkeeping is touched.
     private func scheduleReconnect() {
-        guard wantsOpen, reconnectAttempt < Self.maxReconnectAttempts else { return }
-        reconnectAttempt += 1
-        let backoff = min(Self.baseReconnectDelay * pow(2, Double(reconnectAttempt - 1)),
-                          Self.maxReconnectDelay)
-        let delay = backoff + Double.random(in: 0...0.5)   // jitter
+        guard wantsOpen else { return }
+        stabilityTask?.cancel()
+        stabilityTask = nil
+        // Keep retrying at the ceiling rather than giving up after a fixed
+        // count: a radio the operator wants connected should recover on its
+        // own once it releases the slot, however long that takes.
+        reconnectAttempt = Self.nextReconnectAttempt(reconnectAttempt)
+        let delay = Self.reconnectBackoff(attempt: reconnectAttempt) + Double.random(in: 0...0.5)   // jitter
         reconnectTask?.cancel()
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
@@ -441,6 +469,39 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
             self?.deliver { [weak self] in
                 guard let self, self.wantsOpen, self.state == .failed else { return }
                 self.open()
+            }
+        }
+    }
+
+    /// Advance the reconnect counter, clamped at the cap so the backoff stops
+    /// growing there but the link never stops trying. This is the change from
+    /// the old behaviour, which gave up once the count passed the cap and left
+    /// the operator with a dead radio that would have recovered on its own.
+    static func nextReconnectAttempt(_ current: Int) -> Int {
+        min(current + 1, maxReconnectAttempts)
+    }
+
+    /// The delay before reconnect attempt `attempt` (1-based), doubling from
+    /// the base and capped. Jitter is added by the caller.
+    static func reconnectBackoff(attempt: Int) -> TimeInterval {
+        let steps = max(0, attempt - 1)
+        return min(baseReconnectDelay * pow(2, Double(steps)), maxReconnectDelay)
+    }
+
+    /// Clear the reconnect backoff, but only once the connection has held for
+    /// `stableConnectionSeconds`. A flap cancels the pending reset (in
+    /// `scheduleReconnect`) before it fires, so a session that keeps dropping
+    /// keeps a growing backoff instead of resetting to zero every few seconds.
+    private func scheduleBackoffResetIfStable() {
+        stabilityTask?.cancel()
+        stabilityTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(self?.stableConnectionSeconds ?? 12))
+            guard !Task.isCancelled else { return }
+            self?.deliver { [weak self] in
+                guard let self, self.wantsOpen else { return }
+                let stillUp = self.lock.withLock { if case .modemOpen = self.phase { return true } else { return false } }
+                guard stillUp else { return }
+                self.reconnectAttempt = 0
             }
         }
     }
@@ -453,6 +514,8 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         wantsOpen = false
         reconnectTask?.cancel()
         reconnectTask = nil
+        stabilityTask?.cancel()
+        stabilityTask = nil
         reconnectAttempt = 0
         pollTask?.cancel()
         pollTask = nil

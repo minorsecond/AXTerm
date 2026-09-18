@@ -172,13 +172,23 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         serialReorder.reset()
         audioReorder.reset()
 
-        // Reclaim the radio's single slot from the session we last held, rather
-        // than wait for it to lapse. When there is a recent session to release,
-        // one targeted disconnect frees it and a short settle is enough; when
-        // there is not (a first connect, or a slot long since timed out), fall
-        // back to the passive wait, which is itself zero on a fresh launch.
-        if IcomLANSlotRelease.reclaim(host: configuration.host, controlPort: configuration.controlPort) {
-            TxLog.debug(.modem, "IcomLAN: released the last session before reconnecting", [:])
+        // Two different situations, two different waits.
+        //
+        // A session left holding the slot by a PRIOR launch is worth releasing
+        // with a targeted disconnect so we take the slot back at once instead
+        // of waiting out the login ladder. That only applies to the first
+        // connect of this run, when nothing here has closed yet (lastCloseAt
+        // is zero).
+        //
+        // A session WE closed a moment ago in this same run is the opposite
+        // case: the radio needs the full settle to let go of CI-V, and coming
+        // straight back gets a login that is granted audio with no CI-V — the
+        // session connects, every CI-V poll goes unanswered, and it drops and
+        // flaps. So after our own close, always wait the settle out; never
+        // shortcut it with the reclaim.
+        if lastCloseAt == 0,
+           IcomLANSlotRelease.reclaim(host: configuration.host) {
+            TxLog.debug(.modem, "IcomLAN: released a prior launch's session before reconnecting", [:])
             try await Task.sleep(for: .seconds(IcomLANSlotRelease.settleAfterRelease))
         } else {
             let settle = Self.settleRemaining(now: IcomLANStream.now, lastCloseAt: lastCloseAt)
@@ -250,11 +260,11 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         authID = login.authID
 
         // The slot is ours the instant the login is accepted, before the media
-        // streams are up. Remember who we are to the radio now, so that if the
-        // rest of this connect falls over, or the app is killed before it can
-        // say goodbye, the next launch can still release this exact session.
-        IcomLANSlotRelease.remember(host: c.host, localID: control.localID,
-                                    remoteID: control.remoteID, sourcePort: control.boundPort)
+        // streams are up. Remember the control stream now, so that if the rest
+        // of this connect falls over, or the app is killed before it can say
+        // goodbye, the next launch can still release it. The CI-V and audio
+        // streams are added once they open (in openMediaStreams).
+        IcomLANSlotRelease.remember(host: c.host, streams: slotEndpoints(includeMedia: false))
 
         // From here the control exchange is event-driven: the radio sends
         // its capabilities, an auth acknowledgement and the connection
@@ -278,6 +288,29 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
 
         // openMediaStreams (from handleControl) has brought the CI-V and
         // audio sockets up and set the state; nothing more to do here.
+    }
+
+    /// The streams of this session, addressed the way the radio sees them, for
+    /// the slot-release record. Control is always included; the CI-V and audio
+    /// streams only once they have a remote ID and a bound source port, which
+    /// `remember` filters for anyway. `includeMedia` is false at login time,
+    /// before the media streams exist.
+    private func slotEndpoints(includeMedia: Bool) -> [IcomLANSlotRelease.Endpoint] {
+        var endpoints: [IcomLANSlotRelease.Endpoint] = []
+        if let port = control.boundPort {
+            endpoints.append(.init(localID: control.localID, remoteID: control.remoteID,
+                                   sourcePort: port, radioPort: configuration.controlPort))
+        }
+        guard includeMedia else { return endpoints }
+        if let port = serial.boundPort {
+            endpoints.append(.init(localID: serial.localID, remoteID: serial.remoteID,
+                                   sourcePort: port, radioPort: configuration.serialPort))
+        }
+        if let port = audio.boundPort {
+            endpoints.append(.init(localID: audio.localID, remoteID: audio.remoteID,
+                                   sourcePort: port, radioPort: configuration.audioPort))
+        }
+        return endpoints
     }
 
     /// Release the token, close the CI-V channel, say goodbye on every
@@ -310,11 +343,12 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
             if !authID.isEmpty, control.remoteID != 0 {
                 // Refresh what we know of this session before we let go, so the
                 // reclaim on the next launch measures its window from when we
-                // actually leave, not from when the session first came up. The
-                // goodbye below is unacknowledged UDP that may not land; the
-                // record is what guarantees the slot gets freed regardless.
-                IcomLANSlotRelease.remember(host: configuration.host, localID: control.localID,
-                                            remoteID: control.remoteID, sourcePort: control.boundPort)
+                // actually leave, not from when the session first came up, and
+                // covers every stream. The goodbyes below are unacknowledged
+                // UDP that may not land; the record is what guarantees the slot
+                // gets freed regardless.
+                IcomLANSlotRelease.remember(host: configuration.host,
+                                            streams: slotEndpoints(includeMedia: true))
                 control.sendTracked(IcomLAN.token(.release, local: control.localID, remote: control.remoteID,
                                                   innerSequence: nextInner(), authID: authID))
             }
@@ -565,6 +599,11 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
                 startReorderTicks()
                 startLivenessWatch()
                 state = .connected
+                // Now that all three streams are up, remember every one so the
+                // next launch can release the CI-V and audio streams too, not
+                // just control — a stale CI-V stream is what leaves a fresh
+                // session with audio and no answers.
+                IcomLANSlotRelease.remember(host: c.host, streams: slotEndpoints(includeMedia: true))
                 resolveConnect(.success(()))
             } catch {
                 resolveConnect(.failure(error))
