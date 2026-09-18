@@ -20,13 +20,18 @@ struct ConsoleTheme {
     static let systemIndicatorOpacity: Double = 0.7
     
     // MARK: - Error Message Emphasis
-    
-    /// Background opacity for error messages - more prominent than system
-    static let errorBackgroundOpacity: Double = 0.12
-    
-    /// Indicator bar opacity for error messages - strong but not harsh
-    static let errorIndicatorOpacity: Double = 0.85
-    
+
+    /// The accent for an error or connection-failure line. A muted amber, not a
+    /// loud red: these lines are frequent and mostly transient (a radio dropped,
+    /// a reconnect), so they should be findable at a glance without turning the
+    /// log into a wall of alarm. The row text itself stays neutral; only this
+    /// thin cue carries the colour.
+    static let errorAccent: Color = Color.orange.opacity(0.85)
+
+    /// Background opacity for error messages. Kept level with system lines so an
+    /// error reads as calm status, not an emergency.
+    static let errorBackgroundOpacity: Double = 0.08
+
     // MARK: - Warning Message Emphasis (future-proof)
     
     /// Background opacity for warning messages
@@ -66,19 +71,19 @@ struct ConsoleTheme {
         case .system:
             return Color.gray.opacity(systemBackgroundOpacity)
         case .error:
-            return Color.red.opacity(errorBackgroundOpacity)
+            return Color.gray.opacity(errorBackgroundOpacity)
         case .packet:
             return .clear
         }
     }
-    
+
     /// Returns the appropriate indicator bar color for a message kind
     static func indicatorColor(for kind: ConsoleLine.Kind) -> Color {
         switch kind {
         case .system:
             return Color.gray.opacity(systemIndicatorOpacity)
         case .error:
-            return Color.red.opacity(errorIndicatorOpacity)
+            return errorAccent
         case .packet:
             return .gray  // Fallback for packets
         }

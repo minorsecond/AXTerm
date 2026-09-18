@@ -732,11 +732,23 @@ nonisolated enum ConsoleLineGrouper {
     static func group(_ lines: [ConsoleLine]) -> [ConsoleLineGroup] {
         var groups: [ConsoleLineGroup] = []
         var signatureToIndex: [String: Int] = [:]
+        var errorTextToIndex: [String: Int] = [:]
 
         for line in lines {
-            // Consecutive grouping for system/error messages
-            if line.kind == .system || line.kind == .error {
-                if let lastGroup = groups.last, lastGroup.primary.kind == line.kind, lastGroup.primary.text == line.text {
+            if line.kind == .error {
+                // Collapse identical errors wherever they fall, not just
+                // back-to-back. A fault that keeps recurring — the same
+                // handful of connection complaints on every reconnect — stays
+                // one line with a count instead of a growing stack.
+                if let index = errorTextToIndex[line.text] {
+                    groups[index].duplicates.append(line)
+                    continue
+                }
+            } else if line.kind == .system {
+                // Status collapses only when it repeats immediately, so a
+                // recurring status keeps its place in time rather than folding
+                // into an older row.
+                if let lastGroup = groups.last, lastGroup.primary.kind == .system, lastGroup.primary.text == line.text {
                     groups[groups.count - 1].duplicates.append(line)
                     continue
                 }
@@ -748,6 +760,9 @@ nonisolated enum ConsoleLineGrouper {
             }
 
             let group = ConsoleLineGroup(primary: line)
+            if line.kind == .error {
+                errorTextToIndex[line.text] = groups.count
+            }
             if let signature = line.contentSignature {
                 signatureToIndex[signature] = groups.count
             }
@@ -1102,7 +1117,7 @@ struct ConsoleLineView: View {
         case .system:
             return Color.gray.opacity(ConsoleTheme.systemIndicatorOpacity)
         case .error:
-            return Color.red.opacity(ConsoleTheme.errorIndicatorOpacity)
+            return ConsoleTheme.errorAccent
         case .packet:
             return categoryBorderColor  // Keep existing packet colors
         }
@@ -1117,7 +1132,7 @@ struct ConsoleLineView: View {
     private var categoryBorderColor: Color {
         switch line.kind {
         case .error:
-            return .red
+            return ConsoleTheme.errorAccent
         case .system:
             return .gray  // Matches SYS filter button
         case .packet:
@@ -1170,7 +1185,10 @@ struct ConsoleLineView: View {
     private var messageColor: Color {
         switch line.kind {
         case .system: return .secondary
-        case .error: return .red
+        // The old full-red message text made a busy channel's reconnect churn
+        // read as a wall of alarm. The line stays neutral like a system line;
+        // the muted accent bar to its left is what marks it as an error.
+        case .error: return .secondary
         case .packet: return .primary
         }
     }
@@ -1215,10 +1233,10 @@ struct DuplicateCountBadge: View {
     var body: some View {
         Text("+\(count)")
             .font(.system(size: 9, weight: .medium, design: .monospaced))
-            .foregroundStyle(kind == .error ? .red : .purple)
+            .foregroundStyle(kind == .error ? ConsoleTheme.errorAccent : .purple)
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
-            .background((kind == .error ? Color.red : Color.purple).opacity(0.15))
+            .background((kind == .error ? ConsoleTheme.errorAccent : Color.purple).opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 3))
             .help(kind == .packet ? "Received \(count + 1) times via different paths (click to expand)" : "Occurred \(count + 1) times consecutively (click to expand)")
     }

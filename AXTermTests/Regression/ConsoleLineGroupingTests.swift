@@ -58,4 +58,45 @@ final class ConsoleLineGroupingTests: XCTestCase {
         XCTAssertEqual(groups[0].duplicates.count, 1)
         XCTAssertEqual(groups[0].primary.id, lineA.id)
     }
+
+    /// A recurring fault is the same message over and over; it should stay one
+    /// counted line even when other lines fall between its repeats, so a
+    /// reconnect storm does not bury the log.
+    func testErrorMessagesCollapseEvenWhenNotConsecutive() {
+        let first = ConsoleLine.error("Radio control failed")
+        let between = ConsoleLine.system("Connected to IC-705")
+        let again = ConsoleLine.error("Radio control failed")
+
+        let groups = ConsoleLineGrouper.group([first, between, again])
+
+        XCTAssertEqual(groups.count, 2)
+        let errorGroup = groups.first { $0.primary.kind == .error }
+        XCTAssertEqual(errorGroup?.primary.id, first.id)
+        XCTAssertEqual(errorGroup?.duplicates.count, 1)
+        XCTAssertEqual(errorGroup?.duplicates.first?.id, again.id)
+    }
+
+    /// Distinct faults are distinct lines; collapsing is by message, not by
+    /// kind.
+    func testDifferentErrorsStaySeparate() {
+        let lost = ConsoleLine.error("Lost the radio")
+        let failed = ConsoleLine.error("Connection to IC-705 failed")
+
+        let groups = ConsoleLineGrouper.group([lost, failed])
+
+        XCTAssertEqual(groups.count, 2)
+    }
+
+    /// System status collapses only back-to-back, so two sends separated by
+    /// something else keep their own place in time rather than folding into an
+    /// older row.
+    func testSystemMessagesDoNotCollapseWhenSeparated() {
+        let firstSend = ConsoleLine.system("Frame sent successfully")
+        let between = ConsoleLine.error("Lost the radio")
+        let secondSend = ConsoleLine.system("Frame sent successfully")
+
+        let groups = ConsoleLineGrouper.group([firstSend, between, secondSend])
+
+        XCTAssertEqual(groups.count, 3)
+    }
 }

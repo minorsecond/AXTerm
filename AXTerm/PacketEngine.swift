@@ -369,6 +369,10 @@ final class PacketEngine: ObservableObject {
         identityCollision = nil
     }
     @Published private(set) var lastError: String?
+    /// Per-link deferred console posts, so a connection error that recovers
+    /// can be dropped before it is ever shown. Keyed by the link, whose object
+    /// is reused across a reconnect cycle. See `deferConnectionError`.
+    private var pendingConnectionErrors: [ObjectIdentifier: DispatchWorkItem] = [:]
     @Published private(set) var bytesReceived: Int = 0
     @Published private(set) var lastRxTime: Date = .distantPast
     @Published private(set) var lastTxTime: Date = .distantPast
@@ -3081,6 +3085,39 @@ extension PacketEngine: RadioManagerDelegate {
         }
     }
 
+    // MARK: Quieting reconnect churn
+
+    /// A connection error that clears within this grace is normal reconnect
+    /// churn — a radio still coming up, or a link flapping while it settles —
+    /// and never reaches the console. One that outlasts it is a real problem
+    /// the operator should see. The debug log and the top banner still get
+    /// every error at once; only the console waits.
+    private static let connectionErrorGrace: TimeInterval = 6
+
+    /// Hold a connection error back from the console for the grace period. If
+    /// the link is still not connected when it elapses, show it then; if it
+    /// came back up, the trouble was churn and stays out of the log.
+    private func deferConnectionError(_ message: String, for link: LinkSession,
+                                      category: ConsoleEntryRecord.Category) {
+        let id = ObjectIdentifier(link)
+        pendingConnectionErrors[id]?.cancel()
+        let work = DispatchWorkItem { [weak self, weak link] in
+            guard let self else { return }
+            self.pendingConnectionErrors[id] = nil
+            guard let link, link.state != .connected else { return }
+            self.addErrorLine(message, category: category)
+        }
+        pendingConnectionErrors[id] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.connectionErrorGrace, execute: work)
+    }
+
+    /// The link is up: drop any error we were holding back for it.
+    private func clearPendingConnectionError(for link: LinkSession) {
+        let id = ObjectIdentifier(link)
+        pendingConnectionErrors[id]?.cancel()
+        pendingConnectionErrors[id] = nil
+    }
+
     func radioManager(_ manager: RadioManager, link: LinkSession, didChangeState state: KISSLinkState, from previous: KISSLinkState) {
         let endpoint = link.endpointDescription
         LinkDebugLog.shared.recordStateChange(from: previous.rawValue, to: state.rawValue, endpoint: endpoint)
@@ -3094,6 +3131,7 @@ extension PacketEngine: RadioManagerDelegate {
             }
 
         case .connected:
+            clearPendingConnectionError(for: link)
             addSystemLine("Connected to \(endpoint)", category: .connection)
             eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)
             // A link that just came up clears its own error; recompute the
@@ -3119,7 +3157,7 @@ extension PacketEngine: RadioManagerDelegate {
             SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Disconnected", level: .info, data: nil)
 
         case .failed:
-            addErrorLine("Connection to \(endpoint) failed", category: .connection)
+            deferConnectionError("Connection to \(endpoint) failed", for: link, category: .connection)
             eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(endpoint)", metadata: nil)
             SentryManager.shared.captureConnectionFailure("KISS link failed: \(endpoint)")
         }
@@ -3143,7 +3181,12 @@ extension PacketEngine: RadioManagerDelegate {
         lastError = message
         onLinkError?(message)
         LinkDebugLog.shared.recordParseError(message: "Link error: \(message)")
-        addErrorLine(message, category: .connection)
+        // Hold the console line back over the grace period: while a link is
+        // still coming up or retrying, the same "lost the radio" and "macOS is
+        // refusing" complaints repeat on every attempt, which used to bury the
+        // log at startup. The banner and the debug log above already carry it
+        // at once; the console only shows it if it outlasts the reconnect.
+        deferConnectionError(message, for: link, category: .connection)
         eventLogger?.log(level: .error, category: .connection, message: message, metadata: nil)
     }
 
