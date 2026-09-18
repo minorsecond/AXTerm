@@ -42,6 +42,8 @@ struct AXTermiOSRootView: View {
     /// Locators stations announce in their own beacons; the placement
     /// source for callsigns no directory covers.
     @StateObject private var announcedGrids = AnnouncedGridStore()
+    /// Off-main home for the periodic fold into the durable tables.
+    @State private var sweeper = PacketSweeper()
     /// Reads BPQ ROUTES tables out of session transcripts — same wiring as
     /// the Mac shell; the iPad learns routes from its own sessions too.
     @State private var routesScraper = BpqRoutesScraper()
@@ -563,21 +565,22 @@ struct AXTermiOSRootView: View {
             // stations announced, and which digipeaters actually repeated a
             // frame while we listened.
             announcedGrids.ingest(packets: recent)
-            if let services = client.stationServices {
-                try? services.record(
-                    StationServiceHarvester.declarations(in: recent)
-                        + StationServiceHarvester.demonstratedDigipeaters(in: recent))
-            }
-            // Paths, kept across launches so the graph does not start every
-            // session convinced the network is empty. Only what was actually
-            // observed — a transitive path is re-derived on demand, and
-            // storing an inference would let it harden into a fact that
-            // outlives its evidence.
-            if let store = client.networkPaths {
-                try? store.record(
-                    NetworkPathObserver.paths(in: Array(packets.suffix(600)),
-                                              localCallsign: settings.myCallsign),
-                    now: Date())
+            // The directory and the observed-path table, kept across launches
+            // so the graph does not start every session convinced the network
+            // is empty. Both parse a window and then open a write
+            // transaction, so they go off this actor: inline they put a
+            // blocking GRDB transaction on the thread drawing the UI, every
+            // five seconds, for as long as the app ran.
+            let services = client.stationServices
+            let paths = client.networkPaths
+            let localCallsign = settings.myCallsign
+            Task {
+                await sweeper.sweep(packets: packets,
+                                    localCallsign: localCallsign,
+                                    services: services,
+                                    paths: paths,
+                                    serviceWindow: 200,
+                                    pathWindow: 600)
             }
         }
         .task(id: context.settings.callsignLookupEnabled) {

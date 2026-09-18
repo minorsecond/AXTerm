@@ -491,8 +491,12 @@ struct StationsMapView: View {
     /// Changes when the analysis inputs change, and not on every packet.
     private var insightKey: String {
         let calls = networkPositions.keys.sorted().joined(separator: ",")
-        let heights = antennaHeights.keys.sorted()
-            .map { "\($0):\(antennaHeights[$0] ?? 0)" }.joined(separator: ",")
+        // Bound once. `antennaHeights` is computed and reads the note table,
+        // so referring to it inside the closure was a full read per station
+        // every time this key was evaluated, which is every redraw.
+        let recorded = antennaHeights
+        let heights = recorded.keys.sorted()
+            .map { "\($0):\(recorded[$0] ?? 0)" }.joined(separator: ",")
         return "\(calls)|\(networkPaths.count)|\(showsPredictedPaths)|\(elevation.tileCount)|\(heights)|\(settings.assumedRemoteHeightMetres)"
     }
 

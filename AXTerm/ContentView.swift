@@ -39,6 +39,11 @@ struct ContentView: View {
     /// Locators stations announce in their own beacons — the placement
     /// source for the part of the world no directory covers.
     @StateObject private var announcedGrids = AnnouncedGridStore()
+    /// Off-main home for the periodic fold into the durable tables.
+    @State private var sweeper = PacketSweeper()
+    /// Live traffic merged with what previous sessions recorded, refreshed by
+    /// the sweep rather than rebuilt per view evaluation.
+    @State private var rememberedPaths: [NetworkPath] = []
     /// Reads BPQ ROUTES tables out of session transcripts; its rows become
     /// harvested routes when the capability verdict allows it.
     @State private var routesScraper = BpqRoutesScraper()
@@ -126,31 +131,40 @@ struct ContentView: View {
     /// Grid squares for RMS gateways, keyed by callsign with SSID — a
     /// gateway's position is known from the CMS even when its licensee
     /// has never been looked up.
-    /// Records what stations announced and what digipeaters demonstrated.
-    /// Folds what the live window shows into the durable path table.
+    /// Folds what the live window shows into the durable tables: what
+    /// stations announced, which digipeaters demonstrably repeated a frame,
+    /// and which paths were actually observed.
     ///
-    /// Runs on the same throttle as the service harvest and for the same
-    /// reason: the network's own record of itself should grow wherever the
-    /// operator happens to be, not only while a map is on screen.
-    private func recordNetworkPaths(from packets: [Packet]) {
-        guard let store = client.networkPaths else { return }
-        let recent = Array(packets.suffix(600))
-        let observed = NetworkPathObserver.paths(in: recent,
-                                                 localCallsign: settings.myCallsign)
-        // Only what was actually observed. Transitive paths are re-derived on
-        // demand from whatever the graph holds, and storing an inference
-        // would let it harden into a fact that outlives its evidence.
-        try? store.record(observed, now: Date())
+    /// Runs wherever the operator happens to be rather than only while a map
+    /// is on screen, because the network's own record of itself should grow
+    /// the whole time it is listening.
+    ///
+    /// The parsing and the two write transactions go to `PacketSweeper`, off
+    /// this actor. They used to run inline here, which put a blocking GRDB
+    /// transaction on the thread that draws the map every five seconds for as
+    /// long as the app ran.
+    private func sweepPackets(_ packets: [Packet]) {
+        // Stays here: it publishes into the views, and it persists to a
+        // UserDefaults blob rather than to the database.
+        announcedGrids.ingest(packets: Array(packets.suffix(Self.serviceWindow)))
+        let services = client.stationServices
+        let paths = client.networkPaths
+        let localCallsign = settings.myCallsign
+        Task {
+            let merged = await sweeper.sweep(packets: packets,
+                                             localCallsign: localCallsign,
+                                             services: services,
+                                             paths: paths,
+                                             serviceWindow: Self.serviceWindow,
+                                             pathWindow: Self.pathWindow,
+                                             retention: SQLiteNetworkPathStore.retention)
+            rememberedPaths = merged
+        }
     }
 
-    private func harvestServices(from packets: [Packet]) {
-        let recent = Array(packets.suffix(400))
-        announcedGrids.ingest(packets: recent)
-        guard let services = client.stationServices else { return }
-        try? services.record(
-            StationServiceHarvester.declarations(in: recent)
-                + StationServiceHarvester.demonstratedDigipeaters(in: recent))
-    }
+    /// How much of the live buffer each half of the sweep reads.
+    private static let serviceWindow = 400
+    private static let pathWindow = 600
 
     /// Same gathering as the handheld's, from the Mac's own view state.
     /// The graph the identity page reasons over.
@@ -158,14 +172,14 @@ struct ContentView: View {
     /// Live traffic merged with what previous sessions recorded, so "which
     /// stations does the network depend on" is answered from days of evidence
     /// rather than from the last few minutes of it.
-    private var rememberedNetworkPaths: [NetworkPath] {
-        let live = NetworkPathObserver.paths(
-            in: Array(client.packets.suffix(600)),
-            localCallsign: settings.myCallsign)
-        let remembered = (try? client.networkPaths?.paths(
-            since: Date().addingTimeInterval(-SQLiteNetworkPathStore.retention))) ?? []
-        return NetworkPath.merging(live + remembered)
-    }
+    /// Gathered by the five-second sweep, off this actor, and held.
+    ///
+    /// This was a computed property that parsed 600 packets and read the
+    /// store's whole retention window on every evaluation. `macResolver` is
+    /// also computed and is called from a closure invoked once per station
+    /// row, so a list of twenty stations meant twenty fourteen-day reads per
+    /// redraw. Nothing here changes between two frames.
+    private var rememberedNetworkPaths: [NetworkPath] { rememberedPaths }
 
     /// Every address this station transmits as, SSIDs included. Any *other*
     /// SSID on the same licence is a different radio — the operator's HT is
@@ -811,8 +825,7 @@ struct ContentView: View {
         // Map tab meant the network's own directory only grew while someone
         // was looking at a map, which is the one time they are not reading it.
         .onReceive(client.$packets.throttle(for: .seconds(5), scheduler: RunLoop.main, latest: true)) { packets in
-            harvestServices(from: packets)
-            recordNetworkPaths(from: packets)
+            sweepPackets(packets)
         }
         // Sheets are sized against the window, so the window's size has to
         // be known. A background reader costs nothing and avoids AppKit
@@ -2267,16 +2280,21 @@ struct ContentView: View {
         let ours = CallsignValidator.normalize(settings.myCallsign)
         guard !ours.isEmpty else { return nil }
         let cutoff = Date().addingTimeInterval(-CoverageEstimate.evidenceWindow)
-        let paths = (try? store.paths(since: cutoff)) ?? []
-        return paths
-            .filter { path in
-                guard path.via.isEmpty, path.evidence == .sessionEstablished else { return false }
-                let ends = [path.from, path.to].map { $0.uppercased() }
-                guard ends.contains(ours) else { return false }
-                return ends.contains { (Callsign($0)?.base ?? $0) == target }
-            }
-            .map(\.lastSeen)
-            .max()
+        // Off the main thread, like `stationStats`: this reads the path table
+        // over the whole evidence window, and it is called while a profile
+        // sheet is opening.
+        return await Task.detached(priority: .userInitiated) {
+            let paths = (try? store.paths(since: cutoff)) ?? []
+            return paths
+                .filter { path in
+                    guard path.via.isEmpty, path.evidence == .sessionEstablished else { return false }
+                    let ends = [path.from, path.to].map { $0.uppercased() }
+                    guard ends.contains(ours) else { return false }
+                    return ends.contains { (Callsign($0)?.base ?? $0) == target }
+                }
+                .map(\.lastSeen)
+                .max()
+        }.value
     }
 
     /// Lifetime totals for one station, off the main thread.
@@ -2377,8 +2395,12 @@ struct ContentView: View {
         // A height the operator recorded for this station beats the assumed
         // one: a node on a tower is the case the forecast most often gets
         // wrong, and it is the case they are most likely to have noted.
-        let noted = (try? client.stationNotes?.antennaHeights())?[
-            profile.callsign.uppercased()]
+        // Off the main thread for the same reason as `lastDirectConnection`:
+        // a table read while a profile sheet is opening.
+        let noteStore = client.stationNotes
+        let noted = await Task.detached(priority: .userInitiated) {
+            (try? noteStore?.antennaHeights())?[profile.callsign.uppercased()]
+        }.value
         let mine = winlinkContext.settings.antennaHeightMetres
         let theirs = noted ?? winlinkContext.settings.assumedRemoteHeightMetres
         let destination = placement.position
