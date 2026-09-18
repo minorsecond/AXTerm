@@ -26,10 +26,24 @@ nonisolated enum NetworkTopology {
             graph[b, default: []].insert(a)
         }
 
+        // A vertex has to be somewhere a frame could actually be sent.
+        //
+        // Deliberately only the two things that are certainly not stations: a
+        // service word like BEACON or TCPIP, and an APRS tocall, which names
+        // the software that sent the frame. The fuller `isValidRoutingNode`
+        // was tried here and rejects short tactical aliases, which would have
+        // dropped real digipeaters — PVLY and SIMLA are digipeaters on this
+        // channel, and neither is callsign-shaped (2026-09-17).
+        func isStation(_ call: String) -> Bool {
+            !CallsignValidator.isServiceEndpoint(call)
+                && !APRSDestinationAddress.isTocall(call)
+        }
+
         for path in paths where path.evidence >= minimumEvidence {
-            let hops = [path.from.uppercased()]
+            let hops = ([path.from.uppercased()]
                 + path.via.map { $0.uppercased() }
-                + [path.to.uppercased()]
+                + [path.to.uppercased()])
+                .filter(isStation)
             for index in hops.indices.dropLast() {
                 connect(hops[index], hops[index + 1])
             }

@@ -162,6 +162,12 @@ nonisolated struct NetworkPathObserver {
             // Destinations like BEACON and ID are not stations, so a "path"
             // to one is a category error rather than topology.
             guard !CallsignValidator.isServiceEndpoint(to) else { continue }
+            // Nor is an APRS destination. Mic-E puts the sender's latitude
+            // there and a tocall names its software, so a path "to" one joins
+            // this station to a coordinate. A third of the stored paths were
+            // these, and they filled the profile's network section with
+            // callsign-shaped things nobody has ever worked (2026-09-17).
+            guard !APRSDestinationAddress.carriesDataRatherThanAStation(packet) else { continue }
             guard from != to else { continue }
 
             // Only hops that actually repeated count as part of the path an

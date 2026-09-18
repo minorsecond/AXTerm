@@ -42,6 +42,16 @@ nonisolated enum APRSDestinationAddress {
             firstInfoByte: packet.info.first)
     }
 
+    /// Whether a callsign-shaped string is an APRS tocall.
+    ///
+    /// Exposed on its own for the places that hold a stored callsign and no
+    /// frame to check the data type against — the observed-path graph, which
+    /// keeps `from`/`to` and nothing else. Weaker than the full test, and
+    /// deliberately: it can only catch the `APxxxx` half.
+    static func isTocall(_ callsign: String) -> Bool {
+        callsign.uppercased().range(of: tocallPattern, options: [.regularExpression]) != nil
+    }
+
     /// The same decision from loose parts, for the SQLite aggregation path,
     /// which reads columns rather than assembling a `Packet`. Both callers go
     /// through here so the stored and in-memory aggregations cannot disagree
