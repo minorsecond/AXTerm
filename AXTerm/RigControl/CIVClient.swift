@@ -54,6 +54,24 @@ nonisolated final class CIVClient: @unchecked Sendable {
     private var bytesIn = 0
     private var framesIn = 0
     private var framesDropped = 0
+    /// Polls that have gone unanswered in a row.
+    ///
+    /// The second, independent signal that a radio has stopped serving us. On
+    /// 2026-09-18 the radio answered no CI-V command for four and a half
+    /// hours, 12,624 of them, while every stream stayed punctual with
+    /// keepalives and the link reported healthy. One timeout is ordinary; a
+    /// run of them is the radio, and nothing was counting the run.
+    private var consecutiveTimeouts = 0
+
+    /// How many unanswered polls in a row mean the radio has stopped
+    /// answering. At roughly one poll per second a run of eight is about ten
+    /// seconds of being ignored, which is far outside anything a busy radio
+    /// does and far inside four hours.
+    static let unansweredPollLimit = 8
+
+    /// Called when the radio stops answering altogether. Set by the session,
+    /// which owns what to do about it.
+    var onUnresponsive: ((String) -> Void)?
     private var reportedFirstBytes = false
     private var droppedReports = 0
 
@@ -365,7 +383,15 @@ nonisolated final class CIVClient: @unchecked Sendable {
                 "framesInSinceOpen": self.framesIn,
                 "framesDiscarded": self.framesDropped,
                 "after": String(format: "%.2fs", self.requestTimeout)])
+            self.consecutiveTimeouts += 1
             request.continuation.resume(throwing: CIVError.timeout(command: request.frame.command))
+            if self.consecutiveTimeouts == Self.unansweredPollLimit {
+                // Once, on the way past the limit, not on every poll after it.
+                self.onUnresponsive?(
+                    "the radio has not answered \(self.consecutiveTimeouts) CI-V commands in a "
+                    + "row. Its keepalives are still running, so the session is up and the radio "
+                    + "is ignoring it.")
+            }
             self.advance()
         }
         request.timeout = timeout
@@ -393,6 +419,11 @@ nonisolated final class CIVClient: @unchecked Sendable {
         }
         for frame in parser.feed(data) {
             framesIn += 1
+            // Any frame the radio addressed to us ends the run, whether or not
+            // it is the answer we were waiting for. The question this counter
+            // asks is "is the radio answering at all", not "did this poll
+            // succeed".
+            if frame.from == radioAddress { consecutiveTimeouts = 0 }
             if CIVFilter.isEcho(frame, radio: radioAddress) { continue }
             // While a probe is in flight, any address may answer it — that is
             // the whole point. Our own broadcast coming back with echo-back
@@ -452,7 +483,7 @@ nonisolated final class CIVClient: @unchecked Sendable {
         case .failed(let reason): failAll(CIVError.transport(reason))
         case .opening, .open:
             parser.reset()
-            bytesIn = 0; framesIn = 0; framesDropped = 0
+            bytesIn = 0; framesIn = 0; framesDropped = 0; consecutiveTimeouts = 0
             reportedFirstBytes = false; droppedReports = 0
         }
         onTransportState?(state)

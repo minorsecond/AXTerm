@@ -31,6 +31,32 @@ nonisolated enum IcomLANLiveness {
     /// resting state and must never be read as death.
     static let watchedStreams = ["control", "audio"]
 
+    /// How long the audio stream may carry nothing but keepalives.
+    ///
+    /// A separate question from `silenceLimit`, and the one the 2026-09-18
+    /// outage turned on. The radio pings every stream on its own 10 Hz
+    /// schedule whether or not it is still serving them, so a stream can be
+    /// perfectly punctual and completely empty. Audio is the stream where that
+    /// is decidable: once it is open the radio sends a packet every 20 ms, so
+    /// nothing of substance for this long means it has stopped.
+    ///
+    /// Longer than `silenceLimit` on purpose. Total silence is unambiguous and
+    /// worth acting on in ten seconds; "keepalives but no content" is a
+    /// stranger state, and this is the only check whose false positive would
+    /// drop a radio that is genuinely working.
+    static let payloadSilenceLimit: TimeInterval = 30
+
+    /// Why the audio stream should be failed for carrying only keepalives, or
+    /// nil while it is still delivering.
+    static func payloadComplaint(silentFor: TimeInterval,
+                                 limit: TimeInterval = payloadSilenceLimit) -> String? {
+        guard silentFor >= limit else { return nil }
+        return "the radio is still answering but has sent no audio for "
+            + String(Int(silentFor.rounded()))
+            + " seconds. Its keepalives are running while the stream carries "
+            + "nothing, so the session is up and the radio is not using it."
+    }
+
     /// Why the link should be failed, or nil while it is healthy.
     static func complaint(silentFor: TimeInterval, limit: TimeInterval = silenceLimit) -> String? {
         guard silentFor >= limit else { return nil }

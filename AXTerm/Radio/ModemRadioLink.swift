@@ -183,6 +183,15 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         case .dtr: ptt = SerialLinePTTController(transport: transport, line: .dtr, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
         case .none: ptt = NoPTTController()
         }
+        // A radio that has stopped answering CI-V while its keepalives run is
+        // a session that is up and useless. The liveness watch cannot see it,
+        // because every stream stays punctual; the unanswered polls are the
+        // only evidence, and until 2026-09-18 nothing counted them.
+        if let session {
+            client.onUnresponsive = { [weak session] why in
+                session?.failFromOutside(why)
+            }
+        }
         return (transport, client, ptt)
     }
 

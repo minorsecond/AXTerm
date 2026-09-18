@@ -169,6 +169,15 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     /// payload. Over UDP this is the only evidence the radio still exists;
     /// `IcomLANLiveness` turns it into a verdict. Zero until first contact.
     private(set) var lastInboundAt: Double = 0
+    /// When a datagram that was *not* a ping or an idle last arrived.
+    ///
+    /// The difference between the two is the whole of the 2026-09-18 outage.
+    /// The radio pings every stream on its own 10 Hz schedule whether or not
+    /// it is still serving them, so `lastInboundAt` stays fresh forever on a
+    /// radio that has stopped saying anything of substance. This one goes
+    /// stale, which on a stream that carries content continuously is the only
+    /// signal that the far end has gone.
+    private(set) var lastPayloadAt: Double = 0
     /// When `connect()` last ran. Zero while disconnected.
     private(set) var connectedAt: Double = 0
     private var expecting: [(id: UUID, match: (Data) -> Bool, resume: (Data) -> Void)] = []
@@ -223,6 +232,7 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         // been dead for as long as the reconnect took — killing a session one
         // second after it connected.
         lastInboundAt = 0
+        lastPayloadAt = 0
         // When this session started listening. Silence is measured from here
         // until the radio first speaks, so a stream that never delivers a
         // single datagram is still judged. Without it `silence` stayed nil
@@ -549,6 +559,7 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         // A disconnected stream has heard nothing. Anything else would be
         // this session's history answering for the next one's.
         lastInboundAt = 0
+        lastPayloadAt = 0
         connectedAt = 0
         for e in expecting { e.resume(Data()) }
         expecting.removeAll()
@@ -581,17 +592,31 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
 
     // MARK: - Keepalives
 
-    /// Pings every three seconds (the radio pings us far more often and we
-    /// answer each one); idle packets when nothing tracked has gone out.
+    /// Pings every 100 ms on every stream, and sends idle packets when nothing
+    /// tracked has gone out.
+    ///
+    /// The rate is measured rather than chosen. A 36-minute capture of a
+    /// third-party client holding this radio (2026-09-18, see
+    /// `Docs/IcomLANSessionHealth.md`) shows it pinging control, serial and
+    /// audio at 10 Hz apiece, with no gap anywhere above 0.23 s, and its
+    /// session never degrading. Ours pinged every three seconds, which is
+    /// thirty times quieter, and the two streams we keep quietest outbound are
+    /// the two that stopped being served overnight.
+    static let pingInterval: TimeInterval = 0.1
+    /// How long a stream may go without us sending anything tracked before an
+    /// idle fills the gap. Also measured: the same capture idles control at
+    /// 0.5 s.
+    static let idleInterval: TimeInterval = 0.5
+
     func startKeepalive(pingSequence first: UInt16, idlePackets: Bool) {
         pingSequence = first
         pingTimer?.cancel()
         let ping = DispatchSource.makeTimerSource(queue: queue)
-        ping.schedule(deadline: .now() + 0.5, repeating: 3.0)
+        ping.schedule(deadline: .now() + 0.5, repeating: Self.pingInterval)
         ping.setEventHandler { [weak self] in self?.sendPing() }
         ping.resume()
         pingTimer = ping
-        if idlePackets { rearmIdle(after: 1.0) }
+        if idlePackets { rearmIdle(after: Self.idleInterval) }
     }
 
     private func rearmIdle(after: Double) {
@@ -601,8 +626,8 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         t.setEventHandler { [weak self] in
             guard let self else { return }
             self.sendTracked(IcomLAN.control(.idle, local: self.localID, remote: self.remoteID))
-            let quiet = Self.now - self.lastTrackedAt >= 1.0
-            self.rearmIdle(after: quiet ? 1.0 : 0.1)
+            let quiet = Self.now - self.lastTrackedAt >= Self.idleInterval
+            self.rearmIdle(after: quiet ? Self.idleInterval : 0.1)
         }
         t.resume()
         idleTimer = t
@@ -629,6 +654,12 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         lastInboundAt = Self.now
         if !IcomLAN.isPing(d) && !IcomLAN.isIdle(d) {
             trace("RX " + d.prefix(48).map { String(format: "%02x", $0) }.joined())
+        }
+        if !IcomLAN.isPing(d) && !IcomLAN.isIdle(d) {
+            // Stamped after the keepalive tests and before the early returns
+            // below, so it means "the radio sent something it had to think
+            // about" rather than "a datagram arrived".
+            lastPayloadAt = Self.now
         }
         if IcomLAN.isPing(d) {
             if IcomLAN.pingIsReply(d) {
@@ -682,6 +713,18 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     /// left.
     var silence: TimeInterval? {
         let since = max(lastInboundAt, connectedAt)
+        guard since > 0 else { return nil }
+        return Self.now - since
+    }
+
+    /// How long since the radio sent anything but keepalives, or nil when the
+    /// stream is not connected and there is nothing to judge.
+    ///
+    /// Counts from `connectedAt` before the first real datagram, for the same
+    /// reason `silence` does: a stream that has never carried content is not
+    /// the same as one that has fallen quiet, but both need a clock running.
+    var payloadSilence: TimeInterval? {
+        let since = max(lastPayloadAt, connectedAt)
         guard since > 0 else { return nil }
         return Self.now - since
     }

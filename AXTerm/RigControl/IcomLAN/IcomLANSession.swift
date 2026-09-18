@@ -373,6 +373,19 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
 
     private var isFailed: Bool { if case .failed = state { return true }; return false }
 
+    /// Fails the session on evidence gathered outside it.
+    ///
+    /// The CI-V client sees something no stream can: polls going unanswered
+    /// while every stream stays punctual. It has no business tearing the
+    /// session down itself, so it reports and this decides.
+    func failFromOutside(_ why: String) {
+        queue.async { [weak self] in
+            guard let self, self.isConnected else { return }
+            TxLog.warning(.modem, "IcomLAN failing from CI-V evidence", ["why": why])
+            self.fail(why)
+        }
+    }
+
     private func fail(_ why: String) {
         control.trace("session fail: " + why)
         TxLog.warning(.modem, "IcomLAN session failed", ["why": why, "state": String(describing: state)])
@@ -679,7 +692,8 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
                 "civAsked": self.civWrites,
                 "civRefused": self.civWritesRefused,
                 "civSent": self.serial.sentPackets,
-                "civDropped": self.serial.droppedSends]
+                "civDropped": self.serial.droppedSends,
+                "audioPayload": String(format: "%.1fs", self.audio.payloadSilence ?? -1)]
             // Half the limit is the interesting part: quiet enough to record,
             // not yet a verdict. A log that jumps straight from healthy to
             // failed says nothing about how it got there.
@@ -692,6 +706,17 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
             }
             if let why = IcomLANLiveness.complaint(silentFor: longest) {
                 self.livenessLog("FAILING the link", detail)
+                self.fail(why)
+                return
+            }
+            // A stream can be punctual and empty. The radio keeps pinging
+            // every stream on its own schedule after it has stopped serving
+            // them, so silence alone missed a four-and-a-half-hour outage
+            // (2026-09-18); audio carrying nothing but keepalives is the part
+            // that was decidable and unmeasured.
+            if let quietAudio = self.audio.payloadSilence,
+               let why = IcomLANLiveness.payloadComplaint(silentFor: quietAudio) {
+                self.livenessLog("FAILING the link — audio carries only keepalives", detail)
                 self.fail(why)
             }
         }
