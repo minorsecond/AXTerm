@@ -172,11 +172,21 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         serialReorder.reset()
         audioReorder.reset()
 
-        let settle = Self.settleRemaining(now: IcomLANStream.now, lastCloseAt: lastCloseAt)
-        if settle > 0 {
-            TxLog.debug(.modem, "IcomLAN: letting the radio release the last session",
-                        ["waiting": String(format: "%.1fs", settle)])
-            try await Task.sleep(for: .seconds(settle))
+        // Reclaim the radio's single slot from the session we last held, rather
+        // than wait for it to lapse. When there is a recent session to release,
+        // one targeted disconnect frees it and a short settle is enough; when
+        // there is not (a first connect, or a slot long since timed out), fall
+        // back to the passive wait, which is itself zero on a fresh launch.
+        if IcomLANSlotRelease.reclaim(host: configuration.host, controlPort: configuration.controlPort) {
+            TxLog.debug(.modem, "IcomLAN: released the last session before reconnecting", [:])
+            try await Task.sleep(for: .seconds(IcomLANSlotRelease.settleAfterRelease))
+        } else {
+            let settle = Self.settleRemaining(now: IcomLANStream.now, lastCloseAt: lastCloseAt)
+            if settle > 0 {
+                TxLog.debug(.modem, "IcomLAN: letting the radio release the last session",
+                            ["waiting": String(format: "%.1fs", settle)])
+                try await Task.sleep(for: .seconds(settle))
+            }
         }
 
         state = .connecting
@@ -239,6 +249,13 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         guard let login else { throw IcomLANError.badCredentials }
         authID = login.authID
 
+        // The slot is ours the instant the login is accepted, before the media
+        // streams are up. Remember who we are to the radio now, so that if the
+        // rest of this connect falls over, or the app is killed before it can
+        // say goodbye, the next launch can still release this exact session.
+        IcomLANSlotRelease.remember(host: c.host, localID: control.localID,
+                                    remoteID: control.remoteID, sourcePort: control.boundPort)
+
         // From here the control exchange is event-driven: the radio sends
         // its capabilities, an auth acknowledgement and the connection
         // reply in an order we cannot assume, so `handleControl` drives it
@@ -291,6 +308,13 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
             // never sent costs the operator their radio until the slot times
             // out on its own, so the asymmetry only points one way.
             if !authID.isEmpty, control.remoteID != 0 {
+                // Refresh what we know of this session before we let go, so the
+                // reclaim on the next launch measures its window from when we
+                // actually leave, not from when the session first came up. The
+                // goodbye below is unacknowledged UDP that may not land; the
+                // record is what guarantees the slot gets freed regardless.
+                IcomLANSlotRelease.remember(host: configuration.host, localID: control.localID,
+                                            remoteID: control.remoteID, sourcePort: control.boundPort)
                 control.sendTracked(IcomLAN.token(.release, local: control.localID, remote: control.remoteID,
                                                   innerSequence: nextInner(), authID: authID))
             }
