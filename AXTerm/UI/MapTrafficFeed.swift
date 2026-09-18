@@ -114,9 +114,19 @@ final class MapTrafficFeed: ObservableObject {
         /// What it said, trimmed to a line — an APRS comment, a beacon text,
         /// or the frame type when there is nothing printable.
         var summary: String
-        /// True for a frame this station transmitted, so the operator's own
-        /// traffic reads apart from everyone else's.
+        /// True for a frame carrying one of this station's own addresses as
+        /// its source, so the operator's own traffic reads apart from
+        /// everyone else's. Not the same as having transmitted it — see
+        /// `wasTransmitted`.
         var isOurs: Bool
+        /// True only for a frame this station actually put on the air.
+        ///
+        /// Our own frames come *back* when a digipeater repeats them, and
+        /// they carry our callsign as the source, so the source alone cannot
+        /// tell the two apart. Marking a returning frame "TX" made one
+        /// message look like three transmissions (2026-09-17) — and hid the
+        /// more interesting fact, which is that two digipeaters heard us.
+        var wasTransmitted: Bool = false
         /// True for a frame addressed to this station — an AX.25 frame to one
         /// of our addresses, or an APRS message to our callsign. The one line
         /// in a scrolling channel that wants an answer.
@@ -195,6 +205,10 @@ final class MapTrafficFeed: ObservableObject {
                         via: Self.via(packet),
                         summary: Self.summary(packet),
                         isOurs: marks.isOurs,
+                        // Only a frame we actually sent. One that arrived is
+                        // ours coming back off a digipeater, however our the
+                        // callsign on it is.
+                        wasTransmitted: packet.direction == .tx,
                         isForUs: marks.isForUs,
                         radio: packet.radioID)
         }

@@ -65,6 +65,24 @@ final class MapLayerCatalogTests: XCTestCase {
             "1 of 4 on")
     }
 
+    /// The switch and the map read the same key from two different files, and
+    /// the collapsed summary reads it from a third. A layer whose key is not
+    /// in the defaults would be summarised as off however the switch is set.
+    func testEveryCatalogedLayerHasAKnownDefault() {
+        for layer in MapLayerCatalog.all {
+            XCTAssertNotNil(
+                MapLayerDefaults.byKey[layer.storageKey],
+                "\(layer.title) has no default under \(layer.storageKey)")
+        }
+    }
+
+    func testTrailsAreDrawnForEveryRoverOutOfTheBox() {
+        XCTAssertTrue(
+            MapLayerDefaults.showsAllTracks,
+            "an APRS map that draws no trail until something is selected reads as broken")
+        XCTAssertTrue(MapLayerDefaults.showsTracks)
+    }
+
     func testAScopeWithNoLayersSaysSo() {
         XCTAssertEqual(
             MapLayerCatalog.summaryText(in: .families([]), defaults: defaults),

@@ -826,7 +826,7 @@ struct AXTermiOSRootView: View {
                     mapTraffic?.record(MapTrafficFeed.Line(
                         id: tx.id, at: tx.at, from: tx.from, to: tx.to,
                         via: tx.via.joined(separator: ","), summary: tx.text,
-                        isOurs: true, isForUs: false, radio: tx.radio))
+                        isOurs: true, wasTransmitted: true, isForUs: false, radio: tx.radio))
                 }
             }
             .navigationTitle("Map")

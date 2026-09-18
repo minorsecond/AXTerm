@@ -246,7 +246,10 @@ struct MapTrafficChin: View {
                 // Ours reads apart from received traffic in both directions:
                 // an arrow for what we sent, so a beacon going out is visible
                 // as an event and not just another callsign in the list.
-                Text(line.isOurs ? "TX" : "  ")
+                // TX is what we put on the air. A frame of ours that arrived
+                // is the same frame coming back through a digipeater, which
+                // is worth its own mark: it is proof that digipeater heard us.
+                Text(line.wasTransmitted ? "TX" : (line.isOurs ? "\u{21BA} " : "  "))
                     .foregroundStyle(Self.txTint(line))
                 Text(line.from)
                     .fontWeight(.medium)

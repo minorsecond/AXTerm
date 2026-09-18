@@ -98,3 +98,68 @@ final class MapTrafficPendingTests: XCTestCase {
         XCTAssertEqual(summaries(feed)["made it"], .onAir)
     }
 }
+
+/// Telling a transmission apart from our own frame coming home.
+///
+/// A digipeater repeating us puts our callsign back on the air, so the source
+/// alone cannot say who transmitted. Reading it as "TX" made one message look
+/// like three transmissions and hid the interesting part: two digipeaters
+/// heard us (2026-09-17).
+final class MapTrafficOwnEchoTests: XCTestCase {
+
+    private let radio = RadioID.primary
+    private let now = Date(timeIntervalSince1970: 100_000)
+
+    @MainActor
+    func testOurFrameComingBackIsNotCountedAsATransmission() {
+        let feed = MapTrafficFeed()
+        feed.absorb([heardBack()], attribution: { _ in
+            MapTrafficFeed.Attribution(isOurs: true, isForUs: false)
+        })
+
+        let line = feed.lines(for: nil, visible: [radio]).first
+        XCTAssertEqual(line?.isOurs, true, "it does carry our callsign")
+        XCTAssertEqual(line?.wasTransmitted, false, "but we did not put this copy on the air")
+    }
+
+    @MainActor
+    func testWhatWeActuallySentIsMarkedTransmitted() {
+        let feed = MapTrafficFeed()
+        feed.record(MapTrafficFeed.Line(
+            id: UUID(), at: now, from: "K0EPI-5", to: "APZAXT",
+            via: "WIDE1-1,WIDE2-1", summary: ":AD1CT :howdy{1",
+            isOurs: true, wasTransmitted: true, isForUs: false, radio: radio))
+
+        XCTAssertEqual(feed.lines(for: nil, visible: [radio]).first?.wasTransmitted, true)
+    }
+
+    /// One send, two digipeaters, three lines — and exactly one of them is a
+    /// transmission.
+    @MainActor
+    func testOneSendRepeatedTwiceShowsOneTransmission() {
+        let feed = MapTrafficFeed()
+        feed.record(MapTrafficFeed.Line(
+            id: UUID(), at: now, from: "K0EPI-5", to: "APZAXT",
+            via: "WIDE1-1,WIDE2-1", summary: "howdy",
+            isOurs: true, wasTransmitted: true, isForUs: false, radio: radio))
+        feed.absorb([heardBack(via: "W0NED"), heardBack(via: "AD1CT")], attribution: { _ in
+            MapTrafficFeed.Attribution(isOurs: true, isForUs: false)
+        })
+
+        let lines = feed.lines(for: nil, visible: [radio])
+        XCTAssertEqual(lines.count, 3)
+        XCTAssertEqual(lines.filter(\.wasTransmitted).count, 1)
+    }
+
+    private func heardBack(via: String = "AD1CT") -> Packet {
+        Packet(timestamp: now,
+               from: AX25Address(call: "K0EPI", ssid: 5),
+               to: AX25Address(call: "APZAXT"),
+               via: [AX25Address(call: via, repeated: true),
+                     AX25Address(call: "WIDE1", repeated: true)],
+               frameType: .ui, control: 0x03, pid: 0xF0,
+               info: Data(":AD1CT    :howdy{1".utf8),
+               rawAx25: Data([0x00]),
+               radioID: radio, direction: .rx)
+    }
+}

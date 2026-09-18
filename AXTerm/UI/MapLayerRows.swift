@@ -138,16 +138,16 @@ struct MapLayerToggles: View {
     @ObservedObject var status: MapLayerStatus
     var scope: MapLayerScope = .everything
 
-    @AppStorage("stations.showsPaths") private var showsPaths = false
-    @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = false
-    @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = false
-    @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = true
-    @AppStorage("stations.showsAPRSCoverageRing") private var showsAPRSCoverageRing = true
-    @AppStorage("stations.hidesDistantStations") private var hidesDistantStations = false
-    @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = true
-    @AppStorage("stations.showsObjects") private var showsObjects = true
-    @AppStorage("stations.clustersStations") private var clustersStations = true
-    @AppStorage("stations.falloffMinutes") private var falloffMinutes = 0
+    @AppStorage("stations.showsPaths") private var showsPaths = MapLayerDefaults.showsPaths
+    @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = MapLayerDefaults.showsPredictedPaths
+    @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = MapLayerDefaults.showsDirectoryNodes
+    @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = MapLayerDefaults.showsCoverageRing
+    @AppStorage("stations.showsAPRSCoverageRing") private var showsAPRSCoverageRing = MapLayerDefaults.showsAPRSCoverageRing
+    @AppStorage("stations.hidesDistantStations") private var hidesDistantStations = MapLayerDefaults.hidesDistantStations
+    @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = MapLayerDefaults.preferTransmittedPosition
+    @AppStorage("stations.showsObjects") private var showsObjects = MapLayerDefaults.showsObjects
+    @AppStorage("stations.clustersStations") private var clustersStations = MapLayerDefaults.clustersStations
+    @AppStorage("stations.falloffMinutes") private var falloffMinutes = MapLayerDefaults.falloffMinutes
     /// Which layers have their options expanded. Collapsed by default: the
     /// sidebar is a list of what the map draws, and the tuning underneath it
     /// had grown into a dozen rows that pushed the layers themselves off the
@@ -155,19 +155,26 @@ struct MapLayerToggles: View {
     @AppStorage("stations.expandedTypeOptions") private var expandedTypes = false
     @AppStorage("stations.expandedTrackOptions") private var expandedTracks = false
     @AppStorage("stations.expandedFieldOptions") private var expandedField = false
-    @AppStorage("stations.showsTracks") private var showsTracks = true
-    @AppStorage("stations.showsAllTracks") private var showsAllTracks = false
-    @AppStorage("stations.trackWindowMinutes") private var trackWindowMinutes = 60
-    @AppStorage("stations.showsWeatherField") private var showsWeatherField = false
+    @AppStorage("stations.showsTracks") private var showsTracks = MapLayerDefaults.showsTracks
+    /// Every rover's trail, not just the selected station's.
+    ///
+    /// On by default because that is what an APRS operator expects: aprs.fi,
+    /// YAAC and Xastir all draw everyone's track, and a map that quietly drew
+    /// none until something was selected read as broken rather than as a
+    /// setting. Turn it off to narrow to whatever is selected, which is worth
+    /// doing on a busy channel where the trails bury the terrain.
+    @AppStorage("stations.showsAllTracks") private var showsAllTracks = MapLayerDefaults.showsAllTracks
+    @AppStorage("stations.trackWindowMinutes") private var trackWindowMinutes = MapLayerDefaults.trackWindowMinutes
+    @AppStorage("stations.showsWeatherField") private var showsWeatherField = MapLayerDefaults.showsWeatherField
     @AppStorage("stations.weatherFieldParameter") private var weatherFieldParameter =
         APRSWeatherField.Parameter.temperature.rawValue
 
     // Per-type visibility, only meaningful (and only shown) in APRS mode.
     // Same keys the map reads in StationsMapView.
-    @AppStorage("stations.showsTypeDigipeater") private var showsTypeDigipeater = true
-    @AppStorage("stations.showsTypeWeather") private var showsTypeWeather = true
-    @AppStorage("stations.showsTypeVehicle") private var showsTypeVehicle = true
-    @AppStorage("stations.showsTypeFixed") private var showsTypeFixed = true
+    @AppStorage("stations.showsTypeDigipeater") private var showsTypeDigipeater = MapLayerDefaults.showsTypeDigipeater
+    @AppStorage("stations.showsTypeWeather") private var showsTypeWeather = MapLayerDefaults.showsTypeWeather
+    @AppStorage("stations.showsTypeVehicle") private var showsTypeVehicle = MapLayerDefaults.showsTypeVehicle
+    @AppStorage("stations.showsTypeFixed") private var showsTypeFixed = MapLayerDefaults.showsTypeFixed
 
     var body: some View {
         if scope.includes(.aprs) {
@@ -204,10 +211,12 @@ struct MapLayerToggles: View {
             layer("Movement Trails", "point.topleft.down.to.point.bottomright.curvepath",
                   isOn: $showsTracks,
                   caption: status.trackCaption,
-                  help: "The line of fixes a station beaconed as it moved. Drawn for the "
-                      + "selected station by default: one trail belongs unmistakably to the "
-                      + "station whose card is open, where a map full of unlabelled trails "
-                      + "cannot be matched to anything and buries the terrain under it.")
+                  help: "The line of fixes a station beaconed as it moved. Every rover's "
+                      + "trail is drawn by default, which is what the rest of APRS does. "
+                      + "Only stations that actually moved between two beacons inside the "
+                      + "window get one, so a channel full of fixed digipeaters draws "
+                      + "nothing however long it is left running. Narrow it to whatever is "
+                      + "selected under Trail options when the map gets too busy to read.")
 
             if showsTracks {
                 optionsChevron("Trail options", isExpanded: $expandedTracks,
@@ -218,9 +227,11 @@ struct MapLayerToggles: View {
                     Label("All stations' trails", systemImage: "scribble")
                 }
                 .padding(.leading, 18)
-                .help("Draw every rover's trail at once. The whole picture, at the cost of a "
-                      + "much busier map \u{2014} useful when you are watching a group move, "
-                      + "noisy the rest of the time.")
+                .help("On: every rover's trail at once, which is the default and what "
+                      + "other APRS clients show. Off: only the selected station's, so one "
+                      + "trail belongs unmistakably to the station whose card is open. Worth "
+                      + "turning off on a busy channel, where a map of unlabelled trails "
+                      + "cannot be matched to anything and buries the terrain under it.")
 
                 Picker("", selection: $trackWindowMinutes) {
                     Text("Last 15 minutes").tag(15)

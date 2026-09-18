@@ -19,8 +19,10 @@ nonisolated struct MapLayer: Hashable, Sendable {
     /// applies to the map as a whole.
     let family: RadioTrafficFamily?
     /// What it reads when the operator has never touched it, so a summary is
-    /// right on a fresh install rather than reporting everything off.
-    let defaultOn: Bool
+    /// right on a fresh install rather than reporting everything off. Taken
+    /// from `MapLayerDefaults` rather than restated, so this cannot drift
+    /// from what the switch itself defaults to.
+    var defaultOn: Bool { MapLayerDefaults.byKey[storageKey] ?? false }
 }
 
 nonisolated enum MapLayerCatalog {
@@ -28,31 +30,31 @@ nonisolated enum MapLayerCatalog {
     static let all: [MapLayer] = [
         // APRS: what a beaconing network draws.
         MapLayer(title: "Transmitted Positions", storageKey: "stations.preferTransmittedPosition",
-                 family: .aprs, defaultOn: true),
+                 family: .aprs),
         MapLayer(title: "Movement Trails", storageKey: "stations.showsTracks",
-                 family: .aprs, defaultOn: true),
+                 family: .aprs),
         MapLayer(title: "Weather Field", storageKey: "stations.showsWeatherField",
-                 family: .aprs, defaultOn: false),
+                 family: .aprs),
         MapLayer(title: "Coverage Rings", storageKey: "stations.showsAPRSCoverageRing",
-                 family: .aprs, defaultOn: true),
+                 family: .aprs),
         MapLayer(title: "Objects & Hazards", storageKey: "stations.showsObjects",
-                 family: .aprs, defaultOn: true),
+                 family: .aprs),
 
         // AX.25: what a connected-mode network draws.
         MapLayer(title: "Coverage Rings", storageKey: "stations.showsCoverageRing",
-                 family: .ax25, defaultOn: true),
+                 family: .ax25),
         MapLayer(title: "Observed Paths", storageKey: "stations.showsPaths",
-                 family: .ax25, defaultOn: false),
+                 family: .ax25),
         MapLayer(title: "Predicted Paths", storageKey: "stations.showsPredictedPaths",
-                 family: .ax25, defaultOn: false),
+                 family: .ax25),
         MapLayer(title: "Node Directory", storageKey: "stations.showsDirectoryNodes",
-                 family: .ax25, defaultOn: false),
+                 family: .ax25),
 
         // Neither: the map itself.
         MapLayer(title: "Cluster Markers", storageKey: "stations.clustersStations",
-                 family: nil, defaultOn: true),
+                 family: nil),
         MapLayer(title: "Hide Distant Stations", storageKey: "stations.hidesDistantStations",
-                 family: nil, defaultOn: false),
+                 family: nil),
     ]
 
     /// The layers a scope draws, in the order the rows appear.
