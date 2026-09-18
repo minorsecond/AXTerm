@@ -151,17 +151,11 @@ nonisolated struct OriginIntervalInfo {
 nonisolated final class NetRomPersistence: @unchecked Sendable {
     private let database: DatabaseWriter
     private let config: NetRomPersistenceConfig
-    #if DEBUG
-    private static var retainedForTests: [NetRomPersistence] = []
-    #endif
 
     init(database: DatabaseWriter, config: NetRomPersistenceConfig = .default) throws {
         self.database = database
         self.config = config
         try createTables()
-        #if DEBUG
-        Self.retainedForTests.append(self)
-        #endif
     }
 
     // MARK: - Table Creation

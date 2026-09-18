@@ -12,9 +12,6 @@ import Foundation
 @MainActor
 final class NetRomPassiveInference {
     let config: NetRomInferenceConfig
-    #if DEBUG
-    private static var retainedForTests: [NetRomPassiveInference] = []
-    #endif
 
     private let router: NetRomRouter
     private let localCallsign: String
@@ -24,9 +21,6 @@ final class NetRomPassiveInference {
         self.router = router
         self.localCallsign = CallsignValidator.normalize(localCallsign)
         self.config = config
-        #if DEBUG
-        Self.retainedForTests.append(self)
-        #endif
     }
 
     #if DEBUG

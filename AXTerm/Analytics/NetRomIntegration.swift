@@ -52,9 +52,6 @@ final class NetRomIntegration {
     /// Optional persistence for recording broadcast intervals (adaptive stale threshold).
     private weak var persistence: NetRomPersistence?
 
-    #if DEBUG
-    private static var retainedForTests: [NetRomIntegration] = []
-    #endif
 
     init(
         localCallsign: String,
@@ -87,9 +84,6 @@ final class NetRomIntegration {
             )
         }
 
-        #if DEBUG
-        Self.retainedForTests.append(self)
-        #endif
     }
 
     /// Set or update the persistence reference.

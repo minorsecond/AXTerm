@@ -175,9 +175,6 @@ nonisolated private struct RouteRecord {
 nonisolated final class NetRomRouter {
     let localCallsign: String
     let config: NetRomConfig
-    #if DEBUG
-    private static var retainedForTests: [NetRomRouter] = []
-    #endif
 
     private var neighbors: [NeighborKey: NeighborRecord] = [:]
     private var routesByDestination: [String: [RouteRecord]] = [:]
@@ -193,9 +190,6 @@ nonisolated final class NetRomRouter {
     init(localCallsign: String, config: NetRomConfig = .default) {
         self.localCallsign = CallsignValidator.normalize(localCallsign)
         self.config = config
-        #if DEBUG
-        Self.retainedForTests.append(self)
-        #endif
     }
 
     func observePacket(
