@@ -27,6 +27,15 @@ nonisolated struct CoverageEvidence: Equatable, Sendable {
     private(set) var repeatedUs: [RadioID: [String: Date]] = [:]
     /// Stations we decoded with nothing between us, and when last.
     private(set) var heardDirect: [RadioID: [String: Date]] = [:]
+    /// For each digipeater, which hop positions it has been seen repeating one
+    /// of our frames at, counting only the hops that actually repeated.
+    /// Position 0 means it took the frame straight off our transmitter, which
+    /// is the difference between a digipeater we need a second hop to reach
+    /// and one that hears us anyway.
+    private(set) var repeatHops: [RadioID: [String: Set<Int>]] = [:]
+    /// How many of our own frames have been heard back, which is the sample
+    /// size everything drawn from `repeatHops` rests on.
+    private(set) var ownFramesHeardBack: [RadioID: Int] = [:]
 
     init() {}
 
@@ -48,10 +57,24 @@ nonisolated struct CoverageEvidence: Equatable, Sendable {
             // Our frame, back off the air. Every hop marked repeated on it
             // decoded us.
             var changed = false
+            // Position among the hops that repeated, not among all of them: a
+            // requested-but-unused WIDE sitting in the middle of the path
+            // must not push the next real digipeater down a place.
+            var position = 0
+            if packet.via.contains(where: \.repeated) {
+                ownFramesHeardBack[radio, default: 0] += 1
+                changed = true
+            }
             for hop in packet.via where hop.repeated {
                 let call = hop.display.uppercased()
                 guard !call.isEmpty else { continue }
                 changed = record(call, at: at, radio: radio, in: &repeatedUs) || changed
+                var forRadio = repeatHops[radio] ?? [:]
+                if forRadio[call, default: []].insert(position).inserted {
+                    changed = true
+                    repeatHops[radio] = forRadio
+                }
+                position += 1
             }
             return changed
         }
@@ -83,6 +106,22 @@ nonisolated struct CoverageEvidence: Equatable, Sendable {
     /// Everything one radio heard direct.
     func heardDirect(on radios: Set<RadioID>) -> [String: Date] {
         merged(heardDirect, on: radios)
+    }
+
+    /// How many of our own frames came back on these radios.
+    func ownFramesHeardBack(on radios: Set<RadioID>) -> Int {
+        radios.reduce(0) { $0 + (ownFramesHeardBack[$1] ?? 0) }
+    }
+
+    /// Which hop positions each digipeater has repeated us at.
+    func repeatHops(on radios: Set<RadioID>) -> [String: Set<Int>] {
+        var result: [String: Set<Int>] = [:]
+        for radio in radios.sorted(by: RadioID.deterministicOrder) {
+            for (call, hops) in repeatHops[radio] ?? [:] {
+                result[call, default: []].formUnion(hops)
+            }
+        }
+        return result
     }
 
     /// Radios on the same frequency hear the same air, so their evidence

@@ -15,6 +15,10 @@ nonisolated struct MapCoverageEvidence: Equatable, Sendable {
     var heardDirectAPRS: [String: Date] = [:]
     /// The same, on a radio carrying AX.25.
     var heardDirectAX25: [String: Date] = [:]
+    /// Which hop each APRS digipeater repeated us at, and how many of our own
+    /// frames that rests on. The path advice is read from these.
+    var repeatHopsAPRS: [String: Set<Int>] = [:]
+    var ownFramesHeardBackAPRS: Int = 0
 
     init() {}
 
@@ -27,5 +31,7 @@ nonisolated struct MapCoverageEvidence: Equatable, Sendable {
         repeatedUsAPRS = evidence.repeatedUs(on: aprs)
         heardDirectAPRS = evidence.heardDirect(on: aprs)
         heardDirectAX25 = evidence.heardDirect(on: ax25)
+        repeatHopsAPRS = evidence.repeatHops(on: aprs)
+        ownFramesHeardBackAPRS = evidence.ownFramesHeardBack(on: aprs)
     }
 }

@@ -1313,6 +1313,21 @@ struct ContentView: View {
 
     /// What each radio has been heard carrying. Drives the row's badge and
     /// which layers are filed under it.
+    /// Stations to offer as APRS addressees: what has actually been heard,
+    /// so the commonest case is picking rather than typing a callsign.
+    ///
+    /// Drawn from heard traffic rather than from a contacts list, because the
+    /// station worth messaging on APRS is almost always one that just said
+    /// something.
+    private var aprsAddresseeSuggestions: [APRSComposeModel.Suggestion] {
+        client.stations.map { station in
+            APRSComposeModel.Suggestion(
+                callsign: station.call.uppercased(),
+                lastHeard: station.lastHeard,
+                via: station.lastVia.isEmpty ? nil : station.lastViaDisplay)
+        }
+    }
+
     private var radioFamilies: [RadioID: Set<RadioTrafficFamily>] {
         RadioTrafficClassifier.families(from: client.stations)
     }
@@ -1898,6 +1913,17 @@ struct ContentView: View {
             // what the packet radio on another band can hear.
             coverageEvidence: MapCoverageEvidence(coverageEvidence.evidence,
                                                   families: radioFamilies),
+            // Built on demand: measuring the channel walks the recent packet
+            // history, which is not worth doing for a panel that is closed.
+            channelReport: {
+                let evidence = MapCoverageEvidence(coverageEvidence.evidence,
+                                                   families: radioFamilies)
+                return APRSChannelReport.build(
+                    packets: client.packets,
+                    repeatHops: evidence.repeatHopsAPRS,
+                    ownFramesHeardBack: evidence.ownFramesHeardBackAPRS,
+                    path: sessionCoordinator.aprsPath(forRadio: nil))
+            },
             // What we have heard from the station, so a ping goes out at a
             // reach that can actually span the gap.
             reachAdvice: { [weak client] call in
@@ -1984,7 +2010,7 @@ struct ContentView: View {
                 traffic?.record(MapTrafficFeed.Line(
                     id: tx.id, at: tx.at, from: tx.from, to: tx.to,
                     via: tx.via.joined(separator: ","), summary: tx.text,
-                    isOurs: true, isForUs: false, radio: tx.radio,
+                    isOurs: true, wasTransmitted: true, isForUs: false, radio: tx.radio,
                     // Handed to the radio is not on the air. Where the radio
                     // can tell us the difference, say so until it does.
                     transmit: tx.awaitsKeying ? .pending : nil))
@@ -1994,7 +2020,9 @@ struct ContentView: View {
             }
         }
         .sheet(item: $aprsComposeTarget) { target in
-            APRSComposeSheet(myCallsign: settings.myCallsign, initialTo: target.call) { to, text in
+            APRSComposeSheet(myCallsign: settings.myCallsign,
+                             initialTo: target.call,
+                             heardStations: aprsAddresseeSuggestions) { to, text in
                 client.aprsMessaging?.sendMessage(
                     to: to, text: text, from: settings.myCallsign,
                     path: sessionCoordinator.aprsPath(forRadio: nil), radioID: nil)

@@ -82,6 +82,12 @@ struct StationsMapView: View {
     /// directions of coverage are measured from these.
     var coverageEvidence: MapCoverageEvidence = MapCoverageEvidence()
 
+    /// Builds the channel-and-path report on demand. A closure rather than a
+    /// value: measuring the channel means walking the recent packet history,
+    /// which is not worth doing on every redraw for a panel that is usually
+    /// closed.
+    var channelReport: (() -> APRSChannelReport)?
+
     /// What we have heard from a station, for judging how far to ask it.
     /// A closure rather than the station list itself: this view already takes
     /// its sites from a projection, and handing it the tracker would let it
@@ -150,12 +156,12 @@ struct StationsMapView: View {
     /// Off by default: on a busy channel the network is a lot of lines, and
     /// an operator opening the map usually wants to know where stations are
     /// before how they connect.
-    @AppStorage("stations.showsPaths") private var showsPaths = false
+    @AppStorage("stations.showsPaths") private var showsPaths = MapLayerDefaults.showsPaths
     /// Terrain forecasts for pairs that have never been heard talking.
     /// Separate from `showsPaths` and off by default, because a prediction
     /// is a different kind of claim from an observation and should never
     /// arrive uninvited alongside one.
-    @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = false
+    @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = MapLayerDefaults.showsPredictedPaths
     /// Graph analysis of the observed network: which stations everything
     /// depends on, and which stations cluster together.
     /// Which terrain shading is drawn, if any. Off by default: the map's
@@ -168,40 +174,47 @@ struct StationsMapView: View {
     /// heuristic is a heuristic — but one internet-bridged station on the
     /// far coast stretches the map's zoom until every local station is a
     /// cluster of dots, so the toggle earns its place.
-    @AppStorage("stations.hidesDistantStations") private var hidesDistantStations = false
+    @AppStorage("stations.hidesDistantStations") private var hidesDistantStations = MapLayerDefaults.hidesDistantStations
     /// The whole node directory on the map — every station the network
     /// claims reachable that can be placed from what is already cached.
     /// Off by default: a harvested directory runs to hundreds of names,
     /// and the map's first job is what was actually heard.
-    @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = false
+    @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = MapLayerDefaults.showsDirectoryNodes
     /// Measured coverage rings around this station. On by default: they
     /// draw only when at least one station has answered us directly, and
     /// knowing one's own footprint is half of why a coverage map exists.
-    @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = true
-    @AppStorage("stations.showsAPRSCoverageRing") private var showsAPRSCoverageRing = true
+    @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = MapLayerDefaults.showsCoverageRing
+    @AppStorage("stations.showsAPRSCoverageRing") private var showsAPRSCoverageRing = MapLayerDefaults.showsAPRSCoverageRing
     /// Whether to place a station at its own transmitted APRS fix (on) or at
     /// its licence/registry point (off). Only matters for stations that have
     /// both; the default prefers the station's own beacon.
-    @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = true
+    @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = MapLayerDefaults.preferTransmittedPosition
 
     // APRS-mode per-type visibility. Each hides one class of *transmitted*
     // APRS station (a station drawn at its beaconed fix, which is the only
     // kind that has a type). Address dots and nodes carry no APRS class and
     // are never touched by these. Default on; only surfaced while Transmitted
     // Positions is on, and mirrored in MapLayerRows under the same keys.
-    @AppStorage("stations.showsObjects") private var showsObjects = true
-    @AppStorage("stations.clustersStations") private var clustersStations = true
-    @AppStorage("stations.falloffMinutes") private var falloffMinutes = 0
-    @AppStorage("stations.showsTracks") private var showsTracks = true
-    @AppStorage("stations.showsAllTracks") private var showsAllTracks = false
-    @AppStorage("stations.trackWindowMinutes") private var trackWindowMinutes = 60
-    @AppStorage("stations.showsWeatherField") private var showsWeatherField = false
+    @AppStorage("stations.showsObjects") private var showsObjects = MapLayerDefaults.showsObjects
+    @AppStorage("stations.clustersStations") private var clustersStations = MapLayerDefaults.clustersStations
+    @AppStorage("stations.falloffMinutes") private var falloffMinutes = MapLayerDefaults.falloffMinutes
+    @AppStorage("stations.showsTracks") private var showsTracks = MapLayerDefaults.showsTracks
+    /// Every rover's trail, not just the selected station's.
+    ///
+    /// On by default because that is what an APRS operator expects: aprs.fi,
+    /// YAAC and Xastir all draw everyone's track, and a map that quietly drew
+    /// none until something was selected read as broken rather than as a
+    /// setting. Turn it off to narrow to whatever is selected, which is worth
+    /// doing on a busy channel where the trails bury the terrain.
+    @AppStorage("stations.showsAllTracks") private var showsAllTracks = MapLayerDefaults.showsAllTracks
+    @AppStorage("stations.trackWindowMinutes") private var trackWindowMinutes = MapLayerDefaults.trackWindowMinutes
+    @AppStorage("stations.showsWeatherField") private var showsWeatherField = MapLayerDefaults.showsWeatherField
     @AppStorage("stations.weatherFieldParameter") private var weatherFieldParameter =
         APRSWeatherField.Parameter.temperature.rawValue
-    @AppStorage("stations.showsTypeDigipeater") private var showsTypeDigipeater = true
-    @AppStorage("stations.showsTypeWeather") private var showsTypeWeather = true
-    @AppStorage("stations.showsTypeVehicle") private var showsTypeVehicle = true
-    @AppStorage("stations.showsTypeFixed") private var showsTypeFixed = true
+    @AppStorage("stations.showsTypeDigipeater") private var showsTypeDigipeater = MapLayerDefaults.showsTypeDigipeater
+    @AppStorage("stations.showsTypeWeather") private var showsTypeWeather = MapLayerDefaults.showsTypeWeather
+    @AppStorage("stations.showsTypeVehicle") private var showsTypeVehicle = MapLayerDefaults.showsTypeVehicle
+    @AppStorage("stations.showsTypeFixed") private var showsTypeFixed = MapLayerDefaults.showsTypeFixed
 
     /// What the trail layer is actually drawing, and why it is not drawing
     /// more. A layer that can legitimately draw nothing has to say so or it is
@@ -452,6 +465,8 @@ struct StationsMapView: View {
     @State private var drawPrompt: TextEntryPrompt?
     @State private var showingOfflineMaps = false
     @State private var showingDirectory = false
+    @State private var showingChannelReport = false
+    @State private var latestChannelReport: APRSChannelReport?
     /// A box the operator drew to bound a download. Cleared when the sheet
     /// closes, so the next download offers their own area again rather than
     /// silently reusing a box from an hour ago.
@@ -1229,6 +1244,16 @@ struct StationsMapView: View {
             }
         }
         .sheet(isPresented: $showingCapture) { captureSheet }
+        .sheet(isPresented: $showingChannelReport) {
+            // Named apart from the state it reads. Shadowing it with an
+            // `if let` of the same name inside a closure that also captures it
+            // crashes the type checker outright (Xcode 26, TypeCheckDecl.cpp
+            // assertion), rather than diagnosing anything.
+            if let report = latestChannelReport {
+                APRSChannelPathView(report: report,
+                                    onRefresh: { latestChannelReport = channelReport?() })
+            }
+        }
         .sheet(isPresented: $showingDirectory) {
             NavigationStack {
                 StationDirectoryView(store: serviceStore) { callsign in
@@ -1513,6 +1538,16 @@ struct StationsMapView: View {
             }
             .help("Takes a picture of the area now on screen and saves it as an image file. A picture, not a map: it does not pan or zoom. For a map that still works offline, use Offline Map above.")
             Divider()
+        }
+
+        if channelReport != nil {
+            Button {
+                latestChannelReport = channelReport?()
+                showingChannelReport = true
+            } label: {
+                Label("Channel & Path\u{2026}", systemImage: "chart.bar.doc.horizontal")
+            }
+            .help("How busy the channel is and whether your beacon path suits it. Measured from what has actually been heard, with the workings shown.")
         }
 
         if serviceStore != nil {
