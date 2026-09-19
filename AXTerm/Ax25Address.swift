@@ -102,14 +102,14 @@ nonisolated struct AX25Address: Hashable, Codable, Identifiable, Sendable {
             ssidByte |= 0x01
         }
         
-        if repeated {
-            // Repeater/Digipeater logic: Bit 7 is H-bit (Has-been-repeated)
-            ssidByte |= 0x80
-        } else if let isCommand = isCommand {
-            // Source/Destination logic: Bit 7 is C/R bit (AX.25 v2.0)
-            // Command: Dest=1, Src=0
-            // Response: Dest=0, Src=1
-            
+        if let isCommand = isCommand {
+            // Source/Destination logic: Bit 7 is the C/R bit (AX.25 v2.x), never
+            // the H-bit. Derive it from command/response. The `repeated` flag is
+            // ignored here on purpose: a decoded src/dest address stores the
+            // received C-bit in `repeated`, and re-emitting that as a
+            // has-been-repeated marker is what produced ambiguous cc=11 frames
+            // (both C-bits set) that a strict peer rejects. Command: Dest=1,
+            // Src=0. Response: Dest=0, Src=1.
             if isCommand {
                 if isDestination {
                     ssidByte |= 0x80 // Command + Dest = 1
@@ -124,6 +124,9 @@ nonisolated struct AX25Address: Hashable, Codable, Identifiable, Sendable {
                     ssidByte |= 0x80 // Response + Src = 1
                 }
             }
+        } else if repeated {
+            // Digipeater address only: Bit 7 is the H-bit (has-been-repeated).
+            ssidByte |= 0x80
         }
         
         data.append(ssidByte)
