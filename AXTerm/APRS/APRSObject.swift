@@ -49,6 +49,9 @@ nonisolated struct APRSObjectReport: Equatable, Sendable {
     /// Objects may carry a full weather report, which is how an unattended
     /// sensor with no callsign of its own gets onto the map.
     var weather: APRSWeather?
+    /// An object sits in the same seven-byte slot a station does, so a placed
+    /// repeater can describe its aerial too. See `APRSCoverage`.
+    var coverage: APRSCoverage?
 
     /// The name every consumer keys on. APRS object names are compared
     /// case-insensitively after trimming, so "Fire  " and "FIRE" are one
@@ -127,7 +130,8 @@ extension APRSObjectReport {
             latitude: position.latitude, longitude: position.longitude,
             symbolTable: position.symbolTable, symbolCode: position.symbolCode,
             courseDegrees: position.courseDegrees, speedKnots: position.speedKnots,
-            comment: position.comment, weather: position.weather)
+            comment: position.comment, weather: position.weather,
+            coverage: position.coverage)
     }
 
     private static func ascii(_ bytes: [UInt8], _ offset: Int, _ count: Int) -> String {

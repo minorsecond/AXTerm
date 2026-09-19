@@ -19,6 +19,21 @@ struct APRSReport: Equatable, Hashable, Sendable {
     /// `_`. Nil for every other station — and for a weather station whose
     /// report was all "no sensor" filler.
     var weather: APRSWeather? = nil
+    /// The repeater listing at the front of the comment, when there was one.
+    /// Read out of `comment` rather than left in it, the same way the altitude
+    /// is — see `APRSFrequencySpec`.
+    var frequency: APRSFrequencySpec? = nil
+    /// What the station says about its own reach — power, height, gain and
+    /// directivity, or a plain radius — from the data extension that follows
+    /// the symbol. See `APRSCoverage`.
+    var coverage: APRSCoverage? = nil
+    /// Telemetry the station folded into its comment instead of spending a
+    /// second packet on it. See `APRSCommentTelemetry`.
+    var commentTelemetry: APRSCommentTelemetry? = nil
+    /// Whether `latitude` and `longitude` carry the extra digits a `!DAO!`
+    /// supplied. Worth knowing: it is the difference between a fix good to
+    /// about eighteen metres and one good to under one.
+    var hasRefinedPosition: Bool = false
 }
 
 /// Parses the position out of a received APRS packet. Pure and deterministic
@@ -58,7 +73,11 @@ nonisolated enum APRSParser {
     /// `destination` is the AX.25 destination callsign (Mic-E hides latitude
     /// there); `info` is the AX.25 information field.
     static func parse(destination: String, info: Data) -> APRSReport? {
-        guard let report = decode(destination: destination, info: info) else { return nil }
+        guard var report = decode(destination: destination, info: info) else { return nil }
+        // Applied here rather than in each of the three decoders: every
+        // encoding can carry them, and doing it once is how they cannot be
+        // added to two of the three and forgotten in the last.
+        applyCommentExtensions(to: &report)
         guard !isNullIsland(latitude: report.latitude, longitude: report.longitude) else { return nil }
         return report
     }
@@ -125,6 +144,7 @@ nonisolated enum APRSParser {
 
         var course: Int?
         var speed: Int?
+        var coverage: APRSCoverage?
         var weather: APRSWeather?
         var rest = ascii(b, offset + 19, b.count - (offset + 19))
         if code == "_" {
@@ -143,13 +163,18 @@ nonisolated enum APRSParser {
                 course = Int(String(cs[0...2]))
                 speed = Int(String(cs[4...6]))
                 rest = String(rest.dropFirst(7))
+            } else {
+                // The same seven bytes, when what the station has to say about
+                // itself is its aerial rather than its travel.
+                coverage = APRSCoverage.take(from: &rest)
             }
         }
         let altitude = extractAltitude(&rest)
+        let listing = takeFrequency(&rest)
         return APRSReport(latitude: lat, longitude: lon, symbolTable: table, symbolCode: code,
                           courseDegrees: validCourse(course), speedKnots: speed, altitudeFeet: altitude,
                           comment: rest, hasTimestamp: hasTimestamp, kind: .uncompressed,
-                          weather: weather)
+                          weather: weather, frequency: listing, coverage: coverage)
     }
 
     /// `DDMM.mmN` → signed degrees, ambiguity spaces treated as zero.
@@ -177,10 +202,13 @@ nonisolated enum APRSParser {
     /// `/A=DDDDDD` altitude in feet, removed from the comment when found.
     static func extractAltitude(_ text: inout String) -> Int? {
         guard let r = text.range(of: "/A=") else { return nil }
-        let after = text[r.upperBound...].prefix(6)
-        guard after.count == 6, after.allSatisfy(\.isNumber) else { return nil }
-        let feet = Int(after)
-        text.removeSubrange(r.lowerBound..<text.index(r.upperBound, offsetBy: 6))
+        // Six digits is what the spec asks for and what almost everything
+        // sends. WA6IFI-6 sends five — `/A=12349` — and insisting on six
+        // printed the field where the altitude should have been. Taken as they
+        // come, up to six; `/A=` with no digits after it is still not one.
+        let digits = text[r.upperBound...].prefix(while: \.isNumber).prefix(6)
+        guard !digits.isEmpty, let feet = Int(digits) else { return nil }
+        text.removeSubrange(r.lowerBound..<text.index(r.upperBound, offsetBy: digits.count))
         return feet
     }
 
@@ -297,12 +325,156 @@ nonisolated enum APRSParser {
 
         let code = Character(UnicodeScalar(b[7]))
         let table = Character(UnicodeScalar(b[8]))
-        let comment = b.count > 9 ? ascii(b, 9, b.count - 9) : ""
+        let tail = b.count > 9 ? ascii(b, 9, b.count - 9) : ""
+        var status = micEStatusText(tail)
+        let listing = takeFrequency(&status)
         return APRSReport(latitude: lat, longitude: lon, symbolTable: table, symbolCode: code,
                           courseDegrees: validCourse(course == 0 ? nil : course),
                           speedKnots: speed == 0 ? nil : speed,
-                          altitudeFeet: micEAltitude(comment),
-                          comment: comment, hasTimestamp: false, kind: .micE)
+                          altitudeFeet: micEAltitude(tail),
+                          comment: status, hasTimestamp: false, kind: .micE,
+                          frequency: listing)
+    }
+
+    /// Lift a leading repeater listing out of a comment, as `extractAltitude`
+    /// lifts out `/A=`. Leaves the comment untouched when there is none.
+    static func takeFrequency(_ text: inout String) -> APRSFrequencySpec? {
+        guard let (spec, rest) = APRSFrequencySpec.parse(text) else { return nil }
+        text = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+        return spec
+    }
+
+    /// Everything else that hides in a comment: the DAO precision extension
+    /// and base-91 telemetry. Both are removed from `comment`, the DAO is
+    /// applied to the coordinates, and what is left is the operator's words.
+    ///
+    /// The refinement is added to the *magnitude* of each coordinate, never to
+    /// the signed value — a west longitude gets more negative. Confirmed
+    /// against `decode_aprs`; see `APRSDAO`.
+    static func applyCommentExtensions(to report: inout APRSReport) {
+        var text = report.comment
+        if let dao = APRSDAO.take(from: &text) {
+            report.latitude += (report.latitude < 0 ? -1 : 1) * dao.latitudeMinutes / 60
+            report.longitude += (report.longitude < 0 ? -1 : 1) * dao.longitudeMinutes / 60
+            report.hasRefinedPosition = true
+        }
+        report.commentTelemetry = APRSCommentTelemetry.take(from: &text)
+        // Trimmed once, here, so all three encodings agree. Lifting a field
+        // out of the middle of a comment leaves the space that separated it:
+        // `PHG3830 WA6IFI W2,COn /A=12349` is ` WA6IFI W2,COn ` once the
+        // extension and the altitude are gone, and a comment is a sentence
+        // rather than a fixed-width field.
+        report.comment = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A Mic-E type code: the first character of the status text, when it is
+    /// the radio naming its family rather than the operator saying something.
+    ///
+    /// Only the four documented ones. A station whose comment genuinely begins
+    /// with some other punctuation keeps it — dropping a character because it
+    /// might be a type code would quietly eat the first letter of somebody's
+    /// sentence.
+    ///
+    /// Which family it names decides how long a signature to look for at the
+    /// far end, which is why the two ends cannot be read apart from each other.
+    private enum MicEFamily {
+        /// `>` — TH-D7A, TH-D74, TH-D75 — and `]` — TM-D700, TM-D710. One
+        /// character of signature, or none.
+        case kenwood
+        /// `` ` `` and `'`: the Yaesu, AnyTone and Byonics trackers, and
+        /// anything else carrying a two-character signature.
+        case twoCharacter
+    }
+
+    private static let micETypeCodes: [Character: MicEFamily] = [
+        ">": .kenwood, "]": .kenwood, "`": .twoCharacter, "'": .twoCharacter
+    ]
+
+    /// The single character a Kenwood signs with: `=` a TM-D710 or TH-D75, `^`
+    /// a TH-D74.
+    ///
+    /// The older TM-D700 and TH-D7A sign with nothing at all, and that is the
+    /// cost of the scheme rather than of this implementation: a D700 operator
+    /// whose comment really does end in `=` loses that character, and no
+    /// parser can tell which of the two it was looking at.
+    private static let micEKenwoodSuffixes: Set<Character> = ["=", "^"]
+
+    /// Two-character device identifiers a Mic-E status text ends with.
+    ///
+    /// A tracker signs its transmissions: `_1` is a Yaesu, `|3` a Byonics
+    /// TinyTrak3. It is the radio naming itself, not the operator writing, and
+    /// it is why a comment ends in what looks like line noise.
+    ///
+    /// `|3` is the one worth calling out. It reads exactly like the tail of a
+    /// base-91 telemetry run, and a first pass here treated it as one — a
+    /// mistake made with Direwolf's own agreement, because `decode_aprs`
+    /// without its `tocalls.yaml` cannot identify devices either and leaves
+    /// the suffix in the comment while saying so. With the table loaded it
+    /// names the radio and consumes it, which is what settled it.
+    ///
+    /// The set is from the APRS device identification list maintained by
+    /// Hessu, OH7LZB, for aprs.fi (CC BY-SA 2.0). Only which two characters
+    /// end a status text is used here; the vendor and model mapping is not.
+    private static let micEDeviceSuffixes: Set<String> = [
+        "_ ", "_\\", "_#", "_$", "_(", "_0", "_1", "_2", "_3", "_4", "_5",
+        "_)", "_%", "(5", "(8", "|3", "|4", "^v", "*v", ":2", " X", "[1"
+    ]
+
+    /// The Mic-E status text with the fields that are not text taken out.
+    ///
+    /// What follows the position is not all comment. The first character may
+    /// be a type code naming the radio's family — `]` a Kenwood TM-D700/710,
+    /// `>` a TH-D7 — the last one or two may be that family's signature naming
+    /// the model, and an altitude rides in between as three base-91 characters
+    /// and a `}`. All of it is read into its own field, so leaving any of it
+    /// in the comment prints the altitude twice — once as `5,587 ft` and again
+    /// as `"FX}` in the middle of the operator's own words — and finishes what
+    /// the operator did write with `_4` or `=`.
+    ///
+    /// `parseUncompressed` has always removed `/A=` from the comment it read;
+    /// Mic-E was the path where it did not, which is why
+    /// `testCommentsAgreeWhereDirewolfLeavesThemWhole` covers the other two
+    /// encodings and not this one. Direwolf strips both of these too.
+    ///
+    /// The altitude is removed only when one was actually read, so a `}` that
+    /// is just a brace in a comment survives.
+    static func micEStatusText(_ tail: String) -> String {
+        var text = tail
+        var family: MicEFamily?
+        if let first = text.first, let named = micETypeCodes[first] {
+            family = named
+            text.removeFirst()
+        }
+        if micEAltitude(tail) != nil,
+           let brace = text.firstIndex(of: "}"),
+           text.distance(from: text.startIndex, to: brace) >= 3 {
+            text.removeSubrange(text.index(brace, offsetBy: -3)..<text.index(after: brace))
+        }
+        // Trimmed *before* the signature is looked for, not after. These
+        // frames end with a carriage return, so the last two characters of the
+        // raw text are `4\r` rather than `_4`: the match failed, the trim then
+        // removed only the return, and the suffix survived — glued to the URL
+        // in front of it, which turned `www.k0rap.com` into a link to
+        // `www.k0rap.com_4` and a punycode hostname that goes nowhere.
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // The signature, at the very end, and only as long as the type code at
+        // the front said it would be. A comment finishing in two characters
+        // that happen to spell a Yaesu keeps them when the radio was a
+        // Kenwood, and a station that sent no type code keeps everything.
+        switch family {
+        case .kenwood:
+            if let last = text.last, micEKenwoodSuffixes.contains(last) {
+                text.removeLast()
+            }
+        case .twoCharacter:
+            if text.count >= 2, micEDeviceSuffixes.contains(String(text.suffix(2))) {
+                text.removeLast(2)
+            }
+        case nil:
+            break
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Mic-E altitude: `cccc}` where the three chars before `}` are base-91

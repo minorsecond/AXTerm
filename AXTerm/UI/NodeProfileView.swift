@@ -155,6 +155,7 @@ struct NodeProfileView: View {
                 // The page has room to explain what forgetting costs. The
                 // sheet carries the same action in its footer, where it takes
                 // one word instead of a paragraph.
+                qrzSection
                 if presentation == .page { forgetSection }
             }
             .padding(20)
@@ -848,6 +849,30 @@ struct NodeProfileView: View {
         return count == 0
             ? "Nothing heard \(window)."
             : "\(count) frame\(count == 1 ? "" : "s") heard \(window)."
+    }
+
+    /// A way out to QRZ, on both the peek and the page.
+    ///
+    /// The URL is worked out from the callsign rather than looked up, so this
+    /// is offered as somewhere to go and not as a claim about the operator.
+    /// Absent for a service endpoint or a tactical alias, which have no page:
+    /// a link that leads nowhere is worse than no link, and two of those teach
+    /// an operator to stop trusting all of them.
+    ///
+    /// Below everything AXTerm itself knows, deliberately. What this station
+    /// has been heard doing is more use mid-session than a licence address,
+    /// and the page should answer that first.
+    @ViewBuilder
+    private var qrzSection: some View {
+        if let url = QRZLink.url(for: profile.callsign) {
+            Link(destination: url) {
+                Label(QRZLink.title(for: profile.callsign), systemImage: "arrow.up.right.square")
+                    .font(.callout)
+            }
+            .help("Opens qrz.com/db/\(CallsignValidator.normalize(profile.callsign).baseCallsign) "
+                  + "in your browser. The address is worked out from the callsign, so the page "
+                  + "may not exist.")
+        }
     }
 
     /// Destructive, so it sits at the bottom, states exactly what goes, and

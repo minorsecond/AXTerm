@@ -10,6 +10,15 @@ being noticed, why the existing watchdog could not see it, and the wire
 measurements from a working third-party client that tell us what a healthy
 session actually looks like.
 
+> A later look at the same night found a second cause sitting under this one:
+> the Mac's display slept and App Nap coalesced the app's timers, which is
+> enough on its own to starve the 705 of the keepalives it expects. The 705's
+> LAN session failed within a second of every display-off and recovered within
+> a second of every display-on, four times for four. See
+> [PowerAndLinkRecovery.md](PowerAndLinkRecovery.md). The watchdog work below
+> stands — a radio that stops answering still has to be noticed — but a good
+> share of the flapping recorded here was the scheduler rather than the radio.
+
 ## The failure, 2026-09-18
 
 AXTerm was left running overnight with the 705 on WLAN.

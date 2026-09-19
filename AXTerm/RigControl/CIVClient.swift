@@ -277,6 +277,42 @@ nonisolated final class CIVClient: @unchecked Sendable {
                               expecting: .acknowledgement)
     }
 
+    /// Turn data mode on, and check the radio took it.
+    ///
+    /// `setMode` clears the data flag on an Icom, so this has to follow it.
+    /// Of everything `configureForPacket` writes, this is the one whose
+    /// failure is silent. With `DATA MOD` set to WLAN or USB the radio
+    /// modulates from that input **only in data mode**; in plain FM it
+    /// modulates from the microphone. So a dropped `1A 06` leaves a radio that
+    /// keys on command, unkeys on command, receives perfectly, and puts
+    /// nothing on the air — and nothing complains, because receive never
+    /// needed the setting. `RigReceiveAudit` carries `dataMode` and has never
+    /// had a finding for it for exactly that reason (2026-09-18: an IC-705 on
+    /// WLAN keying and unkeying correctly with a silent transmitter).
+    ///
+    /// One retry before giving up: a single unanswered command on a flaky CI-V
+    /// link is worth trying again before telling the operator anything.
+    /// A radio that does not answer the readback has told us nothing, and is
+    /// not blamed for it: only a radio that answers "off" has actually said
+    /// the setting did not take. Otherwise a rig with a flaky read would be
+    /// reported as a silent transmitter on every connect.
+    func setDataModeChecked(filter: UInt8 = 1) async throws {
+        var writeFailure: Error?
+        do { try await setDataMode(true, filter: filter) } catch { writeFailure = error }
+
+        switch try? await readDataMode() {
+        case .some(true):
+            return
+        case .none:
+            // No evidence either way. Fall back to whether the write itself
+            // was acknowledged, which is what this did before it checked.
+            if let writeFailure { throw writeFailure }
+        case .some(false):
+            try await setDataMode(true, filter: filter)
+            if (try? await readDataMode()) == false { throw CIVError.rejected(command: 0x1A) }
+        }
+    }
+
     func setTransceive(_ on: Bool) async throws {
         _ = try await request(CIVCommand.setTransceive(on, radio: radioAddress, controller: controllerAddress), expecting: .acknowledgement)
     }
@@ -337,7 +373,7 @@ nonisolated final class CIVClient: @unchecked Sendable {
         case .afsk300: try await setMode(.usb, filter: 1)
         case .g3ruh9600RxIF: try await setMode(.fm, filter: 1)
         }
-        try await setDataMode(true, filter: 1)
+        try await setDataModeChecked(filter: 1)
         try await setMenuItem(.dataMod, [dataMod.rawValue])
         try await setMenuItem(.usbAFSquelch, [0x00])
         try await setMenuItem(.usbSend, [0x00])
@@ -384,14 +420,22 @@ nonisolated final class CIVClient: @unchecked Sendable {
                 "framesDiscarded": self.framesDropped,
                 "after": String(format: "%.2fs", self.requestTimeout)])
             self.consecutiveTimeouts += 1
-            request.continuation.resume(throwing: CIVError.timeout(command: request.frame.command))
             if self.consecutiveTimeouts == Self.unansweredPollLimit {
                 // Once, on the way past the limit, not on every poll after it.
+                //
+                // Reported *before* the waiter is resumed. Resuming hands
+                // control to whoever was awaiting this request, so a verdict
+                // reached afterwards is a verdict that caller can miss: it
+                // sees the failure, looks for the reason, and finds nothing
+                // yet. Reporting first makes the continuation the edge that
+                // publishes it, and the caller cannot observe the one without
+                // the other.
                 self.onUnresponsive?(
                     "the radio has not answered \(self.consecutiveTimeouts) CI-V commands in a "
                     + "row. Its keepalives are still running, so the session is up and the radio "
                     + "is ignoring it.")
             }
+            request.continuation.resume(throwing: CIVError.timeout(command: request.frame.command))
             self.advance()
         }
         request.timeout = timeout

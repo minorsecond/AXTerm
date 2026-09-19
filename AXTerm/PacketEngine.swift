@@ -419,6 +419,31 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var consoleLines: [ConsoleLine] = []
     @Published private(set) var rawChunks: [RawChunk] = []
     @Published private(set) var stations: [Station] = []
+    /// Base callsigns heard this session, for the console's callsign scanner.
+    ///
+    /// The scanner's strongest signal: a token in a message that matches a
+    /// station we have actually received is a callsign in a way no pattern can
+    /// argue with. Base calls rather than full addresses, because hearing
+    /// `WA0DE-9` tells us `WA0DE-7` is the same licensee.
+    var heardBaseCallsigns: Set<String> {
+        Set(stations.map { CallsignValidator.normalize($0.call).baseCallsign })
+    }
+
+    /// Each station's telemetry definition, by full callsign.
+    ///
+    /// `PARM`/`UNIT`/`EQNS`/`BITS` are addressed to the sending station itself
+    /// and arrive hours apart from the `T#` frames they describe, so they are
+    /// collected per station as they are heard (`StationTracker`) and looked up
+    /// when a frame needs naming. Full callsign, not base: a station's
+    /// telemetry belongs to that SSID's hardware, and `-1`'s channels are not
+    /// `-9`'s.
+    var telemetryDefinitions: [String: APRSTelemetry.Definition] {
+        stations.reduce(into: [:]) { map, station in
+            if let definition = station.telemetryDefinition {
+                map[CallsignValidator.normalize(station.call)] = definition
+            }
+        }
+    }
     
     // Mobilinkd Telemetry
     @Published var mobilinkdBatteryLevel: Int?
@@ -800,8 +825,15 @@ final class PacketEngine: ObservableObject {
         lastTxTime = Date()
         lastTxByRadio[frame.radio] = lastTxTime
         guard let activeLink = radioManager.session(for: frame.radio), activeLink.state == .connected else {
-            let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
-            TxLog.error(.transport, "Send failed: not connected", error: error, ["frameId": String(frame.id.uuidString.prefix(8))])
+            // A typed error rather than an ad-hoc NSError, so the layers above
+            // can tell "the link is down" from a send that genuinely failed
+            // and report the two differently (see `SendFailure`).
+            let error = KISSTransportError.notConnected
+            TxLog.warning(.transport, "Send skipped: link is down", [
+                "frameId": String(frame.id.uuidString.prefix(8)),
+                "radio": String(describing: frame.radio),
+                "dest": frame.destination.display
+            ])
             addErrorLine("Send failed: not connected", category: .transmission)
             completion?(.failure(error))
             return
@@ -919,7 +951,11 @@ final class PacketEngine: ObservableObject {
                         "dest": frame.destination.display,
                         "size": kissData.count
                     ])
-                    self.addSystemLine("Frame sent successfully", category: .transmission)
+                    // The radio it went out on, so hiding that radio hides
+                    // our own traffic on it too — the way the Packets table
+                    // has always treated it.
+                    self.addSystemLine("Frame sent successfully", category: .transmission,
+                                       radios: [frame.radio])
                     // Notify for sender progress highlighting (I-frames with AXDP PID)
                     if frame.frameType.lowercased() == "i", frame.pid == 0xF0 {
                         self.onUserFrameTransmitted?(frame.payload.count)
@@ -1402,13 +1438,31 @@ final class PacketEngine: ObservableObject {
             level: .info, data: ["frame": who])
     }
 
+    /// A notice about the app. Never hidden by the per-radio filter.
     private func addSystemLine(_ text: String, category: ConsoleEntryRecord.Category) {
         appendConsoleLine(ConsoleLine.system(text), category: category)
     }
 
+    /// A notice about one or more radios — a link, a transmission, a reply.
+    /// Hides with them. An empty set means a radio we cannot name, which hides
+    /// with the primary rather than escaping the filter.
+    private func addSystemLine(_ text: String, category: ConsoleEntryRecord.Category,
+                               radios: Set<RadioID>) {
+        appendConsoleLine(ConsoleLine.system(text, radios: radios), category: category)
+    }
+
     /// Public wrapper for addSystemLine so SessionCoordinator can post adaptive-change notifications.
-    func appendSystemNotification(_ text: String) {
-        addSystemLine(text, category: .transmission)
+    ///
+    /// `radio` names the radio the notice is about, when the caller knows it.
+    /// Left out, the notice is the app's and shows whatever is hidden — so a
+    /// caller that *does* know should say, or its line will not follow its
+    /// radio out of sight.
+    func appendSystemNotification(_ text: String, radio: RadioID? = nil) {
+        if let radio {
+            addSystemLine(text, category: .transmission, radios: [radio])
+        } else {
+            addSystemLine(text, category: .transmission)
+        }
     }
 
     private func addErrorLine(_ text: String, category: ConsoleEntryRecord.Category) {
@@ -1868,7 +1922,10 @@ final class PacketEngine: ObservableObject {
                 timestamp: packet.timestamp,
                 via: viaPath,
                 isDuplicate: isDuplicate,
-                radioID: packet.radioID
+                radioID: packet.radioID,
+                // The bytes, not `text`: a Mic-E payload does not survive the
+                // trip through `infoText`. Only UI frames carry APRS.
+                aprsInfo: packet.frameType == .ui ? packet.info : nil
             )
 
             appendConsoleLine(line, category: .packet, packetID: packet.id, byteCount: packet.info.count)
@@ -2286,7 +2343,16 @@ final class PacketEngine: ObservableObject {
         byteCount: Int? = nil
     ) {
         guard settings.persistHistory, let persistenceWorker else { return }
-        let metadata = ConsoleEntryMetadata(from: line.from, to: line.to, via: line.via.isEmpty ? nil : line.via)
+        let radios: [String]?
+        switch line.subject {
+        case .app: radios = nil
+        case .radios(let ids): radios = ids.map(\.rawValue).sorted()
+        case .unnamedRadio: radios = []
+        }
+        let metadata = ConsoleEntryMetadata(from: line.from, to: line.to,
+                                            via: line.via.isEmpty ? nil : line.via,
+                                            radios: radios,
+                                            aprs: line.aprsInfo?.base64EncodedString())
         let metadataJSON = metadata.hasValues ? DeterministicJSON.encode(metadata) : nil
         let entry = ConsoleEntryRecord(
             id: line.id,
@@ -3132,7 +3198,8 @@ extension PacketEngine: RadioManagerDelegate {
 
         case .connected:
             clearPendingConnectionError(for: link)
-            addSystemLine("Connected to \(endpoint)", category: .connection)
+            addSystemLine("Connected to \(endpoint)", category: .connection,
+                          radios: radioManager.radios(carriedBy: link))
             eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)
             // A link that just came up clears its own error; recompute the
             // engine-level banner from what is still failed, so a recovered
@@ -3152,7 +3219,8 @@ extension PacketEngine: RadioManagerDelegate {
             }
 
         case .disconnected:
-            addSystemLine("Disconnected", category: .connection)
+            addSystemLine("Disconnected", category: .connection,
+                          radios: radioManager.radios(carriedBy: link))
             eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
             SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Disconnected", level: .info, data: nil)
 
@@ -3178,6 +3246,18 @@ extension PacketEngine: RadioManagerDelegate {
     }
 
     func radioManager(_ manager: RadioManager, link: LinkSession, didError message: String) {
+        // A link that dropped because this machine slept is not a fault, and
+        // reading a POSIX error number should not be how an operator learns
+        // they closed their laptop. Said plainly, kept out of the banner, and
+        // not reported: the app asked for the sleep to happen.
+        if SystemPowerMonitor.shared.cause(forDropAt: Date()) == .systemSleep {
+            addSystemLine("\(link.endpointDescription) went down while this machine was asleep. Reconnecting.",
+                          category: .connection)
+            eventLogger?.log(level: .info, category: .connection,
+                             message: "Link down over system sleep: \(link.endpointDescription)",
+                             metadata: ["detail": message])
+            return
+        }
         lastError = message
         onLinkError?(message)
         LinkDebugLog.shared.recordParseError(message: "Link error: \(message)")
@@ -3188,6 +3268,26 @@ extension PacketEngine: RadioManagerDelegate {
         // at once; the console only shows it if it outlasts the reconnect.
         deferConnectionError(message, for: link, category: .connection)
         eventLogger?.log(level: .error, category: .connection, message: message, metadata: nil)
+    }
+
+    /// The event that 2026-09-18 had no equivalent of.
+    ///
+    /// That night produced twenty error-level reports that a frame could not
+    /// be sent and none at all that the station was off the air, which is the
+    /// wrong way round: the failed sends were a consequence, and the outage
+    /// was the thing nobody knew about until morning.
+    func radioManager(_ manager: RadioManager, link: LinkSession, hasBeenDownFor seconds: TimeInterval) {
+        let howLong = PowerInterruption.duration(seconds)
+        let message = "\(link.endpointDescription) has been down for \(howLong) and is still trying. Nothing this station sends on it is going out."
+        addErrorLine(message, category: .connection)
+        eventLogger?.log(level: .error, category: .connection, message: message,
+                         metadata: ["link": link.endpointDescription,
+                                    "downSeconds": "\(Int(seconds))"])
+        TxLog.error(.transport, "Link down too long", error: nil, [
+            "link": link.endpointDescription,
+            "downSeconds": Int(seconds),
+            "lastError": link.lastError ?? "none"
+        ])
     }
 
     func radioManager(_ manager: RadioManager, link: LinkSession, droppedFrameOnUnassignedPort port: UInt8) {
@@ -3205,9 +3305,21 @@ private struct ConsoleEntryMetadata: Codable {
     let from: String?
     let to: String?
     let via: [String]?
+    /// The radios this line is about, so a reloaded transcript hides with the
+    /// same sidebar switches a live one does. Absent for app notices, which
+    /// belong to no radio; an empty array is a radio we could not name.
+    var radios: [String]?
+    /// The APRS information field, base64, for lines that decoded as APRS.
+    ///
+    /// Stored so a reloaded transcript reads the same as a live one. The bytes
+    /// rather than the decoded words: they are the ground truth, they are
+    /// about eighty bytes, and storing them means an improvement to the
+    /// decoder reaches old lines instead of leaving the history rendered by
+    /// whichever version happened to be running that day.
+    var aprs: String?
 
     var hasValues: Bool {
-        from != nil || to != nil || (via != nil && !via!.isEmpty)
+        from != nil || to != nil || (via != nil && !via!.isEmpty) || aprs != nil || radios != nil
     }
 }
 

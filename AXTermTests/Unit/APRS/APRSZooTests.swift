@@ -202,8 +202,37 @@ final class APRSZooTests: XCTestCase {
         XCTAssertEqual(ours.comment, f.direwolf.last, "the comment Direwolf was left with")
     }
 
+    /// Mic-E hides four things in what looks like the comment: a type code
+    /// naming the radio's family, a signature naming the model, an altitude in
+    /// base-91, and a repeater listing. All four are read into their own
+    /// fields and taken out of the text.
+    ///
+    /// The signature is the one place this suite cannot simply defer to the
+    /// recording. `decode_aprs` produced it without its `tocalls.yaml`, so it
+    /// could not identify the radio and left the two characters it signed with
+    /// — `_1`, a Yaesu — sitting in the comment, which is all it had left of
+    /// this frame. Loaded with that table it consumes them exactly as we do.
+    /// Asserting against the raw line would pin AXTerm to a Direwolf that was
+    /// missing a file.
+    func testMicECommentDropsEveryFieldItAlreadyRead() throws {
+        let f = try frame("mic-e")
+        let ours = try XCTUnwrap(APRSParser.parse(destination: f.dest, info: f.info))
+
+        XCTAssertNotNil(ours.altitudeFeet, "the altitude is read")
+        XCTAssertEqual(ours.frequency?.megahertz ?? 0, 147.210, accuracy: 0.0005)
+        XCTAssertEqual(ours.frequency?.tone, .ctcss(hertz: 100.0))
+        XCTAssertEqual(ours.frequency?.offsetKilohertz, 600)
+
+        XCTAssertEqual(f.direwolf.last, "_1",
+                       "Direwolf was left holding the signature it had no table to name")
+        XCTAssertEqual(ours.comment, "",
+                       "and with that read too, the operator wrote nothing at all")
+    }
+
     /// Direwolf prints the plain remainder of the payload as the last line.
     /// Where the type has no structured tail, that is exactly our comment.
+    /// Mic-E is not in this list: its tail is structured to the last character,
+    /// and `testMicECommentDropsEveryFieldItAlreadyRead` covers it.
     func testCommentsAgreeWhereDirewolfLeavesThemWhole() throws {
         for name in ["uncompressed-position", "compressed-position"] {
             let f = try frame(name)

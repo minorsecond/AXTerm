@@ -143,7 +143,6 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
         guard isRunning, let sink, let session, let format else { return }
         let frames = Int(format.sampleRate * 0.02)
         if renderScratch.count != frames { renderScratch = [Float](repeating: 0, count: frames) }
-        if renderInt16.count != frames { renderInt16 = [Int16](repeating: 0, count: frames) }
         let written = renderScratch.withUnsafeMutableBufferPointer { sink.audioIO(render: $0) }
         if written == 0 {
             quietFrames += 1
@@ -151,20 +150,33 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
         } else {
             quietFrames = 0
         }
-        // Zero past what was rendered, clip, scale, truncate toward zero —
-        // the same arithmetic as `Int16(v * 32767)` on a clipped v — as
-        // vector ops rather than a loop of three array writes per sample.
-        renderScratch.withUnsafeMutableBufferPointer { f in
+        session.sendAudio(pcm: Self.encodePCM(&renderScratch, written: written, staging: &renderInt16))
+    }
+
+    /// Float samples to the little-endian 16-bit PCM the radio expects.
+    ///
+    /// Extracted from `transmitFrame` so it can be tested against the
+    /// byte-at-a-time loop it replaced. This is the last step before audio
+    /// leaves for the radio, and a fault here is silent in the worst way: the
+    /// transmitter keys, the carrier goes up, and nothing modulates it.
+    ///
+    /// Zero past what was rendered, clip, scale, truncate toward zero — the
+    /// same arithmetic as `Int16(v * 32767)` on a clipped v, as vector ops
+    /// rather than three array writes per sample.
+    static func encodePCM(_ samples: inout [Float], written: Int, staging: inout [Int16]) -> Data {
+        let frames = samples.count
+        if staging.count != frames { staging = [Int16](repeating: 0, count: frames) }
+        guard frames > 0 else { return Data() }
+        samples.withUnsafeMutableBufferPointer { f in
             let p = f.baseAddress!
             if written < frames { vDSP_vclr(p + written, 1, vDSP_Length(frames - written)) }
             var low: Float = -1, high: Float = 1, scale: Float = 32767
             vDSP_vclip(p, 1, &low, &high, p, 1, vDSP_Length(frames))
             vDSP_vsmul(p, 1, &scale, p, 1, vDSP_Length(frames))
-            renderInt16.withUnsafeMutableBufferPointer { i16 in
+            staging.withUnsafeMutableBufferPointer { i16 in
                 vDSP_vfix16(p, 1, i16.baseAddress!, 1, vDSP_Length(frames))
             }
         }
-        let pcm = renderInt16.withUnsafeBufferPointer { Data(buffer: UnsafeBufferPointer(rebasing: $0[0..<frames])) }
-        session.sendAudio(pcm: pcm)
+        return staging.withUnsafeBufferPointer { Data(buffer: $0) }
     }
 }

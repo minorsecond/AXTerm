@@ -149,6 +149,16 @@ final class SessionCoordinator: ObservableObject {
     /// scheduleNetRomBroadcasts for why launch neither broadcasts
     /// immediately nor waits a whole interval.
     private var netRomWarmupBroadcastTimer: Timer?
+
+    /// Whether this station is announcing itself on a timer. The presence of
+    /// the timer *is* the switch: `scheduleNetRomBroadcasts` tears it down
+    /// when the setting goes off.
+    var isAnnouncingNodes: Bool { netRomBroadcastTimer != nil }
+
+    #if DEBUG
+    /// Test seam: whether a one-shot announcement is armed and waiting.
+    var testWakeAnnouncementIsPending: Bool { netRomWarmupBroadcastTimer?.isValid == true }
+    #endif
     /// One beacon timer per radio: each radio beacons its own content on its
     /// own interval, so a packet node and an APRS node share nothing.
     private var beaconTimers: [RadioID: Timer] = [:]
@@ -1396,6 +1406,33 @@ final class SessionCoordinator: ObservableObject {
         netRomBroadcastTimer = timer
     }
 
+    /// Announce once shortly after a sleep, instead of waiting out the
+    /// interval.
+    ///
+    /// The same warm-up shot the launch path above uses, and for the same
+    /// reason. This station was away; our neighbours' routes to us aged while
+    /// we were gone, and the steady cadence can be an hour. Thirty seconds
+    /// rather than the launch path's ninety because a resumed link reopens
+    /// immediately, with no backoff to serve — but still a delay, because a
+    /// Mac that has just woken has not finished re-associating to Wi-Fi.
+    ///
+    /// Does nothing when announcing is off, and the shot itself is guarded on
+    /// the radio being back, so a sleep the links did not survive costs
+    /// nothing here.
+    func announceAfterWake() {
+        guard isAnnouncingNodes else { return }
+        netRomWarmupBroadcastTimer?.invalidate()
+        let warmup = Timer(timeInterval: 30, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self,
+                      self.packetEngine?.status == .connected else { return }
+                _ = self.netRomDriver.broadcastNodes()
+            }
+        }
+        RunLoop.main.add(warmup, forMode: .common)
+        netRomWarmupBroadcastTimer = warmup
+    }
+
     /// Arm the beacon timer. Same rule as the NODES timer: configuring is
     /// not transmitting. Unlike NODES, the first beacon waits for the
     /// interval — an announcement nobody asked for should not be the
@@ -1478,11 +1515,14 @@ final class SessionCoordinator: ObservableObject {
             let why = beaconObstacle(for: radioID, settings: settings)
                 ?? "the beacon could not be built"
             packetEngine?.appendSystemNotification(
-                "Beacon not sent\(radioSuffix([radioID])): \(why)")
+                "Beacon not sent\(radioSuffix([radioID])): \(why)", radio: radioID)
             return
         }
         transmit(frame, staggeredBy: 0)
-        packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radioID])).")
+        // Attributed as well as named: the suffix tells the operator which
+        // radio beaconed, and the attribution makes the line follow that radio
+        // when it is hidden.
+        packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radioID])).", radio: radioID)
     }
 
     // MARK: - APRS objects
@@ -1618,11 +1658,11 @@ final class SessionCoordinator: ObservableObject {
                 let why = beaconObstacle(for: radio.id, settings: settings)
                     ?? "the beacon could not be built"
                 packetEngine?.appendSystemNotification(
-                    "Beacon not sent\(radioSuffix([radio.id])): \(why)")
+                    "Beacon not sent\(radioSuffix([radio.id])): \(why)", radio: radio.id)
                 continue
             }
             transmit(frame, staggeredBy: index)
-            packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radio.id])).")
+            packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radio.id])).", radio: radio.id)
             index += 1
         }
     }
@@ -2684,7 +2724,21 @@ final class SessionCoordinator: ObservableObject {
                         "dest": frame.destination.display
                     ])
                 case .failure(let error):
-                    TxLog.error(.session, "Frame send failed", error: error)
+                    // "The link is down" is not a fault in the send path, it
+                    // is a consequence of one that has its own report
+                    // (RadioManager's outage watch). On 2026-09-18 twenty of
+                    // these shipped as error-level events overnight while the
+                    // outage itself shipped nothing, so the symptom is a
+                    // breadcrumb now and the cause is the event.
+                    if SendFailure.isLinkDown(error) {
+                        TxLog.warning(.session, "Frame not sent: link is down", [
+                            "type": frame.frameType,
+                            "dest": frame.destination.display,
+                            "error": error.localizedDescription
+                        ])
+                    } else {
+                        TxLog.error(.session, "Frame send failed", error: error)
+                    }
                 }
             }
         }

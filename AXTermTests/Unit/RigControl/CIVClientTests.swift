@@ -12,11 +12,33 @@ nonisolated final class FakeCIVTransport: CIVTransport, @unchecked Sendable {
     /// Every frame written, in order.
     private var _written: [CIVFrame] = []
     var written: [CIVFrame] { lock.withLock { _written } }
-    /// How to answer a command byte: bytes to send back after `delay`.
+    /// How to answer a command byte: bytes to send back after `replyDelay`.
     var responder: (@Sendable (CIVFrame) -> [UInt8]?)?
+    /// How long the radio takes to answer. Zero or less answers *synchronously*,
+    /// inside `write`, which is safe and is what a test wanting a responsive
+    /// radio rather than a slow one should ask for: `CIVClient` hops every
+    /// incoming byte onto its own serial queue, and `advance()` has already
+    /// registered the in-flight request before it calls `write`, so the answer
+    /// is queued behind the send and cannot arrive before anything is waiting
+    /// for it. A synchronous radio takes the wall clock out of the handshake
+    /// altogether, which is the difference between a test that measures the
+    /// code and one that measures how busy the machine was.
     var replyDelay: TimeInterval = 0.005
     var writeError: Error?
     var modemLines: [(dtr: Bool?, rts: Bool?)] = []
+
+    /// Replies go out here rather than on `DispatchQueue.global()`.
+    ///
+    /// The shared pool is where this fake used to put them, and on a loaded
+    /// machine a five-millisecond `asyncAfter` on it can land hundreds of
+    /// milliseconds late — every worker thread is busy with somebody else's
+    /// test. A radio that answers late enough trips `CIVClient`'s request
+    /// timeout, which turns an unrelated CPU spike into a failure in whatever
+    /// test happened to be opening a link at the time. A serial queue of our
+    /// own, at a priority that matches the test's, keeps the answer's latency
+    /// about the radio and not about the machine.
+    private let replyQueue = DispatchQueue(label: "com.axterm.tests.civ.fake-radio",
+                                           qos: .userInitiated)
 
     func open() { state = .open; onStateChange?(state) }
     func close() { state = .closed; onStateChange?(state) }
@@ -27,10 +49,13 @@ nonisolated final class FakeCIVTransport: CIVTransport, @unchecked Sendable {
         guard let frame = CIVFrame.parse([UInt8](data)) else { completion(nil); return }
         lock.withLock { _written.append(frame) }
         completion(nil)
-        if let reply = responder?(frame) {
-            DispatchQueue.global().asyncAfter(deadline: .now() + replyDelay) { [weak self] in
-                self?.onBytes?(Data(reply))
-            }
+        guard let reply = responder?(frame) else { return }
+        guard replyDelay > 0 else {
+            onBytes?(Data(reply))
+            return
+        }
+        replyQueue.asyncAfter(deadline: .now() + replyDelay) { [weak self] in
+            self?.onBytes?(Data(reply))
         }
     }
 
@@ -52,6 +77,62 @@ nonisolated final class FakeCIVTransport: CIVTransport, @unchecked Sendable {
 /// The client: one request at a time, matched by order, with timeouts;
 /// and the PTT controller's fail-safes on top of it.
 final class CIVClientTests: XCTestCase {
+
+    // MARK: - Data mode
+
+    /// The radio acknowledges the write and stays out of data mode anyway.
+    ///
+    /// This is the shape that silenced a transmitter: `setMode` clears the
+    /// data flag, the `1A 06` that restores it goes missing, and with DATA MOD
+    /// set to WLAN the rig then modulates from the microphone. Receive is
+    /// unaffected, so nothing else notices.
+    func testConfigureForPacketFailsWhenDataModeDoesNotStick() async {
+        let (client, transport) = makeClient()
+        transport.responder = { frame in
+            guard frame.command == 0x1A, frame.subcommand == 0x06 else { return FakeCIVTransport.ok }
+            // A write carries data; a read does not.
+            return frame.data.isEmpty
+                ? FakeCIVTransport.reply(0x1A, 0x06, [0x00])   // still off
+                : FakeCIVTransport.ok                          // "yes, done"
+        }
+
+        do {
+            try await client.configureForPacket(.afsk1200, dataMod: .wlan)
+            XCTFail("a radio that never entered data mode must not report success")
+        } catch {
+            XCTAssertEqual(error as? CIVError, .rejected(command: 0x1A))
+        }
+
+        let writes = transport.written.filter { $0.command == 0x1A && $0.subcommand == 0x06 && !$0.data.isEmpty }
+        XCTAssertEqual(writes.count, 2, "one retry before giving up")
+    }
+
+    func testConfigureForPacketSucceedsWhenDataModeTakes() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = { frame in
+            guard frame.command == 0x1A, frame.subcommand == 0x06 else { return FakeCIVTransport.ok }
+            return frame.data.isEmpty ? FakeCIVTransport.reply(0x1A, 0x06, [0x01]) : FakeCIVTransport.ok
+        }
+
+        try await client.configureForPacket(.afsk1200, dataMod: .wlan)
+
+        let writes = transport.written.filter { $0.command == 0x1A && $0.subcommand == 0x06 && !$0.data.isEmpty }
+        XCTAssertEqual(writes.count, 1, "no retry when the first attempt took")
+        XCTAssertTrue(transport.written.contains { $0.command == 0x06 }, "mode was set before data mode")
+    }
+
+    /// A dropped write and a good readback is not a failure: what matters is
+    /// the state the radio ended up in, not whether every frame was answered.
+    func testDataModeUnansweredWriteIsFineIfTheRadioIsInDataMode() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = { frame in
+            guard frame.command == 0x1A, frame.subcommand == 0x06 else { return FakeCIVTransport.ok }
+            return frame.data.isEmpty ? FakeCIVTransport.reply(0x1A, 0x06, [0x01]) : nil
+        }
+
+        try await client.configureForPacket(.afsk1200, dataMod: .wlan)
+        XCTAssertTrue(transport.written.contains { $0.command == 0x1A && $0.subcommand == 0x06 })
+    }
 
     private func makeClient(timeout: TimeInterval = 0.2) -> (CIVClient, FakeCIVTransport) {
         let transport = FakeCIVTransport()
@@ -226,7 +307,95 @@ final class CIVClientTests: XCTestCase {
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 05 01 25 00 FD"), "USB SEND off")
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 05 01 31 00 FD"), "transceive off")
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 05 00 41 00 FD"), "144 MHz TX delay off")
-        XCTAssertEqual(commands.count, 10)
+        // The recipe reads data mode back after writing it. This radio answers
+        // every frame with a bare acknowledgement, which is not a valid reply
+        // to a read, so the readback tells us nothing and the setup proceeds on
+        // the acknowledged write — see `setDataModeChecked`.
+        XCTAssertTrue(commands.contains("FE FE A4 E0 1A 06 FD"), "data mode read back")
+        XCTAssertEqual(commands.count, 11)
+    }
+
+    // MARK: - Data mode at key-up
+
+    /// A ham who ticked "set the radio for packet" expects the radio to be set
+    /// for packet when it transmits. So the data-mode guarantee sits at
+    /// key-up, not at connect: a rig knocked out of data mode after connecting
+    /// is put back before it is keyed, not complained about afterwards.
+    func testKeyingSetsDataModeOnTheFirstTransmission() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = { _ in FakeCIVTransport.ok }
+        let ptt = CIVPTTController(client: client, maxTransmitSeconds: 30, modulatesFromDataInput: true)
+
+        try await key(ptt)
+
+        let frames = transport.written
+        guard let dataMode = frames.firstIndex(where: { $0.command == 0x1A && $0.subcommand == 0x06 }),
+              let keyDown = frames.firstIndex(where: { $0.command == 0x1C }) else {
+            return XCTFail("expected a data-mode write and a key-down, got \(frames.count) frames")
+        }
+        XCTAssertLessThan(dataMode, keyDown, "data mode must be set before the radio is keyed")
+    }
+
+    /// One command per session, not one per transmission: the status poll
+    /// keeps the belief current, so nothing is re-sent while it holds.
+    func testAlreadyInDataModeCostsNothingAtKeyUp() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = { _ in FakeCIVTransport.ok }
+        let ptt = CIVPTTController(client: client, maxTransmitSeconds: 30, modulatesFromDataInput: true)
+        ptt.noteDataMode(true)
+
+        try await key(ptt)
+
+        XCTAssertFalse(transport.written.contains { $0.command == 0x1A && $0.subcommand == 0x06 },
+                       "nothing to fix, so nothing written")
+        XCTAssertTrue(transport.written.contains { $0.command == 0x1C }, "still keyed")
+    }
+
+    /// The operator turned the mode knob. The next transmission puts it back.
+    func testDriftOutOfDataModeIsCorrectedAtTheNextKeyUp() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = { _ in FakeCIVTransport.ok }
+        let ptt = CIVPTTController(client: client, maxTransmitSeconds: 30, modulatesFromDataInput: true)
+        ptt.noteDataMode(true)
+        try await key(ptt)
+        XCTAssertFalse(transport.written.contains { $0.command == 0x1A && $0.subcommand == 0x06 })
+
+        ptt.noteDataMode(false)          // a status poll saw the radio leave data mode
+        try await key(ptt)
+
+        XCTAssertTrue(transport.written.contains { $0.command == 0x1A && $0.subcommand == 0x06 },
+                      "the drift is corrected before the next transmission")
+    }
+
+    /// With "set the radio for packet" off, AXTerm does not write to the radio.
+    func testAStationThatDoesNotWriteToTheRadioIsLeftAlone() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = { _ in FakeCIVTransport.ok }
+        let ptt = CIVPTTController(client: client, maxTransmitSeconds: 30, modulatesFromDataInput: false)
+
+        try await key(ptt)
+
+        XCTAssertFalse(transport.written.contains { $0.command == 0x1A && $0.subcommand == 0x06 })
+        XCTAssertTrue(transport.written.contains { $0.command == 0x1C })
+    }
+
+    /// A dropped data-mode command is a thin reason to refuse to transmit.
+    func testAFailedDataModeStillKeys() async throws {
+        let (client, transport) = makeClient(timeout: 0.05)
+        transport.responder = { frame in
+            (frame.command == 0x1A && frame.subcommand == 0x06) ? nil : FakeCIVTransport.ok
+        }
+        let ptt = CIVPTTController(client: client, maxTransmitSeconds: 30, modulatesFromDataInput: true)
+
+        try await key(ptt)
+
+        XCTAssertTrue(transport.written.contains { $0.command == 0x1C }, "the transmission still goes out")
+    }
+
+    private func key(_ ptt: CIVPTTController) async throws {
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            ptt.setTransmit(true) { error in if let error { c.resume(throwing: error) } else { c.resume() } }
+        }
     }
 
     // MARK: - PTT controller
