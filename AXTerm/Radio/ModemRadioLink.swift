@@ -195,7 +195,12 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         // The WLAN has no control lines: keying there is the CI-V command.
         let method: ModemPTTMethod = (session != nil && (config.pttMethod == .rts || config.pttMethod == .dtr)) ? .civ : config.pttMethod
         switch method {
-        case .civ: ptt = CIVPTTController(client: client, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
+        case .civ: ptt = CIVPTTController(client: client,
+                                          maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds),
+                                          // The soft modem's audio reaches this radio over USB or its
+                                          // WLAN, never the microphone — so the transmitter needs data
+                                          // mode. Only when the operator has let AXTerm set the radio up.
+                                          modulatesFromDataInput: config.setsRadioModeOnConnect)
         case .rts: ptt = SerialLinePTTController(transport: transport, line: .rts, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
         case .dtr: ptt = SerialLinePTTController(transport: transport, line: .dtr, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
         case .none: ptt = NoPTTController()
@@ -375,10 +380,26 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                 // advising the operator to turn on a setting it switched off
                 // at every connect.
                 if config.setsRadioModeOnConnect {
-                    try? await rig.configureForPacket(
-                        config.mode,
-                        dataMod: config.rigLink == .lan ? .wlan : .usb,
-                        quietTheBus: config.rigLink != .lan)
+                    // Not `try?`. Swallowing this leaves the radio part-way
+                    // configured, and the part most likely to be missing is
+                    // data mode — the one setting whose absence is silent on
+                    // receive and fatal on transmit. See `setDataModeChecked`.
+                    do {
+                        try await rig.configureForPacket(
+                            config.mode,
+                            dataMod: config.rigLink == .lan ? .wlan : .usb,
+                            quietTheBus: config.rigLink != .lan)
+                    } catch {
+                        let input = config.rigLink == .lan ? "WLAN" : "USB"
+                        let why = (error as? CIVError)?.message ?? error.localizedDescription
+                        deliver { [weak self] in
+                            self?._delegate?.linkDidError(
+                                "The radio did not take its packet settings — \(why). Check that it "
+                                + "shows FM-D and not FM: the \(input) audio only reaches the "
+                                + "transmitter in data mode, so in plain FM it will key and unkey "
+                                + "normally and put nothing on the air.")
+                        }
+                    }
                 }
                 let answered = await refreshRigStatus()
                 // Over the WLAN identify is allowed to fail, so nothing above
@@ -642,7 +663,11 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         var answered = false
         if let hz = try? await rig.readFrequency() { status.frequencyHz = hz; answered = true }
         if let mode = try? await rig.readMode() { status.mode = mode.mode; status.filter = mode.filter; answered = true }
-        if let data = try? await rig.readDataMode() { status.dataMode = data; answered = true }
+        if let data = try? await rig.readDataMode() {
+            status.dataMode = data
+            (pttController as? CIVPTTController)?.noteDataMode(data)
+            answered = true
+        }
         status.ptt = modem.telemetry.ptt
         status.updatedAt = Date()
         lock.withLock { _rigStatus = status }

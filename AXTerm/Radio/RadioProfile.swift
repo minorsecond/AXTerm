@@ -33,6 +33,11 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
 
     var host: String = "localhost"
     var port: Int = 8001
+    /// Whether a TCP link that drops should come back on its own. On by
+    /// default, and by the same reasoning as the serial and Bluetooth flags
+    /// below: the operator asked for this radio, so a socket the far end reset
+    /// is not a decision to disconnect.
+    var tcpAutoReconnect: Bool = true
 
     var serialDevicePath: String = ""
     var serialBaudRate: Int = 115200

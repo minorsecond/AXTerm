@@ -23,6 +23,9 @@ protocol RadioManagerDelegate: AnyObject {
     /// A frame arrived on a port no radio claims. Reported once per link and
     /// port, so a misconfigured Direwolf channel says so without flooding.
     func radioManager(_ manager: RadioManager, link: LinkSession, droppedFrameOnUnassignedPort port: UInt8)
+    /// A link the operator wants open has been down long enough to say so.
+    /// Once per outage, and never for a machine that was asleep.
+    func radioManager(_ manager: RadioManager, link: LinkSession, hasBeenDownFor seconds: TimeInterval)
     /// The built-in modem's levels, carrier and PTT, a few times a second.
     func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry)
     /// The radio's frequency and mode, as CI-V reports them.
@@ -32,6 +35,7 @@ protocol RadioManagerDelegate: AnyObject {
 /// The modem-only notifications are optional: a delegate that never sees a
 /// sound modem need not know one exists.
 extension RadioManagerDelegate {
+    func radioManager(_ manager: RadioManager, link: LinkSession, hasBeenDownFor seconds: TimeInterval) {}
     func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry) {}
     func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateRigStatus status: RigStatus, model: String?) {}
 }
@@ -78,6 +82,10 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     private var reportedUnassigned: Set<String> = []
     /// Frames that arrived on a port no radio claims.
     private(set) var unassignedDrops = 0
+    /// How long each wanted link has been down, and which outages have been
+    /// reported. See `LinkOutageWatch` for why this exists at all.
+    private var outages = LinkOutageWatch()
+    private var outageTimer: Timer?
 
     weak var delegate: RadioManagerDelegate?
     private let linkFactory: LinkFactory
@@ -102,6 +110,19 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
 
     func session(for radio: RadioID) -> LinkSession? {
         assignment[radio].flatMap { sessions[$0.key] }
+    }
+
+    /// Which radios a link carries.
+    ///
+    /// Usually one. Several when a shared TNC demultiplexes them by KISS port
+    /// onto a single byte stream, in which case that link coming up or going
+    /// down is news for all of them — so the console attributes the notice to
+    /// every radio on it rather than picking one. Empty when the link is not
+    /// assigned to anything, which is a link on its way in or out.
+    func radios(carriedBy link: LinkSession) -> Set<RadioID> {
+        let keys = sessions.compactMap { $0.value === link ? $0.key : nil }
+        guard !keys.isEmpty else { return [] }
+        return Set(assignment.compactMap { keys.contains($0.value.key) ? $0.key : nil })
     }
 
     func kissPort(for radio: RadioID) -> UInt8 {
@@ -259,6 +280,59 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
 
     func closeAll() {
         for session in sessions.values { session.close() }
+        outages.removeAll()
+        refreshRadioStates()
+    }
+
+    /// The machine is going to sleep. Every link goes down on purpose so the
+    /// far ends see a close rather than a client that stopped answering, and
+    /// every one of them stays wanted.
+    ///
+    /// Deliberately not `closeAll()`: that is the operator changing their mind,
+    /// and a link closed that way does not come back by itself.
+    func suspendAll() {
+        for session in sessions.values { session.suspend() }
+        refreshRadioStates()
+    }
+
+    /// Start noticing links that stay down.
+    ///
+    /// Explicit rather than automatic in `init`, so a test that builds a
+    /// manager does not acquire a repeating timer it never asked for.
+    func startWatchingOutages(interval: TimeInterval = 60) {
+        guard outageTimer == nil else { return }
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkOutages() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        outageTimer = timer
+    }
+
+    func stopWatchingOutages() {
+        outageTimer?.invalidate()
+        outageTimer = nil
+    }
+
+    /// Report any link that has now been down too long. Separate from the
+    /// timer so it can be driven directly from a test.
+    func checkOutages(now: Date = Date(), isAsleep: Bool? = nil) {
+        let isAsleep = isAsleep ?? SystemPowerMonitor.shared.isAsleep
+        // A sleeping Mac has every link down by definition. Reporting that
+        // would be telling the operator about their own lid.
+        guard !isAsleep else { return }
+        for outage in outages.due(now: now) {
+            guard let session = sessions[outage.key] else { continue }
+            delegate?.radioManager(self, link: session, hasBeenDownFor: outage.down)
+        }
+    }
+
+    /// The machine is back. Reopen everything that was up, with no backoff to
+    /// serve: the disconnect was expected.
+    func resumeAll() {
+        // The sleep is not an outage the operator needs telling about, so the
+        // clocks restart rather than reporting the hours the lid was shut.
+        outages.reset(now: Date())
+        for session in sessions.values { session.resume() }
         refreshRadioStates()
     }
 
@@ -323,6 +397,7 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     }
 
     func linkSession(_ session: LinkSession, didChangeState state: KISSLinkState, from previous: KISSLinkState) {
+        outages.observe(session.key, isUp: state == .connected, now: Date())
         refreshRadioStates()
         delegate?.radioManager(self, link: session, didChangeState: state, from: previous)
     }
@@ -347,6 +422,13 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
             states[radio.id] = session(for: radio.id)?.state ?? .disconnected
         }
         if states != radioStates { radioStates = states }
+        #if os(macOS)
+        // Told here rather than only from the window, so a station running
+        // with its window closed still stops being napped when a radio comes
+        // up and stops holding sleep off when the last one goes away.
+        KeepAwakeController.shared.connectionChanged(
+            isConnected: states.values.contains(.connected))
+        #endif
     }
 
     // MARK: - Links from profiles
@@ -359,7 +441,8 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         switch radio.kind {
         case .tcp:
             guard radio.port > 0, radio.port <= 65_535 else { return nil }
-            return KISSLinkNetwork(host: radio.host, port: UInt16(radio.port))
+            return KISSLinkNetwork(host: radio.host, port: UInt16(radio.port),
+                                   autoReconnect: radio.tcpAutoReconnect)
         case .serial:
             #if os(macOS)
             return KISSLinkSerial(config: SerialConfig(
@@ -369,7 +452,8 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
                 mobilinkdConfig: radio.mobilinkdConfig))
             #else
             guard radio.port > 0, radio.port <= 65_535 else { return nil }
-            return KISSLinkNetwork(host: radio.host, port: UInt16(radio.port))
+            return KISSLinkNetwork(host: radio.host, port: UInt16(radio.port),
+                                   autoReconnect: radio.tcpAutoReconnect)
             #endif
         case .ble:
             return KISSLinkBLE(config: BLEConfig(

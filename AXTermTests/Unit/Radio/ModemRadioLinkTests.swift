@@ -48,6 +48,14 @@ final class ModemRadioLinkTests: XCTestCase {
     -> (ModemRadioLink, FakeCIVTransport, SyntheticModemIO, Spy) {
         let transport = FakeCIVTransport()
         transport.responder = responder
+        // A radio that answers at once. These tests are about what the link
+        // says and does, not about how long a reply takes, and the five
+        // milliseconds this used to wait were five milliseconds of the shared
+        // dispatch pool — which on a loaded machine is not five milliseconds.
+        // Long enough and `CIVClient`'s 0.5s request timeout fires, the open
+        // drags past the test's wait for it, and the failure surfaces
+        // somewhere else entirely.
+        transport.replyDelay = 0
         let audio = SyntheticModemIO()
         // Default delivery: delegate calls hop to the main actor, where these
         // tests run, and land during the awaits.
@@ -58,7 +66,36 @@ final class ModemRadioLinkTests: XCTestCase {
         return (link, transport, audio, spy)
     }
 
-    private func waitUntil(_ timeout: TimeInterval = 2, _ condition: @escaping () -> Bool) async {
+    /// Wait for something to become true, and fail here if it never does.
+    ///
+    /// Failing here is the whole point. This used to return quietly on
+    /// timeout, so a test whose link never finished connecting carried on
+    /// anyway: it sent a frame into a link that was still opening, got
+    /// `notRunning` back, pumped four hundred blocks of silence, and finally
+    /// reported `XCTAssertTrue failed - PTT off`. Three assertions and one
+    /// subsystem away from what had actually gone wrong, and under load that
+    /// was the whole story of `testATransmissionKeysAndUnkeysOverCIV`.
+    ///
+    /// `what` is required for the same reason: "timed out" names nothing.
+    @discardableResult
+    private func waitUntil(_ what: String,
+                           timeout: TimeInterval = 2,
+                           file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: @escaping () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+        let met = condition()
+        if !met {
+            XCTFail("timed out after \(timeout)s waiting for: \(what)", file: file, line: line)
+        }
+        return met
+    }
+
+    /// The same wait for a condition that is allowed not to happen — a link
+    /// that should *stay* closed, say. Named so the difference is visible at
+    /// the call site rather than hidden in a default argument.
+    private func waitUntilOrGiveUp(timeout: TimeInterval = 2,
+                                   _ condition: @escaping () -> Bool) async {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
     }
@@ -82,7 +119,7 @@ final class ModemRadioLinkTests: XCTestCase {
         let (link, transport, _, spy) = makeLink(config())
         link.open()
         XCTAssertEqual(link.state, .connecting, "CI-V first")
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         XCTAssertEqual(link.state, .connected)
         XCTAssertEqual(link.rigModel, "IC-705")
         XCTAssertEqual(link.endpointDescription, "IC-705 via USB Audio CODEC")
@@ -95,7 +132,7 @@ final class ModemRadioLinkTests: XCTestCase {
                        "CI-V Transceive is the operator's setting and survives us; "
                        + "do not switch it off unasked")
         XCTAssertFalse(written.contains { $0.hasPrefix("FE FE A4 E0 06") }, "the mode is the operator's unless asked")
-        await waitUntil { spy.states.last == .connected }
+        await waitUntil("the delegate to be told we connected") { spy.states.last == .connected }
         XCTAssertEqual(spy.states.last, .connected)
         XCTAssertTrue(spy.errors.isEmpty)
         link.close()
@@ -105,7 +142,7 @@ final class ModemRadioLinkTests: XCTestCase {
     func testSetRadioOnConnectPushesThePacketSetup() async {
         let (link, transport, _, _) = makeLink(config(setsMode: true))
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         let written = transport.written.map(hex)
         XCTAssertTrue(written.contains("FE FE A4 E0 06 05 01 FD"), "FM, filter 1")
         XCTAssertTrue(written.contains("FE FE A4 E0 1A 06 01 01 FD"), "data mode on")
@@ -120,8 +157,8 @@ final class ModemRadioLinkTests: XCTestCase {
     func testTheWrongRadioFailsBeforeAudioIsTouched() async {
         let (link, _, audio, spy) = makeLink(config(), responder: { _ in FakeCIVTransport.reply(0x19, 0x00, [0x94]) })
         link.open()
-        await waitUntil { link.state == .failed }
-        await waitUntil { spy.states.last == .failed }
+        await waitUntil("the wrong radio to fail the link") { link.state == .failed }
+        await waitUntil("the delegate to be told we failed") { spy.states.last == .failed }
         XCTAssertEqual(link.state, .failed)
         XCTAssertEqual(spy.errors.count, 1)
         XCTAssertTrue(spy.errors[0].contains("IC-7300"), spy.errors[0])
@@ -133,8 +170,8 @@ final class ModemRadioLinkTests: XCTestCase {
     func testASilentPortFailsWithTheReason() async {
         let (link, _, _, spy) = makeLink(config(), responder: { _ in nil })
         link.open()
-        await waitUntil(3) { link.state == .failed }
-        await waitUntil { !spy.errors.isEmpty }
+        await waitUntil("a silent port to fail the link", timeout: 3) { link.state == .failed }
+        await waitUntil("the reason to reach the delegate") { !spy.errors.isEmpty }
         XCTAssertEqual(link.state, .failed)
         XCTAssertEqual(spy.errors.first?.hasPrefix("Radio control failed:"), true)
     }
@@ -144,7 +181,7 @@ final class ModemRadioLinkTests: XCTestCase {
         c.civSerialPath = ""
         let (link, transport, _, _) = makeLink(c)
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         XCTAssertEqual(link.state, .connected)
         XCTAssertNil(link.rigModel)
         XCTAssertTrue(transport.written.isEmpty, "nothing to say to a radio we cannot reach")
@@ -160,15 +197,15 @@ final class ModemRadioLinkTests: XCTestCase {
         let lock = NSLock()
         link.onRigStatus = { status in lock.withLock { seen.append(status.frequencyHz) } }
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         // A transceive broadcast: to 00, from A4, command 00, the new frequency.
         transport.inject([0xFE, 0xFE, 0x00, 0xA4, 0x00] + CIVBCD.frequencyBytes(hz: 145_010_000) + [0xFD])
-        await waitUntil { link.rigStatus.frequencyHz == 145_010_000 }
+        await waitUntil("the radio's new frequency to reach the status") { link.rigStatus.frequencyHz == 145_010_000 }
         XCTAssertEqual(link.rigStatus.frequencyHz, 145_010_000)
         XCTAssertEqual(lock.withLock { seen.last }, 145_010_000)
         // And a mode broadcast.
         transport.inject([0xFE, 0xFE, 0x00, 0xA4, 0x01, 0x01, 0x02, 0xFD])
-        await waitUntil { link.rigStatus.mode == .usb }
+        await waitUntil("the radio's new mode to reach the status") { link.rigStatus.mode == .usb }
         XCTAssertEqual(link.rigStatus.mode, .usb)
         XCTAssertEqual(link.rigStatus.filter, 2)
         link.close()
@@ -177,13 +214,14 @@ final class ModemRadioLinkTests: XCTestCase {
     func testIdentifyOnTheLiveLinkAndOnAFreshPort() async throws {
         let (link, _, _, _) = makeLink(config())
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         let live = try await link.identifyRadio()
         XCTAssertEqual(live, "IC-705 (A4) \u{b7} 144.390 MHz FM-D")
         link.close()
 
         let fresh = FakeCIVTransport()
         fresh.responder = Self.ic705
+        fresh.replyDelay = 0   // see makeLink: a radio that answers at once
         let answer = try await ModemRadioLink.identifyRadio(config: config(), makeTransport: { _ in fresh })
         XCTAssertEqual(answer, "IC-705 (A4) \u{b7} 144.390 MHz FM-D")
         XCTAssertEqual(fresh.state, .closed, "a throwaway question closes its port")
@@ -198,12 +236,13 @@ final class ModemRadioLinkTests: XCTestCase {
     /// connection has held the stability window.
     func testABackoffIsNotClearedBeforeTheWindow() async throws {
         let transport = FakeCIVTransport(); transport.responder = ModemRadioLinkTests.ic705
+        transport.replyDelay = 0   // see makeLink: a radio that answers at once
         let link = ModemRadioLink(config: config(), audio: SyntheticModemIO(),
                                   makeTransport: { _ in transport },
                                   scheduling: .inline, stableConnectionSeconds: 5)
         link.testReconnectAttempt = 5   // as if we had been retrying
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         try await Task.sleep(for: .milliseconds(200))   // well inside the 5 s window
         XCTAssertEqual(link.testReconnectAttempt, 5, "backoff must survive until the connection has held the window")
         link.close()
@@ -213,13 +252,14 @@ final class ModemRadioLinkTests: XCTestCase {
     /// genuinely stable radio starts fresh next time.
     func testABackoffClearsOnceTheConnectionHolds() async throws {
         let transport = FakeCIVTransport(); transport.responder = ModemRadioLinkTests.ic705
+        transport.replyDelay = 0   // see makeLink: a radio that answers at once
         let link = ModemRadioLink(config: config(), audio: SyntheticModemIO(),
                                   makeTransport: { _ in transport },
                                   scheduling: .inline, stableConnectionSeconds: 0.3)
         link.testReconnectAttempt = 5
         link.open()
-        await waitUntil { link.state == .connected }
-        await waitUntil(3) { link.testReconnectAttempt == 0 }
+        await waitUntil("the link to connect") { link.state == .connected }
+        await waitUntil("the backoff to clear once the connection holds", timeout: 3) { link.testReconnectAttempt == 0 }
         XCTAssertEqual(link.testReconnectAttempt, 0, "a connection that outlasts the window clears the backoff")
         link.close()
     }
@@ -227,7 +267,7 @@ final class ModemRadioLinkTests: XCTestCase {
     func testATransmissionKeysAndUnkeysOverCIV() async throws {
         let (link, transport, audio, _) = makeLink(config())
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         let frame = AX25FrameBuilder.buildUI(from: AX25Address(call: "K0EPI", ssid: 5), to: AX25Address(call: "TEST"),
                                              via: DigiPath(), pid: 0xF0, payload: Data("hi".utf8), displayInfo: "hi").encodeAX25()
         let accepted = expectation(description: "accepted")
@@ -236,14 +276,16 @@ final class ModemRadioLinkTests: XCTestCase {
 
         // Clock the modem: it asks for PTT, waits for the radio's OK, plays, unkeys.
         audio.pump(blocks: 2)
-        await waitUntil { transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 01 FD") }
+        await waitUntil("PTT on over CI-V") { transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 01 FD") }
         XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 1C 00 01 FD"), "PTT on")
-        await waitUntil { link.modem.telemetry.ptt }
+        await waitUntil("the modem to report PTT keyed") { link.modem.telemetry.ptt }
         for _ in 0..<40 where !transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 00 FD") {
             audio.pump(blocks: 10)
             try? await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 1C 00 00 FD"), "PTT off")
+        let diag = "written=\(transport.written.map(hex)) ptt=\(link.modem.telemetry.ptt) "
+            + "rendered=\(audio.renderedOutput.count) underfilled=\(audio.underfilledBlocks)"
+        XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 1C 00 00 FD"), "PTT off | \(diag)")
         XCTAssertEqual(decodeAll(audio.renderedOutput, sampleRate: 48_000), [frame])
         link.close()
     }
@@ -251,15 +293,15 @@ final class ModemRadioLinkTests: XCTestCase {
     func testClosingWhileKeyedDropsPTT() async throws {
         let (link, transport, audio, _) = makeLink(config())
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         let frame = AX25FrameBuilder.buildUI(from: AX25Address(call: "K0EPI", ssid: 5), to: AX25Address(call: "TEST"),
                                              via: DigiPath(), pid: 0xF0, payload: Data("long".utf8), displayInfo: "long").encodeAX25()
         link.send(KISS.encodeFrame(payload: frame, port: 0)) { _ in }
         audio.pump(blocks: 2)
-        await waitUntil { link.modem.telemetry.ptt }
+        await waitUntil("the modem to report PTT keyed") { link.modem.telemetry.ptt }
         XCTAssertTrue(link.modem.telemetry.ptt)
         link.close()
-        await waitUntil { transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 00 FD") }
+        await waitUntil("PTT off over CI-V") { transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 00 FD") }
         XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 1C 00 00 FD"), "never leave the radio keyed")
     }
 
@@ -286,11 +328,11 @@ final class ModemRadioLinkTests: XCTestCase {
     func testARigThatDiesAfterOpeningFailsTheLink() async {
         let (link, transport, _, spy) = makeLink(config())
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
 
         transport.fail("Socket is not connected")
 
-        await waitUntil { link.state == .failed }
+        await waitUntil("the dead rig to fail the link") { link.state == .failed }
         XCTAssertEqual(link.state, .failed, "the radio is gone; the link must say so")
         XCTAssertTrue(spy.states.contains(.failed), "the delegate was never told: \(spy.states)")
         XCTAssertTrue(spy.errors.contains { $0.contains("Socket is not connected") },
@@ -303,13 +345,13 @@ final class ModemRadioLinkTests: XCTestCase {
     func testALostRadioIsRetried() async {
         let (link, transport, _, _) = makeLink(config())
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         transport.fail("Socket is not connected")
-        await waitUntil { link.state == .failed }
+        await waitUntil("the lost radio to fail the link") { link.state == .failed }
         XCTAssertEqual(link.state, .failed, "the loss must register before recovery means anything")
 
         // The reconnect is scheduled, so the link comes back on its own.
-        await waitUntil(8) { link.state == .connected }
+        await waitUntil("the lost radio to be retried and come back", timeout: 8) { link.state == .connected }
         XCTAssertEqual(link.state, .connected, "no attempt was made to get the radio back")
     }
 
@@ -318,11 +360,11 @@ final class ModemRadioLinkTests: XCTestCase {
     func testAClosedLinkIsNotReconnected() async {
         let (link, transport, _, _) = makeLink(config())
         link.open()
-        await waitUntil { link.state == .connected }
+        await waitUntil("the link to connect") { link.state == .connected }
         link.close()
         transport.fail("Socket is not connected")
 
-        await waitUntil(1) { link.state != .disconnected }
+        await waitUntilOrGiveUp(timeout: 1) { link.state != .disconnected }
         XCTAssertEqual(link.state, .disconnected,
                        "a closed link must stay closed — not reopen, and not be "
                        + "reported as failed when the operator was the one who let go")

@@ -31,6 +31,14 @@ final class CIVUnresponsiveRadioTests: XCTestCase {
     }
 
     /// A run of them is the radio.
+    ///
+    /// Reading `reported` straight after the loop is sound because the client
+    /// reports the verdict *before* it resumes the request that reached the
+    /// limit, so the `await` below cannot return until the write has happened.
+    /// It used to resume first and report second, which left the two lines in
+    /// a race the test lost about one full-suite run in three — a race any
+    /// caller would lose the same way, seeing the failure and finding no
+    /// reason for it.
     func testARunOfUnansweredPollsReportsTheRadioAsIgnoringUs() async {
         let transport = FakeCIVTransport()
         transport.responder = { _ in nil }

@@ -11,6 +11,20 @@ import XCTest
 @MainActor
 final class NetRomBroadcastIntegrationTests: XCTestCase {
 
+    /// Start from an empty service-endpoint ignore list.
+    ///
+    /// `CallsignValidator` keeps that list in process-wide state and an
+    /// `AppSettingsStore` writes to it whenever the setting changes, so what a
+    /// test in this file sees depends on what ran before it in the same
+    /// process. These tests route traffic through via-path hops that have to
+    /// pass `isValidRoutingNode`, which reads that list — so a stale entry
+    /// turns inference off and the failure lands here rather than where it was
+    /// caused.
+    override func setUp() {
+        super.setUp()
+        CallsignValidator.configureIgnoredServiceEndpoints([])
+    }
+
     private let localCallsign = "W0TST"
     private let baseTime = Date(timeIntervalSince1970: 1_700_000_000)
 

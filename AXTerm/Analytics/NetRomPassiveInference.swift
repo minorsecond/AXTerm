@@ -136,6 +136,27 @@ final class NetRomPassiveInference {
         recordEvidence(destination: normalizedFrom, origin: nextHop, path: fullPath, radio: radio, timestamp: timestamp, classification: classification, isRetry: isRetry)
     }
 
+    #if DEBUG
+    /// Test seam: the evidence behind every inferred route, with the numbers
+    /// that decide whether it is published at all. See the note on
+    /// `NetRomIntegration.observationTrace` for why this exists.
+    var debugEvidenceSummary: String {
+        guard !evidenceByDestination.isEmpty else {
+            return "evidence: none (minQuality=\(config.inferredMinimumQuality) base=\(config.inferredBaseQuality))"
+        }
+        let lines = evidenceByDestination.keys.sorted().map { destination -> String in
+            let bucket = evidenceByDestination[destination] ?? []
+            let parts = bucket.map {
+                "via \($0.origin) score=\(String(format: "%.2f", $0.reinforcementScore)) "
+                + "quality=\($0.advertisedQuality(using: config))"
+                + ($0.tombstonedAt == nil ? "" : " tombstoned")
+            }
+            return "\(destination): " + parts.joined(separator: ", ")
+        }
+        return "evidence[minQuality=\(config.inferredMinimumQuality)] " + lines.joined(separator: " | ")
+    }
+    #endif
+
     func purgeStaleEvidence(currentDate: Date) {
         let tombstoneWindow = config.inferredRouteHalfLifeSeconds * config.tombstoneWindowMultiplier
         var refreshedEvidence: [String: [NetRomRouteEvidence]] = [:]

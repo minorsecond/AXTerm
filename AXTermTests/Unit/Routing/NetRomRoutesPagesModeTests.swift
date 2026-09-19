@@ -22,6 +22,27 @@ import XCTest
 @MainActor
 final class NetRomRoutesPagesModeTests: XCTestCase {
 
+    /// Put the process-global ignore list back.
+    ///
+    /// `testViewModel_IgnoredServiceEndpointRemovedFromAllTables` below adds
+    /// K2BBB to a settings store built on its own UserDefaults suite, which
+    /// looks isolated and is not: the setter's `didSet` pushes the list into
+    /// `CallsignValidator`, which is process-wide. Leaving it there made
+    /// `isValidCallsign("K2BBB")` false for every test that ran afterwards in
+    /// the same process — and `NetRomPassiveInference` filters via-path hops
+    /// through `isValidRoutingNode`, so K2BBB stopped being a usable next hop
+    /// and inference silently produced nothing.
+    ///
+    /// That is what failed `NetRomRealisticWiringTests` and
+    /// `NetRomIntegrationWiringTests` on 2026-09-18 and 2026-09-19. Only under
+    /// parallel testing, because this class sorts after both of them and a
+    /// sequential run therefore never put it first; and never on a rerun of
+    /// the failing test alone, because then nothing had leaked.
+    override func tearDown() {
+        CallsignValidator.configureIgnoredServiceEndpoints([])
+        super.tearDown()
+    }
+
     private let localCallsign = "K0EPI"
 
     // MARK: - Test Helpers

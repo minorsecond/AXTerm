@@ -22,9 +22,27 @@ nonisolated final class CIVPTTController: PTTController, @unchecked Sendable {
     private var watchdog: DispatchWorkItem?
     private let queue = DispatchQueue(label: "com.axterm.civ.ptt")
 
-    init(client: CIVClient, maxTransmitSeconds: TimeInterval = 30) {
+    /// Whether this station modulates from a data input — USB or the radio's
+    /// WLAN — rather than the microphone.
+    ///
+    /// On an Icom, `DATA MOD` only routes that input to the transmitter while
+    /// the radio is in data mode; in plain FM it modulates from the mic. So a
+    /// soft modem on a rig that has fallen out of data mode keys on command,
+    /// unkeys on command, receives perfectly, and puts nothing on the air.
+    ///
+    /// False when the operator has said AXTerm may not set up the radio, in
+    /// which case nothing here writes to it.
+    private let modulatesFromDataInput: Bool
+    /// What we believe about the radio's data mode. Seeded false so the first
+    /// transmission of a session asserts it, then kept current by the rig
+    /// status poll through `noteDataMode`.
+    private var dataModeBelievedOn = false
+
+    init(client: CIVClient, maxTransmitSeconds: TimeInterval = 30,
+         modulatesFromDataInput: Bool = false) {
         self.client = client
         self.maxTransmitSeconds = maxTransmitSeconds
+        self.modulatesFromDataInput = modulatesFromDataInput
         client.onTransportState = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -40,9 +58,46 @@ nonisolated final class CIVPTTController: PTTController, @unchecked Sendable {
 
     var isKeyed: Bool { lock.withLock { keyed } }
 
+    /// What the rig status poll last saw. Keeps the belief current, so an
+    /// operator who turns the mode knob mid-session is corrected at the next
+    /// transmission rather than at the next connect.
+    func noteDataMode(_ on: Bool) {
+        lock.withLock { dataModeBelievedOn = on }
+    }
+
+    /// Put the radio in data mode before keying, if it needs to be and we do
+    /// not already believe it is.
+    ///
+    /// At key-up rather than at connect, because that is where it has to be
+    /// true. A radio set up correctly at connect can be knocked out of data
+    /// mode afterwards — the mode knob, a memory recall, a band change, a
+    /// power cycle — and the operator who ticked "set the radio for packet"
+    /// expects the radio to be set for packet when it transmits, not to be
+    /// warned afterwards that it was not.
+    ///
+    /// Normally costs nothing: one command on the first transmission of a
+    /// session, and none after that, because the status poll keeps the belief
+    /// up to date. Between transmissions the radio is left exactly as the
+    /// operator set it; this asserts only what this transmission needs.
+    ///
+    /// A failure does not block the transmission. One dropped CI-V command is
+    /// a thin reason to refuse to transmit, and the belief is left false so
+    /// the next key-up tries again.
+    private func ensureDataModeBeforeKeying() async {
+        guard modulatesFromDataInput else { return }
+        guard !lock.withLock({ dataModeBelievedOn }) else { return }
+        do {
+            try await client.setDataMode(true, filter: 1)
+            lock.withLock { dataModeBelievedOn = true }
+        } catch {
+            onTransition?(false, "could not set data mode before keying: \(error)")
+        }
+    }
+
     func setTransmit(_ on: Bool, completion: @escaping @Sendable (Error?) -> Void) {
         Task { [self] in
             if on {
+                await ensureDataModeBeforeKeying()
                 do {
                     try await client.setPTT(true)
                     markKeyed(true)

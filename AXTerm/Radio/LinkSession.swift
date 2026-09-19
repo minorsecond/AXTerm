@@ -102,6 +102,19 @@ final class LinkSession: KISSLinkDelegate {
         parser.reset()
     }
 
+    /// The machine is going to sleep. The link goes down deliberately and
+    /// stays wanted; the parser is reset because a half-read KISS frame will
+    /// not be finished by a socket that is about to stop existing.
+    func suspend() {
+        link.suspend()
+        parser.reset()
+    }
+
+    /// The machine is back.
+    func resume() {
+        link.resume()
+    }
+
     /// Raw KISS-framed bytes — hardware commands and the like.
     func send(_ kissFramed: Data, completion: @escaping (Error?) -> Void) {
         link.send(kissFramed, completion: completion)
@@ -141,6 +154,18 @@ final class LinkSession: KISSLinkDelegate {
     }
 
     func linkDidError(_ message: String) {
+        // A link that dropped because this machine slept has nothing to put in
+        // the connection banner. The raw text is still handed upward — the
+        // console says what happened in plain words and the debug log keeps the
+        // original — but `lastError` is what `recomputeConnectionError` reads,
+        // and an operator coming back to their desk should not be met with
+        // `Socket is not connected (NWError 57)` for having closed their lid.
+        #if os(macOS)
+        if SystemPowerMonitor.shared.cause(forDropAt: Date()) == .systemSleep {
+            delegate?.linkSession(self, didError: message)
+            return
+        }
+        #endif
         lastError = message
         delegate?.linkSession(self, didError: message)
     }

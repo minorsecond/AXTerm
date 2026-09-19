@@ -114,6 +114,19 @@ struct GeneralSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                // Sleep, not App Nap. Staying scheduled is unconditional and
+                // is not offered here; see KeepAwake.swift for why one is a
+                // choice and the other is not.
+                Picker("Keep this Mac awake", selection: $settings.keepAwakePolicy) {
+                    ForEach(KeepAwakePolicy.allCases) { policy in
+                        Text(policy.title).tag(policy)
+                    }
+                }
+                Text(settings.keepAwakePolicy.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 #endif
             }
         }

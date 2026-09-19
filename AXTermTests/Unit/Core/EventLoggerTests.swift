@@ -29,12 +29,19 @@ final class EventLoggerTests: XCTestCase {
         return AppSettingsStore(defaults: defaults)
     }
 
-    private func waitForStore(_ store: MockEventLogStore) async {
+    /// Wait for the logger to reach its store, and fail here if it never does.
+    ///
+    /// Returning quietly on timeout leaves the assertion below to report
+    /// "expected 1, got 0", which reads as the logger writing the wrong thing
+    /// rather than as the wait running out.
+    private func waitForStore(_ store: MockEventLogStore,
+                              file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<10 {
             if !store.appendedEntries.isEmpty || !store.pruneCalls.isEmpty {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        XCTFail("the event log store was never written to", file: file, line: line)
     }
 }

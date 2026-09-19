@@ -82,7 +82,7 @@ final class PacketHandlingTests: XCTestCase {
         client.handleIncomingData(Data([0x01, 0x02, 0x03]))
 
         XCTAssertEqual(client.packets.count, 1)
-        await waitForStore(store)
+        await letTheStoresSettle()
         XCTAssertEqual(store.savedPackets.count, 0)
         XCTAssertEqual(consoleStore.appendedEntries.count, 0)
         XCTAssertEqual(rawStore.appendedEntries.count, 0)
@@ -262,30 +262,57 @@ final class PacketHandlingTests: XCTestCase {
         return AppSettingsStore(defaults: defaults)
     }
 
-    private func waitForStore(_ store: MockPacketStore) async {
+    /// Wait for a store to be written to, and fail here if it never is.
+    ///
+    /// Saying so here rather than leaving it to the assertion below matters
+    /// once a test has more than one store in it: "expected 1, got 0" three
+    /// times over does not say which write never landed, and a helper that
+    /// returns quietly on timeout is how a test ends up blaming the wrong
+    /// subsystem for a wait that simply ran out.
+    private func waitForStore(_ store: MockPacketStore,
+                              file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<10 {
             if !store.savedPackets.isEmpty || !store.pruneCalls.isEmpty {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        XCTFail("the packet store was never written to", file: file, line: line)
     }
 
-    private func waitForConsoleStore(_ store: MockConsoleStore) async {
+    private func waitForConsoleStore(_ store: MockConsoleStore,
+                                     file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<10 {
             if !store.appendedEntries.isEmpty || !store.pruneCalls.isEmpty {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        XCTFail("the console store was never written to", file: file, line: line)
     }
 
-    private func waitForRawStore(_ store: MockRawStore) async {
+    /// Give the stores a chance to be written to, expecting that they are not.
+    ///
+    /// The other half of `waitForStore`, and deliberately a different name:
+    /// the test that uses this one is asserting that persistence stayed off,
+    /// so a timeout is the expected outcome and must not be reported. Named so
+    /// that reading the call site tells you which of the two is meant.
+    ///
+    /// It is a weak check either way — a write that is merely slow would pass
+    /// it — but that is the shape of the test it serves, not something this
+    /// helper can fix.
+    private func letTheStoresSettle() async {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+    }
+
+    private func waitForRawStore(_ store: MockRawStore,
+                                 file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<10 {
             if !store.appendedEntries.isEmpty || !store.pruneCalls.isEmpty {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        XCTFail("the raw store was never written to", file: file, line: line)
     }
 }

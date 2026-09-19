@@ -60,6 +60,27 @@ protocol KISSLink: AnyObject {
 
     /// Send raw bytes (already KISS-framed)
     func send(_ data: Data, completion: @escaping (Error?) -> Void)
+
+    /// The machine is about to sleep. Put the link down deliberately, so what
+    /// comes back on wake is a fresh connection rather than the wreckage of
+    /// one the far end reset while we were frozen.
+    ///
+    /// Distinct from `close()` because the operator has not changed their
+    /// mind: the link is still wanted, and `resume()` is coming.
+    func suspend()
+
+    /// The machine is back. Reopen at once — the drop was expected, so making
+    /// it serve a reconnect backoff would be punishing the station for the
+    /// operator's lid.
+    func resume()
+}
+
+/// Sleep handling every transport gets for free. A link with nothing special
+/// to do about sleep closes and reopens, which is what the serial and
+/// Bluetooth links want anyway: their device is going away too.
+extension KISSLink {
+    func suspend() { close() }
+    func resume() { open() }
 }
 
 // MARK: - KISSLink Logger

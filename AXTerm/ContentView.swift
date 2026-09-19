@@ -266,6 +266,10 @@ struct ContentView: View {
 
     @State private var selectedNav: NavigationItem = .terminal
     @StateObject private var searchModel = AppToolbarSearchModel()
+    /// Holds off App Nap while radios are up, and holds off idle system sleep
+    /// when the operator has asked for it. Shared, so closing the window in
+    /// menu-bar mode does not release it.
+    @ObservedObject private var keepAwake = KeepAwakeController.shared
     @ObservedObject private var bbsSettings: BBSSettings
     @StateObject private var bbsService: BBSService
     @StateObject private var bbsLibrary: BBSFileLibrary
@@ -509,6 +513,8 @@ struct ContentView: View {
             bbsService.attach()
             syncServiceAddresses()
             bbsLibrary.rescan()
+            client.radioManager.startWatchingOutages()
+            applyKeepAwake()
         }
         // Which addresses this station accepts calls on. Watched as one value
         // rather than five separate modifiers, which the type checker cannot
@@ -521,10 +527,38 @@ struct ContentView: View {
             for: NSApplication.willTerminateNotification)) { _ in
             bbsService.shutdown(reason: "AXTerm is closing")
         }
-        .onReceive(NSWorkspace.shared.notificationCenter.publisher(
-            for: NSWorkspace.willSleepNotification)) { _ in
+        // Sleep gets the same teardown quitting does. The sessions and the
+        // radios are released by AXTermAppDelegate, which outlives this view —
+        // with the menu bar icon on, closing the window leaves the station
+        // running and there would be nobody here to do it. What is left here
+        // is what belongs to the window: the mailbox goodbye and the service
+        // address table.
+        .onReceive(SystemPowerMonitor.shared.willSleep) { _ in
             bbsService.shutdown(reason: "this station is going to sleep")
         }
+        .onReceive(SystemPowerMonitor.shared.didWake) { _ in
+            bbsService.attach()
+            syncServiceAddresses()
+            applyKeepAwake()
+        }
+        // What the app asks the OS for depends on both the operator's policy
+        // and what the station is doing, so it is re-evaluated when either
+        // moves. See KeepAwake.swift for why one half of it is not a choice.
+        .onChange(of: settings.keepAwakePolicy) { _, _ in applyKeepAwake() }
+        .onChange(of: client.radioManager.radioStates) { _, _ in applyKeepAwake() }
+        .onChange(of: sessionCoordinator.connectedSessions.count) { _, _ in applyKeepAwake() }
+    }
+
+    /// Re-evaluates the sleep and scheduling holds.
+    private func applyKeepAwake() {
+        let connected = client.radioManager.radioStates.values.contains(.connected)
+        keepAwake.update(
+            policy: settings.keepAwakePolicy,
+            isConnected: connected,
+            isTransferring: !sessionCoordinator.connectedSessions.isEmpty,
+            // A node or mailbox that answers calls is armed even with nothing
+            // in progress, and a station that sleeps stops answering.
+            isListening: connected && (settings.netRomAcceptInbound || bbsSettings.onAir))
     }
 
     /// The toolbar search field and the panel it opens.

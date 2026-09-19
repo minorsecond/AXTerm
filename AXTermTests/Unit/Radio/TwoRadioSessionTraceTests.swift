@@ -63,9 +63,20 @@ final class TwoRadioSessionTraceTests: XCTestCase {
     /// these tests are `async` for that reason and for the one the project
     /// memory records — a synchronous test that drops a main-actor
     /// ObservableObject trips its isolated deinit.
-    private func waitForReplies(_ count: Int) async {
+    /// Wait for `count` replies, and fail here if they never arrive.
+    ///
+    /// The tests below go on to pick replies apart by index. Returning quietly
+    /// on timeout hands them an array that is too short, so the failure lands
+    /// on whatever they read out of it instead of on the reply that never
+    /// came.
+    private func waitForReplies(_ count: Int,
+                                file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<100 where replies.count < count {
             try? await Task.sleep(nanoseconds: 30_000_000)
+        }
+        if replies.count < count {
+            XCTFail("expected \(count) repl\(count == 1 ? "y" : "ies") from the coordinator, "
+                    + "got \(replies.count)", file: file, line: line)
         }
     }
 

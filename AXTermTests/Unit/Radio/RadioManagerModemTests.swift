@@ -26,11 +26,29 @@ final class RadioManagerModemTests: XCTestCase {
         return radio
     }
 
-    private func waitUntil(_ timeout: TimeInterval = 2, _ condition: @escaping @MainActor () -> Bool) async {
+    /// Wait for something to become true, and fail here if it never does.
+    ///
+    /// Failing here is the whole point. A helper that returns quietly on
+    /// timeout lets the test carry on against a world that never arrived, and
+    /// whatever assertion trips next gets the blame. That is how the sibling
+    /// helper in `ModemRadioLinkTests` had a link that never finished
+    /// connecting reported, over and over, as a modem that would not unkey.
+    ///
+    /// `what` is required for the same reason: "timed out" names nothing.
+    @discardableResult
+    private func waitUntil(_ what: String,
+                           timeout: TimeInterval = 2,
+                           file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: @escaping @MainActor () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() && Date() < deadline {
             try? await Task.sleep(for: .milliseconds(10))
         }
+        let met = condition()
+        if !met {
+            XCTFail("timed out after \(timeout)s waiting for: \(what)", file: file, line: line)
+        }
+        return met
     }
 
     // MARK: - Refusals
@@ -125,10 +143,10 @@ final class RadioManagerModemTests: XCTestCase {
         _ = manager.reconcile([radio, direwolf()], open: false)
         // The Direwolf's link is a real TCP link left closed; only the modem opens.
         manager.open(radio.id)
-        await waitUntil { manager.sessions.values.contains { $0.link is ModemRadioLink && $0.state == .connected } }
+        await waitUntil("the modem radio's link to connect") { manager.sessions.values.contains { $0.link is ModemRadioLink && $0.state == .connected } }
 
         audio.feed([Float](repeating: 0, count: 480 * 12))
-        await waitUntil { manager.modemTelemetry[radio.id] != nil }
+        await waitUntil("modem telemetry to reach this radio") { manager.modemTelemetry[radio.id] != nil }
         let telemetry = manager.modemTelemetry[radio.id]
         XCTAssertNotNil(telemetry, "telemetry republished per radio")
         XCTAssertEqual(telemetry?.ptt, false)
@@ -153,7 +171,7 @@ final class RadioManagerModemTests: XCTestCase {
         })
         var radio = modem()
         _ = manager.reconcile([radio], open: true)
-        await waitUntil { manager.sessions.values.first?.state == .connected }
+        await waitUntil("the link to connect") { manager.sessions.values.first?.state == .connected }
         let link = manager.sessions[radio.linkKey]?.link as? ModemRadioLink
         XCTAssertNotNil(link)
 
@@ -174,7 +192,7 @@ final class RadioManagerModemTests: XCTestCase {
         _ = manager.reconcile([radio], open: true)
         XCTAssertEqual(factoryCalls, 1)
         XCTAssertTrue(manager.sessions[radio.linkKey]?.link === link)
-        await waitUntil { manager.sessions[radio.linkKey]?.state == .connected }
+        await waitUntil("the link to connect") { manager.sessions[radio.linkKey]?.state == .connected }
         XCTAssertEqual(manager.sessions[radio.linkKey]?.state, .connected)
         XCTAssertEqual(link?.config.mode, .afsk300)
         XCTAssertEqual(link?.modem.currentConfiguration.mode, .afsk300)
@@ -191,14 +209,14 @@ final class RadioManagerModemTests: XCTestCase {
         defer { sub.cancel() }
         let radio = modem()
         _ = manager.reconcile([radio], open: true)
-        await waitUntil { manager.sessions.values.first?.state == .connected }
+        await waitUntil("the link to connect") { manager.sessions.values.first?.state == .connected }
 
         // A frame in: synthesized audio of a UI frame, fed to the modem.
         var rng = SplitMix64(seed: 7)
         let frame = randomFrames(count: 1, rng: &rng)[0]
         let samples = AFSKModulator.synthesize(frames: [frame], sampleRate: 48_000)
         audio.feed(samples + [Float](repeating: 0, count: 4800))
-        await waitUntil { !received.isEmpty }
+        await waitUntil("the decoded frame to reach the manager") { !received.isEmpty }
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(received.first?.radio, radio.id)
         XCTAssertEqual(received.first?.ax25, frame)

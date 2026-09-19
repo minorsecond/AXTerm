@@ -16,6 +16,20 @@ import XCTest
 @MainActor
 final class NetRomIntegrationWiringTests: XCTestCase {
 
+    /// Start from an empty service-endpoint ignore list.
+    ///
+    /// `CallsignValidator` keeps that list in process-wide state and an
+    /// `AppSettingsStore` writes to it whenever the setting changes, so what a
+    /// test in this file sees depends on what ran before it in the same
+    /// process. These tests route traffic through via-path hops that have to
+    /// pass `isValidRoutingNode`, which reads that list — so a stale entry
+    /// turns inference off and the failure lands here rather than where it was
+    /// caused.
+    override func setUp() {
+        super.setUp()
+        CallsignValidator.configureIgnoredServiceEndpoints([])
+    }
+
     private let localCallsign = "K0EPI"
 
     // MARK: - Test Helpers
@@ -40,6 +54,40 @@ final class NetRomIntegrationWiringTests: XCTestCase {
             kissEndpoint: nil,
             infoText: "TEST"
         )
+    }
+
+
+    /// What the process-wide callsign validator thinks of this test's
+    /// callsigns, attached to the inference assertions below.
+    ///
+    /// Left in after a hunt that came up empty. On 2026-09-19 these four
+    /// inference cases failed together in one full-suite run and in no other:
+    /// not in ten fresh processes of this class alone, not in three further
+    /// parallel full runs, and not in a single-process sequential run of all
+    /// 7,213 tests — which is where cross-class contamination of a global
+    /// would have shown up if that were the cause.
+    ///
+    /// `CallsignValidator` keeps its ignore list in process-wide mutable
+    /// state, `AppSettingsStore.init` rewrites it on every construction, and
+    /// `isValidCallsign` is what decides whether `K2BBB` counts as a routing
+    /// hop — which is exactly what separates these four tests from the five in
+    /// this file that passed. The sequential run argues against it, but the
+    /// shape fits well enough that the next occurrence should not have to be
+    /// guessed at a second time.
+    private func validatorDiagnostics() -> String {
+        ["K2BBB", "W0ABC", "K1AAA", "K3CCC"].map {
+            "\($0) valid=\(CallsignValidator.isValidCallsign($0)) "
+            + "routing=\(CallsignValidator.isValidRoutingNode($0)) "
+            + "service=\(CallsignValidator.isServiceEndpoint($0))"
+        }.joined(separator: " | ")
+    }
+
+    /// Everything needed to tell which gate on the inference path closed:
+    /// what the validator thinks of the callsigns, what each observation was
+    /// classified as, and the evidence the engine ended up holding.
+    private func inferenceDiagnostics(_ integration: NetRomIntegration) -> String {
+        "\(validatorDiagnostics())\n  trace: \(integration.observationTrace.joined(separator: "\n         "))"
+        + "\n  \(integration.inferenceState)"
     }
 
     // MARK: - Wiring Tests
@@ -77,7 +125,8 @@ final class NetRomIntegrationWiringTests: XCTestCase {
         // Then: Should process and create neighbor from via path
         let neighbors = integration.currentNeighbors()
         XCTAssertTrue(neighbors.contains { $0.call == "K2BBB" },
-                      "Inference mode should process third-party digipeated packets")
+                      "Inference mode should process third-party digipeated packets | "
+                      + "neighbors=\(neighbors.map(\.call)) | \(inferenceDiagnostics(integration))")
     }
 
     func testObservePacket_TracksLinkQuality() {
@@ -168,7 +217,8 @@ final class NetRomIntegrationWiringTests: XCTestCase {
         // Then: Should create inferred route
         let routes = integration.currentRoutes()
         XCTAssertTrue(routes.contains { $0.destination == "K1AAA" },
-                      "Inference mode should create routes from third-party traffic")
+                      "Inference mode should create routes from third-party traffic | "
+                      + "routes=\(routes.map(\.destination)) | \(inferenceDiagnostics(integration))")
     }
 
     func testHybridMode_ProcessesBoth() {
@@ -196,7 +246,8 @@ final class NetRomIntegrationWiringTests: XCTestCase {
         XCTAssertTrue(neighbors.contains { $0.call == "W0ABC" },
                       "Hybrid should process direct packets (classic)")
         XCTAssertTrue(neighbors.contains { $0.call == "K2BBB" },
-                      "Hybrid should process third-party packets (inference)")
+                      "Hybrid should process third-party packets (inference) | "
+                      + "neighbors=\(neighbors.map(\.call)) | \(inferenceDiagnostics(integration))")
     }
 
     // MARK: - Mode Switching Tests
@@ -245,7 +296,10 @@ final class NetRomIntegrationWiringTests: XCTestCase {
         }
 
         // Should have inferred route
-        XCTAssertTrue(integration.currentRoutes().contains { $0.destination == "K1AAA" })
+        let inferred = integration.currentRoutes()
+        XCTAssertTrue(inferred.contains { $0.destination == "K1AAA" },
+                      "hybrid mode should infer a route to K1AAA before the switch | "
+                      + "routes=\(inferred.map(\.destination)) | \(inferenceDiagnostics(integration))")
 
         // When: Switch to classic
         integration.setMode(.classic)

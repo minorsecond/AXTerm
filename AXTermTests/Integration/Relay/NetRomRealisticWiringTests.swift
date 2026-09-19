@@ -20,6 +20,20 @@ import XCTest
 @MainActor
 final class NetRomRealisticWiringTests: XCTestCase {
 
+    /// Start from an empty service-endpoint ignore list.
+    ///
+    /// `CallsignValidator` keeps that list in process-wide state and an
+    /// `AppSettingsStore` writes to it whenever the setting changes, so what a
+    /// test in this file sees depends on what ran before it in the same
+    /// process. These tests route traffic through via-path hops that have to
+    /// pass `isValidRoutingNode`, which reads that list — so a stale entry
+    /// turns inference off and the failure lands here rather than where it was
+    /// caused.
+    override func setUp() {
+        super.setUp()
+        CallsignValidator.configureIgnoredServiceEndpoints([])
+    }
+
     private let localCallsign = "K0EPI"
     private let localCallsignWithSSID = "K0EPI-7"
 
@@ -237,8 +251,30 @@ final class NetRomRealisticWiringTests: XCTestCase {
         XCTAssertGreaterThan(linkStats.count, 0, "Should have link stats after ingestion")
 
         // Verify we have expected stations as neighbors
-        XCTAssertTrue(neighbors.contains { $0.call == "K0NTS" }, "K0NTS should be a neighbor (direct packets)")
-        XCTAssertTrue(neighbors.contains { $0.call == "K2BBB" }, "K2BBB should be a neighbor (from third-party via path)")
+        // The list is printed on failure rather than just named. This
+        // assertion failed once in a full-suite run on 2026-09-18 and could
+        // not be reproduced afterwards — not in forty in-process repetitions,
+        // sixteen fresh processes, or six further full runs — so the next
+        // occurrence has to carry its own evidence: whether the neighbour was
+        // absent, misnamed, or the whole ingest came up short.
+        let heard = neighbors.map(\.call).sorted().joined(separator: ", ")
+        XCTAssertTrue(neighbors.contains { $0.call == "K0NTS" },
+                      "K0NTS should be a neighbor (direct packets). Heard: [\(heard)]")
+        // Every decision the engine made about the third-party path, so a
+        // failure says which gate closed rather than only that the neighbour
+        // is missing.
+        let thirdParty = integration.observationTrace.filter { $0.contains("K2BBB") }
+        XCTAssertTrue(neighbors.contains { $0.call == "K2BBB" },
+                      "K2BBB should be a neighbor (from third-party via path). "
+                      + "Heard \(neighbors.count): [\(heard)]; \(linkStats.count) link stats, "
+                      + "\(routes.count) routes from \(packets.count) packets"
+                      + "\n  routesToK1AAA=\(routes.filter { $0.destination == "K1AAA" }.map(\.origin))"
+                      + "\n  K2BBB valid=\(CallsignValidator.isValidCallsign("K2BBB")) "
+                      + "routing=\(CallsignValidator.isValidRoutingNode("K2BBB")) "
+                      + "service=\(CallsignValidator.isServiceEndpoint("K2BBB"))"
+                      + "\n  \(integration.inferenceState)"
+                      + "\n  third-party observations (\(thirdParty.count)):"
+                      + "\n    " + thirdParty.prefix(6).joined(separator: "\n    "))
     }
 
     /// Test that infrastructure packets do NOT create neighbors.

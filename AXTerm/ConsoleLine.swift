@@ -15,6 +15,39 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         case packet
     }
 
+    /// What a line is about, which is what decides whether hiding a radio in
+    /// the sidebar should hide it.
+    ///
+    /// The distinction that matters is not system-versus-packet. It is whether
+    /// a *radio* owns the line at all. "Connected to IC-705" and "Frame sent
+    /// successfully" describe a radio and belong to it; a database migration
+    /// or a settings change describes the app and belongs to nobody. Before
+    /// this existed, `radioID` was nil for both, so the filter could not tell
+    /// "the app is talking" from "we do not know which radio", and resolved it
+    /// by showing every system line whatever was hidden.
+    enum Subject: Equatable, Hashable, Sendable {
+        /// The app itself. No radio owns it, so no radio filter hides it.
+        case app
+        /// One or more radios. More than one when a shared TNC carries several
+        /// on a single byte stream: that link coming up is news for every
+        /// radio on it, so the line shows while any of them is visible.
+        case radios(Set<RadioID>)
+        /// A radio we cannot name — a line from before the emitter knew, or
+        /// one reloaded without its attribution. Treated as the primary
+        /// radio's, exactly as an unattributed packet line is, so it hides
+        /// with the primary instead of quietly slipping past the filter.
+        case unnamedRadio
+
+        /// One named radio, the common case.
+        static func radio(_ id: RadioID) -> Subject { .radios([id]) }
+
+        /// From an optional id: a line that knows its radio belongs to it, and
+        /// one that does not is unattributed rather than the app's.
+        static func radio(_ id: RadioID?) -> Subject {
+            id.map { .radios([$0]) } ?? .unnamedRadio
+        }
+    }
+
     /// Message type for packet-based console lines
     enum MessageType: String, Hashable, Sendable {
         case id       // Station identification
@@ -39,9 +72,33 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
     let contentSignature: String?
     /// Whether this is a duplicate of a recently seen packet (received via different path)
     let isDuplicate: Bool
-    /// Which radio produced this line (nil for system/error lines and our own
-    /// TX), so the per-radio sidebar filter can hide a radio's traffic here too.
-    let radioID: RadioID?
+    /// What this line is about, for the per-radio filter.
+    let subject: Subject
+
+    /// The radio this line is attributed to, when exactly one owns it. Drives
+    /// the per-line radio badge, which only means something when there is a
+    /// single radio to name — a line from a shared TNC belongs to every radio
+    /// on that stream, and naming one of them would be a guess.
+    var radioID: RadioID? {
+        guard case .radios(let ids) = subject, ids.count == 1 else { return nil }
+        return ids.first
+    }
+    /// The information field as it arrived, kept only when it decoded as APRS.
+    ///
+    /// Bytes rather than `text`, because `text` comes from `Packet.infoText`,
+    /// which trims control characters and gives up entirely on anything under
+    /// three-quarters printable — which is what a Mic-E payload is. Decoding
+    /// from the string would miss exactly the frames that most need decoding.
+    /// Kept so a line reloaded from the database decodes the same way a live
+    /// one does, rather than the transcript changing character at a restart.
+    let aprsInfo: Data?
+    /// What the frame means, decoded once when the line is built.
+    ///
+    /// Stored rather than computed: `body` runs for every visible row on every
+    /// pass of the console's update, and re-parsing a Mic-E position there
+    /// would be work per row per render on a list that grows all day
+    /// (CLAUDE.md §12).
+    let aprs: APRSDigest?
 
     init(
         id: UUID = UUID(),
@@ -53,7 +110,8 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         via: [String] = [],
         messageType: MessageType? = nil,
         isDuplicate: Bool = false,
-        radioID: RadioID? = nil
+        subject: Subject = .app,
+        aprsInfo: Data? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -63,11 +121,21 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         self.text = text
         self.via = via
         self.isDuplicate = isDuplicate
-        self.radioID = radioID
+        self.subject = subject
+
+        let digest = aprsInfo.flatMap { APRSDigest.parse(destination: to ?? "", info: $0) }
+        self.aprs = digest
+        self.aprsInfo = digest == nil ? nil : aprsInfo
 
         // Auto-detect message type for packets if not explicitly provided
         if let messageType = messageType {
             self.messageType = messageType
+        } else if let digest {
+            // What the frame turned out to be beats what its text looks like:
+            // `detectMessageType` files anything over ten characters as DATA,
+            // which is every APRS beacon, and left no way to quiet a busy
+            // channel without hiding the messages too.
+            self.messageType = digest.messageClass
         } else if kind == .packet {
             // Detect message type even if 'to' is nil (use empty string as fallback)
             self.messageType = Self.detectMessageType(text: text, to: to ?? "")
@@ -168,6 +236,17 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         return CallsignValidator.normalize(from) == local
     }
 
+    /// Hashed on identity alone.
+    ///
+    /// The synthesised conformance would need every member to be `Hashable`,
+    /// and `APRSDigest` is not — `APRSObjectReport` is only `Equatable`. A
+    /// UUID is a better hash for this type anyway: two lines with the same
+    /// text a second apart are different lines, and hashing the whole struct
+    /// walked several strings per bucket lookup.
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
     var timestampString: String {
         TimeDisplay.timeString(timestamp)
     }
@@ -187,12 +266,24 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
 
     // MARK: - Convenience Initializers
 
+    /// A notice about the app: migrations, settings, lifecycle. Never hidden
+    /// by the per-radio filter, because no radio owns it.
     static func system(_ text: String) -> ConsoleLine {
-        ConsoleLine(kind: .system, text: text)
+        ConsoleLine(kind: .system, text: text, subject: .app)
     }
 
+    /// A notice about a radio: its link, its transmissions, what it heard back.
+    /// Hides with that radio. `radios` empty means "a radio, but we cannot say
+    /// which" — see `Subject.unnamedRadio`.
+    static func system(_ text: String, radios: Set<RadioID>) -> ConsoleLine {
+        ConsoleLine(kind: .system, text: text,
+                    subject: radios.isEmpty ? .unnamedRadio : .radios(radios))
+    }
+
+    /// Errors are never filtered by radio — see `passesRadioFilter` — so this
+    /// takes no subject. A radio failing while hidden still has to say so.
     static func error(_ text: String) -> ConsoleLine {
-        ConsoleLine(kind: .error, text: text)
+        ConsoleLine(kind: .error, text: text, subject: .app)
     }
 
     static func packet(
@@ -203,9 +294,9 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         via: [String] = [],
         isDuplicate: Bool = false,
         messageType: MessageType? = nil,
-        radioID: RadioID? = nil
+        radioID: RadioID? = nil,
+        aprsInfo: Data? = nil
     ) -> ConsoleLine {
-        let detectedType = messageType ?? detectMessageType(text: text, to: to)
         // Normalize via path for console display so repeated digis like
         // "W0ARP-7,W0ARP-7*" collapse to a single "W0ARP-7*" entry. This keeps
         // the console, tests, and packet model consistent.
@@ -217,9 +308,15 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
             to: to,
             text: text,
             via: normalizedVia,
-            messageType: detectedType,
+            // Left to the initialiser, which classifies from the decoded frame
+            // when there is one and falls back to the text when there is not.
+            messageType: messageType,
             isDuplicate: isDuplicate,
-            radioID: radioID
+            // A received frame knows the radio that heard it. One that does
+            // not is legacy, and hides with the primary rather than escaping
+            // the filter — the same rule the Packets table and the map use.
+            subject: .radio(radioID),
+            aprsInfo: aprsInfo
         )
     }
 
@@ -294,17 +391,35 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
 extension ConsoleLine {
     /// Whether this line survives the per-radio filter.
     ///
-    /// System notices and our own transmissions carry no radio and always
-    /// show. A received packet line is attributed to the radio that heard it;
-    /// an unattributed one (legacy, pre-radio) is treated as the primary
-    /// radio's, matching the Packets table and the map — so it hides with the
-    /// primary rather than slipping past the filter unnoticed.
+    /// Three rules, in order:
+    ///
+    /// 1. **Errors always show.** Hiding a radio in the sidebar is a view
+    ///    filter, not an operational disable: the radio is still on the air
+    ///    with our callsign on it whether or not we are looking at it. A link
+    ///    that drops, a PTT that is refused, a port that is lost — those have
+    ///    to reach the operator from a hidden radio exactly as from a visible
+    ///    one.
+    /// 2. **App notices always show**, because no radio owns them and there is
+    ///    nothing for the filter to match them against.
+    /// 3. **Everything else belongs to its radios** and hides with them — a
+    ///    received frame, a transmitted one, a link coming up, a reply heard.
+    ///    A line from a shared TNC belongs to every radio on that stream and
+    ///    survives while any of them is visible.
+    ///
+    /// Our own transmissions are *not* exempt. They were, and it put this view
+    /// at odds with the Packets table, which has always hidden them with their
+    /// radio (`PacketFilter`) — and it produced half a conversation: hide a
+    /// radio and you saw what you sent on it but not the answer.
     func passesRadioFilter(hidden: Set<RadioID>, myCallsign: String) -> Bool {
         if hidden.isEmpty { return true }
-        if let id = radioID { return !hidden.contains(id) }
-        guard kind == .packet else { return true }
-        let mine = CallsignValidator.normalize(from ?? "") == CallsignValidator.normalize(myCallsign)
-        if mine { return true }
-        return !hidden.contains(.primary)
+        if kind == .error { return true }
+        switch subject {
+        case .app:
+            return true
+        case .radios(let ids):
+            return !ids.isSubset(of: hidden)
+        case .unnamedRadio:
+            return !hidden.contains(.primary)
+        }
     }
 }

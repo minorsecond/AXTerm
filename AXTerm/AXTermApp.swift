@@ -31,17 +31,16 @@ struct AXTermApp: App {
     private let client: PacketEngine
 
     init() {
-        let isUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let isUnitTests = AppEnvironment.isUnitTestHost
         let testConfig = TestModeConfiguration.shared
-        let isTestModeRun = isUnitTests || testConfig.isTestMode
-        let defaults: UserDefaults
-        if isTestModeRun {
-            let suiteName = "com.rosswardrup.AXTerm.test.\(testConfig.instanceID)"
-            defaults = UserDefaults(suiteName: suiteName) ?? .standard
-            defaults.removePersistentDomain(forName: suiteName)
-        } else {
-            defaults = .standard
-        }
+        // `AppEnvironment.defaults` is the one place that decides this, and the
+        // scene used to build the same suite name itself and wipe it. Under
+        // `xcodebuild test` that name is the same in every parallel worker —
+        // `instanceID` is "default" unless an instance name, port or callsign
+        // was passed — so every worker's scene wiped the suite the others were
+        // using, from another process, at whatever moment it happened to start.
+        // Two copies of one decision is how the second one ends up wrong.
+        let defaults = AppEnvironment.defaults
         let settingsStore = AppSettingsStore(defaults: defaults)
         _settings = StateObject(wrappedValue: settingsStore)
         let router = PacketInspectionRouter.shared

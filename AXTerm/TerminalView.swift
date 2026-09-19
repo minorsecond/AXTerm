@@ -1820,6 +1820,13 @@ struct TerminalView: View {
     @ObservedObject var searchModel: AppToolbarSearchModel
     /// Optional app-wide position source for "insert my position".
     var locationService: StationLocationService?
+    // The same three keys the map reads, so "12.4 mi SW" beside a decoded APRS
+    // position means the same thing in the console as it does on the map.
+    @AppStorage("station.useDeviceLocation") private var useDeviceLocation = false
+    @AppStorage("station.manualLatitude") private var manualLatitude = ""
+    @AppStorage("station.manualLongitude") private var manualLongitude = ""
+    @AppStorage(WinlinkSettings.gridSquareKey) private var stationGridSquare = ""
+    @AppStorage(WinlinkSettings.distanceUnitIsMilesKey) private var distanceUnitIsMiles = true
     /// Keeps what happened. Nil disables recording rather than the session.
     var sessionRecorder: TerminalSessionRecorder?
     /// What the operator's other devices connected to, for the History pane's
@@ -1846,7 +1853,11 @@ struct TerminalView: View {
     @State private var activeSessionRecordID: String?
     @State private var autoAttemptTask: Task<Void, Never>?
     @State private var pendingRoutingReconnect = false
-    @State private var connectBarRefreshWorkItem: DispatchWorkItem?
+    /// Debounces the connect-bar rebuild. A `QuietWindowTimer` rather than a
+    /// cancelled-and-replaced `DispatchWorkItem`: this is poked once per packet
+    /// heard, so a debounce that allocates per poke piles up behind a main
+    /// thread that is already behind. See `QuietWindowTimer`.
+    @State private var connectBarRefreshTimer = QuietWindowTimer(window: 0.3)
 
     init(
         client: PacketEngine,
@@ -2366,11 +2377,22 @@ struct TerminalView: View {
     // Debounced entry point for packet/station stream handlers.
     // rebuildObservedPaths iterates every packet — running it on every arrival
     // (potentially 10+ times/second) stalls the main thread and delays rendering.
+    /// Where this station is, for the distance beside a decoded APRS position.
+    ///
+    /// Nil when nothing has been set and there is no fix — the console then
+    /// prints coordinates without a distance, rather than measuring from a
+    /// grid square nobody entered.
+    private var consoleObserver: GreatCircle.Point? {
+        StationPositionResolver.ownStation(
+            gridSquare: stationGridSquare,
+            manualLatitude: manualLatitude,
+            manualLongitude: manualLongitude,
+            usesDeviceLocation: useDeviceLocation,
+            deviceLocation: locationService?.lastLocation)?.point
+    }
+
     private func scheduleConnectBarRefresh() {
-        connectBarRefreshWorkItem?.cancel()
-        let item = DispatchWorkItem { refreshConnectBarData() }
-        connectBarRefreshWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+        connectBarRefreshTimer.poke { refreshConnectBarData() }
     }
 
     private func handleConnectRequest(_ request: ConnectRequest) {
@@ -2878,6 +2900,10 @@ struct TerminalView: View {
                 // Empty with one radio, so the badge appears only when there is
                 // more than one radio to tell apart.
                 radioNames: client.radioNames,
+                heardCallsigns: client.heardBaseCallsigns,
+                telemetryDefinitions: client.telemetryDefinitions,
+                observer: consoleObserver,
+                distanceInMiles: distanceUnitIsMiles,
                 // Flips on every Broadcast⇄Session toggle so the console re-pins
                 // to the bottom even when the line set doesn't change (and no
                 // incoming packet would otherwise trigger a re-pin).

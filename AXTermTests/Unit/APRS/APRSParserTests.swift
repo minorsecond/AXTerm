@@ -88,4 +88,46 @@ final class APRSParserTests: XCTestCase {
         XCTAssertEqual(r?.longitude ?? 0, -104.70, accuracy: 0.1)
         XCTAssertEqual(r?.symbolTable, "/")
     }
+
+    /// A Mic-E status text is signed at both ends: a type code in front naming
+    /// the radio's family, a signature behind naming the model within it.
+    /// Neither is the operator talking, and both used to reach the screen —
+    /// the Yaesu's `_4` landing against a URL and turning `www.k0rap.com` into
+    /// a punycode hostname that goes nowhere, the Kenwood's `=` finishing
+    /// somebody's sentence with an equals sign.
+    ///
+    /// Real tails heard on 144.390, carriage return and all: the return is why
+    /// the signature has to be looked for after the text is trimmed.
+    func testTheRadiosSignatureIsNotPartOfTheComment() {
+        XCTAssertEqual(APRSParser.micEStatusText("]\"Ep}=\r"), "",
+                       "a TM-D710 with nothing to say said nothing")
+        XCTAssertEqual(APRSParser.micEStatusText("]I RAN AWAY=\r"), "I RAN AWAY")
+        XCTAssertEqual(APRSParser.micEStatusText("`\"Jd}!SN!_%\r"), "!SN!")
+        XCTAssertEqual(
+            APRSParser.micEStatusText("`\"F&}147.210MHz C100 +060 http://www.k0rap.com_4\r"),
+            "147.210MHz C100 +060 http://www.k0rap.com",
+            "the URL ends where the operator ended it")
+    }
+
+    /// The signature is only as long as the type code said it would be, and
+    /// only there at all if a type code was. Two characters that spell a Yaesu
+    /// belong to the operator when the radio was a Kenwood, and a station that
+    /// named no family keeps everything it sent.
+    func testOnlyTheSignatureTheFamilyAllowsIsTakenOff() {
+        XCTAssertEqual(APRSParser.micEStatusText("]TESTING_1\r"), "TESTING_1")
+        XCTAssertEqual(APRSParser.micEStatusText(">on the air^"), "on the air")
+        XCTAssertEqual(APRSParser.micEStatusText("\"I{}TOTAL=\r"), "TOTAL=")
+    }
+
+    /// End to end, on the frame N7CTM-9 was heard sending: a TM-D710 beacon
+    /// whose whole status text is altitude and signature. What is left for the
+    /// operator is nothing, and nothing is what the comment should be — it read
+    /// `"="` before.
+    func testMicECommentIsEmptyWhenItWasAllStructure() {
+        let info = Data([0x60, 0x71, 0x60, 0x43, 0x20, 0x70, 0x74, 0x6A, 0x2F,
+                         0x5D, 0x22, 0x45, 0x70, 0x7D, 0x3D, 0x0D])
+        let r = APRSParser.parse(destination: "TPPTSV", info: info)
+        XCTAssertEqual(r?.comment, "")
+        XCTAssertEqual(r?.altitudeFeet, 5367, "the altitude was read, not left in the text")
+    }
 }

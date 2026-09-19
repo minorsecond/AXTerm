@@ -129,11 +129,18 @@ final class NetRomIntegration {
         }
 
         if duplicateStatus == .ingestionDedup {
+            #if DEBUG
+            appendTrace(packet, timestamp: timestamp, "dropped: ingestionDedup")
+            #endif
             return
         }
 
         let baseClassification = PacketClassifier.classify(packet: packet)
         let classification: PacketClassification = duplicateStatus == .retryDuplicate ? .retryOrDuplicate : baseClassification
+        #if DEBUG
+        appendTrace(packet, timestamp: timestamp,
+                    "dup=\(duplicateStatus) base=\(baseClassification) used=\(classification) mode=\(mode)")
+        #endif
 
         // Always update link quality estimator
         linkEstimator.observePacket(
@@ -507,6 +514,37 @@ final class NetRomIntegration {
         }
         return (try? persistence.getAllOriginIntervals()) ?? []
     }
+
+    #if DEBUG
+    /// Test seam: one line per `observePacket`, for diagnosing inference that
+    /// fails only under full-suite parallel load.
+    ///
+    /// Reading the code was not enough. Four inference tests in
+    /// `NetRomIntegrationWiringTests` failed together once on 2026-09-19 and
+    /// never again — not in ten fresh processes, not in eight further parallel
+    /// full runs, and not in a single-process sequential run of all 7,213
+    /// tests. Every gate on the path (the 0.25 s ingestion dedup, the 2 s retry
+    /// window, the classifier, the 60-against-25 quality floor) reads as
+    /// deterministic for those inputs, so the next occurrence needs the
+    /// pipeline's own numbers rather than another reading of the source.
+    private(set) var observationTrace: [String] = []
+
+    private func appendTrace(_ packet: Packet, timestamp: Date, _ note: String) {
+        guard AppEnvironment.isUnitTestHost, observationTrace.count < 1024 else { return }
+        let from = packet.from?.display ?? "?"
+        let to = packet.to?.display ?? "?"
+        let via = packet.via.map { "\($0.display)\($0.repeated ? "*" : "")" }.joined(separator: ",")
+        observationTrace.append(
+            "t+\(Int(timestamp.timeIntervalSince1970) % 1000) \(from)>\(to)"
+            + (via.isEmpty ? "" : " via \(via)") + " \(note)")
+    }
+
+    /// Everything the inference engine believes right now, in one line.
+    var inferenceState: String {
+        guard let passiveInference else { return "inference: off" }
+        return passiveInference.debugEvidenceSummary
+    }
+    #endif
 
     // MARK: - Reset (Debug)
 
