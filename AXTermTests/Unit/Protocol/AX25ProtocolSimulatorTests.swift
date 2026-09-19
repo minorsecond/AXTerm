@@ -61,19 +61,32 @@ final class AX25ProtocolSimulatorTests: XCTestCase {
         XCTAssertEqual(sessionB?.stateMachine.sequenceState.vr, 1, "Node B should have received the frame and incremented V(R)")
     }
 
-    /// Poll `condition` every 20 ms until it holds or `deadline` seconds elapse.
-    /// Returns normally either way — the caller's assertions produce the failure
-    /// detail. The deadline only bounds the wait.
+    /// Poll `condition` every 20 ms until it holds, and fail here if it never
+    /// does.
+    ///
+    /// It used to return normally either way and leave the failure detail to
+    /// the caller's assertions. That works while those assertions mirror the
+    /// condition, which they do below — but it makes the timeout itself
+    /// invisible, and `label` went nowhere. Saying so at the line that gave up
+    /// costs nothing and turns "V(R) was 0" into "V(R) was 0 because the data
+    /// was never acknowledged in five seconds".
+    @discardableResult
     private func waitUntil(
         _ label: String,
         deadline: TimeInterval = 5.0,
+        file: StaticString = #filePath, line: UInt = #line,
         condition: @escaping () -> Bool
-    ) async throws {
+    ) async throws -> Bool {
         let start = Date()
         while Date().timeIntervalSince(start) < deadline {
-            if condition() { return }
+            if condition() { return true }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+        let met = condition()
+        if !met {
+            XCTFail("timed out after \(deadline)s waiting for: \(label)", file: file, line: line)
+        }
+        return met
     }
     
     func testLossyLinkRetransmitsAndEventuallyConnects() async throws {
