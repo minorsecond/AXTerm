@@ -263,4 +263,30 @@ final class XIDNegotiationTests: XCTestCase {
         XCTAssertFalse(manager.session(for: peer, path: DigiPath(), radio: .primary)
             .stateMachine.config.srejEnabled)
     }
+
+    // MARK: - Inbound SABME (modulo 128) is declined, not accepted
+
+    // We are modulo 8 only, so an inbound SABME must be answered with DM (not
+    // UA) to make the peer fall back to modulo 8. Accepting it stranded the peer
+    // in an XID retry loop against a link this side cannot run.
+    func testInboundSABMEIsRefusedWithDM() {
+        let response = manager.handleInboundSABM(
+            from: peer, to: manager.localCallsign, path: DigiPath(),
+            radio: .primary, extended: true, pf: true)
+
+        XCTAssertEqual(response?.displayInfo, "DM", "SABME (modulo 128) must be refused with DM")
+        XCTAssertNil(manager.existingSession(for: peer),
+                     "a refused SABME must not open a session")
+    }
+
+    // A plain SABM (modulo 8) is still accepted with UA.
+    func testInboundSABMIsAcceptedWithUA() {
+        let response = manager.handleInboundSABM(
+            from: peer, to: manager.localCallsign, path: DigiPath(),
+            radio: .primary, extended: false, pf: true)
+
+        XCTAssertEqual(response?.displayInfo, "UA", "SABM (modulo 8) is accepted with UA")
+        XCTAssertNotNil(manager.existingSession(for: peer),
+                        "an accepted SABM opens a session")
+    }
 }

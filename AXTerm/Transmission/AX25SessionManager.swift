@@ -1673,12 +1673,34 @@ final class AX25SessionManager: ObservableObject {
     // MARK: - Inbound Frame Handling
 
     /// Handle an inbound SABM (connection request)
+    ///
+    /// `extended` is SABME, the modulo-128 request. We answer it with DM so
+    /// the peer falls back to modulo 8, which is what AX.25 2.2 asks a station
+    /// that does not support extended mode to do.
+    ///
+    /// Until 2026-09-19 SABM and SABME were dispatched to this method
+    /// identically and both were answered UA. That accepted a link this side
+    /// cannot run: extended mode makes every I- and S-frame control field two
+    /// bytes, and the inbound KISS decode pipeline is not session-aware, so it
+    /// cannot know where a peer's control field ends (see the transmission
+    /// spec, "Modulo 128 is deliberately not offered"). The peer then sat in
+    /// XID retrying against a station that had said yes to something it could
+    /// not do. Saying no is both honest and faster.
     func handleInboundSABM(
         from source: AX25Address,
         to destination: AX25Address,
         path: DigiPath,
-        radio: RadioID
+        radio: RadioID,
+        extended: Bool = false,
+        pf: Bool = true
     ) -> OutboundFrame? {
+        if extended {
+            debugTrace("SABME refused", ["from": source.display, "reason": "modulo 128 unsupported"])
+            TxLog.debug(.session, "SABME refused with DM; this station is modulo 8 only", [
+                "peer": source.display
+            ])
+            return AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path, pf: pf)
+        }
         debugTrace("SABM received", [
             "from": source.display,
             "to": destination.display,
