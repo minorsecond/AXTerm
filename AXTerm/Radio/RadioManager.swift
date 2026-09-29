@@ -254,7 +254,8 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
                 devicePath: serial.config.devicePath,
                 baudRate: radio.serialBaudRate,
                 autoReconnect: radio.serialAutoReconnect,
-                mobilinkdConfig: radio.mobilinkdConfig))
+                mobilinkdConfig: radio.mobilinkdConfig,
+                timing: radio.kissTiming))
         }
         #endif
         if let ble = session.link as? KISSLinkBLE {
@@ -445,7 +446,8 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
                 devicePath: SerialDevicePathResolver.resolve(radio.serialDevicePath),
                 baudRate: radio.serialBaudRate,
                 autoReconnect: radio.serialAutoReconnect,
-                mobilinkdConfig: radio.mobilinkdConfig))
+                mobilinkdConfig: radio.mobilinkdConfig,
+                timing: radio.kissTiming))
             #else
             guard radio.port > 0, radio.port <= 65_535 else { return nil }
             return KISSLinkNetwork(host: radio.host, port: UInt16(radio.port),

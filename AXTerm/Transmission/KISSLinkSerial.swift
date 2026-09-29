@@ -17,6 +17,9 @@ struct SerialConfig: Equatable, Sendable {
     var baudRate: Int
     var autoReconnect: Bool
     var mobilinkdConfig: MobilinkdConfig?
+    /// Sent as KISS parameters when a Mobilinkd connects. Other serial TNCs
+    /// are sent nothing, as before.
+    var timing: KISSTimingParameters
 
     static let defaultBaudRate = 115200
     static let defaultAutoReconnect = true
@@ -25,12 +28,14 @@ struct SerialConfig: Equatable, Sendable {
         devicePath: String,
         baudRate: Int = Self.defaultBaudRate,
         autoReconnect: Bool = Self.defaultAutoReconnect,
-        mobilinkdConfig: MobilinkdConfig? = nil
+        mobilinkdConfig: MobilinkdConfig? = nil,
+        timing: KISSTimingParameters = .default
     ) {
         self.devicePath = devicePath
         self.baudRate = baudRate
         self.autoReconnect = autoReconnect
         self.mobilinkdConfig = mobilinkdConfig
+        self.timing = timing
     }
 
     /// Map baud rate integer to POSIX speed constant
@@ -100,6 +105,8 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     // MARK: - Configuration
 
     private(set) var config: SerialConfig
+    /// The Mobilinkd side of this link. Runs on serialQueue.
+    private var mobilinkd: MobilinkdSessionDriver!
 
     // MARK: - KISSLink State
 
@@ -173,11 +180,23 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     init(config: SerialConfig) {
         self.config = config
         KISSLinkLog.info(config.devicePath, message: "Link init [\(_shortID)]")
+        mobilinkd = MobilinkdSessionDriver(hooks: .init(
+            queue: serialQueue,
+            write: { [weak self] data in _ = self?.writeBytes(data) },
+            writeSequence: { [weak self] frames, done in self?.writeSequence(frames, done) },
+            isConnected: { [weak self] in self?.state == .connected },
+            log: { [weak self] message in
+                guard let self else { return }
+                KISSLinkLog.info(self.endpointDescription, message: message)
+            },
+            ready: { [weak self] in self?.connectionReady() },
+            silent: { [weak self] in self?.mobilinkdSilent() },
+            wanted: { [weak self] in self?.config.mobilinkdConfig?.settings ?? MobilinkdSettings() }))
     }
 
     deinit {
         let reason = "deinit [\(_shortID)]"
-        closeInternal(reason: reason)
+        closeInternal(reason: reason, restoring: false)
         KISSLinkLog.info(config.devicePath, message: "Link deinit [\(_shortID)]")
     }
     
@@ -205,72 +224,80 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 completion(KISSSerialError.notOpen)
                 return
             }
-
-            let fd: Int32
-            self.lock.lock()
-            fd = self.fileDescriptor
-            let current = self._state
-            self.lock.unlock()
-
-            guard current == .connected, fd >= 0 else {
+            guard self.state == .connected else {
                 completion(KISSSerialError.notOpen)
                 return
             }
-            
-            // Log hex dump of outbound frame for debugging
-            let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-            KISSLinkLog.info(self.endpointDescription, message: "Writing \(data.count) bytes: \(hex)")
+            completion(self.writeBytes(data))
+        }
+    }
 
-            // WRITE LOOP: Ensure full frame is written
-            var bytesWritten = 0
-            let totalBytes = data.count
-            
-            let result = data.withUnsafeBytes { buffer -> Int in
-                guard let baseAddress = buffer.baseAddress else { return -1 }
-                
-                while bytesWritten < totalBytes {
-                    let ptr = baseAddress.advanced(by: bytesWritten)
-                    let remaining = totalBytes - bytesWritten
-                    let count = Darwin.write(fd, ptr, remaining)
-                    
-                    if count < 0 {
-                        let err = errno
-                        if err == EINTR { continue }
-                        if err == EAGAIN || err == EWOULDBLOCK {
-                            // FD is non-blocking; output buffer momentarily full.
-                            // Use poll() to wait for writability (up to 500ms).
-                            var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                            let pollResult = poll(&pfd, 1, 500)
-                            if pollResult > 0 { continue } // Writable now, retry
-                            KISSLinkLog.error(self.endpointDescription, message: "Write poll timeout or error")
-                            return -1
-                        }
-                        return -1 // Real error
+    /// Write bytes to the port whatever the link's reported state. Must be
+    /// called on serialQueue.
+    private func writeBytes(_ data: Data) -> Error? {
+        lock.lock()
+        let fd = fileDescriptor
+        lock.unlock()
+        guard fd >= 0 else { return KISSSerialError.notOpen }
+
+        // Log hex dump of outbound frame for debugging
+        let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        KISSLinkLog.info(endpointDescription, message: "Writing \(data.count) bytes: \(hex)")
+
+        // WRITE LOOP: Ensure full frame is written
+        var bytesWritten = 0
+        let totalBytes = data.count
+
+        let result = data.withUnsafeBytes { buffer -> Int in
+            guard let baseAddress = buffer.baseAddress else { return -1 }
+
+            while bytesWritten < totalBytes {
+                let ptr = baseAddress.advanced(by: bytesWritten)
+                let remaining = totalBytes - bytesWritten
+                let count = Darwin.write(fd, ptr, remaining)
+
+                if count < 0 {
+                    let err = errno
+                    if err == EINTR { continue }
+                    if err == EAGAIN || err == EWOULDBLOCK {
+                        // FD is non-blocking; output buffer momentarily full.
+                        // Use poll() to wait for writability (up to 500ms).
+                        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                        let pollResult = poll(&pfd, 1, 500)
+                        if pollResult > 0 { continue } // Writable now, retry
+                        KISSLinkLog.error(endpointDescription, message: "Write poll timeout or error")
+                        return -1
                     }
-                    bytesWritten += count
+                    return -1 // Real error
                 }
-                return bytesWritten
+                bytesWritten += count
             }
+            return bytesWritten
+        }
 
-            if result < 0 {
-                let err = errno
-                let message = String(cString: strerror(err))
-                KISSLinkLog.error(self.endpointDescription, message: "Write failed (errno \(err)): \(message)")
-                completion(KISSSerialError.writeFailed(message))
-                // Device may have disconnected
-                if err == ENXIO || err == EIO {
-                    self.handleDeviceDisconnect()
-                }
-            } else {
-                self.lock.lock()
-                self._totalBytesOut += result
-                self.lock.unlock()
-                KISSLinkLog.bytesOut(self.endpointDescription, count: result)
-                if result < totalBytes {
-                     KISSLinkLog.error(self.endpointDescription, message: "Partial write? \(result)/\(totalBytes) (Should be handled by loop)")
-                }
-                completion(nil)
+        if result < 0 {
+            let err = errno
+            let message = String(cString: strerror(err))
+            KISSLinkLog.error(endpointDescription, message: "Write failed (errno \(err)): \(message)")
+            // Device may have disconnected
+            if err == ENXIO || err == EIO {
+                handleDeviceDisconnect()
             }
+            return KISSSerialError.writeFailed(message)
+        }
+        lock.lock()
+        _totalBytesOut += result
+        lock.unlock()
+        KISSLinkLog.bytesOut(endpointDescription, count: result)
+        return nil
+    }
+
+    /// Write frames 50 ms apart, then call back. On serialQueue.
+    private func writeSequence(_ frames: [Data], _ done: @escaping () -> Void) {
+        guard let first = frames.first else { done(); return }
+        _ = writeBytes(first)
+        serialQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.writeSequence(Array(frames.dropFirst()), done)
         }
     }
 
@@ -291,6 +318,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 newConfig.baudRate != self.config.baudRate
             )
 
+            let old = self.config
             self.config = newConfig
 
             if needsReconnect {
@@ -299,6 +327,10 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 self.openInternal()
             } else if wasConnected {
                 KISSLinkLog.info(self.endpointDescription, message: "Config updated (no reconnect needed)")
+                if self.mobilinkd.isMobilinkd, old.timing != newConfig.timing {
+                    self.writeSequence(newConfig.timing.frames()) {}
+                }
+                self.mobilinkd.wantedChanged(from: old.mobilinkdConfig?.settings ?? MobilinkdSettings())
             }
         }
     }
@@ -577,39 +609,48 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             KISSLinkLog.info(endpointDescription, message: "Bluetooth RFCOMM serial connected successfully")
         }
 
-        // KISS init — goes straight to .connected (no commands sent to TNC)
-        sendKISSInit()
-
         reconnectAttempt = 0
         cancelReconnectTimer()
 
-        // Start Battery Polling if enabled
-        if let mobiConfig = config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
-            startBatteryPolling()
-        }
-
-        scheduleStartupRecoveryWatchdogIfNeeded()
+        sendKISSInit()
 
         // NOTE: Do NOT auto-poll input levels — POLL_INPUT_LEVEL (0x04)
         // stops the TNC4 demodulator. Use manual one-shot measurement only.
     }
+
+    /// The link is up and, for a Mobilinkd, set up. On serialQueue.
+    private func connectionReady() {
+        setState(.connected)
+        KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready")
+        if let mobiConfig = config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
+            startBatteryPolling()
+        }
+        scheduleStartupRecoveryWatchdogIfNeeded()
+    }
+
+    /// A port marked as a Mobilinkd didn't answer like one. Carry on as a
+    /// plain KISS TNC rather than refuse the connection. On serialQueue.
+    private func mobilinkdSilent() {
+        KISSLinkLog.error(endpointDescription, message: "Marked as a Mobilinkd but it did not answer; continuing as plain KISS")
+        mobilinkd.isMobilinkd = false
+        notifyError("This port is marked as a Mobilinkd, but the TNC didn't answer like one. It's connected as a plain KISS TNC.")
+        connectionReady()
+    }
     
     private func startBatteryPolling() {
-        // Prime the CDC data path shortly after connect.
-        // Some USB CDC stacks deliver unsolicited RX only after the first host write.
-        // A one-shot battery poll avoids waiting for user TX. It must carry a
-        // RESET: a bare battery poll stops the TNC4's demodulator.
-        let initialPoll = MobilinkdTNC.pollBatteryLevelAndResume()
-        serialQueue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            guard let self else { return }
-            self.send(Data(initialPoll)) { _ in }
+        // One reading shortly after connecting. It must carry a RESET: a bare
+        // battery poll stops the TNC4's demodulator.
+        serialQueue.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            guard let self, self.mobilinkd.activity == .idle else { return }
+            self.send(Data(MobilinkdTNC.pollBatteryLevelAndResume())) { _ in }
         }
 
         let timer = DispatchSource.makeTimerSource(queue: serialQueue)
         timer.schedule(deadline: .now() + MobilinkdTNC.batteryPollInterval,
                        repeating: MobilinkdTNC.batteryPollInterval)
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
+            // A battery poll would end a measurement or a test tone.
+            guard let self, self.mobilinkd.activity == .idle else { return }
             let frame = MobilinkdTNC.pollBatteryLevelAndResume()
             // Send directly without queuing if possible, or use standard send
             self.send(Data(frame)) { _ in } 
@@ -679,6 +720,9 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         lock.lock()
         let connected = _state == .connected
         lock.unlock()
+        // Silence while measuring or sending a tone is expected, and a RESET
+        // would end either.
+        guard mobilinkd.activity == .idle else { return }
 
         let shouldSendReset = startupReceptionGuard.shouldIssueRecoveryReset(
             isConnected: connected,
@@ -714,7 +758,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         let connected = _state == .connected
         lock.unlock()
 
-        guard connected, config.mobilinkdConfig != nil else { return }
+        guard connected, config.mobilinkdConfig != nil, mobilinkd.activity == .idle else { return }
 
         if startupReceptionGuard.hasSeenInboundAX25 {
             cancelOngoingNoAX25Recovery()
@@ -782,42 +826,26 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     }
     
     private func sendKISSInit() {
-        // TNC4 KISS Init Strategy — ZERO DISRUPTION:
-        //
-        // The TNC4 auto-starts its demodulator on USB connect (and BLE connect).
-        // The EEPROM holds calibrated gain/twist/DC-offset from ADJUST_INPUT_LEVELS.
-        // Sending ANY commands on connect (RESET, SET_MODEM_TYPE, gain commands,
-        // even standard KISS params) risks disrupting the already-running demodulator.
-        //
-        // qth.app and other working KISS clients don't send init commands — they
-        // just open the port and start listening. We do the same.
-        //
-        // Go straight to .connected and let the auto-started demodulator do its job.
-
-        if config.mobilinkdConfig != nil {
-            KISSLinkLog.info(endpointDescription, message: "Mobilinkd serial detected — sending NO init commands (EEPROM config + auto-start demodulator)")
-        } else {
+        guard config.mobilinkdConfig != nil else {
+            // Other serial TNCs get no commands at all: open the port and
+            // listen, as working KISS clients do.
             KISSLinkLog.info(endpointDescription, message: "Serial connected — no KISS init needed")
-        }
-
-        setState(.connected)
-        
-        // Prime the CDC data path. Some USB CDC stacks (or the TNC firmware itself)
-        // do not begin delivering unsolicited RX packets until the host writes at least one byte.
-        // We write a harmless poll or frame separator to wake up the receive pipe.
-        serialQueue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self else { return }
-            let primeData: [UInt8]
-            if self.config.mobilinkdConfig != nil {
-                primeData = MobilinkdTNC.pollBatteryLevelAndResume()
-            } else {
-                primeData = [0xC0, 0xC0] // Harmless empty KISS frame
+            connectionReady()
+            // Prime the CDC data path. Some USB CDC stacks do not begin
+            // delivering unsolicited RX until the host writes at least one byte.
+            serialQueue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                _ = self?.writeBytes(Data([0xC0, 0xC0]))   // an empty KISS frame
             }
-            self.send(Data(primeData)) { _ in
-                KISSLinkLog.info(self.endpointDescription, message: "Sent connection priming write (\(primeData.count) bytes)")
-            }
+            return
         }
-        KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready (no commands sent)")
+        // A Mobilinkd: the profile's KISS timing, then the shared session
+        // (probe, read its settings, apply this radio's, RESET). The writes
+        // also prime the USB data path.
+        let t = config.timing
+        KISSLinkLog.info(endpointDescription, message: "Mobilinkd serial — KISS timing: TXDELAY \(t.txDelayMs) ms, "
+            + "persistence \(t.persistence), slot \(t.slotTimeMs) ms")
+        mobilinkd.isMobilinkd = true
+        writeSequence(t.frames()) { [weak self] in self?.mobilinkd.begin() }
     }
 
     // MARK: - Private: Configure Port
@@ -953,6 +981,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 if startupReceptionGuard.hasSeenInboundAX25 {
                     cancelOngoingNoAX25Recovery()
                 }
+                if mobilinkd.isMobilinkd { mobilinkd.observe(data) }
                 Task { @MainActor [weak self] in
                     self?.delegate?.linkDidReceive(data)
                 }
@@ -988,7 +1017,23 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
 
     // MARK: - Private: Close
 
-    private func closeInternal(reason: String) {
+    /// - Parameter restoring: put back the TNC4 settings this link changed
+    ///   first. False when the device is already gone, or from deinit.
+    private func closeInternal(reason: String, restoring: Bool = true) {
+        if restoring, state == .connected {
+            let restore = mobilinkd.closingFrames()
+            if !restore.isEmpty {
+                KISSLinkLog.info(endpointDescription, message: "Putting the TNC4's own settings back before disconnecting")
+                for frame in restore {
+                    _ = writeBytes(frame)
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+                // An input gain change makes the TNC4 re-centre its input for a
+                // second; closing inside that has left it unresponsive.
+                Thread.sleep(forTimeInterval: MobilinkdSessionDriver.restoreSettleSeconds)
+            }
+        }
+        if restoring { mobilinkd.linkClosed() } else { mobilinkd.connectionEnded() }
         cancelReconnectTimer()
         cancelStartupRecoveryWatchdog()
         connectionOpenedAt = nil
@@ -1033,7 +1078,9 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
 
     private func handleDeviceDisconnect() {
         KISSLinkLog.error(endpointDescription, message: "Device disconnected")
-        closeInternal(reason: "Device disconnected")
+        // Nothing can be written to a device that is gone. What the TNC4 held
+        // is remembered, so a reconnect can still put it back later.
+        closeInternal(reason: "Device disconnected", restoring: false)
         notifyError("Device disconnected: \(config.devicePath)")
         scheduleReconnectIfEnabled()
     }
@@ -1107,4 +1154,20 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             self?.delegate?.linkDidError(message)
         }
     }
+}
+
+// MARK: - MobilinkdControlling
+
+extension KISSLinkSerial: MobilinkdControlling {
+    var isMobilinkd: Bool { mobilinkd.isMobilinkd }
+    var mobilinkdActivity: MobilinkdActivity { mobilinkd.activity }
+
+    func refreshMobilinkdStatus() { serialQueue.async { [weak self] in self?.mobilinkd.refreshStatus() } }
+    func startMeasuringInput() { serialQueue.async { [weak self] in self?.mobilinkd.startMeasuring() } }
+    func stopMeasuringInput() { serialQueue.async { [weak self] in self?.mobilinkd.stopMeasuring() } }
+    func startTestTone(_ tone: MobilinkdTestTone, for seconds: TimeInterval) {
+        serialQueue.async { [weak self] in self?.mobilinkd.startTone(tone, for: seconds) }
+    }
+    func stopTestTone() { serialQueue.async { [weak self] in self?.mobilinkd.stopTone() } }
+    func saveSettingsToTNC() { serialQueue.async { [weak self] in self?.mobilinkd.save() } }
 }

@@ -366,11 +366,13 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
             // Always passed: the link decides whether the peripheral is a
             // Mobilinkd from its service UUID.
             mobilinkdConfig: MobilinkdConfig(settings: tnc4),
-            timing: KISSTimingParameters(
-                txDelayMs: txDelayMs,
-                persistence: UInt8(clamping: persistence),
-                slotTimeMs: slotTimeMs,
-                txTailMs: txTailMs))
+            timing: kissTiming)
+    }
+
+    /// The KISS timing a hardware TNC on this radio is sent when it connects.
+    var kissTiming: KISSTimingParameters {
+        KISSTimingParameters(txDelayMs: txDelayMs, persistence: UInt8(clamping: persistence),
+                             slotTimeMs: slotTimeMs, txTailMs: txTailMs)
     }
 
     /// The Mobilinkd settings as a serial link takes them, or nil when the
