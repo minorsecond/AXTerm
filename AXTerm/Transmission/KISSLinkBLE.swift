@@ -359,7 +359,17 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     /// True when the TX characteristic chosen is the Mobilinkd one, which only
     /// Mobilinkd firmware advertises.
-    private var isMobilinkdPeripheral = false
+    private var isMobilinkdPeripheral = false {
+        didSet {
+            lock.lock()
+            _isMobilinkd = isMobilinkdPeripheral
+            lock.unlock()
+        }
+    }
+    /// Copies other threads can read, under `lock`.
+    private var _isMobilinkd = false
+    private var _activity: MobilinkdActivity = .idle
+    private var activityTimer: DispatchSourceTimer?
 
     private enum MobilinkdPhase {
         case idle
@@ -430,6 +440,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         timer?.cancel()
         batTimer?.cancel()
         sessionTimer?.cancel()
+        activityTimer?.cancel()
 
         // Cancel the BLE connection synchronously if possible.
         // CBCentralManager tolerates cancelPeripheralConnection from any thread.
@@ -617,7 +628,13 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         let released = found.restricted(to: levelsApplied ?? MobilinkdSettings())
             .subtracting(wantedSettings)
         let target = released.merging(wantedSettings)
-        sendSessionFrames(MobilinkdSettings.frames(toReach: target, from: current))
+        var frames = MobilinkdSettings.frames(toReach: target, from: current)
+        if mobilinkdActivity == .measuring {
+            // An input gain or twist change restarts the level stream by
+            // itself; the usual RESET would end the measurement instead.
+            frames.removeAll { $0 == Data(MobilinkdTNC.reset()) }
+        }
+        sendSessionFrames(frames)
         levelsApplied = wantedSettings.isEmpty ? nil : wantedSettings
     }
 
@@ -662,7 +679,19 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         let connected = _state == .connected
         lock.unlock()
 
-        let restore = MobilinkdSession.restoreFrames(applied: levelsApplied, found: levelsFound)
+        var restore = MobilinkdSession.restoreFrames(applied: levelsApplied, found: levelsFound)
+        let reset = Data(MobilinkdTNC.reset())
+        switch mobilinkdActivity {
+        case .sendingTone:
+            // Unkey first: a TNC4 left sending a tone keeps the radio keyed.
+            restore.insert(Data(MobilinkdTNC.stopTX()), at: 0)
+            if restore.last != reset { restore.append(reset) }
+        case .measuring:
+            if restore.last != reset { restore.append(reset) }
+        case .idle:
+            break
+        }
+        endActivity()
         guard connected, isMobilinkdPeripheral, !restore.isEmpty, mobilinkdPhase != .restoring else {
             teardown(reason: reason)
             completion?()
@@ -683,6 +712,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     }
 
     private func teardown(reason: String, finalState: KISSLinkState = .disconnected) {
+        endActivity()
         cancelReconnectTimer()
         cancelBatteryPolling()
         cancelStartupRecoveryWatchdog()
@@ -983,7 +1013,8 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: bleQueue)
         timer.schedule(deadline: .now() + 5.0, repeating: MobilinkdTNC.batteryPollInterval)
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
+            // A battery poll would end a measurement or a test tone.
+            guard let self, self.mobilinkdActivity == .idle else { return }
             self.send(Data(MobilinkdTNC.pollBatteryLevelAndResume())) { _ in }
         }
         timer.resume()
@@ -1059,7 +1090,11 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     ) {
         lock.lock()
         let connected = _state == .connected
+        let busy = _activity != .idle
         lock.unlock()
+        // Silence while measuring or sending a tone is expected, and a RESET
+        // would end either.
+        guard !busy else { return }
 
         let shouldSendReset = startupReceptionGuard.shouldIssueRecoveryReset(
             isConnected: connected,
@@ -1093,7 +1128,9 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     private func handleOngoingNoAX25Recovery() {
         lock.lock()
         let connected = _state == .connected
+        let busy = _activity != .idle
         lock.unlock()
+        guard !busy else { return }
 
         guard connected, isMobilinkdPeripheral else { return }
 
@@ -1516,5 +1553,103 @@ extension KISSLinkBLE: CBPeripheralDelegate {
         bleQueue.async { [weak self] in
             self?.resumePendingWrite()
         }
+    }
+}
+
+// MARK: - MobilinkdControlling
+
+extension KISSLinkBLE: MobilinkdControlling {
+    var isMobilinkd: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isMobilinkd
+    }
+
+    var mobilinkdActivity: MobilinkdActivity {
+        lock.lock()
+        defer { lock.unlock() }
+        return _activity
+    }
+
+    func refreshMobilinkdStatus() {
+        bleQueue.async { [weak self] in
+            guard let self, self.isMobilinkdPeripheral, self.mobilinkdActivity == .idle else { return }
+            // GET_ALL_VALUES stops the demodulator; the RESET after it
+            // restarts it once the replies are out.
+            self.send(Data(MobilinkdTNC.getAllValues() + MobilinkdTNC.reset())) { _ in }
+        }
+    }
+
+    func startMeasuringInput() {
+        bleQueue.async { [weak self] in
+            guard let self, self.isMobilinkdPeripheral else { return }
+            guard self.mobilinkdActivity != .measuring else { return }
+            if case .sendingTone = self.mobilinkdActivity { return }
+            self.beginActivity(.measuring, for: MobilinkdTNC.maxMeasuringSeconds) { [weak self] in
+                self?.stopMeasuringInput()
+            }
+            self.send(Data(MobilinkdTNC.streamInputLevel())) { _ in }
+        }
+    }
+
+    func stopMeasuringInput() {
+        bleQueue.async { [weak self] in
+            guard let self, self.mobilinkdActivity == .measuring else { return }
+            self.endActivity()
+            self.send(Data(MobilinkdTNC.reset())) { _ in }
+        }
+    }
+
+    func startTestTone(_ tone: MobilinkdTestTone, for seconds: TimeInterval) {
+        bleQueue.async { [weak self] in
+            guard let self, self.isMobilinkdPeripheral else { return }
+            // A measurement streams on the same audio task; end it first.
+            let preface: [UInt8] = self.mobilinkdActivity == .measuring ? MobilinkdTNC.reset() : []
+            self.beginActivity(.sendingTone(tone), for: max(1, seconds)) { [weak self] in
+                self?.stopTestTone()
+            }
+            self.send(Data(preface + tone.frame)) { _ in }
+        }
+    }
+
+    func stopTestTone() {
+        bleQueue.async { [weak self] in
+            guard let self, case .sendingTone = self.mobilinkdActivity else { return }
+            self.endActivity()
+            self.send(Data(MobilinkdTNC.stopTX() + MobilinkdTNC.reset())) { _ in }
+        }
+    }
+
+    func saveSettingsToTNC() {
+        bleQueue.async { [weak self] in
+            guard let self, self.isMobilinkdPeripheral else { return }
+            self.send(Data(MobilinkdTNC.saveEEPROM())) { _ in }
+            // What the TNC4 starts with is now what this link set, so closing
+            // has nothing to put back.
+            if let found = self.levelsFound { self.levelsFound = found.merging(self.levelsApplied) }
+        }
+    }
+
+    /// On bleQueue.
+    private func beginActivity(_ activity: MobilinkdActivity, for seconds: TimeInterval,
+                               onTimeout: @escaping () -> Void) {
+        activityTimer?.cancel()
+        lock.lock()
+        _activity = activity
+        lock.unlock()
+        let timer = DispatchSource.makeTimerSource(queue: bleQueue)
+        timer.schedule(deadline: .now() + seconds)
+        timer.setEventHandler(handler: onTimeout)
+        activityTimer = timer
+        timer.resume()
+    }
+
+    /// On bleQueue.
+    fileprivate func endActivity() {
+        activityTimer?.cancel()
+        activityTimer = nil
+        lock.lock()
+        _activity = .idle
+        lock.unlock()
     }
 }

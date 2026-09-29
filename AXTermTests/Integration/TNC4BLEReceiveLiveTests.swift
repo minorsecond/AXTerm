@@ -439,6 +439,66 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         close(after)
     }
 
+    /// Receive-only. The settings page's controls against a real TNC4: the
+    /// status read brings the full report back, measuring streams levels, and
+    /// afterwards the TNC4 is decoding packets again.
+    func testSettingsControlsOverBLE() throws {
+        let device = try discoverTNC4()
+        let recorder = TNC4Recorder()
+        let link = KISSLinkBLE(config: BLEConfig(
+            peripheralUUID: device.id.uuidString, peripheralName: device.name, autoReconnect: false))
+        link.delegate = recorder
+        link.open()
+        defer { link.close() }
+        XCTAssertTrue(waitFor(seconds: 45) { link.state == .connected }, "never connected")
+        guard link.state == .connected else { return }
+        XCTAssertTrue(link.isMobilinkd)
+
+        func report(after mark: Int) -> MobilinkdDeviceState {
+            var state = MobilinkdDeviceState()
+            for f in recorder.snapshot().frames.dropFirst(mark) {
+                if let r = MobilinkdReply.parse(f) { state.apply(r) }
+            }
+            return state
+        }
+
+        // 1. Status.
+        var mark = recorder.snapshot().frames.count
+        link.refreshMobilinkdStatus()
+        _ = waitFor(seconds: 4) { report(after: mark).txReversePolarity != nil }
+        let status = report(after: mark)
+        note("TNC4 status: \(status.hardwareVersion ?? "?") fw \(status.firmwareVersion ?? "?") "
+            + "serial \(status.serialNumber ?? "?") battery \(status.batteryMillivolts.map(String.init) ?? "?") mV "
+            + "gain in \(status.inputGain.map(String.init) ?? "?") out \(status.outputGain.map(String.init) ?? "?") "
+            + "PTT \(status.pttMultiplex == true ? "multiplex" : status.pttMultiplex == false ? "simplex" : "?") "
+            + "modems \(status.supportedModemTypes ?? []) canSave \(status.canSave)")
+        XCTAssertNotNil(status.firmwareVersion)
+        XCTAssertNotNil(status.batteryMillivolts)
+        XCTAssertNotNil(MobilinkdSettings(reportedBy: status), "every managed setting reported")
+
+        // 2. Measuring.
+        _ = waitFor(seconds: 1) { false }
+        mark = recorder.snapshot().frames.count
+        link.startMeasuringInput()
+        _ = waitFor(seconds: 4) { false }
+        XCTAssertEqual(link.mobilinkdActivity, .measuring)
+        link.stopMeasuringInput()
+        let levels = recorder.snapshot().frames.dropFirst(mark).compactMap(MobilinkdTNC.parseInputLevel)
+        note("TNC4: \(levels.count) level readings in 4 s; last vpp \(levels.last.map { String($0.vpp) } ?? "-")")
+        XCTAssertGreaterThan(levels.count, 3, "the level stream did not flow")
+
+        // 3. Back to packets.
+        _ = waitFor(seconds: 1) { link.mobilinkdActivity == .idle }
+        mark = recorder.snapshot().frames.count
+        let listen = Double(env["AXTERM_TNC4_LISTEN_SECONDS"] ?? "") ?? 60
+        _ = waitFor(seconds: listen) { false }
+        let packets = recorder.snapshot().frames.dropFirst(mark)
+            .filter { ($0.first ?? 0xFF) & 0x0F == 0 }
+            .compactMap { AX25.decodeFrame(ax25: Data($0.dropFirst())) }
+        note("TNC4: \(packets.count) packets decoded in \(Int(listen)) s after measuring")
+        XCTAssertGreaterThan(packets.count, 0, "the TNC4 did not go back to decoding after measuring")
+    }
+
     /// Open a link and make sure the TNC4 is actually heard before using it.
     /// About one connection in four comes up with notifications "enabled" and
     /// nothing ever arriving; a fresh connection clears it. This probes with

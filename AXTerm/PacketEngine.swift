@@ -1038,6 +1038,14 @@ final class PacketEngine: ObservableObject {
         }
     }
 
+    /// The live TNC4 controls for a radio, when its link is up and its TNC is
+    /// a Mobilinkd.
+    func mobilinkdControl(for radio: RadioID) -> MobilinkdControlling? {
+        guard let control = radioManager.session(for: radio)?.link as? MobilinkdControlling,
+              control.isMobilinkd else { return nil }
+        return control
+    }
+
     /// Sends a SET_INPUT_GAIN command to set manual input gain level (0-4, 6dB steps).
     func sendSetInputGain(_ level: UInt8) {
         guard let activeLink = radioManager.primarySession else { return }
