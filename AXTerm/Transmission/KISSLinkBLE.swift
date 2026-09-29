@@ -856,13 +856,10 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         cancelSessionTimer()
         probeAttempts = 0
         KISSLinkLog.info(endpointDescription, message: "TNC4 answered, firmware \(MobilinkdTNC.parseFirmwareVersion(reply) ?? "?")")
-        if !wantedSettings.isEmpty || levelsFound != nil {
-            startLevelRead()
-        } else {
-            sendSessionFrames(MobilinkdSession.connectFrames(wanted: nil, found: nil)) { [weak self] in
-                self?.finishConnect()
-            }
-        }
+        // Always find out what the TNC4 holds, even when the profile manages
+        // nothing yet: a setting changed later (the level assistant, a slider)
+        // must be restorable, and reading then would stop a measurement.
+        startLevelRead()
     }
 
     /// The TNC4 took our writes and sent nothing back. Drop the connection and

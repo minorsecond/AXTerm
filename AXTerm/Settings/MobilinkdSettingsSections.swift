@@ -7,6 +7,7 @@
 //  the TNC4 itself. See Docs/MobilinkdTNC4.md.
 //
 
+import Combine
 import SwiftUI
 
 struct MobilinkdSettingsSections: View {
@@ -20,6 +21,8 @@ struct MobilinkdSettingsSections: View {
     @State private var measuring = false
     @State private var confirmingSave = false
     @State private var refreshedOnce = false
+    @State private var confirmingAssistant = false
+    @StateObject private var assistant = MobilinkdLevelAssistantRunner()
 
     private var device: MobilinkdDeviceState { client.mobilinkdDevices[radioID] ?? MobilinkdDeviceState() }
     private var control: MobilinkdControlling? { client.mobilinkdControl(for: radioID) }
@@ -55,6 +58,7 @@ struct MobilinkdSettingsSections: View {
                 if isUp { control?.refreshMobilinkdStatus() }
             }
             .onDisappear {
+                assistant.cancel()
                 control?.stopMeasuringInput()
                 control?.stopTestTone()
             }
@@ -99,6 +103,7 @@ struct MobilinkdSettingsSections: View {
     private var receiveSection: some View {
         Section {
             levelMeter
+            if connected { levelAssistant }
             ManagedTNC4Setting(title: "Input gain for this radio", value: $viewModel.tnc4.inputGain,
                                tncValue: device.inputGain, fallback: 0, describe: Self.gainText) { binding in
                 Picker("Input gain", selection: binding) {
@@ -150,6 +155,39 @@ struct MobilinkdSettingsSections: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var levelAssistant: some View {
+        LabeledContent("Input gain") {
+            if assistant.running {
+                HStack {
+                    Text(assistant.status ?? "").foregroundStyle(.secondary)
+                    Button("Cancel") { assistant.cancel() }
+                }
+            } else {
+                Button("Find the right gain\u{2026}") { confirmingAssistant = true }
+                    .disabled(measuring || toneEndsAt != nil)
+            }
+        }
+        .confirmationDialog("Find the right input gain?", isPresented: $confirmingAssistant) {
+            Button("Start") {
+                guard let control else { return }
+                let id = radioID
+                assistant.run(control: control,
+                              gains: (device.minInputGain ?? 0)...(device.maxInputGain ?? 4),
+                              reading: { [client] in
+                                  let d = client.mobilinkdDevices[id]
+                                  return (d?.inputLevel, d?.inputLevelAt)
+                              },
+                              setGain: { [viewModel] in viewModel.tnc4.inputGain = $0 })
+            }
+        } message: {
+            Text("Open the radio's squelch on a quiet channel first. AXTerm tries each input gain from the lowest up and keeps the lowest one that gives a clean level. It takes about half a minute, and packets aren't received meanwhile.")
+        }
+        if let message = assistant.resultMessage {
+            Text(message).font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -328,5 +366,84 @@ private struct ManagedTNC4Setting<Value: Hashable, Control: View>: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Runs `MobilinkdLevelAssistant` against a connected TNC4.
+@MainActor
+final class MobilinkdLevelAssistantRunner: ObservableObject {
+    @Published private(set) var running = false
+    @Published private(set) var status: String?
+    @Published private(set) var resultMessage: String?
+    private var task: Task<Void, Never>?
+    private weak var control: MobilinkdControlling?
+
+    /// The TNC4 re-centres its input for about a second after a gain change
+    /// (tnc4-firmware AudioLevel.cpp, setAudioInputLevels).
+    static let settleSeconds = 2.5
+    static let sampleSeconds = 2.0
+
+    func run(control: MobilinkdControlling, gains: ClosedRange<Int>,
+             reading: @escaping () -> (MobilinkdInputLevel?, Date?),
+             setGain: @escaping (Int) -> Void) {
+        cancel()
+        self.control = control
+        running = true
+        resultMessage = nil
+        task = Task { [weak self] in
+            var planner = MobilinkdLevelAssistant(minGain: gains.lowerBound, maxGain: gains.upperBound)
+            control.startMeasuringInput()
+            defer { control.stopMeasuringInput() }
+            while case .measure(let gain) = planner.step {
+                self?.status = "Trying \(MobilinkdSettingsSections.gainText(gain))\u{2026}"
+                setGain(gain)
+                try? await Task.sleep(for: .seconds(Self.settleSeconds))
+                guard !Task.isCancelled else { return }
+                var samples: [MobilinkdInputLevel] = []
+                var lastAt: Date?
+                let end = Date().addingTimeInterval(Self.sampleSeconds)
+                while Date() < end, !Task.isCancelled {
+                    let (level, at) = reading()
+                    if let level, let at, at != lastAt { samples.append(level); lastAt = at }
+                    try? await Task.sleep(for: .milliseconds(80))
+                }
+                guard !Task.isCancelled else { return }
+                guard !samples.isEmpty else {
+                    self?.finish("The TNC4 sent no levels. Try again.")
+                    return
+                }
+                planner.record(samples)
+            }
+            switch planner.step {
+            case .done(let gain):
+                setGain(gain)
+                self?.finish("Set to \(MobilinkdSettingsSections.gainText(gain)) for this radio.")
+            case .betweenSteps(let gain):
+                setGain(gain)
+                self?.finish("Set to \(MobilinkdSettingsSections.gainText(gain)). The radio's volume falls between two steps; turn it up a little and run this again for a stronger level.")
+            case .radioTooLoud:
+                setGain(gains.lowerBound)
+                self?.finish("Even the lowest gain clips. Turn the radio's volume down and run this again.")
+            case .radioTooQuiet(let gain):
+                setGain(gain)
+                self?.finish("Even the highest gain is too quiet. Turn the radio's volume up and run this again.")
+            case .measure:
+                break
+            }
+        }
+    }
+
+    func cancel() {
+        guard running else { return }
+        task?.cancel()
+        task = nil
+        control?.stopMeasuringInput()
+        finish(nil)
+    }
+
+    private func finish(_ message: String?) {
+        running = false
+        status = nil
+        resultMessage = message
     }
 }

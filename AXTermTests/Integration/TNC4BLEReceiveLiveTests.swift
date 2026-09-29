@@ -499,6 +499,55 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         XCTAssertGreaterThan(packets.count, 0, "the TNC4 did not go back to decoding after measuring")
     }
 
+    /// Receive-only. The level assistant's loop against a real TNC4, with the
+    /// link's config standing in for the radio profile.
+    @MainActor
+    func testLevelAssistantOverBLE() throws {
+        let device = try discoverTNC4()
+        let recorder = TNC4Recorder()
+        var config = BLEConfig(peripheralUUID: device.id.uuidString, peripheralName: device.name, autoReconnect: false)
+        let link = KISSLinkBLE(config: config)
+        link.delegate = recorder
+        link.open()
+        defer { link.close() }
+        XCTAssertTrue(waitFor(seconds: 45) { link.state == .connected }, "never connected")
+        guard link.state == .connected else { return }
+        _ = waitFor(seconds: 2) { false }
+
+        var tried: [Int] = []
+        let runner = MobilinkdLevelAssistantRunner()
+        runner.run(control: link, gains: 0...4,
+                   reading: {
+                       guard let (at, frame) = recorder.timedFrames().last(where: { MobilinkdTNC.parseInputLevel($0.1) != nil })
+                       else { return (nil, nil) }
+                       return (MobilinkdTNC.parseInputLevel(frame), at)
+                   },
+                   setGain: { gain in
+                       if tried.last != gain { tried.append(gain) }
+                       config.mobilinkdConfig = MobilinkdConfig(settings: MobilinkdSettings(inputGain: gain))
+                       link.updateConfig(config)
+                   })
+        _ = waitFor(seconds: 60) { !runner.running }
+        note("TNC4 assistant: tried gains \(tried); result: \(runner.resultMessage ?? "none")")
+        XCTAssertFalse(runner.running, "the assistant never finished")
+        XCTAssertNotNil(runner.resultMessage)
+
+        // The chosen gain is what the TNC4 now uses, and it is decoding again.
+        _ = waitFor(seconds: 3) { false }
+        let mark = recorder.snapshot().frames.count
+        link.send(Data(MobilinkdTNC.getInputGain())) { _ in }
+        _ = waitFor(seconds: 3) { recorder.snapshot().frames.dropFirst(mark).contains { MobilinkdTNC.parseInputGain($0) != nil } }
+        let gain = recorder.snapshot().frames.dropFirst(mark).compactMap(MobilinkdTNC.parseInputGain).last
+        note("TNC4: input gain afterwards \(gain.map(String.init) ?? "?")")
+        XCTAssertEqual(gain, config.mobilinkdConfig?.settings.inputGain)
+
+        let listenMark = recorder.snapshot().frames.count
+        _ = waitFor(seconds: 45) { false }
+        let packets = recorder.snapshot().frames.dropFirst(listenMark).filter { ($0.first ?? 0xFF) & 0x0F == 0 }.count
+        note("TNC4: \(packets) packets in 45 s afterwards")
+        XCTAssertGreaterThan(packets, 0, "not decoding after the assistant")
+    }
+
     /// Open a link and make sure the TNC4 is actually heard before using it.
     /// About one connection in four comes up with notifications "enabled" and
     /// nothing ever arriving; a fresh connection clears it. This probes with
