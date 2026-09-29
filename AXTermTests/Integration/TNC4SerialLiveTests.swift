@@ -207,6 +207,54 @@ final class TNC4SerialLiveTests: XCTestCase {
         XCTAssertEqual(link.state, .connected)
     }
 
+    /// THIS ONE TRANSMITS: connect to a node and disconnect, through the app's
+    /// own link with a radio's TNC4 settings and nothing test-only.
+    /// TEST_RUNNER_AXTERM_TNC4_NODE (K0EPI-7), _TX_CALL (K0EPI-2) and
+    /// _INPUT_GAIN (0) set it up.
+    func testSerialNodeHandshake() throws {
+        guard env["AXTERM_TNC4_TX"] == "1" else { throw XCTSkip("Set TEST_RUNNER_AXTERM_TNC4_TX=1 to transmit") }
+        func address(_ s: String) -> AX25Address { let (c, n) = CallsignNormalizer.parse(s); return AX25Address(call: c, ssid: n) }
+        let me = address(env["AXTERM_TNC4_TX_CALL"] ?? "K0EPI-2")
+        let node = address(env["AXTERM_TNC4_NODE"] ?? "K0EPI-7")
+        let gain = Int(env["AXTERM_TNC4_INPUT_GAIN"] ?? "") ?? 0
+        let (link, recorder) = try open(MobilinkdConfig(settings: MobilinkdSettings(outputGain: 63, inputGain: gain)))
+        defer { closeAndWait(link) }
+
+        func fromNode(after mark: Int) -> [(control: UInt8, info: Data)] {
+            recorder.frames.dropFirst(mark).compactMap { f in
+                guard (f.first ?? 0xFF) & 0x0F == 0, let d = AX25.decodeFrame(ax25: Data(f.dropFirst())),
+                      d.from?.call == node.call, d.from?.ssid == node.ssid,
+                      d.to?.call == me.call, d.to?.ssid == me.ssid else { return nil }
+                return (d.control, d.info)
+            }
+        }
+        func isAnswer(_ c: UInt8) -> Bool { [0x63, 0x0F].contains(c & 0xEF) }   // UA or DM
+        func send(_ frame: OutboundFrame) { link.send(KISS.encodeFrame(payload: frame.encodeAX25(), port: 0)) { _ in } }
+
+        var answer: UInt8?
+        for attempt in 1...3 where answer == nil {
+            let mark = recorder.frames.count
+            send(AX25FrameBuilder.buildSABM(from: me, to: node))
+            _ = waitFor(seconds: 8) { fromNode(after: mark).contains { isAnswer($0.control) } }
+            answer = fromNode(after: mark).first { isAnswer($0.control) }?.control
+            note("TNC4 USB: SABM \(attempt) \(me.display)>\(node.display): "
+                + (answer.map { $0 & 0xEF == 0x63 ? "UA" : "DM" } ?? "no answer"))
+        }
+        XCTAssertEqual(answer.map { $0 & 0xEF }, 0x63, "the node did not accept the connection")
+        guard answer.map({ $0 & 0xEF }) == 0x63 else { return }
+
+        let mark = recorder.frames.count
+        _ = waitFor(seconds: 4) { false }
+        for f in fromNode(after: mark) where f.control & 0x01 == 0 {
+            note("TNC4 USB: node says \(String(decoding: f.info.prefix(80), as: UTF8.self).replacingOccurrences(of: "\r", with: " | "))")
+        }
+        let discMark = recorder.frames.count
+        send(AX25FrameBuilder.buildDISC(from: me, to: node))
+        let closed = waitFor(seconds: 8) { fromNode(after: discMark).contains { isAnswer($0.control) } }
+        note("TNC4 USB: DISC \(closed ? "acknowledged" : "not acknowledged")")
+        XCTAssertTrue(closed, "the node never acknowledged DISC")
+    }
+
     // MARK: Helpers
 
     private func serialConfig(_ mobilinkd: MobilinkdConfig?) throws -> SerialConfig {
