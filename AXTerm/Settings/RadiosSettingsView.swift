@@ -308,6 +308,8 @@ struct RadioDetailView: View {
                     Text("Transport")
                 }
 
+                MobilinkdSettingsSections(radioID: radioID, client: client, viewModel: viewModel)
+
                 #if os(macOS)
                 if viewModel.selectedTransport == .modem {
                     // Over Wi-Fi the CI-V port is the network session itself, so
