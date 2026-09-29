@@ -33,6 +33,14 @@ final class MobilinkdTests: XCTestCase {
         XCTAssertEqual(poll, [0xC0, 0x06, 0x06, 0xC0])
     }
 
+    /// A battery poll ends the TNC4's demodulator (the audio task reads the
+    /// battery), and nothing restarts it but RESET, a transmission or a new
+    /// connection. Every poll AXTerm sends carries the RESET with it.
+    func testTheBatteryPollBringsTheReceiverBack() {
+        XCTAssertEqual(MobilinkdTNC.pollBatteryLevelAndResume(),
+                       [0xC0, 0x06, 0x06, 0xC0, 0xC0, 0x06, 0x0B, 0xC0])
+    }
+
     /// The queries AXTerm uses to see what the TNC4 holds before changing it,
     /// with opcodes from the firmware's KissHardware.hpp.
     func testQueryFrames() {

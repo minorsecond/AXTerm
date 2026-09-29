@@ -98,9 +98,28 @@ enum MobilinkdTNC {
     }
     
     /// Generates a frame to request battery level.
+    ///
+    /// On its own this stops the TNC4 receiving: the battery is read by the
+    /// audio task, and any message to that task ends the demodulator, which
+    /// only a RESET, the end of a transmission or a new connection restarts
+    /// (AudioInput.cpp, startAudioInputTask). Use `pollBatteryLevelAndResume()`.
     static func pollBatteryLevel() -> [UInt8] {
         return [KISS_FEND, CMD_HARDWARE, GET_BATTERY_LEVEL, KISS_FEND]
     }
+
+    /// A battery poll followed by RESET in the same write, so the TNC4 goes
+    /// back to decoding once it has read the battery.
+    ///
+    /// AXTerm used to poll the battery five seconds after connecting and
+    /// every minute after that, which left the receiver off until the next
+    /// transmission or the startup watchdog's RESET.
+    static func pollBatteryLevelAndResume() -> [UInt8] {
+        pollBatteryLevel() + reset()
+    }
+
+    /// How often to ask. Each poll stops the demodulator for a moment and a
+    /// battery doesn't move fast, so not often.
+    static let batteryPollInterval: TimeInterval = 300
 
     /// Generates a frame to poll audio input levels (Vpp/Vavg/Vmin/Vmax).
     static func pollInputLevel() -> [UInt8] {

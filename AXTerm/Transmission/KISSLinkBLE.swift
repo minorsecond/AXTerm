@@ -989,11 +989,10 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     private func startBatteryPolling() {
         let timer = DispatchSource.makeTimerSource(queue: bleQueue)
-        timer.schedule(deadline: .now() + 5.0, repeating: 60.0)
+        timer.schedule(deadline: .now() + 5.0, repeating: MobilinkdTNC.batteryPollInterval)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            let frame = MobilinkdTNC.pollBatteryLevel()
-            self.send(Data(frame)) { _ in }
+            self.send(Data(MobilinkdTNC.pollBatteryLevelAndResume())) { _ in }
         }
         timer.resume()
 

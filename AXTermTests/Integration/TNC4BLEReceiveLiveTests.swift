@@ -517,7 +517,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         guard connected else { return }
 
         // Ask for the battery now rather than waiting out the link's own poll.
-        link.send(Data(MobilinkdTNC.pollBatteryLevel())) { error in
+        link.send(Data(MobilinkdTNC.pollBatteryLevelAndResume())) { error in
             if let error { print("TNC4: battery query failed to send: \(error)") }
         }
 

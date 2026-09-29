@@ -597,18 +597,20 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     private func startBatteryPolling() {
         // Prime the CDC data path shortly after connect.
         // Some USB CDC stacks deliver unsolicited RX only after the first host write.
-        // A one-shot battery poll is safe and avoids waiting for user TX.
-        let initialPoll = MobilinkdTNC.pollBatteryLevel()
+        // A one-shot battery poll avoids waiting for user TX. It must carry a
+        // RESET: a bare battery poll stops the TNC4's demodulator.
+        let initialPoll = MobilinkdTNC.pollBatteryLevelAndResume()
         serialQueue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             guard let self else { return }
             self.send(Data(initialPoll)) { _ in }
         }
 
         let timer = DispatchSource.makeTimerSource(queue: serialQueue)
-        timer.schedule(deadline: .now() + 60.0, repeating: 60.0)
+        timer.schedule(deadline: .now() + MobilinkdTNC.batteryPollInterval,
+                       repeating: MobilinkdTNC.batteryPollInterval)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            let frame = MobilinkdTNC.pollBatteryLevel()
+            let frame = MobilinkdTNC.pollBatteryLevelAndResume()
             // Send directly without queuing if possible, or use standard send
             self.send(Data(frame)) { _ in } 
         }
@@ -807,7 +809,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             guard let self else { return }
             let primeData: [UInt8]
             if self.config.mobilinkdConfig != nil {
-                primeData = MobilinkdTNC.pollBatteryLevel()
+                primeData = MobilinkdTNC.pollBatteryLevelAndResume()
             } else {
                 primeData = [0xC0, 0xC0] // Harmless empty KISS frame
             }
