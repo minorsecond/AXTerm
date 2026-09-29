@@ -423,7 +423,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
 
         // 2. Mobilinkd mode with the IC-V8's input gain.
         let wanted: UInt8 = original == 0 ? 2 : 0
-        guard let (link, recorder) = open(MobilinkdConfig(outputGain: 63, inputGain: wanted)) else {
+        guard let (link, recorder) = open(MobilinkdConfig(settings: MobilinkdSettings(outputGain: 63, inputGain: Int(wanted)))) else {
             return XCTFail("Mobilinkd-mode link never connected")
         }
         let applied = inputGain(link, recorder)

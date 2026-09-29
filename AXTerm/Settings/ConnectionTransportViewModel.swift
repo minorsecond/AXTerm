@@ -279,10 +279,7 @@ final class ConnectionTransportViewModel: ObservableObject {
         if port != profile.port { port = profile.port }
 
         if mobilinkdEnabled != profile.mobilinkdEnabled { mobilinkdEnabled = profile.mobilinkdEnabled }
-        let modem = MobilinkdTNC.ModemType(rawValue: UInt8(clamping: profile.mobilinkdModemType)) ?? .afsk1200
-        if mobilinkdModemType != modem { mobilinkdModemType = modem }
-        if mobilinkdInputGain != Double(profile.mobilinkdInputGain) { mobilinkdInputGain = Double(profile.mobilinkdInputGain) }
-        if mobilinkdOutputGain != Double(profile.mobilinkdOutputGain) { mobilinkdOutputGain = Double(profile.mobilinkdOutputGain) }
+        if tnc4 != profile.tnc4 { tnc4 = profile.tnc4 }
 
         if modemMode != profile.modemMode { modemMode = profile.modemMode }
         if audioInputDeviceUID != profile.audioInputDeviceUID { audioInputDeviceUID = profile.audioInputDeviceUID }
@@ -1076,16 +1073,10 @@ final class ConnectionTransportViewModel: ObservableObject {
         didSet { update { $0.mobilinkdEnabled = mobilinkdEnabled } }
     }
 
-    @Published var mobilinkdModemType: MobilinkdTNC.ModemType = .afsk1200 {
-        didSet { update { $0.mobilinkdModemType = Int(mobilinkdModemType.rawValue) } }
-    }
-
-    @Published var mobilinkdInputGain: Double = 0.0 {
-        didSet { update { $0.mobilinkdInputGain = Int(mobilinkdInputGain) } }
-    }
-
-    @Published var mobilinkdOutputGain: Double = 63.0 {
-        didSet { update { $0.mobilinkdOutputGain = Int(mobilinkdOutputGain) } }
+    /// The TNC4 settings this radio manages. An unset field is left as the
+    /// TNC4 has it.
+    @Published var tnc4 = MobilinkdSettings() {
+        didSet { update { $0.tnc4 = tnc4 } }
     }
     
     @Published var mobilinkdBatteryLevel: String = ""

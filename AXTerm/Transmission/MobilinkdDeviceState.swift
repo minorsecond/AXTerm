@@ -51,10 +51,14 @@ nonisolated enum MobilinkdReply: Equatable, Sendable {
         let b = Array(frame)
         guard b.count >= 2, b[0] == MobilinkdTNC.CMD_HARDWARE else { return nil }
         let v = Array(b.dropFirst(2))
-        func u8() -> Int? { v.first.map(Int.init) }
-        func s8() -> Int? { v.first.map { Int(Int8(bitPattern: $0)) } }
-        func u16() -> Int? { v.count >= 2 ? Int(v[0]) << 8 | Int(v[1]) : nil }
-        func flag() -> Bool? { v.first.map { $0 != 0 } }
+        // Exact lengths, as the firmware's reply8/reply16 send them. This is
+        // what keeps another TNC's text answer from reading as a setting:
+        // Direwolf's "TNC:DIREWOLF 1.8" starts with 'T', which is 84, the
+        // RX-polarity code, but carries far more than one byte.
+        func u8() -> Int? { v.count == 1 ? Int(v[0]) : nil }
+        func s8() -> Int? { v.count == 1 ? Int(Int8(bitPattern: v[0])) : nil }
+        func u16() -> Int? { v.count == 2 ? Int(v[0]) << 8 | Int(v[1]) : nil }
+        func flag() -> Bool? { v.count == 1 ? v[0] != 0 : nil }
         func text() -> String? {
             let s = String(decoding: v.prefix { $0 != 0 }, as: UTF8.self)
             return s.isEmpty ? nil : s
@@ -68,16 +72,16 @@ nonisolated enum MobilinkdReply: Equatable, Sendable {
         case 41: return text().map(MobilinkdReply.hardwareVersion)
         case 47: return text().map(MobilinkdReply.serialNumber)
         case 48:
-            guard v.count >= 6 else { return nil }
+            guard v.count == 6 else { return nil }
             return .macAddress(v.prefix(6).map { String(format: "%02X", $0) }.joined(separator: ":"))
         case 12: return u16().map(MobilinkdReply.outputGain)
         case 27: return u8().map(MobilinkdReply.outputTwist)
         case 13: return u16().map(MobilinkdReply.inputGain)
         case 25: return s8().map(MobilinkdReply.inputTwist)
-        case 124: return .inputGainRange(min: u16(), max: nil)
-        case 125: return .inputGainRange(min: nil, max: u16())
-        case 121: return .inputTwistRange(min: s8(), max: nil)
-        case 122: return .inputTwistRange(min: nil, max: s8())
+        case 124: return u16().map { .inputGainRange(min: $0, max: nil) }
+        case 125: return u16().map { .inputGainRange(min: nil, max: $0) }
+        case 121: return s8().map { .inputTwistRange(min: $0, max: nil) }
+        case 122: return s8().map { .inputTwistRange(min: nil, max: $0) }
         case 33: return u8().map { .txDelayMs($0 * 10) }
         case 34: return u8().map(MobilinkdReply.persistence)
         case 35: return u8().map { .slotTimeMs($0 * 10) }
@@ -89,10 +93,10 @@ nonisolated enum MobilinkdReply: Equatable, Sendable {
         case 86: return flag().map(MobilinkdReply.txReversePolarity)
         case 74: return flag().map(MobilinkdReply.usbPowerOn)
         case 76: return flag().map(MobilinkdReply.usbPowerOff)
-        case 49: return MobilinkdTNC.decodeDateTime(v).map(MobilinkdReply.dateTime)
+        case 49: return v.count == 7 ? MobilinkdTNC.decodeDateTime(v).map(MobilinkdReply.dateTime) : nil
         case 51: return text().map(MobilinkdReply.errorMessage)
-        case 4: return MobilinkdTNC.parseInputLevel(frame).map(MobilinkdReply.inputLevel)
-        case 42: return .saved
+        case 4: return v.count == 8 ? MobilinkdTNC.parseInputLevel(frame).map(MobilinkdReply.inputLevel) : nil
+        case 42: return v.count == 1 ? .saved : nil
         case MobilinkdTNC.EXT_CMD_PREFIX:
             guard b.count >= 3 else { return nil }
             let ev = Array(b.dropFirst(3))

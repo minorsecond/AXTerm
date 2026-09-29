@@ -97,7 +97,7 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
         let settings = makeSettings()
         settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 5 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.modemType = 5 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertEqual(before, after,
             "Modem type change must not trigger reconnect")
@@ -107,7 +107,7 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
         let settings = makeSettings()
         settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 200 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.outputGain = 200 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertEqual(before, after,
             "Output gain change must not trigger reconnect")
@@ -116,9 +116,9 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
     func testSnapshotIgnoresMobilinkdInputGainChange() {
         let settings = makeSettings()
         settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 2 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.inputGain = 2 }
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 4 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.inputGain = 4 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertEqual(before, after,
             "Input gain change must not trigger reconnect")
@@ -131,7 +131,7 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         // Change both transport and Mobilinkd fields
         settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .serial; $0.serialDevicePath = "/dev/cu.usbmodem1234" }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 3 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.inputGain = 3 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         // Should be unequal because of the transport field change
         XCTAssertNotEqual(before, after,
@@ -144,9 +144,9 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         // Change ALL Mobilinkd fields
         settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = false }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 9 }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 255 }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 0 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.modemType = 9 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.outputGain = 255 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.inputGain = 0 }
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         XCTAssertEqual(before, after,
             "Changing only Mobilinkd fields must keep snapshots equal")

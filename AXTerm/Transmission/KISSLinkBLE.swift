@@ -381,15 +381,19 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     /// Set while a deaf connection is being dropped on purpose, so the
     /// disconnect that follows reconnects instead of reporting a failure.
     private var reconnectingAfterDeafLink = false
-    /// Re-frames inbound bytes so the session's own replies can be held back.
+    /// Reads a copy of the inbound stream for the session's own replies.
     private var inboundParser = KISSFrameParser()
-    /// One entry per reply the session is owed; see MobilinkdSession.ExpectedReplies.
-    private var expectedReplies = MobilinkdSession.ExpectedReplies()
-    private var levelReader = MobilinkdSession.Reader()
+    /// Replies to the level read, as they arrive.
+    private var levelReport = MobilinkdDeviceState()
     /// What the TNC4 held before this link changed anything.
-    private var levelsFound: MobilinkdSession.Levels?
-    /// What this link set it to.
-    private var levelsApplied: MobilinkdSession.Levels?
+    private var levelsFound: MobilinkdSettings?
+    /// The fields this link set, and what it set them to.
+    private var levelsApplied: MobilinkdSettings?
+
+    /// The settings this radio's profile manages on a TNC4.
+    private var wantedSettings: MobilinkdSettings {
+        config.mobilinkdConfig?.settings ?? MobilinkdSettings()
+    }
 
     // MARK: - Init
 
@@ -598,24 +602,23 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         if old.timing != config.timing {
             sendInitFrames(config.timing.frames(), index: 0) { _ in }
         }
-        guard isMobilinkdPeripheral, old.mobilinkdConfig != config.mobilinkdConfig else { return }
+        let oldWanted = old.mobilinkdConfig?.settings ?? MobilinkdSettings()
+        guard isMobilinkdPeripheral, oldWanted != wantedSettings else { return }
 
-        if let wanted = config.mobilinkdConfig.map(MobilinkdSession.Levels.init) {
-            if let current = levelsApplied ?? levelsFound {
-                sendSessionFrames(MobilinkdSession.frames(toReach: wanted, from: current))
-                levelsApplied = wanted
-            } else {
-                // Mobilinkd mode was just switched on: find out what the TNC4
-                // holds first, so it can be put back later.
-                startLevelRead()
-            }
-            if config.mobilinkdConfig?.isBatteryMonitoringEnabled == true { startBatteryPolling() }
-        } else {
-            // Mobilinkd mode switched off: give the TNC4 its own settings back.
-            sendSessionFrames(MobilinkdSession.restoreFrames(applied: levelsApplied, found: levelsFound))
-            levelsApplied = nil
-            cancelBatteryPolling()
+        guard let found = levelsFound else {
+            // Nothing was read yet (the profile managed nothing until now):
+            // find out what the TNC4 holds first, so it can be put back later.
+            startLevelRead()
+            return
         }
+        // Fields the profile stopped managing go back to what the TNC4 had;
+        // the rest go to the profile's values.
+        let current = found.merging(levelsApplied)
+        let released = found.restricted(to: levelsApplied ?? MobilinkdSettings())
+            .subtracting(wantedSettings)
+        let target = released.merging(wantedSettings)
+        sendSessionFrames(MobilinkdSettings.frames(toReach: target, from: current))
+        levelsApplied = wantedSettings.isEmpty ? nil : wantedSettings
     }
 
     // MARK: - Private: Open
@@ -671,7 +674,6 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         cancelStartupRecoveryWatchdog()
         cancelSessionTimer()
         mobilinkdPhase = .restoring
-        expectedReplies.expect(repliesTo: restore)
         sendInitFrames(restore, index: 0) { [weak self] _ in
             self?.bleQueue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 self?.teardown(reason: reason)
@@ -732,8 +734,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         mobilinkdPhase = .idle
         reconnectingAfterDeafLink = false
         inboundParser.reset()
-        expectedReplies.removeAll()
-        levelReader = MobilinkdSession.Reader()
+        levelReport = MobilinkdDeviceState()
     }
 
     // MARK: - Private: Reconnect
@@ -807,7 +808,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         connectionOpenedAt = Date()
         ongoingNoAX25RecoveryAttempts = 0
 
-        if let mobiConfig = config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
+        if isMobilinkdPeripheral, config.mobilinkdConfig?.isBatteryMonitoringEnabled ?? true {
             startBatteryPolling()
         }
         scheduleStartupRecoveryWatchdogIfNeeded()
@@ -818,7 +819,6 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     private func startProbe() {
         mobilinkdPhase = .probing
         startSessionTimer(after: Self.probeTimeout) { [weak self] in self?.probeTimedOut() }
-        expectedReplies.expect(repliesTo: [MobilinkdSession.probe])
         writeBLE(MobilinkdSession.probe) { _ in }
     }
 
@@ -826,7 +826,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         cancelSessionTimer()
         probeAttempts = 0
         KISSLinkLog.info(endpointDescription, message: "TNC4 answered, firmware \(MobilinkdTNC.parseFirmwareVersion(reply) ?? "?")")
-        if config.mobilinkdConfig != nil {
+        if !wantedSettings.isEmpty || levelsFound != nil {
             startLevelRead()
         } else {
             sendSessionFrames(MobilinkdSession.connectFrames(wanted: nil, found: nil)) { [weak self] in
@@ -862,22 +862,24 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     /// back when the link closes.
     private func startLevelRead() {
         mobilinkdPhase = .readingLevels
-        levelReader = MobilinkdSession.Reader()
+        levelReport = MobilinkdDeviceState()
         startSessionTimer(after: Self.levelReadTimeout) { [weak self] in self?.levelReadTimedOut() }
-        expectedReplies.expect(repliesTo: MobilinkdSession.readRequests)
-        sendInitFrames(MobilinkdSession.readRequests, index: 0) { _ in }
+        writeBLE(MobilinkdSession.readRequest) { _ in }
     }
 
-    private func levelsRead(_ current: MobilinkdSession.Levels) {
+    private func levelsRead(_ current: MobilinkdSettings) {
         cancelSessionTimer()
         // Keep the first reading: after a drop and reconnect the TNC4 still
         // holds what this link set, not what the owner had.
         if levelsFound == nil { levelsFound = current }
-        let wanted = config.mobilinkdConfig.map(MobilinkdSession.Levels.init)
-        levelsApplied = wanted
-        KISSLinkLog.info(endpointDescription, message: "TNC4 held \(current); applying \(wanted.map { "\($0)" } ?? "nothing")")
-        let frames = MobilinkdSession.connectFrames(wanted: wanted, found: current)
-        sendSessionFrames(frames) { [weak self] in
+        let found = levelsFound ?? current
+        // Fields this link set before but the profile no longer manages go
+        // back to what the TNC4 had; the rest go to the profile's values.
+        let released = found.restricted(to: levelsApplied ?? MobilinkdSettings()).subtracting(wantedSettings)
+        let target = released.merging(wantedSettings)
+        levelsApplied = wantedSettings.isEmpty ? nil : wantedSettings
+        KISSLinkLog.info(endpointDescription, message: "TNC4 held \(current); setting \(target)")
+        sendSessionFrames(MobilinkdSession.connectFrames(wanted: target, found: current)) { [weak self] in
             guard let self else { return }
             self.lock.lock()
             let connected = self._state == .connected
@@ -904,7 +906,6 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     private func sendSessionFrames(_ frames: [Data], then completion: (() -> Void)? = nil) {
         guard !frames.isEmpty else { completion?(); return }
         mobilinkdPhase = .applying
-        expectedReplies.expect(repliesTo: frames)
         sendInitFrames(frames, index: 0) { [weak self] _ in
             guard let self else { return }
             if self.mobilinkdPhase == .applying { self.mobilinkdPhase = .idle }
@@ -912,28 +913,19 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         }
     }
 
-    /// Re-frame inbound bytes from a Mobilinkd, holding back replies to the
-    /// session's own questions and acting on them.
-    private func filterMobilinkdInbound(_ data: Data) -> Data {
-        var out = Data()
-        for frame in inboundParser.feedFrames(data) {
-            switch frame.output {
-            case .ax25(let payload):
-                out.append(KISS.encodeFrame(payload: payload, port: frame.port))
-            case .mobilinkdTelemetry(let hardware):
-                if expectedReplies.claim(hardware) {
-                    handleSessionReply(hardware)
-                    continue
-                }
-                out.append(KISS.FEND)
-                out.append((frame.port << 4) | 0x06)
-                out.append(KISS.escape(Data(hardware.dropFirst())))
-                out.append(KISS.FEND)
-            case .unknown:
-                continue
-            }
+    /// Watch a copy of the inbound stream for replies the session is waiting on.
+    ///
+    /// Everything still goes to the delegate untouched. The session used to
+    /// hold its own replies back because PacketEngine wrote any input-gain
+    /// reply into the radio's profile; that writer is gone.
+    private func observeMobilinkdInbound(_ data: Data) {
+        guard mobilinkdPhase == .probing || mobilinkdPhase == .readingLevels else {
+            inboundParser.reset()
+            return
         }
-        return out
+        for frame in inboundParser.feedFrames(data) {
+            if case .mobilinkdTelemetry(let hardware) = frame.output { handleSessionReply(hardware) }
+        }
     }
 
     private func handleSessionReply(_ frame: Data) {
@@ -941,8 +933,8 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         case .probing where MobilinkdSession.isProbeReply(frame):
             probeAnswered(frame)
         case .readingLevels:
-            levelReader.observe(frame)
-            if let levels = levelReader.levels { levelsRead(levels) }
+            if let reply = MobilinkdReply.parse(frame) { levelReport.apply(reply) }
+            if let levels = MobilinkdSettings(reportedBy: levelReport) { levelsRead(levels) }
         default:
             break   // echoes of what the session just set
         }
@@ -1013,7 +1005,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     private func scheduleStartupRecoveryWatchdogIfNeeded() {
         cancelStartupRecoveryWatchdog()
 
-        guard config.mobilinkdConfig != nil else { return }
+        guard isMobilinkdPeripheral else { return }
 
         let noKISSTimer = DispatchSource.makeTimerSource(queue: bleQueue)
         noKISSTimer.schedule(deadline: .now() + Self.startupNoKISSRecoveryDelay)
@@ -1071,7 +1063,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
         let shouldSendReset = startupReceptionGuard.shouldIssueRecoveryReset(
             isConnected: connected,
-            isMobilinkd: config.mobilinkdConfig != nil,
+            isMobilinkd: isMobilinkdPeripheral,
             trigger: trigger
         )
 
@@ -1103,7 +1095,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         let connected = _state == .connected
         lock.unlock()
 
-        guard connected, config.mobilinkdConfig != nil else { return }
+        guard connected, isMobilinkdPeripheral else { return }
 
         if startupReceptionGuard.hasSeenInboundAX25 {
             cancelOngoingNoAX25Recovery()
@@ -1480,12 +1472,9 @@ extension KISSLinkBLE: CBPeripheralDelegate {
             cancelOngoingNoAX25Recovery()
         }
 
-        // A Mobilinkd's stream is re-framed so the session's own replies can
-        // be held back (see MobilinkdSession.isSessionReply).
-        let delivered = isMobilinkdPeripheral ? filterMobilinkdInbound(data) : data
-        guard !delivered.isEmpty else { return }
+        if isMobilinkdPeripheral { observeMobilinkdInbound(data) }
         Task { @MainActor [weak self] in
-            self?.delegate?.linkDidReceive(delivered)
+            self?.delegate?.linkDidReceive(data)
         }
     }
 

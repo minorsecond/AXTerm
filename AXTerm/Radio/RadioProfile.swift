@@ -47,11 +47,12 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     var blePeripheralName: String = ""
     var bleAutoReconnect: Bool = true
 
+    /// Treat a serial TNC as a Mobilinkd. A Bluetooth LE one is recognised
+    /// by its service UUID and needs no switch.
     var mobilinkdEnabled: Bool = false
-    var mobilinkdModemType: Int = 1
-    // TNC4 firmware defaults (KissHardware.hpp init()).
-    var mobilinkdOutputGain: Int = 63
-    var mobilinkdInputGain: Int = 0
+    /// The TNC4 settings this radio manages; unset fields are left as the
+    /// TNC4 has them. See MobilinkdSettings.
+    var tnc4 = MobilinkdSettings()
 
     var capabilities: TNCCapabilities = TNCCapabilities()
 
@@ -206,14 +207,18 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         blePeripheralName = try c.decodeIfPresent(String.self, forKey: .blePeripheralName) ?? ""
         bleAutoReconnect = try c.decodeIfPresent(Bool.self, forKey: .bleAutoReconnect) ?? true
         mobilinkdEnabled = try c.decodeIfPresent(Bool.self, forKey: .mobilinkdEnabled) ?? false
-        mobilinkdModemType = try c.decodeIfPresent(Int.self, forKey: .mobilinkdModemType) ?? 1
-        mobilinkdOutputGain = try c.decodeIfPresent(Int.self, forKey: .mobilinkdOutputGain) ?? 63
-        mobilinkdInputGain = try c.decodeIfPresent(Int.self, forKey: .mobilinkdInputGain) ?? 0
-        // 11 was the old default, labelled as the TNC4's factory value when the
-        // firmware's is 63. It could never have reached a TNC while Mobilinkd
-        // mode was off, and applying it now that the gains are really sent
-        // would leave the transmit audio far too quiet.
-        if !mobilinkdEnabled && mobilinkdOutputGain == 11 { mobilinkdOutputGain = 63 }
+        if let stored = try c.decodeIfPresent(MobilinkdSettings.self, forKey: .tnc4) {
+            tnc4 = stored
+        } else if mobilinkdEnabled {
+            // Written before `tnc4` existed, as three always-set scalars. They
+            // only ever reached a TNC with Mobilinkd mode on, so only then do
+            // they become settings this radio manages.
+            let legacy = try decoder.container(keyedBy: LegacyMobilinkdKeys.self)
+            tnc4 = MobilinkdSettings(
+                outputGain: try legacy.decodeIfPresent(Int.self, forKey: .mobilinkdOutputGain),
+                inputGain: try legacy.decodeIfPresent(Int.self, forKey: .mobilinkdInputGain),
+                modemType: try legacy.decodeIfPresent(Int.self, forKey: .mobilinkdModemType))
+        }
         capabilities = try c.decodeIfPresent(TNCCapabilities.self, forKey: .capabilities) ?? TNCCapabilities()
         kissPort = try c.decodeIfPresent(UInt8.self, forKey: .kissPort) ?? 0
         callsign = try c.decodeIfPresent(String.self, forKey: .callsign) ?? ""
@@ -358,7 +363,9 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
             peripheralUUID: blePeripheralUUID,
             peripheralName: blePeripheralName,
             autoReconnect: bleAutoReconnect,
-            mobilinkdConfig: mobilinkdConfig,
+            // Always passed: the link decides whether the peripheral is a
+            // Mobilinkd from its service UUID.
+            mobilinkdConfig: MobilinkdConfig(settings: tnc4),
             timing: KISSTimingParameters(
                 txDelayMs: txDelayMs,
                 persistence: UInt8(clamping: persistence),
@@ -366,15 +373,15 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
                 txTailMs: txTailMs))
     }
 
-    /// The Mobilinkd settings as the links take them, or nil when the TNC is
-    /// not a TNC4.
+    /// The Mobilinkd settings as a serial link takes them, or nil when the
+    /// serial TNC is not a Mobilinkd.
     var mobilinkdConfig: MobilinkdConfig? {
         guard mobilinkdEnabled else { return nil }
-        return MobilinkdConfig(
-            modemType: MobilinkdTNC.ModemType(rawValue: UInt8(clamping: mobilinkdModemType)) ?? .afsk1200,
-            outputGain: UInt8(clamping: mobilinkdOutputGain),
-            inputGain: UInt8(clamping: mobilinkdInputGain),
-            isBatteryMonitoringEnabled: true)
+        return MobilinkdConfig(settings: tnc4)
+    }
+
+    private enum LegacyMobilinkdKeys: String, CodingKey {
+        case mobilinkdModemType, mobilinkdOutputGain, mobilinkdInputGain
     }
 
     // MARK: Legacy single-connection settings
@@ -418,9 +425,10 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         self.blePeripheralName = blePeripheralName
         self.bleAutoReconnect = bleAutoReconnect
         self.mobilinkdEnabled = mobilinkdEnabled
-        self.mobilinkdModemType = mobilinkdModemType
-        self.mobilinkdOutputGain = mobilinkdOutputGain
-        self.mobilinkdInputGain = mobilinkdInputGain
+        if mobilinkdEnabled {
+            tnc4 = MobilinkdSettings(outputGain: mobilinkdOutputGain, inputGain: mobilinkdInputGain,
+                                     modemType: mobilinkdModemType)
+        }
         self.capabilities = capabilities
     }
 

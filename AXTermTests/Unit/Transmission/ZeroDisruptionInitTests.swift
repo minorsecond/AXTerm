@@ -28,12 +28,7 @@ final class ZeroDisruptionSerialTests: XCTestCase {
         let config = SerialConfig(
             devicePath: "/dev/null",
             baudRate: 115200,
-            mobilinkdConfig: MobilinkdConfig(
-                modemType: .afsk1200,
-                outputGain: 128,
-                inputGain: 4,
-                isBatteryMonitoringEnabled: false
-            )
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 128, inputGain: 4, modemType: 1), isBatteryMonitoringEnabled: false)
         )
         let link = KISSLinkSerial(config: config)
         XCTAssertEqual(link.state, .disconnected)
@@ -64,7 +59,7 @@ final class ZeroDisruptionSerialTests: XCTestCase {
         let newConfig = SerialConfig(
             devicePath: "/dev/null",
             baudRate: 9600,
-            mobilinkdConfig: MobilinkdConfig(modemType: .afsk1200, outputGain: 200, inputGain: 2, isBatteryMonitoringEnabled: true)
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 200, inputGain: 2, modemType: 1), isBatteryMonitoringEnabled: true)
         )
         link.updateConfig(newConfig)
 
@@ -103,7 +98,7 @@ final class ZeroDisruptionSerialTests: XCTestCase {
         let newConfig = SerialConfig(
             devicePath: "/dev/null",
             baudRate: 115200,
-            mobilinkdConfig: MobilinkdConfig(modemType: .afsk1200, outputGain: 255, inputGain: 0, isBatteryMonitoringEnabled: true)
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 255, inputGain: 0, modemType: 1), isBatteryMonitoringEnabled: true)
         )
         link.updateConfig(newConfig)
 
@@ -119,12 +114,12 @@ final class ZeroDisruptionSerialTests: XCTestCase {
         let a = SerialConfig(
             devicePath: "/dev/cu.test",
             baudRate: 115200,
-            mobilinkdConfig: MobilinkdConfig(modemType: .afsk1200, outputGain: 128, inputGain: 4, isBatteryMonitoringEnabled: false)
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 128, inputGain: 4, modemType: 1), isBatteryMonitoringEnabled: false)
         )
         let b = SerialConfig(
             devicePath: "/dev/cu.test",
             baudRate: 115200,
-            mobilinkdConfig: MobilinkdConfig(modemType: .afsk1200, outputGain: 128, inputGain: 4, isBatteryMonitoringEnabled: false)
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 128, inputGain: 4, modemType: 1), isBatteryMonitoringEnabled: false)
         )
         XCTAssertEqual(a, b)
     }
@@ -189,12 +184,7 @@ final class ZeroDisruptionBLETests: XCTestCase {
         let config = BLEConfig(
             peripheralUUID: "00000000-0000-0000-0000-000000000000",
             peripheralName: "TNC4",
-            mobilinkdConfig: MobilinkdConfig(
-                modemType: .afsk1200,
-                outputGain: 128,
-                inputGain: 4,
-                isBatteryMonitoringEnabled: false
-            )
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 128, inputGain: 4, modemType: 1), isBatteryMonitoringEnabled: false)
         )
         let link = KISSLinkBLE(config: config)
         XCTAssertEqual(link.state, .disconnected)
@@ -217,12 +207,12 @@ final class ZeroDisruptionBLETests: XCTestCase {
         let a = BLEConfig(
             peripheralUUID: "AAAA",
             peripheralName: "TNC4",
-            mobilinkdConfig: MobilinkdConfig(modemType: .afsk1200, outputGain: 128, inputGain: 4, isBatteryMonitoringEnabled: false)
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 128, inputGain: 4, modemType: 1), isBatteryMonitoringEnabled: false)
         )
         let b = BLEConfig(
             peripheralUUID: "AAAA",
             peripheralName: "TNC4",
-            mobilinkdConfig: MobilinkdConfig(modemType: .afsk1200, outputGain: 128, inputGain: 4, isBatteryMonitoringEnabled: false)
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 128, inputGain: 4, modemType: 1), isBatteryMonitoringEnabled: false)
         )
         XCTAssertEqual(a, b)
     }

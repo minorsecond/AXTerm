@@ -452,6 +452,8 @@ final class PacketEngine: ObservableObject {
     /// hardware TNCs never do, which is itself the honest answer.
     @Published private(set) var tncIdentity: String?
     @Published var mobilinkdInputLevel: MobilinkdInputLevel?
+    /// What each radio's Mobilinkd has reported about itself, reply by reply.
+    @Published private(set) var mobilinkdDevices: [RadioID: MobilinkdDeviceState] = [:]
 
     @Published var selectedStationCall: String?
     @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
@@ -757,11 +759,7 @@ final class PacketEngine: ObservableObject {
         radio.serialBaudRate = config.baudRate
         radio.serialAutoReconnect = config.autoReconnect
         radio.mobilinkdEnabled = config.mobilinkdConfig != nil
-        if let mobilinkd = config.mobilinkdConfig {
-            radio.mobilinkdModemType = Int(mobilinkd.modemType.rawValue)
-            radio.mobilinkdOutputGain = Int(mobilinkd.outputGain)
-            radio.mobilinkdInputGain = Int(mobilinkd.inputGain)
-        }
+        if let mobilinkd = config.mobilinkdConfig { radio.tnc4 = mobilinkd.settings }
         radio.enabled = true
         radio.archived = false
         connectOverriding(with: radio)
@@ -777,12 +775,7 @@ final class PacketEngine: ObservableObject {
         radio.blePeripheralUUID = config.peripheralUUID
         radio.blePeripheralName = config.peripheralName
         radio.bleAutoReconnect = config.autoReconnect
-        radio.mobilinkdEnabled = config.mobilinkdConfig != nil
-        if let mobilinkd = config.mobilinkdConfig {
-            radio.mobilinkdModemType = Int(mobilinkd.modemType.rawValue)
-            radio.mobilinkdOutputGain = Int(mobilinkd.outputGain)
-            radio.mobilinkdInputGain = Int(mobilinkd.inputGain)
-        }
+        if let mobilinkd = config.mobilinkdConfig { radio.tnc4 = mobilinkd.settings }
         radio.enabled = true
         radio.archived = false
         connectOverriding(with: radio)
@@ -1108,36 +1101,34 @@ final class PacketEngine: ObservableObject {
     /// describe; the link keeps its own regardless.
     private func absorbTelemetry(_ telemetryData: Data, isPrimary: Bool, radios: [RadioID] = []) {
         frameStats.recordFrame(type: "Telemetry", size: telemetryData.count)
-        if let identity = TNCIdentifier.identity(fromTelemetryFrame: telemetryData) {
+        // Mobilinkd first, and strictly: a TNC4's version replies are
+        // printable text behind a printable opcode ("(2.5.14"), which the
+        // name check below would take for a TNC introducing itself. The parse
+        // checks each reply's exact length, so Direwolf's "TNC:..." answer,
+        // whose 'T' is also the RX-polarity opcode, still falls through.
+        if let reply = MobilinkdReply.parse(telemetryData) {
+            for radio in radios { mobilinkdDevices[radio, default: MobilinkdDeviceState()].apply(reply) }
+            switch reply {
+            case .inputLevel(let level):
+                if isPrimary { mobilinkdInputLevel = level }
+            case .batteryMillivolts(let mV):
+                if isPrimary { mobilinkdBatteryLevel = mV }
+            default:
+                break
+            }
+            // An input-gain reply is no longer written into the profile. It
+            // used to be, as the result of the firmware's auto-adjust, which
+            // meant any gain reply at all (the link reading what the TNC4
+            // holds, or restoring it) overwrote the operator's setting.
+            debugTrace("Mobilinkd reply", ["reply": String(describing: reply)])
+        } else if let identity = TNCIdentifier.identity(fromTelemetryFrame: telemetryData) {
             // The TNC answered the hardware query with its name — Direwolf
             // does; this rides the same SetHardware command Mobilinkd
-            // telemetry uses, so it is checked first and everything else
-            // falls through unchanged.
+            // telemetry uses.
             if isPrimary { tncIdentity = identity }
             debugTrace("TNC identified itself", ["identity": identity])
-        } else if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
-            if isPrimary { mobilinkdInputLevel = inputLevel }
-            debugTrace("Mobilinkd InputLevel", [
-                "vpp": inputLevel.vpp, "vavg": inputLevel.vavg,
-                "vmin": inputLevel.vmin, "vmax": inputLevel.vmax
-            ])
-        } else if let battery = MobilinkdTNC.parseBatteryLevel(telemetryData) {
-            if isPrimary { mobilinkdBatteryLevel = battery }
-            debugTrace("Mobilinkd Battery", ["level": battery])
-        } else if let gain = MobilinkdTNC.parseInputGain(telemetryData) {
-            // The TNC4 reports the gain its auto-adjust settled on. Written
-            // to the profile of every radio on this link (a Bluetooth TNC
-            // carries one); `updateRadio` is a no-op when it already agrees.
-            for radio in radios where settings.radio(radio)?.mobilinkdInputGain != gain {
-                settings.updateRadio(radio) { $0.mobilinkdInputGain = gain }
-                debugTrace("Mobilinkd Auto-Gain Updated", ["radio": radio.rawValue, "newGain": gain])
-            }
         } else {
-            // Not "Mobilinkd Telemetry": the Mobilinkd parsers above simply
-            // share KISS SetHardware (0x06) with everything else that rides
-            // it, so naming the unrecognised case after them made a Direwolf
-            // link look like it had a Mobilinkd on it. Say what is true —
-            // a hardware frame nothing here understands.
+            // A hardware frame nothing here understands.
             debugTrace("Unrecognised KISS hardware frame", ["hex": hexPrefix(telemetryData)])
         }
         LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(

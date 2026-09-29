@@ -297,13 +297,12 @@ struct MobilinkdInputLevel: Equatable, Sendable {
     let vmax: UInt16   // Maximum
 }
 
-/// Configuration payload for Mobilinkd TNC4
+/// What a link needs to know to treat its TNC as a Mobilinkd.
 ///
-/// The defaults are the firmware's own (KissHardware.hpp), so a profile that
-/// never touched them asks the TNC4 for nothing it doesn't already have.
+/// On Bluetooth LE the link recognises a Mobilinkd by its service UUID; on
+/// serial the operator says so, and this being non-nil is how.
 struct MobilinkdConfig: Hashable, Sendable {
-    var modemType: MobilinkdTNC.ModemType = .afsk1200
-    var outputGain: UInt8 = 63      // TX Volume (0-255); firmware default
-    var inputGain: UInt8 = 0        // RX gain step (0-4); firmware default
+    /// The TNC4 settings this radio's profile manages.
+    var settings = MobilinkdSettings()
     var isBatteryMonitoringEnabled: Bool = true
 }

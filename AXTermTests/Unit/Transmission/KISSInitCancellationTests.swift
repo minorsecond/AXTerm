@@ -19,12 +19,7 @@ final class KISSInitCancellationTests: XCTestCase {
             devicePath: "/dev/null",  // Won't actually open
             baudRate: 115200,
             autoReconnect: false,
-            mobilinkdConfig: MobilinkdConfig(
-                modemType: .afsk1200,
-                outputGain: 128,
-                inputGain: 4,
-                isBatteryMonitoringEnabled: false
-            )
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 128, inputGain: 4, modemType: 1), isBatteryMonitoringEnabled: false)
         )
 
         let link = KISSLinkSerial(config: config)
@@ -48,12 +43,7 @@ final class KISSInitCancellationTests: XCTestCase {
             peripheralUUID: "00000000-0000-0000-0000-000000000000",
             peripheralName: "TestTNC",
             autoReconnect: false,
-            mobilinkdConfig: MobilinkdConfig(
-                modemType: .afsk1200,
-                outputGain: 128,
-                inputGain: 4,
-                isBatteryMonitoringEnabled: false
-            )
+            mobilinkdConfig: MobilinkdConfig(settings: MobilinkdSettings(outputGain: 128, inputGain: 4, modemType: 1), isBatteryMonitoringEnabled: false)
         )
 
         let link = KISSLinkBLE(config: config)

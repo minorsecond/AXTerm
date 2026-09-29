@@ -111,8 +111,8 @@ final class SettingsObservationTests: XCTestCase {
         settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
 
         engine.isConnectionLogicSuspended = true
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 3 }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 200 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.inputGain = 3 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.outputGain = 200 }
         engine.isConnectionLogicSuspended = false
 
         XCTAssertEqual(engine.status, .disconnected,
@@ -124,7 +124,7 @@ final class SettingsObservationTests: XCTestCase {
         settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
 
         engine.isConnectionLogicSuspended = true
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 5 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.modemType = 5 }
         engine.isConnectionLogicSuspended = false
 
         XCTAssertEqual(engine.status, .disconnected,
@@ -134,16 +134,16 @@ final class SettingsObservationTests: XCTestCase {
     func testResumeWithAllMobilinkdFieldsChangedDoesNotReconnect() {
         let (engine, settings) = makeEngine()
         settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 1 }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 128 }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 4 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.modemType = 1 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.outputGain = 128 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.inputGain = 4 }
 
         engine.isConnectionLogicSuspended = true
         // Change every Mobilinkd field
         settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = false }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 9 }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 255 }
-        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 0 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.modemType = 9 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.outputGain = 255 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.tnc4.inputGain = 0 }
         engine.isConnectionLogicSuspended = false
 
         XCTAssertEqual(engine.status, .disconnected,

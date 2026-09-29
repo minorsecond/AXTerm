@@ -6,9 +6,9 @@ final class MobilinkdSessionTests: XCTestCase {
 
     private let reset = Data([0xC0, 0x06, 0x0B, 0xC0])
 
-    private func levels(out: UInt16 = 63, input: UInt16 = 4, modem: UInt8 = 1) -> MobilinkdSession.Levels {
-        MobilinkdSession.Levels(outputGain: out, inputGain: input, modemType: modem)
-    }
+    /// What the TNC4 in these tests holds: its saved setup for another radio.
+    private let owners = MobilinkdSettings(outputGain: 63, outputTwist: 50, inputGain: 4,
+                                           inputTwist: 3, modemType: 1, pttMultiplex: true)
 
     // MARK: KISS timing
 
@@ -32,15 +32,16 @@ final class MobilinkdSessionTests: XCTestCase {
     /// The BLE link used to send a hardcoded 300 ms whatever the profile said.
     /// The IC-V8 needs about that long just to get on the air, so its packets
     /// went out with almost no preamble.
-    func testABLEProfileCarriesItsOwnTXDelay() {
+    func testABLEProfileCarriesItsOwnTimingAndSettings() {
         var radio = RadioProfile(id: RadioID(), name: "IC-V8")
         radio.kind = .ble
         radio.txDelayMs = 500
-        XCTAssertEqual(radio.bleConfig.timing.txDelayMs, 500)
+        radio.tnc4.inputGain = 0
         XCTAssertEqual(radio.bleConfig.timing.frames()[0], Data([0xC0, 0x01, 50, 0xC0]))
+        XCTAssertEqual(radio.bleConfig.mobilinkdConfig?.settings.inputGain, 0)
     }
 
-    // MARK: Liveness probe
+    // MARK: Liveness probe and level read
 
     func testTheProbeIsAFirmwareVersionQuery() {
         XCTAssertEqual(MobilinkdSession.probe, Data([0xC0, 0x06, 0x28, 0xC0]))
@@ -48,149 +49,121 @@ final class MobilinkdSessionTests: XCTestCase {
         XCTAssertFalse(MobilinkdSession.isProbeReply(Data([0x06, 0x06, 0x10, 0x7A])), "a battery reply is not an answer")
     }
 
-    // MARK: Reading levels
-
-    func testTheReaderNeedsAllThreeAnswers() {
-        var reader = MobilinkdSession.Reader()
-        reader.observe(Data([0x06, 0x0C, 0x00, 0x3F]))
-        reader.observe(Data([0x06, 0x0D, 0x00, 0x04]))
-        XCTAssertNil(reader.levels, "no modem type yet")
-        reader.observe(Data([0x06, 0xC1, 0x81, 0x01]))
-        XCTAssertEqual(reader.levels, levels(out: 63, input: 4, modem: 1))
+    func testTheLevelReadIsOneGetAllValues() {
+        XCTAssertEqual(MobilinkdSession.readRequest, Data([0xC0, 0x06, 0x7F, 0xC0]))
     }
 
-    /// PacketEngine writes any input-gain reply into the radio profile, so the
-    /// link must recognise its own and keep them.
-    func testSessionRepliesAreRecognised() {
-        XCTAssertTrue(MobilinkdSession.isSessionReply(Data([0x06, 0x0D, 0x00, 0x04])))
-        XCTAssertTrue(MobilinkdSession.isSessionReply(Data([0x06, 0x0C, 0x00, 0x3F])))
-        XCTAssertTrue(MobilinkdSession.isSessionReply(Data([0x06, 0xC1, 0x81, 0x01])))
-        XCTAssertTrue(MobilinkdSession.isSessionReply(Data([0x06, 0x28, 0x32])))
-        XCTAssertFalse(MobilinkdSession.isSessionReply(Data([0x06, 0x06, 0x10, 0x7A])), "battery belongs to the app")
-        XCTAssertFalse(MobilinkdSession.isSessionReply(Data([0x06, 0x04, 0, 1, 0, 2, 0, 3, 0, 4])), "levels belong to the app")
+    /// The managed values are known only once every one of them has arrived.
+    func testSettingsAreReadFromTheDeviceReport() {
+        var state = MobilinkdDeviceState()
+        state.outputGain = 63; state.outputTwist = 50; state.inputGain = 4; state.inputTwist = 3; state.modemType = 1
+        XCTAssertNil(MobilinkdSettings(reportedBy: state), "PTT style not in yet")
+        state.pttMultiplex = true
+        XCTAssertEqual(MobilinkdSettings(reportedBy: state), owners)
     }
 
-    // MARK: Holding back the session's own replies
+    // MARK: Applying
 
-    func testEachRequestIsMatchedToTheReplyItDraws() {
-        XCTAssertEqual(MobilinkdSession.replyKey(forRequest: Data(MobilinkdTNC.setInputGain(0))), 0x0D,
-                       "a SET is answered like its GET")
-        XCTAssertEqual(MobilinkdSession.replyKey(forRequest: Data(MobilinkdTNC.getInputGain())), 0x0D)
-        XCTAssertEqual(MobilinkdSession.replyKey(forRequest: Data(MobilinkdTNC.setOutputGain(63))), 0x0C)
-        XCTAssertEqual(MobilinkdSession.replyKey(forRequest: Data(MobilinkdTNC.setModemType(.afsk1200))), 0x81)
-        XCTAssertEqual(MobilinkdSession.replyKey(forRequest: MobilinkdSession.probe), 0x28)
-        XCTAssertNil(MobilinkdSession.replyKey(forRequest: reset), "RESET draws no reply")
-        XCTAssertNil(MobilinkdSession.replyKey(forRequest: Data([0xC0, 0x01, 30, 0xC0])), "nor does KISS timing")
-    }
-
-    func testOnlyAsManyRepliesAsWereAskedForAreHeldBack() {
-        var expected = MobilinkdSession.ExpectedReplies()
-        expected.expect(repliesTo: [Data(MobilinkdTNC.getInputGain())])
-        let reply = Data([0x06, 0x0D, 0x00, 0x04])
-        XCTAssertTrue(expected.claim(reply), "the session's own reply")
-        XCTAssertFalse(expected.claim(reply), "a second one is the app's, e.g. an auto-adjust result")
-    }
-
-    func testARepliesNobodyAskedForGoesThrough() {
-        var expected = MobilinkdSession.ExpectedReplies()
-        expected.expect(repliesTo: [Data(MobilinkdTNC.getOutputGain())])
-        XCTAssertFalse(expected.claim(Data([0x06, 0x0D, 0x00, 0x04])), "asked for output gain, not input")
-        XCTAssertFalse(expected.claim(Data([0x06, 0x06, 0x10, 0x7A])), "battery is never the session's")
-    }
-
-    /// A reply the TNC4 never sent must not swallow the app's later one.
-    func testExpectationsExpire() {
-        var expected = MobilinkdSession.ExpectedReplies()
-        let t0 = Date()
-        expected.expect(repliesTo: [Data(MobilinkdTNC.getInputGain())], now: t0)
-        XCTAssertFalse(expected.claim(Data([0x06, 0x0D, 0x00, 0x04]),
-                                      now: t0.addingTimeInterval(MobilinkdSession.ExpectedReplies.lifetime + 1)))
-    }
-
-    // MARK: Applying and restoring
-
-    func testNothingIsSentWhenTheTNCAlreadyAgrees() {
-        XCTAssertEqual(MobilinkdSession.frames(toReach: levels(), from: levels()), [])
+    func testNothingIsSentForFieldsTheProfileLeavesAlone() {
+        XCTAssertEqual(MobilinkdSettings.frames(toReach: MobilinkdSettings(), from: owners), [])
     }
 
     func testOnlyWhatDiffersIsSent() {
-        XCTAssertEqual(MobilinkdSession.frames(toReach: levels(out: 50), from: levels(out: 63)),
-                       [Data(MobilinkdTNC.setOutputGain(50))],
-                       "an output change alone needs no RESET")
+        XCTAssertEqual(MobilinkdSettings.frames(toReach: MobilinkdSettings(outputGain: 50), from: owners),
+                       [Data(MobilinkdTNC.setOutputGain(50))], "an output change alone needs no RESET")
+        XCTAssertEqual(MobilinkdSettings.frames(toReach: MobilinkdSettings(outputGain: 63), from: owners), [],
+                       "already there")
     }
 
-    /// Setting input gain leaves the TNC4 streaming levels, so RESET follows.
-    func testAnInputGainChangeEndsWithReset() {
-        XCTAssertEqual(MobilinkdSession.frames(toReach: levels(input: 0), from: levels(input: 4)),
+    /// Input gain and twist changes leave the TNC4 streaming levels.
+    func testInputChangesEndWithReset() {
+        XCTAssertEqual(MobilinkdSettings.frames(toReach: MobilinkdSettings(inputGain: 0), from: owners),
                        [Data(MobilinkdTNC.setInputGain(0)), reset])
+        XCTAssertEqual(MobilinkdSettings.frames(toReach: MobilinkdSettings(inputTwist: 6), from: owners).last, reset)
     }
 
-    func testModemTypeGoesFirst() {
-        let frames = MobilinkdSession.frames(toReach: levels(out: 50, input: 0, modem: 3), from: levels())
-        XCTAssertEqual(frames.first, Data(MobilinkdTNC.setModemType(.fsk9600)))
-        XCTAssertEqual(frames.last, reset)
-        XCTAssertEqual(frames.count, 4)
+    func testModemTypeGoesFirstAndPTTNeedsNoReset() {
+        let frames = MobilinkdSettings.frames(
+            toReach: MobilinkdSettings(outputTwist: 40, modemType: 3, pttMultiplex: false), from: owners)
+        XCTAssertEqual(frames, [Data(MobilinkdTNC.setModemType(.fsk9600)),
+                                Data(MobilinkdTNC.setPTTMultiplex(false)),
+                                Data(MobilinkdTNC.setOutputTwist(40)),
+                                reset])
+    }
+
+    /// The firmware accepts 1200, 9600 and M17 only. An unknown type is never
+    /// sent, and nothing restarts for a change that wasn't made.
+    func testAnUnknownModemTypeIsNotSent() {
+        XCTAssertEqual(MobilinkdSettings.frames(toReach: MobilinkdSettings(modemType: 2), from: owners), [])
     }
 
     /// Connecting always restarts the demodulator. On 2026-09-29 a TNC4 that
     /// had just connected passed up nothing until it did.
     func testConnectingAlwaysEndsWithOneReset() {
         XCTAssertEqual(MobilinkdSession.connectFrames(wanted: nil, found: nil), [reset])
-        XCTAssertEqual(MobilinkdSession.connectFrames(wanted: levels(), found: levels()), [reset])
-        let frames = MobilinkdSession.connectFrames(wanted: levels(input: 0), found: levels(input: 4))
-        XCTAssertEqual(frames.filter { $0 == reset }.count, 1, "no doubled RESET")
-        XCTAssertEqual(frames.last, reset)
+        XCTAssertEqual(MobilinkdSession.connectFrames(wanted: MobilinkdSettings(), found: owners), [reset])
+        let frames = MobilinkdSession.connectFrames(wanted: MobilinkdSettings(inputGain: 0), found: owners)
+        XCTAssertEqual(frames, [Data(MobilinkdTNC.setInputGain(0)), reset], "no doubled RESET")
     }
 
+    // MARK: Restoring
+
     /// The point of the whole exercise: a TNC4 shared with another radio goes
-    /// back to its owner's settings when AXTerm lets go of it.
-    func testRestoringPutsBackWhatWasFound() {
-        let found = levels(out: 63, input: 4, modem: 1)
-        let applied = levels(out: 63, input: 0, modem: 1)
-        XCTAssertEqual(MobilinkdSession.restoreFrames(applied: applied, found: found),
+    /// back to its owner's settings when AXTerm lets go of it, and only the
+    /// fields AXTerm touched are written.
+    func testRestoringPutsBackOnlyWhatWasChanged() {
+        let applied = MobilinkdSettings(inputGain: 0)
+        XCTAssertEqual(MobilinkdSession.restoreFrames(applied: applied, found: owners),
                        [Data(MobilinkdTNC.setInputGain(4)), reset])
     }
 
     func testNothingToRestoreWhenNothingWasChanged() {
-        XCTAssertEqual(MobilinkdSession.restoreFrames(applied: levels(), found: levels()), [])
-        XCTAssertEqual(MobilinkdSession.restoreFrames(applied: nil, found: levels()), [])
-        XCTAssertEqual(MobilinkdSession.restoreFrames(applied: levels(), found: nil), [],
+        XCTAssertEqual(MobilinkdSession.restoreFrames(applied: nil, found: owners), [])
+        XCTAssertEqual(MobilinkdSession.restoreFrames(applied: MobilinkdSettings(inputGain: 4), found: owners), [],
+                       "set to what it already had")
+        XCTAssertEqual(MobilinkdSession.restoreFrames(applied: MobilinkdSettings(inputGain: 0), found: nil), [],
                        "without knowing what it held, there is nothing to go back to")
     }
 
-    /// The firmware accepts 1200, 9600 and M17 only, and so does the enum.
-    /// An unknown type in `found` must not produce a frame.
-    func testAnUnknownModemTypeIsNotSent() {
-        XCTAssertEqual(MobilinkdSession.frames(toReach: levels(modem: 2), from: levels(modem: 1)), [])
+    // MARK: Combining
+
+    func testMergingAndSubtracting() {
+        let a = MobilinkdSettings(outputGain: 63, inputGain: 4)
+        XCTAssertEqual(a.merging(MobilinkdSettings(inputGain: 0)), MobilinkdSettings(outputGain: 63, inputGain: 0))
+        XCTAssertEqual(a.subtracting(MobilinkdSettings(inputGain: 0)), MobilinkdSettings(outputGain: 63))
+        XCTAssertEqual(owners.restricted(to: MobilinkdSettings(inputGain: 0)), MobilinkdSettings(inputGain: 4))
     }
 }
 
-/// Profiles written before the gains were actually sent to the TNC.
-final class MobilinkdProfileDefaultsTests: XCTestCase {
+/// Profiles written before `tnc4` existed.
+final class MobilinkdProfileMigrationTests: XCTestCase {
 
     private func decode(_ json: String) throws -> RadioProfile {
         try JSONDecoder().decode(RadioProfile.self, from: Data(json.utf8))
     }
 
-    func testDefaultsMatchTheFirmware() {
-        let radio = RadioProfile(id: RadioID(), name: "TNC4")
-        XCTAssertEqual(radio.mobilinkdOutputGain, 63)
-        XCTAssertEqual(radio.mobilinkdInputGain, 0)
-        XCTAssertEqual(MobilinkdConfig().outputGain, 63)
-        XCTAssertEqual(MobilinkdConfig().inputGain, 0)
+    func testANewProfileManagesNothing() {
+        XCTAssertTrue(RadioProfile(id: RadioID(), name: "TNC4").tnc4.isEmpty)
     }
 
-    /// 11 was the old default. It never reached a TNC with Mobilinkd mode off,
-    /// and applying it now would make transmit audio far too quiet.
-    func testTheOldBogusOutputDefaultIsReplaced() throws {
-        let radio = try decode(#"{"id":"r1","name":"A","kind":"ble","mobilinkdEnabled":false,"mobilinkdOutputGain":11}"#)
-        XCTAssertEqual(radio.mobilinkdOutputGain, 63)
+    /// With Mobilinkd mode off the old scalars never reached a TNC, so they
+    /// don't become settings (the old output default of 11 would have made
+    /// transmit audio far too quiet).
+    func testOldScalarsWithMobilinkdOffAreDropped() throws {
+        let radio = try decode(#"{"id":"r1","kind":"ble","mobilinkdEnabled":false,"mobilinkdOutputGain":11,"mobilinkdInputGain":0}"#)
+        XCTAssertTrue(radio.tnc4.isEmpty)
     }
 
-    /// With Mobilinkd mode on, 11 may be what the operator chose. Leave it.
-    func testAChosenOutputGainIsKept() throws {
-        let radio = try decode(#"{"id":"r1","name":"A","kind":"ble","mobilinkdEnabled":true,"mobilinkdOutputGain":11}"#)
-        XCTAssertEqual(radio.mobilinkdOutputGain, 11)
+    func testOldScalarsWithMobilinkdOnAreKept() throws {
+        let radio = try decode(#"{"id":"r1","kind":"serial","mobilinkdEnabled":true,"mobilinkdOutputGain":40,"mobilinkdInputGain":2,"mobilinkdModemType":1}"#)
+        XCTAssertEqual(radio.tnc4, MobilinkdSettings(outputGain: 40, inputGain: 2, modemType: 1))
+    }
+
+    func testTNC4SettingsSurviveJSON() throws {
+        var radio = RadioProfile(id: RadioID(rawValue: "r1"), name: "IC-V8")
+        radio.tnc4 = MobilinkdSettings(outputGain: 63, inputGain: 0, pttMultiplex: true)
+        let back = try JSONDecoder().decode(RadioProfile.self, from: JSONEncoder().encode(radio))
+        XCTAssertEqual(back.tnc4, radio.tnc4)
     }
 }
 
@@ -208,5 +181,23 @@ final class MobilinkdStartupReceptionGuardChunkTests: XCTestCase {
         guardian.observeInboundChunk(chunk)
         XCTAssertTrue(guardian.hasSeenInboundKISSFrame)
         XCTAssertTrue(guardian.hasSeenInboundAX25)
+    }
+}
+
+/// A TNC4 reply and another TNC's name share the SetHardware command.
+final class MobilinkdReplyVersusTNCNameTests: XCTestCase {
+
+    /// "(2.5.14" is the TNC4's firmware version behind a printable opcode.
+    /// It must read as a version, not as a TNC naming itself.
+    func testATNC4VersionIsNotATNCName() {
+        let frame = Data([0x06, 0x28] + Array("2.5.14".utf8))
+        XCTAssertEqual(MobilinkdReply.parse(frame), .firmwareVersion("2.5.14"))
+    }
+
+    /// Direwolf's answer starts with 'T' (84, the RX-polarity code) but is
+    /// far longer than a one-byte flag, so it stays a name.
+    func testDirewolfsAnswerIsNotAPolarityReply() {
+        XCTAssertNil(MobilinkdReply.parse(Data([0x06] + Array("TNC:DIREWOLF 1.8".utf8))))
+        XCTAssertNil(MobilinkdReply.parse(Data([0x06] + Array("DIREWOLF 1.8".utf8))))
     }
 }
