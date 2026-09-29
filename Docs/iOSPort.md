@@ -106,7 +106,10 @@ camera — stays in one coordinator that neither platform reimplements.
 ### Transport on iOS
 
 `KISSLinkNetwork` (NWConnection) works as-is against Direwolf or LinBPQ over
-WiFi. A handheld TNC over Bluetooth is not yet implemented.
+WiFi. `KISSLinkBLE` builds for iOS too, and the target carries the Bluetooth
+usage string it needs (added 2026-09-29), but it hasn't been tried on a device.
+It runs in the foreground only; there is no background Bluetooth mode. See
+`Docs/MobilinkdTNC4.md`.
 
 ---
 
