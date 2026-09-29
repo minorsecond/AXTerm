@@ -166,7 +166,60 @@ final class TNC4SerialLiveTests: XCTestCase {
         XCTAssertGreaterThan(packets, 0)
     }
 
+    /// THIS ONE TRANSMITS: a three-second test tone, with the output level
+    /// changed while it plays. Needs TEST_RUNNER_AXTERM_TNC4_TX=1 as well.
+    func testSerialTestTone() throws {
+        guard env["AXTERM_TNC4_TX"] == "1" else { throw XCTSkip("Set TEST_RUNNER_AXTERM_TNC4_TX=1 to transmit") }
+        let seconds = Double(env["AXTERM_TNC4_TONE_SECONDS"] ?? "") ?? 3
+        var config = try serialConfig(MobilinkdConfig())
+        let recorder = SerialRecorder()
+        let link = KISSLinkSerial(config: config)
+        link.delegate = recorder
+        link.open()
+        defer { closeAndWait(link) }
+        XCTAssertTrue(waitFor(seconds: 30) { link.state == .connected }, "never connected")
+        guard link.state == .connected else { return }
+        _ = waitFor(seconds: 2) { false }
+
+        let start = Date()
+        link.startTestTone(.both, for: seconds)
+        note(String(format: "TNC4 USB: tone on at %.2f", start.timeIntervalSince1970))
+        _ = waitFor(seconds: 0.2) { false }
+        XCTAssertEqual(link.mobilinkdActivity, .sendingTone(.both))
+        // The output level moves while the tone plays; the firmware keeps the
+        // tone going through gain changes.
+        for gain in [50, 63] {
+            _ = waitFor(seconds: seconds / 3) { false }
+            config.mobilinkdConfig = MobilinkdConfig(settings: MobilinkdSettings(outputGain: gain))
+            link.updateConfig(config)
+            note(String(format: "TNC4 USB: output gain %d at +%.2f s", gain, Date().timeIntervalSince(start)))
+        }
+        let stopped = waitFor(seconds: seconds + 2) { link.mobilinkdActivity == .idle }
+        note(String(format: "TNC4 USB: tone %@ at +%.2f s", stopped ? "stopped" : "STILL ON", Date().timeIntervalSince(start)))
+        XCTAssertTrue(stopped, "the tone did not stop on its own")
+
+        let mark = recorder.frames.count
+        let listen = Double(env["AXTERM_TNC4_LISTEN_SECONDS"] ?? "") ?? 45
+        _ = waitFor(seconds: listen) { false }
+        let packets = decoded(recorder, after: mark).count
+        note("TNC4 USB: after the tone, still \(link.state.rawValue), \(packets) packets in \(Int(listen)) s, "
+            + "output gain now \(outputGain(link, recorder).map(String.init) ?? "?")")
+        XCTAssertEqual(link.state, .connected)
+    }
+
     // MARK: Helpers
+
+    private func serialConfig(_ mobilinkd: MobilinkdConfig?) throws -> SerialConfig {
+        SerialConfig(devicePath: try port(), autoReconnect: false, mobilinkdConfig: mobilinkd,
+                     timing: KISSTimingParameters(txDelayMs: 500))
+    }
+
+    private func outputGain(_ link: KISSLinkSerial, _ recorder: SerialRecorder) -> Int? {
+        let mark = recorder.frames.count
+        link.send(Data(MobilinkdTNC.getOutputGain())) { _ in }
+        _ = waitFor(seconds: 3) { recorder.frames.dropFirst(mark).contains { MobilinkdTNC.parseOutputGain($0) != nil } }
+        return recorder.frames.dropFirst(mark).compactMap(MobilinkdTNC.parseOutputGain).last
+    }
 
     private func port() throws -> String {
         if let p = env["AXTERM_TNC4_PORT"] { return p }
