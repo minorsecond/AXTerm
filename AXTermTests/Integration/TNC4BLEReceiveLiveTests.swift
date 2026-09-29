@@ -113,7 +113,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
             autoReconnect: false, mobilinkdConfig: MobilinkdConfig()))
         link.delegate = recorder
         link.open()
-        defer { link.close() }
+        defer { closeAndWait(link) }
         XCTAssertTrue(waitFor(seconds: 30) { link.state == .connected }, "never reached .connected over BLE")
         guard link.state == .connected else { return }
 
@@ -141,7 +141,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
             autoReconnect: false, mobilinkdConfig: MobilinkdConfig()))
         link.delegate = recorder
         link.open()
-        defer { link.close() }
+        defer { closeAndWait(link) }
         XCTAssertTrue(waitFor(seconds: 30) { link.state == .connected }, "never reached .connected over BLE")
         guard link.state == .connected else { return }
 
@@ -199,7 +199,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         // A live link first (a deaf one can't hear the digipeats), with any
         // output and input gain from the environment applied, unsaved.
         let (link, recorder) = try openLiveLink()
-        defer { link.close() }
+        defer { closeAndWait(link) }
 
         // Optional TX delay in ms, as a standard KISS TXDELAY frame (10 ms
         // units). The TNC4 keeps it in working memory only, like the gain.
@@ -264,7 +264,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         }()
 
         let (link, recorder) = try openLiveLink()
-        defer { link.close() }
+        defer { closeAndWait(link) }
 
         func send(_ frame: OutboundFrame) {
             link.send(KISS.encodeFrame(payload: frame.encodeAX25(), port: 0)) { _ in }
@@ -341,7 +341,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         }
         let (call, ssid) = CallsignNormalizer.parse(env["AXTERM_TNC4_TX_CALL"] ?? "K0EPI-2")
         let (link, recorder) = try openLiveLink()
-        defer { link.close() }
+        defer { closeAndWait(link) }
 
         let poll = Data(MobilinkdTNC.pollInputLevel())
         for _ in 0..<3 { link.send(poll) { _ in }; _ = waitFor(seconds: 0.6) { false } }
@@ -449,7 +449,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
             peripheralUUID: device.id.uuidString, peripheralName: device.name, autoReconnect: false))
         link.delegate = recorder
         link.open()
-        defer { link.close() }
+        defer { closeAndWait(link) }
         XCTAssertTrue(waitFor(seconds: 45) { link.state == .connected }, "never connected")
         guard link.state == .connected else { return }
         XCTAssertTrue(link.isMobilinkd)
@@ -465,7 +465,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         // 1. Status.
         var mark = recorder.snapshot().frames.count
         link.refreshMobilinkdStatus()
-        _ = waitFor(seconds: 4) { report(after: mark).txReversePolarity != nil }
+        _ = waitFor(seconds: 6) { report(after: mark).txReversePolarity != nil && report(after: mark).batteryMillivolts != nil }
         let status = report(after: mark)
         note("TNC4 status: \(status.hardwareVersion ?? "?") fw \(status.firmwareVersion ?? "?") "
             + "serial \(status.serialNumber ?? "?") battery \(status.batteryMillivolts.map(String.init) ?? "?") mV "
@@ -509,7 +509,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         let link = KISSLinkBLE(config: config)
         link.delegate = recorder
         link.open()
-        defer { link.close() }
+        defer { closeAndWait(link) }
         XCTAssertTrue(waitFor(seconds: 45) { link.state == .connected }, "never connected")
         guard link.state == .connected else { return }
         _ = waitFor(seconds: 2) { false }
@@ -617,7 +617,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
             mobilinkdConfig: MobilinkdConfig()))
         link.delegate = recorder
         link.open()
-        defer { link.close() }
+        defer { closeAndWait(link) }
 
         let connected = waitFor(seconds: 30) { link.state == .connected }
         let s0 = recorder.snapshot()
@@ -673,6 +673,15 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         note("TNC4: bluetooth state \(scanner.bluetoothState.rawValue), "
             + "saw \(scanner.devices.map(\.displayName))")
         return try XCTUnwrap(found, "no BLE peripheral advertising the Mobilinkd service")
+    }
+
+    /// Close and give the link time to put the TNC4's own settings back
+    /// before the test process moves on. Without this the restore writes
+    /// never left, and the TNC4 kept the test's settings.
+    private func closeAndWait(_ link: KISSLinkBLE) {
+        link.close()
+        _ = waitFor(seconds: 4) { link.state == .disconnected }
+        _ = waitFor(seconds: 1) { false }
     }
 
     /// Spin the main run loop until the condition holds or time runs out.

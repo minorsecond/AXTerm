@@ -106,9 +106,9 @@ enum MobilinkdTNC {
 
     /// Every setting, version and capability in one burst of replies.
     ///
-    /// Like a battery poll, this stops the demodulator (the firmware queues a
-    /// battery and twist measurement on the audio task, then IDLE). Follow it
-    /// with `reset()`.
+    /// AXTerm doesn't send this. It queues a battery and a twist measurement
+    /// on the audio task, and on firmware 2.5.14 that has left the TNC4 hung
+    /// until it rebooted. See MobilinkdSession.statusRequests.
     static func getAllValues() -> [UInt8] { hw(127) }
 
     /// Input levels as a stream of `[06 04 Vpp Vavg Vmin Vmax]` replies until
@@ -134,6 +134,19 @@ enum MobilinkdTNC {
     /// (a separate PTT line). The firmware sends no reply to this one.
     static func setPTTMultiplex(_ multiplex: Bool) -> [UInt8] { hw(79, [multiplex ? 1 : 0]) }
     static func getPTTChannel() -> [UInt8] { hw(80) }
+    static func getOutputTwist() -> [UInt8] { hw(27) }
+    static func getHardwareVersion() -> [UInt8] { hw(41) }
+    static func getSerialNumber() -> [UInt8] { hw(47) }
+    static func getCapabilities() -> [UInt8] { hw(126) }
+    static func getPassall() -> [UInt8] { hw(82) }
+    static func getRxReversePolarity() -> [UInt8] { hw(84) }
+    static func getTxReversePolarity() -> [UInt8] { hw(86) }
+    static func getUSBPowerOn() -> [UInt8] { hw(74) }
+    static func getUSBPowerOff() -> [UInt8] { hw(76) }
+    /// GET_TXDELAY (33), GET_PERSIST (34), GET_TIMESLOT (35), GET_TXTAIL (36).
+    static func getTimingValue(_ code: UInt8) -> [UInt8] { hw(code) }
+    static func getModemTypes() -> [UInt8] { [KISS_FEND, CMD_HARDWARE, EXT_CMD_PREFIX, EXT_GET_MODEM_TYPES, KISS_FEND] }
+    static func getInputTwist() -> [UInt8] { hw(25) }
 
     static func setPassall(_ on: Bool) -> [UInt8] { hw(81, [on ? 1 : 0]) }
     static func setRxReversePolarity(_ on: Bool) -> [UInt8] { hw(83, [on ? 1 : 0]) }

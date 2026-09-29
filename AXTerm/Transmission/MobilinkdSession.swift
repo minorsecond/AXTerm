@@ -53,9 +53,44 @@ nonisolated enum MobilinkdSession {
 
     // MARK: Reading what the TNC4 holds
 
-    /// One GET_ALL_VALUES brings every managed setting back. It stops the
-    /// demodulator, which is fine: `connectFrames` always ends with RESET.
-    static let readRequest = Data(MobilinkdTNC.getAllValues())
+    /// Individual queries for the managed settings.
+    ///
+    /// Not GET_ALL_VALUES: that also queues a battery and twist measurement on
+    /// the TNC4's audio task. Sent just after a reconnect, while the task was
+    /// still settling from the last gain change, it went unanswered and the
+    /// TNC4 rebooted (2026-09-29). These are answered by the KISS task alone.
+    static let readRequests: [Data] = [
+        Data(MobilinkdTNC.getOutputGain()),
+        Data(MobilinkdTNC.getOutputTwist()),
+        Data(MobilinkdTNC.getInputGain()),
+        Data(MobilinkdTNC.getInputTwist()),
+        Data(MobilinkdTNC.getModemType()),
+        Data(MobilinkdTNC.getPTTChannel()),
+    ]
+
+    /// Everything the settings page shows, as individual queries the TNC4
+    /// answers from its KISS task, then the battery.
+    ///
+    /// Not GET_ALL_VALUES. That queues a battery and a twist measurement on the
+    /// audio task, and the twist measurement waits for samples with no
+    /// timeout. On 2026-09-29, sent right after connecting, the TNC4 answered
+    /// its first line and then stopped. It rebooted seconds later, when the
+    /// audio queue (depth 8) filled and the next post blocked the task that
+    /// handles commands. The battery is the one reading that needs the audio
+    /// task, so it goes last, alone, with the RESET that restarts the
+    /// demodulator after it.
+    static let statusRequests: [Data] = [
+        Data(MobilinkdTNC.getHardwareVersion()),
+        Data(MobilinkdTNC.getFirmwareVersion()),
+        Data(MobilinkdTNC.getSerialNumber()),
+        Data(MobilinkdTNC.getCapabilities()),
+        Data(MobilinkdTNC.getModemTypes()),
+        Data(MobilinkdTNC.getTimingValue(33)), Data(MobilinkdTNC.getTimingValue(34)),
+        Data(MobilinkdTNC.getTimingValue(35)), Data(MobilinkdTNC.getTimingValue(36)),
+        Data(MobilinkdTNC.getPassall()),
+        Data(MobilinkdTNC.getRxReversePolarity()), Data(MobilinkdTNC.getTxReversePolarity()),
+        Data(MobilinkdTNC.getUSBPowerOn()), Data(MobilinkdTNC.getUSBPowerOff()),
+    ] + readRequests + [Data(MobilinkdTNC.pollBatteryLevelAndResume())]
 
     // MARK: Changing it
 

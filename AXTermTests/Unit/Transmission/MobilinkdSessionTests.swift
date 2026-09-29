@@ -49,8 +49,14 @@ final class MobilinkdSessionTests: XCTestCase {
         XCTAssertFalse(MobilinkdSession.isProbeReply(Data([0x06, 0x06, 0x10, 0x7A])), "a battery reply is not an answer")
     }
 
-    func testTheLevelReadIsOneGetAllValues() {
-        XCTAssertEqual(MobilinkdSession.readRequest, Data([0xC0, 0x06, 0x7F, 0xC0]))
+    /// Individual queries, none of which touch the TNC4's audio task.
+    func testTheLevelReadIsSixQueries() {
+        XCTAssertEqual(MobilinkdSession.readRequests, [
+            Data([0xC0, 0x06, 0x0C, 0xC0]), Data([0xC0, 0x06, 0x1B, 0xC0]),
+            Data([0xC0, 0x06, 0x0D, 0xC0]), Data([0xC0, 0x06, 0x19, 0xC0]),
+            Data([0xC0, 0x06, 0xC1, 0x81, 0xC0]), Data([0xC0, 0x06, 0x50, 0xC0]),
+        ])
+        XCTAssertFalse(MobilinkdSession.readRequests.contains(Data(MobilinkdTNC.getAllValues())))
     }
 
     /// The managed values are known only once every one of them has arrived.

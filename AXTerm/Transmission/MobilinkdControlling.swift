@@ -46,7 +46,8 @@ protocol MobilinkdControlling: AnyObject {
     var isMobilinkd: Bool { get }
     var mobilinkdActivity: MobilinkdActivity { get }
 
-    /// Ask for every setting, version and the battery (GET_ALL_VALUES), then RESET.
+    /// Ask for every setting, version and the battery, one query at a time
+    /// (see MobilinkdSession.statusRequests for why not GET_ALL_VALUES).
     func refreshMobilinkdStatus()
 
     /// Stream input levels until `stopMeasuringInput`, or two minutes at most.
