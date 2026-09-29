@@ -161,6 +161,18 @@ up, then run "Find the right gain", which keeps the lowest gain that still
 fills the range. At volume 3 it chose gain 3, so volume 3 is too low for
 gain 0.
 
+### Compared with an ID-50
+
+The same TNC4 on an Icom ID-50 (volume 10, input gain 0), with the same
+test: while transmitting, the input sat quiet near centre, and by +1.5 s it
+was back to normal noise, centred, with nothing pinned and no drift. Two node
+handshakes in a row caught every reply, including the UA that comes straight
+after AXTerm's own transmission: SABM and UA, the welcome, the RR, then DISC
+and UA. So the jolt comes from the IC-V8 or its cable, not from the TNC4.
+
+On the ID-50, volume 10 clips at the TNC4's gain 4 and gives a clean level
+at gain 0.
+
 ### TX delay
 
 The IC-V8 takes about 300 ms to get on the air after PTT. At the TNC4's default
