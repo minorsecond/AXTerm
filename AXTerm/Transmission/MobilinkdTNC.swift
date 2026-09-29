@@ -31,6 +31,7 @@ enum MobilinkdTNC {
     static let EXT_CMD_PREFIX: UInt8 = 0xC1
     static let EXT_GET_MODEM_TYPE: UInt8 = 0x81
     static let EXT_SET_MODEM_TYPE: UInt8 = 0x82
+    static let EXT_GET_MODEM_TYPES: UInt8 = 0x83  // Lists the types this firmware accepts
 
     // None of the SET commands above is written to the TNC4's flash. The
     // firmware stores settings only on SAVE_EEPROM_SETTINGS (42), which AXTerm
@@ -95,6 +96,83 @@ enum MobilinkdTNC {
 
     static func getFirmwareVersion() -> [UInt8] {
         [KISS_FEND, CMD_HARDWARE, GET_FIRMWARE_VERSION, KISS_FEND]
+    }
+
+    // MARK: Configuration (opcodes from KissHardware.hpp)
+
+    private static func hw(_ code: UInt8, _ args: [UInt8] = []) -> [UInt8] {
+        [KISS_FEND, CMD_HARDWARE, code] + args + [KISS_FEND]
+    }
+
+    /// Every setting, version and capability in one burst of replies.
+    ///
+    /// Like a battery poll, this stops the demodulator (the firmware queues a
+    /// battery and twist measurement on the audio task, then IDLE). Follow it
+    /// with `reset()`.
+    static func getAllValues() -> [UInt8] { hw(127) }
+
+    /// Input levels as a stream of `[06 04 Vpp Vavg Vmin Vmax]` replies until
+    /// another audio command arrives. The demodulator is off while streaming;
+    /// end with `reset()` to get back to packets.
+    static func streamInputLevel() -> [UInt8] { hw(5) }
+
+    /// Test tones. These key the radio and keep it keyed until `stopTX()` or
+    /// any hardware command other than an output gain or twist change.
+    static func sendMark() -> [UInt8] { hw(7) }
+    static func sendSpace() -> [UInt8] { hw(8) }
+    static func sendBoth() -> [UInt8] { hw(9) }
+    static func stopTX() -> [UInt8] { hw(10) }
+
+    /// Input twist in dB, -3...9 on the TNC4. Starts a level stream, so
+    /// follow with `reset()`.
+    static func setInputTwist(_ dB: Int) -> [UInt8] { hw(24, [UInt8(bitPattern: Int8(clamping: dB))]) }
+
+    /// Output twist 0...100; 50 is flat, lower cuts 2200 Hz, higher cuts 1200 Hz.
+    static func setOutputTwist(_ value: Int) -> [UInt8] { hw(26, [UInt8(clamping: max(0, min(100, value)))]) }
+
+    /// PTT style: multiplex (PTT on the mic line, most handhelds) or simplex
+    /// (a separate PTT line). The firmware sends no reply to this one.
+    static func setPTTMultiplex(_ multiplex: Bool) -> [UInt8] { hw(79, [multiplex ? 1 : 0]) }
+    static func getPTTChannel() -> [UInt8] { hw(80) }
+
+    static func setPassall(_ on: Bool) -> [UInt8] { hw(81, [on ? 1 : 0]) }
+    static func setRxReversePolarity(_ on: Bool) -> [UInt8] { hw(83, [on ? 1 : 0]) }
+    static func setTxReversePolarity(_ on: Bool) -> [UInt8] { hw(85, [on ? 1 : 0]) }
+    static func setUSBPowerOn(_ on: Bool) -> [UInt8] { hw(73, [on ? 1 : 0]) }
+    static func setUSBPowerOff(_ on: Bool) -> [UInt8] { hw(75, [on ? 1 : 0]) }
+
+    /// Write the current settings to the TNC4's flash, making them what it
+    /// starts with from now on, with every radio. Answered with `06 2A 20`.
+    static func saveEEPROM() -> [UInt8] { hw(SAVE_EEPROM) }
+    static let SAVE_EEPROM: UInt8 = 42
+
+    static func setDateTime(_ date: Date) -> [UInt8] { hw(50, encodeDateTime(date)) }
+
+    // MARK: Date and time
+
+    /// The RTC's seven BCD bytes: YY MM DD weekday HH MM SS, in UTC, with
+    /// weekday 1 (Monday) to 7 (Sunday) as the STM32 RTC counts it.
+    static func encodeDateTime(_ date: Date) -> [UInt8] {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let c = cal.dateComponents([.year, .month, .day, .weekday, .hour, .minute, .second], from: date)
+        func bcd(_ n: Int) -> UInt8 { UInt8((n / 10) << 4 | (n % 10)) }
+        let weekday = ((c.weekday ?? 1) + 5) % 7 + 1   // Calendar: 1 = Sunday
+        return [bcd((c.year ?? 2000) % 100), bcd(c.month ?? 1), bcd(c.day ?? 1), bcd(weekday),
+                bcd(c.hour ?? 0), bcd(c.minute ?? 0), bcd(c.second ?? 0)]
+    }
+
+    static func decodeDateTime(_ bytes: [UInt8]) -> Date? {
+        guard bytes.count >= 7 else { return nil }
+        func dec(_ b: UInt8) -> Int? {
+            let hi = Int(b >> 4), lo = Int(b & 0x0F)
+            return hi < 10 && lo < 10 ? hi * 10 + lo : nil
+        }
+        guard let yy = dec(bytes[0]), let mo = dec(bytes[1]), let dd = dec(bytes[2]),
+              let hh = dec(bytes[4]), let mi = dec(bytes[5]), let ss = dec(bytes[6]) else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal.date(from: DateComponents(year: 2000 + yy, month: mo, day: dd, hour: hh, minute: mi, second: ss))
     }
     
     /// Generates a frame to request battery level.
