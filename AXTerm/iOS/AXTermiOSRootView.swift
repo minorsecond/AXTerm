@@ -575,12 +575,13 @@ struct AXTermiOSRootView: View {
             let paths = client.networkPaths
             let localCallsign = settings.myCallsign
             Task {
-                await sweeper.sweep(packets: packets,
-                                    localCallsign: localCallsign,
-                                    services: services,
-                                    paths: paths,
-                                    serviceWindow: 200,
-                                    pathWindow: 600)
+                _ = await sweeper.sweep(packets: packets,
+                                        localCallsign: localCallsign,
+                                        services: services,
+                                        paths: paths,
+                                        serviceWindow: 200,
+                                        pathWindow: 600,
+                                        retention: SQLiteNetworkPathStore.retention)
             }
         }
         .task(id: context.settings.callsignLookupEnabled) {

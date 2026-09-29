@@ -69,7 +69,6 @@
 				PacketTableCoordinator.swift,
 				PacketTableNSTableView.swift,
 				RowSelectionCaptureView.swift,
-				"Transmission/AppDelegate+Diagnostics.swift",
 				"Transmission/AX25DiagnosticLogger+FileLogging.swift",
 				Transmission/KISSLinkSerial.swift,
 				Winlink/UI/WinlinkMailView.swift,
@@ -769,6 +768,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "AXTerm connects to Bluetooth LE KISS TNCs, such as a Mobilinkd TNC4, for packet radio.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to reach a KISS TNC service (for example Direwolf or LinBPQ) on your network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "AXTerm uses your position to set the station grid square, place stations on the map, and stamp position reports.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -805,6 +805,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "AXTerm connects to Bluetooth LE KISS TNCs, such as a Mobilinkd TNC4, for packet radio.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to reach a KISS TNC service (for example Direwolf or LinBPQ) on your network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "AXTerm uses your position to set the station grid square, place stations on the map, and stamp position reports.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

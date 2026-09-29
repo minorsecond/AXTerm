@@ -1102,7 +1102,12 @@ struct OfflineBasemapMapView {
 
     private static func tuneDragPress(on mapView: MKMapView, wanted: Bool) {
         let target = wanted ? dragPressDuration : systemPressDuration
-        for recognizer in mapView.gestureRecognizers {
+        #if os(macOS)
+        let recognizers = mapView.gestureRecognizers
+        #else
+        let recognizers = mapView.gestureRecognizers ?? []   // optional on UIKit
+        #endif
+        for recognizer in recognizers {
             #if os(macOS)
             guard let press = recognizer as? NSPressGestureRecognizer else { continue }
             #else
