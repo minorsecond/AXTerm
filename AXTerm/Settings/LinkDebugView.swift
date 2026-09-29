@@ -79,29 +79,9 @@ struct LinkDebugView: View {
                     }
                     .disabled(viewModel.isMeasuring)
                     .help("Takes a one-shot audio measurement. Briefly pauses packet reception.")
-
-                    Spacer()
-
-                    Button("Auto Adjust") {
-                        viewModel.adjustInputLevels()
-                    }
-                    .disabled(viewModel.isMeasuring)
-                    .help("Runs the TNC4's AGC algorithm. Pauses reception for ~5s.")
                 }
-
-                Divider()
-
-                HStack {
-                    Text("Input Gain")
-                    Stepper(
-                        gainLabel(viewModel.inputGain),
-                        value: Binding(
-                            get: { Int(viewModel.inputGain) },
-                            set: { viewModel.setInputGain(UInt8(clamping: $0)) }
-                        ),
-                        in: 0...4
-                    )
-                }
+                // Gain and level setting live in the radio's TNC4 settings,
+                // where they are applied per radio and put back afterwards.
             }
 
             // MARK: - Live Stats
@@ -336,10 +316,6 @@ struct LinkDebugView: View {
         }
     }
 
-    private func gainLabel(_ level: UInt8) -> String {
-        let db = Int(level) * 6
-        return "\(level) (\(db)dB)"
-    }
 
     private func inputLevelGuidance(_ level: MobilinkdInputLevel) -> String {
         if level.vpp < Self.optimalVppMin {

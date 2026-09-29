@@ -15,7 +15,6 @@ final class LinkDebugViewModel: ObservableObject {
     @Published var showTxOnly: Bool = false
     @Published var showRxOnly: Bool = false
     @Published var inputLevel: MobilinkdInputLevel?
-    @Published var inputGain: UInt8 = 4
     @Published var isMeasuring: Bool = false
 
     let log = LinkDebugLog.shared
@@ -39,20 +38,6 @@ final class LinkDebugViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             self?.isMeasuring = false
         }
-    }
-
-    func adjustInputLevels() {
-        isMeasuring = true
-        packetEngine?.sendAdjustInputLevels()
-        // Auto-adjust takes ~5s, RESET fires at 5s, give extra margin
-        DispatchQueue.main.asyncAfter(deadline: .now() + 7.0) { [weak self] in
-            self?.isMeasuring = false
-        }
-    }
-
-    func setInputGain(_ level: UInt8) {
-        inputGain = level
-        packetEngine?.sendSetInputGain(level)
     }
 
     var filteredFrames: [LinkDebugFrameEntry] {

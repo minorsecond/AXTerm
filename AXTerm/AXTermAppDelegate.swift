@@ -146,12 +146,18 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
             replied = true
             sender.reply(toApplicationShouldTerminate: true)
         }
+        // A Mobilinkd link closes by putting the TNC4's own settings back (the
+        // ones this radio changed), and those writes need a moment to leave.
+        // Without it a TNC4 shared with another radio kept this radio's gains
+        // until it was power-cycled.
+        let engine = coordinator?.packetEngine
+        let restoresTNC4 = (settings?.radios ?? []).contains { engine?.mobilinkdControl(for: $0.id) != nil }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             radioManager?.closeAll()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: replyOnce)
+            DispatchQueue.main.asyncAfter(deadline: .now() + (restoresTNC4 ? 0.8 : 0.3), execute: replyOnce)
         }
         // Backstop: reply no later than this regardless of how the close goes.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: replyOnce)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (restoresTNC4 ? 2.5 : 1.5), execute: replyOnce)
         return .terminateLater
     }
 }

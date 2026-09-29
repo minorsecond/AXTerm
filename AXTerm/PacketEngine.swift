@@ -1024,33 +1024,12 @@ final class PacketEngine: ObservableObject {
         }
     }
 
-    /// Sends the ADJUST_INPUT_LEVELS command to trigger the TNC4's auto-AGC.
-    /// Stops the demodulator during calibration; sends RESET after 5s to restart.
-    func sendAdjustInputLevels() {
-        guard let activeLink = radioManager.primarySession else { return }
-        let frame = Data(MobilinkdTNC.adjustInputLevels())
-        let resetFrame = Data(MobilinkdTNC.reset())
-        activeLink.send(frame) { [weak activeLink] _ in
-            // Auto-adjust takes several seconds (gain stepping + measurements).
-            DispatchQueue.global().asyncAfter(deadline: .now() + 5.0) {
-                activeLink?.send(resetFrame) { _ in }
-            }
-        }
-    }
-
     /// The live TNC4 controls for a radio, when its link is up and its TNC is
     /// a Mobilinkd.
     func mobilinkdControl(for radio: RadioID) -> MobilinkdControlling? {
         guard let control = radioManager.session(for: radio)?.link as? MobilinkdControlling,
               control.isMobilinkd else { return nil }
         return control
-    }
-
-    /// Sends a SET_INPUT_GAIN command to set manual input gain level (0-4, 6dB steps).
-    func sendSetInputGain(_ level: UInt8) {
-        guard let activeLink = radioManager.primarySession else { return }
-        let frame = Data(MobilinkdTNC.setInputGain(UInt16(level)))
-        activeLink.send(frame) { _ in }
     }
 
     /// Asks the TNC to name itself via the in-band KISS hardware query.
