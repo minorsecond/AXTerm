@@ -141,6 +141,35 @@ final class CIVClientTests: XCTestCase {
         return (client, transport)
     }
 
+    /// Menu *writes* only. `readMenuItem` and `setMenuItem` are both `1A 05`
+    /// and differ only in that the write carries a value after the two item
+    /// bytes, so a filter that does not check the length counts the read that
+    /// now precedes every write.
+    private func menuWrites(_ transport: FakeCIVTransport, item: [UInt8]) -> [CIVFrame] {
+        transport.written.filter {
+            $0.command == 0x1A && $0.subcommand == 0x05
+                && $0.data.starts(with: item) && $0.data.count > item.count
+        }
+    }
+
+    /// An IC-705 already set up for 1200 bd packet: it answers every read with
+    /// the value `configureForPacket` would otherwise write.
+    private func ic705AlreadySetUp(dataMod: UInt8) -> (CIVFrame) -> [UInt8]? {
+        { frame in
+            switch (frame.command, frame.subcommand) {
+            case (0x19, 0x00): return FakeCIVTransport.reply(0x19, 0x00, [0xA4])
+            case (0x04, _):    return FakeCIVTransport.reply(0x04, nil, [0x05, 0x01])   // FM, FIL1
+            case (0x1A, 0x06) where frame.data.isEmpty:
+                return FakeCIVTransport.reply(0x1A, 0x06, [0x01, 0x01])                 // data mode on
+            case (0x1A, 0x05) where frame.data.count == 2:
+                let item = Array(frame.data)
+                let value: UInt8 = item == [0x01, 0x19] ? dataMod : 0x00
+                return FakeCIVTransport.reply(0x1A, 0x05, item + [value])
+            default: return FakeCIVTransport.ok
+            }
+        }
+    }
+
     /// A radio that answers like an IC-705 on 144.390 FM-D.
     private func ic705(_ frame: CIVFrame) -> [UInt8]? {
         switch (frame.command, frame.subcommand) {
@@ -295,12 +324,18 @@ final class CIVClientTests: XCTestCase {
         } catch { XCTFail("\(error)") }
     }
 
-    func testConfigureForPacketSendsTheWholeRecipe() async throws {
+    /// A radio that answers nothing useful still gets the whole recipe. The
+    /// readback tells us nothing, and a setting left wrong because one read
+    /// timed out would be worse than a redundant write.
+    func testConfigureForPacketSendsTheWholeRecipeWhenItCannotReadTheRadio() async throws {
         let (client, transport) = makeClient()
         transport.responder = { _ in FakeCIVTransport.ok }
-        try await client.configureForPacket(.afsk1200)
+        let changed = try await client.configureForPacket(.afsk1200)
+        XCTAssertFalse(changed.isEmpty, "a radio it could not read must be written and reported")
         let commands = transport.written.map { $0.encoded().map { String(format: "%02X", $0) }.joined(separator: " ") }
-        XCTAssertEqual(commands.first, "FE FE A4 E0 06 05 01 FD", "FM, FIL1")
+        XCTAssertEqual(commands.first, "FE FE A4 E0 04 FD",
+                       "it reads the mode before deciding to write it")
+        XCTAssertTrue(commands.contains("FE FE A4 E0 06 05 01 FD"), "FM, FIL1")
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 06 01 01 FD"), "data mode on")
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 05 01 19 01 FD"), "DATA MOD = USB")
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 05 01 11 00 FD"), "AF SQL open")
@@ -312,7 +347,35 @@ final class CIVClientTests: XCTestCase {
         // to a read, so the readback tells us nothing and the setup proceeds on
         // the acknowledged write — see `setDataModeChecked`.
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 06 FD"), "data mode read back")
-        XCTAssertEqual(commands.count, 11)
+    }
+
+    /// The point of reading first. Reconnecting after a sleep, a dropped link
+    /// or a rebuild used to rewrite ten settings every time, including the
+    /// ones already right, so a sideband or filter set by hand was taken back
+    /// without a word (2026-09-19).
+    func testAnAlreadyConfiguredRadioIsLeftAlone() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = ic705AlreadySetUp(dataMod: 0x01)
+        let changed = try await client.configureForPacket(.afsk1200, dataMod: .usb)
+
+        XCTAssertEqual(changed, [], "nothing was wrong, so nothing should be reported")
+        let writes = transport.written.filter {
+            ($0.command == 0x06)                                              // set mode
+            || ($0.command == 0x1A && $0.subcommand == 0x05 && $0.data.count > 2)  // menu writes
+        }
+        XCTAssertTrue(writes.isEmpty,
+                      "rewrote \(writes.count) settings that were already correct")
+    }
+
+    /// Data mode is the exception and stays unconditional: `setMode` clears
+    /// the data flag on an Icom, and a radio that quietly lost it receives
+    /// perfectly and transmits silence.
+    func testDataModeIsWrittenEvenWhenTheRadioSaysItIsAlreadyOn() async throws {
+        let (client, transport) = makeClient()
+        transport.responder = ic705AlreadySetUp(dataMod: 0x01)
+        try await client.configureForPacket(.afsk1200, dataMod: .usb)
+        let dataMode = transport.written.filter { $0.command == 0x1A && $0.subcommand == 0x06 && !$0.data.isEmpty }
+        XCTAssertFalse(dataMode.isEmpty, "data mode must be written whatever the readback says")
     }
 
     // MARK: - Data mode at key-up
@@ -483,16 +546,11 @@ final class CIVClientTests: XCTestCase {
         transport.responder = ic705
         try await client.configureForPacket(.afsk1200, dataMod: .wlan, quietTheBus: false)
 
-        let transceive = transport.written.filter {
-            $0.command == 0x1A && $0.subcommand == 0x05 && $0.data.starts(with: [0x01, 0x31])
-        }
-        XCTAssertTrue(transceive.isEmpty,
+        XCTAssertTrue(menuWrites(transport, item: [0x01, 0x31]).isEmpty,
                       "wrote transceive-off over a link with no bus to quiet")
 
-        let dataMod = transport.written.filter {
-            $0.command == 0x1A && $0.subcommand == 0x05 && $0.data.starts(with: [0x01, 0x19])
-        }
-        XCTAssertEqual(dataMod.first?.data.last, 0x03, "the rest of the setup still goes")
+        XCTAssertEqual(menuWrites(transport, item: [0x01, 0x19]).first?.data.last, 0x03,
+                       "the rest of the setup still goes")
     }
 
     /// On a shared serial bus it is still worth quieting.
@@ -501,10 +559,7 @@ final class CIVClientTests: XCTestCase {
         transport.responder = ic705
         try await client.configureForPacket(.afsk1200, dataMod: .usb, quietTheBus: true)
 
-        let transceive = transport.written.filter {
-            $0.command == 0x1A && $0.subcommand == 0x05 && $0.data.starts(with: [0x01, 0x31])
-        }
-        XCTAssertEqual(transceive.first?.data.last, 0x00)
+        XCTAssertEqual(menuWrites(transport, item: [0x01, 0x31]).first?.data.last, 0x00)
     }
 
     /// `configureForPacket` has to name the input the audio actually arrives
@@ -523,10 +578,7 @@ final class CIVClientTests: XCTestCase {
             transport.responder = ic705
             try await client.configureForPacket(.afsk1200, dataMod: link)
 
-            let dataMod = transport.written.filter {
-                $0.command == 0x1A && $0.subcommand == 0x05
-                    && $0.data.starts(with: [0x01, 0x19])
-            }
+            let dataMod = menuWrites(transport, item: [0x01, 0x19])
             XCTAssertEqual(dataMod.count, 1, "\(link) wrote \(dataMod.count) DATA MOD frames")
             XCTAssertEqual(dataMod.first?.data.last, expected,
                            "\(link) must write item 0119 = \(expected), not \(dataMod.first?.data.last ?? 0)")

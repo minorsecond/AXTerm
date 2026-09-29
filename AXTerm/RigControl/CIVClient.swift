@@ -366,21 +366,77 @@ nonisolated final class CIVClient: @unchecked Sendable {
     ///   the session is point to point — and the setting is persistent, so
     ///   leaving it off is a change to the operator's radio that outlives
     ///   AXTerm and that nothing here ever undoes (2026-09-17).
+    /// Returns the settings this actually changed, so the operator can be
+    /// told rather than having their radio quietly rewritten.
+    @discardableResult
     func configureForPacket(_ mode: ModemMode, dataMod: DataModSource = .usb,
-                            quietTheBus: Bool = true) async throws {
-        switch mode {
-        case .afsk1200: try await setMode(.fm, filter: 1)
-        case .afsk300: try await setMode(.usb, filter: 1)
-        case .g3ruh9600RxIF: try await setMode(.fm, filter: 1)
+                            quietTheBus: Bool = true) async throws -> [String] {
+        var changed: [String] = []
+        // Cleared the first time a read goes unanswered; see setMenuItemIfNeeded.
+        var readable = true
+
+        // Read before writing. This used to write all ten settings at every
+        // connect, which meant reconnecting — after a sleep, a dropped link, a
+        // rebuild — silently rewrote the operator's radio each time, including
+        // settings that were already right. Somebody who sets a filter or a
+        // sideband by hand between overs had it taken back without being told.
+        // Now only what is actually wrong is written, and the caller is told
+        // what changed.
+        let current = try? await readMode()
+        if current == nil { readable = false }
+        if current?.mode != mode.expectedRigMode || current?.filter != 1 {
+            try await setMode(mode.expectedRigMode, filter: 1)
+            let was = current.map { "\($0.mode.label) to " } ?? ""
+            changed.append("mode \(was)\(mode.expectedRigMode.label), widest filter")
         }
+
+        // Not conditional, and deliberately. `setMode` clears the data flag on
+        // an Icom, so this has to follow it whether or not the mode changed,
+        // and a radio that silently lost data mode is the one failure here
+        // that is invisible on receive and fatal on transmit.
+        let dataWasOn = (try? await readDataMode()) ?? false
         try await setDataModeChecked(filter: 1)
-        try await setMenuItem(.dataMod, [dataMod.rawValue])
-        try await setMenuItem(.usbAFSquelch, [0x00])
-        try await setMenuItem(.usbSend, [0x00])
-        if quietTheBus { try await setTransceive(false) }
-        for item in [CIVCommand.MenuItem.txDelayHF, .txDelay50M, .txDelay144M, .txDelay430M] {
-            try await setMenuItem(item, [0x00])
+        if !dataWasOn { changed.append("data mode on") }
+
+        if try await setMenuItemIfNeeded(.dataMod, [dataMod.rawValue], readable: &readable) {
+            changed.append("DATA MOD \(dataMod == .wlan ? "WLAN" : "USB")")
         }
+        if try await setMenuItemIfNeeded(.usbAFSquelch, [0x00], readable: &readable) { changed.append("USB AF squelch off") }
+        if try await setMenuItemIfNeeded(.usbSend, [0x00], readable: &readable) { changed.append("USB SEND off") }
+        if quietTheBus, try await setMenuItemIfNeeded(.civTransceive, [0x00], readable: &readable) {
+            try await setTransceive(false)
+            changed.append("CI-V transceive off")
+        }
+        for item in [CIVCommand.MenuItem.txDelayHF, .txDelay50M, .txDelay144M, .txDelay430M] {
+            if try await setMenuItemIfNeeded(item, [0x00], readable: &readable) { changed.append("TX delay off") }
+        }
+        return changed
+    }
+
+    /// Write a menu item only when the radio does not already hold that value.
+    ///
+    /// Returns whether anything was written. A read that fails tells us
+    /// nothing, so the write goes ahead — the setting mattering more than the
+    /// tidiness, and the alternative being a radio left misconfigured because
+    /// one read timed out.
+    @discardableResult
+    private func setMenuItemIfNeeded(_ item: CIVCommand.MenuItem, _ data: [UInt8],
+                                     readable: inout Bool) async throws -> Bool {
+        if readable {
+            if let reply = try? await request(
+                CIVCommand.readMenuItem(item, radio: radioAddress, controller: controllerAddress),
+                expecting: .reply(command: 0x1A, subcommand: 0x05)) {
+                // The reply echoes the two item bytes before the value.
+                if Array(reply.data.dropFirst(2)) == data { return false }
+            } else {
+                // Stop asking. Each unanswered read costs a full CI-V timeout,
+                // and ten of them would be five seconds added to every connect
+                // on a radio that does not support these reads.
+                readable = false
+            }
+        }
+        try await setMenuItem(item, data)
+        return true
     }
 
     // MARK: - Request/response

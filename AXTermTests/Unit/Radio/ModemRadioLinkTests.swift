@@ -134,7 +134,7 @@ final class ModemRadioLinkTests: XCTestCase {
         XCTAssertFalse(written.contains { $0.hasPrefix("FE FE A4 E0 06") }, "the mode is the operator's unless asked")
         await waitUntil("the delegate to be told we connected") { spy.states.last == .connected }
         XCTAssertEqual(spy.states.last, .connected)
-        XCTAssertTrue(spy.errors.isEmpty)
+        XCTAssertTrue(spy.errors.isEmpty, spy.errors.joined(separator: " | "))
         link.close()
         XCTAssertEqual(link.state, .disconnected)
     }
@@ -144,13 +144,42 @@ final class ModemRadioLinkTests: XCTestCase {
         link.open()
         await waitUntil("the link to connect") { link.state == .connected }
         let written = transport.written.map(hex)
-        XCTAssertTrue(written.contains("FE FE A4 E0 06 05 01 FD"), "FM, filter 1")
+        // This radio answers the mode read with FM/FIL1, which is already what
+        // 1200 bd wants, so the mode is left alone — see the sibling test. The
+        // rest it does not answer reads for, so the rest is written.
         XCTAssertTrue(written.contains("FE FE A4 E0 1A 06 01 01 FD"), "data mode on")
         XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 19 01 FD"), "DATA MOD = USB")
         XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 11 00 FD"), "AF squelch open")
         XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 25 00 FD"), "USB SEND off")
         XCTAssertTrue(written.contains("FE FE A4 E0 1A 05 01 31 00 FD"),
                       "asked to set the radio up over a cable, the bus is still quieted")
+        link.close()
+    }
+
+    /// A setting already right is not written again. Reconnecting after a
+    /// sleep or a rebuild used to rewrite the lot every time, so a mode set by
+    /// hand between overs was taken back without a word (2026-09-19).
+    func testAModeThatIsAlreadyRightIsNotRewritten() async {
+        let (link, transport, _, _) = makeLink(config(setsMode: true))
+        link.open()
+        await waitUntil("the link to connect") { link.state == .connected }
+        XCTAssertFalse(transport.written.map(hex).contains { $0.hasPrefix("FE FE A4 E0 06") },
+                       "this radio already answers FM/FIL1; setting it again is the old behaviour")
+        link.close()
+    }
+
+    /// And a radio in the wrong mode is still put right, or the setting would
+    /// mean nothing.
+    func testAModeThatIsWrongIsSet() async {
+        let (link, transport, _, _) = makeLink(config(setsMode: true), responder: { frame in
+            // As `ic705`, but sitting in USB rather than the FM 1200 bd wants.
+            if frame.command == 0x04 { return FakeCIVTransport.reply(0x04, nil, [0x01, 0x01]) }
+            return ModemRadioLinkTests.ic705(frame)
+        })
+        link.open()
+        await waitUntil("the link to connect") { link.state == .connected }
+        XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 06 05 01 FD"),
+                      "a radio in USB must be put into FM for 1200 bd")
         link.close()
     }
 

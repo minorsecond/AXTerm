@@ -240,6 +240,21 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// a few seconds is alive and anything beyond it is not.
     static let streamAliveWithin: TimeInterval = 5
 
+    /// What to say when connecting changed the radio.
+    ///
+    /// Nil when nothing changed, which is the common case now that
+    /// `configureForPacket` reads before it writes — so this is silent on a
+    /// reconnect that found the radio already set up, and speaks only when the
+    /// operator's radio actually moved under them.
+    ///
+    /// Pure so the wording can be read back in a test.
+    static func settingsChangeNotice(_ changed: [String], mode: ModemMode) -> String? {
+        guard !changed.isEmpty else { return nil }
+        return "Set the radio for \(mode.title): " + changed.joined(separator: ", ")
+            + ". Turn off \u{201C}Set the radio for packet when connecting\u{201D} to leave "
+            + "the radio's own settings alone."
+    }
+
     /// - Parameter sourcePortMismatched: the CI-V stream bound a different
     ///   source port from the one its session ID was built from. The radio
     ///   checks the two against each other and refuses the stream without
@@ -385,19 +400,27 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                     // data mode — the one setting whose absence is silent on
                     // receive and fatal on transmit. See `setDataModeChecked`.
                     do {
-                        try await rig.configureForPacket(
+                        // `configureForPacket` reads each setting and writes
+                        // only what is wrong, so this list is empty on a
+                        // reconnect that found the radio already right — and
+                        // the operator hears nothing, which is the point.
+                        let changed = try await rig.configureForPacket(
                             config.mode,
                             dataMod: config.rigLink == .lan ? .wlan : .usb,
                             quietTheBus: config.rigLink != .lan)
+                        if let notice = Self.settingsChangeNotice(changed, mode: config.mode) {
+                            deliver { [weak self] in self?._delegate?.linkDidError(notice) }
+                        }
                     } catch {
                         let input = config.rigLink == .lan ? "WLAN" : "USB"
+                        let shows = config.mode.expectedRigMode.label
                         let why = (error as? CIVError)?.message ?? error.localizedDescription
                         deliver { [weak self] in
                             self?._delegate?.linkDidError(
                                 "The radio did not take its packet settings — \(why). Check that it "
-                                + "shows FM-D and not FM: the \(input) audio only reaches the "
-                                + "transmitter in data mode, so in plain FM it will key and unkey "
-                                + "normally and put nothing on the air.")
+                                + "shows \(shows)-D and not \(shows): the \(input) audio only reaches "
+                                + "the transmitter in data mode, so in plain \(shows) it will key and "
+                                + "unkey normally and put nothing on the air.")
                         }
                     }
                 }
@@ -702,7 +725,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         guard settings.answered else {
             return .unavailable("the radio did not answer any of them.")
         }
-        return .checked(RigReceiveAudit.findings(settings))
+        return .checked(RigReceiveAudit.findings(settings, for: config.mode))
     }
 
     /// Make the corrections the audit asked for, and report what changed.

@@ -81,16 +81,28 @@ nonisolated enum RigReceiveAudit {
     }
 
     /// Everything worth saying about these settings, worst first.
-    static func findings(_ s: Settings) -> [Finding] {
+    ///
+    /// `modemMode` is what the modem is set to, and every judgement about the
+    /// radio's mode and filter depends on it. Without it this judged every
+    /// station as though it were 1200 bd FM on 2 m: a 300 bd HF station was
+    /// told, at blocking severity, to switch to FM — and the filter check sat
+    /// behind that same `else`, so the one setting that actually matters at
+    /// 300 bd was never looked at.
+    static func findings(_ s: Settings, for modemMode: ModemMode) -> [Finding] {
         var out: [Finding] = []
+        let wantedMode = modemMode.expectedRigMode
 
         if s.attenuatorDB > 0 {
             out.append(Finding(
                 title: "The attenuator is on",
                 detail: "Set to \(s.attenuatorDB) dB, which is thrown away before "
                       + "anything else happens.",
-                fix: "Turn the attenuator off. On 2 m packet there is almost never a "
-                   + "reason for it, and it costs exactly the margin a distant station needs.",
+                fix: modemMode.ridesOnSSB
+                    ? "Turn the attenuator off. On a loud HF band it may well be deliberate, "
+                    + "but the packet signal you are trying to decode is rarely the loud thing, "
+                    + "and this comes off it first."
+                    : "Turn the attenuator off. On 2 m packet there is almost never a "
+                    + "reason for it, and it costs exactly the margin a distant station needs.",
                 severity: .blocking, correction: .attenuatorOff))
         }
 
@@ -114,19 +126,53 @@ nonisolated enum RigReceiveAudit {
                 severity: .blocking, correction: .squelchOpen))
         }
 
-        if s.mode != .fm {
+        if s.mode != wantedMode {
+            if modemMode.ridesOnSSB && (s.mode == .usb || s.mode == .lsb) {
+                // The other sideband decodes perfectly well on its own terms.
+                // AFSK inverts with the sideband and NRZI encodes transitions
+                // rather than levels, so mark and space may swap and the frame
+                // still comes out. What it cannot survive is disagreeing with
+                // the far end, and this is also the setting AXTerm silently
+                // puts back on every connect.
+                out.append(Finding(
+                    title: "The radio is on the other sideband",
+                    detail: "Mode is \(s.mode.label); AXTerm sets \(wantedMode.label) for "
+                          + "\(modemMode.title).",
+                    fix: "Either sideband decodes, as long as the station you are working is "
+                       + "on the same one — the tones invert with the sideband and NRZI does "
+                       + "not care which is which. But while \u{201C}Set the radio for packet "
+                       + "when connecting\u{201D} is on, AXTerm puts this back to "
+                       + "\(wantedMode.label) at every connect, so a sideband set by hand will "
+                       + "not survive a reconnect.",
+                    severity: .suggestion))
+            } else {
+                out.append(Finding(
+                    title: "The radio is in the wrong mode",
+                    detail: "Mode is \(s.mode.label); \(modemMode.title) needs "
+                          + "\(wantedMode.label).",
+                    fix: "Switch to \(wantedMode.label) with data mode on. "
+                       + (modemMode.ridesOnSSB
+                          ? "300-baud HF packet is an SSB mode; in FM the tones never reach the "
+                          + "demodulator at all."
+                          : "1200-baud packet is FM."),
+                    severity: .blocking))
+            }
+        }
+
+        // Judged whatever the mode is. A narrow filter is the setting most
+        // likely to be wrong at 300 bd, where the two tones are 200 Hz apart
+        // and a data filter narrower than the pair simply removes one of them.
+        if s.filter > 1 {
             out.append(Finding(
-                title: "The radio is not in FM",
-                detail: "Mode is \(s.mode).",
-                fix: "1200-baud packet is FM. Switch to FM (data mode on).",
-                severity: .blocking))
-        } else if s.filter > 1 {
-            out.append(Finding(
-                title: "A narrow FM filter is selected",
+                title: "A narrow filter is selected",
                 detail: "Filter \(s.filter) of 3.",
-                fix: "Select FIL1, the widest. 1200-baud AFSK runs about 3 kHz "
-                   + "deviation and a narrow filter clips it — strong signals survive "
-                   + "the clipping, marginal ones do not.",
+                fix: modemMode.ridesOnSSB
+                    ? "Select FIL1, the widest. The tones are 1600 and 1800 Hz, so this mode "
+                    + "needs about 1.8 kHz of passband; a narrow data filter cuts the space "
+                    + "tone off and the two can no longer be told apart."
+                    : "Select FIL1, the widest. 1200-baud AFSK runs about 3 kHz "
+                    + "deviation and a narrow filter clips it — strong signals survive "
+                    + "the clipping, marginal ones do not.",
                 severity: .blocking, correction: .widestFilter))
         }
 
@@ -151,8 +197,11 @@ nonisolated enum RigReceiveAudit {
             out.append(Finding(
                 title: "The preamp is off",
                 detail: "No preamp selected.",
-                fix: "Worth trying P.AMP1 on 2 m. Not a fault — it is the right choice "
-                   + "on a crowded band — but it is free margin on a quiet one.",
+                fix: modemMode.ridesOnSSB
+                    ? "Worth trying P.AMP1 on a quiet HF band. Not a fault — it is the right "
+                    + "choice on a crowded one — but it is free margin otherwise."
+                    : "Worth trying P.AMP1 on 2 m. Not a fault — it is the right choice "
+                    + "on a crowded band — but it is free margin on a quiet one.",
                 severity: .suggestion))
         }
 

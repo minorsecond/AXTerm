@@ -259,10 +259,26 @@ Radios → the modem radio → **Check reception**.
 
 Findings are ranked. *Blocking* is sensitivity thrown away before the modem
 ever sees it — an attenuator left on, RF gain backed off, a squelch that is not
-open, a narrow FM filter clipping 1200-baud deviation. *Degrading* is audio the
-demodulator then has to fight: NR smears the tone transitions, NB punches holes
-and a hole inside a frame costs the frame. *Suggestion* is the preamp being
-off, which is the right choice on a crowded band and free margin on a quiet one.
+open, a narrow filter. *Degrading* is audio the demodulator then has to fight:
+NR smears the tone transitions, NB punches holes and a hole inside a frame costs
+the frame. *Suggestion* is the preamp being off, which is the right choice on a
+crowded band and free margin on a quiet one.
+
+The audit is judged against the modem mode, not against 1200-baud FM. Until
+2026-09-19 it was not: the mode check was a literal `.fm`, so a 300 bd HF
+station was told at blocking severity to switch to FM — on 20 m, advice that
+guarantees the silence it was called to explain. The filter check sat in the
+`else` of that same test, so the setting that matters most at 300 bd, where the
+tones are 200 Hz apart and a narrow data filter removes one of them, was never
+reached on the stations that needed it. `ModemMode.expectedRigMode` is now the
+one definition of what the radio should be in, read by both `configureForPacket`
+and the audit, so the two cannot drift apart again.
+
+On an SSB mode the opposite sideband is a suggestion rather than a fault. The
+tones invert with the sideband and NRZI encodes transitions rather than levels,
+so LSB decodes as well as USB — provided the far end agrees. What the operator
+does need telling is that `setsRadioModeOnConnect` puts the sideband back at
+every connect, which it now says when it changes the mode.
 
 It is deliberately read-only — what to do about a finding is the operator's
 call, on their radio — and it judges only the standard, well-documented Icom

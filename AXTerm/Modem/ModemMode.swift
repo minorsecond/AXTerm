@@ -51,6 +51,34 @@ nonisolated enum ModemMode: String, Codable, CaseIterable, Sendable {
     var isTxCapable: Bool { parameters.isTxCapable }
     var baud: Double { parameters.baud }
 
+    /// The mode the radio has to be in for this modem mode.
+    ///
+    /// `CIVClient.configureForPacket` sets this and `RigReceiveAudit` judges
+    /// against it, from here, because they used to hold separate copies: the
+    /// audit's was a literal `.fm`, so on a 300 bd HF station it reported
+    /// "the radio is not in FM" as blocking and told the operator to switch to
+    /// FM on 20 m — advice that would have guaranteed the silence it was
+    /// called to explain.
+    var expectedRigMode: RigMode {
+        switch self {
+        case .afsk1200: return .fm
+        case .afsk300: return .usb
+        case .g3ruh9600RxIF: return .fm
+        }
+    }
+
+    /// Whether this mode rides on SSB, where the sideband is the operator's
+    /// to pick. AFSK inverts with the sideband and NRZI encodes transitions
+    /// rather than levels, so LSB decodes perfectly well — as long as the
+    /// other end is on LSB too. That makes the opposite sideband a thing to
+    /// mention, not a fault.
+    var ridesOnSSB: Bool {
+        switch self {
+        case .afsk300: return true
+        case .afsk1200, .g3ruh9600RxIF: return false
+        }
+    }
+
     /// Modes the operator can pick today; 9600 joins when its demodulator ships.
     static var selectable: [ModemMode] { [.afsk1200, .afsk300] }
 
