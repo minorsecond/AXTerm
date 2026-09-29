@@ -2882,7 +2882,9 @@ final class SessionCoordinator: ObservableObject {
                 from: from,
                 to: to,
                 path: path,
-                radio: radio
+                radio: radio,
+                extended: uType == .SABME,
+                pf: (packet.control & 0x10) != 0
             ) {
                 sendFrame(response)
             }
