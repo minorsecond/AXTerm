@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct PacketInspectionCoordinator {
+nonisolated struct PacketInspectionCoordinator {
     func inspectSelectedPacket(
         selection: Set<Packet.ID>,
         packets: [Packet]

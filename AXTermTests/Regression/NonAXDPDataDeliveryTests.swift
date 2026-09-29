@@ -54,15 +54,15 @@ final class SessionManagerBasicTests: XCTestCase {
     /// Verify session can be created and connected
     func testSessionCanBeConnected() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
             
             // Transition to connected
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             XCTAssertEqual(session.state, .connected)
         }
@@ -73,7 +73,7 @@ final class SessionManagerBasicTests: XCTestCase {
         await MainActor.run {
             var dataReceived: Data?
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             sessionManager.onDataReceived = { session, data in
@@ -82,8 +82,8 @@ final class SessionManagerBasicTests: XCTestCase {
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Manually invoke the callback to simulate receiving data
             let testData = Data("Test".utf8)
@@ -102,10 +102,13 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
     /// Test that ObservableTerminalTxViewModel can be created
     func testViewModelCanBeCreated() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
@@ -119,23 +122,26 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Send plain text via the callback
             viewModel.sessionManager.onDataReceived?(session, Data("Hello\r\n".utf8))
@@ -152,23 +158,26 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // STEP 1: Send AXDP data (marks peer as in reassembly)
             let axdpData = AXDP.Message(type: .ping, sessionId: 1, messageId: 1).encode()
@@ -191,23 +200,26 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
 
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
 
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()
 
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
 
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
 
             // Simulate receiving AXDP magic (sets reassembly flag).
             viewModel.sessionManager.onDataReceived?(
@@ -234,23 +246,26 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Alternating: AXDP -> Complete -> Plain -> AXDP -> Complete -> Plain -> Plain
             
@@ -289,10 +304,13 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
     /// Test that the flag IS set when AXDP magic is detected
     func testFlagSetOnAXDPMagic() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
@@ -300,8 +318,8 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Send AXDP data
             let axdp = AXDP.Message(type: .ping, sessionId: 1, messageId: 1).encode()
@@ -320,10 +338,13 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
     /// The flag should only be cleared via clearAXDPReassemblyFlag() called from SessionCoordinator.
     func testFlagNotClearedByNonAXDPData() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
@@ -331,8 +352,8 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Step 1: Send AXDP (sets flag)
             viewModel.sessionManager.onDataReceived?(session, AXDP.Message(type: .ping, sessionId: 1, messageId: 1).encode())
@@ -366,25 +387,28 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
     func testFlagClearedOnDisconnect() async {
         // Create components that need to persist across await
         let sessionManager = await MainActor.run {
-            let sm = AX25SessionManager()
+            let sm = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sm.localCallsign = AX25Address(call: "TEST", ssid: 1)
             return sm
         }
         
         let viewModel = await MainActor.run {
-            let vm = ObservableTerminalTxViewModel(
+            let settings = AppSettingsStore()
+            let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
-            vm.setupSessionCallbacks()  // Must be called for callbacks to work
-            return vm
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
+            return viewModel
         }
         
         let (session, peerKey) = await MainActor.run {
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Send AXDP (sets flag)
             viewModel.sessionManager.onDataReceived?(session, AXDP.Message(type: .ping, sessionId: 1, messageId: 1).encode())
@@ -418,23 +442,26 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Simulate fragmented AXDP message:
             // First I-frame: AXDP magic header (sets flag)
@@ -477,23 +504,26 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Rapid alternation: 20 cycles of AXDP → Reassembly Complete → Plain
             for i in 0..<20 {
@@ -521,23 +551,26 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Send 5 consecutive AXDP messages (e.g., capability negotiation burst)
             // Each sets the flag, keeps getting reset
@@ -565,23 +598,26 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Phase 1: Plain text only (peer never used AXDP yet, flag not set)
             viewModel.sessionManager.onDataReceived?(session, Data("Hello\r\n".utf8))
@@ -638,23 +674,26 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // STEP 1: AXDP first chunk arrives (sets flag)
             let axdpMessage = AXDP.Message(
@@ -710,10 +749,13 @@ final class ProtocolSwitchingTests: XCTestCase {
     /// Test flag state is correctly maintained through multiple switches via clearAXDPReassemblyFlag
     func testFlagStateAcrossMultipleSwitches() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
@@ -721,8 +763,8 @@ final class ProtocolSwitchingTests: XCTestCase {
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             let peerKey = peer.display.uppercased()
             
@@ -766,16 +808,19 @@ final class ProtocolSwitchingTests: XCTestCase {
             var receivedFromPeerA: [String] = []
             var receivedFromPeerB: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 if address.call.uppercased() == "PEERA" {
                     receivedFromPeerA.append(text)
                 } else if address.call.uppercased() == "PEERB" {
@@ -785,13 +830,13 @@ final class ProtocolSwitchingTests: XCTestCase {
             
             let peerA = AX25Address(call: "PEERA", ssid: 0)
             let sessionA = sessionManager.session(for: peerA)
-            sessionA.stateMachine.handle(event: .connectRequest)
-            sessionA.stateMachine.handle(event: .receivedUA)
+            _ = sessionA.stateMachine.handle(event: .connectRequest)
+            _ = sessionA.stateMachine.handle(event: .receivedUA)
             
             let peerB = AX25Address(call: "PEERB", ssid: 0)
             let sessionB = sessionManager.session(for: peerB)
-            sessionB.stateMachine.handle(event: .connectRequest)
-            sessionB.stateMachine.handle(event: .receivedUA)
+            _ = sessionB.stateMachine.handle(event: .connectRequest)
+            _ = sessionB.stateMachine.handle(event: .receivedUA)
             
             // SCENARIO: Peer A sends partial data (no newline), then Peer B sends complete data
             // BUG: If buffers are shared, Peer A's partial data would prepend Peer B's message
@@ -829,16 +874,19 @@ final class ProtocolSwitchingTests: XCTestCase {
             var receivedFromPeer2: [String] = []
             var receivedFromPeer3: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 switch address.call.uppercased() {
                 case "PEER1": receivedFromPeer1.append(text)
                 case "PEER2": receivedFromPeer2.append(text)
@@ -850,18 +898,18 @@ final class ProtocolSwitchingTests: XCTestCase {
             // Create three sessions
             let peer1 = AX25Address(call: "PEER1", ssid: 0)
             let session1 = sessionManager.session(for: peer1)
-            session1.stateMachine.handle(event: .connectRequest)
-            session1.stateMachine.handle(event: .receivedUA)
+            _ = session1.stateMachine.handle(event: .connectRequest)
+            _ = session1.stateMachine.handle(event: .receivedUA)
             
             let peer2 = AX25Address(call: "PEER2", ssid: 0)
             let session2 = sessionManager.session(for: peer2)
-            session2.stateMachine.handle(event: .connectRequest)
-            session2.stateMachine.handle(event: .receivedUA)
+            _ = session2.stateMachine.handle(event: .connectRequest)
+            _ = session2.stateMachine.handle(event: .receivedUA)
             
             let peer3 = AX25Address(call: "PEER3", ssid: 0)
             let session3 = sessionManager.session(for: peer3)
-            session3.stateMachine.handle(event: .connectRequest)
-            session3.stateMachine.handle(event: .receivedUA)
+            _ = session3.stateMachine.handle(event: .connectRequest)
+            _ = session3.stateMachine.handle(event: .receivedUA)
             
             // Interleave partial and complete messages from all three peers
             viewModel.sessionManager.onDataReceived?(session1, Data("Hello from ".utf8))      // partial
@@ -891,16 +939,19 @@ final class ProtocolSwitchingTests: XCTestCase {
             var receivedFromPeerA: [String] = []
             var receivedFromPeerB: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 if address.call.uppercased() == "PEERA" {
                     receivedFromPeerA.append(text)
                 } else if address.call.uppercased() == "PEERB" {
@@ -911,14 +962,14 @@ final class ProtocolSwitchingTests: XCTestCase {
             // Peer A: prefers AXDP
             let peerA = AX25Address(call: "PEERA", ssid: 0)
             let sessionA = sessionManager.session(for: peerA)
-            sessionA.stateMachine.handle(event: .connectRequest)
-            sessionA.stateMachine.handle(event: .receivedUA)
+            _ = sessionA.stateMachine.handle(event: .connectRequest)
+            _ = sessionA.stateMachine.handle(event: .receivedUA)
             
             // Peer B: plain text only
             let peerB = AX25Address(call: "PEERB", ssid: 0)
             let sessionB = sessionManager.session(for: peerB)
-            sessionB.stateMachine.handle(event: .connectRequest)
-            sessionB.stateMachine.handle(event: .receivedUA)
+            _ = sessionB.stateMachine.handle(event: .connectRequest)
+            _ = sessionB.stateMachine.handle(event: .receivedUA)
             
             let keyA = peerA.display.uppercased()
             let keyB = peerB.display.uppercased()
@@ -957,23 +1008,26 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "OLDSTATION", ssid: 0)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Local sends AXDP probe, peer responds with plain text (no AXDP support)
             // This is simulated from the peer's perspective - they only send plain text
@@ -1001,23 +1055,26 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Phase 1: AXDP capability negotiation (sets reassembly flag)
             viewModel.sessionManager.onDataReceived?(session, AXDP.Message(type: .ping, sessionId: 0, messageId: 1).encode())
@@ -1041,23 +1098,26 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "USER", ssid: 0)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "USER",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let bbs = AX25Address(call: "BBS", ssid: 0)
             let session = sessionManager.session(for: bbs)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // BBS sends AXDP probe (sets reassembly flag)
             viewModel.sessionManager.onDataReceived?(session, AXDP.Message(type: .ping, sessionId: 0, messageId: 0).encode())
@@ -1087,24 +1147,27 @@ final class SessionAutoSwitchTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             // Create and connect a session - currentSession should still be nil
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // currentSession should be nil initially (no updateCurrentSession called)
             XCTAssertNil(viewModel.currentSession)
@@ -1127,30 +1190,33 @@ final class SessionAutoSwitchTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             // Create first session
             let peer1 = AX25Address(call: "PEER1", ssid: 0)
             let session1 = sessionManager.session(for: peer1)
-            session1.stateMachine.handle(event: .connectRequest)
-            session1.stateMachine.handle(event: .receivedUA)
+            _ = session1.stateMachine.handle(event: .connectRequest)
+            _ = session1.stateMachine.handle(event: .receivedUA)
             
             // Create second session
             let peer2 = AX25Address(call: "PEER2", ssid: 0)
             let session2 = sessionManager.session(for: peer2)
-            session2.stateMachine.handle(event: .connectRequest)
-            session2.stateMachine.handle(event: .receivedUA)
+            _ = session2.stateMachine.handle(event: .connectRequest)
+            _ = session2.stateMachine.handle(event: .receivedUA)
             
             // Manually set currentSession to session1 (simulating user selecting it)
             viewModel.setCurrentSession(session1)
@@ -1175,24 +1241,27 @@ final class SessionAutoSwitchTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             // Create first session and connect it
             let peer1 = AX25Address(call: "PEER1", ssid: 0)
             let session1 = sessionManager.session(for: peer1)
-            session1.stateMachine.handle(event: .connectRequest)
-            session1.stateMachine.handle(event: .receivedUA)
+            _ = session1.stateMachine.handle(event: .connectRequest)
+            _ = session1.stateMachine.handle(event: .receivedUA)
             viewModel.setCurrentSession(session1)
             
             // Create second session but DON'T connect it (leave in disconnected state)
@@ -1217,16 +1286,19 @@ final class SessionAutoSwitchTests: XCTestCase {
             var receivedFromPeer1: [String] = []
             var receivedFromPeer2: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 if address.call.uppercased() == "PEER1" {
                     receivedFromPeer1.append(text)
                 } else if address.call.uppercased() == "PEER2" {
@@ -1237,13 +1309,13 @@ final class SessionAutoSwitchTests: XCTestCase {
             // Create and connect both sessions
             let peer1 = AX25Address(call: "PEER1", ssid: 0)
             let session1 = sessionManager.session(for: peer1)
-            session1.stateMachine.handle(event: .connectRequest)
-            session1.stateMachine.handle(event: .receivedUA)
+            _ = session1.stateMachine.handle(event: .connectRequest)
+            _ = session1.stateMachine.handle(event: .receivedUA)
             
             let peer2 = AX25Address(call: "PEER2", ssid: 0)
             let session2 = sessionManager.session(for: peer2)
-            session2.stateMachine.handle(event: .connectRequest)
-            session2.stateMachine.handle(event: .receivedUA)
+            _ = session2.stateMachine.handle(event: .connectRequest)
+            _ = session2.stateMachine.handle(event: .receivedUA)
             
             // Rapidly interleave data from both sessions
             for i in 0..<10 {

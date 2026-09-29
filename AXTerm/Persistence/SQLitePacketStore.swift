@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-final class SQLitePacketStore: PacketStore, @unchecked Sendable {
+nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuerying, PacketStoreTimeRangeQuerying, @unchecked Sendable {
     private let dbQueue: DatabaseQueue
 
     init(dbQueue: DatabaseQueue) {
@@ -20,10 +20,7 @@ final class SQLitePacketStore: PacketStore, @unchecked Sendable {
     }
 
     func save(_ packet: Packet) throws {
-        guard let endpoint = packet.kissEndpoint else {
-            throw PacketStoreError.missingKISSEndpoint
-        }
-        let record = try PacketRecord(packet: packet, endpoint: endpoint)
+        let record = PacketRecord(packet: packet)
         try dbQueue.write { db in
             try record.insert(db)
         }
@@ -38,9 +35,105 @@ final class SQLitePacketStore: PacketStore, @unchecked Sendable {
         }
     }
 
+    func loadPackets(in timeframe: DateInterval) throws -> [Packet] {
+        try dbQueue.read { db in
+            // A database opened straight from disk is never migrated — a
+            // snapshot kept from an older build is missing whatever columns
+            // that build did not have — so a read may only name the ones it
+            // finds. An absent radio reads as the primary one, which is what
+            // every row written before radios were separable belonged to.
+            let radioColumn = try Self.selectableColumn("radioID", in: db)
+            let bytesColumn = try Self.selectableColumn("infoBytes", in: db)
+            let hexColumn = try Self.selectableColumn("infoHex", in: db)
+            let sql = """
+                SELECT id, receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType,
+                       controlHex, pid, infoText, infoLen,
+                       \(bytesColumn), \(hexColumn), \(radioColumn)
+                FROM \(PacketRecord.databaseTableName)
+                WHERE receivedAt >= ? AND receivedAt < ? AND direction = 'rx'
+                -- Heard traffic only. Since 2026-09-17 this table also holds what
+                -- this station transmitted, and counting our own frames as
+                -- stations heard would inflate every figure derived from it.
+                ORDER BY receivedAt ASC
+            """
+            let rows = try Row.fetchAll(db, sql: sql, arguments: [timeframe.start, timeframe.end])
+            return rows.map { row in
+                let id: UUID = row["id"]
+                let timestamp: Date = row["receivedAt"]
+                let fromCall: String = row["fromCall"]
+                let fromSSID: Int = row["fromSSID"]
+                let toCall: String = row["toCall"]
+                let toSSID: Int = row["toSSID"]
+                let viaPath: String = row["viaPath"]
+                let frameTypeRaw: String = row["frameType"]
+                let controlHex: String = row["controlHex"]
+                let pidValue: Int? = row["pid"]
+                let infoText: String? = row["infoText"]
+                let infoLen: Int = row["infoLen"]
+                let storedBytes: Data? = row["infoBytes"]
+                let storedHex: String? = row["infoHex"]
+                let radioIDRaw: String? = row["radioID"]
+                // The real payload, not a run of zeros the right length. The
+                // first byte is the APRS data type, which is the only thing
+                // that distinguishes a Mic-E destination (a latitude) from a
+                // station, so a zeroed payload silently turned every Mic-E
+                // beacon into a phantom node on the graph (2026-09-17).
+                let payload: Data
+                if let storedBytes, !storedBytes.isEmpty {
+                    payload = storedBytes
+                } else if let storedHex, !storedHex.isEmpty {
+                    payload = PacketEncoding.decodeHex(storedHex)
+                } else {
+                    // Neither column held anything: fall back to the recorded
+                    // length so byte totals stay right, with no content to read.
+                    payload = infoLen > 0 ? Data(count: infoLen) : Data()
+                }
+
+                return Packet(
+                    id: id,
+                    timestamp: timestamp,
+                    from: AX25Address(call: fromCall, ssid: fromSSID),
+                    to: AX25Address(call: toCall, ssid: toSSID),
+                    via: PacketEncoding.decodeViaPath(viaPath),
+                    frameType: FrameType(rawValue: frameTypeRaw) ?? .unknown,
+                    control: PacketEncoding.decodeControl(controlHex),
+                    pid: pidValue.map { UInt8(clamping: $0) },
+                    info: payload,
+                    rawAx25: Data(),
+                    kissEndpoint: nil,
+                    infoText: infoText,
+                    // Without this every stored frame came back belonging to no
+                    // radio, which the analytics scope reads as the primary one:
+                    // hiding that radio emptied the page and showing it drew
+                    // every other radio's traffic too (2026-09-17).
+                    radioID: RadioID(rawValue: radioIDRaw ?? RadioID.primary.rawValue)
+                )
+            }
+        }
+    }
+
+    /// A SELECT expression for `column`, or a NULL of the same name when the
+    /// database does not have it. Reads run against databases this build never
+    /// migrated — a kept snapshot, a fixture — and naming a column that is not
+    /// there fails the whole query rather than the one field.
+    private static func selectableColumn(
+        _ column: String,
+        in db: Database,
+        as expression: String? = nil,
+        alias: String? = nil
+    ) throws -> String {
+        let name = alias ?? column
+        let present = try db.columns(in: PacketRecord.databaseTableName)
+            .contains { $0.name == column }
+        guard present else { return "NULL AS \(name)" }
+        return "\(expression ?? column) AS \(name)"
+    }
+
     func deleteAll() throws {
         try dbQueue.write { db in
             _ = try PacketRecord.deleteAll(db)
+            // Reclaim disk space immediately
+            try db.execute(sql: "PRAGMA incremental_vacuum")
         }
     }
 
@@ -71,6 +164,8 @@ final class SQLitePacketStore: PacketStore, @unchecked Sendable {
                 """,
                 arguments: [overflow]
             )
+            // Reclaim disk space incrementally (up to 100 pages ~400KB at a time)
+            try db.execute(sql: "PRAGMA incremental_vacuum(100)")
         }
     }
 
@@ -85,12 +180,399 @@ final class SQLitePacketStore: PacketStore, @unchecked Sendable {
     func loadAllChronological() throws -> [PacketRecord] {
         try dbQueue.read { db in
             try PacketRecord
+                // Replay means what the station heard. Feeding our own
+                // transmissions back through the decoder would have this
+                // station answering itself.
+                .filter(Column("direction") == "rx")
                 .order(Column("receivedAt").asc)
                 .fetchAll(db)
         }
     }
+
+    func aggregateAnalytics(
+        in timeframe: DateInterval,
+        bucket: TimeBucket,
+        calendar: Calendar,
+        options: AnalyticsAggregator.Options
+    ) throws -> AnalyticsAggregationResult {
+        try dbQueue.read { db in
+            let start = timeframe.start
+            let end = timeframe.end
+
+            guard end > start else {
+                return Self.emptyAggregation(interval: timeframe, bucket: bucket, calendar: calendar)
+            }
+
+            // The radio scope has to reach the query: this path aggregates
+            // from columns, so the caller cannot filter the packets first, and
+            // without it the summary counted every radio and sat unchanged when
+            // the operator hid one (2026-09-17). A row written before the radio
+            // column existed reads as the primary radio, matching `toPacket()`.
+            var arguments: [String: (any DatabaseValueConvertible)?] = ["start": start, "end": end]
+            var radioClause = ""
+            let selection = options.radioSelection
+            // As in `loadPackets`: an un-migrated snapshot may not have these.
+            let radioExpression = try db.columns(in: PacketRecord.databaseTableName)
+                .contains { $0.name == "radioID" } ? "radioID" : "NULL"
+            let dataTypeColumn = try Self.selectableColumn(
+                "infoHex", in: db, as: "substr(infoHex, 1, 2)", alias: "infoDataType")
+
+            /// Names one radio id as a bound argument and returns its placeholder.
+            func bind(_ rawValue: String, _ name: String) -> String {
+                arguments[name] = rawValue
+                return ":\(name)"
+            }
+
+            if !selection.hidden.isEmpty {
+                let primary = bind(RadioID.primary.rawValue, "primaryRadio")
+                let placeholders = selection.hidden.map(\.rawValue).sorted()
+                    .enumerated()
+                    .map { bind($0.element, "hiddenRadio\($0.offset)") }
+                radioClause += " AND COALESCE(\(radioExpression), \(primary)) NOT IN (\(placeholders.joined(separator: ", ")))"
+            }
+            if let channelRadios = selection.channelRadios {
+                guard !channelRadios.isEmpty else {
+                    return Self.emptyAggregation(interval: timeframe, bucket: bucket, calendar: calendar)
+                }
+                let primary = bind(RadioID.primary.rawValue, "primaryRadio")
+                let placeholders = channelRadios.map(\.rawValue).sorted()
+                    .enumerated()
+                    .map { bind($0.element, "channelRadio\($0.offset)") }
+                radioClause += " AND COALESCE(\(radioExpression), \(primary)) IN (\(placeholders.joined(separator: ", ")))"
+            }
+            let args = StatementArguments(arguments)
+
+            let baseSQL = """
+                SELECT receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType,
+                       controlHex, infoText, infoLen, \(dataTypeColumn)
+                FROM \(PacketRecord.databaseTableName)
+                WHERE receivedAt >= :start AND receivedAt < :end\(radioClause)
+            """
+
+            var totalPackets = 0
+            var totalPayloadBytes = 0
+            var infoTextCount = 0
+            var uiFrames = 0
+            var iFrames = 0
+            var maxPayload = 0
+
+            var uniqueStations: Set<String> = []
+            var packetCounts: [BucketKey: Int] = [:]
+            var payloadBytes: [BucketKey: Int] = [:]
+            var uniqueStationsByBucket: [BucketKey: Set<String>] = [:]
+            var uiCountsByBucket: [BucketKey: Int] = [:]
+            var iCountsByBucket: [BucketKey: Int] = [:]
+            var otherCountsByBucket: [BucketKey: Int] = [:]
+            var rejectCountsByBucket: [BucketKey: Int] = [:]
+            var heatmapCounts: [Date: [Int]] = [:]
+            var talkerCounts: [String: Int] = [:]
+            var destinationCounts: [String: Int] = [:]
+            var digipeaterCounts: [String: Int] = [:]
+
+            let clampedEnd = max(start, end.addingTimeInterval(-0.001))
+            let heatmapStartDay = calendar.startOfDay(for: start)
+            let heatmapEndDay = calendar.startOfDay(for: clampedEnd)
+
+            var day = heatmapStartDay
+            while day <= heatmapEndDay {
+                heatmapCounts[day] = Array(repeating: 0, count: 24)
+                day = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86_400)
+            }
+
+            let rows = try Row.fetchCursor(db, sql: baseSQL, arguments: args)
+            while let row = try rows.next() {
+                totalPackets += 1
+
+                let timestamp: Date = row["receivedAt"]
+                let fromCall: String = row["fromCall"]
+                let fromSSID: Int = row["fromSSID"]
+                let toCall: String = row["toCall"]
+                let toSSID: Int = row["toSSID"]
+                let viaPath: String = row["viaPath"]
+                let frameTypeRaw: String = row["frameType"]
+                let controlHex: String = row["controlHex"]
+                let infoText: String? = row["infoText"]
+                let payloadLength: Int = row["infoLen"]
+
+                totalPayloadBytes += payloadLength
+                maxPayload = max(maxPayload, payloadLength)
+                if let infoText, !infoText.isEmpty {
+                    infoTextCount += 1
+                }
+
+                if frameTypeRaw == FrameType.ui.rawValue {
+                    uiFrames += 1
+                } else if frameTypeRaw == FrameType.i.rawValue {
+                    iFrames += 1
+                }
+
+                let fromDisplay = CallsignNormalizer.display(call: fromCall, ssid: fromSSID)
+                let toDisplay = CallsignNormalizer.display(call: toCall, ssid: toSSID)
+                let from = StationNormalizer.normalize(fromDisplay)
+                // An APRS destination holds a latitude or the sender's software
+                // name, so it is not a station and must not be counted as one —
+                // the same rule PacketEvent applies on the in-memory path.
+                let dataTypeHex: String? = row["infoDataType"]
+                let destinationIsData = APRSDestinationAddress.carriesDataRatherThanAStation(
+                    frameType: FrameType(rawValue: frameTypeRaw) ?? .unknown,
+                    destinationCall: toCall,
+                    firstInfoByte: dataTypeHex.flatMap { UInt8($0, radix: 16) })
+                let to = destinationIsData ? nil : StationNormalizer.normalize(toDisplay)
+                let identityMode = options.stationIdentityMode
+                // Only digipeaters that actually repeated the frame (H bit set) count as
+                // observed stations — mirrors AnalyticsAggregator's in-memory semantics.
+                let repeatedVia = PacketEncoding.decodeViaPath(viaPath)
+                    .filter(\.repeated)
+                    .compactMap { StationNormalizer.normalize($0.display) }
+
+                // Station-validity filtering must match AnalyticsAggregator so the
+                // "Unique stations" card and series read the same regardless of whether
+                // history persistence routes aggregation through SQLite or memory.
+                if let from, CallsignValidator.isValidRoutingNode(from) {
+                    let key = CallsignParser.identityKey(for: from, mode: identityMode)
+                    talkerCounts[key, default: 0] += 1
+                    uniqueStations.insert(key)
+                }
+                if let to, CallsignValidator.isValidRoutingNode(to) {
+                    let key = CallsignParser.identityKey(for: to, mode: identityMode)
+                    destinationCounts[key, default: 0] += 1
+                    uniqueStations.insert(key)
+                }
+
+                for station in repeatedVia where CallsignValidator.isValidRoutingNode(station) {
+                    let key = CallsignParser.identityKey(for: station, mode: identityMode)
+                    if options.includeViaDigipeaters {
+                        uniqueStations.insert(key)
+                    }
+                    digipeaterCounts[key, default: 0] += 1
+                }
+
+                let seriesKey = BucketKey(date: timestamp, bucket: bucket, calendar: calendar)
+                packetCounts[seriesKey, default: 0] += 1
+                payloadBytes[seriesKey, default: 0] += payloadLength
+                if frameTypeRaw == FrameType.ui.rawValue {
+                    uiCountsByBucket[seriesKey, default: 0] += 1
+                } else if frameTypeRaw == FrameType.i.rawValue {
+                    iCountsByBucket[seriesKey, default: 0] += 1
+                } else {
+                    otherCountsByBucket[seriesKey, default: 0] += 1
+                }
+                // REJ (sType 2) / SREJ (sType 3) from the mod-8 S-frame control byte:
+                // the peer asked for a retransmit — a direct RF-loss indicator.
+                if frameTypeRaw == FrameType.s.rawValue {
+                    let control = PacketEncoding.decodeControl(controlHex)
+                    let sType = (control >> 2) & 0x03
+                    if sType >= 2 {
+                        rejectCountsByBucket[seriesKey, default: 0] += 1
+                    }
+                }
+
+                var bucketStations = uniqueStationsByBucket[seriesKey, default: []]
+                if let from, CallsignValidator.isValidRoutingNode(from) {
+                    bucketStations.insert(CallsignParser.identityKey(for: from, mode: identityMode))
+                }
+                if let to, CallsignValidator.isValidRoutingNode(to) {
+                    bucketStations.insert(CallsignParser.identityKey(for: to, mode: identityMode))
+                }
+                if options.includeViaDigipeaters {
+                    for station in repeatedVia where CallsignValidator.isValidRoutingNode(station) {
+                        bucketStations.insert(CallsignParser.identityKey(for: station, mode: identityMode))
+                    }
+                }
+                uniqueStationsByBucket[seriesKey] = bucketStations
+
+                let packetDay = calendar.startOfDay(for: timestamp)
+                let packetHour = calendar.component(.hour, from: timestamp)
+                if var rowCounts = heatmapCounts[packetDay], packetHour >= 0, packetHour < 24 {
+                    rowCounts[packetHour] += 1
+                    heatmapCounts[packetDay] = rowCounts
+                }
+            }
+
+            let summary = AnalyticsSummaryMetrics(
+                totalPackets: totalPackets,
+                uniqueStations: uniqueStations.count,
+                totalPayloadBytes: totalPayloadBytes,
+                uiFrames: uiFrames,
+                iFrames: iFrames,
+                infoTextRatio: totalPackets > 0 ? Double(infoTextCount) / Double(totalPackets) : 0
+            )
+
+            let seriesBucketKeys = Self.bucketKeys(interval: timeframe, bucket: bucket, calendar: calendar)
+            let series = AnalyticsSeries(
+                packetsPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: packetCounts[$0, default: 0]) },
+                bytesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: payloadBytes[$0, default: 0]) },
+                uniqueStationsPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: uniqueStationsByBucket[$0]?.count ?? 0) },
+                uiFramesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: uiCountsByBucket[$0, default: 0]) },
+                iFramesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: iCountsByBucket[$0, default: 0]) },
+                otherFramesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: otherCountsByBucket[$0, default: 0]) },
+                rejectFramesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: rejectCountsByBucket[$0, default: 0]) }
+            )
+
+            let days = Self.dayRange(startDay: heatmapStartDay, endDay: heatmapEndDay, calendar: calendar)
+            let formatter = DateFormatter()
+            formatter.dateFormat = "MMM d"
+            let heatmap = HeatmapData(
+                matrix: days.map { heatmapCounts[$0] ?? Array(repeating: 0, count: 24) },
+                xLabels: (0..<24).map { String(format: "%02d", $0) },
+                yLabels: days.map { formatter.string(from: $0) }
+            )
+
+            let histogram = try Self.computeHistogram(
+                db: db,
+                start: start,
+                end: end,
+                maxPayload: maxPayload,
+                binCount: options.histogramBinCount
+            )
+
+            return AnalyticsAggregationResult(
+                summary: summary,
+                series: series,
+                heatmap: heatmap,
+                histogram: histogram,
+                topTalkers: Self.rankRows(from: talkerCounts, limit: options.topLimit),
+                topDestinations: Self.rankRows(from: destinationCounts, limit: options.topLimit),
+                topDigipeaters: Self.rankRows(from: digipeaterCounts, limit: options.topLimit)
+            )
+        }
+    }
+
+    private static func computeHistogram(
+        db: Database,
+        start: Date,
+        end: Date,
+        maxPayload: Int,
+        binCount: Int
+    ) throws -> HistogramData {
+        guard binCount > 0 else { return .empty }
+        let bucketSize = max(1, Int(ceil(Double(maxPayload + 1) / Double(binCount))))
+        var bins = Array(repeating: 0, count: binCount)
+
+        // Zero-payload frames are excluded to match AnalyticsAggregator: they would
+        // flood the first bin and hide the distribution of actual data frames.
+        let payloadRows = try Row.fetchCursor(
+            db,
+            sql: """
+                SELECT infoLen
+                FROM \(PacketRecord.databaseTableName)
+                WHERE receivedAt >= ? AND receivedAt < ? AND infoLen > 0 AND direction = 'rx'
+            """,
+            arguments: [start, end]
+        )
+        while let row = try payloadRows.next() {
+            let payload: Int = row["infoLen"]
+            let index = min(binCount - 1, max(0, payload / bucketSize))
+            bins[index] += 1
+        }
+
+        let histogramBins = bins.enumerated().map { index, count in
+            HistogramBin(
+                lowerBound: index * bucketSize,
+                upperBound: (index + 1) * bucketSize - 1,
+                count: count
+            )
+        }
+        return HistogramData(bins: histogramBins, maxValue: maxPayload)
+    }
+
+    private static func bucketKeys(interval: DateInterval, bucket: TimeBucket, calendar: Calendar) -> [BucketKey] {
+        guard interval.end > interval.start else { return [] }
+        let clampedEnd = max(interval.start, interval.end.addingTimeInterval(-0.001))
+        let start = bucket.normalizedStart(for: interval.start, calendar: calendar)
+        let end = bucket.normalizedStart(for: clampedEnd, calendar: calendar)
+        guard start <= end else { return [] }
+
+        var current = start
+        var keys: [BucketKey] = []
+        while current <= end {
+            keys.append(BucketKey(date: current, bucket: bucket, calendar: calendar))
+            current = advance(date: current, bucket: bucket, calendar: calendar)
+        }
+        return keys
+    }
+
+    private static func advance(date: Date, bucket: TimeBucket, calendar: Calendar) -> Date {
+        switch bucket {
+        case .tenSeconds:
+            return calendar.date(byAdding: .second, value: 10, to: date) ?? date.addingTimeInterval(10)
+        case .minute:
+            return calendar.date(byAdding: .minute, value: 1, to: date) ?? date.addingTimeInterval(60)
+        case .fiveMinutes:
+            return calendar.date(byAdding: .minute, value: 5, to: date) ?? date.addingTimeInterval(300)
+        case .fifteenMinutes:
+            return calendar.date(byAdding: .minute, value: 15, to: date) ?? date.addingTimeInterval(900)
+        case .hour:
+            return calendar.date(byAdding: .hour, value: 1, to: date) ?? date.addingTimeInterval(3_600)
+        case .day:
+            return calendar.date(byAdding: .day, value: 1, to: date) ?? date.addingTimeInterval(86_400)
+        }
+    }
+
+    private static func dayRange(startDay: Date, endDay: Date, calendar: Calendar) -> [Date] {
+        guard startDay <= endDay else { return [] }
+        var days: [Date] = []
+        var current = startDay
+        while current <= endDay {
+            days.append(current)
+            current = calendar.date(byAdding: .day, value: 1, to: current) ?? current.addingTimeInterval(86_400)
+        }
+        return days
+    }
+
+    private static func rankRows(
+        from counts: [String: Int],
+        limit: Int
+    ) -> [RankRow] {
+        guard limit > 0 else { return [] }
+        // Entries were validated (isValidRoutingNode) and identity-grouped at
+        // insertion time; tactical aliases rank like callsigns.
+        return counts
+            .map { RankRow(label: $0.key, count: $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.count == rhs.count {
+                    return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+                }
+                return lhs.count > rhs.count
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private static func emptyAggregation(
+        interval: DateInterval,
+        bucket: TimeBucket,
+        calendar: Calendar
+    ) -> AnalyticsAggregationResult {
+        let keys = bucketKeys(interval: interval, bucket: bucket, calendar: calendar)
+        let zeroPoints = keys.map { AnalyticsSeriesPoint(bucket: $0.date, value: 0) }
+        let emptySeries = AnalyticsSeries(
+            packetsPerBucket: zeroPoints,
+            bytesPerBucket: zeroPoints,
+            uniqueStationsPerBucket: zeroPoints,
+            uiFramesPerBucket: zeroPoints,
+            iFramesPerBucket: zeroPoints,
+            otherFramesPerBucket: zeroPoints,
+            rejectFramesPerBucket: zeroPoints
+        )
+        return AnalyticsAggregationResult(
+            summary: AnalyticsSummaryMetrics(
+                totalPackets: 0,
+                uniqueStations: 0,
+                totalPayloadBytes: 0,
+                uiFrames: 0,
+                iFrames: 0,
+                infoTextRatio: 0
+            ),
+            series: emptySeries,
+            heatmap: .empty,
+            histogram: .empty,
+            topTalkers: [],
+            topDestinations: [],
+            topDigipeaters: []
+        )
+    }
 }
 
-enum PacketStoreError: Error {
-    case missingKISSEndpoint
+nonisolated enum PacketStoreError: Error {
 }

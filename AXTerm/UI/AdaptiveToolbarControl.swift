@@ -1,0 +1,415 @@
+import SwiftUI
+import Charts
+
+struct AdaptiveToolbarControl: View {
+    @ObservedObject var store: AdaptiveStatusStore
+    var linkViz: LinkVizMonitor?
+    var onOpenAnalytics: (() -> Void)?
+    @State private var isPopoverPresented = false
+
+    var body: some View {
+        Button {
+            isPopoverPresented.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Text("Adaptive")
+                    .font(.system(size: 11, weight: .semibold))
+
+                if let effective = store.effectiveAdaptive {
+                    LinkQualityIcon(lossRate: effective.lossRate)
+                    Text("· K\(effective.k) P\(effective.p) N2 \(effective.n2)")
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                    if let destination = effective.destination, !destination.isEmpty {
+                        Text("· Session")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("· Waiting")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.thinMaterial, in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
+            AdaptivePopoverContent(store: store, linkViz: linkViz, onOpenAnalytics: onOpenAnalytics)
+        }
+        .help("Adaptive transmission status")
+    }
+}
+
+private struct AdaptivePopoverContent: View {
+    @ObservedObject var store: AdaptiveStatusStore
+    var linkViz: LinkVizMonitor?
+    var onOpenAnalytics: (() -> Void)?
+
+    private enum ChartMode: String, CaseIterable {
+        case etx = "ETX"
+        case rtt = "RTT"
+        case window = "Window"
+    }
+    @State private var chartMode: ChartMode = .etx
+
+    private let gridColumns: [GridItem] = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8)
+    ]
+
+    var body: some View {
+        let adaptive = store.effectiveAdaptive
+        VStack(alignment: .leading, spacing: 12) {
+            header(adaptive: adaptive)
+
+            LazyVGrid(columns: gridColumns, spacing: 8) {
+                metricCard(
+                    label: "ETX",
+                    info: "Expected transmissions per successful frame, smoothed (EWMA, newest sample weighted 0.3). This is the value the controller's thresholds compare against — ≤1.5 allows window upgrades, >2.0 forces 64-byte frames. Lower is better.",
+                    value: adaptive.map { format($0.smoothedEtx ?? $0.etx) } ?? "—",
+                    emphasized: true
+                )
+                metricCard(
+                    label: "Loss",
+                    info: "Frame-loss estimate, smoothed (EWMA of retransmits ÷ transmissions per sample). ≥20% forces stop-and-wait; ≤10% sustained allows recovery.",
+                    value: adaptive.map { formatPercent($0.smoothedLoss ?? $0.lossRate) } ?? "—"
+                )
+                metricCard(label: "K", info: "Window size: outstanding frames allowed. Earned +1 per confirmed 10-clean-frame streak, halved on retransmission.", value: adaptive.map { "\($0.k)" } ?? "—")
+                metricCard(label: "P", info: "Packet size in bytes. Steps 64 → 128 → 192 → 256 on sustained stability; drops immediately on loss.", value: adaptive.map { "\($0.p)" } ?? "—")
+                metricCard(label: "N2", info: "Maximum retries before fail.", value: adaptive.map { "\($0.n2)" } ?? "—")
+                metricCard(label: "RTO", info: "Current retransmission timeout (2 × smoothed RTT, clamped). Also seeds the connect timer for this route.", value: adaptive.map { formatSeconds($0.currentRto) } ?? "—")
+            }
+
+            if let adaptive {
+                learningStatus(adaptive: adaptive)
+            }
+
+            listenOnlyRadiosNote
+
+            chartSection
+
+            HStack(spacing: 10) {
+                Button("Copy Metrics") {
+                    copyMetrics()
+                }
+                .platformLinkButton()
+
+                if let onOpenAnalytics {
+                    Button("Open Analytics…") {
+                        onOpenAnalytics()
+                    }
+                    .platformLinkButton()
+                }
+                Spacer()
+            }
+            .font(.system(size: 11))
+        }
+        .padding(14)
+        .frame(width: 360)
+    }
+
+    @ViewBuilder
+    private func header(adaptive: AdaptiveParams?) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Adaptive")
+                    .font(.system(size: 15, weight: .semibold))
+                if let updated = adaptive?.updatedAt {
+                    Text("Updated \(relativeDate(updated))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            Text(contextChipText(adaptive: adaptive))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(platform: .platformQuaternaryLabel).opacity(0.1), in: Capsule())
+        }
+    }
+
+    /// The controller's "show your work" row: what it is doing right now
+    /// (trial / streak / waiting) and a running count of what it has done.
+    @ViewBuilder
+    private func learningStatus(adaptive: AdaptiveParams) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: adaptive.probationFramesRemaining != nil
+                      ? "testtube.2" : "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 10))
+                    .foregroundStyle(adaptive.probationFramesRemaining != nil ? Color.orange : .secondary)
+                Text(adaptive.learningNarrative)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.primary)
+            }
+            Text(adaptive.activitySummary)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(platform: .platformCardBackground).opacity(0.55))
+        )
+        .help("The adaptive controller only upgrades after a sustained clean streak, and every upgrade runs a trial: a retransmission during the trial rolls it back and doubles the streak required next time.")
+    }
+
+    /// Radios the tuner has nothing to learn from, and why.
+    ///
+    /// Without this a radio simply does not appear, and the operator is left
+    /// to work out whether it is starting up, misconfigured or broken. An
+    /// APRS radio is none of those. It is doing its job, and its job produces
+    /// no evidence about loss.
+    @ViewBuilder
+    private var listenOnlyRadiosNote: some View {
+        if !store.radiosCarryingOnlyAPRS.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(store.radiosCarryingOnlyAPRS, id: \.rawValue) { radio in
+                    HStack(alignment: .top, spacing: 5) {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(radioName(radio)) carries APRS only")
+                                .font(.system(size: 11, weight: .medium))
+                            Text("A beacon that goes missing leaves no trace, so there is "
+                                 + "no loss here to measure. This radio keeps the settings "
+                                 + "you configured.")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(platform: .platformCardBackground).opacity(0.55))
+            )
+            .help("Adaptive tuning reads packet loss, and packet loss can only be counted where a lost frame leaves a trace: a retransmission, a reject, a duplicate. Connected-mode traffic leaves all three. A beacon leaves none, so a radio hearing only beacons is left on the settings you chose.")
+        }
+    }
+
+    private func radioName(_ radio: RadioID) -> String {
+        SessionCoordinator.shared?.radioName(radio) ?? radio.rawValue
+    }
+
+    /// The link the RTT/Window charts describe: the selected adaptive
+    /// session's destination, else the most recently active link.
+    private var currentLinkViz: LinkSessionViz? {
+        guard let linkViz else { return nil }
+        if let destination = store.effectiveAdaptive?.destination,
+           let viz = linkViz.sessions[destination.uppercased()] {
+            return viz
+        }
+        return linkViz.mostRecentlyActive
+    }
+
+    @ViewBuilder
+    private var chartSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("", selection: $chartMode) {
+                ForEach(ChartMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .help("ETX: channel-wide expected transmissions over the last hour. RTT: this link's round-trip time and retransmission timeout. Window: this link's frames in flight vs the configured window, with loss events marked.")
+
+            switch chartMode {
+            case .etx:
+                etxChart
+            case .rtt:
+                if let viz = currentLinkViz, viz.rttHistory.count >= 3 {
+                    RTTChartView(samples: viz.rttHistory)
+                        .frame(height: 140)
+                } else {
+                    chartPlaceholder("No RTT samples yet — connect a session.")
+                }
+            case .window:
+                if let viz = currentLinkViz, viz.windowHistory.count >= 3 {
+                    WindowSawtoothView(samples: viz.windowHistory)
+                        .frame(height: 140)
+                } else {
+                    chartPlaceholder("No window activity yet — connect a session.")
+                }
+            }
+        }
+    }
+
+    private func chartPlaceholder(_ text: String) -> some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Color(platform: .platformCardBackground).opacity(0.55))
+            .frame(height: 110)
+            .overlay {
+                Text(text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+    }
+
+    @ViewBuilder
+    private var etxChart: some View {
+        let points = store.effectiveETXHistory.sorted { $0.timestamp < $1.timestamp }
+        if chartHasEnoughData(points) {
+            Chart(points) { sample in
+                LineMark(
+                    x: .value("Time", sample.timestamp),
+                    y: .value("ETX", sample.etx)
+                )
+                .interpolationMethod(.catmullRom)
+                .foregroundStyle(Color.accentColor)
+            }
+            .frame(height: 140)
+            .chartYAxisLabel("ETX", position: .leading)
+            .chartXAxisLabel(chartWindowLabel, position: .bottomTrailing)
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 4))
+            }
+        } else {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(platform: .platformCardBackground).opacity(0.55))
+                .frame(height: 110)
+                .overlay {
+                    Text("Collecting metrics…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func metricCard(label: String, info: String, value: String, emphasized: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Image(systemName: "info.circle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .help(info)
+                Spacer()
+            }
+            Text(value)
+                .font(.system(size: emphasized ? 15 : 13, weight: emphasized ? .semibold : .medium))
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(platform: .platformCardBackground).opacity(0.55))
+        )
+    }
+
+    /// Which channel and route this figure is about. Since the tuner keeps
+    /// state per radio, "Global Network" would now be a lie on a station with
+    /// more than one — see `AdaptiveScopeLabel`.
+    private func contextChipText(adaptive: AdaptiveParams?) -> String {
+        AdaptiveScopeLabel.text(for: adaptive,
+                                radioName: { SessionCoordinator.shared?.radioName($0) },
+                                hasMultipleRadios: (SessionCoordinator.shared?.hasMultipleRadios ?? false))
+    }
+
+    private var chartWindowLabel: String {
+        let minutes = Int(store.effectiveETXWindow / 60)
+        return minutes >= 60 ? "last hour" : "last \(minutes) min"
+    }
+
+    private func chartHasEnoughData(_ points: [AdaptiveETXSample]) -> Bool {
+        guard points.count >= 3, let first = points.first, let last = points.last else { return false }
+        return last.timestamp.timeIntervalSince(first.timestamp) >= 30
+    }
+
+    private func relativeDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private func format(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%.2f", value)
+    }
+
+    private func formatPercent(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%.0f%%", value * 100)
+    }
+
+    private func formatSeconds(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%.1fs", value)
+    }
+
+    private func copyMetrics() {
+        guard let adaptive = store.effectiveAdaptive else { return }
+        let scope: String
+        if let destination = adaptive.destination {
+            scope = "Session \(destination)"
+        } else {
+            scope = "Global"
+        }
+        let summary = """
+        \(scope) Adaptive K\(adaptive.k) P\(adaptive.p) N2 \(adaptive.n2) \
+        ETX \(format(adaptive.smoothedEtx ?? adaptive.etx)) \
+        Loss \(formatPercent(adaptive.smoothedLoss ?? adaptive.lossRate)) \
+        RTO \(formatSeconds(adaptive.currentRto))
+        \(adaptive.learningNarrative)
+        \(adaptive.activitySummary)
+        """
+        ClipboardWriter.copy(summary)
+    }
+}
+
+private struct LinkQualityIcon: View {
+    let lossRate: Double?
+    
+    var body: some View {
+        if let lossRate {
+            if lossRate <= 0.10 {
+                Image(systemName: "cellularbars")
+                    .foregroundStyle(.green)
+                    .font(.system(size: 11))
+            } else if lossRate <= 0.25 {
+                Image(systemName: "cellularbars")
+                    .foregroundStyle(.yellow)
+                    .font(.system(size: 11))
+            } else if lossRate <= 0.50 {
+                Image(systemName: "cellularbars")
+                    .foregroundStyle(.orange)
+                    .font(.system(size: 11))
+            } else {
+                Image(systemName: "cellularbars")
+                    .foregroundStyle(.red)
+                    .font(.system(size: 11))
+            }
+        } else {
+            Image(systemName: "cellularbars")
+                .foregroundStyle(.secondary.opacity(0.3))
+                .font(.system(size: 11))
+        }
+    }
+}

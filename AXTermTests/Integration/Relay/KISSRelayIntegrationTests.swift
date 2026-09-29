@@ -172,7 +172,11 @@ final class KISSRelayIntegrationTests: XCTestCase {
         let frames = parser.feed(received)
 
         XCTAssertEqual(frames.count, 1, "Should receive exactly one frame")
-        XCTAssertEqual(frames[0], payload, "Payload should match")
+        if case .ax25(let d) = frames[0] {
+            XCTAssertEqual(d, payload, "Payload should match")
+        } else {
+            XCTFail("Frame should be AX.25")
+        }
     }
 
     func testKISSFrameRelayBtoA() throws {
@@ -208,7 +212,11 @@ final class KISSRelayIntegrationTests: XCTestCase {
         let frames = parser.feed(received)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], payload)
+        if case .ax25(let d) = frames[0] {
+            XCTAssertEqual(d, payload)
+        } else {
+            XCTFail("Frame should be AX.25")
+        }
     }
 
     // MARK: - AX.25 Frame Relay Tests
@@ -257,7 +265,14 @@ final class KISSRelayIntegrationTests: XCTestCase {
         XCTAssertEqual(frames.count, 1)
 
         // Decode AX.25
-        let decoded = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] {
+            frameData = d
+        } else {
+            XCTFail("Frame should be AX.25")
+            return
+        }
+        let decoded = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.from?.call, "N0CALL")
         XCTAssertEqual(decoded?.from?.ssid, 7)
@@ -310,7 +325,14 @@ final class KISSRelayIntegrationTests: XCTestCase {
 
         XCTAssertEqual(frames.count, 1)
 
-        let decoded = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] {
+            frameData = d
+        } else {
+            XCTFail("Frame should be AX.25")
+            return
+        }
+        let decoded = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.via.count, 2)
         XCTAssertEqual(decoded?.via[0].call, "WIDE1")
@@ -372,7 +394,14 @@ final class KISSRelayIntegrationTests: XCTestCase {
 
         XCTAssertEqual(frames.count, 1)
 
-        let ax25Decoded = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] {
+            frameData = d
+        } else {
+            XCTFail("Frame should be AX.25")
+            return
+        }
+        let ax25Decoded = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(ax25Decoded)
 
         if let info = ax25Decoded?.info {
@@ -437,7 +466,14 @@ final class KISSRelayIntegrationTests: XCTestCase {
 
         XCTAssertEqual(frames.count, 1)
 
-        let ax25Decoded = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] {
+            frameData = d
+        } else {
+            XCTFail("Frame should be AX.25")
+            return
+        }
+        let ax25Decoded = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(ax25Decoded)
 
         if let info = ax25Decoded?.info {
@@ -499,7 +535,14 @@ final class KISSRelayIntegrationTests: XCTestCase {
 
         XCTAssertEqual(frames.count, 1)
 
-        let decoded = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] {
+            frameData = d
+        } else {
+            XCTFail("Frame should be AX.25")
+            return
+        }
+        let decoded = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.info, largePayload)
 
@@ -545,7 +588,14 @@ final class KISSRelayIntegrationTests: XCTestCase {
 
         XCTAssertEqual(frames.count, 1)
 
-        let decoded = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] {
+            frameData = d
+        } else {
+            XCTFail("Frame should be AX.25")
+            return
+        }
+        let decoded = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.info, specialInfo, "Special bytes should survive KISS encoding")
 
@@ -585,9 +635,13 @@ final class KISSRelayIntegrationTests: XCTestCase {
         var parserB = KISSFrameParser()
         let framesB = parserB.feed(receivedAtB)
         XCTAssertEqual(framesB.count, 1)
-        XCTAssertEqual(framesB[0], msgAtoB)
+        if case .ax25(let d) = framesB[0] {
+            XCTAssertEqual(d, msgAtoB)
+        } else {
+            XCTFail("Frame should be AX.25")
+        }
 
-        print("A->B: received '\(String(data: framesB[0], encoding: .utf8) ?? "?")'")
+        print("A->B: received '\(String(data: (try? framesB[0].ax25Data()) ?? Data(), encoding: .utf8) ?? "?")'")
 
         // Send from B to A
         let msgBtoA = Data("Message from B".utf8)
@@ -602,9 +656,13 @@ final class KISSRelayIntegrationTests: XCTestCase {
         var parserA = KISSFrameParser()
         let framesA = parserA.feed(receivedAtA)
         XCTAssertEqual(framesA.count, 1)
-        XCTAssertEqual(framesA[0], msgBtoA)
+        if case .ax25(let d) = framesA[0] {
+            XCTAssertEqual(d, msgBtoA)
+        } else {
+            XCTFail("Frame should be AX.25")
+        }
 
-        print("B->A: received '\(String(data: framesA[0], encoding: .utf8) ?? "?")'")
+        print("B->A: received '\(String(data: (try? framesA[0].ax25Data()) ?? Data(), encoding: .utf8) ?? "?")'")
     }
 
     func testSequentialFrames() throws {
@@ -642,7 +700,11 @@ final class KISSRelayIntegrationTests: XCTestCase {
             // Receive each frame as it arrives
             if let received = stationB.receive(timeout: 0.5) {
                 let frames = parserB.feed(received)
-                allReceivedFrames.append(contentsOf: frames)
+                for frame in frames {
+                    if case .ax25(let d) = frame {
+                        allReceivedFrames.append(d)
+                    }
+                }
             }
         }
 
@@ -699,7 +761,14 @@ final class KISSRelayIntegrationTests: XCTestCase {
         let frames1 = parser1.feed(received1)
         XCTAssertEqual(frames1.count, 1)
 
-        let decoded1 = AX25.decodeFrame(ax25: frames1[0])
+        var frameData1: Data?
+        if case .ax25(let d) = frames1[0] {
+            frameData1 = d
+        } else {
+            XCTFail("Frame should be AX.25")
+            return
+        }
+        let decoded1 = AX25.decodeFrame(ax25: frameData1!)
         XCTAssertNotNil(decoded1)
         XCTAssertFalse(AXDP.hasMagic(decoded1?.info ?? Data()), "Should NOT have AXDP magic")
         XCTAssertEqual(decoded1?.info, plainText)
@@ -725,7 +794,14 @@ final class KISSRelayIntegrationTests: XCTestCase {
         let frames2 = parser2.feed(received2)
         XCTAssertEqual(frames2.count, 1)
 
-        let decoded2 = AX25.decodeFrame(ax25: frames2[0])
+        var frameData2: Data?
+        if case .ax25(let d) = frames2[0] {
+            frameData2 = d
+        } else {
+            XCTFail("Frame should be AX.25")
+            return
+        }
+        let decoded2 = AX25.decodeFrame(ax25: frameData2!)
         XCTAssertNotNil(decoded2)
         XCTAssertTrue(AXDP.hasMagic(decoded2?.info ?? Data()), "Should have AXDP magic")
 
@@ -735,5 +811,13 @@ final class KISSRelayIntegrationTests: XCTestCase {
         print("AXDP packet received: '\(String(data: axdpDecoded?.payload ?? Data(), encoding: .utf8) ?? "?")'")
 
         print("\n--- Both packet types coexist correctly ---")
+    }
+}
+
+// Extension to help with extraction if needed, but not strictly necessary if handled usage-by-usage
+extension KISSFrameOutput {
+    func ax25Data() throws -> Data {
+        if case .ax25(let d) = self { return d }
+        throw NSError(domain: "Test", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not AX.25"])
     }
 }

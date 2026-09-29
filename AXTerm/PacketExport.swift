@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct PacketExport: Codable, Equatable {
+nonisolated struct PacketExport: Codable, Equatable {
     let id: UUID
     let timestamp: Date
     let from: String

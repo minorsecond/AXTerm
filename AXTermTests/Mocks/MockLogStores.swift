@@ -8,7 +8,7 @@
 import Foundation
 @testable import AXTerm
 
-final class MockConsoleStore: ConsoleStore {
+final class MockConsoleStore: ConsoleStore, @unchecked Sendable {
     private(set) var appendedEntries: [ConsoleEntryRecord] = []
     private(set) var deleteAllCalled = false
     private(set) var pruneCalls: [Int] = []
@@ -30,7 +30,7 @@ final class MockConsoleStore: ConsoleStore {
     }
 }
 
-final class MockRawStore: RawStore {
+final class MockRawStore: RawStore, @unchecked Sendable {
     private(set) var appendedEntries: [RawEntryRecord] = []
     private(set) var deleteAllCalled = false
     private(set) var pruneCalls: [Int] = []
@@ -52,7 +52,7 @@ final class MockRawStore: RawStore {
     }
 }
 
-final class MockEventLogStore: EventLogStore {
+final class MockEventLogStore: EventLogStore, @unchecked Sendable {
     private(set) var appendedEntries: [AppEventRecord] = []
     private(set) var deleteAllCalled = false
     private(set) var pruneCalls: [Int] = []
@@ -63,6 +63,12 @@ final class MockEventLogStore: EventLogStore {
 
     func loadRecent(limit: Int) throws -> [AppEventRecord] {
         Array(appendedEntries.suffix(limit)).reversed()
+    }
+
+    func loadEvents(category: AppEventRecord.Category, in window: DateInterval) throws -> [AppEventRecord] {
+        appendedEntries
+            .filter { $0.category == category && window.contains($0.createdAt) }
+            .sorted { $0.createdAt < $1.createdAt }
     }
 
     func deleteAll() throws {

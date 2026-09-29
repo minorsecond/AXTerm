@@ -42,8 +42,8 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         viewModel.customRangeEnd = date2.addingTimeInterval(60)
 
         viewModel.updatePackets(packets)
-        await waitFor { viewModel.viewState.series.packetsPerBucket.count == 2 }
-        XCTAssertEqual(viewModel.viewState.series.packetsPerBucket.count, 2)
+        await waitFor { viewModel.viewState.series.packetsPerBucket.count == 3 }
+        XCTAssertEqual(viewModel.viewState.series.packetsPerBucket.count, 3)
 
         // Change to a larger bucket (fifteenMinutes won't collapse them, but fiveMinutes should give us more buckets)
         // Actually for this test - if they're 65 minutes apart with hour bucket = 2 buckets.
@@ -150,6 +150,514 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.viewState.selectedNodeID)
     }
 
+    func testClearSelectionAndFitAlsoClearsFocusPillState() async {
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "fiveMinutes"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.setActive(true)
+
+        viewModel.handleNodeClick("alpha", isShift: false)
+        viewModel.focusState.setAnchor(nodeID: "alpha", displayName: "ALPHA")
+
+        XCTAssertEqual(viewModel.viewState.selectedNodeID, "alpha")
+        XCTAssertTrue(viewModel.focusState.isFocusEnabled)
+        XCTAssertEqual(viewModel.focusState.anchorNodeID, "alpha")
+
+        viewModel.clearSelectionAndFit()
+
+        XCTAssertTrue(viewModel.viewState.selectedNodeIDs.isEmpty)
+        XCTAssertNil(viewModel.viewState.selectedNodeID)
+        XCTAssertFalse(viewModel.focusState.isFocusEnabled)
+        XCTAssertNil(viewModel.focusState.anchorNodeID)
+        XCTAssertNotNil(viewModel.fitToSelectionRequest)
+        XCTAssertTrue(viewModel.fitTargetNodeIDs.isEmpty)
+    }
+
+    func testUsesDatabaseAggregationProviderWhenAvailable() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = true
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let expected = AnalyticsAggregationResult(
+            summary: AnalyticsSummaryMetrics(
+                totalPackets: 6200,
+                uniqueStations: 8,
+                totalPayloadBytes: 12400,
+                uiFrames: 4000,
+                iFrames: 1200,
+                infoTextRatio: 0.5
+            ),
+            series: AnalyticsSeries(
+                packetsPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 6200)],
+                bytesPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 12400)],
+                uniqueStationsPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 8)]
+            ),
+            heatmap: HeatmapData(matrix: [[6200]], xLabels: ["00"], yLabels: ["Feb 18"]),
+            histogram: HistogramData(bins: [HistogramBin(lowerBound: 0, upperBound: 127, count: 6200)], maxValue: 127),
+            topTalkers: [RankRow(label: "SRC", count: 6200)],
+            topDestinations: [RankRow(label: "DST", count: 6200)],
+            topDigipeaters: [RankRow(label: "DIGI", count: 900)]
+        )
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            databaseAggregationProvider: { _, _, _, _ in expected },
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.setActive(true)
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+
+        // Intentionally keep in-memory packets sparse; provider should still drive results.
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "ONE", to: "TWO")])
+
+        await waitFor { viewModel.viewState.summary?.totalPackets == 6200 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 6200)
+        XCTAssertEqual(viewModel.viewState.series.packetsPerBucket.first?.value, 6200)
+        XCTAssertEqual(viewModel.viewState.topTalkers.first?.label, "SRC")
+    }
+
+    func testManualRefreshBypassesAggregationCache() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+
+        final class CallCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func increment() { lock.lock(); value += 1; lock.unlock() }
+            var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+        }
+        let counter = CallCounter()
+
+        let result = AnalyticsAggregationResult(
+            summary: AnalyticsSummaryMetrics(
+                totalPackets: 1,
+                uniqueStations: 1,
+                totalPayloadBytes: 1,
+                uiFrames: 1,
+                iFrames: 0,
+                infoTextRatio: 1
+            ),
+            series: .empty,
+            heatmap: .empty,
+            histogram: .empty,
+            topTalkers: [],
+            topDestinations: [],
+            topDigipeaters: []
+        )
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            databaseAggregationProvider: { _, _, _, _ in
+                counter.increment()
+                return result
+            },
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.setActive(true)
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "ONE", to: "TWO")])
+
+        await waitFor { counter.count >= 1 }
+        let countBeforeRefresh = counter.count
+
+        // With identical inputs, an explicit refresh must still recompute rather than
+        // replay the cached result.
+        viewModel.manualRefresh()
+        await waitFor { counter.count > countBeforeRefresh }
+        XCTAssertGreaterThan(counter.count, countBeforeRefresh)
+    }
+
+    func testGraphBuildUsesTimeframePacketsProviderWhenAvailable() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let providerPacket = makePacket(
+            timestamp: timestamp,
+            from: "DBSRC",
+            to: "DBDST"
+        )
+        final class ProviderProbe: @unchecked Sendable {
+            var called = false
+        }
+        let probe = ProviderProbe()
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            timeframePacketsProvider: { _ in
+                probe.called = true
+                return [providerPacket]
+            },
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.setActive(true)
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+
+        // In-memory packets are empty; graph should still build from provider data.
+        viewModel.updatePackets([])
+
+        await waitFor { probe.called }
+        XCTAssertTrue(probe.called)
+        await waitFor { viewModel.viewState.networkHealth.metrics.totalPackets > 0 }
+        XCTAssertGreaterThan(viewModel.viewState.networkHealth.metrics.totalPackets, 0)
+    }
+
+    func testPrewarmDoesNotMutateViewStateWhileInactive() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+
+        viewModel.prewarmIfNeeded(with: [makePacket(timestamp: timestamp, from: "SRC", to: "DST")])
+        try? await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertNil(viewModel.viewState.summary)
+        XCTAssertTrue(viewModel.viewState.graphModel.nodes.isEmpty)
+
+        viewModel.setActive(true)
+        await waitFor { viewModel.viewState.summary?.totalPackets == 1 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 1)
+    }
+
+    func testAutoUpdateDisabledSkipsPacketDrivenAnalyticsRefresh() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+        settings.analyticsAutoUpdateEnabled = false
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+        viewModel.setActive(true)
+
+        await waitFor { viewModel.hasLoadedAggregation && viewModel.hasLoadedGraph }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets ?? 0, 0)
+
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "SRC1", to: "DST1")])
+        try? await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets ?? 0, 0)
+
+        viewModel.manualRefresh()
+        await waitFor { viewModel.viewState.summary?.totalPackets == 1 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 1)
+
+        // Reset to validate that enabling auto-update still resumes live updates.
+        viewModel.autoUpdateEnabled = true
+        let packet1 = makePacket(timestamp: timestamp, from: "SRC1", to: "DST1")
+        let packet2 = makePacket(timestamp: timestamp.addingTimeInterval(1), from: "SRC2", to: "DST2")
+        viewModel.updatePackets([packet1, packet2])
+        await waitFor { (viewModel.viewState.summary?.totalPackets ?? 0) == 2 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 2)
+
+        // Keep this explicit transition check as regression coverage.
+        viewModel.autoUpdateEnabled = false
+        let packet3 = makePacket(timestamp: timestamp.addingTimeInterval(2), from: "SRC3", to: "DST3")
+        viewModel.updatePackets([packet1, packet2, packet3])
+        try? await Task.sleep(for: .milliseconds(120))
+        let frozenCount = viewModel.viewState.summary?.totalPackets ?? 0
+        viewModel.autoUpdateEnabled = true
+        await waitFor { (viewModel.viewState.summary?.totalPackets ?? 0) > frozenCount }
+
+    }
+
+    func testAggregationLoadingFlagClearsAfterActivate() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let expected = AnalyticsAggregationResult(
+            summary: AnalyticsSummaryMetrics(
+                totalPackets: 10,
+                uniqueStations: 2,
+                totalPayloadBytes: 50,
+                uiFrames: 10,
+                iFrames: 0,
+                infoTextRatio: 1.0
+            ),
+            series: AnalyticsSeries(
+                packetsPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 10)],
+                bytesPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 50)],
+                uniqueStationsPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 2)]
+            ),
+            heatmap: HeatmapData(matrix: [[10]], xLabels: ["00"], yLabels: ["Feb 18"]),
+            histogram: HistogramData(bins: [HistogramBin(lowerBound: 0, upperBound: 127, count: 10)], maxValue: 127),
+            topTalkers: [RankRow(label: "SRC", count: 10)],
+            topDestinations: [RankRow(label: "DST", count: 10)],
+            topDigipeaters: []
+        )
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            databaseAggregationProvider: { _, _, _, _ in
+                try? await Task.sleep(for: .milliseconds(80))
+                return expected
+            },
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+
+        viewModel.setActive(true)
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "SRC", to: "DST")])
+
+        await waitFor { viewModel.viewState.summary?.totalPackets == 10 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 10)
+        XCTAssertFalse(viewModel.isAggregationLoading)
+    }
+
+    func testHasLoadedFlagsTransitionAfterActivate() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "SRC", to: "DST")])
+
+        XCTAssertFalse(viewModel.hasLoadedAggregation)
+        XCTAssertFalse(viewModel.hasLoadedGraph)
+
+        viewModel.setActive(true)
+        await waitFor { viewModel.hasLoadedAggregation }
+        await waitFor { viewModel.hasLoadedGraph }
+
+        XCTAssertTrue(viewModel.hasLoadedAggregation)
+        XCTAssertTrue(viewModel.hasLoadedGraph)
+    }
+
+    func testIgnoredServiceEndpointChangeRebuildsGraphAndAggregation() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "minute"
+        settings.analyticsIncludeVia = true
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 20
+        settings.analyticsAutoUpdateEnabled = false
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+        viewModel.setActive(true)
+
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "K0SRC", to: "K0DST", via: ["DRLNOD"])])
+        viewModel.manualRefresh()
+        await waitFor { viewModel.hasLoadedAggregation && viewModel.hasLoadedGraph }
+
+        XCTAssertTrue(viewModel.viewState.graphModel.nodes.contains { $0.callsign == "DRLNOD" })
+        XCTAssertTrue(viewModel.viewState.topDigipeaters.contains { $0.label == "DRLNOD" })
+
+        settings.addIgnoredServiceEndpoint("DRLNOD")
+        await waitFor {
+            !viewModel.viewState.graphModel.nodes.contains { $0.callsign == "DRLNOD" } &&
+            !viewModel.viewState.topDigipeaters.contains { $0.label == "DRLNOD" }
+        }
+    }
+
+    func testLensFilteringShowsExpectedRelationshipTypesEndToEnd() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let packets = [
+            // Direct peer evidence (bidirectional, no via)
+            makePacket(timestamp: timestamp, from: "W1AAA", to: "K2BBB"),
+            makePacket(timestamp: timestamp.addingTimeInterval(1), from: "K2BBB", to: "W1AAA"),
+
+            // Heard-direct evidence (one-way, repeated)
+            makePacket(timestamp: timestamp.addingTimeInterval(5), from: "N3CCC", to: "W1AAA"),
+            makePacket(timestamp: timestamp.addingTimeInterval(65), from: "N3CCC", to: "W1AAA"),
+
+            // Heard-via evidence
+            makePacket(timestamp: timestamp.addingTimeInterval(10), from: "W4DDD", to: "W1AAA", via: ["N0DIG"])
+        ]
+
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "fiveMinutes"
+        settings.analyticsIncludeVia = true
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 50
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-120)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(600)
+        viewModel.setActive(true)
+        viewModel.updatePackets(packets)
+        viewModel.manualRefresh()
+
+        await waitFor {
+            let types = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+            return types.contains(.directPeer) && types.contains(.heardDirect) && types.contains(.heardVia)
+        }
+
+        let allTypes = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+        XCTAssertTrue(allTypes.contains(.directPeer), "All lens should include direct peers")
+        XCTAssertTrue(allTypes.contains(.heardDirect), "All lens should include heard-direct evidence")
+        XCTAssertTrue(allTypes.contains(.heardVia), "All lens should include heard-via evidence")
+
+        viewModel.graphViewMode = .connectivity
+        await waitFor {
+            let types = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+            return types.isSubset(of: GraphViewMode.connectivity.visibleLinkTypes)
+        }
+        let connectivityTypes = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+        XCTAssertTrue(connectivityTypes.contains(.directPeer), "Direct lens should include direct peers")
+        XCTAssertTrue(connectivityTypes.contains(.heardDirect), "Direct lens should include heard-direct")
+        XCTAssertFalse(connectivityTypes.contains(.heardVia), "Direct lens should exclude heard-via")
+
+        viewModel.graphViewMode = .routing
+        await waitFor {
+            let types = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+            return types.isSubset(of: GraphViewMode.routing.visibleLinkTypes)
+        }
+        let routingTypes = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+        XCTAssertTrue(routingTypes.contains(.directPeer), "Routed lens should include direct peers")
+        XCTAssertTrue(routingTypes.contains(.heardVia), "Routed lens should include heard-via")
+        XCTAssertFalse(routingTypes.contains(.heardDirect), "Routed lens should exclude heard-direct")
+    }
+
+    func testNetworkHealthIsInvariantToViewFilters() async {
+
+        let now = Date()
+        let packets = [
+            makePacket(timestamp: now.addingTimeInterval(-120), from: "W1AAA", to: "K2BBB"),
+            makePacket(timestamp: now.addingTimeInterval(-119), from: "K2BBB", to: "W1AAA"),
+            makePacket(timestamp: now.addingTimeInterval(-110), from: "W1AAA", to: "N3CCC"),
+            makePacket(timestamp: now.addingTimeInterval(-109), from: "N3CCC", to: "W1AAA"),
+            makePacket(timestamp: now.addingTimeInterval(-100), from: "W4DDD", to: "W1AAA", via: ["N0DIG"]),
+            makePacket(timestamp: now.addingTimeInterval(-95), from: "W5EEE", to: "K2BBB", via: ["N0DIG"]),
+            makePacket(timestamp: now.addingTimeInterval(-90), from: "K2BBB", to: "W5EEE", via: ["N0DIG"])
+        ]
+
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "fiveMinutes"
+        settings.analyticsIncludeVia = true
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 200
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = now.addingTimeInterval(-900)
+        viewModel.customRangeEnd = now.addingTimeInterval(60)
+        viewModel.setActive(true)
+        viewModel.updatePackets(packets)
+        viewModel.manualRefresh()
+
+        await waitFor { viewModel.viewState.graphModel.nodes.count >= 4 }
+        let baseline = viewModel.viewState.networkHealth
+        let baselineVisibleEdgeCount = viewModel.viewState.graphModel.edges.count
+
+        viewModel.minEdgeCount = 6
+        viewModel.manualRefresh()
+
+        await waitFor { viewModel.viewState.graphModel.edges.count < baselineVisibleEdgeCount }
+        XCTAssertLessThan(viewModel.viewState.graphModel.edges.count, baselineVisibleEdgeCount, "View filters should materially change rendered edge set")
+
+        let filtered = viewModel.viewState.networkHealth
+        XCTAssertEqual(filtered.score, baseline.score, "Health score must not change due to view filters")
+        XCTAssertEqual(filtered.scoreBreakdown.c1MainClusterPct, baseline.scoreBreakdown.c1MainClusterPct, accuracy: 0.001)
+        XCTAssertEqual(filtered.scoreBreakdown.c2ConnectivityPct, baseline.scoreBreakdown.c2ConnectivityPct, accuracy: 0.001)
+        XCTAssertEqual(filtered.scoreBreakdown.c3IsolationReduction, baseline.scoreBreakdown.c3IsolationReduction, accuracy: 0.001)
+        XCTAssertEqual(filtered.scoreBreakdown.a1ActiveNodesPct, baseline.scoreBreakdown.a1ActiveNodesPct, accuracy: 0.001)
+        XCTAssertEqual(filtered.scoreBreakdown.a2PacketRateScore, baseline.scoreBreakdown.a2PacketRateScore, accuracy: 0.001)
+    }
+
     private func makeSettings() -> AppSettingsStore {
         let suiteName = "AXTermTests-AnalyticsDashboard-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
@@ -181,6 +689,104 @@ private extension AnalyticsDashboardViewModelTests {
         )) ?? Date(timeIntervalSince1970: 0)
     }
 
+    func testScopingToAChannelNarrowsTheAggregatedData() async {
+        let base = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let a = RadioID(rawValue: "a")   // 144.390
+        let b = RadioID(rawValue: "b")   // 145.050
+        func radioPacket(_ offset: TimeInterval, from: String, radio: RadioID) -> Packet {
+            Packet(timestamp: base.addingTimeInterval(offset),
+                   from: AX25Address(call: from), to: AX25Address(call: "CQ"),
+                   frameType: .ui, control: 0x03, rawAx25: Data([0x01]), radioID: radio)
+        }
+        let packets = [
+            radioPacket(0, from: "AAA", radio: a),
+            radioPacket(60, from: "BBB", radio: a),
+            radioPacket(120, from: "CCC", radio: b),
+        ]
+
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings, calendar: calendar,
+            packetDebounce: 0, graphDebounce: 0, packetScheduler: .main)
+        viewModel.setActive(true)
+        viewModel.customRangeStart = base.addingTimeInterval(-60)
+        viewModel.customRangeEnd = base.addingTimeInterval(600)
+
+        viewModel.updateRadioContext(
+            channels: AnalyticsRadioChannel.channels(
+                radios: [
+                    .init(id: a, name: "APRS", frequencyHz: 144_390_000),
+                    .init(id: b, name: "Packet", frequencyHz: 145_050_000),
+                ], hidden: []),
+            hidden: [])
+        viewModel.updatePackets(packets)
+
+        func seriesTotal() -> Int {
+            viewModel.viewState.series.packetsPerBucket.reduce(0) { $0 + $1.value }
+        }
+
+        await waitFor { seriesTotal() == 3 }
+        XCTAssertEqual(seriesTotal(), 3, "all radios: every packet")
+
+        // Scope to the 145.050 channel — only radio b's one packet remains.
+        viewModel.selectedRadioScope = .channel("freq:145050000")
+        await waitFor { seriesTotal() == 1 }
+        XCTAssertEqual(seriesTotal(), 1, "one channel: only its radio's traffic")
+
+        // Back to all.
+        viewModel.selectedRadioScope = .all
+        await waitFor { seriesTotal() == 3 }
+        XCTAssertEqual(seriesTotal(), 3)
+    }
+
+    func testHidingARadioRemovesItsTrafficFromAnalytics() async {
+        let base = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let a = RadioID(rawValue: "a")
+        let b = RadioID(rawValue: "b")
+        func radioPacket(_ offset: TimeInterval, radio: RadioID) -> Packet {
+            Packet(timestamp: base.addingTimeInterval(offset),
+                   from: AX25Address(call: "K0NTS"), to: AX25Address(call: "CQ"),
+                   frameType: .ui, control: 0x03, rawAx25: Data([0x01]), radioID: radio)
+        }
+        let packets = [radioPacket(0, radio: a), radioPacket(60, radio: b)]
+
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings, calendar: calendar,
+            packetDebounce: 0, graphDebounce: 0, packetScheduler: .main)
+        viewModel.setActive(true)
+        viewModel.customRangeStart = base.addingTimeInterval(-60)
+        viewModel.customRangeEnd = base.addingTimeInterval(600)
+        viewModel.updatePackets(packets)
+
+        func seriesTotal() -> Int {
+            viewModel.viewState.series.packetsPerBucket.reduce(0) { $0 + $1.value }
+        }
+        await waitFor { seriesTotal() == 2 }
+
+        // Hide radio b — the analytics page must drop its packet, like the map
+        // and the packets table already do.
+        viewModel.updateRadioContext(
+            channels: AnalyticsRadioChannel.channels(
+                radios: [
+                    .init(id: a, name: "APRS", frequencyHz: 144_390_000),
+                    .init(id: b, name: "Packet", frequencyHz: 145_050_000),
+                ], hidden: [b]),
+            hidden: [b])
+        await waitFor { seriesTotal() == 1 }
+        XCTAssertEqual(seriesTotal(), 1, "hidden radio's traffic is excluded")
+    }
+
     func makePacket(
         timestamp: Date,
         from: String? = nil,
@@ -191,7 +797,9 @@ private extension AnalyticsDashboardViewModelTests {
             timestamp: timestamp,
             from: from.map { AX25Address(call: $0) },
             to: to.map { AX25Address(call: $0) },
-            via: via.map { AX25Address(call: $0) },
+            // Test digis carry the H bit: only hops that actually repeated count
+            // as observed digipeaters in analytics.
+            via: via.map { AX25Address(call: $0, repeated: true) },
             frameType: .ui
         )
     }

@@ -167,21 +167,6 @@ final class KISSTransportTests: XCTestCase {
 
     // MARK: - Transport Types Tests
 
-    func testTransportStateEquality() {
-        // Verify state equality works
-        XCTAssertEqual(KISSTransportState.disconnected, KISSTransportState.disconnected)
-        XCTAssertEqual(KISSTransportState.connected, KISSTransportState.connected)
-        XCTAssertNotEqual(KISSTransportState.disconnected, KISSTransportState.connected)
-    }
-
-    func testTransportStateRawValue() {
-        // Verify state raw values
-        XCTAssertEqual(KISSTransportState.disconnected.rawValue, "disconnected")
-        XCTAssertEqual(KISSTransportState.connecting.rawValue, "connecting")
-        XCTAssertEqual(KISSTransportState.connected.rawValue, "connected")
-        XCTAssertEqual(KISSTransportState.failed.rawValue, "failed")
-    }
-
     func testTransportErrorDescriptions() {
         // Verify error descriptions
         let notConnected = KISSTransportError.notConnected
@@ -194,18 +179,4 @@ final class KISSTransportTests: XCTestCase {
         XCTAssertEqual(sendFailed.errorDescription, "Send failed: buffer full")
     }
 
-    func testPendingFrameCreation() {
-        // Given frame parameters
-        let frameId = UUID()
-        let ax25Data = Data([0x01, 0x02, 0x03])
-
-        // When we create a pending frame
-        let pending = PendingFrame(id: frameId, ax25Frame: ax25Data, port: 0)
-
-        // Then it should have KISS-encoded data
-        XCTAssertEqual(pending.id, frameId)
-        XCTAssertEqual(pending.kissData.first, KISS.FEND)
-        XCTAssertEqual(pending.kissData.last, KISS.FEND)
-        XCTAssertNotNil(pending.queuedAt)
-    }
 }

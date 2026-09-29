@@ -1,0 +1,117 @@
+{
+  "captured_at": "2026-09-09T14:26:48Z",
+  "channel": "rfnet: 1200-baud AFSK, one Direwolf per station, shared audio bus",
+  "note": "One frame of every APRS type, transmitted through a real modem and described by Direwolf's own parser. AXTerm transmits only positions and messages, so these are the frames its read-only parsers would otherwise never be tested against by anything but themselves. Regenerate with TestRig/scripts/aprs_zoo.py.",
+  "frames": [
+    {
+      "name": "mic-e",
+      "src": "WT0R-9",
+      "dest": "SYTPZZ",
+      "frame_hex": "a6b2a8a0b4b4e0aea860a440407303f06070491c6c2039662f602247267d3134372e3231304d487a2043313030202b3036305f310d",
+      "info_hex": "6070491c6c2039662f602247267d3134372e3231304d487a2043313030202b3036305f310d",
+      "provenance": "off-air: WT0R-9 on K0EPI-7's channel, 2026-09-09",
+      "needle": "WT0R-9>SYTPZZ",
+      "decoded_by_direwolf": [
+        "MIC-E, FIRE TRUCK, Mic-Emsg, Off Duty",
+        "N 39 40.0000, W 104 45.0000, 0 MPH, course 29, alt 5722 ft, 147.210 MHz, +600k, PL 100.0",
+        "_1"
+      ]
+    },
+    {
+      "name": "compressed-position",
+      "src": "AD1CT",
+      "dest": "APGRWO",
+      "frame_hex": "82a08ea4ae9ee082886286a8406103f0212f3a4b4137342236232d2020432f413d30303538313547726179776f6c662f302e31342e3133",
+      "info_hex": "212f3a4b4137342236232d2020432f413d30303538313547726179776f6c662f302e31342e3133",
+      "provenance": "off-air: AD1CT (Graywolf) on K0EPI-7's channel, 2026-09-09",
+      "needle": "KA74",
+      "decoded_by_direwolf": [
+        "Position, House, Gates, etc",
+        "N 39 37.3639, W 104 46.3539, alt 5815 ft",
+        "Graywolf/0.14.13"
+      ]
+    },
+    {
+      "name": "uncompressed-position",
+      "src": "KK0X-10",
+      "dest": "APMI04",
+      "frame_hex": "82a09a926068e0969660b040407503f0403038303033307a333933342e31354e2f31303435352e3035572d575833696e314d696e6920553d31322e34562e",
+      "info_hex": "403038303033307a333933342e31354e2f31303435352e3035572d575833696e314d696e6920553d31322e34562e",
+      "provenance": "off-air: KK0X-10 on K0EPI-7's channel, 2026-09-09",
+      "needle": "WX3in1Mini",
+      "decoded_by_direwolf": [
+        "Position with time, House, SQ3PLX http://microsat.com.pl/",
+        "N 39 34.1500, W 104 55.0500",
+        "WX3in1Mini U=12.4V."
+      ]
+    },
+    {
+      "name": "object",
+      "src": "METHOD",
+      "dest": "APMI04",
+      "frame_hex": "82a09a926068e09a8aa8909e886103f03b3134372e323835434f2a3131313131317a333832362e37384e2f31303630302e36355772543838205234306d207265706561746572",
+      "info_hex": "3b3134372e323835434f2a3131313131317a333832362e37384e2f31303630302e36355772543838205234306d207265706561746572",
+      "provenance": "off-air prefix: METHOD's object on K0EPI-7's channel, comment completed",
+      "needle": ";147.285CO",
+      "decoded_by_direwolf": [
+        "Object, \"147.285CO\", Repeater, SQ3PLX http://microsat.com.pl/",
+        "N 38 26.7800, W 106 00.6500, 147.285 MHz",
+        "T88 R40m repeater"
+      ]
+    },
+    {
+      "name": "item",
+      "src": "K0EPI-7",
+      "dest": "APZAXT",
+      "frame_hex": "82a0b482b0a8e096608aa092406f03f02941494421333933342e31354e2f31303435352e3035572d696e636964656e74206d61726b6572",
+      "info_hex": "2941494421333933342e31354e2f31303435352e3035572d696e636964656e74206d61726b6572",
+      "provenance": "synthesised to APRS 1.01 ch.11; Direwolf accepting it validates the shape",
+      "needle": ")AID!",
+      "decoded_by_direwolf": [
+        "Item, \"AID\", House, Experimental",
+        "N 39 34.1500, W 104 55.0500",
+        "incident marker"
+      ]
+    },
+    {
+      "name": "telemetry",
+      "src": "SIMLA",
+      "dest": "APMI06",
+      "frame_hex": "82a09a92606ce0a6929a9882406103f054233231322c3138352c3034372c3031322c3037352c3030302c3030303030303030",
+      "info_hex": "54233231322c3138352c3034372c3031322c3037352c3030302c3030303030303030",
+      "provenance": "off-air: SIMLA on K0EPI-7's channel, 2026-09-09",
+      "needle": "T#212",
+      "decoded_by_direwolf": [
+        "Telemetry, SQ3PLX http://microsat.com.pl/",
+        "Seq=212, A1=185, A2=47, A3=12, A4=75, A5=0, D1=0, D2=0, D3=0, D4=0, D5=0, D6=0, D7=0, D8=0"
+      ]
+    },
+    {
+      "name": "weather",
+      "src": "N2XGL-1",
+      "dest": "APRS",
+      "frame_hex": "82a0a4a64040e09c64b08e98406303f0403038303433337a343031312e39304e2f31303530382e3934575f3030302f3030306730303174303635723030307030303050303030683432623130313630",
+      "info_hex": "403038303433337a343031312e39304e2f31303530382e3934575f3030302f3030306730303174303635723030307030303050303030683432623130313630",
+      "provenance": "off-air prefix: N2XGL-1 on K0EPI-7's channel, tail completed to ch.12",
+      "needle": "t065r000",
+      "decoded_by_direwolf": [
+        "Weather Report, WEATHER Station (blue), Generic, (obsolete. Digis should use APNxxx instead)",
+        "N 40 11.9000, W 105 08.9400",
+        "wind 0.0 mph, direction 0, gust 1, temperature 65, rain 0.00 in last hour, rain 0.00 in last 24 hours, rain 0.00 since midnight, humidity 42, barometer 30.01, \"\""
+      ]
+    },
+    {
+      "name": "status",
+      "src": "SIMLA",
+      "dest": "APMI06",
+      "frame_hex": "82a09a92606ce0a6929a9882406103f03e4e6f20415052532d4953202d3e446967692020303830343238",
+      "info_hex": "3e4e6f20415052532d4953202d3e446967692020303830343238",
+      "provenance": "off-air: SIMLA on K0EPI-7's channel, 2026-09-09",
+      "needle": ">No APRS-IS",
+      "decoded_by_direwolf": [
+        "Status Report, SQ3PLX http://microsat.com.pl/",
+        "No APRS-IS ->Digi  080428"
+      ]
+    }
+  ]
+}

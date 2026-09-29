@@ -7,6 +7,7 @@
 
 import XCTest
 @testable import AXTerm
+import GRDB
 
 @MainActor
 final class PacketHandlingTests: XCTestCase {
@@ -81,7 +82,7 @@ final class PacketHandlingTests: XCTestCase {
         client.handleIncomingData(Data([0x01, 0x02, 0x03]))
 
         XCTAssertEqual(client.packets.count, 1)
-        await waitForStore(store)
+        await letTheStoresSettle()
         XCTAssertEqual(store.savedPackets.count, 0)
         XCTAssertEqual(consoleStore.appendedEntries.count, 0)
         XCTAssertEqual(rawStore.appendedEntries.count, 0)
@@ -137,6 +138,91 @@ final class PacketHandlingTests: XCTestCase {
         XCTAssertEqual(packet.viaDisplay, "W0ARP-7*")
     }
 
+    func testPacketCapRetainsNewestPackets() {
+        let base = Date()
+        let p1 = Packet(
+            timestamp: base,
+            from: AX25Address(call: "K0AAA"),
+            to: AX25Address(call: "K0DST"),
+            frameType: .ui,
+            control: 0x03,
+            info: Data([0x01]),
+            rawAx25: Data([0x01])
+        )
+        let p2 = Packet(
+            timestamp: base.addingTimeInterval(1),
+            from: AX25Address(call: "K0AAB"),
+            to: AX25Address(call: "K0DST"),
+            frameType: .ui,
+            control: 0x03,
+            info: Data([0x02]),
+            rawAx25: Data([0x02])
+        )
+        let p3 = Packet(
+            timestamp: base.addingTimeInterval(2),
+            from: AX25Address(call: "K0AAC"),
+            to: AX25Address(call: "K0DST"),
+            frameType: .ui,
+            control: 0x03,
+            info: Data([0x03]),
+            rawAx25: Data([0x03])
+        )
+
+        var packets: [Packet] = []
+        PacketEngine.insertPacketMaintainingCap(p1, into: &packets, maxPackets: 2)
+        PacketEngine.insertPacketMaintainingCap(p2, into: &packets, maxPackets: 2)
+        PacketEngine.insertPacketMaintainingCap(p3, into: &packets, maxPackets: 2)
+
+        XCTAssertEqual(packets.count, 2)
+        XCTAssertEqual(packets.map(\.id), [p2.id, p3.id], "Capped in-memory packets should keep the newest packets")
+    }
+
+    #if DEBUG
+    func testDebugRebuildUsesLivePacketsWhenPacketDatabaseIsEmpty() async throws {
+        let settings = makeSettings(persistHistory: false)
+        settings.myCallsign = "K0EPI-7"
+
+        let queue = try DatabaseQueue(path: ":memory:")
+        try DatabaseManager.migrator.migrate(queue)
+
+        let packetStore = SQLitePacketStore(dbQueue: queue)
+        let engine = PacketEngine(
+            maxPackets: 100,
+            maxConsoleLines: 100,
+            maxRawChunks: 100,
+            settings: settings,
+            packetStore: packetStore,
+            consoleStore: nil,
+            rawStore: nil,
+            eventLogger: nil,
+            databaseWriter: queue
+        )
+
+        let livePacket = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "K6NVS"),
+            to: AX25Address(call: "K0EPI", ssid: 7),
+            frameType: .ui,
+            control: 0x03,
+            pid: 0xF0,
+            info: Data("TEST".utf8),
+            rawAx25: Data([0x01])
+        )
+        engine.handleIncomingPacket(livePacket)
+
+        let beforeStats = engine.netRomIntegration?.exportLinkStats().count ?? 0
+        XCTAssertGreaterThan(beforeStats, 0, "Expected live NET/ROM/link-estimator state before rebuild.")
+
+        let rebuild = await engine.debugRebuildNetRomFromPackets()
+        XCTAssertTrue(rebuild.success, "Rebuild should succeed by replaying live in-memory packets when DB is empty.")
+        XCTAssertGreaterThan(rebuild.packetsProcessed, 0, "Expected in-memory packets to be replayed.")
+
+        let afterStats = engine.netRomIntegration?.exportLinkStats().count ?? 0
+        XCTAssertGreaterThan(afterStats, 0, "Live NET/ROM state should remain populated after rebuild.")
+        XCTAssertGreaterThanOrEqual(afterStats, beforeStats, "Rebuild from live packets should not regress to empty link stats.")
+    }
+    #endif
+
     @MainActor
     func testConsoleLineViaDedupesRepeatedDigis() throws {
         // This behavior is now thoroughly covered by PacketEncoding and
@@ -176,30 +262,57 @@ final class PacketHandlingTests: XCTestCase {
         return AppSettingsStore(defaults: defaults)
     }
 
-    private func waitForStore(_ store: MockPacketStore) async {
+    /// Wait for a store to be written to, and fail here if it never is.
+    ///
+    /// Saying so here rather than leaving it to the assertion below matters
+    /// once a test has more than one store in it: "expected 1, got 0" three
+    /// times over does not say which write never landed, and a helper that
+    /// returns quietly on timeout is how a test ends up blaming the wrong
+    /// subsystem for a wait that simply ran out.
+    private func waitForStore(_ store: MockPacketStore,
+                              file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<10 {
             if !store.savedPackets.isEmpty || !store.pruneCalls.isEmpty {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        XCTFail("the packet store was never written to", file: file, line: line)
     }
 
-    private func waitForConsoleStore(_ store: MockConsoleStore) async {
+    private func waitForConsoleStore(_ store: MockConsoleStore,
+                                     file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<10 {
             if !store.appendedEntries.isEmpty || !store.pruneCalls.isEmpty {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        XCTFail("the console store was never written to", file: file, line: line)
     }
 
-    private func waitForRawStore(_ store: MockRawStore) async {
+    /// Give the stores a chance to be written to, expecting that they are not.
+    ///
+    /// The other half of `waitForStore`, and deliberately a different name:
+    /// the test that uses this one is asserting that persistence stayed off,
+    /// so a timeout is the expected outcome and must not be reported. Named so
+    /// that reading the call site tells you which of the two is meant.
+    ///
+    /// It is a weak check either way — a write that is merely slow would pass
+    /// it — but that is the shape of the test it serves, not something this
+    /// helper can fix.
+    private func letTheStoresSettle() async {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+    }
+
+    private func waitForRawStore(_ store: MockRawStore,
+                                 file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<10 {
             if !store.appendedEntries.isEmpty || !store.pruneCalls.isEmpty {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        XCTFail("the raw store was never written to", file: file, line: line)
     }
 }

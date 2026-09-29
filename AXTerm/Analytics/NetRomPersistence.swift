@@ -21,7 +21,7 @@ import Foundation
 import GRDB
 
 /// Configuration for NET/ROM persistence.
-struct NetRomPersistenceConfig {
+nonisolated struct NetRomPersistenceConfig {
     let maxSnapshotAgeSeconds: TimeInterval
 
     /// TTL for individual neighbor entries (seconds). Neighbors older than this are decayed on load.
@@ -60,7 +60,7 @@ struct NetRomPersistenceConfig {
 
 /// Persisted state returned by load(now:).
 /// Contains neighbors, routes, and link stats with stale entries filtered/decayed.
-struct PersistedState {
+nonisolated struct PersistedState {
     let neighbors: [NeighborInfo]
     let routes: [RouteInfo]
     let linkStats: [LinkStatRecord]
@@ -68,17 +68,18 @@ struct PersistedState {
 }
 
 /// Metadata about a persisted snapshot.
-struct SnapshotMeta: Equatable {
+nonisolated struct SnapshotMeta: Equatable {
     let lastPacketID: Int64
     let configHash: String?
     let snapshotTimestamp: Date
 }
 
 /// GRDB record for neighbors table.
-private struct NeighborRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct NeighborRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "netrom_neighbors"
 
     let call: String
+    let radioID: String
     let quality: Int
     let lastSeen: Double  // TimeInterval since 1970
     let obsolescenceCount: Int
@@ -86,11 +87,12 @@ private struct NeighborRecord: Codable, FetchableRecord, PersistableRecord {
 }
 
 /// GRDB record for routes table.
-private struct RouteRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct RouteRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "netrom_routes"
 
     let destination: String
     let origin: String
+    let radioID: String
     let quality: Int
     let pathJson: String
     let sourceType: String
@@ -98,11 +100,12 @@ private struct RouteRecord: Codable, FetchableRecord, PersistableRecord {
 }
 
 /// GRDB record for link stats table.
-private struct LinkStatDBRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct LinkStatDBRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "link_stats"
 
     let fromCall: String
     let toCall: String
+    let radioID: String
     let quality: Int
     let lastUpdated: Double  // TimeInterval since 1970
     let dfEstimate: Double?
@@ -110,13 +113,14 @@ private struct LinkStatDBRecord: Codable, FetchableRecord, PersistableRecord {
     let dupCount: Int
     let ewmaQuality: Int
     let obsCount: Int  // observation count for evidence rehydration
+    let sessionObsCount: Int  // of those, how many were connected-mode frames
 }
 
 /// GRDB record for snapshot metadata.
-private struct SnapshotMetaRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct SnapshotMetaRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "netrom_snapshot_meta"
 
-    let id: Int = 1  // Single row
+    var id: Int = 1  // Single row
     let lastPacketID: Int64
     let configHash: String?
     let snapshotTimestamp: Double  // TimeInterval since 1970
@@ -124,7 +128,7 @@ private struct SnapshotMetaRecord: Codable, FetchableRecord, PersistableRecord {
 
 /// GRDB record for tracking per-origin broadcast intervals.
 /// Used for adaptive stale threshold calculation.
-private struct OriginIntervalRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct OriginIntervalRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "netrom_origin_intervals"
 
     let origin: String  // Primary key
@@ -135,7 +139,7 @@ private struct OriginIntervalRecord: Codable, FetchableRecord, PersistableRecord
 }
 
 /// Public struct for origin interval data.
-struct OriginIntervalInfo {
+nonisolated struct OriginIntervalInfo {
     let origin: String
     let estimatedIntervalSeconds: TimeInterval
     let lastBroadcast: Date
@@ -143,47 +147,49 @@ struct OriginIntervalInfo {
 }
 
 /// Persistence layer for NET/ROM routing state.
-final class NetRomPersistence {
+/// Thread-safe: all database access is serialized by GRDB's `DatabaseWriter`.
+nonisolated final class NetRomPersistence: @unchecked Sendable {
     private let database: DatabaseWriter
     private let config: NetRomPersistenceConfig
-    #if DEBUG
-    private static var retainedForTests: [NetRomPersistence] = []
-    #endif
 
     init(database: DatabaseWriter, config: NetRomPersistenceConfig = .default) throws {
         self.database = database
         self.config = config
         try createTables()
-        #if DEBUG
-        Self.retainedForTests.append(self)
-        #endif
     }
 
     // MARK: - Table Creation
 
     private func createTables() throws {
         try database.write { db in
+            // Keyed by radio as well as callsign: a neighbor reachable on two
+            // radios is two links with two qualities (CLAUDE.md §8 — evidence
+            // gathered by one antenna is not evidence about another).
             try db.create(table: "netrom_neighbors", ifNotExists: true) { t in
-                t.column("call", .text).primaryKey()
+                t.column("call", .text).notNull()
+                t.column("radioID", .text).notNull().defaults(to: "radio-primary")
                 t.column("quality", .integer).notNull()
                 t.column("lastSeen", .double).notNull()
                 t.column("obsolescenceCount", .integer).notNull().defaults(to: 1)
                 t.column("sourceType", .text).notNull().defaults(to: "classic")
+                t.primaryKey(["radioID", "call"])
             }
 
             try db.create(table: "netrom_routes", ifNotExists: true) { t in
                 t.column("destination", .text).notNull()
                 t.column("origin", .text).notNull()
+                t.column("radioID", .text).notNull().defaults(to: "radio-primary")
                 t.column("quality", .integer).notNull()
                 t.column("pathJson", .text).notNull()
                 t.column("sourceType", .text).notNull().defaults(to: "broadcast")
                 t.column("lastUpdate", .double).notNull().defaults(to: 0)
-                t.primaryKey(["destination", "origin"])
+                t.primaryKey(["destination", "origin", "radioID"])
             }
 
             try db.create(table: "link_stats", ifNotExists: true) { t in
                 t.column("fromCall", .text).notNull()
                 t.column("toCall", .text).notNull()
+                t.column("radioID", .text).notNull().defaults(to: "radio-primary")
                 t.column("quality", .integer).notNull()
                 t.column("lastUpdated", .double).notNull()
                 t.column("dfEstimate", .double)
@@ -191,7 +197,8 @@ final class NetRomPersistence {
                 t.column("dupCount", .integer).notNull().defaults(to: 0)
                 t.column("ewmaQuality", .integer).notNull().defaults(to: 0)
                 t.column("obsCount", .integer).notNull().defaults(to: 0)  // observation count for evidence rehydration
-                t.primaryKey(["fromCall", "toCall"])
+                t.column("sessionObsCount", .integer).notNull().defaults(to: 0)  // of those, connected-mode frames
+                t.primaryKey(["radioID", "fromCall", "toCall"])
             }
 
             try db.create(table: "netrom_snapshot_meta", ifNotExists: true) { t in
@@ -213,7 +220,137 @@ final class NetRomPersistence {
             // Migration: Add obsCount column to existing link_stats tables
             // This handles databases created before the obsCount column was added
             try migrateAddObsCountColumn(db)
+            // Migration: key the three tables by radio as well as callsign.
+            try migrateAddRadioKey(db)
+            // Migration: record how much of a link's evidence was connected-mode.
+            // After migrateAddRadioKey, which rebuilds the table without it.
+            try migrateAddSessionObsCountColumn(db)
+            // One-off: clear routing state produced by the APRS faults.
+            try purgeAPRSPollutedRouting(db)
         }
+    }
+
+    /// Rebuilds a table created before the radio was part of its key.
+    ///
+    /// SQLite cannot change a primary key in place, so each old-shape table
+    /// is copied into its new shape with every row attributed to the one
+    /// radio the station had — `RadioID.primary`, the constant
+    /// "radio-primary" — and swapped in. Idempotent: a table that already has
+    /// the column is left alone.
+    private func migrateAddRadioKey(_ db: Database) throws {
+        func hasRadio(_ table: String) throws -> Bool {
+            try db.columns(in: table).contains { $0.name == "radioID" }
+        }
+        if try !hasRadio("netrom_neighbors") {
+            try db.execute(sql: """
+                CREATE TABLE netrom_neighbors_v2 (
+                    call TEXT NOT NULL, radioID TEXT NOT NULL DEFAULT 'radio-primary',
+                    quality INTEGER NOT NULL, lastSeen DOUBLE NOT NULL,
+                    obsolescenceCount INTEGER NOT NULL DEFAULT 1,
+                    sourceType TEXT NOT NULL DEFAULT 'classic',
+                    PRIMARY KEY (radioID, call));
+                INSERT INTO netrom_neighbors_v2 (call, radioID, quality, lastSeen, obsolescenceCount, sourceType)
+                    SELECT call, 'radio-primary', quality, lastSeen, obsolescenceCount, sourceType FROM netrom_neighbors;
+                DROP TABLE netrom_neighbors;
+                ALTER TABLE netrom_neighbors_v2 RENAME TO netrom_neighbors;
+                """)
+        }
+        if try !hasRadio("netrom_routes") {
+            try db.execute(sql: """
+                CREATE TABLE netrom_routes_v2 (
+                    destination TEXT NOT NULL, origin TEXT NOT NULL,
+                    radioID TEXT NOT NULL DEFAULT 'radio-primary',
+                    quality INTEGER NOT NULL, pathJson TEXT NOT NULL,
+                    sourceType TEXT NOT NULL DEFAULT 'broadcast',
+                    lastUpdate DOUBLE NOT NULL DEFAULT 0,
+                    PRIMARY KEY (destination, origin, radioID));
+                INSERT INTO netrom_routes_v2 (destination, origin, radioID, quality, pathJson, sourceType, lastUpdate)
+                    SELECT destination, origin, 'radio-primary', quality, pathJson, sourceType, lastUpdate FROM netrom_routes;
+                DROP TABLE netrom_routes;
+                ALTER TABLE netrom_routes_v2 RENAME TO netrom_routes;
+                """)
+        }
+        if try !hasRadio("link_stats") {
+            try db.execute(sql: """
+                CREATE TABLE link_stats_v2 (
+                    fromCall TEXT NOT NULL, toCall TEXT NOT NULL,
+                    radioID TEXT NOT NULL DEFAULT 'radio-primary',
+                    quality INTEGER NOT NULL, lastUpdated DOUBLE NOT NULL,
+                    dfEstimate DOUBLE, drEstimate DOUBLE,
+                    dupCount INTEGER NOT NULL DEFAULT 0,
+                    ewmaQuality INTEGER NOT NULL DEFAULT 0,
+                    obsCount INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (radioID, fromCall, toCall));
+                INSERT INTO link_stats_v2 (fromCall, toCall, radioID, quality, lastUpdated, dfEstimate, drEstimate, dupCount, ewmaQuality, obsCount)
+                    SELECT fromCall, toCall, 'radio-primary', quality, lastUpdated, dfEstimate, drEstimate, dupCount, ewmaQuality, obsCount FROM link_stats;
+                DROP TABLE link_stats;
+                ALTER TABLE link_stats_v2 RENAME TO link_stats;
+                """)
+        }
+    }
+
+    /// Clears routing state that two fixed faults had already written.
+    ///
+    /// Until 2026-09-17 the passive inference read the next hop from the last
+    /// repeated via entry, which for a digipeated APRS frame is the alias the
+    /// digipeater consumed rather than the digipeater itself, and it accepted
+    /// a beacon as evidence of a routable path. Together those filled the table
+    /// with APRS stations reached "via WIDE1", and the node broadcast then
+    /// advertised them to the packet network over the air.
+    ///
+    /// The code no longer produces any of it, but the rows are persisted and
+    /// would keep being advertised until they aged out. So they go now:
+    ///
+    /// - anything routed through a path alias, which is never a station;
+    /// - every inferred route and neighbour, because the good ones cannot be
+    ///   told from the bad ones after the fact and they re-learn within
+    ///   minutes from live traffic.
+    ///
+    /// Routes from real node broadcasts are untouched. Runs once, recorded in
+    /// `netrom_purges` so a later launch leaves the re-learned table alone.
+    private func purgeAPRSPollutedRouting(_ db: Database) throws {
+        let purgeID = "aprs-polluted-routing-2026-09-17"
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS netrom_purges (
+                id TEXT PRIMARY KEY,
+                appliedAt DOUBLE NOT NULL);
+            """)
+        let done = try Bool.fetchOne(
+            db, sql: "SELECT EXISTS(SELECT 1 FROM netrom_purges WHERE id = ?)",
+            arguments: [purgeID]) ?? false
+        guard !done else { return }
+
+        let aliasTest = """
+            %@ GLOB 'WIDE*' OR %@ GLOB 'TRACE*' OR %@ GLOB 'RELAY*'
+            """
+        let routeAlias = String(format: aliasTest, "origin", "origin", "origin")
+        let neighborAlias = String(format: aliasTest, "call", "call", "call")
+        try db.execute(sql: "DELETE FROM netrom_routes WHERE (\(routeAlias)) OR sourceType = 'inferred'")
+        try db.execute(sql: "DELETE FROM netrom_neighbors WHERE (\(neighborAlias)) OR sourceType = 'inferred'")
+        try db.execute(sql: "INSERT INTO netrom_purges (id, appliedAt) VALUES (?, ?)",
+                       arguments: [purgeID, Date().timeIntervalSince1970])
+        #if DEBUG
+        print("[NETROM:PERSISTENCE] Purged routing state written by the APRS faults")
+        #endif
+    }
+
+    /// Adds the sessionObsCount column to link_stats if it doesn't exist.
+    ///
+    /// Existing rows default to **0**, which is the opposite of what obsCount
+    /// does below and is deliberate. obsCount defaults to 1 so a restored link
+    /// is not mistaken for one with no evidence at all. This column answers a
+    /// narrower question: may this link speak about packet loss? For a row
+    /// written before the column existed we do not know, and guessing yes
+    /// would let a beacon-only link go on feeding the adaptive tuner the very
+    /// figure this column exists to exclude. Guessing no costs one link's
+    /// contribution until its next connected-mode frame, which restores it.
+    private func migrateAddSessionObsCountColumn(_ db: Database) throws {
+        let columns = try db.columns(in: "link_stats")
+        guard !columns.contains(where: { $0.name == "sessionObsCount" }) else { return }
+        try db.execute(sql: "ALTER TABLE link_stats ADD COLUMN sessionObsCount INTEGER NOT NULL DEFAULT 0")
+        #if DEBUG
+        print("[NETROM:PERSISTENCE] Migrated link_stats table: added sessionObsCount column")
+        #endif
     }
 
     /// Adds the obsCount column to link_stats if it doesn't exist.
@@ -248,6 +385,7 @@ final class NetRomPersistence {
             for neighbor in neighbors {
                 let record = NeighborRecord(
                     call: neighbor.call,
+                    radioID: neighbor.radioID.rawValue,
                     quality: neighbor.quality,
                     lastSeen: neighbor.lastSeen.timeIntervalSince1970,
                     obsolescenceCount: neighbor.obsolescenceCount,
@@ -262,14 +400,15 @@ final class NetRomPersistence {
     func loadNeighbors() throws -> [NeighborInfo] {
         try database.read { db in
             // Deterministic ordering: desc quality, then callsign asc
-            let records = try NeighborRecord.order(Column("quality").desc, Column("call").asc).fetchAll(db)
+            let records = try NeighborRecord.order(Column("quality").desc, Column("call").asc, Column("radioID").asc).fetchAll(db)
             return records.map { record in
                 NeighborInfo(
                     call: record.call,
                     quality: record.quality,
                     lastSeen: Date(timeIntervalSince1970: record.lastSeen),
                     obsolescenceCount: record.obsolescenceCount,
-                    sourceType: record.sourceType
+                    sourceType: record.sourceType,
+                    radioID: RadioID(rawValue: record.radioID)
                 )
             }
         }
@@ -290,6 +429,7 @@ final class NetRomPersistence {
                 let record = RouteRecord(
                     destination: route.destination,
                     origin: route.origin,
+                    radioID: route.radioID.rawValue,
                     quality: route.quality,
                     pathJson: pathJson,
                     sourceType: route.sourceType,
@@ -304,7 +444,7 @@ final class NetRomPersistence {
     func loadRoutes() throws -> [RouteInfo] {
         try database.read { db in
             // Deterministic ordering: destination asc, then quality desc
-            let records = try RouteRecord.order(Column("destination").asc, Column("quality").desc).fetchAll(db)
+            let records = try RouteRecord.order(Column("destination").asc, Column("quality").desc, Column("origin").asc, Column("radioID").asc).fetchAll(db)
             return records.map { record in
                 let path = (try? JSONDecoder().decode([String].self, from: Data(record.pathJson.utf8))) ?? []
                 return RouteInfo(
@@ -313,7 +453,8 @@ final class NetRomPersistence {
                     quality: record.quality,
                     path: path,
                     lastUpdated: Date(timeIntervalSince1970: record.lastUpdate),
-                    sourceType: record.sourceType
+                    sourceType: record.sourceType,
+                    radioID: RadioID(rawValue: record.radioID)
                 )
             }
         }
@@ -333,13 +474,15 @@ final class NetRomPersistence {
                 let record = LinkStatDBRecord(
                     fromCall: stat.fromCall,
                     toCall: stat.toCall,
+                    radioID: stat.radioID.rawValue,
                     quality: stat.quality,
                     lastUpdated: stat.lastUpdated.timeIntervalSince1970,
                     dfEstimate: stat.dfEstimate,
                     drEstimate: stat.drEstimate,
                     dupCount: stat.duplicateCount,
                     ewmaQuality: stat.quality,
-                    obsCount: stat.observationCount  // Persist evidence count for rehydration
+                    obsCount: stat.observationCount,  // Persist evidence count for rehydration
+                    sessionObsCount: stat.sessionEvidenceCount
                 )
                 try record.insert(db)
             }
@@ -350,7 +493,7 @@ final class NetRomPersistence {
     func loadLinkStats(now: Date) throws -> [LinkStatRecord] {
         return try database.read { db in
             // Deterministic ordering: fromCall asc, then toCall asc
-            let records = try LinkStatDBRecord.order(Column("fromCall").asc, Column("toCall").asc).fetchAll(db)
+            let records = try LinkStatDBRecord.order(Column("fromCall").asc, Column("toCall").asc, Column("radioID").asc).fetchAll(db)
             return records.map { record in
                 // Sanitize timestamp: reject Date.distantPast, epoch 0, or very old dates
                 let rawDate = Date(timeIntervalSince1970: record.lastUpdated)
@@ -364,7 +507,9 @@ final class NetRomPersistence {
                     dfEstimate: record.dfEstimate,
                     drEstimate: record.drEstimate,
                     duplicateCount: record.dupCount,
-                    observationCount: record.obsCount  // Load persisted evidence count
+                    observationCount: record.obsCount,  // Load persisted evidence count
+                    radioID: RadioID(rawValue: record.radioID),
+                    sessionEvidenceCount: record.sessionObsCount
                 )
             }
         }
@@ -406,6 +551,7 @@ final class NetRomPersistence {
             for neighbor in neighbors {
                 let record = NeighborRecord(
                     call: neighbor.call,
+                    radioID: neighbor.radioID.rawValue,
                     quality: neighbor.quality,
                     lastSeen: neighbor.lastSeen.timeIntervalSince1970,
                     obsolescenceCount: neighbor.obsolescenceCount,
@@ -420,6 +566,7 @@ final class NetRomPersistence {
                 let record = RouteRecord(
                     destination: route.destination,
                     origin: route.origin,
+                    radioID: route.radioID.rawValue,
                     quality: route.quality,
                     pathJson: pathJson,
                     sourceType: route.sourceType,
@@ -433,13 +580,15 @@ final class NetRomPersistence {
                 let record = LinkStatDBRecord(
                     fromCall: stat.fromCall,
                     toCall: stat.toCall,
+                    radioID: stat.radioID.rawValue,
                     quality: stat.quality,
                     lastUpdated: stat.lastUpdated.timeIntervalSince1970,
                     dfEstimate: stat.dfEstimate,
                     drEstimate: stat.drEstimate,
                     dupCount: stat.duplicateCount,
                     ewmaQuality: stat.quality,
-                    obsCount: stat.observationCount  // Persist evidence count for rehydration
+                    obsCount: stat.observationCount,  // Persist evidence count for rehydration
+                    sessionObsCount: stat.sessionEvidenceCount
                 )
                 try record.insert(db)
             }
@@ -526,7 +675,7 @@ final class NetRomPersistence {
         let allNeighbors = try loadNeighbors()
         let cutoff = now.addingTimeInterval(-config.neighborTTLSeconds)
 
-        return allNeighbors.compactMap { neighbor -> NeighborInfo? in
+        return allNeighbors.map { neighbor -> NeighborInfo in
             let age = now.timeIntervalSince(neighbor.lastSeen)
 
             // If within TTL, keep as-is
@@ -534,41 +683,35 @@ final class NetRomPersistence {
                 return neighbor
             }
 
-            // If beyond TTL, apply linear decay
-            // decayFactor = 1 - (age / TTL), clamped to [0, 1]
-            let decayFactor = max(0, 1 - (age / config.neighborTTLSeconds))
-            let decayedQuality = Int(Double(neighbor.quality) * decayFactor)
-
-            // Drop if quality decays to near zero
-            if decayedQuality < 10 {
-                return nil
-            }
+            // Beyond TTL, decay exponentially (half the quality per additional TTL)
+            // and keep the entry for display. The old linear formula
+            // 1 - age/TTL only ran when age > TTL, so it was always <= 0 and every
+            // restart zeroed the quality of any neighbor older than the TTL while
+            // its Freshness column still read high.
+            let overage = age - config.neighborTTLSeconds
+            let decayFactor = exp(-overage * M_LN2 / config.neighborTTLSeconds)
+            let decayedQuality = Int((Double(neighbor.quality) * decayFactor).rounded())
 
             return NeighborInfo(
                 call: neighbor.call,
                 quality: decayedQuality,
                 lastSeen: neighbor.lastSeen,
                 obsolescenceCount: neighbor.obsolescenceCount,
-                sourceType: neighbor.sourceType
+                sourceType: neighbor.sourceType,
+                isOfficial: neighbor.isOfficial,
+                radioID: neighbor.radioID
             )
         }
     }
 
-    /// Load routes with per-entry filtering based on lastUpdate.
+    /// Load all routes (no TTL filtering — expired entries are kept for display).
     private func loadRoutesWithDecay(now: Date) throws -> [RouteInfo] {
-        let allRoutes = try loadRoutes()
-
-        let cutoff = now.addingTimeInterval(-config.routeTTLSeconds)
-
-        return allRoutes.filter { $0.lastUpdated >= cutoff }
+        return try loadRoutes()
     }
 
-    /// Load link stats with per-entry filtering based on lastUpdated timestamp.
+    /// Load all link stats (no TTL filtering — expired entries are kept for display).
     private func loadLinkStatsWithDecay(now: Date) throws -> [LinkStatRecord] {
-        let allStats = try loadLinkStats(now: now)
-        let cutoff = now.addingTimeInterval(-config.linkStatTTLSeconds)
-
-        return allStats.filter { $0.lastUpdated >= cutoff }
+        return try loadLinkStats(now: now)
     }
 
     // MARK: - Clear

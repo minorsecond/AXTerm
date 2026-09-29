@@ -11,7 +11,7 @@ import Foundation
 // MARK: - Control Byte Constants
 
 /// AX.25 control byte constants for frame building
-enum AX25Control {
+nonisolated enum AX25Control {
     // U-frame control bytes (unnumbered)
     static let ui: UInt8       = 0x03    // UI (Unnumbered Information)
     static let sabm: UInt8     = 0x2F    // SABM (Set Asynchronous Balanced Mode)
@@ -74,7 +74,7 @@ enum AX25Control {
 // MARK: - Frame Builder
 
 /// Builds AX.25 frames for transmission
-struct AX25FrameBuilder {
+nonisolated struct AX25FrameBuilder {
 
     // MARK: - U-Frame Builders
 
@@ -99,7 +99,8 @@ struct AX25FrameBuilder {
             frameType: "u",
             pid: nil,         // No PID for U-frames except UI
             controlByte: control,
-            displayInfo: extended ? "SABME" : "SABM"
+            displayInfo: extended ? "SABME" : "SABM",
+            isCommand: true
         )
     }
 
@@ -119,7 +120,8 @@ struct AX25FrameBuilder {
             frameType: "u",
             pid: nil,
             controlByte: AX25Control.uFrame(base: AX25Control.ua, pf: pf),
-            displayInfo: "UA"
+            displayInfo: "UA",
+            isCommand: false
         )
     }
 
@@ -139,7 +141,8 @@ struct AX25FrameBuilder {
             frameType: "u",
             pid: nil,
             controlByte: AX25Control.uFrame(base: AX25Control.dm, pf: pf),
-            displayInfo: "DM"
+            displayInfo: "DM",
+            isCommand: false
         )
     }
 
@@ -159,7 +162,8 @@ struct AX25FrameBuilder {
             frameType: "u",
             pid: nil,
             controlByte: AX25Control.uFrame(base: AX25Control.disc, pf: pf),
-            displayInfo: "DISC"
+            displayInfo: "DISC",
+            isCommand: true
         )
     }
 
@@ -181,7 +185,8 @@ struct AX25FrameBuilder {
             frameType: "ui",
             pid: pid,
             controlByte: AX25Control.ui,
-            displayInfo: displayInfo
+            displayInfo: displayInfo,
+            isCommand: true
         )
     }
 
@@ -193,7 +198,8 @@ struct AX25FrameBuilder {
         to destination: AX25Address,
         via path: DigiPath = DigiPath(),
         nr: Int,
-        pf: Bool = false
+        pf: Bool = false,
+        isCommand: Bool = false
     ) -> OutboundFrame {
         return OutboundFrame(
             destination: destination,
@@ -205,7 +211,8 @@ struct AX25FrameBuilder {
             pid: nil,
             controlByte: AX25Control.sFrame(base: AX25Control.rrBase, nr: nr, pf: pf),
             nr: nr,
-            displayInfo: "RR(\(nr))"
+            displayInfo: "RR(\(nr))",
+            isCommand: isCommand
         )
     }
 
@@ -215,7 +222,8 @@ struct AX25FrameBuilder {
         to destination: AX25Address,
         via path: DigiPath = DigiPath(),
         nr: Int,
-        pf: Bool = false
+        pf: Bool = false,
+        isCommand: Bool = false
     ) -> OutboundFrame {
         return OutboundFrame(
             destination: destination,
@@ -227,7 +235,8 @@ struct AX25FrameBuilder {
             pid: nil,
             controlByte: AX25Control.sFrame(base: AX25Control.rnrBase, nr: nr, pf: pf),
             nr: nr,
-            displayInfo: "RNR(\(nr))"
+            displayInfo: "RNR(\(nr))",
+            isCommand: isCommand
         )
     }
 
@@ -237,7 +246,8 @@ struct AX25FrameBuilder {
         to destination: AX25Address,
         via path: DigiPath = DigiPath(),
         nr: Int,
-        pf: Bool = false
+        pf: Bool = false,
+        isCommand: Bool = false
     ) -> OutboundFrame {
         return OutboundFrame(
             destination: destination,
@@ -249,7 +259,60 @@ struct AX25FrameBuilder {
             pid: nil,
             controlByte: AX25Control.sFrame(base: AX25Control.rejBase, nr: nr, pf: pf),
             nr: nr,
-            displayInfo: "REJ(\(nr))"
+            displayInfo: "REJ(\(nr))",
+            isCommand: isCommand
+        )
+    }
+
+    /// Build an XID negotiation frame (AX.25 2.2 §4.3.3.7). The
+    /// information field carries the FI/GI/PI parameter groups; commands
+    /// go out with P=1, responses mirror the command's P as F.
+    static func buildXID(
+        from source: AX25Address,
+        to destination: AX25Address,
+        via path: DigiPath = DigiPath(),
+        parameters: AX25XIDParameters,
+        isCommand: Bool,
+        pf: Bool = true
+    ) -> OutboundFrame {
+        var control: UInt8 = 0xAF
+        if pf { control |= 0x10 }
+        return OutboundFrame(
+            destination: destination,
+            source: source,
+            path: path,
+            payload: parameters.encoded(isCommand: isCommand),
+            priority: .interactive,
+            frameType: "u",
+            pid: nil,
+            controlByte: control,
+            displayInfo: "XID",
+            isCommand: isCommand
+        )
+    }
+
+    /// Build an SREJ (Selective Reject) frame — retransmit exactly N(R).
+    /// Only valid on a link where XID negotiated SREJ (§6.4.4.2).
+    static func buildSREJ(
+        from source: AX25Address,
+        to destination: AX25Address,
+        via path: DigiPath = DigiPath(),
+        nr: Int,
+        pf: Bool = false,
+        isCommand: Bool = false
+    ) -> OutboundFrame {
+        return OutboundFrame(
+            destination: destination,
+            source: source,
+            path: path,
+            payload: Data(),
+            priority: .interactive,
+            frameType: "s",
+            pid: nil,
+            controlByte: AX25Control.sFrame(base: AX25Control.srejBase, nr: nr, pf: pf),
+            nr: nr,
+            displayInfo: "SREJ(\(nr))",
+            isCommand: isCommand
         )
     }
 
@@ -280,7 +343,8 @@ struct AX25FrameBuilder {
             controlByte: AX25Control.iFrame(ns: ns, nr: nr, pf: pf),
             ns: ns,
             nr: nr,
-            displayInfo: displayInfo ?? "I(\(ns),\(nr))"
+            displayInfo: displayInfo ?? "I(\(ns),\(nr))",
+            isCommand: true
         )
     }
 }

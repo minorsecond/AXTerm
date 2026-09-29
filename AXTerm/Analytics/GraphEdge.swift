@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct GraphEdge: Hashable, Sendable {
+nonisolated struct GraphEdge: Hashable, Sendable {
     let source: String
     let target: String
     let count: Int

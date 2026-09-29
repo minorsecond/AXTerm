@@ -24,7 +24,7 @@
 import Foundation
 
 /// Result of parsing a single NET/ROM routing entry.
-struct NetRomBroadcastEntry: Equatable {
+nonisolated struct NetRomBroadcastEntry: Equatable {
     let destinationCallsign: String
     let destinationAlias: String
     let bestNeighborCallsign: String
@@ -32,14 +32,14 @@ struct NetRomBroadcastEntry: Equatable {
 }
 
 /// Result of parsing a complete NET/ROM broadcast packet.
-struct NetRomBroadcastResult: Equatable {
+nonisolated struct NetRomBroadcastResult: Equatable {
     let originCallsign: String
     let entries: [NetRomBroadcastEntry]
     let timestamp: Date
 }
 
 /// Parser for NET/ROM L3 routing broadcast packets.
-struct NetRomBroadcastParser {
+nonisolated struct NetRomBroadcastParser {
 
     /// NET/ROM broadcast signature byte.
     static let signatureByte: UInt8 = 0xFF

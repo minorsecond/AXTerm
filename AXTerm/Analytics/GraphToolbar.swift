@@ -29,29 +29,30 @@ struct GraphToolbar: View {
     let onClearSelection: () -> Void
     let onClearFocus: () -> Void
     let onChangeAnchor: () -> Void
+    var isDraftingPath: Bool = false
+    var onTogglePathDraft: () -> Void = {}
 
     var body: some View {
+        // Content-hugging control cluster: shares one row with the legend instead
+        // of consuming a full-width row of its own.
         HStack(spacing: 12) {
-            // Left group: View controls
             viewControlsGroup
 
-            // Center: Focus indicator (when active)
             if focusState.isFocusEnabled, focusState.anchorNodeID != nil {
                 Divider()
                     .frame(height: 16)
                 focusIndicator
             }
 
-            Spacer()
-
-            // Right: Selection indicator (when nodes selected)
             if selectedNodeCount > 0 {
+                Divider()
+                    .frame(height: 16)
                 selectionIndicator
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.8))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(platform: .platformCardBackground).opacity(0.8))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
@@ -59,23 +60,35 @@ struct GraphToolbar: View {
 
     private var viewControlsGroup: some View {
         HStack(spacing: 4) {
-            // Fit: Zooms to show all visible nodes at optimal size
+            // Fit: frames currently visible graph nodes.
             Button(action: onFitToView) {
                 Label(Copy.Toolbar.fitToNodesLabel, systemImage: "arrow.up.left.and.arrow.down.right")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help(Copy.Toolbar.fitToNodesTooltip)
+            .help("Fit: Frame all currently visible nodes.")
             .accessibilityLabel(Copy.Toolbar.fitToNodesAccessibility)
 
-            // Home: Returns to default 1:1 zoom and centered position
+            // Home: returns to canonical default camera.
             Button(action: onResetView) {
                 Label(Copy.Toolbar.resetViewLabel, systemImage: "house")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help(Copy.Toolbar.resetViewTooltip)
+            .help("Home: Reset to default zoom and centered position.")
             .accessibilityLabel(Copy.Toolbar.resetViewAccessibility)
+
+            // Draw Path: click stations in order to build a connect path.
+            Button(action: onTogglePathDraft) {
+                Label("Draw Path", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(isDraftingPath ? Color.accentColor : Color.primary)
+            .help(isDraftingPath
+                  ? "Path drawing active: click stations in order to build the route, Esc to cancel."
+                  : "Draw a connect path: click stations in order from your node, then connect through the drawn hops.")
+            .accessibilityLabel(isDraftingPath ? "Stop drawing path" : "Draw connect path")
         }
         .font(.system(size: 12))
     }
@@ -164,6 +177,8 @@ struct GraphToolbar: View {
 private struct FocusSettingsPopover: View {
     @Binding var focusState: GraphFocusState
     let onChangeAnchor: () -> Void
+    var isDraftingPath: Bool = false
+    var onTogglePathDraft: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

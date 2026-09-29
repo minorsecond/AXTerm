@@ -18,6 +18,7 @@ struct PacketNSTableView: NSViewRepresentable {
 
     enum ColumnIdentifier: String, CaseIterable {
         case time
+        case radio
         case from
         case to
         case via
@@ -26,10 +27,13 @@ struct PacketNSTableView: NSViewRepresentable {
     }
 
     let packets: [Packet]
+    /// Radio names by id. Empty with one radio, and then there is no Radio
+    /// column — a column that always said the same thing would be noise.
+    var radioNames: [RadioID: String] = [:]
     @Binding var selection: Set<Packet.ID>
-    @Binding var isAtTop: Bool
+    @Binding var isAtBottom: Bool
     @Binding var followNewest: Bool
-    let scrollToTopToken: Int
+    let scrollToBottomToken: Int
     let onInspectSelection: () -> Void
     let onCopyInfo: (Packet) -> Void
     let onCopyRawHex: (Packet) -> Void
@@ -37,7 +41,7 @@ struct PacketNSTableView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             selection: $selection,
-            isAtTop: $isAtTop,
+            isAtBottom: $isAtBottom,
             followNewest: $followNewest,
             onInspectSelection: onInspectSelection,
             onCopyInfo: onCopyInfo,
@@ -70,7 +74,7 @@ struct PacketNSTableView: NSViewRepresentable {
 
         context.coordinator.attach(tableView: tableView)
         configureColumns(for: tableView)
-        let initialRows = packets.map { PacketRowViewModel.fromPacket($0) }
+        let initialRows = packets.map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
         PacketNSTableView.sizeColumnsToFitContent(in: tableView, rows: initialRows)
         PacketNSTableView.expandInfoColumnToFill(in: tableView)
 
@@ -81,14 +85,25 @@ struct PacketNSTableView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.autoresizingMask = [.width, .height]
         context.coordinator.attach(scrollView: scrollView)
+        
+        // Initial scroll to bottom if needed
+        if context.coordinator.isAtBottom.wrappedValue {
+             DispatchQueue.main.async {
+                 if tableView.numberOfRows > 0 {
+                     tableView.scrollRowToVisible(tableView.numberOfRows - 1)
+                 }
+             }
+        }
+        
         return scrollView
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.radioNames = radioNames
         context.coordinator.enqueueUpdate(
             packets: packets,
             selection: selection,
-            scrollToTopToken: scrollToTopToken
+            scrollToBottomToken: scrollToBottomToken
         )
     }
 
@@ -96,6 +111,8 @@ struct PacketNSTableView: NSViewRepresentable {
         if !tableView.tableColumns.isEmpty { return }
 
         let timeColumn = makeColumn(id: .time, title: "Time", minWidth: 70, width: 80, toolTip: "Received time")
+        let radioColumn = makeColumn(id: .radio, title: "Radio", minWidth: 50, width: 80,
+                                     toolTip: "Which radio decoded this frame, not which the sender used")
         let fromColumn = makeColumn(id: .from, title: "From", minWidth: 80, width: 100, toolTip: "Source callsign")
         let toColumn = makeColumn(id: .to, title: "To", minWidth: 80, width: 100, toolTip: "Destination callsign")
         let viaColumn = makeColumn(id: .via, title: "Via", minWidth: 60, width: 120, toolTip: "Digipeater path")
@@ -104,6 +121,7 @@ struct PacketNSTableView: NSViewRepresentable {
         infoColumn.resizingMask = [.autoresizingMask, .userResizingMask]
 
         tableView.addTableColumn(timeColumn)
+        if !radioNames.isEmpty { tableView.addTableColumn(radioColumn) }
         tableView.addTableColumn(fromColumn)
         tableView.addTableColumn(toColumn)
         tableView.addTableColumn(viaColumn)
@@ -146,9 +164,11 @@ struct PacketNSTableView: NSViewRepresentable {
 
     #if DEBUG
     private func resetAutosavedColumnsIfNeeded(for tableView: NSTableView) {
-        // Autosaved column widths can mask changes to autoresizingColumn. Use this
-        // debug-only toggle to clear saved widths if the Info column stays narrow.
-        let shouldResetAutosave = false
+        // Autosaved column widths can mask changes to autoresizingColumn. If the
+        // Info column stays narrow, clear the saved widths with:
+        //   defaults write com.rosswardrup.AXTerm AXTermResetPacketColumnAutosave -bool YES
+        let shouldResetAutosave = UserDefaults.standard.bool(
+            forKey: "AXTermResetPacketColumnAutosave")
         guard shouldResetAutosave, let autosaveName = tableView.autosaveName else { return }
         let defaultsKey = "NSTableView Columns \(autosaveName)"
         UserDefaults.standard.removeObject(forKey: defaultsKey)
@@ -174,9 +194,26 @@ struct PacketNSTableView: NSViewRepresentable {
         let otherColumnsWidth = tableView.tableColumns
             .filter { $0 != infoColumn }
             .reduce(CGFloat.zero) { $0 + $1.width }
-        let availableWidth = max(infoColumn.minWidth, tableView.bounds.width - otherColumnsWidth - totalSpacing)
-        // Only expand; never shrink user-resized widths.
-        if availableWidth > infoColumn.width {
+        // The clip view's width, not the table's. The table is the scroll
+        // view's document view and can be wider than what is on screen, so
+        // measuring against its own bounds sized the Info column to include
+        // the part hidden under the vertical scroller — payload text was
+        // then clipped mid-character at the window edge instead of
+        // truncating with an ellipsis inside it.
+        let visibleWidth = tableView.enclosingScrollView?.contentSize.width ?? tableView.bounds.width
+        let availableWidth = max(infoColumn.minWidth, visibleWidth - otherColumnsWidth - totalSpacing)
+        // Fill the remaining width exactly — shrink as well as expand.
+        //
+        // This used to expand only, to avoid overriding a width the operator
+        // had dragged. The cost was that a width set while the window was
+        // wide, or restored from the autosaved column state, outlived the
+        // window it was measured for: the Info column stayed wider than the
+        // table, so payload text ran off the right edge with its ellipsis
+        // somewhere out of sight, and the only clue was an autohiding
+        // scroller. Filling exactly is also what
+        // `lastColumnOnlyAutoresizingStyle` already promises, so the two are
+        // no longer pulling against each other.
+        if availableWidth != infoColumn.width {
             infoColumn.width = availableWidth
         }
     }
@@ -187,7 +224,7 @@ extension PacketNSTableView {
         private struct PendingUpdate {
             let packets: [Packet]
             let selection: Set<Packet.ID>
-            let scrollToTopToken: Int
+            let scrollToBottomToken: Int
         }
 
         private enum RowUpdate {
@@ -199,7 +236,7 @@ extension PacketNSTableView {
 
         private let logger = Logger(subsystem: "AXTerm", category: "PacketTable")
         private let selection: Binding<Set<Packet.ID>>
-        private let isAtTop: Binding<Bool>
+        let isAtBottom: Binding<Bool> // Made internal to be accessible by makeNSView
         private let followNewest: Binding<Bool>
         private let onInspectSelection: () -> Void
         private let onCopyInfo: (Packet) -> Void
@@ -207,15 +244,19 @@ extension PacketNSTableView {
 
         private(set) var rows: [PacketRowViewModel] = []
         private(set) var packets: [Packet] = []
+        var radioNames: [RadioID: String] = [:]
         private var isApplyingSelection = false
         private var lastContextRow: Int?
-        private var lastScrollToTopToken = 0
+        private var lastScrollToBottomToken = 0
         private var scrollObserver: NSObjectProtocol?
         private var pendingUpdate: PendingUpdate?
         private var isProgrammaticUpdate = false
+        private var isContextMenuTracking = false
+        private var menuDidBeginObserver: NSObjectProtocol?
+        private var menuDidEndObserver: NSObjectProtocol?
         private var scrollStateWorkItem: DispatchWorkItem?
-        private var pendingIsAtTop: Bool?
-        private var lastPublishedIsAtTop: Bool?
+        private var pendingIsAtBottom: Bool?
+        private var lastPublishedIsAtBottom: Bool?
         private let rowUpdateScheduler = CoalescingScheduler(delay: .milliseconds(80))
         private let columnSizingScheduler = CoalescingScheduler(delay: .milliseconds(500))
 
@@ -224,14 +265,14 @@ extension PacketNSTableView {
 
         init(
             selection: Binding<Set<Packet.ID>>,
-            isAtTop: Binding<Bool>,
+            isAtBottom: Binding<Bool>,
             followNewest: Binding<Bool>,
             onInspectSelection: @escaping () -> Void,
             onCopyInfo: @escaping (Packet) -> Void,
             onCopyRawHex: @escaping (Packet) -> Void
         ) {
             self.selection = selection
-            self.isAtTop = isAtTop
+            self.isAtBottom = isAtBottom
             self.followNewest = followNewest
             self.onInspectSelection = onInspectSelection
             self.onCopyInfo = onCopyInfo
@@ -241,25 +282,27 @@ extension PacketNSTableView {
         func enqueueUpdate(
             packets: [Packet],
             selection: Set<Packet.ID>,
-            scrollToTopToken: Int
+            scrollToBottomToken: Int
         ) {
             #if DEBUG
-            logger.debug("Packet table enqueue update (count: \(packets.count), token: \(scrollToTopToken))")
+            logger.debug("Packet table enqueue update (count: \(packets.count), token: \(scrollToBottomToken))")
             #endif
             pendingUpdate = PendingUpdate(
                 packets: packets,
                 selection: selection,
-                scrollToTopToken: scrollToTopToken
+                scrollToBottomToken: scrollToBottomToken
             )
             rowUpdateScheduler.schedule { [weak self] in
+                guard let self else { return }
                 await MainActor.run {
-                    self?.applyPendingUpdate()
+                    self.applyPendingUpdate()
                 }
             }
         }
 
         func attach(tableView: NSTableView) {
             self.tableView = tableView
+            observeMenuTracking(for: tableView.menu)
         }
 
         func attach(scrollView: NSScrollView) {
@@ -271,7 +314,7 @@ extension PacketNSTableView {
                 queue: .main
             ) { [weak self] _ in
                 guard let self, let tableView = self.tableView else { return }
-                self.updateIsAtTop(in: tableView)
+                self.updateIsAtBottom(in: tableView)
             }
         }
 
@@ -323,13 +366,18 @@ extension PacketNSTableView {
 
         func tableView(_ tableView: NSTableView, menuFor event: NSEvent) -> NSMenu? {
             let clickedRow = tableView.row(at: tableView.convert(event.locationInWindow, from: nil))
-            lastContextRow = clickedRow >= 0 ? clickedRow : nil
-            if clickedRow >= 0, !tableView.selectedRowIndexes.contains(clickedRow) {
+            guard rows.indices.contains(clickedRow) else {
+                lastContextRow = nil
+                return nil
+            }
+            lastContextRow = clickedRow
+            if !tableView.selectedRowIndexes.contains(clickedRow) {
                 tableView.selectRowIndexes(IndexSet(integer: clickedRow), byExtendingSelection: false)
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    self.selection.wrappedValue = [self.rows[clickedRow].id]
-                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.rows.indices.contains(clickedRow) else { return }
+                self.selection.wrappedValue = [self.rows[clickedRow].id]
             }
             return tableView.menu
         }
@@ -337,7 +385,8 @@ extension PacketNSTableView {
         @objc func handleDoubleClick(_ sender: Any?) {
             guard let tableView else { return }
             let row = tableView.clickedRow
-            activateRow(row)
+            guard packets.indices.contains(row) else { return }
+            onCopyInfo(packets[row])
         }
 
         @objc func inspectFromMenu(_ sender: Any?) {
@@ -388,19 +437,28 @@ extension PacketNSTableView {
         private func updateScrollPosition(
             in tableView: NSTableView,
             anchorID: Packet.ID?,
-            shouldScrollToTop: Bool
+            wasAtBottom: Bool,
+            shouldScrollToBottom: Bool
         ) {
-            let isUserNearTop = isUserAtTop(in: tableView)
             let shouldAutoScroll = AutoScrollDecision.shouldAutoScroll(
-                isUserAtTop: isUserNearTop,
+                isUserAtTarget: wasAtBottom,
                 followNewest: followNewest.wrappedValue,
-                didRequestScrollToTop: shouldScrollToTop
+                didRequestScrollToTarget: shouldScrollToBottom
             )
+
             if shouldAutoScroll {
-                if rows.indices.contains(0) {
-                    let visibleRows = tableView.rows(in: tableView.visibleRect)
-                    if !visibleRows.contains(0) {
-                        tableView.scrollRowToVisible(0)
+                let count = tableView.numberOfRows
+                if count > 0 {
+                    if shouldScrollToBottom {
+                        // Explicit jump (button/tab switch): animate
+                        NSAnimationContext.runAnimationGroup { context in
+                            context.duration = 0.2
+                            context.allowsImplicitAnimation = true
+                            tableView.scrollRowToVisible(count - 1)
+                        }
+                    } else {
+                        // Auto-follow: instant, stays in sync with row insert
+                        tableView.scrollRowToVisible(count - 1)
                     }
                 }
                 return
@@ -408,22 +466,28 @@ extension PacketNSTableView {
 
             guard let anchorID,
                   let anchorIndex = rows.firstIndex(where: { $0.id == anchorID }) else {
-                return
+                    return
             }
             let visibleRows = tableView.rows(in: tableView.visibleRect)
             guard !visibleRows.contains(anchorIndex) else { return }
             tableView.scrollRowToVisible(anchorIndex)
         }
 
-        private func updateIsAtTop(in tableView: NSTableView) {
+        private func updateIsAtBottom(in tableView: NSTableView) {
             guard !isProgrammaticUpdate else { return }
-            let atTop = isUserAtTop(in: tableView)
-            scheduleScrollStateUpdate(isAtTop: atTop)
+            let atBottom = isUserAtBottom(in: tableView)
+            scheduleScrollStateUpdate(isAtBottom: atBottom)
         }
 
         deinit {
             if let scrollObserver {
                 NotificationCenter.default.removeObserver(scrollObserver)
+            }
+            if let menuDidBeginObserver {
+                NotificationCenter.default.removeObserver(menuDidBeginObserver)
+            }
+            if let menuDidEndObserver {
+                NotificationCenter.default.removeObserver(menuDidEndObserver)
             }
             rowUpdateScheduler.cancel()
             columnSizingScheduler.cancel()
@@ -434,6 +498,15 @@ extension PacketNSTableView {
             let field = NSTextField(labelWithString: "")
             field.usesSingleLineMode = true
             field.lineBreakMode = .byTruncatingTail
+            // Truncating a label takes more than a line-break mode. Without
+            // the line cap and `truncatesLastVisibleLine` the cell clips
+            // instead, and without the low compression resistance the field
+            // keeps its intrinsic width and pushes past the cell — which is
+            // how a long beacon ended mid-character at the window edge with
+            // no ellipsis to say there was more.
+            field.maximumNumberOfLines = 1
+            field.cell?.truncatesLastVisibleLine = true
+            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             field.backgroundColor = .clear
             field.drawsBackground = false
 
@@ -444,6 +517,13 @@ extension PacketNSTableView {
                 field.textColor = .secondaryLabelColor
                 field.alignment = .left
                 field.toolTip = row.timeText
+            case ColumnIdentifier.radio.rawValue:
+                field.stringValue = row.radioName ?? ""
+                field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+                field.textColor = .secondaryLabelColor
+                field.alignment = .left
+                field.lineBreakMode = .byTruncatingTail
+                field.toolTip = row.radioName.map { "Decoded by \($0)" }
             case ColumnIdentifier.from.rawValue:
                 field.stringValue = row.fromText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -461,6 +541,7 @@ extension PacketNSTableView {
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
                 field.textColor = .secondaryLabelColor
                 field.alignment = .left
+                field.lineBreakMode = .byTruncatingMiddle
                 field.toolTip = row.viaText
             case ColumnIdentifier.type.rawValue:
                 field.stringValue = row.typeLabel
@@ -503,6 +584,7 @@ extension PacketNSTableView {
                 return
             }
             guard let pendingUpdate else { return }
+            guard !isContextMenuTracking else { return }
             self.pendingUpdate = nil
 
             #if DEBUG
@@ -510,9 +592,11 @@ extension PacketNSTableView {
             #endif
 
             isProgrammaticUpdate = true
+            // Capture scroll state BEFORE row mutation so we know user intent
+            let wasAtBottom = isUserAtBottom(in: tableView)
             let visibleAnchorID = firstVisiblePacketID(in: tableView)
-            let shouldScrollToTop = pendingUpdate.scrollToTopToken != lastScrollToTopToken
-            lastScrollToTopToken = pendingUpdate.scrollToTopToken
+            let shouldScrollToBottom = pendingUpdate.scrollToBottomToken != lastScrollToBottomToken
+            lastScrollToBottomToken = pendingUpdate.scrollToBottomToken
             let updateAction = updateRows(
                 packets: pendingUpdate.packets,
                 in: tableView
@@ -521,13 +605,14 @@ extension PacketNSTableView {
             updateScrollPosition(
                 in: tableView,
                 anchorID: visibleAnchorID,
-                shouldScrollToTop: shouldScrollToTop
+                wasAtBottom: wasAtBottom,
+                shouldScrollToBottom: shouldScrollToBottom
             )
             scheduleColumnSizing(for: tableView)
             DispatchQueue.main.async { [weak self, weak tableView] in
                 guard let self, let tableView else { return }
                 self.isProgrammaticUpdate = false
-                self.updateIsAtTop(in: tableView)
+                self.updateIsAtBottom(in: tableView)
             }
 
             #if DEBUG
@@ -542,6 +627,34 @@ extension PacketNSTableView {
             )
         }
 
+        private func observeMenuTracking(for menu: NSMenu?) {
+            if let menuDidBeginObserver {
+                NotificationCenter.default.removeObserver(menuDidBeginObserver)
+                self.menuDidBeginObserver = nil
+            }
+            if let menuDidEndObserver {
+                NotificationCenter.default.removeObserver(menuDidEndObserver)
+                self.menuDidEndObserver = nil
+            }
+            guard let menu else { return }
+            menuDidBeginObserver = NotificationCenter.default.addObserver(
+                forName: NSMenu.didBeginTrackingNotification,
+                object: menu,
+                queue: .main
+            ) { [weak self] _ in
+                self?.isContextMenuTracking = true
+            }
+            menuDidEndObserver = NotificationCenter.default.addObserver(
+                forName: NSMenu.didEndTrackingNotification,
+                object: menu,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.isContextMenuTracking = false
+                self.applyPendingUpdate()
+            }
+        }
+
         private func updateRows(packets: [Packet], in tableView: NSTableView) -> RowUpdate {
             let newIDs = packets.map(\.id)
             let oldIDs = rows.map(\.id)
@@ -552,7 +665,7 @@ extension PacketNSTableView {
             }
 
             if rows.isEmpty {
-                rows = packets.map { PacketRowViewModel.fromPacket($0) }
+                rows = packets.map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
                 self.packets = packets
                 tableView.reloadData()
                 return .reload
@@ -560,12 +673,13 @@ extension PacketNSTableView {
 
             if newIDs.count >= oldIDs.count {
                 let delta = newIDs.count - oldIDs.count
-                if delta > 0, Array(newIDs.dropFirst(delta)) == oldIDs {
-                    let newRows = packets.prefix(delta).map { PacketRowViewModel.fromPacket($0) }
-                    rows.insert(contentsOf: newRows, at: 0)
+                if delta > 0, Array(newIDs.prefix(oldIDs.count)) == oldIDs {
+                    let newRows = packets.suffix(delta).map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
+                    let startRow = rows.count
+                    rows.append(contentsOf: newRows)
                     self.packets = packets
                     tableView.beginUpdates()
-                    tableView.insertRows(at: IndexSet(integersIn: 0..<delta), withAnimation: [])
+                    tableView.insertRows(at: IndexSet(integersIn: startRow..<(startRow + delta)), withAnimation: [])
                     tableView.endUpdates()
                     return .insert(count: delta)
                 }
@@ -584,44 +698,36 @@ extension PacketNSTableView {
                 }
             }
 
-            rows = packets.map { PacketRowViewModel.fromPacket($0) }
+            rows = packets.map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
             self.packets = packets
             tableView.reloadData()
             return .reload
         }
 
-        private func scheduleScrollStateUpdate(isAtTop: Bool) {
-            guard lastPublishedIsAtTop != isAtTop else { return }
-            pendingIsAtTop = isAtTop
-            scrollStateWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self, let pendingIsAtTop = self.pendingIsAtTop else { return }
-                guard self.lastPublishedIsAtTop != pendingIsAtTop else { return }
-                #if DEBUG
-                self.logger.debug("Packet table scroll state update (isAtTop: \(pendingIsAtTop))")
-                #endif
-                self.lastPublishedIsAtTop = pendingIsAtTop
-                DispatchQueue.main.async { [weak self] in
-                    self?.isAtTop.wrappedValue = pendingIsAtTop
-                }
+        private func scheduleScrollStateUpdate(isAtBottom: Bool) {
+            guard lastPublishedIsAtBottom != isAtBottom else { return }
+            lastPublishedIsAtBottom = isAtBottom
+            
+            DispatchQueue.main.async { [weak self] in
+                self?.isAtBottom.wrappedValue = isAtBottom
             }
-            scrollStateWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
         }
 
         private func scheduleColumnSizing(for tableView: NSTableView) {
             columnSizingScheduler.schedule { [weak self, weak tableView] in
+                guard let self, let tableView else { return }
                 await MainActor.run {
-                    guard let self, let tableView else { return }
                     PacketNSTableView.sizeColumnsToFitContent(in: tableView, rows: self.rows)
                     PacketNSTableView.expandInfoColumnToFill(in: tableView)
                 }
             }
         }
 
-        private func isUserAtTop(in tableView: NSTableView) -> Bool {
-            let visibleRect = tableView.visibleRect
-            return visibleRect.minY <= 2
+        private func isUserAtBottom(in tableView: NSTableView) -> Bool {
+            let numberOfRows = tableView.numberOfRows
+            guard numberOfRows > 0 else { return true }
+            let visibleRowRange = tableView.rows(in: tableView.visibleRect)
+            return visibleRowRange.contains(numberOfRows - 1)
         }
     }
 }
@@ -659,7 +765,7 @@ private final class TypePillView: NSView {
     }
 }
 
-private struct PacketTableColumnSizer {
+nonisolated private struct PacketTableColumnSizer {
     let rows: [PacketRowViewModel]
 
     func width(for column: PacketNSTableView.ColumnIdentifier) -> CGFloat {
@@ -673,6 +779,7 @@ private struct PacketTableColumnSizer {
         let title: String
         switch column {
         case .time: title = "Time"
+        case .radio: title = "Radio"
         case .from: title = "From"
         case .to: title = "To"
         case .via: title = "Via"
@@ -689,6 +796,9 @@ private struct PacketTableColumnSizer {
         case .time:
             font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
             values = rows.map { $0.timeText }
+        case .radio:
+            font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            values = rows.map { $0.radioName ?? "" }
         case .from:
             font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             values = rows.map { $0.fromText }
@@ -715,8 +825,9 @@ private struct PacketTableColumnSizer {
     private func columnMaxWidth(for column: PacketNSTableView.ColumnIdentifier) -> CGFloat {
         switch column {
         case .time: return 140
+        case .radio: return 160
         case .from, .to: return 200
-        case .via: return 180
+        case .via: return 420
         case .type: return 80
         case .info: return 1200
         }

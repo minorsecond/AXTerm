@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum DeterministicJSON {
+nonisolated enum DeterministicJSON {
     nonisolated static func encode<T: Encodable>(_ value: T) -> String? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

@@ -378,7 +378,7 @@ struct BulkTransferRow: View {
     }
 
     private func formatBytes(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        ByteCount.string(Int64(bytes))
     }
 
     private func formatTime(_ date: Date) -> String {
@@ -447,21 +447,12 @@ struct BulkTransferRow: View {
     private var progressText: String {
         // Show progress against transmission size (compressed if applicable)
         let targetSize = transfer.transmissionSize > 0 ? transfer.transmissionSize : transfer.fileSize
-        let sent = ByteCountFormatter.string(
-            fromByteCount: Int64(transfer.bytesSent),
-            countStyle: .file
-        )
-        let total = ByteCountFormatter.string(
-            fromByteCount: Int64(targetSize),
-            countStyle: .file
-        )
+        let sent = ByteCount.string(Int64(transfer.bytesSent))
+        let total = ByteCount.string(Int64(targetSize))
 
         // If compressed and different from original, show both
         if transfer.compressionUsed && targetSize != transfer.fileSize {
-            let originalFormatted = ByteCountFormatter.string(
-                fromByteCount: Int64(transfer.fileSize),
-                countStyle: .file
-            )
+            let originalFormatted = ByteCount.string(Int64(transfer.fileSize))
             return "\(sent) / \(total) (\(originalFormatted) uncompressed)"
         }
         return "\(sent) / \(total)"
@@ -469,10 +460,7 @@ struct BulkTransferRow: View {
 
     private var throughputText: String {
         let bps = transfer.throughputBytesPerSecond
-        let formatted = ByteCountFormatter.string(
-            fromByteCount: Int64(bps),
-            countStyle: .file
-        )
+        let formatted = ByteCount.string(Int64(bps))
         return "\(formatted)/s"
     }
 
@@ -891,7 +879,7 @@ struct SendFileSheet: View {
 
                 HStack(spacing: 8) {
                     if let size = fileSize(url) {
-                        Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
+                        Text(ByteCount.string(Int64(size)))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -1342,7 +1330,7 @@ struct IncomingTransferRequestView: View {
                         .font(.system(.body, design: .monospaced))
                         .fontWeight(.medium)
 
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(request.fileSize), countStyle: .file))
+                    Text(ByteCount.string(Int64(request.fileSize)))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1473,7 +1461,7 @@ struct IncomingTransferSheet: View {
                             .lineLimit(2)
                             .truncationMode(.middle)
 
-                        Text(ByteCountFormatter.string(fromByteCount: Int64(request.fileSize), countStyle: .file))
+                        Text(ByteCount.string(Int64(request.fileSize)))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }

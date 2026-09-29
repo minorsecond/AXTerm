@@ -24,7 +24,7 @@ struct OutboundProgressView: View {
                 Text(progress.destination)
                     .fontWeight(.medium)
                     .foregroundStyle(.secondary)
-                if progress.hasAcks {
+                if progress.hasAcks || !progress.relayedDigis.isEmpty {
                     Text("·")
                         .foregroundStyle(.tertiary)
                     progressBadge
@@ -44,26 +44,52 @@ struct OutboundProgressView: View {
         )
     }
 
+    /// Delivery lifecycle badge: Queued → Sending → Relayed (a digi we heard
+    /// retransmitted the frame — evidence of hop progress, deliberately NOT
+    /// shown as delivery) → Delivered (the peer's ack covers the message).
+    /// Datagram sends stop at Relayed/Sent — no ack exists to promise more.
     @ViewBuilder
     private var progressBadge: some View {
-        if progress.isComplete {
+        switch progress.deliveryPhase {
+        case .delivered:
             HStack(spacing: 3) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 10))
-                    .foregroundStyle(.green)
                 Text("Delivered")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.green)
             }
-        } else if progress.hasAcks && progress.bytesAcked > 0 {
+            .foregroundStyle(.green)
+            .help("Acknowledged by \(progress.destination)")
+
+        case .partiallyAcked:
             Text("\(progress.bytesAcked)/\(progress.totalBytes) acked")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
-        } else if progress.bytesSent > 0 {
+
+        case .relayed:
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Relayed by \(progress.relayedDigis.joined(separator: ", "))")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(.indigo)
+            .help(progress.hasAcks
+                  ? "\(progress.relayedDigis.joined(separator: ", ")) retransmitted your frame — awaiting acknowledgment from \(progress.destination)"
+                  : "\(progress.relayedDigis.joined(separator: ", ")) retransmitted your frame. Datagram sends carry no acknowledgment, so this is the strongest confirmation available.")
+
+        case .sentDatagram:
+            Text("Sent")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .help("Datagram transmitted. No acknowledgment exists for UI frames.")
+
+        case .sending:
             Text("Sending…")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
-        } else {
+
+        case .queued:
             Text("Queued")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.tertiary)

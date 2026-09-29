@@ -17,6 +17,18 @@ final class MockNotificationScheduler: NotificationScheduling {
         scheduledPackets.append(packet)
         scheduledMatches.append(match)
     }
+
+    func scheduleMailNotification(packet: Packet) {
+        scheduledPackets.append(packet)
+    }
+
+    func scheduleMentionNotification(packet: Packet) {
+        scheduledPackets.append(packet)
+    }
+
+    func scheduleConnectionNotification(callsign: String) {
+        // Mock connection notification
+    }
 }
 
 final class MockNotificationCenter: NotificationCenterScheduling {

@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-final class SQLiteRawStore: RawStore, @unchecked Sendable {
+nonisolated final class SQLiteRawStore: RawStore, @unchecked Sendable {
     private let dbQueue: DatabaseQueue
 
     init(dbQueue: DatabaseQueue) {
@@ -37,6 +37,8 @@ final class SQLiteRawStore: RawStore, @unchecked Sendable {
     func deleteAll() throws {
         try dbQueue.write { db in
             _ = try RawEntryRecord.deleteAll(db)
+            // Reclaim disk space immediately
+            try db.execute(sql: "PRAGMA incremental_vacuum")
         }
     }
 
@@ -58,6 +60,8 @@ final class SQLiteRawStore: RawStore, @unchecked Sendable {
                 """,
                 arguments: [overflow]
             )
+            // Reclaim disk space incrementally (up to 100 pages ~400KB at a time)
+            try db.execute(sql: "PRAGMA incremental_vacuum(100)")
         }
     }
 }

@@ -5,10 +5,35 @@
 //  Created by AXTerm on 2026-03-01.
 //
 
-import AppKit
 import SwiftUI
 
-enum AnalyticsStyle {
+nonisolated enum AnalyticsStyle {
+    /// Channel-utilization model for a shared 1200-baud AX.25 channel.
+    enum Channel {
+        /// AFSK bit rate assumed for airtime estimates.
+        static let baudRate: Double = 1200
+        /// Fixed per-frame airtime: TXDelay, flags, and squelch tails dominate
+        /// short frames (~300 ms is a typical field value).
+        static let perFrameOverheadSeconds: Double = 0.3
+        /// Non-payload bytes per frame (addresses, control, PID, FCS).
+        static let framingBytes: Int = 32
+
+        /// Estimated airtime for a single frame.
+        static func frameAirtimeSeconds(payloadBytes: Int) -> Double {
+            perFrameOverheadSeconds + Double(payloadBytes + framingBytes) * 8.0 / baudRate
+        }
+
+        /// Estimated channel airtime as a percentage of the bucket duration.
+        static func utilizationPercent(packets: Int, payloadBytes: Int, bucketSeconds: Double) -> Int {
+            guard bucketSeconds > 0, packets > 0 else { return 0 }
+            let framing = packets * framingBytes
+            let airtimeSeconds = Double(packets) * perFrameOverheadSeconds
+                + Double(payloadBytes + framing) * 8.0 / baudRate
+            let percent = min(100.0, airtimeSeconds / bucketSeconds * 100.0)
+            return Int(percent.rounded())
+        }
+    }
+
     enum Layout {
         static let pagePadding: CGFloat = 20
         static let sectionSpacing: CGFloat = 18
@@ -22,6 +47,8 @@ enum AnalyticsStyle {
         static let graphInset: CGFloat = 24
         static let metricColumns: Int = 3
         static let chartColumns: Int = 2
+        static let floatingBarMaxWidth: CGFloat = 1120
+        static let floatingBarOuterPadding: CGFloat = 12
     }
 
     enum Chart {
@@ -85,24 +112,34 @@ enum AnalyticsStyle {
         static let topLimit: Int = 6
     }
 
+    /// Main-actor, because the colours underneath it are.
+    ///
+    /// `UIColor.systemPurple` and friends are dynamic: they resolve against
+    /// the current trait collection, which is main-actor state. Reading them
+    /// from anywhere else is the data race the compiler is describing, not a
+    /// technicality — so the honest fix is to say where they may be read
+    /// rather than to silence it. Everything that draws is already on the
+    /// main actor, so nothing at the call sites has to change.
+    @MainActor
     enum Colors {
-        static let cardBackground = Color(nsColor: .controlBackgroundColor)
-        static let cardStroke = Color(nsColor: .separatorColor)
-        static let divider = Color(nsColor: .separatorColor)
-        static let textSecondary = Color(nsColor: .secondaryLabelColor)
-        static let accent = Color(nsColor: .controlAccentColor)
-        static let graphMyNode = Color(nsColor: .systemPurple)
-        static let chartGridLine = Color(nsColor: .separatorColor).opacity(0.35)
-        static let chartAxis = Color(nsColor: .secondaryLabelColor)
+        static let cardBackground = Color(platform: .platformCardBackground)
+        static let cardStroke = Color(platform: .platformSeparator)
+        static let divider = Color(platform: .platformSeparator)
+        static let textSecondary = Color(platform: .platformSecondaryLabel)
+        static let accent = Color(platform: .platformAccent)
+        static let graphMyNode = Color(platform: .systemPurple)
+        static let chartGridLine = Color(platform: .platformSeparator).opacity(0.35)
+        static let chartAxis = Color(platform: .platformSecondaryLabel)
         static let chartPlotBackground = Color.clear
 
         static func accent(alpha: Double) -> Color {
-            Color(nsColor: NSColor.controlAccentColor.withAlphaComponent(alpha))
+            Color(platform: PlatformColor.platformAccent.platformAlpha(alpha))
         }
 
-        static let neutralFill = Color(nsColor: .secondaryLabelColor).opacity(0.12)
-        static let graphEdge = Color(nsColor: .secondaryLabelColor).opacity(0.55)
-        static let graphNode = Color(nsColor: .labelColor)
-        static let graphNodeMuted = Color(nsColor: .secondaryLabelColor)
+        static let neutralFill = Color(platform: .platformSecondaryLabel).opacity(0.12)
+        static let graphEdge = Color(platform: .platformSecondaryLabel).opacity(0.55)
+        static let graphNode = Color(platform: .platformLabel)
+        static let graphNodeMuted = Color(platform: .platformSecondaryLabel)
+        static let graphOfficialNode = Color(platform: .systemOrange)
     }
 }

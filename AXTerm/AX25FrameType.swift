@@ -8,7 +8,7 @@
 import Foundation
 
 /// AX.25 frame types
-enum FrameType: String, Hashable, Codable, CaseIterable {
+nonisolated enum FrameType: String, Hashable, Codable, CaseIterable {
     case ui = "UI"      // Unnumbered Information
     case i = "I"        // Information
     case s = "S"        // Supervisory

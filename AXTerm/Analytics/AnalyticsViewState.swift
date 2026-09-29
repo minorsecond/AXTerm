@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct AnalyticsViewState: Hashable, Sendable {
+nonisolated struct AnalyticsViewState: Hashable, Sendable {
     var summary: AnalyticsSummaryMetrics?
     var series: AnalyticsSeries
     var heatmap: HeatmapData

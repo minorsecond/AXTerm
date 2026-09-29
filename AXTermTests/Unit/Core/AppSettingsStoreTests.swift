@@ -32,22 +32,28 @@ final class AppSettingsStoreTests: XCTestCase {
     }
 
     func testPortValidationClampsToRange() {
-        XCTAssertEqual(AppSettingsStore.sanitizePort("0"), "1")
-        XCTAssertEqual(AppSettingsStore.sanitizePort("99999"), "65535")
-        XCTAssertEqual(AppSettingsStore.sanitizePort("8001"), "8001")
-        XCTAssertEqual(AppSettingsStore.sanitizePort("abc"), "\(AppSettingsStore.defaultPort)")
+        XCTAssertEqual(AppSettingsStore.sanitizePort(0), 1)
+        XCTAssertEqual(AppSettingsStore.sanitizePort(99999), 65535)
+        XCTAssertEqual(AppSettingsStore.sanitizePort(8001), 8001)
     }
 
     func testRetentionValidationClamps() {
         XCTAssertEqual(AppSettingsStore.sanitizeRetention(10), AppSettingsStore.minRetention)
-        XCTAssertEqual(AppSettingsStore.sanitizeRetention(600_000), AppSettingsStore.maxRetention)
+        XCTAssertEqual(AppSettingsStore.sanitizeRetention(20_000_000), AppSettingsStore.maxRetention)
         XCTAssertEqual(AppSettingsStore.sanitizeRetention(50_000), 50_000)
     }
 
     func testLogRetentionValidationClamps() {
         XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(10), AppSettingsStore.minLogRetention)
-        XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(600_000), AppSettingsStore.maxLogRetention)
+        XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(3_000_000), AppSettingsStore.maxLogRetention)
         XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(10_000), 10_000)
+    }
+
+    func testAX25T1TimeoutValidationClamps() {
+        XCTAssertEqual(AppSettingsStore.sanitizeAX25T1TimeoutSeconds(0.1), AppSettingsStore.minAX25T1TimeoutSeconds)
+        XCTAssertEqual(AppSettingsStore.sanitizeAX25T1TimeoutSeconds(45.0), AppSettingsStore.maxAX25T1TimeoutSeconds)
+        XCTAssertEqual(AppSettingsStore.sanitizeAX25T1TimeoutSeconds(4.04), 4.0)
+        XCTAssertEqual(AppSettingsStore.sanitizeAX25T1TimeoutSeconds(4.06), 4.1)
     }
 
     func testWatchListSanitizesAndDedupes() {
@@ -61,6 +67,19 @@ final class AppSettingsStoreTests: XCTestCase {
             let store = AppSettingsStore(defaults: defaults)
             store.myCallsign = "n0call-7"
             XCTAssertEqual(store.myCallsign, "N0CALL-7")
+        }
+    }
+
+    func testAX25T1TimeoutPersistsSanitizedValue() {
+        withIsolatedDefaults { defaults in
+            let store = AppSettingsStore(defaults: defaults)
+            store.ax25T1TimeoutSeconds = 0.2
+            XCTAssertEqual(store.ax25T1TimeoutSeconds, AppSettingsStore.minAX25T1TimeoutSeconds)
+            XCTAssertEqual(
+                defaults.double(forKey: AppSettingsStore.ax25T1TimeoutSecondsKey),
+                AppSettingsStore.minAX25T1TimeoutSeconds,
+                accuracy: 0.0001
+            )
         }
     }
 
@@ -116,6 +135,49 @@ final class AppSettingsStoreTests: XCTestCase {
 
             XCTAssertEqual(publishCount, 0, "Reading runInMenuBar must not trigger objectWillChange")
             cancellable.cancel()
+        }
+    }
+
+    func testAnalyticsAutoUpdatePersists() {
+        withIsolatedDefaults { defaults in
+            let store = AppSettingsStore(defaults: defaults)
+
+            store.analyticsAutoUpdateEnabled = false
+            XCTAssertFalse(defaults.bool(forKey: AppSettingsStore.analyticsAutoUpdateEnabledKey))
+
+            store.analyticsAutoUpdateEnabled = true
+            XCTAssertTrue(defaults.bool(forKey: AppSettingsStore.analyticsAutoUpdateEnabledKey))
+        }
+    }
+
+    func testIgnoredServiceEndpointsSanitizePersistAndSyncValidator() {
+        withIsolatedDefaults { defaults in
+            let store = AppSettingsStore(defaults: defaults)
+            defer { CallsignValidator.configureIgnoredServiceEndpoints([]) }
+
+            store.ignoredServiceEndpoints = [" horse ", "HORSE", "drlnod"]
+
+            XCTAssertEqual(store.ignoredServiceEndpoints, ["HORSE", "DRLNOD"])
+            XCTAssertEqual(
+                defaults.stringArray(forKey: AppSettingsStore.ignoredServiceEndpointsKey),
+                ["HORSE", "DRLNOD"]
+            )
+            XCTAssertFalse(CallsignValidator.isValidRoutingNode("HORSE"))
+            XCTAssertFalse(CallsignValidator.isValidRoutingNode("DRLNOD"))
+            XCTAssertTrue(CallsignValidator.isValidRoutingNode("DRL"))
+        }
+    }
+
+    func testAddAndRemoveIgnoredServiceEndpoint() {
+        withIsolatedDefaults { defaults in
+            let store = AppSettingsStore(defaults: defaults)
+            defer { CallsignValidator.configureIgnoredServiceEndpoints([]) }
+
+            store.addIgnoredServiceEndpoint("horse")
+            XCTAssertTrue(store.isServiceEndpointIgnored("HORSE"))
+
+            store.removeIgnoredServiceEndpoint("HORSE")
+            XCTAssertFalse(store.isServiceEndpointIgnored("HORSE"))
         }
     }
 }

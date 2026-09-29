@@ -11,7 +11,7 @@ import Foundation
 // MARK: - Transfer Protocol Registry
 
 /// Singleton registry for file transfer protocol creation and detection
-final class TransferProtocolRegistry: @unchecked Sendable {
+nonisolated final class TransferProtocolRegistry: @unchecked Sendable {
     /// Shared instance
     static let shared = TransferProtocolRegistry()
 
@@ -168,7 +168,7 @@ final class TransferProtocolRegistry: @unchecked Sendable {
 // MARK: - AXDP Transfer Protocol Adapter
 
 /// Adapter to wrap existing AXDP implementation in FileTransferProtocol interface
-final class AXDPTransferProtocol: FileTransferProtocol {
+nonisolated final class AXDPTransferProtocol: FileTransferProtocol {
     let protocolType: TransferProtocolType = .axdp
 
     weak var delegate: FileTransferProtocolDelegate?

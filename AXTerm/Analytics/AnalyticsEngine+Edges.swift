@@ -54,12 +54,12 @@ extension AnalyticsEngine {
     }
 }
 
-private struct EdgeKey: Hashable {
+nonisolated private struct EdgeKey: Hashable {
     let source: String
     let target: String
 }
 
-private struct EdgeAggregate {
+nonisolated private struct EdgeAggregate {
     var count: Int = 0
     var bytes: Int = 0
 }

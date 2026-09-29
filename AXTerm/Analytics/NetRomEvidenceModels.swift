@@ -8,7 +8,7 @@
 import Foundation
 
 /// Configuration for passive NET/ROM inference.
-struct NetRomInferenceConfig {
+nonisolated struct NetRomInferenceConfig: Sendable {
     let evidenceWindowSeconds: TimeInterval
     let inferredRouteHalfLifeSeconds: TimeInterval
     let inferredBaseQuality: Int
@@ -20,10 +20,41 @@ struct NetRomInferenceConfig {
     let uiBeaconWeight: Double
     let ackOnlyWeight: Double
     let retryPenaltyMultiplier: Double
+    /// Tombstone window = inferredRouteHalfLifeSeconds × tombstoneWindowMultiplier.
+    /// Evidence is held in tombstone state for this duration before removal.
+    let tombstoneWindowMultiplier: Double
+
+    init(
+        evidenceWindowSeconds: TimeInterval,
+        inferredRouteHalfLifeSeconds: TimeInterval,
+        inferredBaseQuality: Int,
+        reinforcementIncrement: Int,
+        inferredMinimumQuality: Int,
+        maxInferredRoutesPerDestination: Int,
+        dataProgressWeight: Double,
+        routingBroadcastWeight: Double,
+        uiBeaconWeight: Double,
+        ackOnlyWeight: Double,
+        retryPenaltyMultiplier: Double,
+        tombstoneWindowMultiplier: Double = 1.0
+    ) {
+        self.evidenceWindowSeconds = evidenceWindowSeconds
+        self.inferredRouteHalfLifeSeconds = inferredRouteHalfLifeSeconds
+        self.inferredBaseQuality = inferredBaseQuality
+        self.reinforcementIncrement = reinforcementIncrement
+        self.inferredMinimumQuality = inferredMinimumQuality
+        self.maxInferredRoutesPerDestination = maxInferredRoutesPerDestination
+        self.dataProgressWeight = dataProgressWeight
+        self.routingBroadcastWeight = routingBroadcastWeight
+        self.uiBeaconWeight = uiBeaconWeight
+        self.ackOnlyWeight = ackOnlyWeight
+        self.retryPenaltyMultiplier = retryPenaltyMultiplier
+        self.tombstoneWindowMultiplier = tombstoneWindowMultiplier
+    }
 
     static let `default` = NetRomInferenceConfig(
         evidenceWindowSeconds: 5,
-        inferredRouteHalfLifeSeconds: 30,
+        inferredRouteHalfLifeSeconds: FreshnessCalculator.defaultTTL,
         inferredBaseQuality: 60,
         reinforcementIncrement: 20,
         inferredMinimumQuality: 25,
@@ -32,7 +63,8 @@ struct NetRomInferenceConfig {
         routingBroadcastWeight: 0.8,
         uiBeaconWeight: 0.4,
         ackOnlyWeight: 0.1,
-        retryPenaltyMultiplier: 0.7
+        retryPenaltyMultiplier: 0.7,
+        tombstoneWindowMultiplier: 1.0
     )
 
     func weight(for classification: PacketClassification) -> Double {
@@ -49,12 +81,17 @@ struct NetRomInferenceConfig {
 }
 
 /// Evidence record for an inferred route.
-struct NetRomRouteEvidence: Equatable {
+nonisolated struct NetRomRouteEvidence: Equatable {
     let destination: String
     let origin: String
     var path: [String]
     var lastObserved: Date
     var reinforcementScore: Double
+    /// When set, this evidence is in tombstone state (expired but retained for potential revival).
+    var tombstonedAt: Date?
+    /// The radio the next hop was heard on: the route this evidence
+    /// publishes is a way in on that radio.
+    var radio: RadioID = .primary
 
     /// Advertised quality derived from reinforcement increments.
     func advertisedQuality(using config: NetRomInferenceConfig) -> Int {
@@ -74,5 +111,7 @@ struct NetRomRouteEvidence: Equatable {
             reinforcementScore *= config.retryPenaltyMultiplier
         }
         lastObserved = timestamp
+        // Revive from tombstone if refreshed with new evidence
+        tombstonedAt = nil
     }
 }

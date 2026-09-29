@@ -8,17 +8,12 @@
 //
 
 import XCTest
+import GRDB
 @testable import AXTerm
 
 // MARK: - NetworkHealthScoreTests
 
 final class NetworkHealthScoreTests: XCTestCase {
-
-    override func setUp() {
-        super.setUp()
-        // Reset EMA state between tests for reproducibility
-        NetworkHealthCalculator.resetEMAState()
-    }
 
     // MARK: - Test 1: Formula Weights and Rounding
 
@@ -134,7 +129,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthShort = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalShort,
             timeframePackets: recentPackets,
@@ -150,7 +144,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthLong = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalLong,
             timeframePackets: allPackets,
@@ -197,7 +190,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthBaseline = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalGraph,
             timeframePackets: packets,
@@ -231,7 +223,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         )
 
         // But health is still calculated from CANONICAL graph
-        NetworkHealthCalculator.resetEMAState()
         let healthWithFilteredView = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalGraph,  // Same canonical graph
             timeframePackets: packets,
@@ -289,7 +280,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthOff = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalOff,
             timeframePackets: packets,
@@ -305,7 +295,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: true
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthOn = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalOn,
             timeframePackets: packets,
@@ -357,7 +346,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -390,7 +378,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -419,13 +406,14 @@ final class NetworkHealthScoreTests: XCTestCase {
 
         // Connected pair
         _ = builder.addDirectPeerExchange(between: "W1ABC", and: "K2DEF", countEachDirection: 5)
-        // Isolated node (only sends, doesn't receive bidirectional)
-        _ = builder.addDirectEndpoint(from: "N3GHI", to: "W1ABC", count: 1)
+        // Isolated node: heard on air, but its only traffic goes to a service
+        // endpoint, so it never gains a station-to-station link. (With
+        // canonicalMinEdge=1 a single station-to-station packet already links.)
+        _ = builder.addDirectEndpoint(from: "N3GHI", to: "BEACON", count: 1)
 
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -462,7 +450,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let now = Date()
         let emptyGraph = GraphModel(nodes: [], edges: [], adjacency: [:], droppedNodesCount: 0)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: emptyGraph,
             timeframePackets: [],
@@ -472,15 +459,13 @@ final class NetworkHealthScoreTests: XCTestCase {
             now: now
         )
 
-        // With empty graph:
-        // - A2 (packet rate) should be 0
-        // - Overall score follows formula: 0.6×Topology + 0.4×Activity
-        // - C3 (isolation reduction) = 100 when no nodes exist (0 isolated / 0 total)
-        // - This gives TopologyScore = 0.2×100 = 20, FinalScore = 0.6×20 = 12
+        // With no packets there is nothing to score: every component is 0 and the
+        // sample gate reports Unknown rather than praising an empty network.
         XCTAssertEqual(health.scoreBreakdown.a2PacketRateScore, 0, "Empty packets: A2 should be 0")
         XCTAssertEqual(health.scoreBreakdown.packetRatePerMin, 0, "Empty packets: rate should be 0")
-        // Score is 12 due to C3 isolation reduction formula (0 isolated from 0 nodes = 100%)
-        XCTAssertEqual(health.score, 12, "Empty packets: score should be 12 (C3 gives 100% isolation reduction)")
+        XCTAssertEqual(health.scoreBreakdown.c3IsolationReduction, 0, "Empty packets: C3 must not be 100")
+        XCTAssertEqual(health.score, 0, "Empty packets: score should be 0")
+        XCTAssertEqual(health.rating, .unknown, "Empty packets: rating should be Unknown")
     }
 
     private func testHighPacketRateA2() {
@@ -497,7 +482,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -529,7 +513,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -560,10 +543,178 @@ final class NetworkHealthScoreTests: XCTestCase {
         XCTAssertEqual(HealthRating.from(score: 0), .unknown)
     }
 
+    /// Two stations exchanging a couple of packets must not produce a confident
+    /// score — the old model rated this degenerate sample "Excellent" (87).
+    func testSparseSampleReportsUnknown() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-120))
+        _ = builder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 1)
+        let packets = builder.buildPackets()
+
+        let health = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        XCTAssertEqual(health.score, 0, "Below the sample gate no score is emitted")
+        XCTAssertEqual(health.rating, .unknown)
+        XCTAssertFalse(health.reasons.contains("Network operational"))
+        // Metrics stay available for the explainer
+        XCTAssertEqual(health.metrics.totalStations, 2)
+    }
+
+    /// A2 must not reward a collision-saturated shared channel: a rate deep into
+    /// congestion territory scores lower than a normal rate.
+    func testCongestedChannelScoresLowerThanNormalRate() {
+        let now = Date()
+
+        // Normal: ~5 pkt/min over the 10-minute window
+        var normalBuilder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        for _ in 0..<25 {
+            _ = normalBuilder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 1)
+        }
+        _ = normalBuilder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 2)
+        let normalPackets = normalBuilder.buildPackets()
+
+        // Saturated: ~50 pkt/min over the same window
+        var busyBuilder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        for _ in 0..<250 {
+            _ = busyBuilder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 1)
+        }
+        _ = busyBuilder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 2)
+        let busyPackets = busyBuilder.buildPackets()
+
+        let normalHealth = NetworkHealthCalculator.calculate(
+            timeframePackets: normalPackets,
+            allRecentPackets: normalPackets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            now: now
+        )
+        let busyHealth = NetworkHealthCalculator.calculate(
+            timeframePackets: busyPackets,
+            allRecentPackets: busyPackets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        XCTAssertEqual(normalHealth.scoreBreakdown.a2PacketRateScore, 100, accuracy: 0.5,
+                       "Normal load should score full A2")
+        XCTAssertLessThan(busyHealth.scoreBreakdown.a2PacketRateScore,
+                          normalHealth.scoreBreakdown.a2PacketRateScore,
+                          "Saturated channel must not outscore a normal one")
+    }
+
+    /// Coverage-aware rate: if we only listened for part of the activity
+    /// window, the packet rate divides by listening time, not wall time —
+    /// otherwise reopening the app after a break under-reports a live channel.
+    func testPacketRateUsesCoveredTimeNotWallTime() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-120))
+        // 20 packets in the 2 minutes we were actually listening.
+        for _ in 0..<10 {
+            _ = builder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 1)
+        }
+        _ = builder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 2)
+        let packets = builder.buildPackets()
+
+        // Listening only for the last 2 minutes of the 10-minute window.
+        let coverage = CaptureCoverage(intervals: [
+            DateInterval(start: now.addingTimeInterval(-120), end: now)
+        ])
+
+        let withCoverage = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            coverage: coverage,
+            now: now
+        )
+        let withoutCoverage = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        // 24 frames over 2 covered minutes = 12/min; the wall-clock (fallback)
+        // computation already divides by the observed packet span, so coverage
+        // must agree or improve on it — and must be ~5x the naive /10 figure.
+        XCTAssertEqual(withCoverage.metrics.packetRate, 12.0, accuracy: 1.5)
+        XCTAssertGreaterThanOrEqual(withCoverage.metrics.packetRate, withoutCoverage.metrics.packetRate - 0.01)
+    }
+
+    /// Partial coverage annotates the score and silences warnings that would
+    /// otherwise blame the network for our downtime.
+    func testPartialCoverageAnnotatesAndSuppressesDowntimeWarnings() {
+        let now = Date()
+        let windowDuration: TimeInterval = 3600
+
+        // Traffic only in the first 10 minutes of the hour: we then closed the app.
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-windowDuration))
+        _ = builder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 3)
+        _ = builder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 3)
+        let packets = builder.buildPackets()
+
+        let coverage = CaptureCoverage(intervals: [
+            DateInterval(start: now.addingTimeInterval(-windowDuration), end: now.addingTimeInterval(-windowDuration + 600))
+        ])
+
+        let health = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            timeframeDuration: windowDuration,
+            coverage: coverage,
+            now: now
+        )
+
+        XCTAssertEqual(health.metrics.coverageFraction, 600.0 / 3600.0, accuracy: 0.02)
+        let coverageWarning = health.warnings.first { $0.id == "partial_coverage" }
+        XCTAssertNotNil(coverageWarning, "Sub-60% coverage must be called out")
+        XCTAssertEqual(coverageWarning?.detail.contains("17% of this window"), true,
+                       "Percent renders once — a %%%% format literal once produced '17%%'")
+        XCTAssertFalse(health.warnings.contains { $0.id == "stale_nodes" },
+                       "Stale-station warnings are meaningless when we weren't listening")
+    }
+
+    /// Full coverage produces no coverage warning.
+    func testFullCoverageProducesNoCoverageWarning() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        _ = builder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 3)
+        _ = builder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 3)
+        let packets = builder.buildPackets()
+
+        let coverage = CaptureCoverage(intervals: [
+            DateInterval(start: now.addingTimeInterval(-7200), end: now)
+        ])
+
+        let health = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            timeframeDuration: 3600,
+            coverage: coverage,
+            now: now
+        )
+
+        XCTAssertEqual(health.metrics.coverageFraction, 1.0, accuracy: 0.001)
+        XCTAssertFalse(health.warnings.contains { $0.id == "partial_coverage" })
+    }
+
     /// Verify canonical minEdge constant
     func testCanonicalMinEdgeConstant() {
-        XCTAssertEqual(NetworkHealthCalculator.canonicalMinEdge, 2,
-                       "Canonical minEdge should be 2 for health calculations")
+        XCTAssertEqual(NetworkHealthCalculator.canonicalMinEdge, 1,
+                       "Any observed link is topology evidence for health calculations")
     }
 
     /// Verify activity window constant
@@ -577,5 +728,348 @@ final class NetworkHealthScoreTests: XCTestCase {
         let breakdown = HealthScoreBreakdown.empty
         let totalWeight = breakdown.components.reduce(0) { $0 + $1.weight }
         XCTAssertEqual(totalWeight, 100, accuracy: 0.01, "Component weights should sum to 100")
+    }
+
+    /// Routing aliases (e.g., DRL) must not cause topology percentages to exceed 100.
+    func testRoutingAliasesDoNotExceedTopologyPercentBounds() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-120))
+
+        _ = builder.addDirectPeerExchange(between: "W1ABC", and: "DRL", countEachDirection: 3)
+        let packets = builder.buildPackets()
+
+        let canonicalGraph = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: packets,
+            includeViaDigipeaters: false
+        )
+
+        let health = NetworkHealthCalculator.calculate(
+            canonicalGraph: canonicalGraph,
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "test",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        XCTAssertEqual(health.metrics.totalStations, 2, "Alias node should be counted in total station universe")
+        XCTAssertLessThanOrEqual(health.metrics.largestComponentPercent, 100, "Cluster % must be bounded")
+        XCTAssertLessThanOrEqual(health.metrics.isolationReduction, 100, "Isolation % must be bounded")
+        XCTAssertEqual(health.scoreBreakdown.c1MainClusterPct, 100, accuracy: 0.1, "Two-node connected graph should be 100% cluster")
+    }
+
+    /// Activity percentages must remain bounded even if recent packets include stations outside timeframe packets.
+    func testActivityPercentagesBoundedWhenRecentWindowHasExtraStations() {
+        let now = Date()
+
+        var timeframeBuilder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-3600))
+        _ = timeframeBuilder.addDirectPeerExchange(between: "W1ABC", and: "K2DEF", countEachDirection: 2)
+        let timeframePackets = timeframeBuilder.buildPackets()
+
+        var recentBuilder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-60))
+        _ = recentBuilder.addDirectPeerExchange(between: "N3GHI", and: "W4JKL", countEachDirection: 3)
+        let recentPackets = recentBuilder.buildPackets()
+
+        let canonicalGraph = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: timeframePackets,
+            includeViaDigipeaters: false
+        )
+
+        let health = NetworkHealthCalculator.calculate(
+            canonicalGraph: canonicalGraph,
+            timeframePackets: timeframePackets,
+            allRecentPackets: recentPackets,
+            timeframeDisplayName: "test",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        XCTAssertLessThanOrEqual(health.scoreBreakdown.a1ActiveNodesPct, 100, "Active-node % must be bounded")
+        XCTAssertLessThanOrEqual(health.metrics.freshness, 1, "Freshness ratio must be <= 1")
+    }
+
+    /// Integration sanity check for a local sqlite snapshot.
+    /// Run with AXTERM_HEALTH_SQLITE_PATH=/path/to/axterm.sqlite.
+    func testHealthMetricsFromSQLiteSnapshotWhenPathProvided() throws {
+        let envPath = ProcessInfo.processInfo.environment["AXTERM_HEALTH_SQLITE_PATH"]
+        let defaultSnapshotPath = "/Users/rwardrup/dev/AXTerm/axterm.sqlite"
+        let path = (envPath?.isEmpty == false) ? envPath! : defaultSnapshotPath
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("SQLite snapshot not found at \(path)")
+        }
+
+        let dbQueue = try DatabaseQueue(path: path)
+        let store = SQLitePacketStore(dbQueue: dbQueue)
+
+        guard let newest = try store.loadRecent(limit: 1).first else {
+            throw XCTSkip("No packets in sqlite snapshot")
+        }
+
+        let end = newest.receivedAt.addingTimeInterval(1)
+        let start = end.addingTimeInterval(-7 * 24 * 60 * 60)
+        let window = DateInterval(start: start, end: end)
+        let packets = try store.loadPackets(in: window)
+
+        XCTAssertFalse(packets.isEmpty, "Expected packets in the 7-day snapshot window")
+
+        let graphDirect = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: packets,
+            includeViaDigipeaters: false
+        )
+        let healthDirect = NetworkHealthCalculator.calculate(
+            canonicalGraph: graphDirect,
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "7d",
+            includeViaDigipeaters: false,
+            now: end
+        )
+
+        let graphVia = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: packets,
+            includeViaDigipeaters: true
+        )
+        let healthVia = NetworkHealthCalculator.calculate(
+            canonicalGraph: graphVia,
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "7d",
+            includeViaDigipeaters: true,
+            now: end
+        )
+
+        for health in [healthDirect, healthVia] {
+            XCTAssertLessThanOrEqual(health.metrics.largestComponentPercent, 100, "Cluster must be <= 100")
+            XCTAssertGreaterThanOrEqual(health.metrics.largestComponentPercent, 0, "Cluster must be >= 0")
+            XCTAssertLessThanOrEqual(health.metrics.connectivityRatio, 100, "Connectivity must be <= 100")
+            XCTAssertGreaterThanOrEqual(health.metrics.connectivityRatio, 0, "Connectivity must be >= 0")
+            XCTAssertLessThanOrEqual(health.metrics.isolationReduction, 100, "Isolation must be <= 100")
+            XCTAssertGreaterThanOrEqual(health.metrics.isolationReduction, 0, "Isolation must be >= 0")
+            XCTAssertLessThanOrEqual(health.metrics.freshness, 1, "Freshness ratio must be <= 1")
+            XCTAssertGreaterThanOrEqual(health.metrics.freshness, 0, "Freshness ratio must be >= 0")
+            XCTAssertLessThanOrEqual(health.score, 100, "Score must be <= 100")
+            XCTAssertGreaterThanOrEqual(health.score, 0, "Score must be >= 0")
+        }
+
+        let report = """
+        SQLite snapshot health (end=\(end)):
+          Direct includeVia=false:
+            score=\(healthDirect.score)
+            stations=\(healthDirect.metrics.totalStations)
+            cluster=\(String(format: "%.1f", healthDirect.metrics.largestComponentPercent))%
+            connectivity=\(String(format: "%.1f", healthDirect.metrics.connectivityRatio))%
+            isolation=\(String(format: "%.1f", healthDirect.metrics.isolationReduction))%
+          Routed includeVia=true:
+            score=\(healthVia.score)
+            stations=\(healthVia.metrics.totalStations)
+            cluster=\(String(format: "%.1f", healthVia.metrics.largestComponentPercent))%
+            connectivity=\(String(format: "%.1f", healthVia.metrics.connectivityRatio))%
+            isolation=\(String(format: "%.1f", healthVia.metrics.isolationReduction))%
+        """
+        XCTContext.runActivity(named: report) { _ in }
+    }
+
+    /// Contract test: the convenience entry point takes no rendered view graph and
+    /// must match an explicit canonical-graph calculation exactly.
+    func testConvenienceCalculationMatchesExplicitCanonicalGraph() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+
+        _ = builder.addDirectPeerExchange(between: "W1ABC", and: "K2DEF", countEachDirection: 5)
+        _ = builder.addDirectPeerExchange(between: "K2DEF", and: "N3GHI", countEachDirection: 4)
+        _ = builder.addViaObservation(from: "N3GHI", to: "W4JKL", via: ["N0DIG"], count: 3)
+
+        let packets = builder.buildPackets()
+        XCTAssertFalse(packets.isEmpty)
+
+        let canonicalGraph = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: packets,
+            includeViaDigipeaters: true
+        )
+        XCTAssertFalse(canonicalGraph.nodes.isEmpty)
+
+        let healthFromCanonical = NetworkHealthCalculator.calculate(
+            canonicalGraph: canonicalGraph,
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "10m",
+            includeViaDigipeaters: true,
+            now: now
+        )
+        let healthFromEmptyView = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "10m",
+            includeViaDigipeaters: true,
+            now: now
+        )
+
+        XCTAssertEqual(healthFromCanonical.score, healthFromEmptyView.score, "Health score must not depend on rendered graph parameter")
+        XCTAssertEqual(healthFromCanonical.metrics.totalStations, healthFromEmptyView.metrics.totalStations)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.c1MainClusterPct, healthFromEmptyView.scoreBreakdown.c1MainClusterPct, accuracy: 0.001)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.c2ConnectivityPct, healthFromEmptyView.scoreBreakdown.c2ConnectivityPct, accuracy: 0.001)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.c3IsolationReduction, healthFromEmptyView.scoreBreakdown.c3IsolationReduction, accuracy: 0.001)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.a1ActiveNodesPct, healthFromEmptyView.scoreBreakdown.a1ActiveNodesPct, accuracy: 0.001)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.a2PacketRateScore, healthFromEmptyView.scoreBreakdown.a2PacketRateScore, accuracy: 0.001)
+    }
+
+    /// SQLite contract test using shifted timestamps so assertions remain valid over time.
+    /// This prevents production snapshots from "aging out" of recent-activity windows.
+    func testShiftedSQLiteSnapshotMaintainsHealthMetricsAtSyntheticNow() throws {
+        let packets = try loadSQLiteSnapshotPackets()
+        guard !packets.isEmpty else {
+            throw XCTSkip("No packets in sqlite snapshot")
+        }
+
+        // Anchor all packet times near a deterministic synthetic now while preserving relative spacing.
+        let syntheticNow = makeDate(year: 2026, month: 2, day: 11, hour: 12, minute: 0, second: 0)
+        let shiftedPackets = shiftPacketsToReferenceNow(packets, referenceNow: syntheticNow)
+
+        // Use fixed 7-day timeframe ending at syntheticNow.
+        let timeframeStart = syntheticNow.addingTimeInterval(-7 * 24 * 60 * 60)
+        let timeframePackets = shiftedPackets.filter { $0.timestamp >= timeframeStart && $0.timestamp <= syntheticNow }
+        XCTAssertFalse(timeframePackets.isEmpty, "Shifted timeframe packets should not be empty")
+
+        let directCanonical = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: timeframePackets,
+            includeViaDigipeaters: false
+        )
+        let directHealth = NetworkHealthCalculator.calculate(
+            canonicalGraph: directCanonical,
+            timeframePackets: timeframePackets,
+            allRecentPackets: shiftedPackets,
+            timeframeDisplayName: "7d",
+            includeViaDigipeaters: false,
+            now: syntheticNow
+        )
+
+        let viaCanonical = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: timeframePackets,
+            includeViaDigipeaters: true
+        )
+        let viaHealth = NetworkHealthCalculator.calculate(
+            canonicalGraph: viaCanonical,
+            timeframePackets: timeframePackets,
+            allRecentPackets: shiftedPackets,
+            timeframeDisplayName: "7d",
+            includeViaDigipeaters: true,
+            now: syntheticNow
+        )
+
+        for health in [directHealth, viaHealth] {
+            XCTAssertGreaterThan(health.metrics.activeStations, 0, "Shifted snapshot should have active stations in 10m window")
+            XCTAssertGreaterThan(health.scoreBreakdown.packetRatePerMin, 0, "Shifted snapshot should have non-zero packet rate")
+            XCTAssertLessThanOrEqual(health.score, 100)
+            XCTAssertGreaterThanOrEqual(health.score, 0)
+            XCTAssertLessThanOrEqual(health.metrics.largestComponentPercent, 100)
+            XCTAssertLessThanOrEqual(health.metrics.connectivityRatio, 100)
+            XCTAssertLessThanOrEqual(health.metrics.isolationReduction, 100)
+        }
+    }
+
+    /// Snapshot semantics contract at synthetic now:
+    /// Graph lens subsets must remain truthful on real-world packet snapshots.
+    func testShiftedSQLiteSnapshotLensSemanticsContract() throws {
+        let packets = try loadSQLiteSnapshotPackets()
+        guard !packets.isEmpty else {
+            throw XCTSkip("No packets in sqlite snapshot")
+        }
+
+        let syntheticNow = makeDate(year: 2026, month: 2, day: 11, hour: 12, minute: 0, second: 0)
+        let shiftedPackets = shiftPacketsToReferenceNow(packets, referenceNow: syntheticNow)
+        let timeframeStart = syntheticNow.addingTimeInterval(-7 * 24 * 60 * 60)
+        let timeframePackets = shiftedPackets.filter { $0.timestamp >= timeframeStart && $0.timestamp <= syntheticNow }
+
+        let classified = NetworkGraphBuilder.buildClassified(
+            packets: timeframePackets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: true,
+                minimumEdgeCount: 1,
+                maxNodes: 300,
+                stationIdentityMode: .station
+            ),
+            now: syntheticNow
+        )
+        XCTAssertFalse(classified.nodes.isEmpty, "Shifted snapshot should produce classified nodes")
+
+        let connectivity = ViewGraphDeriver.deriveViewGraph(from: classified, viewMode: .connectivity)
+        let routing = ViewGraphDeriver.deriveViewGraph(from: classified, viewMode: .routing)
+        let combined = ViewGraphDeriver.deriveViewGraph(from: classified, viewMode: .all)
+
+        XCTAssertEqual(connectivity.nodes.count, classified.nodes.count)
+        XCTAssertEqual(routing.nodes.count, classified.nodes.count)
+        XCTAssertEqual(combined.nodes.count, classified.nodes.count)
+
+        let connectivityTypes = Set(connectivity.edges.map(\.linkType))
+        let routingTypes = Set(routing.edges.map(\.linkType))
+        let combinedTypes = Set(combined.edges.map(\.linkType))
+
+        XCTAssertTrue(connectivityTypes.isSubset(of: GraphViewMode.connectivity.visibleLinkTypes))
+        XCTAssertTrue(routingTypes.isSubset(of: GraphViewMode.routing.visibleLinkTypes))
+        XCTAssertTrue(combinedTypes.isSubset(of: GraphViewMode.all.visibleLinkTypes))
+
+        XCTAssertFalse(connectivityTypes.contains(.heardVia), "Direct lens must exclude heard-via")
+        XCTAssertFalse(routingTypes.contains(.heardDirect), "Routed lens must exclude heard-direct")
+        XCTAssertGreaterThanOrEqual(combined.edges.count, connectivity.edges.count, "Combined should not hide connectivity edges")
+        XCTAssertGreaterThanOrEqual(combined.edges.count, routing.edges.count, "Combined should not hide routed edges")
+    }
+
+    private func loadSQLiteSnapshotPackets() throws -> [Packet] {
+        let envPath = ProcessInfo.processInfo.environment["AXTERM_HEALTH_SQLITE_PATH"]
+        let defaultSnapshotPath = "/Users/rwardrup/dev/AXTerm/axterm.sqlite"
+        let path = (envPath?.isEmpty == false) ? envPath! : defaultSnapshotPath
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("SQLite snapshot not found at \(path)")
+        }
+
+        let dbQueue = try DatabaseQueue(path: path)
+        let store = SQLitePacketStore(dbQueue: dbQueue)
+
+        guard let newest = try store.loadRecent(limit: 1).first else {
+            return []
+        }
+
+        let end = newest.receivedAt.addingTimeInterval(1)
+        let start = end.addingTimeInterval(-7 * 24 * 60 * 60)
+        let window = DateInterval(start: start, end: end)
+        return try store.loadPackets(in: window)
+    }
+
+    private func shiftPacketsToReferenceNow(_ packets: [Packet], referenceNow: Date) -> [Packet] {
+        guard let newest = packets.map(\.timestamp).max() else { return packets }
+        let targetNewest = referenceNow.addingTimeInterval(-15) // keep newest safely inside "recent" window
+        let delta = targetNewest.timeIntervalSince(newest)
+        return packets.map { packet in
+            Packet(
+                id: packet.id,
+                timestamp: packet.timestamp.addingTimeInterval(delta),
+                from: packet.from,
+                to: packet.to,
+                via: packet.via,
+                frameType: packet.frameType,
+                control: packet.control,
+                controlByte1: packet.controlByte1,
+                pid: packet.pid,
+                info: packet.info,
+                rawAx25: packet.rawAx25,
+                kissEndpoint: packet.kissEndpoint,
+                infoText: packet.infoText
+            )
+        }
+    }
+
+    private func makeDate(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        return calendar.date(from: DateComponents(
+            calendar: calendar,
+            timeZone: calendar.timeZone,
+            year: year,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute,
+            second: second
+        )) ?? Date(timeIntervalSince1970: 0)
     }
 }

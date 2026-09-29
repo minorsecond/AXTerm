@@ -7,19 +7,19 @@
 
 import SwiftUI
 
-struct SearchFocusAction {
+nonisolated struct SearchFocusAction {
     let action: () -> Void
 }
 
-struct ToggleConnectionAction {
+nonisolated struct ToggleConnectionAction {
     let action: () -> Void
 }
 
-struct InspectPacketAction {
+nonisolated struct InspectPacketAction {
     let action: () -> Void
 }
 
-struct SelectNavigationAction {
+nonisolated struct SelectNavigationAction {
     let action: (NavigationItem) -> Void
 }
 
@@ -45,22 +45,22 @@ extension FocusedValues {
     }
 }
 
-private struct SearchFocusActionKey: FocusedValueKey {
+nonisolated private struct SearchFocusActionKey: FocusedValueKey {
     typealias Value = SearchFocusAction?
     static let defaultValue: SearchFocusAction? = nil
 }
 
-private struct ToggleConnectionActionKey: FocusedValueKey {
+nonisolated private struct ToggleConnectionActionKey: FocusedValueKey {
     typealias Value = ToggleConnectionAction?
     static let defaultValue: ToggleConnectionAction? = nil
 }
 
-private struct InspectPacketActionKey: FocusedValueKey {
+nonisolated private struct InspectPacketActionKey: FocusedValueKey {
     typealias Value = InspectPacketAction?
     static let defaultValue: InspectPacketAction? = nil
 }
 
-private struct SelectNavigationActionKey: FocusedValueKey {
+nonisolated private struct SelectNavigationActionKey: FocusedValueKey {
     typealias Value = SelectNavigationAction?
     static let defaultValue: SelectNavigationAction? = nil
 }
@@ -92,31 +92,19 @@ struct AXTermCommands: Commands {
             .keyboardShortcut("k", modifiers: [.command])
         }
 
-        CommandMenu("View") {
-            Button("Terminal") {
-                selectNavigation?.action(.terminal)
+        // The standard View menu, not a second one. `CommandMenu("View")`
+        // does not merge with the View menu SwiftUI already provides — it
+        // adds another, so the menu bar read "File Edit View Connection View
+        // Window Help". Navigating between views is what the View menu is
+        // for, so these belong in it.
+        CommandGroup(after: .sidebar) {
+            Divider()
+            ForEach(NavigationItem.allCases, id: \.self) { item in
+                Button(item.rawValue) {
+                    selectNavigation?.action(item)
+                }
+                .keyboardShortcut(KeyEquivalent(item.menuShortcut), modifiers: [.command])
             }
-            .keyboardShortcut("1", modifiers: [.command])
-
-            Button("Packets") {
-                selectNavigation?.action(.packets)
-            }
-            .keyboardShortcut("2", modifiers: [.command])
-
-            Button("Routes") {
-                selectNavigation?.action(.routes)
-            }
-            .keyboardShortcut("3", modifiers: [.command])
-
-            Button("Analytics") {
-                selectNavigation?.action(.analytics)
-            }
-            .keyboardShortcut("4", modifiers: [.command])
-
-            Button("Raw") {
-                selectNavigation?.action(.raw)
-            }
-            .keyboardShortcut("5", modifiers: [.command])
         }
 
         CommandGroup(after: .help) {

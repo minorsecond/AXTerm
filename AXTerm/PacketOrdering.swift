@@ -7,12 +7,12 @@
 
 import Foundation
 
-enum PacketOrdering {
+nonisolated enum PacketOrdering {
     static func shouldPrecede(_ lhs: Packet, _ rhs: Packet) -> Bool {
         if lhs.timestamp != rhs.timestamp {
-            return lhs.timestamp > rhs.timestamp
+            return lhs.timestamp < rhs.timestamp
         }
-        return lhs.id.uuidString > rhs.id.uuidString
+        return lhs.id.uuidString < rhs.id.uuidString
     }
 
     static func insertionIndex(for packet: Packet, in packets: [Packet]) -> Int {

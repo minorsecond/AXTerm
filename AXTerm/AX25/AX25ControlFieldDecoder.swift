@@ -8,7 +8,7 @@
 import Foundation
 
 /// Decoder for AX.25 control field bytes
-enum AX25ControlFieldDecoder {
+nonisolated enum AX25ControlFieldDecoder {
 
     // MARK: - U-Frame Control Byte Patterns (with P/F bit masked out)
 
@@ -32,6 +32,9 @@ enum AX25ControlFieldDecoder {
 
     /// FRMR (Frame Reject) - 0x87
     private static let frmrPattern: UInt8 = 0x87
+
+    /// XID (Exchange Identification) - 0xAF
+    private static let xidPattern: UInt8 = 0xAF
 
     // MARK: - Decode Function
 
@@ -212,6 +215,8 @@ enum AX25ControlFieldDecoder {
             uType = .DM
         case frmrPattern:
             uType = .FRMR
+        case xidPattern:
+            uType = .XID
         default:
             uType = .UNKNOWN
         }

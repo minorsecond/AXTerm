@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum AnalyticsTimeframe: String, CaseIterable, Hashable, Sendable {
+nonisolated enum AnalyticsTimeframe: String, CaseIterable, Hashable, Sendable {
     case fifteenMinutes
     case oneHour
     case sixHours

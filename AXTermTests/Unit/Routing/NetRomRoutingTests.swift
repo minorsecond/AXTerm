@@ -149,6 +149,45 @@ final class NetRomRoutingTests: XCTestCase {
         XCTAssertEqual(stored.quality, expectedQuality, "Route quality must follow NET/ROM normalization.")
     }
 
+    func testRouteQualityFollowsFreshBroadcastDownward() {
+        // Classic NET/ROM: each broadcast carries the node's current quality, so a
+        // route advertised weaker must display weaker. The old max() update made
+        // route quality a high-water mark that could never decrease.
+        let router = makeRouter()
+        let neighbor = "W0ABC"
+        let now = Date(timeIntervalSince1970: 1_700_000_350)
+        router.observePacket(
+            makePacket(from: neighbor, to: localCallsign, timestamp: now),
+            observedQuality: 200,
+            direction: .incoming,
+            timestamp: now
+        )
+
+        let strong = RouteInfo(
+            destination: "W1BBB",
+            origin: neighbor,
+            quality: 220,
+            path: [neighbor, "W1BBB"],
+            lastUpdated: now
+        )
+        router.broadcastRoutes(from: neighbor, quality: 220, destinations: [strong], timestamp: now.addingTimeInterval(1))
+        let qualityAfterStrong = router.currentRoutes().first?.quality ?? 0
+
+        // Weak enough to drop, strong enough to clear minimumRouteQuality (32)
+        let weak = RouteInfo(
+            destination: "W1BBB",
+            origin: neighbor,
+            quality: 100,
+            path: [neighbor, "W1BBB"],
+            lastUpdated: now.addingTimeInterval(60)
+        )
+        router.broadcastRoutes(from: neighbor, quality: 100, destinations: [weak], timestamp: now.addingTimeInterval(60))
+        let qualityAfterWeak = router.currentRoutes().first?.quality ?? 0
+
+        XCTAssertLessThan(qualityAfterWeak, qualityAfterStrong,
+            "A weaker fresh advertisement must lower the displayed route quality")
+    }
+
     func testLoopedRoutesIgnored() {
         let router = makeRouter()
         let neighbor = "W0ABC"
@@ -241,10 +280,12 @@ final class NetRomRoutingTests: XCTestCase {
             timestamp: now.addingTimeInterval(1)
         )
 
-        // Use TTL + 2 to ensure route is past the cutoff (not exactly at boundary)
+        // purgeStaleRoutes is now a no-op — expired routes are kept for display.
+        // bestRouteTo() guards against using them for routing decisions.
         let later = now.addingTimeInterval(NetRomConfig.default.routeTTLSeconds + 2)
         router.purgeStaleRoutes(currentDate: later)
-        XCTAssertTrue(router.currentRoutes().isEmpty, "Routes must be removed after the TTL window.")
+        XCTAssertFalse(router.currentRoutes().isEmpty, "Expired routes should be kept for display")
+        XCTAssertNil(router.bestRouteTo("W3EEE"), "bestRouteTo must not return expired routes")
     }
 
     func testDeterministicRouteOrdering() {

@@ -11,7 +11,7 @@ import Foundation
 ///
 /// Values are loaded from Info.plist (populated from xcconfig) and user settings.
 /// The xcconfig files define build-specific values (Debug vs Release).
-struct SentryConfiguration: Equatable, Sendable {
+nonisolated struct SentryConfiguration: Equatable, Sendable {
     // MARK: - Info.plist Keys
 
     static let infoPlistDSNKey = "SENTRY_DSN"
@@ -19,9 +19,13 @@ struct SentryConfiguration: Equatable, Sendable {
     static let infoPlistDebugKey = "SENTRY_DEBUG"
     static let infoPlistTracesSampleRateKey = "SENTRY_TRACES_SAMPLE_RATE"
     static let infoPlistProfilesSampleRateKey = "SENTRY_PROFILES_SAMPLE_RATE"
+    static let legacyInfoPlistProfilesSampleRateKey = "sentry_profiles_sample_rate"
+    static let generatedInfoPlistProfilesSampleRateKey = "SentryProfilesSampleRate"
+    static let infoPlistGitCommitKey = "SENTRY_GIT_COMMIT"
 
     /// Environment variable fallback for DSN (useful for CI or local overrides).
     static let environmentVariableDSNKey = "SENTRY_DSN"
+    static let environmentVariableGitCommitKeys = ["SENTRY_GIT_COMMIT", "GIT_COMMIT_HASH", "GITHUB_SHA", "CI_COMMIT_SHA"]
 
     // MARK: - Configuration Properties
 
@@ -46,6 +50,9 @@ struct SentryConfiguration: Equatable, Sendable {
     /// Distribution identifier (build number).
     let dist: String
 
+    /// Git commit hash associated with this build (if available).
+    let gitCommit: String?
+
     /// User preference: whether Sentry is enabled at all.
     let enabledByUser: Bool
 
@@ -61,6 +68,20 @@ struct SentryConfiguration: Equatable, Sendable {
     var shouldStart: Bool {
         dsn != nil && enabledByUser
     }
+
+    /// Whether a DSN is configured, for callers that want only that one bit.
+    ///
+    /// A `static let`, so it is resolved once and then free to read. The
+    /// settings pane shows it, and a SwiftUI body runs on every redraw —
+    /// building a whole configuration there is what put a `git` subprocess
+    /// on the main thread in the first place.
+    ///
+    /// Neither the Info.plist nor the environment changes while the process
+    /// runs, so there is nothing to invalidate.
+    static let isDSNConfigured: Bool = resolveDSN(
+        environmentValue: ProcessInfo.processInfo.environment[environmentVariableDSNKey],
+        infoPlistValue: InfoPlistReader(bundle: .main).string(forKey: infoPlistDSNKey)
+    ) != nil
 
     // MARK: - Loading
 
@@ -102,7 +123,11 @@ struct SentryConfiguration: Equatable, Sendable {
         let environment = infoPlist.string(forKey: infoPlistEnvironmentKey) ?? "unknown"
         let debug = infoPlist.bool(forKey: infoPlistDebugKey)
         let tracesSampleRate = infoPlist.double(forKey: infoPlistTracesSampleRateKey) ?? 0.0
-        let profilesSampleRate = infoPlist.double(forKey: infoPlistProfilesSampleRateKey) ?? 0.0
+        let profilesSampleRate = resolveProfilesSampleRate(infoPlist: infoPlist)
+        let gitCommit = resolveGitCommit(
+            infoPlistValue: infoPlist.string(forKey: infoPlistGitCommitKey),
+            environmentVariables: environmentVariables
+        )
 
         let version = infoPlist.string(forKey: "CFBundleShortVersionString") ?? "0"
         let build = infoPlist.string(forKey: "CFBundleVersion") ?? "0"
@@ -116,6 +141,7 @@ struct SentryConfiguration: Equatable, Sendable {
             profilesSampleRate: clampSampleRate(profilesSampleRate),
             release: "\(name)@\(version)+\(build)",
             dist: build,
+            gitCommit: gitCommit,
             enabledByUser: enabledByUser,
             sendPacketContents: sendPacketContents,
             sendConnectionDetails: sendConnectionDetails
@@ -133,6 +159,27 @@ struct SentryConfiguration: Equatable, Sendable {
             return plist
         }
         return nil
+    }
+
+    /// The commit this build came from, or nil when nothing recorded one.
+    ///
+    /// Build-time only. A fourth branch used to shell out to `git rev-parse`
+    /// in the working directory, which never worked and eventually crashed
+    /// the app: every scheme sets `useCustomWorkingDirectory = "NO"`, so a
+    /// launched app's working directory is `/`, where there is no checkout to
+    /// read. It returned nil after forking a process, and it did that from
+    /// inside a SwiftUI body (2026-09-16).
+    ///
+    /// To tag developer builds, set `SENTRY_GIT_COMMIT` at build time the way
+    /// CI already sets `GITHUB_SHA`. The xcconfigs ship it as `unknown`,
+    /// which `sanitizeGitCommit` reads as absent.
+    static func resolveGitCommit(infoPlistValue: String?, environmentVariables: [String: String]) -> String? {
+        for key in environmentVariableGitCommitKeys {
+            if let value = sanitizeGitCommit(environmentVariables[key]) {
+                return value
+            }
+        }
+        return sanitizeGitCommit(infoPlistValue)
     }
 
     // MARK: - Private Helpers
@@ -196,22 +243,43 @@ struct SentryConfiguration: Equatable, Sendable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func sanitizeGitCommit(_ raw: String?) -> String? {
+        guard let value = sanitizeValue(raw) else { return nil }
+        if value == "unknown" || value == "UNKNOWN" || value == "unset" || value == "UNSET" {
+            return nil
+        }
+        return value
+    }
+
     private static func clampSampleRate(_ rate: Double) -> Double {
         min(max(rate, 0.0), 1.0)
+    }
+
+    private static func resolveProfilesSampleRate(infoPlist: InfoPlistReading) -> Double {
+        if let value = infoPlist.double(forKey: infoPlistProfilesSampleRateKey) {
+            return value
+        }
+        if let value = infoPlist.double(forKey: generatedInfoPlistProfilesSampleRateKey) {
+            return value
+        }
+        if let value = infoPlist.double(forKey: legacyInfoPlistProfilesSampleRateKey) {
+            return value
+        }
+        return 0.0
     }
 }
 
 // MARK: - Info.plist Reading Protocol
 
 /// Protocol for reading Info.plist values, enabling dependency injection for tests.
-protocol InfoPlistReading: Sendable {
+nonisolated protocol InfoPlistReading: Sendable {
     func string(forKey key: String) -> String?
     func bool(forKey key: String) -> Bool
     func double(forKey key: String) -> Double?
 }
 
 /// Default implementation that reads from a Bundle's Info.plist.
-struct InfoPlistReader: InfoPlistReading {
+nonisolated struct InfoPlistReader: InfoPlistReading {
     let bundle: Bundle
 
     init(bundle: Bundle = .main) {
@@ -250,10 +318,13 @@ struct InfoPlistReader: InfoPlistReading {
 }
 
 /// Mock Info.plist reader for testing.
-struct MockInfoPlistReader: InfoPlistReading {
-    var values: [String: Any]
+nonisolated struct MockInfoPlistReader: InfoPlistReading {
+    // `any Sendable` rather than `Any`: the struct is Sendable, and a
+    // dictionary of Any is not. Everything a plist holds — strings,
+    // numbers, booleans, arrays of them — already is.
+    var values: [String: any Sendable]
 
-    init(_ values: [String: Any] = [:]) {
+    init(_ values: [String: any Sendable] = [:]) {
         self.values = values
     }
 
@@ -281,4 +352,3 @@ struct MockInfoPlistReader: InfoPlistReading {
         return nil
     }
 }
-

@@ -7,17 +7,17 @@
 
 import Foundation
 
-struct DiagnosticsReport: Encodable {
-    struct AppInfo: Encodable {
+nonisolated struct DiagnosticsReport: Encodable {
+    nonisolated struct AppInfo: Encodable {
         let name: String
         let version: String
         let build: String
         let macOSVersion: String
     }
 
-    struct SettingsSnapshot: Encodable {
+    nonisolated struct SettingsSnapshot: Encodable {
         let host: String
-        let port: String
+        let port: Int
         let persistHistory: Bool
         let packetRetention: Int
         let consoleRetention: Int
@@ -25,7 +25,7 @@ struct DiagnosticsReport: Encodable {
         let eventRetention: Int
     }
 
-    struct EventSnapshot: Encodable {
+    nonisolated struct EventSnapshot: Encodable {
         let id: UUID
         let createdAt: Date
         let level: String
@@ -39,7 +39,12 @@ struct DiagnosticsReport: Encodable {
     let events: [EventSnapshot]
 }
 
-enum DiagnosticsExporter {
+nonisolated enum DiagnosticsExporter {
+    // `@MainActor`, because it reads `AppSettingsStore`, which genuinely is
+    // main-actor state — the settings are edited from the UI. Reading them
+    // from anywhere else is the race the compiler describes, and a
+    // diagnostics report is not worth one.
+    @MainActor
     static func makeReport(settings: AppSettingsStore, events: [AppEventRecord]) -> DiagnosticsReport {
         let bundle = Bundle.main
         let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String
@@ -56,8 +61,8 @@ enum DiagnosticsExporter {
         )
 
         let snapshot = DiagnosticsReport.SettingsSnapshot(
-            host: settings.host,
-            port: settings.port,
+            host: settings.primaryRadio?.host ?? "",
+            port: settings.primaryRadio?.port ?? 0,
             persistHistory: settings.persistHistory,
             packetRetention: settings.retentionLimit,
             consoleRetention: settings.consoleRetentionLimit,

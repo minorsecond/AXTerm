@@ -13,8 +13,8 @@
 //  Since AX.25 often has UI-only frames (no ACK), dr is frequently unobservable.
 //  We support partial observability:
 //    1) Full ETX when both df and dr are estimable
-//    2) Unidirectional fallback: uses conservative dr estimate (initialDeliveryRatio)
-//       when dr is unknown, ensuring quality is penalized for one-way evidence only
+//    2) Unidirectional fallback: assumes a conservative dr of 0.99 when dr is
+//       unknown, so one-way evidence can never read as a fully confirmed link
 //
 //  EWMA smoothing ensures stability - quality doesn't spike from transient conditions.
 //  Directionality is critical: A→B stats MUST NOT affect B→A unless explicit reverse evidence exists.
@@ -30,7 +30,7 @@
 import Foundation
 
 /// Configuration for link quality estimation.
-struct LinkQualityConfig: Equatable {
+nonisolated struct LinkQualityConfig: Equatable, Sendable {
     /// Capture source type for ingestion semantics.
     let source: CaptureSourceType
 
@@ -58,9 +58,17 @@ struct LinkQualityConfig: Equatable {
     /// Maximum observations to retain per directional link (ring buffer bound).
     let maxObservationsPerLink: Int
 
-    /// Whether to exclude service destinations (BEACON, ID, MAIL, etc.) from link quality edges.
-    /// Default is true - service destinations are not valid callsigns for routing purposes.
+    /// Whether to exclude service destinations (BEACON, ID, NODES, MAIL, etc.)
+    /// from link quality edges. Default is true. Endpoints are accepted per
+    /// `CallsignValidator.isValidRoutingNode`, so tactical aliases are tracked
+    /// while service names, pseudo-paths, and corrupt garbage are not.
     let excludeServiceDestinations: Bool
+
+    /// Multiplier for inter-arrival time → adaptive TTL (e.g. 6.0 means 6× avg inter-arrival).
+    let adaptiveTTLMultiplier: Double
+
+    /// Maximum adaptive TTL in seconds (cap for sparse links).
+    let maxAdaptiveTTLSeconds: TimeInterval
 
     /// Ingestion de-duplication window (seconds).
     var ingestionDedupWindow: TimeInterval {
@@ -80,7 +88,9 @@ struct LinkQualityConfig: Equatable {
         maxETX: Double,
         ackProgressWeight: Double,
         maxObservationsPerLink: Int,
-        excludeServiceDestinations: Bool = true
+        excludeServiceDestinations: Bool = true,
+        adaptiveTTLMultiplier: Double = 6.0,
+        maxAdaptiveTTLSeconds: TimeInterval = 7200.0
     ) {
         self.source = source
         self.slidingWindowSeconds = slidingWindowSeconds
@@ -92,11 +102,13 @@ struct LinkQualityConfig: Equatable {
         self.ackProgressWeight = ackProgressWeight
         self.maxObservationsPerLink = maxObservationsPerLink
         self.excludeServiceDestinations = excludeServiceDestinations
+        self.adaptiveTTLMultiplier = adaptiveTTLMultiplier
+        self.maxAdaptiveTTLSeconds = maxAdaptiveTTLSeconds
     }
 
     static let `default` = LinkQualityConfig(
         source: .kiss,
-        slidingWindowSeconds: 300,
+        slidingWindowSeconds: FreshnessCalculator.defaultTTL,
         forwardHalfLifeSeconds: 30 * 60,
         reverseHalfLifeSeconds: 30 * 60,
         initialDeliveryRatio: 0.5,
@@ -104,17 +116,19 @@ struct LinkQualityConfig: Equatable {
         maxETX: 20.0,
         ackProgressWeight: 0.6,
         maxObservationsPerLink: 200,
-        excludeServiceDestinations: true
+        excludeServiceDestinations: true,
+        adaptiveTTLMultiplier: 6.0,
+        maxAdaptiveTTLSeconds: 7200.0
     )
 
     /// Generate a hash for config invalidation purposes.
     func configHash() -> String {
-        "link_v3_\(source)_\(slidingWindowSeconds)_\(forwardHalfLifeSeconds)_\(reverseHalfLifeSeconds)_\(initialDeliveryRatio)_\(minDeliveryRatio)_\(maxETX)_\(ackProgressWeight)_\(maxObservationsPerLink)_\(excludeServiceDestinations)"
+        "link_v4_\(source)_\(slidingWindowSeconds)_\(forwardHalfLifeSeconds)_\(reverseHalfLifeSeconds)_\(initialDeliveryRatio)_\(minDeliveryRatio)_\(maxETX)_\(ackProgressWeight)_\(maxObservationsPerLink)_\(excludeServiceDestinations)_\(adaptiveTTLMultiplier)_\(maxAdaptiveTTLSeconds)"
     }
 }
 
 /// Statistics for a directional link, exposed for testing and persistence.
-struct LinkStats: Equatable {
+nonisolated struct LinkStats: Equatable {
     /// Total observations within the sliding window.
     let observationCount: Int
 
@@ -133,6 +147,17 @@ struct LinkStats: Equatable {
     /// Timestamp of last observation.
     let lastUpdate: Date?
 
+    /// How many observations came from connected-mode frames (I, S, and the
+    /// non-UI U frames that open and close a session).
+    ///
+    /// Loss is only observable where a lost frame leaves a trace: a
+    /// retransmission, a REJ, a duplicate. A UI frame we never heard leaves
+    /// none, so a link carrying only beacons can report that frames arrived
+    /// and can never report that one did not. Its delivery estimate settles
+    /// at whatever credit an arrival earns and means nothing. This count is
+    /// how a reader tells the two apart.
+    let sessionEvidenceCount: Int
+
     /// Empty stats for unknown links.
     static let empty = LinkStats(
         observationCount: 0,
@@ -140,12 +165,13 @@ struct LinkStats: Equatable {
         dfEstimate: nil,
         drEstimate: nil,
         ewmaQuality: 0,
-        lastUpdate: nil
+        lastUpdate: nil,
+        sessionEvidenceCount: 0
     )
 }
 
 /// Record for persisting link statistics.
-struct LinkStatRecord: Equatable {
+nonisolated struct LinkStatRecord: Equatable {
     let fromCall: String
     let toCall: String
     let quality: Int
@@ -163,7 +189,15 @@ struct LinkStatRecord: Equatable {
     /// Total observation count.
     let observationCount: Int
 
-    init(fromCall: String, toCall: String, quality: Int, lastUpdated: Date, dfEstimate: Double? = nil, drEstimate: Double? = nil, duplicateCount: Int = 0, observationCount: Int = 0) {
+    /// The radio this link was measured on. A delivery probability is a
+    /// property of a path between two antennas; another radio's evidence
+    /// about the same station is kept apart, never blended in.
+    let radioID: RadioID
+
+    /// Observations from connected-mode frames. See `LinkStats`.
+    let sessionEvidenceCount: Int
+
+    init(fromCall: String, toCall: String, quality: Int, lastUpdated: Date, dfEstimate: Double? = nil, drEstimate: Double? = nil, duplicateCount: Int = 0, observationCount: Int = 0, radioID: RadioID = .primary, sessionEvidenceCount: Int = 0) {
         self.fromCall = fromCall
         self.toCall = toCall
         self.quality = quality
@@ -172,7 +206,16 @@ struct LinkStatRecord: Equatable {
         self.drEstimate = drEstimate
         self.duplicateCount = duplicateCount
         self.observationCount = observationCount
+        self.radioID = radioID
+        self.sessionEvidenceCount = sessionEvidenceCount
     }
+}
+
+/// One directed link as one radio measured it.
+nonisolated struct LinkKey: Hashable, Sendable {
+    let radio: RadioID
+    let from: String
+    let to: String
 }
 
 /// ETX-style link quality estimator with directional tracking and EWMA smoothing.
@@ -182,14 +225,16 @@ struct LinkStatRecord: Equatable {
 /// - Bounded memory: Ring buffer limits per-link observation storage
 /// - Determinism: Same inputs always produce same outputs (injectable clock)
 /// - EWMA smoothing: Prevents quality spikes from transient conditions
-struct LinkQualityEstimator {
+nonisolated struct LinkQualityEstimator {
     let config: LinkQualityConfig
 
     /// Injectable clock for deterministic testing.
     private let clock: () -> Date
 
-    /// Internal storage keyed by "FROM→TO".
-    private var stats: [String: DirectionalLinkStats] = [:]
+    /// Internal storage keyed by (radio, FROM, TO). CLAUDE.md §8: metrics are
+    /// evidence-based, and evidence gathered by one antenna is not evidence
+    /// about another.
+    private var stats: [LinkKey: DirectionalLinkStats] = [:]
 
     init(config: LinkQualityConfig = .default, clock: @escaping () -> Date = { Date() }) {
         self.config = config
@@ -217,10 +262,14 @@ struct LinkQualityEstimator {
         let to = CallsignValidator.normalize(rawTo)
         guard !from.isEmpty, !to.isEmpty else { return }
 
-        // Filter out service destinations (BEACON, ID, MAIL, etc.) if configured
+        // Filter out service destinations (BEACON, ID, NODES, MAIL, etc.) if
+        // configured. Endpoints are validated as routing nodes, not strict
+        // callsigns: tactical aliases (DRLNOD, EATON…) are real stations, and
+        // refusing them froze alias neighbor quality at the cold-start base
+        // because their links never accumulated df/dr evidence.
         if config.excludeServiceDestinations {
-            guard CallsignValidator.isValidCallsign(from),
-                  CallsignValidator.isValidCallsign(to) else {
+            guard CallsignValidator.isValidRoutingNode(from),
+                  CallsignValidator.isValidRoutingNode(to) else {
                 return
             }
         }
@@ -229,13 +278,28 @@ struct LinkQualityEstimator {
         if duplicateStatus == .ingestionDedup { return }
 
         let decoded = packet.controlFieldDecoded
-        let key = "\(from)→\(to)"
+        let key = LinkKey(radio: packet.radioID ?? .primary, from: from, to: to)
         var s = stats[key] ?? DirectionalLinkStats(
             lastUpdated: timestamp,
             observations: RingBuffer(capacity: config.maxObservationsPerLink)
         )
 
-        let isRetry = duplicateStatus == .retryDuplicate || classification == .retryOrDuplicate || decoded.sType == .REJ || decoded.sType == .SREJ
+        // A REJ/SREJ from A reports a missed I-frame FROM B: it is loss
+        // evidence for the B→A direction, not for its own sender's link
+        // (the classifier folds it into .retryOrDuplicate, so exclude it here).
+        let isRejectNotice = decoded.sType == .REJ || decoded.sType == .SREJ
+        let isRetry = duplicateStatus == .retryDuplicate
+            || (classification == .retryOrDuplicate && !isRejectNotice)
+        // UA and DM are solicited responses: either one proves the peer HEARD
+        // the SABM/DISC that provoked it — direct forward-delivery proof for
+        // the frame's original sender (field capture 2026-08-23: a successful
+        // SABM/UA handshake left df=0.0 because the UA carried no weight).
+        let isConnectionResponse = decoded.uType == .UA || decoded.uType == .DM
+        // I and S frames only exist inside a session, and a U frame that is
+        // not UI is one being set up or torn down. Those are the frames whose
+        // loss we can actually see, so they are the ones that qualify a link
+        // to speak about loss at all.
+        let isSessionEvidence = RadioTrafficClassifier.isSessionEvidence(packet.frameType)
 
         // Forward evidence (data progress / routing broadcast / UI beacon).
         if classification.forwardEvidenceWeight > 0 && !isRetry {
@@ -244,6 +308,7 @@ struct LinkQualityEstimator {
                 value: classification.forwardEvidenceWeight,
                 timestamp: timestamp,
                 isDuplicate: false,
+                isSessionEvidence: isSessionEvidence,
                 config: config
             )
         }
@@ -255,7 +320,26 @@ struct LinkQualityEstimator {
                 value: 0.0,
                 timestamp: timestamp,
                 isDuplicate: true,
+                isSessionEvidence: isSessionEvidence,
                 config: config
+            )
+        }
+
+        // Reject notices penalize the direction whose I-frame was lost.
+        if isRejectNotice && !isRetry {
+            applyDirectionalForward(
+                from: to, to: from, radio: key.radio,
+                value: 0.0,
+                timestamp: timestamp
+            )
+        }
+
+        // Connection responses credit the handshake initiator's forward channel.
+        if isConnectionResponse && !isRetry {
+            applyDirectionalForward(
+                from: to, to: from, radio: key.radio,
+                value: 0.8,
+                timestamp: timestamp
             )
         }
 
@@ -263,7 +347,7 @@ struct LinkQualityEstimator {
         if let nr = decoded.nr, s.recordNrProgress(nr) {
             applyReverseEvidence(
                 from: to,
-                to: from,
+                to: from, radio: key.radio,
                 value: config.ackProgressWeight,
                 timestamp: timestamp
             )
@@ -273,7 +357,7 @@ struct LinkQualityEstimator {
         if classification.reverseEvidenceWeight > 0 {
             applyReverseEvidence(
                 from: to,
-                to: from,
+                to: from, radio: key.radio,
                 value: classification.reverseEvidenceWeight,
                 timestamp: timestamp
             )
@@ -283,27 +367,34 @@ struct LinkQualityEstimator {
     }
 
     /// Get the current quality estimate for a directional link (0...255).
-    func linkQuality(from: String, to: String) -> Int {
-        let key = "\(CallsignValidator.normalize(from))→\(CallsignValidator.normalize(to))"
+    func linkQuality(from: String, to: String, radio: RadioID = .primary) -> Int {
+        let key = LinkKey(radio: radio, from: CallsignValidator.normalize(from), to: CallsignValidator.normalize(to))
         guard let s = stats[key] else { return 0 }
         return s.quality(using: config)
     }
 
     /// Get detailed statistics for a directional link.
-    func linkStats(from: String, to: String) -> LinkStats {
-        let key = "\(CallsignValidator.normalize(from))→\(CallsignValidator.normalize(to))"
+    func linkStats(from: String, to: String, radio: RadioID = .primary) -> LinkStats {
+        let key = LinkKey(radio: radio, from: CallsignValidator.normalize(from), to: CallsignValidator.normalize(to))
         guard let s = stats[key] else { return .empty }
         return s.toLinkStats(using: config)
     }
 
+    /// The radios that have measured this directed link.
+    func radios(from: String, to: String) -> [RadioID] {
+        let f = CallsignValidator.normalize(from), t = CallsignValidator.normalize(to)
+        return stats.keys.filter { $0.from == f && $0.to == t }.map(\.radio)
+            .sorted { RadioID.deterministicOrder($0, $1) }
+    }
+
     /// Get symmetric link quality if both directions have evidence, nil otherwise.
-    /// Uses the minimum of both directions as a conservative estimate.
-    func symmetricLinkQuality(a: String, b: String) -> Int? {
+    /// Uses the geometric mean of both directions (ETX combines multiplicatively).
+    func symmetricLinkQuality(a: String, b: String, radio: RadioID = .primary) -> Int? {
         let normalizedA = CallsignValidator.normalize(a)
         let normalizedB = CallsignValidator.normalize(b)
 
-        let keyAB = "\(normalizedA)→\(normalizedB)"
-        let keyBA = "\(normalizedB)→\(normalizedA)"
+        let keyAB = LinkKey(radio: radio, from: normalizedA, to: normalizedB)
+        let keyBA = LinkKey(radio: radio, from: normalizedB, to: normalizedA)
 
         guard let statsAB = stats[keyAB], statsAB.hasEvidence,
               let statsBA = stats[keyBA], statsBA.hasEvidence else {
@@ -317,20 +408,52 @@ struct LinkQualityEstimator {
         return min(255, max(0, Int(symmetric.rounded())))
     }
 
-    /// Purge observations older than the sliding window.
-    mutating func purgeStaleData(currentDate: Date) {
-        let cutoff = currentDate.addingTimeInterval(-config.slidingWindowSeconds)
+    /// Expected transmissions over a directional link, or nil before the
+    /// link has produced a forward-delivery estimate. The same formula the
+    /// quality score uses, so the Auto radio and the Stations list agree.
+    func etx(from: String, to: String, radio: RadioID = .primary) -> Double? {
+        let s = linkStats(from: from, to: to, radio: radio)
+        guard let df = s.dfEstimate else { return nil }
+        return DirectionalLinkStats.etx(df: df, dr: s.drEstimate, config: config)
+    }
 
-        var keysToRemove: [String] = []
+    /// Compute the effective TTL for a directional link based on its inter-arrival pattern.
+    func effectiveTTL(from: String, to: String, radio: RadioID = .primary) -> TimeInterval {
+        let key = LinkKey(radio: radio, from: CallsignValidator.normalize(from), to: CallsignValidator.normalize(to))
+        guard let s = stats[key] else { return config.slidingWindowSeconds }
+        return s.effectiveTTL(using: config)
+    }
+
+    /// Purge observations older than the per-link effective TTL.
+    /// Uses two-phase tombstone expiry: entries without evidence are tombstoned first,
+    /// then removed after the tombstone window elapses.
+    mutating func purgeStaleData(currentDate: Date) {
+        var keysToRemove: [LinkKey] = []
+
         for (key, var s) in stats {
+            let linkTTL = s.effectiveTTL(using: config)
+            let cutoff = currentDate.addingTimeInterval(-linkTTL)
             s.pruneOld(cutoff: cutoff)
-            if s.observations.count == 0 {
-                if s.hasEvidence && s.lastUpdated >= cutoff {
+
+            if !s.hasEvidence {
+                if s.tombstonedAt == nil {
+                    // Phase 1: Enter tombstone state
+                    s.tombstonedAt = currentDate
+                    s.forwardEstimate = nil
+                    s.reverseEstimate = nil
                     stats[key] = s
                 } else {
-                    keysToRemove.append(key)
+                    // Phase 2: Check if tombstone window has elapsed
+                    let tombstoneAge = currentDate.timeIntervalSince(s.tombstonedAt!)
+                    if tombstoneAge >= linkTTL {
+                        keysToRemove.append(key)
+                    } else {
+                        stats[key] = s
+                    }
                 }
             } else {
+                // Has evidence — ensure not tombstoned
+                s.tombstonedAt = nil
                 stats[key] = s
             }
         }
@@ -345,26 +468,33 @@ struct LinkQualityEstimator {
         let now = clock()
         return stats
             .compactMap { (key, s) -> LinkStatRecord? in
-                let parts = key.components(separatedBy: "→")
-                guard parts.count == 2 else { return nil }
                 let linkStats = s.toLinkStats(using: config)
+
+                // Skip entries with no evidence — these were touched by a packet
+                // but never accumulated qualifying observations (e.g., only S-frames
+                // or all observations expired from the sliding window).
+                guard linkStats.observationCount > 0 || linkStats.dfEstimate != nil else {
+                    return nil
+                }
 
                 // Never export Date.distantPast - use current time as fallback
                 let timestamp = linkStats.lastUpdate ?? now
                 let sanitizedTimestamp = Self.sanitizeTimestamp(timestamp, fallback: now)
 
                 return LinkStatRecord(
-                    fromCall: parts[0],
-                    toCall: parts[1],
+                    fromCall: key.from,
+                    toCall: key.to,
                     quality: linkStats.ewmaQuality,
                     lastUpdated: sanitizedTimestamp,
                     dfEstimate: linkStats.dfEstimate,
                     drEstimate: linkStats.drEstimate,
                     duplicateCount: linkStats.duplicateCount,
-                    observationCount: linkStats.observationCount
+                    observationCount: linkStats.observationCount,
+                    radioID: key.radio,
+                    sessionEvidenceCount: linkStats.sessionEvidenceCount
                 )
             }
-            .sorted { ($0.fromCall, $0.toCall) < ($1.fromCall, $1.toCall) }
+            .sorted { ($0.radioID.rawValue, $0.fromCall, $0.toCall) < ($1.radioID.rawValue, $1.fromCall, $1.toCall) }
     }
 
     /// Import link statistics from persistence.
@@ -377,7 +507,7 @@ struct LinkQualityEstimator {
         #endif
 
         for record in records {
-            let key = "\(record.fromCall)→\(record.toCall)"
+            let key = LinkKey(radio: record.radioID, from: record.fromCall, to: record.toCall)
             let sanitizedTimestamp = Self.sanitizeTimestamp(record.lastUpdated, fallback: now)
             let restoredForward = record.dfEstimate ?? (Double(record.quality) / 255.0)
 
@@ -395,6 +525,7 @@ struct LinkQualityEstimator {
                 restoredReverseEstimate: record.drEstimate,
                 restoredObservationCount: record.observationCount,
                 restoredDuplicateCount: record.duplicateCount,
+                restoredSessionEvidenceCount: record.sessionEvidenceCount,
                 restoredQuality: record.quality
             )
         }
@@ -408,8 +539,32 @@ struct LinkQualityEstimator {
 
     // MARK: - Private Helpers
 
-    private mutating func applyReverseEvidence(from: String, to: String, value: Double, timestamp: Date) {
-        let reverseKey = "\(from)→\(to)"
+    /// Add forward-channel evidence to an arbitrary directional link — used
+    /// when a frame carries evidence about the OPPOSITE direction (a UA
+    /// proving the SABM arrived, a REJ proving an inbound I-frame was lost).
+    ///
+    /// Every caller is a session frame (a REJ reporting a lost I-frame, a UA
+    /// or DM answering a SABM or DISC), so the evidence always counts toward
+    /// the link's session total.
+    private mutating func applyDirectionalForward(from: String, to: String, radio: RadioID, value: Double, timestamp: Date) {
+        let key = LinkKey(radio: radio, from: from, to: to)
+        var s = stats[key] ?? DirectionalLinkStats(
+            lastUpdated: timestamp,
+            observations: RingBuffer(capacity: config.maxObservationsPerLink)
+        )
+        s.addObservation(
+            channel: .forward,
+            value: value,
+            timestamp: timestamp,
+            isDuplicate: false,
+            isSessionEvidence: true,
+            config: config
+        )
+        stats[key] = s
+    }
+
+    private mutating func applyReverseEvidence(from: String, to: String, radio: RadioID, value: Double, timestamp: Date) {
+        let reverseKey = LinkKey(radio: radio, from: from, to: to)
         var reverseStats = stats[reverseKey] ?? DirectionalLinkStats(
             lastUpdated: timestamp,
             observations: RingBuffer(capacity: config.maxObservationsPerLink)
@@ -419,6 +574,7 @@ struct LinkQualityEstimator {
             value: value,
             timestamp: timestamp,
             isDuplicate: false,
+            isSessionEvidence: true,
             config: config
         )
         stats[reverseKey] = reverseStats
@@ -437,7 +593,7 @@ struct LinkQualityEstimator {
 // MARK: - Internal Types
 
 /// Ring buffer for bounded observation storage.
-private struct RingBuffer<T> {
+nonisolated private struct RingBuffer<T> {
     private var storage: [T] = []
     private var writeIndex: Int = 0
     let capacity: Int
@@ -468,19 +624,23 @@ private struct RingBuffer<T> {
     }
 }
 
-private enum EvidenceChannel {
+nonisolated private enum EvidenceChannel {
     case forward
     case reverse
 }
 
-private struct Observation {
+nonisolated private struct Observation {
     let timestamp: Date
     let channel: EvidenceChannel
     let isDuplicate: Bool
+    /// Whether this observation came from a connected-mode frame, which is
+    /// the only kind that can also report a loss. Carried per observation so
+    /// it ages out with the sliding window instead of standing forever.
+    let isSessionEvidence: Bool
 }
 
 /// Statistics for a single directional link (A→B).
-private struct DirectionalLinkStats {
+nonisolated private struct DirectionalLinkStats {
     /// EWMA-smoothed forward delivery ratio (0.0...1.0).
     var forwardEstimate: Double?
 
@@ -507,7 +667,29 @@ private struct DirectionalLinkStats {
     var restoredReverseEstimate: Double?
     var restoredObservationCount: Int
     var restoredDuplicateCount: Int
+    var restoredSessionEvidenceCount: Int
+    /// Lifetime evidence credit transferred from restored state when live
+    /// observations resume — restarts must not re-darken minObs gates.
+    var carriedObservationCount: Int = 0
+    var carriedDuplicateCount: Int = 0
+    var carriedSessionEvidenceCount: Int = 0
     var restoredQuality: Int?
+
+    /// EWMA sample counts per channel, seeded at 1 for the cold-start prior.
+    /// Early samples blend with a count-based alpha (running mean) so a single
+    /// packet cannot claim df = 1.0; the time-based alpha takes over as evidence
+    /// accumulates.
+    var forwardSampleCount: Int = 1
+    var reverseSampleCount: Int = 1
+
+    /// Average inter-arrival time for forward observations (EWMA-smoothed, seconds).
+    var avgInterArrivalSeconds: Double?
+
+    /// Count of forward arrivals used for adaptive TTL (need ≥3 for reliable estimate).
+    var arrivalCount: Int = 0
+
+    /// When set, this link is in tombstone state (no evidence but retained for potential revival).
+    var tombstonedAt: Date?
 
     init(
         lastUpdated: Date,
@@ -516,6 +698,7 @@ private struct DirectionalLinkStats {
         restoredReverseEstimate: Double? = nil,
         restoredObservationCount: Int = 0,
         restoredDuplicateCount: Int = 0,
+        restoredSessionEvidenceCount: Int = 0,
         restoredQuality: Int? = nil
     ) {
         self.forwardEstimate = nil
@@ -529,7 +712,17 @@ private struct DirectionalLinkStats {
         self.restoredReverseEstimate = restoredReverseEstimate
         self.restoredObservationCount = restoredObservationCount
         self.restoredDuplicateCount = restoredDuplicateCount
+        self.restoredSessionEvidenceCount = restoredSessionEvidenceCount
         self.restoredQuality = restoredQuality
+        // Restored evidence counts toward the EWMA warm-up (plus the prior), so an
+        // imported link continues where it left off instead of re-warming from
+        // scratch — and incremental replay matches a full recompute exactly.
+        if restoredForwardEstimate != nil {
+            self.forwardSampleCount = restoredObservationCount + 1
+        }
+        if restoredReverseEstimate != nil {
+            self.reverseSampleCount = restoredObservationCount + 1
+        }
     }
 
     var hasEvidence: Bool {
@@ -542,46 +735,85 @@ private struct DirectionalLinkStats {
         value: Double,
         timestamp: Date,
         isDuplicate: Bool,
+        isSessionEvidence: Bool,
         config: LinkQualityConfig
     ) {
-        observations.append(Observation(timestamp: timestamp, channel: channel, isDuplicate: isDuplicate))
+        observations.append(Observation(timestamp: timestamp, channel: channel,
+                                        isDuplicate: isDuplicate,
+                                        isSessionEvidence: isSessionEvidence))
         lastUpdated = timestamp
 
-        // Clear restored values once we have real observations
+        // Revive from tombstone if new evidence arrives
+        tombstonedAt = nil
+
+        // Seed the live EWMA from persisted state before clearing it — otherwise the
+        // first observation after an import throws away everything the link had
+        // learned and restarts from the cold-start prior.
+        if forwardEstimate == nil, let restoredForwardEstimate {
+            forwardEstimate = clamp01(restoredForwardEstimate)
+        }
+        if reverseEstimate == nil, let restoredReverseEstimate {
+            reverseEstimate = clamp01(restoredReverseEstimate)
+        }
+
+        // Clear restored values once we have real observations — but carry the
+        // evidence-count credit forward: the estimates seed the live EWMAs, and
+        // the observation count must survive the same way or every restart
+        // re-darkens the minObs gates downstream (field capture 2026-08-23:
+        // K0NTS-1→N3HYM-15 dropped 7→1 on the first post-restart frame).
+        carriedObservationCount += restoredObservationCount
+        carriedDuplicateCount += restoredDuplicateCount
+        carriedSessionEvidenceCount += restoredSessionEvidenceCount
         restoredForwardEstimate = nil
         restoredReverseEstimate = nil
         restoredObservationCount = 0
         restoredDuplicateCount = 0
+        restoredSessionEvidenceCount = 0
         restoredQuality = nil
 
         switch channel {
         case .forward:
             let previous = lastForwardUpdate
-            if previous == nil {
-                forwardEstimate = clamp01(value)
-            } else {
-                forwardEstimate = updateEWMA(
-                    current: forwardEstimate ?? config.initialDeliveryRatio,
-                    value: clamp01(value),
-                    previousTimestamp: previous ?? timestamp,
-                    timestamp: timestamp,
-                    halfLife: config.forwardHalfLifeSeconds
-                )
+
+            // Track inter-arrival time for adaptive TTL
+            if let previous, !isDuplicate {
+                let gap = timestamp.timeIntervalSince(previous)
+                if gap > 0.5 { // Ignore sub-second dupes
+                    let alpha = 0.3
+                    if let current = avgInterArrivalSeconds {
+                        avgInterArrivalSeconds = (1.0 - alpha) * current + alpha * gap
+                    } else {
+                        avgInterArrivalSeconds = gap
+                    }
+                }
             }
+            // Retries are not fresh arrivals — counting them inflated the
+            // adaptive-TTL arrival gate.
+            if !isDuplicate {
+                arrivalCount += 1
+            }
+
+            forwardEstimate = updateEWMA(
+                current: forwardEstimate ?? config.initialDeliveryRatio,
+                value: clamp01(value),
+                previousTimestamp: previous,
+                timestamp: timestamp,
+                halfLife: config.forwardHalfLifeSeconds,
+                sampleCount: forwardSampleCount
+            )
+            forwardSampleCount += 1
             lastForwardUpdate = timestamp
         case .reverse:
             let previous = lastReverseUpdate
-            if previous == nil {
-                reverseEstimate = clamp01(value)
-            } else {
-                reverseEstimate = updateEWMA(
-                    current: reverseEstimate ?? config.initialDeliveryRatio,
-                    value: clamp01(value),
-                    previousTimestamp: previous ?? timestamp,
-                    timestamp: timestamp,
-                    halfLife: config.reverseHalfLifeSeconds
-                )
-            }
+            reverseEstimate = updateEWMA(
+                current: reverseEstimate ?? config.initialDeliveryRatio,
+                value: clamp01(value),
+                previousTimestamp: previous,
+                timestamp: timestamp,
+                halfLife: config.reverseHalfLifeSeconds,
+                sampleCount: reverseSampleCount
+            )
+            reverseSampleCount += 1
             lastReverseUpdate = timestamp
         }
     }
@@ -593,6 +825,15 @@ private struct DirectionalLinkStats {
         return nr != lastNr
     }
 
+    /// Compute the effective TTL for this link based on inter-arrival pattern.
+    func effectiveTTL(using config: LinkQualityConfig) -> TimeInterval {
+        guard arrivalCount >= 3, let avg = avgInterArrivalSeconds else {
+            return config.slidingWindowSeconds
+        }
+        let adaptiveTTL = config.adaptiveTTLMultiplier * avg
+        return min(config.maxAdaptiveTTLSeconds, max(config.slidingWindowSeconds, adaptiveTTL))
+    }
+
     /// Remove observations older than cutoff.
     mutating func pruneOld(cutoff: Date) {
         observations.removeAll { $0.timestamp < cutoff }
@@ -602,25 +843,30 @@ private struct DirectionalLinkStats {
     func toLinkStats(using config: LinkQualityConfig) -> LinkStats {
         let liveTotal = observations.count
         let liveDups = observations.elements.filter { $0.isDuplicate }.count
+        let liveSession = observations.elements.filter { $0.isSessionEvidence }.count
 
         let total: Int
         let dups: Int
+        let session: Int
         let df: Double?
         let dr: Double?
 
         if liveTotal > 0 {
-            total = liveTotal
-            dups = liveDups
+            total = liveTotal + carriedObservationCount
+            dups = liveDups + carriedDuplicateCount
+            session = liveSession + carriedSessionEvidenceCount
             df = forwardEstimate
             dr = reverseEstimate
         } else if restoredObservationCount > 0 {
             total = restoredObservationCount
             dups = restoredDuplicateCount
+            session = restoredSessionEvidenceCount
             df = restoredForwardEstimate
             dr = restoredReverseEstimate
         } else {
             total = 0
             dups = 0
+            session = 0
             df = nil
             dr = nil
         }
@@ -631,7 +877,8 @@ private struct DirectionalLinkStats {
             dfEstimate: df,
             drEstimate: dr,
             ewmaQuality: quality(using: config),
-            lastUpdate: lastUpdated
+            lastUpdate: lastUpdated,
+            sessionEvidenceCount: session
         )
     }
 
@@ -662,7 +909,7 @@ private struct DirectionalLinkStats {
         return nil
     }
 
-    private static func etx(df: Double, dr: Double?, config: LinkQualityConfig) -> Double {
+    static func etx(df: Double, dr: Double?, config: LinkQualityConfig) -> Double {
         if let dr {
             let product = max(config.minDeliveryRatio, df) * max(config.minDeliveryRatio, dr)
             return min(config.maxETX, max(1.0, 1.0 / product))
@@ -676,20 +923,34 @@ private struct DirectionalLinkStats {
         return min(config.maxETX, max(1.0, 1.0 / product))
     }
 
+    /// Time-based EWMA with warm-up correction.
+    ///
+    /// The effective alpha is `max(timeAlpha, 1/(sampleCount + 1))`. The
+    /// count-based term makes the early estimate a running mean seeded by the
+    /// `initialDeliveryRatio` prior — one packet yields 0.75, not a hard 1.0 —
+    /// while enough samples let the Δt-based term (λ = 1 − exp(−Δt/H)) dominate,
+    /// as specified in CLAUDE.md §8.
     private func updateEWMA(
         current: Double,
         value: Double,
-        previousTimestamp: Date,
+        previousTimestamp: Date?,
         timestamp: Date,
-        halfLife: TimeInterval
+        halfLife: TimeInterval,
+        sampleCount: Int
     ) -> Double {
-        let delta = max(0.0, timestamp.timeIntervalSince(previousTimestamp))
-        let alpha: Double
-        if halfLife <= 0 {
-            alpha = 1.0
+        let timeAlpha: Double
+        if let previousTimestamp {
+            let delta = max(0.0, timestamp.timeIntervalSince(previousTimestamp))
+            if halfLife <= 0 {
+                timeAlpha = 1.0
+            } else {
+                timeAlpha = 1.0 - exp(-delta / halfLife)
+            }
         } else {
-            alpha = 1.0 - exp(-delta / halfLife)
+            timeAlpha = 0.0
         }
+        let countAlpha = 1.0 / Double(max(1, sampleCount) + 1)
+        let alpha = max(timeAlpha, countAlpha)
         let blended = (1.0 - alpha) * current + alpha * value
         return clamp01(blended)
     }

@@ -37,7 +37,7 @@ final class WireLogStore: ObservableObject {
     }
 }
 
-struct WireLogEvent: Identifiable {
+nonisolated struct WireLogEvent: Identifiable {
     let id = UUID()
     let timestamp: Date
     let direction: TxLogDirection

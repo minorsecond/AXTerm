@@ -41,8 +41,8 @@ final class StationsSidebarTests: XCTestCase {
         )
 
         store.loadResult = [
-            try! PacketRecord(packet: firstPacket, endpoint: endpoint),
-            try! PacketRecord(packet: secondPacket, endpoint: endpoint)
+            PacketRecord(packet: firstPacket),
+            PacketRecord(packet: secondPacket)
         ]
 
         let client = PacketEngine(

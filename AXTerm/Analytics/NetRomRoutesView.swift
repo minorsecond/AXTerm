@@ -6,35 +6,61 @@
 //  Apple HIG-compliant design with native table styling, tooltips, and export functionality.
 //
 
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 /// Main view for the NET/ROM Routes page.
 struct NetRomRoutesView: View {
     @StateObject private var viewModel: NetRomRoutesViewModel
     @ObservedObject var settings: AppSettingsStore
+    @ObservedObject var connectCoordinator: ConnectCoordinator
     private weak var packetEngine: PacketEngine?
 
     @State private var showingClearConfirmation = false
     @State private var clearFeedback: String?
 
-    init(integration: NetRomIntegration?, packetEngine: PacketEngine? = nil, settings: AppSettingsStore) {
+    init(
+        integration: NetRomIntegration?,
+        packetEngine: PacketEngine? = nil,
+        settings: AppSettingsStore,
+        connectCoordinator: ConnectCoordinator
+    ) {
         self.settings = settings
         self.packetEngine = packetEngine
+        self.connectCoordinator = connectCoordinator
         _viewModel = StateObject(wrappedValue: NetRomRoutesViewModel(integration: integration, packetEngine: packetEngine, settings: settings))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             // Toolbar
+            //
+            // Scrolled sideways on a handheld. The controls carry fixed widths
+            // sized for a Mac window (340 + 160 + 180 plus a toggle and four
+            // buttons), and an HStack cannot shrink below its content — so on
+            // an 834pt iPad it forced the whole VStack wider than the screen
+            // and dragged the table's leftmost column, the callsign, off the
+            // edge with it. Scrolling keeps every control reachable instead of
+            // silently clipping the one that matters most.
+            #if os(iOS)
+            ScrollView(.horizontal, showsIndicators: false) {
+                routesToolbar
+            }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            #else
             routesToolbar
+            #endif
 
             Divider()
 
             // Content based on selected tab
             tabContent
         }
-        .background(Color(NSColor.windowBackgroundColor))
+        .background(Color(platform: .platformWindowBackground))
         .confirmationDialog(
             "Clear all NET/ROM routing data?",
             isPresented: $showingClearConfirmation,
@@ -53,30 +79,56 @@ struct NetRomRoutesView: View {
     private var routesToolbar: some View {
         HStack(spacing: 12) {
             // Tab picker
-            Picker("View", selection: $viewModel.selectedTab) {
-                ForEach(NetRomRoutesTab.allCases) { tab in
-                    Label(tab.rawValue, systemImage: tab.icon)
-                        .tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
+            NativeSegmentedPicker(
+                selection: $viewModel.selectedTab,
+                items: Array(RoutesScope.allCases),
+                title: { $0.title },
+                tooltip: { $0.tooltip },
+                accessibilityLabel: "Routes View"
+            )
             .frame(width: 340)
 
             Spacer()
 
             // Mode picker
             Picker("Mode", selection: $viewModel.routingMode) {
-                Text("Classic").tag(NetRomRoutingMode.classic)
-                Text("Inferred").tag(NetRomRoutingMode.inference)
-                Text("Hybrid").tag(NetRomRoutingMode.hybrid)
+                switch viewModel.selectedTab {
+                case .routes:
+                    Text("Classic Routes").tag(NetRomRoutingMode.classic)
+                    Text("Inferred Routes").tag(NetRomRoutingMode.inference)
+                    Text("All Routes").tag(NetRomRoutingMode.hybrid)
+                case .neighbors:
+                    Text("Classic Neighbors").tag(NetRomRoutingMode.classic)
+                    Text("Inferred Neighbors").tag(NetRomRoutingMode.inference)
+                    Text("All Neighbors").tag(NetRomRoutingMode.hybrid)
+                case .linkQuality:
+                    Text("Classic Links").tag(NetRomRoutingMode.classic)
+                    Text("Inferred Links").tag(NetRomRoutingMode.inference)
+                    Text("All Links").tag(NetRomRoutingMode.hybrid)
+                }
             }
             .pickerStyle(.menu)
-            .frame(width: 120)
-            .help("NET/ROM routing mode: Classic uses only explicit broadcasts, Inferred uses passive observation, Hybrid combines both")
+            .frame(width: 160)
+            .help(modePickerTooltip)
+
+            // Radio channel scope — only when there is more than one channel.
+            if viewModel.radioChannels.count > 1 {
+                Picker("Channel", selection: $viewModel.selectedRadioScope) {
+                    Text("All radios").tag(AnalyticsRadioScope.all)
+                    ForEach(viewModel.radioChannels) { channel in
+                        Text(channel.label).tag(AnalyticsRadioScope.channel(channel.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 150)
+                .help("Scope neighbours, routes and link quality to one "
+                      + "frequency. Radios on the same frequency roll up into "
+                      + "one channel; different frequencies stay separate.")
+            }
 
             // Hide expired toggle
             Toggle("Hide expired", isOn: $settings.hideExpiredRoutes)
-                .toggleStyle(.checkbox)
+                .platformCheckboxToggle()
                 .help("When enabled, hides entries with 0% freshness (older than TTL)")
 
             // Search field
@@ -138,7 +190,129 @@ struct NetRomRoutesView: View {
         .padding(.vertical, 8)
     }
 
+#if os(iOS)
+    // MARK: - Touch presentations
+
+    /// Routes as stacked rows.
+    ///
+    /// Nine side-by-side columns fit a 900pt Mac window and not an 834pt
+    /// iPad, where the destination callsign — the field the whole view exists
+    /// for — truncated to `KB5YZB…` while `Hops` kept a column to itself.
+    ///
+    /// Tooltips move to `.explain()`: `.help()` renders nothing on iOS, so
+    /// every derivation CLAUDE.md requires was silently absent here.
+    private var routesTouchList: some View {
+        List(viewModel.filteredRoutes) { route in
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(NetRomTouchRow.headline(
+                        destination: route.destination, nextHop: route.nextHop))
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    QualityBadge(quality: route.quality, percent: route.qualityPercent)
+                }
+
+                if NetRomTouchRow.shouldShowPath(route.pathSummary, nextHop: route.nextHop) {
+                    Text(route.pathSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .explain("Connect path: \(route.pathSummary)", showsIndicator: false)
+                }
+
+                HStack(spacing: 6) {
+                    SourceTypeBadge(sourceType: route.sourceType)
+                    Text(NetRomTouchRow.detail(
+                        hops: route.hopCountKnown ? route.hopCount : nil,
+                        updated: route.lastUpdatedRelative,
+                        freshness: route.freshnessDisplayString))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .explain(RouteDisplayInfo.freshnessTooltip, showsIndicator: false)
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button("Connect (NET/ROM)") { requestRouteConnect(route, action: .netrom) }
+                Button("Connect Direct (AX.25)") { requestRouteConnect(route, action: .ax25Direct) }
+                Button("Connect via Digi (AX.25)") { requestRouteConnect(route, action: .ax25ViaDigi) }
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    /// Link quality as stacked rows.
+    ///
+    /// df, dr, ETX and dups are the metrics CLAUDE.md requires an explanation
+    /// for, and at 50pt per column on a handheld they were unreadable even
+    /// where they rendered. A dash means *no observation yet*, which is not
+    /// the same claim as a measured zero.
+    private var linkQualityTouchList: some View {
+        List(viewModel.filteredLinkStats) { stat in
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(NetRomTouchRow.headline(destination: stat.fromCall, nextHop: stat.toCall))
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    QualityBadge(quality: stat.quality, percent: stat.qualityPercent,
+                                 detailTooltip: stat.qualityTooltip)
+                }
+
+                HStack(spacing: 10) {
+                    metricLabel("df", NetRomTouchRow.metric(stat.dfEstimate, decimals: 2))
+                        .explain("Forward delivery probability (0–1): how often a frame sent this way arrives.")
+                    metricLabel("dr", NetRomTouchRow.metric(stat.drEstimate, decimals: 2))
+                        .explain("Reverse delivery probability (0–1): how often the reply comes back.")
+                    metricLabel("ETX", NetRomTouchRow.metric(stat.etx, decimals: 1))
+                        .explain("Expected transmissions per delivered frame. 1.0 is a perfect link; above 3 is poor.")
+                    metricLabel("dups", "\(stat.duplicateCount)")
+                        .explain("Duplicate or retried frames observed. A high count usually means retries.")
+                }
+                .font(.caption2)
+
+                Text(NetRomTouchRow.detail(
+                    hops: nil, updated: stat.lastUpdatedRelative,
+                    freshness: stat.freshnessDisplayString))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .explain(LinkStatDisplayInfo.freshnessTooltip, showsIndicator: false)
+            }
+            .padding(.vertical, 2)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(NetRomTouchRow.spokenLink(
+                from: stat.fromCall, to: stat.toCall,
+                df: stat.dfEstimate, dr: stat.drEstimate))
+        }
+        .listStyle(.plain)
+    }
+
+    /// A metric and its name, so a bare number is never on its own.
+    private func metricLabel(_ name: String, _ value: String) -> some View {
+        HStack(spacing: 2) {
+            Text(name).foregroundStyle(.tertiary)
+            Text(value).foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+#endif
+
     // MARK: - Actions
+
+    private var modePickerTooltip: String {
+        switch viewModel.selectedTab {
+        case .routes:
+            return "Filter routes: Classic (from explicit NET/ROM broadcasts), Inferred (deduced from packet observation), or All"
+        case .neighbors:
+            return "Filter neighbors: Classic (heard directly), Inferred (deduced from traffic), or All"
+        case .linkQuality:
+            return "Filter link quality stats by the type of neighbor they involve (Classic vs Inferred)"
+        }
+    }
 
     private func clearRoutes() {
         packetEngine?.clearNetRomData()
@@ -168,6 +342,20 @@ struct NetRomRoutesView: View {
 
     // MARK: - Neighbors Table
 
+    /// Which radio the evidence came from. Nothing with one radio; with
+    /// several, the name under the callsign, because evidence on another
+    /// radio is kept separately — it is a different antenna and path.
+    @ViewBuilder
+    private func radioCaption(_ radio: RadioID) -> some View {
+        if settings.hasMultipleRadios, let profile = settings.radio(radio) {
+            Text(profile.name.isEmpty ? RadioProfile.defaultName(for: profile) : profile.name)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .help("Heard on \(profile.name.isEmpty ? RadioProfile.defaultName(for: profile) : profile.name). "
+                      + "Evidence on another radio is kept separately because it is a different antenna and path.")
+        }
+    }
+
     private var neighborsTable: some View {
         Group {
             if viewModel.filteredNeighbors.isEmpty {
@@ -178,8 +366,19 @@ struct NetRomRoutesView: View {
             } else {
                 Table(viewModel.filteredNeighbors) {
                     TableColumn("Callsign") { neighbor in
-                        Text(neighbor.callsign)
-                            .fontWeight(.medium)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(neighbor.callsign)
+                                .fontWeight(.medium)
+                            radioCaption(neighbor.radioID)
+                        }
+                            .onTapGesture(count: 2) {
+                                requestNeighborConnect(neighbor)
+                            }
+                            .contextMenu {
+                                Button("Connect (AX.25)") {
+                                    requestNeighborConnect(neighbor)
+                                }
+                            }
                     }
                     .width(min: 80, ideal: 100)
 
@@ -208,7 +407,7 @@ struct NetRomRoutesView: View {
                     }
                     .width(min: 50, ideal: 70)
                 }
-                .tableStyle(.inset(alternatesRowBackgrounds: true))
+                .platformInsetTable()
             }
         }
     }
@@ -223,15 +422,50 @@ struct NetRomRoutesView: View {
                     message: "No routes have been discovered yet. Routes are built from NET/ROM broadcasts or inferred from packet observations."
                 )
             } else {
+                #if os(iOS)
+                routesTouchList
+                #else
                 Table(viewModel.filteredRoutes) {
                     TableColumn("Destination") { route in
                         Text(route.destination)
                             .fontWeight(.medium)
+                            .onTapGesture(count: 2) {
+                                requestRouteConnect(route, action: .netrom)
+                            }
+                            .contextMenu {
+                                Button("Connect (NET/ROM)") {
+                                    requestRouteConnect(route, action: .netrom)
+                                }
+                                .help("Connects to the next-hop node and drives its "
+                                      + "command prompt — the proven path on this network.")
+                                Button("Connect Direct (AX.25)") {
+                                    requestRouteConnect(route, action: .ax25Direct)
+                                }
+                                Button("Connect via Digi (AX.25)") {
+                                    requestRouteConnect(route, action: .ax25ViaDigi)
+                                }
+                                Divider()
+                                Button("Open NET/ROM Circuit (native)") {
+                                    openNativeCircuit(to: route.destination)
+                                }
+                                Button("Auto-try Every Known Route") {
+                                    autoTryCircuit(to: route.destination)
+                                }
+                                .help("Opens a NET/ROM circuit through the best route, and "
+                                      + "if that one goes unanswered, tries the next-best "
+                                      + "automatically. A station that answers 'no' ends it.")
+                                .help("Speaks the NET/ROM transport itself — one connect "
+                                      + "request the network routes, instead of typing at a "
+                                      + "node's prompt. New; not yet proven against these nodes.")
+                            }
                     }
                     .width(min: 80, ideal: 100)
 
                     TableColumn("Next Hop") { route in
-                        Text(route.nextHop)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(route.nextHop)
+                            radioCaption(route.radioID)
+                        }
                     }
                     .width(min: 80, ideal: 100)
 
@@ -250,12 +484,21 @@ struct NetRomRoutesView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .foregroundStyle(.secondary)
-                            .help("Full path: \(route.pathSummary)")
+                            .help("Connect path: \(route.pathSummary)")
+                    }
+                    .width(min: 120, ideal: 180)
+
+                    TableColumn("Heard As") { route in
+                        Text(route.heardPathSummary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.tertiary)
+                            .help(route.heardPathTooltip)
                     }
                     .width(min: 120, ideal: 180)
 
                     TableColumn("Hops") { route in
-                        Text("\(route.hopCount)")
+                        Text(route.hopCountKnown ? "\(route.hopCount)" : "—")
                             .foregroundStyle(.secondary)
                     }
                     .width(min: 40, ideal: 50)
@@ -275,7 +518,8 @@ struct NetRomRoutesView: View {
                     }
                     .width(min: 50, ideal: 70)
                 }
-                .tableStyle(.inset(alternatesRowBackgrounds: true))
+                .platformInsetTable()
+                #endif
             }
         }
     }
@@ -290,6 +534,9 @@ struct NetRomRoutesView: View {
                     message: "No link quality data has been collected yet. Link quality is estimated from packet observations using ETX-style metrics."
                 )
             } else {
+                #if os(iOS)
+                linkQualityTouchList
+                #else
                 Table(viewModel.filteredLinkStats) {
                     TableColumn("From") { stat in
                         Text(stat.fromCall)
@@ -304,7 +551,7 @@ struct NetRomRoutesView: View {
                     .width(min: 80, ideal: 100)
 
                     TableColumn("Quality") { stat in
-                        QualityBadge(quality: stat.quality, percent: stat.qualityPercent)
+                        QualityBadge(quality: stat.quality, percent: stat.qualityPercent, detailTooltip: stat.qualityTooltip)
                     }
                     .width(min: 80, ideal: 100)
 
@@ -366,7 +613,8 @@ struct NetRomRoutesView: View {
                     }
                     .width(min: 50, ideal: 70)
                 }
-                .tableStyle(.inset(alternatesRowBackgrounds: true))
+                .platformInsetTable()
+                #endif
             }
         }
     }
@@ -396,8 +644,106 @@ struct NetRomRoutesView: View {
     // MARK: - Helpers
 
     private func copyToClipboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        ClipboardWriter.copy(text)
+    }
+
+    private func requestNeighborConnect(_ neighbor: NeighborDisplayInfo) {
+        connectCoordinator.activeContext = .neighbors
+        let intent = ConnectIntent(
+            kind: .ax25Direct,
+            to: neighbor.callsign,
+            sourceContext: .neighbors,
+            suggestedRoutePreview: nil,
+            validationErrors: [],
+            routeHint: nil,
+            note: nil
+        )
+        connectCoordinator.requestConnect(
+            ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true,
+                               origin: .explicitAction)
+        )
+    }
+
+    /// Open a native NET/ROM circuit. Distinct from `requestRouteConnect`
+    /// with `.netrom`, which drives a node's *command prompt* — this
+    /// speaks the transport nodes speak to each other, and the network
+    /// does the routing. See Docs/NetRomTransport.md.
+    private func openNativeCircuit(to destination: String) {
+        guard let coordinator = SessionCoordinator.shared else { return }
+        let target = CallsignNormalizer.toAddress(destination)
+        if case let .failure(reason) = coordinator.netRomDriver.openCircuit(to: target) {
+            coordinator.packetEngine?.appendSystemNotification(reason.operatorText)
+        }
+    }
+
+    /// Walk every known route to a destination until one comes up.
+    private func autoTryCircuit(to destination: String) {
+        guard let coordinator = SessionCoordinator.shared else { return }
+        let target = CallsignNormalizer.toAddress(destination)
+        if case let .failure(reason) = coordinator.netRomDriver.autoConnect(to: target) {
+            coordinator.packetEngine?.appendSystemNotification(reason.operatorText)
+        }
+    }
+
+    private func requestRouteConnect(_ route: RouteDisplayInfo, action: RouteConnectAction) {
+        connectCoordinator.activeContext = .routes
+        switch action {
+        case .netrom:
+            let hint = NetRomRouteHint(
+                nextHop: route.nextHop,
+                heardAs: route.heardPath.first,
+                path: route.path,
+                hops: route.hopCount
+            )
+            let intent = ConnectIntent(
+                kind: .netrom(nextHopOverride: nil),
+                to: route.destination,
+                sourceContext: .routes,
+                suggestedRoutePreview: route.hopCountKnown
+                    ? "\(route.pathSummary) (\(route.hopCount) hops)"
+                    : route.pathSummary,
+                validationErrors: [],
+                routeHint: hint,
+                note: nil
+            )
+            connectCoordinator.requestConnect(
+                ConnectRequest(intent: intent, mode: .netrom, executeImmediately: true,
+                               origin: .explicitAction)
+            )
+        case .ax25Direct:
+            let target = ConnectPrefillLogic.ax25DirectTarget(
+                destination: route.destination,
+                heardAs: route.heardPath.first
+            )
+            let intent = ConnectIntent(
+                kind: .ax25Direct,
+                to: target.to,
+                sourceContext: .routes,
+                suggestedRoutePreview: nil,
+                validationErrors: [],
+                routeHint: nil,
+                note: target.note
+            )
+            connectCoordinator.requestConnect(
+                ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true,
+                               origin: .explicitAction)
+            )
+        case .ax25ViaDigi:
+            let digis = route.heardPath.compactMap { Callsign($0) }
+            let intent = ConnectIntent(
+                kind: .ax25ViaDigis(digis),
+                to: route.destination,
+                sourceContext: .routes,
+                suggestedRoutePreview: nil,
+                validationErrors: [],
+                routeHint: nil,
+                note: nil
+            )
+            connectCoordinator.requestConnect(
+                ConnectRequest(intent: intent, mode: .ax25ViaDigi, executeImmediately: true,
+                               origin: .explicitAction)
+            )
+        }
     }
 
     // MARK: - Debug Rebuild
@@ -462,6 +808,7 @@ struct NetRomRoutesView: View {
 struct QualityBadge: View {
     let quality: Int
     let percent: Double
+    var detailTooltip: String? = nil
 
     private var color: Color {
         if percent >= 80 { return .green }
@@ -470,19 +817,21 @@ struct QualityBadge: View {
         return .red
     }
 
+    private var roundedPercent: Int { Int(percent.rounded()) }
+
     var body: some View {
         HStack(spacing: 4) {
             Text("\(quality)")
                 .fontWeight(.medium)
-            Text("(\(Int(percent))%)")
+            Text("(\(roundedPercent)%)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
-        .help("Quality estimates how reliably packets travel in each direction. Lower values indicate retries or weak acknowledgement evidence.")
-        .accessibilityLabel("Quality \(quality) of 255, \(Int(percent)) percent.")
+        .help(detailTooltip ?? "Quality estimates how reliably packets travel in each direction. Lower values indicate retries or weak acknowledgement evidence.")
+        .accessibilityLabel("Quality \(quality) of 255, \(roundedPercent) percent.")
     }
 }
 
@@ -495,6 +844,7 @@ struct SourceTypeBadge: View {
         case "classic": return "Classic"
         case "inferred": return "Inferred"
         case "broadcast": return "Broadcast"
+        case "harvested": return "Harvested"
         default: return sourceType.capitalized
         }
     }
@@ -504,6 +854,7 @@ struct SourceTypeBadge: View {
         case "classic": return "radio"
         case "inferred": return "wand.and.stars"
         case "broadcast": return "megaphone"
+        case "harvested": return "tray.and.arrow.down"
         default: return "questionmark.circle"
         }
     }
@@ -516,6 +867,8 @@ struct SourceTypeBadge: View {
             return "Inferred: Deduced from packet patterns without explicit announcement"
         case "broadcast":
             return "Broadcast: Received via NET/ROM routing broadcast"
+        case "harvested":
+            return "Harvested: Read from a node's own ROUTES table during a session. Second-hand — used for this station's routing, never advertised."
         default:
             return "Source type: \(sourceType)"
         }
@@ -532,6 +885,11 @@ struct SourceTypeBadge: View {
 // MARK: - Preview
 
 #Preview {
-    NetRomRoutesView(integration: nil, packetEngine: nil, settings: AppSettingsStore())
+    NetRomRoutesView(
+        integration: nil,
+        packetEngine: nil,
+        settings: AppSettingsStore(),
+        connectCoordinator: ConnectCoordinator()
+    )
         .frame(width: 900, height: 500)
 }

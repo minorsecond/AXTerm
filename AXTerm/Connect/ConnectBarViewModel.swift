@@ -1,0 +1,1219 @@
+import Foundation
+import Combine
+
+nonisolated struct ConnectSuggestionGroup: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let values: [String]
+}
+
+nonisolated enum RouteConnectAction {
+    case netrom
+    case ax25Direct
+    case ax25ViaDigi
+}
+
+nonisolated struct ConnectDigiPathSection: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let paths: [ConnectSuggestions.DigiPath]
+}
+
+final class ConnectBarViewModel: ObservableObject {
+    @Published private(set) var barState: ConnectBarState
+    @Published var mode: ConnectBarMode = .ax25
+    /// True when the bar routes automatically (the Auto ladder) rather than
+    /// forcing `mode`. This is the default for picking a station; forcing a
+    /// protocol turns it off. `mode` still tracks the forced choice underneath.
+    @Published var autoRouting: Bool = true
+    @Published var toCall: String = ""
+    @Published var viaDigipeaters: [String] = []
+    @Published var pendingViaTokenInput: String = ""
+    @Published private(set) var viaInputError: String?
+    @Published var nextHopSelection: String = "__AUTO__"
+    @Published private(set) var nextHopOptions: [String] = ["__AUTO__"]
+    /// The radio the operator picked for the next connect; nil is Auto.
+    @Published var radioSelection: RadioID?
+    /// The enabled radios, in the operator's order. The picker shows only
+    /// when there are two.
+    @Published private(set) var radioOptions: [RadioOption] = []
+    /// Auto's current answer for the draft, in words, for the picker's help.
+    var autoRadioDescriber: ((_ destination: String, _ digis: [String]) -> String?)?
+
+    struct RadioOption: Equatable, Identifiable {
+        let id: RadioID
+        let name: String
+    }
+
+    func setRadioOptions(_ options: [RadioOption]) {
+        guard options != radioOptions else { return }
+        radioOptions = options
+        // A radio that went away, or the last but one, takes Auto with it.
+        if let selected = radioSelection, !options.contains(where: { $0.id == selected }) {
+            radioSelection = nil
+        }
+        if options.count < 2 { radioSelection = nil }
+    }
+
+    /// "Auto (IC-705)" while the picker is on Auto — what Auto would do
+    /// right now for what is typed — and why, for the tooltip.
+    var autoRadioHelp: String {
+        autoRadioDescriber?(toCall, viaDigipeaters) ?? "Auto picks the radio that has heard the first hop most recently and best."
+    }
+    @Published private(set) var routePreview: String = "No known route"
+    @Published private(set) var routeOverrideWarning: String?
+    @Published private(set) var inlineNote: String?
+    @Published private(set) var validationErrors: [String] = []
+    @Published private(set) var warningMessages: [String] = []
+    @Published private(set) var suggestions: ConnectSuggestions = .empty
+    @Published private(set) var isAutoAttemptInProgress = false
+    @Published private(set) var autoAttemptStatus: String?
+
+    static let autoNextHopID = "__AUTO__"
+
+    private let defaults: UserDefaults
+    private let recentAttemptsKey = "connectBar.recentAttempts"
+    private let recentDigiPathsKey = "connectBar.recentDigiPaths"
+    private let contextModeKey = "connectBar.contextModes"
+    private let contextAutoRoutingKey = "connectBar.contextAutoRouting"
+    private var activeDraftContext: ConnectSourceContext = .terminal
+
+    private var contextModes: [ConnectSourceContext: ConnectBarMode] = [:]
+    private var contextAutoRouting: [ConnectSourceContext: Bool] = [:]
+    private var attemptHistory: [ConnectAttemptRecord] = []
+    private var recentDigiPaths: [RecentDigiPath] = []
+
+    private var stations: [String] = []
+    private var neighbors: [String] = []
+    private var routeDestinations: [String] = []
+    private var routeHintsByDestination: [String: NetRomRouteHint] = [:]
+    private var routeHintsByDestinationAndNextHop: [String: [String: NetRomRouteHint]] = [:]
+    private var routeFallbackDigisByDestination: [String: [[String]]] = [:]
+    private var fallbackPathCursorByDestination: [String: Int] = [:]
+    private var observedPaths: [[String]] = []
+    private var knownDigis: [String] = []
+
+    private var routeRows: [RouteInfo] = []
+    private var neighborRows: [NeighborInfo] = []
+    private var observedPathStore: [ObservedPathKey: ObservedPath] = [:]
+
+    private var suggestionsWorkItem: DispatchWorkItem?
+    private let suggestionsDebounce: TimeInterval = 0.2
+
+    private struct ObservedPathKey: Hashable {
+        let peer: String
+        let digisSignature: String
+    }
+
+    // Implicit MainActor-isolated deinits dispatch through
+    // swift_task_deinitOnExecutor, which crashes in libmalloc when the object
+    // is released synchronously (same failure TelemetryRateLimiter hit).
+    // The deinit touches no isolated state, so opt it out.
+    nonisolated deinit {}
+
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
+        self.defaults = defaults
+        self.barState = .disconnectedDraft(.empty())
+        loadPersistence()
+        scheduleSuggestionsRefresh()
+    }
+
+    /// Everything a node said it can reach, offered in every mode.
+    ///
+    /// Not gated on NET/ROM mode: an operator typing a name is asking "what can
+    /// I connect to", and answering only after they have already guessed the
+    /// right mode makes them solve the problem first. Picking one switches the
+    /// bar to the relay that reaches it.
+    private var reachableGroup: ConnectSuggestionGroup {
+        ConnectSuggestionGroup(
+            id: "reachable", title: "Reachable via nodes",
+            values: claimedRouteVia.keys.sorted())
+    }
+
+    var toSuggestionGroups: [ConnectSuggestionGroup] {
+        let recentByMode = recentCalls(for: mode)
+        switch mode {
+        case .ax25, .ax25ViaDigi:
+            return [
+                ConnectSuggestionGroup(id: "recent", title: "Recent Heard", values: dedupe(recentByMode + stations).prefix(10).map { $0 }),
+                ConnectSuggestionGroup(id: "favorites", title: "Favorites", values: favoriteCalls().prefix(10).map { $0 }),
+                ConnectSuggestionGroup(id: "neighbors", title: "Neighbors", values: neighbors.prefix(10).map { $0 }),
+                reachableGroup
+            ].filter { !$0.values.isEmpty }
+        case .netrom:
+            return [
+                ConnectSuggestionGroup(id: "routes", title: "Routes", values: dedupe(recentByMode + routeDestinations).prefix(20).map { $0 }),
+                ConnectSuggestionGroup(id: "neighbors", title: "Neighbors", values: neighbors.prefix(10).map { $0 }),
+                reachableGroup
+            ].filter { !$0.values.isEmpty }
+        }
+    }
+
+    var flatToSuggestions: [String] {
+        var seen = Set<String>()
+        return toSuggestionGroups
+            .flatMap(\.values)
+            .filter { seen.insert($0).inserted }
+    }
+
+    var canEditDigis: Bool {
+        mode == .ax25ViaDigi
+    }
+
+    var canEditNetRomRouting: Bool {
+        mode == .netrom
+    }
+
+    var viaHopCount: Int {
+        viaDigipeaters.count
+    }
+
+    var pendingViaTokens: [String] {
+        DigipeaterListParser.parse(pendingViaTokenInput)
+    }
+
+    var pendingViaDuplicateError: String? {
+        guard let duplicate = DigipeaterListParser.firstDuplicate(in: pendingViaTokens, existing: viaDigipeaters) else {
+            return nil
+        }
+        return "\(duplicate) is already in the path."
+    }
+
+    var canAddPendingDigipeaters: Bool {
+        !pendingViaTokens.isEmpty && pendingViaDuplicateError == nil
+    }
+
+    var connectSuggestions: ConnectSuggestions {
+        suggestions
+    }
+
+    var recommendedDigiPaths: [ConnectSuggestions.DigiPath] {
+        sanitizedDigiPaths(suggestions.recommendedDigiPaths)
+    }
+
+    var fallbackDigiPaths: [ConnectSuggestions.DigiPath] {
+        sanitizedDigiPaths(suggestions.fallbackDigiPaths)
+    }
+
+    var recommendedNextHopSuggestions: [ConnectSuggestions.NetRomNextHop] {
+        suggestions.recommendedNextHops
+    }
+
+    var fallbackNextHopSuggestions: [ConnectSuggestions.NetRomNextHop] {
+        suggestions.fallbackNextHops
+    }
+
+    var knownDigiPresets: [String] {
+        knownDigis
+    }
+
+    func isDigipeaterUnavailableInCurrentPath(_ candidate: String) -> Bool {
+        let key = DigipeaterListParser.normalizeForComparison(candidate)
+        guard !key.isEmpty else { return false }
+        return viaDigipeaters.contains { DigipeaterListParser.normalizeForComparison($0) == key }
+    }
+
+    func isSuggestedPathUnavailable(_ digis: [String]) -> Bool {
+        guard !viaDigipeaters.isEmpty, !digis.isEmpty else { return false }
+        let currentKeys = Set(viaDigipeaters.map(DigipeaterListParser.normalizeForComparison).filter { !$0.isEmpty })
+        for digi in digis {
+            let key = DigipeaterListParser.normalizeForComparison(digi)
+            if !key.isEmpty && currentKeys.contains(key) {
+                return true
+            }
+        }
+        return false
+    }
+
+    var observedPathPresets: [[String]] {
+        observedPaths
+    }
+
+    var recentPathPresets: [[String]] {
+        let scoped = recentDigiPaths.filter { item in
+            item.mode == mode && (item.context == nil || item.context == activeDraftContext)
+        }
+        if !scoped.isEmpty {
+            return scoped.map(\.path)
+        }
+        return recentDigiPaths.filter { $0.mode == mode }.map(\.path)
+    }
+
+    var moreDigiPathSections: [ConnectDigiPathSection] {
+        let sectionOrder: [ConnectSuggestions.DigiPath.Source] = [
+            .observedForDestination,
+            .historicalSuccess,
+            .neighborStrong,
+            .routeDerived
+        ]
+        let titleForSource: [ConnectSuggestions.DigiPath.Source: String] = [
+            .observedForDestination: "Observed for destination",
+            .historicalSuccess: "Recent successful for destination",
+            .neighborStrong: "Strong neighbors",
+            .routeDerived: "Route-derived"
+        ]
+
+        return sectionOrder.compactMap { source in
+            let items = fallbackDigiPaths.filter { $0.source == source }
+            guard !items.isEmpty else { return nil }
+            return ConnectDigiPathSection(
+                id: "source-\(source.rawValue)",
+                title: titleForSource[source] ?? "Other",
+                paths: Array(items.prefix(10))
+            )
+        }
+    }
+
+    var recommendedNextHopOptions: [String] {
+        recommendedNextHopSuggestions.map(\.callsign)
+    }
+
+    var fallbackNextHopOptions: [String] {
+        fallbackNextHopSuggestions.map(\.callsign)
+    }
+
+    func applyContext(_ context: ConnectSourceContext) {
+        activeDraftContext = context
+        let resolved = contextModes[context] ?? ConnectBarMode.defaultMode(for: context)
+        mode = resolved
+        autoRouting = contextAutoRouting[context] ?? ConnectBarMode.defaultAutoRouting(for: context)
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    /// What the visible routing switch reads: Auto when auto-routing, otherwise
+    /// the forced protocol.
+    var routingChoice: ConnectRoutingChoice {
+        guard !autoRouting else { return .auto }
+        switch mode {
+        case .ax25: return .direct
+        case .ax25ViaDigi: return .digi
+        case .netrom: return .netrom
+        }
+    }
+
+    /// Drive the routing switch. Auto flips on auto-routing (leaving `mode` as
+    /// the fallback the ladder falls through to); any protocol forces it off and
+    /// sets `mode`.
+    func setRoutingChoice(_ choice: ConnectRoutingChoice, for context: ConnectSourceContext?) {
+        switch choice {
+        case .auto:
+            autoRouting = true
+        case .direct:
+            autoRouting = false
+            setMode(.ax25, for: context)
+        case .digi:
+            autoRouting = false
+            setMode(.ax25ViaDigi, for: context)
+        case .netrom:
+            autoRouting = false
+            setMode(.netrom, for: context)
+        }
+        if let context {
+            activeDraftContext = context
+            contextAutoRouting[context] = autoRouting
+            persistContextAutoRouting()
+        }
+        validate()
+    }
+
+    func setMode(_ newMode: ConnectBarMode, for context: ConnectSourceContext?) {
+        mode = newMode
+        if newMode != .ax25ViaDigi {
+            viaInputError = nil
+        }
+        if let context {
+            activeDraftContext = context
+            contextModes[context] = newMode
+            persistContextModes()
+        }
+        if newMode != .netrom {
+            nextHopSelection = Self.autoNextHopID
+            routeOverrideWarning = nil
+        }
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func updateRuntimeData(stations: [Station], neighbors: [NeighborInfo], routes: [RouteInfo], packets: [Packet], favorites: [String], directoryRoutes: [String: [String]] = [:]) {
+        self.stations = stations
+            .map { CallsignValidator.normalize($0.call) }
+            .filter { !$0.isEmpty }
+        self.neighbors = neighbors
+            .map { canonicalCallsign($0.call) }
+            .filter { !$0.isEmpty }
+        self.routeRows = routes
+        self.neighborRows = neighbors
+
+        var bestRoutesByDestination: [String: RouteInfo] = [:]
+        var bestRoutesByDestinationAndNextHop: [String: [String: RouteInfo]] = [:]
+        var fallbackDigisByDestination: [String: [[String]]] = [:]
+
+        for route in routes {
+            let destination = canonicalCallsign(route.destination)
+            guard !destination.isEmpty else { continue }
+            let hint = hintFor(route: route)
+
+            if let hop = hint.nextHop, !hop.isEmpty {
+                var perHop = bestRoutesByDestinationAndNextHop[destination] ?? [:]
+                if let existing = perHop[hop] {
+                    if shouldPrefer(route, over: existing) {
+                        perHop[hop] = route
+                    }
+                } else {
+                    perHop[hop] = route
+                }
+                bestRoutesByDestinationAndNextHop[destination] = perHop
+            }
+
+            let via = ConnectPrefillLogic.fallbackDigipeaters(
+                destination: destination,
+                hint: hint,
+                nextHopOverride: nil
+            )
+            if !via.isEmpty {
+                fallbackDigisByDestination[destination, default: []].append(via)
+            }
+
+            if let existing = bestRoutesByDestination[destination] {
+                if shouldPrefer(route, over: existing) {
+                    bestRoutesByDestination[destination] = route
+                }
+            } else {
+                bestRoutesByDestination[destination] = route
+            }
+        }
+
+        routeHintsByDestination = Dictionary(
+            uniqueKeysWithValues: bestRoutesByDestination.map { destination, route in
+                (destination, hintFor(route: route))
+            }
+        )
+        routeHintsByDestinationAndNextHop = bestRoutesByDestinationAndNextHop.mapValues { perHop in
+            Dictionary(uniqueKeysWithValues: perHop.map { hop, route in
+                (hop, hintFor(route: route))
+            })
+        }
+        mergeDirectoryRoutes(directoryRoutes)
+        routeDestinations = routeHintsByDestination.keys.sorted()
+        routeFallbackDigisByDestination = fallbackDigisByDestination.mapValues { paths in
+            var seen = Set<String>()
+            return paths.filter { path in
+                let key = path.joined(separator: ",")
+                return seen.insert(key).inserted
+            }
+        }
+
+        rebuildObservedPaths(from: packets)
+
+        let persistedFavorites = favorites.map { CallsignValidator.normalize($0) }
+        if !persistedFavorites.isEmpty {
+            self.stations = dedupe(persistedFavorites + self.stations)
+        }
+
+        refreshRoutePreview()
+        scheduleSuggestionsRefresh()
+    }
+
+    func applySuggestedTo(_ value: String) {
+        toCall = CallsignValidator.normalize(value)
+        autoRouteModeForDestination()
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    /// The last destination the mode was auto-routed for, so an operator
+    /// who flips the mode back by hand is not overridden on the next
+    /// keystroke or re-commit of the same callsign.
+    private var lastAutoRoutedDestination = ""
+
+    /// Picking a destination the network only knows through nodes arms the
+    /// transport that can actually reach it.
+    ///
+    /// Field capture 2026-08-28 19:20: AA3RG-7 chosen from "Reachable via
+    /// nodes", the status strip drew the full DRLNOD → KB5YZB-7 → COSCO
+    /// relay path — and the bar, still set to AX.25 Direct, dialled
+    /// AA3RG-7 into fifteen retries of silence. The picture and the dial
+    /// must come from the same knowledge: a station with a NET/ROM route
+    /// or a directory claim, never heard on the air, switches the bar to
+    /// NET/ROM, whose executor falls back to the node-prompt relay when no
+    /// native circuit exists. A station actually heard keeps whatever mode
+    /// is set — a direct dial to it is a reasonable ask.
+    private func autoRouteModeForDestination() {
+        let destination = toCall.uppercased()
+        guard !destination.isEmpty, destination != lastAutoRoutedDestination
+        else { return }
+        guard !stations.contains(destination) else { return }
+        let hasRoute = routeDestinations.contains(destination)
+        let hasClaim = claimedRouteVia[destination] != nil
+        guard hasRoute || hasClaim else { return }
+        lastAutoRoutedDestination = destination
+        guard mode != .netrom else { return }
+        setMode(.netrom, for: activeDraftContext)
+        applyInlineNote(hasRoute
+            ? "Routed via NET/ROM — a route to \(destination) is known."
+            : "\(destination) is only known through node directories — "
+              + "connecting through the node chain.")
+    }
+
+    func applyInlineNote(_ note: String?) {
+        inlineNote = note
+    }
+
+    func ingestViaInput() {
+        let parsed = pendingViaTokens
+        guard !parsed.isEmpty else { return }
+        if let duplicate = DigipeaterListParser.firstDuplicate(in: parsed, existing: viaDigipeaters) {
+            viaInputError = "\(duplicate) is already in the path."
+            return
+        }
+        if inlineNote == "Removed duplicate digis from path." {
+            inlineNote = nil
+        }
+        appendDigipeaters(parsed)
+        viaInputError = nil
+        pendingViaTokenInput = ""
+        syncStateFromDraftIfEditable()
+    }
+
+    func appendDigipeaters(_ rawValues: [String]) {
+        if let duplicate = DigipeaterListParser.firstDuplicate(in: rawValues, existing: viaDigipeaters) {
+            viaInputError = "\(duplicate) is already in the path."
+        } else {
+            viaInputError = nil
+            if inlineNote == "Removed duplicate digis from path." {
+                inlineNote = nil
+            }
+        }
+        let merged = viaDigipeaters + rawValues
+        let deduped = DigipeaterListParser.dedupedPreservingOrder(merged)
+        viaDigipeaters = DigipeaterListParser.capped(deduped)
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func removeDigi(at index: Int) {
+        guard viaDigipeaters.indices.contains(index) else { return }
+        viaDigipeaters.remove(at: index)
+        viaInputError = nil
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func moveDigiLeft(at index: Int) {
+        guard index > 0, viaDigipeaters.indices.contains(index) else { return }
+        viaDigipeaters.swapAt(index, index - 1)
+        viaInputError = nil
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func moveDigiRight(at index: Int) {
+        guard viaDigipeaters.indices.contains(index), index < viaDigipeaters.count - 1 else { return }
+        viaDigipeaters.swapAt(index, index + 1)
+        viaInputError = nil
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func applyPathPreset(_ path: [String]) {
+        let normalized = path.map { canonicalCallsign($0) }.filter { !$0.isEmpty }
+        let deduped = DigipeaterListParser.dedupedPreservingOrder(normalized)
+        viaDigipeaters = DigipeaterListParser.capped(deduped)
+        if deduped.count != normalized.count {
+            applyInlineNote("Removed duplicate digis from path.")
+        } else if inlineNote == "Removed duplicate digis from path." {
+            inlineNote = nil
+        }
+        viaInputError = nil
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func applyRoutePrefill(route: RouteDisplayInfo, action: RouteConnectAction) {
+        let destination = canonicalCallsign(route.destination)
+        let heardAs = canonicalCallsign(route.heardPath.first ?? "")
+
+        switch action {
+        case .netrom:
+            mode = .netrom
+            toCall = destination
+            nextHopSelection = Self.autoNextHopID
+            inlineNote = nil
+        case .ax25Direct:
+            mode = .ax25
+            let target = ConnectPrefillLogic.ax25DirectTarget(destination: destination, heardAs: heardAs)
+            toCall = target.to
+            inlineNote = target.note
+            viaDigipeaters = []
+            nextHopSelection = Self.autoNextHopID
+        case .ax25ViaDigi:
+            mode = .ax25ViaDigi
+            toCall = destination
+            viaDigipeaters = DigipeaterListParser.capped(
+                DigipeaterListParser.dedupedPreservingOrder(
+                    route.heardPath.map { canonicalCallsign($0) }.filter { !$0.isEmpty }
+                )
+            )
+            nextHopSelection = Self.autoNextHopID
+            inlineNote = nil
+        }
+
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func applyNetRomPrefill(
+        destination: String,
+        routeHint: NetRomRouteHint?,
+        suggestedPreview: String?,
+        nextHopOverride: String?
+    ) {
+        mode = .netrom
+        toCall = canonicalCallsign(destination)
+        if let routeHint {
+            routeHintsByDestination[toCall] = routeHint
+            if let hop = routeHint.nextHop, !hop.isEmpty {
+                routeHintsByDestinationAndNextHop[toCall, default: [:]][hop] = routeHint
+            }
+        }
+        if let suggestedPreview, !suggestedPreview.isEmpty {
+            routePreview = suggestedPreview
+        }
+        let normalizedOverride = canonicalCallsign(nextHopOverride ?? "")
+        nextHopSelection = normalizedOverride.isEmpty ? Self.autoNextHopID : normalizedOverride
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func applyNeighborPrefill(_ neighbor: NeighborDisplayInfo) {
+        mode = .ax25
+        toCall = canonicalCallsign(neighbor.callsign)
+        viaDigipeaters = []
+        inlineNote = nil
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func applyStationPrefill(_ station: Station) {
+        mode = .ax25
+        toCall = canonicalCallsign(station.call)
+        viaDigipeaters = []
+        inlineNote = nil
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func beginAutoAttempting() {
+        isAutoAttemptInProgress = true
+        autoAttemptStatus = nil
+    }
+
+    func updateAutoAttemptStatus(_ status: String?) {
+        autoAttemptStatus = status
+    }
+
+    func endAutoAttempting() {
+        isAutoAttemptInProgress = false
+        autoAttemptStatus = nil
+    }
+
+    func enterBroadcastComposer() {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .switchedToBroadcast)
+    }
+
+    func enterConnectDraftMode() {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .switchedToConnect)
+        syncStateFromDraftIfEditable()
+    }
+
+    func markConnecting() {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .connectRequested(currentDraft()))
+    }
+
+    func markConnected(sourceCall: String?, destination: String, via: [String], transportMode: ConnectBarMode, forcedNextHop: String?) {
+        let transport: SessionTransport
+        switch transportMode {
+        case .netrom:
+            transport = .netrom(nextHop: forcedNextHop, forced: forcedNextHop != nil)
+        case .ax25, .ax25ViaDigi:
+            transport = .ax25(via: via)
+        }
+
+        let session = SessionInfo(
+            sourceContext: activeDraftContext,
+            sourceCall: sourceCall,
+            destination: canonicalCallsign(destination),
+            transport: transport,
+            connectedAt: Date()
+        )
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .connectSucceeded(session))
+        endAutoAttempting()
+    }
+
+    func markDisconnecting() {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .disconnectRequested)
+    }
+
+    func markDisconnected() {
+        barState = ConnectBarStateReducer.reduce(
+            state: barState,
+            event: .disconnectCompleted(nextDraft: currentDraft())
+        )
+        endAutoAttempting()
+    }
+
+    func markFailed(reason: ConnectFailure.Reason, detail: String?) {
+        let failure = ConnectFailure(reason: reason, detail: detail)
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .connectFailed(failure))
+    }
+
+    func applySidebarSelection(_ selection: SidebarStationSelection, action: SidebarConnectAction) {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .sidebarSelection(selection, action))
+        // An immediate connect lands in .connecting — the draft's fields must
+        // still be applied, or the follow-up buildIntent() sees an empty bar.
+        switch barState {
+        case let .disconnectedDraft(draft), let .connecting(draft):
+            applyDraft(draft)
+        default:
+            break
+        }
+    }
+
+    func buildIntent(sourceContext: ConnectSourceContext) -> ConnectIntent {
+        validate()
+
+        let normalizedTo = canonicalCallsign(toCall)
+        let routeHint = routeHintsByDestination[normalizedTo]
+        let preview = mode == .netrom ? routePreview : nil
+
+        let kind: ConnectKind
+        switch mode {
+        case .ax25:
+            kind = .ax25Direct
+        case .ax25ViaDigi:
+            let digis = viaDigipeaters.compactMap { ConnectCallsign.toCallsign($0) }
+            kind = .ax25ViaDigis(digis)
+        case .netrom:
+            let override: CallsignSSID?
+            if nextHopSelection == Self.autoNextHopID {
+                override = nil
+            } else {
+                override = ConnectCallsign.toCallsign(nextHopSelection)
+            }
+            kind = .netrom(nextHopOverride: override)
+        }
+
+        return ConnectIntent(
+            kind: kind,
+            to: normalizedTo,
+            sourceContext: sourceContext,
+            suggestedRoutePreview: preview,
+            validationErrors: validationErrors,
+            routeHint: routeHint,
+            note: inlineNote
+        )
+    }
+
+    func fallbackDigipeaterCandidates(for destination: String, nextHopOverride: CallsignSSID?) -> [[String]] {
+        if let override = nextHopOverride {
+            return [[override.stringValue]]
+        }
+
+        let normalizedDestination = canonicalCallsign(destination)
+        if canonicalCallsign(toCall) == normalizedDestination {
+            let ranked = (recommendedDigiPaths + fallbackDigiPaths).map(\.digis)
+            if !ranked.isEmpty {
+                return ranked
+            }
+        }
+
+        let ranked = routeFallbackDigisByDestination[normalizedDestination] ?? []
+        if !ranked.isEmpty {
+            return ranked
+        }
+
+        if let hint = routeHintsByDestination[normalizedDestination] {
+            let via = ConnectPrefillLogic.fallbackDigipeaters(
+                destination: normalizedDestination,
+                hint: hint,
+                nextHopOverride: nil
+            )
+            if !via.isEmpty {
+                return [via]
+            }
+        }
+
+        return []
+    }
+
+    func nextFallbackDigipeaterSelection(for destination: String, nextHopOverride: CallsignSSID?) -> (path: [String], alternateCount: Int) {
+        let candidates = fallbackDigipeaterCandidates(for: destination, nextHopOverride: nextHopOverride)
+        guard !candidates.isEmpty else { return ([], 0) }
+
+        if nextHopOverride != nil {
+            return (candidates[0], 0)
+        }
+
+        let normalizedDestination = canonicalCallsign(destination)
+        let currentIndex = fallbackPathCursorByDestination[normalizedDestination] ?? 0
+        let selectedIndex = currentIndex % candidates.count
+        fallbackPathCursorByDestination[normalizedDestination] = (selectedIndex + 1) % candidates.count
+        return (candidates[selectedIndex], max(0, candidates.count - 1))
+    }
+
+    func recordAttempt(intent: ConnectIntent, result: ConnectAttemptResult) {
+        let normalized = canonicalCallsign(intent.to)
+        guard !normalized.isEmpty else { return }
+
+        let timestamp = Date()
+        let success = result == .success
+        let modeForAttempt: ConnectBarMode
+        let digis: [String]
+        let override: String?
+
+        switch intent.kind {
+        case .ax25Direct:
+            modeForAttempt = .ax25
+            digis = []
+            override = nil
+        case let .ax25ViaDigis(path):
+            modeForAttempt = .ax25ViaDigi
+            digis = path.map(\.stringValue)
+            override = nil
+        case let .netrom(nextHopOverride):
+            modeForAttempt = .netrom
+            digis = []
+            override = nextHopOverride?.stringValue
+        }
+
+        attemptHistory.insert(
+            ConnectAttemptRecord(
+                to: normalized,
+                mode: modeForAttempt,
+                timestamp: timestamp,
+                success: success,
+                digis: digis,
+                nextHopOverride: override
+            ),
+            at: 0
+        )
+        attemptHistory = Array(attemptHistory.prefix(200))
+        persistAttempts()
+
+        if modeForAttempt == .ax25ViaDigi && success && !digis.isEmpty {
+            recentDigiPaths.removeAll { $0.path == digis && $0.mode == .ax25ViaDigi && $0.context == activeDraftContext }
+            recentDigiPaths.insert(
+                RecentDigiPath(path: digis, mode: .ax25ViaDigi, context: activeDraftContext, timestamp: timestamp),
+                at: 0
+            )
+            recentDigiPaths = Array(recentDigiPaths.prefix(20))
+            persistRecentDigiPaths()
+        }
+
+        scheduleSuggestionsRefresh()
+    }
+
+    func refreshRoutePreview() {
+        guard mode == .netrom else { return }
+
+        let destination = canonicalCallsign(toCall)
+        guard !destination.isEmpty else {
+            routePreview = "No destination selected"
+            nextHopOptions = dedupe([Self.autoNextHopID] + neighbors)
+            routeOverrideWarning = nil
+            return
+        }
+
+        var hint = routeHintsByDestination[destination]
+        if nextHopSelection != Self.autoNextHopID && !nextHopSelection.isEmpty,
+           let overrideHint = routeHintsByDestinationAndNextHop[destination]?[nextHopSelection] {
+            hint = overrideHint
+        }
+
+        if let hint {
+            let summary = hint.path.isEmpty ? destination : hint.path.joined(separator: " → ")
+            if claimedRouteDestinations.contains(destination), let hop = hint.nextHop {
+                // Not "best route": nothing here has measured this one. Saying
+                // who claimed it is the whole difference between evidence and
+                // hearsay, and the operator can weigh it.
+                routePreview = "\(hop) lists \(destination): \(summary)"
+            } else {
+                routePreview = "Best route: \(summary) (\(hint.hops) hops)"
+            }
+        } else {
+            routePreview = "No known route"
+        }
+
+        let recommendationOptions = suggestions.recommendedNextHops.map(\.callsign)
+        let fallbackOptions = suggestions.fallbackNextHops.map(\.callsign)
+        var options = [Self.autoNextHopID] + recommendationOptions + fallbackOptions
+        if nextHopSelection != Self.autoNextHopID && !nextHopSelection.isEmpty && !options.contains(nextHopSelection) {
+            options.append(nextHopSelection)
+        }
+        nextHopOptions = dedupe(options)
+
+        if nextHopSelection != Self.autoNextHopID && !nextHopSelection.isEmpty {
+            let hasKnownOverride = routeHintsByDestinationAndNextHop[destination]?[nextHopSelection] != nil
+            if !hasKnownOverride {
+                routeOverrideWarning = "No known route via \(nextHopSelection) — attempt may fail."
+            } else {
+                routeOverrideWarning = nil
+            }
+        } else {
+            routeOverrideWarning = nil
+        }
+    }
+
+    func validate() {
+        var errors: [String] = []
+        var warnings: [String] = []
+
+        let normalizedTo = canonicalCallsign(toCall)
+        if normalizedTo.isEmpty {
+            errors.append("Destination callsign is required")
+        } else {
+            switch mode {
+            case .netrom:
+                if !CallsignValidator.isValidRoutingNode(normalizedTo) {
+                    errors.append("Destination must be a valid callsign or routing node")
+                }
+            case .ax25, .ax25ViaDigi:
+                if !CallsignValidator.isValidRoutingNode(normalizedTo) {
+                    errors.append("Destination must be a valid callsign or tactical alias (e.g. DRL, DRLBBS)")
+                }
+            }
+        }
+
+        if mode == .ax25ViaDigi {
+            if viaDigipeaters.count > 2 {
+                warnings.append("More than 2 digipeaters may reduce reliability")
+            }
+            if viaDigipeaters.count > DigipeaterListParser.maxDigipeaters {
+                errors.append("Digipeater list exceeds \(DigipeaterListParser.maxDigipeaters) entries")
+            }
+            let invalidDigis = viaDigipeaters.filter { !CallsignValidator.isValidDigipeaterAddress($0) }
+            if !invalidDigis.isEmpty {
+                errors.append("Invalid digipeater: \(invalidDigis.joined(separator: ", "))")
+            }
+            if let duplicate = DigipeaterListParser.firstDuplicate(in: viaDigipeaters, existing: []) {
+                errors.append("\(duplicate) is already in the path.")
+            }
+        }
+
+        validationErrors = errors
+        warningMessages = warnings
+        refreshRoutePreview()
+        scheduleSuggestionsRefresh()
+    }
+
+    private func currentDraft() -> ConnectDraft {
+        let transport: ConnectTransportDraft
+        switch mode {
+        case .ax25:
+            transport = .ax25(.direct)
+        case .ax25ViaDigi:
+            transport = .ax25(.viaDigipeaters(viaDigipeaters))
+        case .netrom:
+            let forced = nextHopSelection == Self.autoNextHopID ? nil : nextHopSelection
+            transport = .netrom(NetRomDraftOptions(forcedNextHop: forced, routePreview: routePreview))
+        }
+
+        return ConnectDraft(
+            sourceContext: activeDraftContext,
+            destination: toCall,
+            transport: transport
+        )
+    }
+
+    private func applyDraft(_ draft: ConnectDraft) {
+        activeDraftContext = draft.sourceContext
+        toCall = canonicalCallsign(draft.destination)
+        switch draft.transport {
+        case let .ax25(option):
+            switch option {
+            case .direct:
+                mode = .ax25
+                viaDigipeaters = []
+            case let .viaDigipeaters(path):
+                mode = .ax25ViaDigi
+                viaDigipeaters = DigipeaterListParser.capped(
+                    DigipeaterListParser.dedupedPreservingOrder(path.map { canonicalCallsign($0) }.filter { !$0.isEmpty })
+                )
+            }
+            nextHopSelection = Self.autoNextHopID
+        case let .netrom(option):
+            mode = .netrom
+            viaDigipeaters = []
+            nextHopSelection = option.forcedNextHop ?? Self.autoNextHopID
+        }
+        validate()
+    }
+
+    private func syncStateFromDraftIfEditable() {
+        switch barState {
+        case .disconnectedDraft, .failed:
+            barState = .disconnectedDraft(currentDraft())
+        case .connecting, .connectedSession, .disconnecting, .broadcastComposer:
+            break
+        }
+    }
+
+    private func dedupe(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values
+            .map { value in
+                if value == Self.autoNextHopID { return value }
+                return canonicalCallsign(value)
+            }
+            .filter { !$0.isEmpty || $0 == Self.autoNextHopID }
+            .filter { seen.insert($0).inserted }
+    }
+
+    private func sanitizedDigiPaths(_ paths: [ConnectSuggestions.DigiPath]) -> [ConnectSuggestions.DigiPath] {
+        var seen = Set<String>()
+        var result: [ConnectSuggestions.DigiPath] = []
+        for path in paths {
+            let deduped = DigipeaterListParser.capped(
+                DigipeaterListParser.dedupedPreservingOrder(path.digis)
+            )
+            let key = deduped.map { DigipeaterListParser.normalizeForComparison($0) }.joined(separator: ",")
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(
+                ConnectSuggestions.DigiPath(
+                    digis: deduped,
+                    score: path.score,
+                    source: path.source
+                )
+            )
+        }
+        return result
+    }
+
+    private func favoriteCalls() -> [String] {
+        let successFirst = attemptHistory
+            .filter { $0.success }
+            .map(\.to)
+        return dedupe(successFirst)
+    }
+
+    private func recentCalls(for mode: ConnectBarMode) -> [String] {
+        dedupe(attemptHistory.filter { $0.mode == mode }.map(\.to))
+    }
+
+    /// Destinations whose only route is somebody's claim rather than measured.
+    ///
+    /// Tracked apart from the hints so the preview can say which it is. A node
+    /// listing a station in its table is good enough to try and not the same
+    /// thing as having watched a frame get there.
+    private(set) var claimedRouteDestinations: Set<String> = []
+
+    /// Destination → the node to go through, for routes nothing has measured.
+    ///
+    /// Published so the destination picker can name the route on the row. A
+    /// bare callsign in a list answers "can I?" but not "through whom?", which
+    /// is the only question these entries exist to answer.
+    @Published private(set) var claimedRouteVia: [String: String] = [:]
+
+    /// Folds in what nodes say they can reach, where nothing measured says so.
+    ///
+    /// Measured routes win outright: they are evidence this station got there,
+    /// with df/dr behind them, while a table entry is a third party's word. So
+    /// a claim only ever fills a gap — it never displaces an observed route,
+    /// and never replaces a per-hop route that was actually seen to work.
+    private func mergeDirectoryRoutes(_ directoryRoutes: [String: [String]]) {
+        claimedRouteDestinations.removeAll()
+        var via: [String: String] = [:]
+        for (rawDestination, rawTellers) in directoryRoutes {
+            let destination = canonicalCallsign(rawDestination)
+            guard !destination.isEmpty else { continue }
+            let tellers = rawTellers.map { canonicalCallsign($0) }.filter { !$0.isEmpty }
+            guard !tellers.isEmpty else { continue }
+
+            var perHop = routeHintsByDestinationAndNextHop[destination] ?? [:]
+            for teller in tellers where perHop[teller] == nil {
+                // Two hops by construction: the link to the node, then the node
+                // forwarding on. What lies beyond it is the node's business.
+                perHop[teller] = NetRomRouteHint(
+                    nextHop: teller, heardAs: nil,
+                    path: [teller, destination], hops: 2)
+            }
+            routeHintsByDestinationAndNextHop[destination] = perHop
+
+            if routeHintsByDestination[destination] == nil,
+               let freshest = tellers.first, let hint = perHop[freshest] {
+                routeHintsByDestination[destination] = hint
+                claimedRouteDestinations.insert(destination)
+                via[destination] = freshest
+            }
+        }
+        claimedRouteVia = via
+    }
+
+    private func hintFor(route: RouteInfo) -> NetRomRouteHint {
+        let path = route.path.map { canonicalCallsign($0) }.filter { !$0.isEmpty }
+        let nextHop = path.first ?? canonicalCallsign(route.origin)
+        return NetRomRouteHint(
+            nextHop: nextHop.isEmpty ? nil : nextHop,
+            heardAs: path.first,
+            path: path,
+            hops: max(1, path.count)
+        )
+    }
+
+    private func shouldPrefer(_ candidate: RouteInfo, over existing: RouteInfo) -> Bool {
+        if candidate.quality != existing.quality {
+            return candidate.quality > existing.quality
+        }
+        if candidate.lastUpdated != existing.lastUpdated {
+            return candidate.lastUpdated > existing.lastUpdated
+        }
+        if candidate.path.count != existing.path.count {
+            return candidate.path.count < existing.path.count
+        }
+        return candidate.origin < existing.origin
+    }
+
+    private func rebuildObservedPaths(from packets: [Packet]) {
+        var map: [ObservedPathKey: ObservedPath] = [:]
+        var knownDigiSet = Set<String>()
+
+        for packet in packets {
+            let via = packet.via
+                .map { canonicalCallsign($0.display) }
+                .filter { !$0.isEmpty && CallsignValidator.isValidDigipeaterAddress($0) }
+            guard !via.isEmpty else { continue }
+
+            for digi in via {
+                knownDigiSet.insert(digi)
+            }
+
+            let peers = [
+                packet.to.map { canonicalCallsign($0.display) } ?? "",
+                packet.from.map { canonicalCallsign($0.display) } ?? ""
+            ]
+            .filter { !$0.isEmpty }
+
+            for peer in peers {
+                let key = ObservedPathKey(peer: peer, digisSignature: via.joined(separator: ","))
+                if var existing = map[key] {
+                    existing.count += 1
+                    if packet.timestamp > existing.lastSeen {
+                        existing.lastSeen = packet.timestamp
+                    }
+                    map[key] = existing
+                } else {
+                    map[key] = ObservedPath(
+                        peer: peer,
+                        digis: via,
+                        lastSeen: packet.timestamp,
+                        count: 1
+                    )
+                }
+            }
+        }
+
+        observedPathStore = map
+        observedPaths = map.values
+            .sorted { lhs, rhs in
+                if lhs.count != rhs.count { return lhs.count > rhs.count }
+                if lhs.lastSeen != rhs.lastSeen { return lhs.lastSeen > rhs.lastSeen }
+                return lhs.digis.joined(separator: ",") < rhs.digis.joined(separator: ",")
+            }
+            .prefix(10)
+            .map(\.digis)
+
+        knownDigis = Array(knownDigiSet).sorted()
+    }
+
+    private func scheduleSuggestionsRefresh() {
+        suggestionsWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.rebuildSuggestions()
+        }
+        suggestionsWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + suggestionsDebounce, execute: work)
+    }
+
+    /// Digi-path evidence for the strategy ladder, whatever mode the bar is
+    /// in: the engine gates digi suggestions on `.ax25ViaDigi`, but the
+    /// ladder compares families and wants the paths even while the bar
+    /// shows NET/ROM.
+    func digiPathEvidence(for destination: String) -> [ConnectSuggestions.DigiPath] {
+        sanitizedDigiPaths(ConnectSuggestionEngine.build(
+            to: destination,
+            mode: .ax25ViaDigi,
+            routes: routeRows,
+            neighbors: neighborRows,
+            observedPaths: Array(observedPathStore.values),
+            attemptHistory: attemptHistory
+        ).recommendedDigiPaths)
+    }
+
+    private func rebuildSuggestions() {
+        suggestions = ConnectSuggestionEngine.build(
+            to: toCall,
+            mode: mode,
+            routes: routeRows,
+            neighbors: neighborRows,
+            observedPaths: Array(observedPathStore.values),
+            attemptHistory: attemptHistory
+        )
+        refreshRoutePreview()
+    }
+
+    private func canonicalCallsign(_ raw: String) -> String {
+        let normalized = CallsignValidator.normalize(raw)
+        guard !normalized.isEmpty else { return "" }
+        let parsed = CallsignNormalizer.parse(normalized)
+        guard !parsed.call.isEmpty else { return "" }
+        return CallsignNormalizer.display(call: parsed.call, ssid: parsed.ssid)
+    }
+
+    private func loadPersistence() {
+        if let data = defaults.data(forKey: contextModeKey),
+           let decoded = try? JSONDecoder().decode(ConnectModeContextDefaults.self, from: data) {
+            contextModes = decoded.values
+        }
+
+        if let data = defaults.data(forKey: contextAutoRoutingKey),
+           let decoded = try? JSONDecoder().decode([ConnectSourceContext: Bool].self, from: data) {
+            contextAutoRouting = decoded
+        }
+
+        if let data = defaults.data(forKey: recentAttemptsKey),
+           let decoded = try? JSONDecoder().decode([ConnectAttemptRecord].self, from: data) {
+            attemptHistory = decoded
+        }
+
+        if let data = defaults.data(forKey: recentDigiPathsKey),
+           let decoded = try? JSONDecoder().decode([RecentDigiPath].self, from: data) {
+            recentDigiPaths = decoded
+        }
+    }
+
+    private func persistContextModes() {
+        let envelope = ConnectModeContextDefaults(values: contextModes)
+        if let data = try? JSONEncoder().encode(envelope) {
+            defaults.set(data, forKey: contextModeKey)
+        }
+    }
+
+    private func persistContextAutoRouting() {
+        if let data = try? JSONEncoder().encode(contextAutoRouting) {
+            defaults.set(data, forKey: contextAutoRoutingKey)
+        }
+    }
+
+    private func persistAttempts() {
+        if let data = try? JSONEncoder().encode(attemptHistory) {
+            defaults.set(data, forKey: recentAttemptsKey)
+        }
+    }
+
+    private func persistRecentDigiPaths() {
+        if let data = try? JSONEncoder().encode(recentDigiPaths) {
+            defaults.set(data, forKey: recentDigiPathsKey)
+        }
+    }
+}

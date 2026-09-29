@@ -15,13 +15,13 @@ import CommonCrypto
 // MARK: - Raw Binary Frame Types
 
 /// Raw binary protocol frame markers
-enum RawBinaryMarker: UInt8 {
+nonisolated enum RawBinaryMarker: UInt8 {
     case metadata = 0x7B  // '{' - Start of JSON metadata
     case eot = 0x04       // End of Transmission
 }
 
 /// Raw binary protocol state
-enum RawBinaryState: Equatable, Sendable {
+nonisolated enum RawBinaryState: Equatable, Sendable {
     case idle
     case sendingMetadata
     case sendingData
@@ -36,7 +36,12 @@ enum RawBinaryState: Equatable, Sendable {
 // MARK: - Raw Binary Protocol Implementation
 
 /// Simple raw binary file transfer protocol
-final class RawBinaryProtocol: FileTransferProtocol {
+// `@unchecked Sendable`: the transfer schedules its own continuation with
+// `DispatchQueue.main.asyncAfter` and is driven entirely from the main
+// thread, so the weak capture in that `@Sendable` closure is confined in
+// practice. A convention, not a proof — but the same one the rest of the
+// transmission layer runs on.
+nonisolated final class RawBinaryProtocol: FileTransferProtocol, @unchecked Sendable {
     let protocolType: TransferProtocolType = .rawBinary
 
     weak var delegate: FileTransferProtocolDelegate?

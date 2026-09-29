@@ -8,14 +8,14 @@
 import CoreGraphics
 import Foundation
 
-struct GraphLayoutResult: Hashable, Sendable {
+nonisolated struct GraphLayoutResult: Hashable, Sendable {
     let nodes: [NodePosition]
     let edges: [GraphEdge]
 
     static let empty = GraphLayoutResult(nodes: [], edges: [])
 }
 
-enum GraphLayoutEngine {
+nonisolated enum GraphLayoutEngine {
     static let algorithmName = "radial"
     static let iterations = 1
 
@@ -94,7 +94,7 @@ enum GraphLayoutEngine {
     }
 }
 
-private struct SeededGenerator: RandomNumberGenerator {
+nonisolated private struct SeededGenerator: RandomNumberGenerator {
     private var state: UInt64
 
     init(seed: Int) {

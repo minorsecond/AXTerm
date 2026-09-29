@@ -1,0 +1,228 @@
+{
+  "captured_at": "2026-09-09T13:58:13Z",
+  "digipeater": "RFDIGI-1",
+  "asked_as": "ORACLE-1",
+  "channel": "rfnet: 1200-baud AFSK, one Direwolf per station, shared audio bus",
+  "note": "A Direwolf digipeater with no APRS application behind it \u2014 the AD1CT case. It repeats WIDEn-N traffic with callsign substitution and answers no query. Regenerate with TestRig/scripts/digi_capture.py.",
+  "probes": [
+    {
+      "kind": "beacon-via-wide",
+      "sent_info": "=3936.70N/10443.90W-AXTerm oracle",
+      "sent_via": [
+        "WIDE1-1"
+      ],
+      "heard": [
+        {
+          "after_s": 1.27,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [
+            "WIDE1-1"
+          ],
+          "frame_hex": "82a0b482b0a8e09ea48286988a62ae92888a62406303f03d333933362e37304e2f31303434332e3930572d41585465726d206f7261636c65",
+          "info_ascii": "=3936.70N/10443.90W-AXTerm oracle",
+          "is_ours": true,
+          "repeated_by_digi": false
+        },
+        {
+          "after_s": 1.85,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [
+            "RFDIGI-1"
+          ],
+          "frame_hex": "82a0b482b0a8e09ea48286988a62a48c88928e92e303f03d333933362e37304e2f31303434332e3930572d41585465726d206f7261636c65",
+          "info_ascii": "=3936.70N/10443.90W-AXTerm oracle",
+          "is_ours": true,
+          "repeated_by_digi": true
+        }
+      ]
+    },
+    {
+      "kind": "beacon-direct",
+      "sent_info": "=3936.70N/10443.90W-AXTerm oracle direct",
+      "sent_via": [],
+      "heard": [
+        {
+          "after_s": 1.29,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [],
+          "frame_hex": "82a0b482b0a8e09ea48286988a6303f03d333933362e37304e2f31303434332e3930572d41585465726d206f7261636c6520646972656374",
+          "info_ascii": "=3936.70N/10443.90W-AXTerm oracle direct",
+          "is_ours": true,
+          "repeated_by_digi": false
+        }
+      ]
+    },
+    {
+      "kind": "query-position",
+      "sent_info": ":RFDIGI-1 :?APRSP",
+      "sent_via": [],
+      "heard": [
+        {
+          "after_s": 1.36,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [],
+          "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5246444947492d31203a3f4150525350",
+          "info_ascii": ":RFDIGI-1 :?APRSP",
+          "is_ours": true,
+          "repeated_by_digi": false
+        }
+      ]
+    },
+    {
+      "kind": "query-version",
+      "sent_info": ":RFDIGI-1 :?VER",
+      "sent_via": [],
+      "heard": [
+        {
+          "after_s": 1.88,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [],
+          "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5246444947492d31203a3f564552",
+          "info_ascii": ":RFDIGI-1 :?VER",
+          "is_ours": true,
+          "repeated_by_digi": false
+        }
+      ]
+    },
+    {
+      "kind": "query-trace",
+      "sent_info": ":RFDIGI-1 :?APRST",
+      "sent_via": [],
+      "heard": [
+        {
+          "after_s": 1.1,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [],
+          "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5246444947492d31203a3f4150525354",
+          "info_ascii": ":RFDIGI-1 :?APRST",
+          "is_ours": true,
+          "repeated_by_digi": false
+        }
+      ]
+    },
+    {
+      "kind": "query-via-wide",
+      "sent_info": ":RFDIGI-1 :?APRSP",
+      "sent_via": [
+        "WIDE1-1"
+      ],
+      "heard": [
+        {
+          "after_s": 1.93,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [
+            "WIDE1-1"
+          ],
+          "frame_hex": "82a0b482b0a8e09ea48286988a62ae92888a62406303f03a5246444947492d31203a3f4150525350",
+          "info_ascii": ":RFDIGI-1 :?APRSP",
+          "is_ours": true,
+          "repeated_by_digi": false
+        },
+        {
+          "after_s": 2.41,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [
+            "RFDIGI-1"
+          ],
+          "frame_hex": "82a0b482b0a8e09ea48286988a62a48c88928e92e303f03a5246444947492d31203a3f4150525350",
+          "info_ascii": ":RFDIGI-1 :?APRSP",
+          "is_ours": true,
+          "repeated_by_digi": true
+        }
+      ]
+    },
+    {
+      "kind": "trace-through-digi",
+      "sent_info": ":XASTIR-1 :?APRST",
+      "sent_via": [
+        "WIDE1-1"
+      ],
+      "heard": [
+        {
+          "after_s": 1.49,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [
+            "WIDE1-1"
+          ],
+          "frame_hex": "82a0b482b0a8e09ea48286988a62ae92888a62406303f03a5841535449522d31203a3f4150525354",
+          "info_ascii": ":XASTIR-1 :?APRST",
+          "is_ours": true,
+          "repeated_by_digi": false
+        },
+        {
+          "after_s": 1.97,
+          "src": "ORACLE-1",
+          "dest": "APZAXT",
+          "via": [
+            "RFDIGI-1"
+          ],
+          "frame_hex": "82a0b482b0a8e09ea48286988a62a48c88928e92e303f03a5841535449522d31203a3f4150525354",
+          "info_ascii": ":XASTIR-1 :?APRST",
+          "is_ours": true,
+          "repeated_by_digi": true
+        },
+        {
+          "after_s": 3.18,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c57494445312d310d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT,WIDE1-1\r",
+          "is_ours": false,
+          "repeated_by_digi": false
+        },
+        {
+          "after_s": 3.68,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c5246444947492d312a0d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT,RFDIGI-1*\r",
+          "is_ours": false,
+          "repeated_by_digi": false
+        },
+        {
+          "after_s": 4.63,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c57494445312d310d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT,WIDE1-1\r",
+          "is_ours": false,
+          "repeated_by_digi": true
+        },
+        {
+          "after_s": 5.31,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "RFDIGI-1",
+            "WIDE2-1"
+          ],
+          "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c5246444947492d312a0d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT,RFDIGI-1*\r",
+          "is_ours": false,
+          "repeated_by_digi": true
+        }
+      ]
+    }
+  ]
+}

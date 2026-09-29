@@ -12,7 +12,7 @@
 import Foundation
 
 /// AXTerm Datagram Protocol - application-layer reliability over AX.25 UI/I frames.
-enum AXDP {
+nonisolated enum AXDP {
 
     // MARK: - Protocol Constants
 
@@ -91,7 +91,7 @@ enum AXDP {
         static func decode(from data: Data, at offset: Int) -> DecodeResult? {
             // Need at least 3 bytes: type (1) + length (2)
             guard offset + 3 <= data.count else {
-                print("[DEBUG:AXDP:TLV] truncate header | offset=\(offset) need=3 dataLen=\(data.count)")
+                axDebugPrint("[DEBUG:AXDP:TLV] truncate header | offset=\(offset) need=3 dataLen=\(data.count)")
                 return nil
             }
 
@@ -104,9 +104,9 @@ enum AXDP {
             // Check value doesn't exceed data
             guard valueEnd <= data.count else {
                 if type == TLVType.payload.rawValue {
-                    print("[DEBUG:AXDP:TLV] truncate payload TLV | offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count) SHORT=\(valueEnd - data.count) bytes")
+                    axDebugPrint("[DEBUG:AXDP:TLV] truncate payload TLV | offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count) SHORT=\(valueEnd - data.count) bytes")
                 } else {
-                    print("[DEBUG:AXDP:TLV] truncate value | type=0x\(String(format: "%02X", type)) offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count)")
+                    axDebugPrint("[DEBUG:AXDP:TLV] truncate value | type=0x\(String(format: "%02X", type)) offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count)")
                 }
                 return nil
             }
@@ -267,7 +267,7 @@ enum AXDP {
         static func decode(from data: Data) -> (Message, Int)? {
             // Check magic header
             guard hasMagic(data) else {
-                print("[DEBUG:AXDP:DECODE] no magic | dataLen=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined())")
+                axDebugPrint("[DEBUG:AXDP:DECODE] no magic | dataLen=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined())")
                 TxLog.debug(.axdp, "No AXDP magic header", ["size": data.count])
                 return nil
             }
@@ -277,7 +277,7 @@ enum AXDP {
             let (tlvs, truncated, tlvConsumedBytes, truncatedAtKnownType) = decodeTLVs(from: tlvData)
 
             guard !tlvs.isEmpty else {
-                print("[DEBUG:AXDP:DECODE] empty tlvs | dataLen=\(data.count) tlvDataLen=\(tlvData.count)")
+                axDebugPrint("[DEBUG:AXDP:DECODE] empty tlvs | dataLen=\(data.count) tlvDataLen=\(tlvData.count)")
                 return nil
             }
 
@@ -424,7 +424,7 @@ enum AXDP {
             switch msg.type {
             case .chat, .fileChunk:
                 if msg.payload == nil {
-                    print("[DEBUG:AXDP:DECODE] incomplete msg | type=\(msg.type) bufferLen=\(data.count) payload=nil (graceful)")
+                    axDebugPrint("[DEBUG:AXDP:DECODE] incomplete msg | type=\(msg.type) bufferLen=\(data.count) payload=nil (graceful)")
                     TxLog.debug(.axdp, "Message decoded without payload (truncated/corrupt)", [
                         "type": String(describing: msg.type),
                         "bufferLen": data.count
@@ -641,7 +641,7 @@ enum AXDP {
 // MARK: - SACK Bitmap
 
 /// Selective ACK bitmap for tracking received chunks
-struct AXDPSACKBitmap: Sendable {
+nonisolated struct AXDPSACKBitmap: Sendable {
     /// Base chunk index (lowest chunk in window)
     let baseChunk: UInt32
 
@@ -736,7 +736,7 @@ struct AXDPSACKBitmap: Sendable {
 // MARK: - Message ID Tracker
 
 /// Tracks message IDs for deduplication
-struct AXDPMessageIdTracker: Sendable {
+nonisolated struct AXDPMessageIdTracker: Sendable {
     /// Key for session+messageId pair
     private struct MessageKey: Hashable {
         let sessionId: UInt32
@@ -788,7 +788,7 @@ struct AXDPMessageIdTracker: Sendable {
 // MARK: - Retry Policy
 
 /// Configures retry behavior for AXDP reliability
-struct AXDPRetryPolicy: Sendable {
+nonisolated struct AXDPRetryPolicy: Sendable {
     /// Maximum number of retry attempts
     let maxRetries: Int
 
@@ -837,7 +837,7 @@ struct AXDPRetryPolicy: Sendable {
 // MARK: - Transfer State
 
 /// Tracks state for an AXDP file transfer session
-struct AXDPTransferState: Sendable {
+nonisolated struct AXDPTransferState: Sendable {
     /// Session ID
     let sessionId: UInt32
 

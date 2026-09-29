@@ -8,7 +8,7 @@
 import Foundation
 
 /// Generates time axis ticks with appropriate spacing and formatting.
-enum TimeAxisTicks {
+nonisolated enum TimeAxisTicks {
 
     // MARK: - Configuration
 

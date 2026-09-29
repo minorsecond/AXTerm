@@ -9,13 +9,14 @@ import Combine
 import Foundation
 import SwiftUI
 
-/// Tab selection for the Routes page.
-enum NetRomRoutesTab: String, CaseIterable, Identifiable {
+/// Scope selection for the Routes page.
+nonisolated enum RoutesScope: String, CaseIterable, Identifiable {
     case neighbors = "Neighbors"
     case routes = "Routes"
     case linkQuality = "Link Quality"
 
     var id: String { rawValue }
+    var title: String { rawValue }
 
     var icon: String {
         switch self {
@@ -24,10 +25,21 @@ enum NetRomRoutesTab: String, CaseIterable, Identifiable {
         case .linkQuality: return "chart.bar"
         }
     }
+
+    var tooltip: String {
+        switch self {
+        case .neighbors:
+            return "Stations heard directly on the frequency. These are your immediate peers and represent the first hop for any network route."
+        case .routes:
+            return "The NET/ROM routing table. Shows distant nodes discovered via broadcasts and the best neighbor to use as a gateway to reach them."
+        case .linkQuality:
+            return "Estimated reliability of neighboring stations. Uses packet observation to track delivery success; lower ETX values indicate more stable links."
+        }
+    }
 }
 
 /// Display model for a neighbor row.
-struct NeighborDisplayInfo: Identifiable, Hashable {
+nonisolated struct NeighborDisplayInfo: Identifiable, Hashable {
     let id: String
     let callsign: String
     let quality: Int
@@ -35,6 +47,9 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
     let sourceType: String
     let lastSeen: Date
     let lastSeenRelative: String
+    /// The radio this neighbour is heard on. Evidence on another radio is
+    /// another entry: a different antenna and path.
+    let radioID: RadioID
 
     /// Time-based freshness fraction (0.0-1.0).
     let freshness: Double
@@ -55,8 +70,9 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
     private static let defaultPlateau: TimeInterval = FreshnessCalculator.defaultPlateau
 
     init(from info: NeighborInfo, now: Date, ttl: TimeInterval = NeighborDisplayInfo.defaultTTL, plateau: TimeInterval = NeighborDisplayInfo.defaultPlateau) {
-        self.id = info.call
+        self.id = info.radioID == .primary ? info.call : "\(info.call)@\(info.radioID.rawValue)"
         self.callsign = info.call
+        self.radioID = info.radioID
         self.quality = info.quality
         self.qualityPercent = Double(info.quality) / 255.0 * 100.0
         self.sourceType = info.sourceType
@@ -140,9 +156,17 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     let sourceType: String
     let path: [String]
     let pathSummary: String
+    let heardPath: [String]
+    let heardPathSummary: String
     let hopCount: Int
+    /// NET/ROM broadcasts carry no path, so the hop count of a classic route is
+    /// unknown — the stored 2-element path is synthetic. Only inferred routes have
+    /// an observed hop count.
+    let hopCountKnown: Bool
     let lastUpdated: Date
     let lastUpdatedRelative: String
+    /// The radio the next hop is reached on.
+    let radioID: RadioID
 
     /// Time-based freshness fraction (0.0-1.0).
     let freshness: Double
@@ -166,15 +190,32 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     private static let defaultPlateau: TimeInterval = FreshnessCalculator.defaultPlateau
 
     init(from info: RouteInfo, now: Date, ttl: TimeInterval = RouteDisplayInfo.defaultTTL, plateau: TimeInterval = RouteDisplayInfo.defaultPlateau, isLearning: Bool = false) {
-        self.id = "\(info.destination)→\(info.origin)"
+        self.id = info.radioID == .primary
+            ? "\(info.destination)→\(info.origin)"
+            : "\(info.destination)→\(info.origin)@\(info.radioID.rawValue)"
         self.destination = info.destination
         self.nextHop = info.path.first ?? info.origin
+        self.radioID = info.radioID
         self.quality = info.quality
         self.qualityPercent = Double(info.quality) / 255.0 * 100.0
         self.sourceType = info.sourceType
         self.path = info.path
         self.pathSummary = info.path.isEmpty ? info.origin : info.path.joined(separator: " → ")
+        if info.sourceType == "inferred" {
+            let reversedHeard = Array(info.path.dropLast().reversed())
+            self.heardPath = reversedHeard
+            self.heardPathSummary = reversedHeard.isEmpty ? "Direct" : reversedHeard.joined(separator: " → ")
+        } else if info.sourceType == "harvested" {
+            self.heardPath = [info.origin]
+            self.heardPathSummary = "Scraped from \(info.origin)'s ROUTES table"
+        } else {
+            self.heardPath = [info.origin]
+            self.heardPathSummary = "Broadcast from \(info.origin)"
+        }
         self.hopCount = max(1, info.path.count)
+        // Inferred paths were watched hop by hop; harvested paths are exactly
+        // [anchor, neighbor] by construction. Both are fully known.
+        self.hopCountKnown = info.sourceType == "inferred" || info.sourceType == "harvested"
         self.lastUpdated = info.lastUpdated
         self.lastUpdatedRelative = Self.formatRelativeTime(info.lastUpdated, now: now)
         self.isLearningInterval = isLearning
@@ -191,6 +232,16 @@ struct RouteDisplayInfo: Identifiable, Hashable {
         } else {
             self.freshnessStatus = info.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
         }
+    }
+
+    var heardPathTooltip: String {
+        if sourceType == "inferred" {
+            return "How traffic from \(destination) reached you: \(heardPathSummary)"
+        }
+        if sourceType == "harvested" {
+            return "Read from \(nextHop)'s own ROUTES listing during a connected session — \(nextHop)'s claim about its link to \(destination), scaled by this station's link to \(nextHop). Never advertised onward."
+        }
+        return "Last explicit routing advertisement heard from \(nextHop)"
     }
 
     private static func formatRelativeTime(_ date: Date, now: Date) -> String {
@@ -294,14 +345,17 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
         self.dfEstimate = record.dfEstimate
         self.drEstimate = record.drEstimate
 
-        // Calculate ETX with the same clamping rules used by the estimator
+        // Calculate ETX with the same rules as the estimator, including its
+        // conservative dr=0.99 fallback when the reverse path is unobserved —
+        // otherwise the displayed ETX and Quality columns contradict each other
+        // (ETX 1.0 next to Quality 252).
         let config = LinkQualityConfig.default
         if let df = record.dfEstimate, let dr = record.drEstimate, df > 0, dr > 0 {
             let product = max(config.minDeliveryRatio, df) * max(config.minDeliveryRatio, dr)
             self.etx = min(config.maxETX, max(1.0, 1.0 / product))
         } else if let df = record.dfEstimate, df > 0 {
-            let clamped = max(config.minDeliveryRatio, df)
-            self.etx = min(config.maxETX, max(1.0, 1.0 / clamped))
+            let product = max(config.minDeliveryRatio, df) * 0.99
+            self.etx = min(config.maxETX, max(1.0, 1.0 / product))
         } else {
             self.etx = nil
         }
@@ -338,6 +392,20 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
 
     /// Apple HIG tooltip for link stat freshness column.
     static let freshnessTooltip = FreshnessTooltips.linkStats
+
+    /// Per-row derivation tooltip: explains why the quality is what it is.
+    var qualityTooltip: String {
+        var lines: [String] = ["Quality: \(quality) (\(Int(qualityPercent.rounded()))%)"]
+        let dfText = dfEstimate.map { String(format: "df=%.2f", $0) } ?? "df unobserved"
+        let drText = drEstimate.map { String(format: "dr=%.2f", $0) } ?? "dr unobserved (assumed 0.99)"
+        lines.append("\(dfText), \(drText)")
+        if let etx {
+            lines.append(String(format: "ETX=%.2f — expected transmissions per delivered frame", etx))
+        }
+        lines.append("Duplicates/retries observed: \(duplicateCount)")
+        lines.append("quality = 255 / ETX, where ETX = 1 / (df × dr)")
+        return lines.joined(separator: "\n")
+    }
 
     /// Accessibility label for this link stat's freshness.
     var freshnessAccessibilityLabel: String {
@@ -380,13 +448,25 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
 /// ViewModel for the NET/ROM Routes page.
 @MainActor
 final class NetRomRoutesViewModel: ObservableObject {
-    @Published var selectedTab: NetRomRoutesTab = .neighbors
+    @Published var selectedTab: RoutesScope = .neighbors
     @Published var searchText: String = ""
     @Published var routingMode: NetRomRoutingMode = .hybrid
 
     @Published private(set) var neighbors: [NeighborDisplayInfo] = []
     @Published private(set) var routes: [RouteDisplayInfo] = []
     @Published private(set) var linkStats: [LinkStatDisplayInfo] = []
+
+    /// Frequency channels the page can scope to, pushed in from the packet
+    /// engine. With one channel there is nothing to choose and no picker.
+    @Published private(set) var radioChannels: [AnalyticsRadioChannel] = []
+    /// Which channel the page is scoped to. `.all` shows every visible radio;
+    /// a channel keeps neighbours/routes/link-quality to one frequency.
+    @Published var selectedRadioScope: AnalyticsRadioScope = .all {
+        didSet {
+            guard selectedRadioScope != oldValue else { return }
+            refresh()
+        }
+    }
 
     @Published private(set) var isLoading = false
     @Published private(set) var lastRefresh: Date?
@@ -402,6 +482,10 @@ final class NetRomRoutesViewModel: ObservableObject {
     private weak var settings: AppSettingsStore?
     private let clock: ClockProviding
     private var refreshTimer: Timer?
+    /// Guards `refresh()` against the re-entry caused by resetting a stale
+    /// radio scope inside it (the scope's didSet calls refresh again).
+    private var isRefreshingNow = false
+    private var cancellables: Set<AnyCancellable> = []
 
     /// Cached origin intervals for adaptive TTL calculation
     private var originIntervals: [String: OriginIntervalInfo] = [:]
@@ -444,8 +528,10 @@ final class NetRomRoutesViewModel: ObservableObject {
     /// - Parameter route: The route info.
     /// - Returns: Tuple of (TTL in seconds, whether we're still learning the interval).
     private func routeTTL(for route: RouteInfo) -> (ttl: TimeInterval, isLearning: Bool) {
-        // Inferred routes use activity decay like neighbors - no broadcast interval to track
-        if route.sourceType == "inferred" {
+        // Inferred and harvested routes use activity decay like neighbors —
+        // neither has a broadcast interval to adapt to (harvested came from a
+        // scraped ROUTES table, not from periodic advertisements).
+        if route.sourceType == "inferred" || route.sourceType == "harvested" {
             return (neighborStaleTTLSeconds, false)
         }
 
@@ -499,6 +585,7 @@ final class NetRomRoutesViewModel: ObservableObject {
         self.packetEngine = packetEngine
         self.settings = settings
         self.clock = clock
+        bindSettings()
         startAutoRefresh()
     }
 
@@ -511,9 +598,10 @@ final class NetRomRoutesViewModel: ObservableObject {
     var filteredNeighbors: [NeighborDisplayInfo] {
         var result = neighbors
 
-        // Filter by expiration if enabled
+        // Filter by expiration if enabled. The threshold matches the rendered
+        // percentage: anything that displays as "0%" (rounds below 0.5%) is hidden.
         if shouldHideExpired {
-            result = result.filter { $0.freshness > 0 }
+            result = result.filter { $0.freshness >= 0.005 }
         }
 
         // Filter by search text
@@ -528,9 +616,9 @@ final class NetRomRoutesViewModel: ObservableObject {
     var filteredRoutes: [RouteDisplayInfo] {
         var result = routes
 
-        // Filter by expiration if enabled
+        // Filter by expiration if enabled (see filteredNeighbors for the threshold).
         if shouldHideExpired {
-            result = result.filter { $0.freshness > 0 }
+            result = result.filter { $0.freshness >= 0.005 }
         }
 
         // Filter by search text
@@ -539,7 +627,8 @@ final class NetRomRoutesViewModel: ObservableObject {
             result = result.filter {
                 $0.destination.uppercased().contains(query) ||
                 $0.nextHop.uppercased().contains(query) ||
-                $0.pathSummary.uppercased().contains(query)
+                $0.pathSummary.uppercased().contains(query) ||
+                $0.heardPathSummary.uppercased().contains(query)
             }
         }
 
@@ -549,9 +638,9 @@ final class NetRomRoutesViewModel: ObservableObject {
     var filteredLinkStats: [LinkStatDisplayInfo] {
         var result = linkStats
 
-        // Filter by expiration if enabled
+        // Filter by expiration if enabled (see filteredNeighbors for the threshold).
         if shouldHideExpired {
-            result = result.filter { $0.freshness > 0 }
+            result = result.filter { $0.freshness >= 0.005 }
         }
 
         // Filter by search text
@@ -570,7 +659,49 @@ final class NetRomRoutesViewModel: ObservableObject {
 
     private var hasLoggedFirstRefresh = false
 
+    /// Recomputes the frequency channels from the packet engine's radios and
+    /// resets a selection whose channel has vanished. Called at the top of each
+    /// refresh, so the picker tracks radios connecting and frequencies read
+    /// from the rig without any view wiring.
+    private func refreshRadioChannels() {
+        let radios = (packetEngine?.radioSummaries ?? []).map {
+            AnalyticsRadioChannel.Radio(id: $0.id, name: $0.name, frequencyHz: $0.frequencyHz)
+        }
+        let hidden = packetEngine?.hiddenRadioIDs ?? []
+        let channels = AnalyticsRadioChannel.channels(radios: radios, hidden: hidden)
+        if channels != radioChannels { radioChannels = channels }
+        // A selection whose channel is gone falls back to All. The didSet's
+        // re-refresh is absorbed by refresh()'s reentrancy guard; the data this
+        // pass produces is already correct because `passesRadioScope` treats a
+        // vanished channel as "show all visible".
+        if case .channel(let id) = selectedRadioScope,
+           !channels.contains(where: { $0.id == id }) {
+            selectedRadioScope = .all
+        }
+    }
+
+    /// Whether a row on this radio should be shown: never a hidden radio, and,
+    /// when a channel is selected, only that channel's radios.
+    private func passesRadioScope(_ radio: RadioID) -> Bool {
+        let hidden = packetEngine?.hiddenRadioIDs ?? []
+        if hidden.contains(radio) { return false }
+        switch selectedRadioScope {
+        case .all:
+            return true
+        case .channel(let id):
+            // A selection whose channel vanished shows all visible, not nothing.
+            guard let channel = radioChannels.first(where: { $0.id == id }) else { return true }
+            return channel.radioIDs.contains(radio)
+        }
+    }
+
     func refresh() {
+        // Resetting a stale radio scope re-enters refresh via its didSet; the
+        // guard absorbs that so a single pass does all the work.
+        guard !isRefreshingNow else { return }
+        isRefreshingNow = true
+        defer { isRefreshingNow = false }
+
         guard let integration else {
             #if DEBUG
             if !hasLoggedFirstRefresh {
@@ -580,6 +711,8 @@ final class NetRomRoutesViewModel: ObservableObject {
             #endif
             return
         }
+
+        refreshRadioChannels()
 
         isLoading = true
         let now = clock.now
@@ -619,6 +752,23 @@ final class NetRomRoutesViewModel: ObservableObject {
         let rawNeighbors = integration.currentNeighbors(forMode: routingMode)
         let rawRoutes = integration.currentRoutes(forMode: routingMode)
         let rawLinkStats = integration.exportLinkStats(forMode: routingMode)
+        // Radio scope: drop a hidden radio's rows (as the map, packets table
+        // and analytics dashboard do), and, when a frequency channel is
+        // selected, keep only its radios. Now that neighbours/routes carry the
+        // radio that heard them, this actually distinguishes them.
+        let filteredNeighbors = rawNeighbors.filter {
+            isDisplayableNode($0.call) && passesRadioScope($0.radioID)
+        }
+        let filteredRoutes = rawRoutes.filter { route in
+            isDisplayableNode(route.destination) &&
+            isDisplayableNode(route.origin) &&
+            route.path.allSatisfy { isDisplayableNode($0) } &&
+            passesRadioScope(route.radioID)
+        }
+        let filteredLinkStats = rawLinkStats.filter { stat in
+            isDisplayableNode(stat.fromCall) && isDisplayableNode(stat.toCall) &&
+            passesRadioScope(stat.radioID)
+        }
 
         #if DEBUG
         if !hasLoggedFirstRefresh {
@@ -706,15 +856,22 @@ final class NetRomRoutesViewModel: ObservableObject {
         let neighborTTL = neighborStaleTTLSeconds
         let linkStatTTL = linkStatStaleTTLSeconds
 
-        neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0, now: now, ttl: neighborTTL) }
+        neighbors = filteredNeighbors.map { NeighborDisplayInfo(from: $0, now: now, ttl: neighborTTL) }
 
         // Routes use different TTL strategies based on source type
-        routes = rawRoutes.map { route in
+        routes = filteredRoutes.map { route in
             let (ttl, isLearning) = routeTTL(for: route)
             return RouteDisplayInfo(from: route, now: now, ttl: ttl, isLearning: isLearning)
         }
 
-        linkStats = rawLinkStats.map { LinkStatDisplayInfo(from: $0, now: now, ttl: linkStatTTL) }
+        linkStats = filteredLinkStats.map { LinkStatDisplayInfo(from: $0, now: now, ttl: linkStatTTL) }
+
+        validateRoutingTableIntegrity(
+            mode: routingMode,
+            neighbors: neighbors,
+            routes: routes,
+            linkStats: linkStats
+        )
 
         lastRefresh = now
         isLoading = false
@@ -761,6 +918,8 @@ final class NetRomRoutesViewModel: ObservableObject {
                 "qualityPercent": String(format: "%.1f", route.qualityPercent),
                 "sourceType": route.sourceType,
                 "path": route.path,
+                "heardPath": route.heardPath,
+                "heardPathSummary": route.heardPathSummary,
                 "hopCount": route.hopCount,
                 "lastUpdated": ISO8601DateFormatter().string(from: route.lastUpdated),
                 "freshnessPercent": route.freshnessDisplayString,
@@ -772,10 +931,10 @@ final class NetRomRoutesViewModel: ObservableObject {
     }
 
     func copyRoutesAsCSV() -> String {
-        var lines = ["Destination,Next Hop,Quality,Quality %,Source,Path,Hops,Last Updated,Freshness %,Freshness 0-255,Status"]
+        var lines = ["Destination,Next Hop,Quality,Quality %,Source,Path,Heard As,Hops,Last Updated,Freshness %,Freshness 0-255,Status"]
         for r in filteredRoutes {
             let pathStr = r.path.joined(separator: " > ")
-            lines.append("\(r.destination),\(r.nextHop),\(r.quality),\(String(format: "%.1f", r.qualityPercent)),\(r.sourceType),\"\(pathStr)\",\(r.hopCount),\(ISO8601DateFormatter().string(from: r.lastUpdated)),\(r.freshnessDisplayString),\(r.freshness255),\(r.freshnessStatus)")
+            lines.append("\(r.destination),\(r.nextHop),\(r.quality),\(String(format: "%.1f", r.qualityPercent)),\(r.sourceType),\"\(pathStr)\",\"\(r.heardPathSummary)\",\(r.hopCount),\(ISO8601DateFormatter().string(from: r.lastUpdated)),\(r.freshnessDisplayString),\(r.freshness255),\(r.freshnessStatus)")
         }
         return lines.joined(separator: "\n")
     }
@@ -827,9 +986,13 @@ final class NetRomRoutesViewModel: ObservableObject {
         lastRebuildResult = nil
 
         Task {
-            let result = await engine.debugRebuildNetRomFromPackets { [weak self] progress in
+            // Named rather than plain [weak self]: the enclosing Task already
+            // holds self, so a capture under the same name reads as two
+            // different ownerships of one thing. A separate binding says what
+            // this actually is — a weak handle used only to report progress.
+            let result = await engine.debugRebuildNetRomFromPackets { [weak model = self] progress in
                 Task { @MainActor in
-                    self?.rebuildProgress = progress
+                    model?.rebuildProgress = progress
                 }
             }
 
@@ -865,9 +1028,101 @@ final class NetRomRoutesViewModel: ObservableObject {
     private func startAutoRefresh() {
         refresh()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
+                self.refresh()
+            }
+        }
+    }
+
+    private func bindSettings() {
+        guard let settings else { return }
+
+        settings.$ignoredServiceEndpoints
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
                 self?.refresh()
             }
+            .store(in: &cancellables)
+    }
+
+    private func isDisplayableNode(_ callsign: String) -> Bool {
+        CallsignValidator.isValidRoutingNode(callsign)
+    }
+
+    private func validateRoutingTableIntegrity(
+        mode: NetRomRoutingMode,
+        neighbors: [NeighborDisplayInfo],
+        routes: [RouteDisplayInfo],
+        linkStats: [LinkStatDisplayInfo]
+    ) {
+        var issues: [String] = []
+
+        func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
+            if !condition() {
+                issues.append(message)
+            }
+        }
+
+        // Duplicate IDs indicate unstable/ambiguous row identity in table views.
+        expect(Set(neighbors.map(\.id)).count == neighbors.count, "Duplicate neighbor IDs")
+        expect(Set(routes.map(\.id)).count == routes.count, "Duplicate route IDs")
+        expect(Set(linkStats.map(\.id)).count == linkStats.count, "Duplicate link-stat IDs")
+
+        for neighbor in neighbors {
+            expect(isDisplayableNode(neighbor.callsign), "Invalid neighbor callsign: \(neighbor.callsign)")
+            expect((0...255).contains(neighbor.quality), "Neighbor quality out of range: \(neighbor.callsign)=\(neighbor.quality)")
+        }
+
+        for route in routes {
+            expect(isDisplayableNode(route.destination), "Invalid route destination: \(route.destination)")
+            expect(isDisplayableNode(route.nextHop), "Invalid route nextHop: \(route.nextHop)")
+            expect(route.path.allSatisfy { isDisplayableNode($0) }, "Invalid route path node in \(route.id)")
+            expect(route.hopCount >= 1, "Invalid hop count for route \(route.id): \(route.hopCount)")
+            expect((0...255).contains(route.quality), "Route quality out of range: \(route.id)=\(route.quality)")
+            // Mode-independent: any string outside the known vocabulary means a
+            // producer invented a source without wiring the display ripples.
+            expect(
+                ["classic", "broadcast", "inferred", "harvested"].contains(route.sourceType),
+                "Unknown route source \(route.sourceType) for \(route.id)"
+            )
+            if mode == .classic {
+                expect(route.sourceType == "classic" || route.sourceType == "broadcast", "Classic mode leaked route source \(route.sourceType) for \(route.id)")
+            } else if mode == .inference {
+                expect(route.sourceType == "inferred", "Inference mode leaked route source \(route.sourceType) for \(route.id)")
+            }
+        }
+
+        for stat in linkStats {
+            expect(isDisplayableNode(stat.fromCall), "Invalid link-stat from node: \(stat.fromCall)")
+            expect(isDisplayableNode(stat.toCall), "Invalid link-stat to node: \(stat.toCall)")
+            expect((0...255).contains(stat.quality), "Link-stat quality out of range: \(stat.id)=\(stat.quality)")
+            if let df = stat.dfEstimate {
+                expect(df >= 0 && df <= 1, "Link-stat df out of range: \(stat.id)=\(df)")
+            }
+            if let dr = stat.drEstimate {
+                expect(dr >= 0 && dr <= 1, "Link-stat dr out of range: \(stat.id)=\(dr)")
+            }
+            if let etx = stat.etx {
+                expect(etx.isFinite && etx >= 1, "Link-stat etx invalid: \(stat.id)=\(etx)")
+            }
+        }
+
+        if !issues.isEmpty {
+            Telemetry.capture(
+                message: "netrom.routes.integrity_violation",
+                data: [
+                    "mode": String(describing: mode),
+                    "neighborCount": neighbors.count,
+                    "routeCount": routes.count,
+                    "linkStatCount": linkStats.count,
+                    "issues": issues.joined(separator: " | ")
+                ]
+            )
+            #if DEBUG
+            assertionFailure("NET/ROM routes integrity violation: \(issues.joined(separator: " | "))")
+            #endif
         }
     }
 

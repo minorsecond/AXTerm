@@ -890,13 +890,43 @@ final class TxAdaptiveSettingsComprehensiveTests: XCTestCase {
         XCTAssertLessThanOrEqual(settings.paclen.currentAdaptive, 128)
     }
     
-    func testUpdateFromLinkQualityExtremeETX() {
+    /// A high ETX shrinks our frames only when *our* frames are the ones
+    /// being lost.
+    ///
+    /// ETX blends both directions (CLAUDE.md §8) and is still what ranks
+    /// routes, but it no longer sizes paclen. A path whose ETX is high
+    /// purely because the far end's frames are arriving damaged cannot be
+    /// improved by us sending smaller ones — on 2026-08-27 that reasoning
+    /// walked a session down to paclen 64 and K=1 while its own five
+    /// I-frames had gone out without a single retransmission.
+    func testExtremeETXFromOurOwnLossShrinksFrames() {
         var settings = TxAdaptiveSettings()
-        
-        // Very high ETX
-        settings.updateFromLinkQuality(lossRate: 0.19, etx: 10.0, srtt: nil)
-        
+        settings.updateFromLinkQuality(lossRate: 0.25, forwardLoss: 0.25, etx: 10.0, srtt: nil)
         XCTAssertEqual(settings.paclen.currentAdaptive, 64)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 1)
+    }
+
+    func testExtremeETXFromTheirLossLeavesOurFramesAlone() {
+        var settings = TxAdaptiveSettings()
+        let before = settings.paclen.currentAdaptive
+        // Everything we sent got through first time; the damage is all
+        // inbound, which is what pushes the composite loss and ETX up.
+        settings.updateFromLinkQuality(lossRate: 0.9, forwardLoss: 0.0, etx: 10.0, srtt: nil)
+        XCTAssertEqual(settings.paclen.currentAdaptive, before,
+                       "smaller frames from us cannot mend their transmissions")
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 2)
+        // The link's real condition is still recorded — route ranking and
+        // the operator's readout need it.
+        XCTAssertEqual(settings.lossRateEWMA ?? 0, 0.9, accuracy: 0.0001)
+        XCTAssertEqual(settings.forwardLossEWMA ?? 1, 0.0, accuracy: 0.0001)
+    }
+
+    /// Callers with no directional evidence keep the old behaviour.
+    func testMissingForwardLossFallsBackToTheComposite() {
+        var settings = TxAdaptiveSettings()
+        settings.updateFromLinkQuality(lossRate: 0.3, etx: 2.5, srtt: nil)
+        XCTAssertEqual(settings.paclen.currentAdaptive, 64)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 1)
     }
     
     func testUpdateFromLinkQualityNegativeValues() {

@@ -24,7 +24,7 @@ import Foundation
 // MARK: - Capture Source Type
 
 /// Capture source type for differentiating KISS vs AGWPE behavior.
-enum CaptureSourceType: String, Sendable {
+nonisolated enum CaptureSourceType: String, Sendable {
     case kiss
     case agwpe
 
@@ -44,7 +44,7 @@ enum CaptureSourceType: String, Sendable {
 /// Uses a plateau + smoothstep model:
 /// - During plateau period: freshness stays near 100% (gentle 5% decline)
 /// - After plateau: smoothstep easing to 0% at TTL
-struct FreshnessConfig: Equatable, Sendable {
+nonisolated struct FreshnessConfig: Equatable, Sendable {
     /// TTL for neighbors in seconds.
     let neighborTTL: TimeInterval
 
@@ -110,7 +110,7 @@ struct FreshnessConfig: Equatable, Sendable {
 /// Configuration for time-based decay calculations.
 /// - Note: Deprecated. Use FreshnessConfig instead.
 @available(*, deprecated, message: "Use FreshnessConfig instead")
-struct DecayConfig: Equatable, Sendable {
+nonisolated struct DecayConfig: Equatable, Sendable {
     /// TTL for neighbors in seconds.
     let neighborTTL: TimeInterval
 
@@ -170,7 +170,7 @@ struct DecayConfig: Equatable, Sendable {
 ///
 /// This provides intuitive UX where recently-seen nodes look healthy,
 /// with a smooth transition to stale/expired status.
-enum FreshnessCalculator {
+nonisolated enum FreshnessCalculator {
     /// Default plateau duration (5 minutes).
     static let defaultPlateau: TimeInterval = 5 * 60
 
@@ -264,7 +264,7 @@ enum FreshnessCalculator {
 /// Core decay calculation functions.
 /// - Note: Deprecated. Use FreshnessCalculator instead.
 @available(*, deprecated, message: "Use FreshnessCalculator instead")
-enum DecayCalculator {
+nonisolated enum DecayCalculator {
     /// Compute decay fraction (0.0 to 1.0) based on time elapsed.
     static func decayFraction(lastSeen: Date, now: Date, ttl: TimeInterval) -> Double {
         let age = now.timeIntervalSince(lastSeen)
@@ -288,7 +288,7 @@ enum DecayCalculator {
 
 // MARK: - NeighborInfo Freshness Extension
 
-extension NeighborInfo {
+nonisolated extension NeighborInfo {
     /// Compute freshness fraction based on lastSeen timestamp.
     ///
     /// Uses plateau + smoothstep model for intuitive UX.
@@ -367,7 +367,7 @@ extension NeighborInfo {
 
 // MARK: - RouteInfo Freshness Extension
 
-extension RouteInfo {
+nonisolated extension RouteInfo {
     /// Compute freshness fraction based on lastUpdated timestamp.
     ///
     /// Uses plateau + smoothstep model for intuitive UX.
@@ -429,7 +429,7 @@ extension RouteInfo {
 
 /// Wrapper for RouteInfo that includes lastUpdated timestamp for freshness calculation.
 /// RouteInfo itself doesn't store lastUpdated, so we need this wrapper.
-struct RouteFreshnessInfo {
+nonisolated struct RouteFreshnessInfo {
     let route: RouteInfo
     let lastUpdated: Date
 
@@ -463,7 +463,7 @@ struct RouteFreshnessInfo {
 /// Wrapper for RouteInfo that includes lastUpdated timestamp for decay calculation.
 /// - Note: Deprecated. Use RouteFreshnessInfo instead.
 @available(*, deprecated, message: "Use RouteFreshnessInfo instead")
-struct RouteDecayInfo {
+nonisolated struct RouteDecayInfo {
     let route: RouteInfo
     let lastUpdated: Date
 
@@ -487,7 +487,7 @@ struct RouteDecayInfo {
 
 // MARK: - LinkStatRecord Freshness Extension
 
-extension LinkStatRecord {
+nonisolated extension LinkStatRecord {
     /// Compute freshness fraction based on lastUpdated timestamp.
     ///
     /// Uses plateau + smoothstep model for intuitive UX.
@@ -551,23 +551,29 @@ extension LinkStatRecord {
 /// - Use sentence-style capitalization
 /// - Avoid technical acronyms where possible
 /// - Provide clear purpose and example
-enum FreshnessTooltips {
+nonisolated enum FreshnessTooltips {
     /// Tooltip for the Neighbors freshness column.
     static let neighbors = """
         Freshness indicates how recently this neighbor was heard.
-        100% = just seen; drops to 0% after 30 minutes of silence.
+        100% = just seen; declines toward 0% as the neighbor approaches its
+        stale TTL (configurable in Settings, 6 hours by default).
+        Freshness measures knowledge age, so it keeps declining while the app
+        is closed — the network can change while you are not listening.
         """
 
     /// Tooltip for the Routes freshness column.
     static let routes = """
-        Route freshness shows how recently this path was reinforced.
-        Newer routes appear fresher; stale routes fade toward 0%.
+        Route freshness shows how recently this path was advertised or reinforced.
+        It declines toward 0% at the route's TTL — adaptive per origin once the
+        broadcast interval is learned, otherwise the global stale TTL from Settings.
         """
 
     /// Tooltip for the Link Stats freshness column.
     static let linkStats = """
         Link freshness reflects how recently traffic was observed on this link.
-        Fresher stats are more reliable for routing decisions.
+        It declines toward 0% at the link-stat stale TTL (configurable in
+        Settings, 12 hours by default). Fresher stats are more reliable for
+        routing decisions.
         """
 
     /// Short tooltip for freshness column header.
@@ -576,7 +582,7 @@ enum FreshnessTooltips {
     /// Detailed tooltip explaining the freshness curve.
     static let detailed = """
         Freshness uses a gentle curve that stays near 100% for the first 5 minutes,
-        then smoothly declines to 0% at 30 minutes. This reflects typical packet radio
+        then smoothly declines to 0% at the entry's TTL. This reflects typical packet radio
         activity patterns where periodic beacons keep links fresh.
         """
 }
@@ -584,7 +590,7 @@ enum FreshnessTooltips {
 /// Legacy tooltip texts.
 /// - Note: Deprecated. Use FreshnessTooltips instead.
 @available(*, deprecated, message: "Use FreshnessTooltips instead")
-enum DecayTooltips {
+nonisolated enum DecayTooltips {
     static let neighbors = FreshnessTooltips.neighbors
     static let routes = FreshnessTooltips.routes
     static let decay = FreshnessTooltips.detailed
@@ -597,7 +603,7 @@ enum DecayTooltips {
 import SwiftUI
 
 /// Color scheme for freshness display following Apple HIG.
-enum FreshnessColors {
+nonisolated enum FreshnessColors {
     /// Get the color for a freshness fraction.
     ///
     /// Uses a green-to-gray gradient:
@@ -660,7 +666,7 @@ enum FreshnessColors {
 // MARK: - Accessibility Labels
 
 /// Accessibility labels for freshness-related UI elements.
-enum FreshnessAccessibility {
+nonisolated enum FreshnessAccessibility {
     /// Generate accessibility label for a neighbor's freshness.
     static func neighbor(_ fraction: Double, callsign: String) -> String {
         let percent = Int(round(fraction * 100))
@@ -698,7 +704,7 @@ enum FreshnessAccessibility {
 /// Legacy accessibility labels.
 /// - Note: Deprecated. Use FreshnessAccessibility instead.
 @available(*, deprecated, message: "Use FreshnessAccessibility instead")
-enum DecayAccessibility {
+nonisolated enum DecayAccessibility {
     static func neighborDecay(_ fraction: Double, callsign: String) -> String {
         FreshnessAccessibility.neighbor(fraction, callsign: callsign)
     }

@@ -12,7 +12,7 @@ import SwiftUI
 
 /// Notification model for session state changes and peer actions.
 /// Add new cases in NotificationType when introducing new toast variants.
-struct SessionNotification: Identifiable, Equatable {
+nonisolated struct SessionNotification: Identifiable, Equatable {
     let id = UUID()
     let type: NotificationType
     let peer: String
@@ -30,7 +30,7 @@ struct SessionNotification: Identifiable, Equatable {
     var icon: String {
         switch type {
         case .connected: return "link.circle.fill"
-        case .disconnected: return "link.badge.xmark"
+        case .disconnected: return "xmark.circle.fill"
         case .error: return "exclamationmark.triangle.fill"
         case .peerAxdpEnabled, .peerAxdpEnabledAlreadyUsing: return "bolt.fill"
         case .peerAxdpDisabled: return "bolt.slash.fill"

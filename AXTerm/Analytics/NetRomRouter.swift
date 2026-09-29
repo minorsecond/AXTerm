@@ -9,7 +9,7 @@ import Foundation
 
 /// NET/ROM routing configuration constants.
 /// Quality math follows section 10 of https://packet-radio.net/wp-content/uploads/2017/04/netrom1.pdf
-struct RoutingFreshnessPolicy: Equatable {
+nonisolated struct RoutingFreshnessPolicy: Equatable {
     /// Whether UI beacons should refresh neighbor lastSeen (weak evidence).
     let uiBeaconRefreshesNeighbor: Bool
     /// Whether UI beacons should refresh routes (disabled by default).
@@ -24,7 +24,7 @@ struct RoutingFreshnessPolicy: Equatable {
     )
 }
 
-struct NetRomConfig {
+nonisolated struct NetRomConfig {
     let neighborBaseQuality: Int
     let neighborIncrement: Int
     let minimumRouteQuality: Int
@@ -36,6 +36,33 @@ struct NetRomConfig {
     /// Routing freshness policy for classification-driven refresh.
     let routingPolicy: RoutingFreshnessPolicy
 
+    /// Hysteresis margin (0.0-1.0). New route must exceed current by this fraction to trigger switch.
+    let hysteresisMargin: Double
+    /// Minimum hold time (seconds) before allowing route switch.
+    let hysteresisHoldSeconds: TimeInterval
+
+    init(
+        neighborBaseQuality: Int,
+        neighborIncrement: Int,
+        minimumRouteQuality: Int,
+        maxRoutesPerDestination: Int,
+        neighborTTLSeconds: TimeInterval,
+        routeTTLSeconds: TimeInterval,
+        routingPolicy: RoutingFreshnessPolicy,
+        hysteresisMargin: Double = 0.12,
+        hysteresisHoldSeconds: TimeInterval = 120.0
+    ) {
+        self.neighborBaseQuality = neighborBaseQuality
+        self.neighborIncrement = neighborIncrement
+        self.minimumRouteQuality = minimumRouteQuality
+        self.maxRoutesPerDestination = maxRoutesPerDestination
+        self.neighborTTLSeconds = neighborTTLSeconds
+        self.routeTTLSeconds = routeTTLSeconds
+        self.routingPolicy = routingPolicy
+        self.hysteresisMargin = hysteresisMargin
+        self.hysteresisHoldSeconds = hysteresisHoldSeconds
+    }
+
     static let `default` = NetRomConfig(
         neighborBaseQuality: 80,
         neighborIncrement: 40,
@@ -43,70 +70,101 @@ struct NetRomConfig {
         maxRoutesPerDestination: 3,
         neighborTTLSeconds: FreshnessCalculator.defaultTTL,
         routeTTLSeconds: FreshnessCalculator.defaultTTL,
-        routingPolicy: .default
+        routingPolicy: .default,
+        hysteresisMargin: 0.12,
+        hysteresisHoldSeconds: 120.0
     )
 
     static let maximumRouteQuality = 255
 }
 
 /// Packet direction used when observing quality events.
-enum PacketDirection {
+nonisolated enum PacketDirection {
     case incoming, outgoing
 }
 
 /// Public representation of a NET/ROM neighbor for tests/UI.
-struct NeighborInfo: Equatable {
+nonisolated struct NeighborInfo: Equatable {
     let call: String
     let quality: Int
     let lastSeen: Date
     let obsolescenceCount: Int
     let sourceType: String
+    let isOfficial: Bool
+    /// The radio this neighbor was heard on. A neighbor reachable on two
+    /// radios is two entries — two antennas, two links, two qualities.
+    let radioID: RadioID
 
-    init(call: String, quality: Int, lastSeen: Date, obsolescenceCount: Int = 1, sourceType: String = "classic") {
+    init(call: String, quality: Int, lastSeen: Date, obsolescenceCount: Int = 1, sourceType: String = "classic", isOfficial: Bool = false, radioID: RadioID = .primary) {
         self.call = call
         self.quality = quality
         self.lastSeen = lastSeen
         self.obsolescenceCount = obsolescenceCount
         self.sourceType = sourceType
+        self.isOfficial = isOfficial
+        self.radioID = radioID
     }
 }
 
 /// Public route snapshot exposed to router tests / graph queries.
-struct RouteInfo: Equatable {
+nonisolated struct RouteInfo: Equatable {
     let destination: String
     let origin: String
     let quality: Int
     let path: [String]
     let lastUpdated: Date
     let sourceType: String
+    /// The radio the next hop is reached on: a route is (destination, radio,
+    /// next hop).
+    let radioID: RadioID
 
-    init(destination: String, origin: String, quality: Int, path: [String], lastUpdated: Date, sourceType: String = "broadcast") {
+    init(destination: String, origin: String, quality: Int, path: [String], lastUpdated: Date, sourceType: String = "broadcast", radioID: RadioID = .primary) {
         self.destination = destination
         self.origin = origin
         self.quality = quality
         self.path = path
         self.lastUpdated = lastUpdated
         self.sourceType = sourceType
+        self.radioID = radioID
     }
 }
 
+/// One neighbor as one radio hears it.
+nonisolated struct NeighborKey: Hashable, Sendable {
+    let radio: RadioID
+    let call: String
+}
+
 /// Path summary for best path lookups.
-struct NetRomPath: Equatable, Hashable {
+nonisolated struct NetRomPath: Equatable, Hashable {
     let nodes: [String]
     let quality: Int
 }
 
-private struct NeighborRecord {
+nonisolated private struct NeighborRecord {
     let call: String
+    let radioID: RadioID
     var pathQuality: Int
     var lastUpdate: Date
     var obsolescenceCount: Int
     var sourceType: String  // "classic" or "inferred"
+    var isOfficial: Bool
+
+    init(call: String, radioID: RadioID = .primary, pathQuality: Int, lastUpdate: Date, obsolescenceCount: Int, sourceType: String, isOfficial: Bool = false) {
+        self.call = call
+        self.radioID = radioID
+        self.pathQuality = pathQuality
+        self.lastUpdate = lastUpdate
+        self.obsolescenceCount = obsolescenceCount
+        self.sourceType = sourceType
+        self.isOfficial = isOfficial
+    }
 }
 
-private struct RouteRecord {
+nonisolated private struct RouteRecord {
     let destination: String
     let origin: String
+    let radioID: RadioID
     var quality: Int
     var path: [String]
     var lastHeard: Date
@@ -114,22 +172,24 @@ private struct RouteRecord {
     var sourceType: String  // "classic", "broadcast", or "inferred"
 }
 
-final class NetRomRouter {
+nonisolated final class NetRomRouter {
     let localCallsign: String
     let config: NetRomConfig
-    #if DEBUG
-    private static var retainedForTests: [NetRomRouter] = []
-    #endif
 
-    private var neighbors: [String: NeighborRecord] = [:]
+    private var neighbors: [NeighborKey: NeighborRecord] = [:]
     private var routesByDestination: [String: [RouteRecord]] = [:]
+
+    /// Tracks the currently preferred route per destination for hysteresis.
+    private struct PreferredRoute {
+        let origin: String
+        let radioID: RadioID
+        let selectedAt: Date
+    }
+    private var preferredRoutes: [String: PreferredRoute] = [:]
 
     init(localCallsign: String, config: NetRomConfig = .default) {
         self.localCallsign = CallsignValidator.normalize(localCallsign)
         self.config = config
-        #if DEBUG
-        Self.retainedForTests.append(self)
-        #endif
     }
 
     func observePacket(
@@ -145,11 +205,12 @@ final class NetRomRouter {
         guard packet.via.isEmpty else { return }
         guard !isInfrastructurePacket(packet) else { return }
 
+        let radio = packet.radioID ?? .primary
         switch direction {
         case .incoming:
-            updateNeighbor(call: normalizedFrom, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
+            updateNeighbor(call: normalizedFrom, radio: radio, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
         case .outgoing:
-            updateNeighbor(call: normalizedTo, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
+            updateNeighbor(call: normalizedTo, radio: radio, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
         }
     }
 
@@ -167,11 +228,12 @@ final class NetRomRouter {
         guard packet.via.isEmpty else { return }
         guard !isInfrastructurePacket(packet) else { return }
 
+        let radio = packet.radioID ?? .primary
         switch direction {
         case .incoming:
-            updateNeighbor(call: normalizedFrom, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
+            updateNeighbor(call: normalizedFrom, radio: radio, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
         case .outgoing:
-            updateNeighbor(call: normalizedTo, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
+            updateNeighbor(call: normalizedTo, radio: radio, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
         }
     }
 
@@ -179,7 +241,7 @@ final class NetRomRouter {
     private static var hasLoggedBroadcast = false
     #endif
 
-    func broadcastRoutes(from origin: String, quality: Int, destinations: [RouteInfo], timestamp: Date) {
+    func broadcastRoutes(from origin: String, radio: RadioID = .primary, quality: Int, destinations: [RouteInfo], timestamp: Date) {
         guard let normalizedOrigin = normalize(origin) else {
             #if DEBUG
             if !Self.hasLoggedBroadcast {
@@ -188,11 +250,11 @@ final class NetRomRouter {
             #endif
             return
         }
-        guard let neighbor = neighbors[normalizedOrigin] else {
+        guard let neighbor = neighbors[NeighborKey(radio: radio, call: normalizedOrigin)] else {
             #if DEBUG
             if !Self.hasLoggedBroadcast {
                 print("[NETROM:ROUTER] broadcastRoutes: origin '\(normalizedOrigin)' is NOT a neighbor")
-                print("[NETROM:ROUTER]   Current neighbors: \(neighbors.keys.sorted())")
+                print("[NETROM:ROUTER]   Current neighbors: \(neighbors.keys.map { "\($0.call)@\($0.radio.rawValue)" }.sorted())")
                 Self.hasLoggedBroadcast = true
             }
             #endif
@@ -210,12 +272,26 @@ final class NetRomRouter {
             if advertised.path.contains(where: { normalize($0) == localCallsign }) { continue }
 
             let combined = combinedQuality(broadcastQuality: advertised.quality, pathQuality: neighbor.pathQuality)
-            guard combined >= config.minimumRouteQuality else {
-                #if DEBUG
-                print("[NETROM:ROUTER]   Route to \(normalizedDestination) rejected: quality \(combined) < min \(config.minimumRouteQuality)")
-                #endif
-                continue
+            // minimumRouteQuality is the classic NET/ROM acceptance rule for
+            // *broadcast* routes. Inferred routes are acceptance-gated by evidence
+            // in the inference layer (inferredMinimumQuality) and store the honest
+            // combined value even when it is small — promoting them to the floor
+            // made every weak route display the same fabricated number. Harvested
+            // routes get the same exemption: on a NODES-silent channel a weak
+            // scraped route is the only route there is, and storing the honest
+            // small number beats discarding the only way in — tier ranking keeps
+            // real broadcasts on top regardless.
+            let advertisedSourceType = advertised.sourceType.isEmpty ? "broadcast" : advertised.sourceType
+            let isBroadcastClass = Self.sourceTier(advertisedSourceType) == 2
+            if isBroadcastClass {
+                guard combined >= config.minimumRouteQuality else {
+                    #if DEBUG
+                    print("[NETROM:ROUTER]   Route to \(normalizedDestination) rejected: quality \(combined) < min \(config.minimumRouteQuality)")
+                    #endif
+                    continue
+                }
             }
+            let storedQuality = max(1, combined)
 
             var normalizedPath = advertised.path.compactMap { normalize($0) }
             if normalizedPath.first != normalizedOrigin {
@@ -224,16 +300,17 @@ final class NetRomRouter {
             if normalizedPath.contains(localCallsign) { continue }
 
             // Determine sourceType: use the advertised sourceType, but ensure inferred routes stay inferred
-            let effectiveSourceType = advertised.sourceType.isEmpty ? "broadcast" : advertised.sourceType
+            let effectiveSourceType = advertisedSourceType
 
             #if DEBUG
-            print("[NETROM:ROUTER]   ✓ Storing route: \(normalizedDestination) via \(normalizedOrigin) quality=\(combined) source=\(effectiveSourceType)")
+            print("[NETROM:ROUTER]   ✓ Storing route: \(normalizedDestination) via \(normalizedOrigin) quality=\(storedQuality) source=\(effectiveSourceType)")
             #endif
 
             storeRoute(
                 destination: normalizedDestination,
                 origin: normalizedOrigin,
-                quality: combined,
+                radio: radio,
+                quality: storedQuality,
                 path: normalizedPath,
                 timestamp: timestamp,
                 sourceType: effectiveSourceType
@@ -245,7 +322,15 @@ final class NetRomRouter {
         neighbors
             .values
             .sorted(by: neighborSort)
-            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType) }
+            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType, isOfficial: $0.isOfficial, radioID: $0.radioID) }
+    }
+
+    /// O(1) check — avoids the full route array construction of bestRouteTo().
+    /// Use this in list/sidebar rendering where only existence matters.
+    func hasRoute(to destination: String, currentDate: Date = Date()) -> Bool {
+        guard let normalized = normalize(destination) else { return false }
+        let cutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
+        return routesByDestination[normalized]?.contains { $0.lastHeard >= cutoff } ?? false
     }
 
     func currentRoutes() -> [RouteInfo] {
@@ -253,21 +338,72 @@ final class NetRomRouter {
         return sortedDestinations.flatMap { destination in
             let bucket = routesByDestination[destination] ?? []
             return bucket.map { route in
-                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path, lastUpdated: route.lastHeard, sourceType: route.sourceType)
+                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path, lastUpdated: route.lastHeard, sourceType: route.sourceType, radioID: route.radioID)
             }
         }
     }
 
-    func removeRoute(origin: String, destination: String) {
+    func removeRoute(origin: String, destination: String, radio: RadioID? = nil, sourceType: String? = nil) {
         guard let normalizedDestination = normalize(destination) else { return }
         guard var bucket = routesByDestination[normalizedDestination] else { return }
-        bucket.removeAll { $0.origin == origin }
+        bucket.removeAll { route in
+            guard route.origin == origin else { return false }
+            // A radio filter keeps one radio's stale route from taking the
+            // other radio's still-good route to the same origin with it.
+            if let radio, route.radioID != radio { return false }
+            if let sourceType {
+                return route.sourceType == sourceType
+            }
+            return true
+        }
         if bucket.isEmpty {
             routesByDestination.removeValue(forKey: normalizedDestination)
             return
         }
         bucket.sort(by: routeSort)
         routesByDestination[normalizedDestination] = bucket
+    }
+
+    /// Every next hop known for a destination, best first, deduplicated
+    /// by neighbor. Auto-try walks this: when the best route refuses or
+    /// times out, the second-best is the honest next thing to attempt.
+    func candidateRoutes(to destination: String, currentDate: Date = Date()) -> [RouteInfo] {
+        guard let normalized = normalize(destination),
+              let bucket = routesByDestination[normalized] else { return [] }
+        let cutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
+        var seen = Set<String>()
+        return bucket
+            // Same TTL cutoff as bestRouteTo/hasRoute. Without it, auto-try
+            // walked routes the rest of the router had already declared dead —
+            // spending a full attempt timeout per expired entry.
+            .filter { $0.lastHeard >= cutoff }
+            .sorted { lhs, rhs in
+                // Tier first (see sourceTier): a live broadcast route is
+                // attempted before scraped or guessed ones of any quality.
+                let lhsTier = Self.sourceTier(lhs.sourceType)
+                let rhsTier = Self.sourceTier(rhs.sourceType)
+                if lhsTier != rhsTier { return lhsTier > rhsTier }
+                if lhs.quality != rhs.quality { return lhs.quality > rhs.quality }
+                // Deterministic tie-break (CLAUDE.md §9): freshest, then
+                // alphabetical, so the same table always yields the same
+                // attempt order.
+                if lhs.lastHeard != rhs.lastHeard { return lhs.lastHeard > rhs.lastHeard }
+                if lhs.origin != rhs.origin { return lhs.origin < rhs.origin }
+                return RadioID.deterministicOrder(lhs.radioID, rhs.radioID)
+            }
+            .compactMap { route in
+                // The same neighbor on two radios is two ways in.
+                guard seen.insert("\(route.origin)|\(route.radioID.rawValue)").inserted else { return nil }
+                return RouteInfo(
+                    destination: normalized,
+                    origin: route.origin,
+                    quality: route.quality,
+                    path: route.path,
+                    lastUpdated: route.lastHeard,
+                    sourceType: route.sourceType,
+                    radioID: route.radioID
+                )
+            }
     }
 
     func bestPaths(from destination: String) -> [NetRomPath] {
@@ -281,20 +417,106 @@ final class NetRomRouter {
         return currentNeighbors().filter { $0.call == normalized }
     }
 
-    func bestRouteTo(_ destination: String) -> RouteInfo? {
+    func bestRouteTo(_ destination: String, currentDate: Date = Date()) -> RouteInfo? {
         guard let normalized = normalize(destination) else { return nil }
-        return currentRoutes().first { $0.destination == normalized }
+        let cutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
+
+        // Get all non-expired candidates for this destination, sorted by quality (descending)
+        let candidates = currentRoutes()
+            .filter { $0.destination == normalized && $0.lastUpdated >= cutoff }
+
+        guard let absoluteBest = candidates.first else {
+            preferredRoutes.removeValue(forKey: normalized)
+            return nil
+        }
+
+        // If no hysteresis (margin=0), always return absolute best
+        guard config.hysteresisMargin > 0 else {
+            return absoluteBest
+        }
+
+        // Check if we have a preferred route for this destination
+        if let preferred = preferredRoutes[normalized],
+           let preferredRoute = candidates.first(where: { $0.origin == preferred.origin && $0.radioID == preferred.radioID }) {
+            // Hysteresis exists to stop flapping between *comparable*
+            // measurements; cross-tier numbers are not comparable. If a
+            // higher-tier route appeared (a real broadcast arriving on top of
+            // a harvested or inferred pick), holding the old pick because the
+            // newcomer's quality didn't clear a margin would invert the
+            // source-priority rule — so tier preempts immediately, and the
+            // margin/hold logic below only ever arbitrates within a tier.
+            if Self.sourceTier(absoluteBest.sourceType) > Self.sourceTier(preferredRoute.sourceType) {
+                preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, radioID: absoluteBest.radioID, selectedAt: currentDate)
+                Telemetry.breadcrumb(
+                    category: "netrom.routing",
+                    message: "Next hop switched — higher-tier route appeared",
+                    data: [
+                        "destination": normalized,
+                        "from": preferredRoute.origin,
+                        "fromSource": preferredRoute.sourceType,
+                        "to": absoluteBest.origin,
+                        "toSource": absoluteBest.sourceType,
+                        "quality": absoluteBest.quality
+                    ],
+                    level: .info
+                )
+                return absoluteBest
+            }
+            // Preferred route is still valid — check if the best candidate is significantly better
+            let marginThreshold = Double(preferredRoute.quality) * (1.0 + config.hysteresisMargin)
+            let holdTimeElapsed = currentDate.timeIntervalSince(preferred.selectedAt) >= config.hysteresisHoldSeconds
+
+            if Double(absoluteBest.quality) > marginThreshold && holdTimeElapsed {
+                // Switch to the new best route
+                preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, radioID: absoluteBest.radioID, selectedAt: currentDate)
+                // Routing decision (CLAUDE.md observability mandate): next-hop
+                // switches are the moments that explain traffic path changes.
+                Telemetry.breadcrumb(
+                    category: "netrom.routing",
+                    message: "Next hop switched",
+                    data: [
+                        "destination": normalized,
+                        "from": preferredRoute.origin,
+                        "to": absoluteBest.origin,
+                        "quality": absoluteBest.quality,
+                        "previousQuality": preferredRoute.quality
+                    ],
+                    level: .info
+                )
+                return absoluteBest
+            }
+
+            // Stay with preferred route
+            return preferredRoute
+        }
+
+        // No preferred route exists (or it expired) — select the best
+        preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, radioID: absoluteBest.radioID, selectedAt: currentDate)
+        Telemetry.breadcrumb(
+            category: "netrom.routing",
+            message: "Next hop selected",
+            data: [
+                "destination": normalized,
+                "origin": absoluteBest.origin,
+                "quality": absoluteBest.quality,
+                "candidates": candidates.count
+            ],
+            level: .info
+        )
+        return absoluteBest
     }
 
     /// Refresh lastUpdated for routes from a specific origin, constrained by source types.
-    func refreshRoutes(from origin: String, timestamp: Date, allowedSourceTypes: Set<String>) {
+    func refreshRoutes(from origin: String, radio: RadioID = .primary, timestamp: Date, allowedSourceTypes: Set<String>) {
         let normalizedOrigin = CallsignValidator.normalize(origin)
         guard !normalizedOrigin.isEmpty else { return }
 
         for (destination, routeList) in routesByDestination {
             var updated = false
             let refreshed = routeList.map { route -> RouteRecord in
-                guard route.origin == normalizedOrigin else { return route }
+                // Hearing the origin on one radio says nothing about the
+                // route learned through it on another.
+                guard route.origin == normalizedOrigin, route.radioID == radio else { return route }
                 guard allowedSourceTypes.contains(route.sourceType) else { return route }
                 var copy = route
                 if copy.lastHeard != timestamp {
@@ -309,18 +531,28 @@ final class NetRomRouter {
         }
     }
 
+    // MARK: - Reset
+
+    func reset() {
+        neighbors.removeAll()
+        routesByDestination.removeAll()
+        preferredRoutes.removeAll()
+    }
+
     // MARK: - Import from Persistence
 
     func importNeighbors(_ infos: [NeighborInfo]) {
         for info in infos {
             let normalized = CallsignValidator.normalize(info.call)
             guard !normalized.isEmpty, normalized != localCallsign else { continue }
-            neighbors[normalized] = NeighborRecord(
+            neighbors[NeighborKey(radio: info.radioID, call: normalized)] = NeighborRecord(
                 call: normalized,
+                radioID: info.radioID,
                 pathQuality: info.quality,
                 lastUpdate: info.lastSeen,
                 obsolescenceCount: 1,
-                sourceType: info.sourceType
+                sourceType: info.sourceType,
+                isOfficial: info.isOfficial
             )
         }
     }
@@ -341,6 +573,7 @@ final class NetRomRouter {
             let record = RouteRecord(
                 destination: normalizedDest,
                 origin: info.origin,
+                radioID: info.radioID,
                 quality: info.quality,
                 path: normalizedPath,
                 lastHeard: info.lastUpdated,
@@ -348,7 +581,7 @@ final class NetRomRouter {
                 sourceType: info.sourceType
             )
             var bucket = routesByDestination[normalizedDest] ?? []
-            if let existingIndex = bucket.firstIndex(where: { $0.origin == info.origin }) {
+            if let existingIndex = bucket.firstIndex(where: { $0.origin == info.origin && $0.radioID == info.radioID }) {
                 bucket[existingIndex] = record
             } else {
                 bucket.append(record)
@@ -363,41 +596,59 @@ final class NetRomRouter {
     }
 
     func purgeStaleRoutes(currentDate: Date) {
-        let routeCutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
-        let neighborCutoff = currentDate.addingTimeInterval(-config.neighborTTLSeconds)
-
-        routesByDestination = routesByDestination.compactMapValues { routeList in
-            let filtered = routeList.filter { $0.lastHeard >= routeCutoff }
-            return filtered.isEmpty ? nil : filtered.sorted(by: routeSort)
+        // Routes themselves are kept in-memory for display (view model shows
+        // computed freshness, "Hide expired" toggle filters them in UI).
+        // bestRouteTo() guards against using expired routes for routing.
+        //
+        // Clean up preferredRoutes entries whose destination no longer has any valid routes.
+        let cutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
+        var stalePreferred: [String] = []
+        for (destination, _) in preferredRoutes {
+            let hasValidRoutes = routesByDestination[destination]?.contains { $0.lastHeard >= cutoff } ?? false
+            if !hasValidRoutes {
+                stalePreferred.append(destination)
+            }
         }
-
-        neighbors = neighbors.compactMapValues { neighbor in
-            guard neighbor.lastUpdate >= neighborCutoff else { return nil }
-            return neighbor
+        for destination in stalePreferred {
+            preferredRoutes.removeValue(forKey: destination)
+        }
+        if !stalePreferred.isEmpty {
+            Telemetry.breadcrumb(
+                category: "netrom.routing",
+                message: "Purged stale preferred routes",
+                data: ["count": stalePreferred.count],
+                level: .info
+            )
         }
     }
 
     // MARK: - Private helpers
 
-    private func updateNeighbor(call: String, observedQuality: Int, timestamp: Date, sourceType: String = "classic") {
+    private func updateNeighbor(call: String, radio: RadioID = .primary, observedQuality: Int, timestamp: Date, sourceType: String = "classic", isOfficial: Bool = false) {
         guard call != localCallsign else { return }
-        var candidate = neighbors[call] ?? NeighborRecord(
+        let key = NeighborKey(radio: radio, call: call)
+        var candidate = neighbors[key] ?? NeighborRecord(
             call: call,
+            radioID: radio,
             pathQuality: config.neighborBaseQuality,
             lastUpdate: timestamp,
             obsolescenceCount: 1,
-            sourceType: sourceType
+            sourceType: sourceType,
+            isOfficial: isOfficial
         )
         let normalizedQuality = clampQuality(observedQuality)
 
         // EWMA blend: 70% current + 30% observed
         // This allows quality to both increase AND decrease based on observed link quality.
         // The old formula (max + increment) could only increase, causing all neighbors to hit 255.
-        let blendedQuality = Int(0.7 * Double(candidate.pathQuality) + 0.3 * Double(normalizedQuality))
-
-        // Small bonus for being recently heard (capped at 255)
-        let heardBonus = 5
-        let finalQuality = min(NetRomConfig.maximumRouteQuality, blendedQuality + heardBonus)
+        // No "recently heard" bonus: a flat per-observation increment biased every
+        // neighbor upward regardless of link quality (a chatty bad neighbor would
+        // outrank a quiet good one) and set a floor the blend could never escape.
+        let blendedQuality = min(
+            NetRomConfig.maximumRouteQuality,
+            Int((0.7 * Double(candidate.pathQuality) + 0.3 * Double(normalizedQuality)).rounded())
+        )
+        let finalQuality = blendedQuality
 
         candidate.pathQuality = finalQuality
         candidate.lastUpdate = timestamp
@@ -406,26 +657,59 @@ final class NetRomRouter {
         if candidate.sourceType != "classic" {
             candidate.sourceType = sourceType
         }
-        neighbors[call] = candidate
+        if isOfficial {
+            candidate.isOfficial = true
+        }
+        neighbors[key] = candidate
+    }
+
+    /// Mark a neighbor as an official NET/ROM node (broadcast source).
+    func markAsOfficial(call: String, radio: RadioID = .primary) {
+        let key = NeighborKey(radio: radio, call: call)
+        guard var neighbor = neighbors[key] else { return }
+        neighbor.isOfficial = true
+        neighbors[key] = neighbor
+    }
+
+    /// The radio this neighbor is best heard on, when it is heard at all.
+    func radio(forNeighbor call: String) -> RadioID? {
+        guard let normalized = normalize(call) else { return nil }
+        return neighbors.values
+            .filter { $0.call == normalized }
+            .sorted(by: neighborSort)
+            .first?.radioID
     }
 
     private func storeRoute(
         destination: String,
         origin: String,
+        radio: RadioID,
         quality: Int,
         path: [String],
         timestamp: Date,
         sourceType: String = "broadcast"
     ) {
         var bucket = routesByDestination[destination] ?? []
-        if let existingIndex = bucket.firstIndex(where: { $0.origin == origin }) {
+        if let existingIndex = bucket.firstIndex(where: { $0.origin == origin && $0.radioID == radio }) {
             var existing = bucket[existingIndex]
-            existing.quality = max(existing.quality, quality)
-            existing.path = path
-            existing.lastHeard = timestamp
-            existing.obsolescenceCount = 1
-            // Don't overwrite classic/broadcast with inferred
-            if existing.sourceType == "inferred" && sourceType != "inferred" {
+            // Classic NET/ROM: each broadcast carries the node's *current* quality,
+            // so a same-or-higher-tier update replaces the figure — max() made
+            // route quality a high-water mark that could never decrease.
+            // Lower-tier evidence (inferred under harvested, anything under
+            // broadcast) may only corroborate (raise) the figure, never degrade
+            // it, and never rewrites the path or the sourceType: the better
+            // claim owns the record, the weaker one at most agrees with it.
+            let incomingTier = Self.sourceTier(sourceType)
+            let existingTier = Self.sourceTier(existing.sourceType)
+            if incomingTier < existingTier {
+                existing.quality = max(existing.quality, quality)
+                existing.lastHeard = timestamp
+                existing.obsolescenceCount = 1
+            } else {
+                existing.quality = quality
+                existing.path = path
+                existing.lastHeard = timestamp
+                existing.obsolescenceCount = 1
                 existing.sourceType = sourceType
             }
             bucket[existingIndex] = existing
@@ -433,6 +717,7 @@ final class NetRomRouter {
             let newRoute = RouteRecord(
                 destination: destination,
                 origin: origin,
+                radioID: radio,
                 quality: quality,
                 path: path,
                 lastHeard: timestamp,
@@ -440,12 +725,44 @@ final class NetRomRouter {
                 sourceType: sourceType
             )
             bucket.append(newRoute)
+            // New routes are topology changes worth a crumb; refreshes of
+            // existing routes are per-broadcast noise and stay unlogged.
+            Telemetry.breadcrumb(
+                category: "netrom.routing",
+                message: "Route stored",
+                data: [
+                    "destination": destination,
+                    "origin": origin,
+                    "quality": quality,
+                    "hops": path.count,
+                    "source": sourceType
+                ],
+                level: .debug
+            )
         }
         bucket.sort(by: routeSort)
         if bucket.count > config.maxRoutesPerDestination {
             bucket = Array(bucket.prefix(config.maxRoutesPerDestination))
         }
         routesByDestination[destination] = bucket
+    }
+
+    /// Trust tier for a route source: broadcast/classic > harvested > inferred.
+    ///
+    /// Quality numbers are not comparable across tiers — a broadcast figure is
+    /// the protocol's own computation, a harvested figure is scaled hearsay
+    /// read out of one node's ROUTES table, and an inferred figure is a
+    /// traffic-pattern guess — so tier compares first and quality only decides
+    /// within a tier. This is what "NODES broadcasts are first priority when
+    /// the network has them" means in code: on a channel with real broadcasts
+    /// they win outright, and on a silent channel (this operator's home
+    /// network has zero PID-0xCF traffic) the lower tiers are all there is.
+    static func sourceTier(_ sourceType: String) -> Int {
+        switch sourceType {
+        case "broadcast", "classic": return 2
+        case "harvested": return 1
+        default: return 0
+        }
     }
 
     private func combinedQuality(broadcastQuality: Int, pathQuality: Int) -> Int {
@@ -460,11 +777,22 @@ final class NetRomRouter {
     }
 
     private func routeSort(lhs: RouteRecord, rhs: RouteRecord) -> Bool {
+        // Tier before quality — this ordering also guards the
+        // maxRoutesPerDestination eviction in storeRoute: a full bucket must
+        // never drop a broadcast route to keep two harvested ones.
+        let lhsTier = Self.sourceTier(lhs.sourceType)
+        let rhsTier = Self.sourceTier(rhs.sourceType)
+        if lhsTier != rhsTier {
+            return lhsTier > rhsTier
+        }
         if lhs.quality != rhs.quality {
             return lhs.quality > rhs.quality
         }
         if lhs.origin != rhs.origin {
             return lhs.origin < rhs.origin
+        }
+        if lhs.radioID != rhs.radioID {
+            return RadioID.deterministicOrder(lhs.radioID, rhs.radioID)
         }
         return lhs.path.count < rhs.path.count
     }
@@ -473,7 +801,10 @@ final class NetRomRouter {
         if lhs.pathQuality != rhs.pathQuality {
             return lhs.pathQuality > rhs.pathQuality
         }
-        return lhs.call < rhs.call
+        if lhs.call != rhs.call {
+            return lhs.call < rhs.call
+        }
+        return RadioID.deterministicOrder(lhs.radioID, rhs.radioID)
     }
 
     private func normalize(_ value: String?) -> String? {

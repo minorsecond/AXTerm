@@ -22,6 +22,27 @@ import XCTest
 @MainActor
 final class NetRomRoutesPagesModeTests: XCTestCase {
 
+    /// Put the process-global ignore list back.
+    ///
+    /// `testViewModel_IgnoredServiceEndpointRemovedFromAllTables` below adds
+    /// K2BBB to a settings store built on its own UserDefaults suite, which
+    /// looks isolated and is not: the setter's `didSet` pushes the list into
+    /// `CallsignValidator`, which is process-wide. Leaving it there made
+    /// `isValidCallsign("K2BBB")` false for every test that ran afterwards in
+    /// the same process — and `NetRomPassiveInference` filters via-path hops
+    /// through `isValidRoutingNode`, so K2BBB stopped being a usable next hop
+    /// and inference silently produced nothing.
+    ///
+    /// That is what failed `NetRomRealisticWiringTests` and
+    /// `NetRomIntegrationWiringTests` on 2026-09-18 and 2026-09-19. Only under
+    /// parallel testing, because this class sorts after both of them and a
+    /// sequential run therefore never put it first; and never on a rerun of
+    /// the failing test alone, because then nothing had leaked.
+    override func tearDown() {
+        CallsignValidator.configureIgnoredServiceEndpoints([])
+        super.tearDown()
+    }
+
     private let localCallsign = "K0EPI"
 
     // MARK: - Test Helpers
@@ -38,7 +59,7 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
             timestamp: timestamp,
             from: AX25Address(call: from),
             to: AX25Address(call: to),
-            via: via.map { AX25Address(call: $0) },
+            via: via.map { AX25Address(call: $0, repeated: true) },
             frameType: .ui,
             control: 0,
             pid: nil,
@@ -300,6 +321,22 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
                        "Neighbors should be filtered to classic only")
         XCTAssertEqual(viewModel.routes.count, classicRoutes.count,
                        "Routes should be filtered to classic only")
+    }
+
+    func testViewModel_IgnoredServiceEndpointRemovedFromAllTables() {
+        let integration = makeIntegrationWithMixedData()
+        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "AXTermTests.NetRomRoutes.\(UUID().uuidString)") ?? .standard)
+        let viewModel = NetRomRoutesViewModel(integration: integration, settings: settings)
+        viewModel.setMode(.hybrid)
+
+        XCTAssertTrue(viewModel.neighbors.contains { $0.callsign == "K2BBB" })
+
+        settings.addIgnoredServiceEndpoint("K2BBB")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertFalse(viewModel.neighbors.contains { $0.callsign == "K2BBB" })
+        XCTAssertFalse(viewModel.routes.contains { $0.destination == "K1AAA" && $0.path.contains("K2BBB") })
+        XCTAssertFalse(viewModel.linkStats.contains { $0.fromCall == "K2BBB" || $0.toCall == "K2BBB" })
     }
 
     // MARK: - Ordering Tests

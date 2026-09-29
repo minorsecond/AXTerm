@@ -1,0 +1,205 @@
+{
+  "asked_via": [],
+  "captured_at": "2026-09-09T11:32:09Z",
+  "target": "XASTIR-1",
+  "asked_as": "ORACLE-1",
+  "listen_seconds": 9.0,
+  "note": "Byte-exact replies from a real Xastir on the TestRig channel. Regenerate with scripts/xastir_oracle.py; do not hand-edit. Exchanges with a non-empty sent_via were asked as ORACLE-2 through that digipeater path.",
+  "exchanges": [
+    {
+      "query": "?APRSP",
+      "sent_info": ":XASTIR-1 :?APRSP",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 1.08,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d",
+          "info_ascii": "=3936.70N/10443.90W-AXTerm rig oracle\r",
+          "addressed_to_us": false
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "query": "?VER",
+      "sent_info": ":XASTIR-1 :?VER",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 0.9,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d31203a78617374697220322e312e380d",
+          "info_ascii": ":ORACLE-1 :xastir 2.1.8\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "query": "?APRSD",
+      "sent_info": ":XASTIR-1 :?APRSD",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 1.08,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d31203a446972656374733d204f5241434c452d31204f5241434c452d320d",
+          "info_ascii": ":ORACLE-1 :Directs= ORACLE-1 ORACLE-2\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "query": "?APRST",
+      "sent_info": ":XASTIR-1 :?APRST",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 1.01,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158540d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "query": "?PING?",
+      "sent_info": ":XASTIR-1 :?PING?",
+      "sent_via": [],
+      "replies": [
+        {
+          "after_s": 1.01,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158540d",
+          "info_ascii": ":ORACLE-1 :PATH= ORACLE-1>APZAXT\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "query": "?APRSS",
+      "sent_info": ":XASTIR-1 :?APRSS",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "query": "?APRSO",
+      "sent_info": ":XASTIR-1 :?APRSO",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "query": "?APRSM",
+      "sent_info": ":XASTIR-1 :?APRSM",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "query": "?APRSH",
+      "sent_info": ":XASTIR-1 :?APRSH",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "query": "?IGATE?",
+      "sent_info": ":XASTIR-1 :?IGATE?",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "query": "?aprsp",
+      "sent_info": ":XASTIR-1 :?aprsp",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "query": "?WX?",
+      "sent_info": ":XASTIR-1 :?WX?",
+      "sent_via": [],
+      "replies": [],
+      "attempts": 3
+    },
+    {
+      "query": "?APRST",
+      "sent_info": ":XASTIR-1 :?APRST",
+      "sent_via": [
+        "RELAY",
+        "WIDE2-1"
+      ],
+      "replies": [
+        {
+          "after_s": 1.26,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d32203a504154483d204f5241434c452d323e41505a4158542c52454c41592c57494445322d310d",
+          "info_ascii": ":ORACLE-2 :PATH= ORACLE-2>APZAXT,RELAY,WIDE2-1\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    },
+    {
+      "query": "?APRSD",
+      "sent_info": ":XASTIR-1 :?APRSD",
+      "sent_via": [
+        "RELAY",
+        "WIDE2-1"
+      ],
+      "replies": [
+        {
+          "after_s": 1.27,
+          "src": "XASTIR-1",
+          "dest": "APX218",
+          "via": [
+            "WIDE1-1",
+            "WIDE2-1"
+          ],
+          "info_hex": "3a4f5241434c452d32203a446972656374733d204250515458342d37204f5241434c452d31204f5241434c452d320d",
+          "info_ascii": ":ORACLE-2 :Directs= BPQTX4-7 ORACLE-1 ORACLE-2\r",
+          "addressed_to_us": true
+        }
+      ],
+      "attempts": 1
+    }
+  ]
+}

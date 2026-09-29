@@ -25,6 +25,47 @@ final class SessionCoordinatorTests: XCTestCase {
         super.tearDown()
     }
 
+    // MARK: - Native NET/ROM retry memory
+
+    /// A connect tries a real NET/ROM circuit first and falls back to
+    /// driving node command prompts. The fallback costs a full grace
+    /// period, and on a network where nothing advertises a route back to
+    /// this station a circuit can never complete — so the failure must be
+    /// remembered, or every connect pays that price again.
+    func testANativeFailureIsRememberedSoTheGraceIsPaidOnce() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        XCTAssertTrue(coordinator.shouldTryNativeNetRom(to: "COSCO"),
+                      "nothing known yet — worth trying")
+        coordinator.noteNativeNetRomFailed(to: "COSCO")
+        XCTAssertFalse(coordinator.shouldTryNativeNetRom(to: "COSCO"))
+        // SSID-normalized like every other destination key.
+        XCTAssertFalse(coordinator.shouldTryNativeNetRom(to: "cosco"))
+        // And scoped to the destination that actually failed.
+        XCTAssertTrue(coordinator.shouldTryNativeNetRom(to: "DRLNOD"))
+    }
+
+    /// Not permanent. Routes appear, advertising gets switched on, nodes
+    /// come back — a station written off forever would never be retried.
+    func testTheFailureIsForgottenAfterTheRetryInterval() {
+        XCTAssertGreaterThan(SessionCoordinator.netRomNativeRetryInterval, 0,
+                             "a zero interval would defeat the memory entirely")
+        XCTAssertLessThanOrEqual(SessionCoordinator.netRomNativeRetryInterval, 24 * 3600,
+                                 "a day is already longer than an operating session")
+    }
+
+    func testSuccessClearsTheMemory() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.noteNativeNetRomFailed(to: "COSCO")
+        XCTAssertFalse(coordinator.shouldTryNativeNetRom(to: "COSCO"))
+        coordinator.noteNativeNetRomSucceeded(to: "COSCO")
+        XCTAssertTrue(coordinator.shouldTryNativeNetRom(to: "COSCO"),
+                      "it worked; stop assuming it will not")
+    }
+
     // Note: AXDPCapabilityStore is tested in AXDPCapabilityTests.swift
     // using the AXDPCapabilityCache which has the same core functionality.
 
@@ -43,7 +84,7 @@ final class SessionCoordinatorTests: XCTestCase {
             localAddress: AX25Address(call: "LOCAL"),
             remoteAddress: AX25Address(call: "PEER"),
             path: DigiPath(),
-            channel: 0,
+            radio: .primary,
             config: AX25SessionConfig(),
             isInitiator: true
         )
@@ -68,8 +109,8 @@ final class SessionCoordinatorTests: XCTestCase {
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
         // Force session to connected state
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         XCTAssertEqual(session.state, .connected)
 
@@ -648,8 +689,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.syncSessionManagerConfigFromAdaptive()
         coordinator.useDefaultConfigForDestinations.insert("PEER-1")
 
-        let configForPeer = coordinator.sessionManager.getConfigForDestination?("PEER-1", "") ?? AX25SessionConfig()
-        let configForOther = coordinator.sessionManager.getConfigForDestination?("OTHER-0", "") ?? AX25SessionConfig()
+        let configForPeer = coordinator.sessionManager.getConfigForDestination?("PEER-1", "", .primary) ?? AX25SessionConfig()
+        let configForOther = coordinator.sessionManager.getConfigForDestination?("OTHER-0", "", .primary) ?? AX25SessionConfig()
 
         XCTAssertEqual(configForPeer.windowSize, 4, "Overridden station should get default config (window 4)")
         XCTAssertEqual(configForOther.windowSize, 1, "Other should get learned config")
@@ -662,12 +703,12 @@ final class SessionCoordinatorTests: XCTestCase {
         defer { SessionCoordinator.shared = nil }
 
         coordinator.adaptiveTransmissionEnabled = true
-        let routeKey = RouteAdaptiveKey(destination: "PEER-0", pathSignature: "VIA,WIDE1-1")
-        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "session", routeKey: routeKey)
+        let routeKey = AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: "VIA,WIDE1-1")
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "session", scope: routeKey)
 
-        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "VIA,WIDE1-1") ?? AX25SessionConfig()
+        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "VIA,WIDE1-1", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(config.windowSize, 1, "Per-route high loss should yield window 1")
-        XCTAssertEqual(config.maxRetries, 10)
+        XCTAssertEqual(config.maxRetries, 15)
     }
 
     func testApplyLinkQualitySampleWithoutRouteKeyUpdatesGlobalOnly() {
@@ -677,7 +718,7 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.adaptiveTransmissionEnabled = true
         coordinator.applyLinkQualitySample(lossRate: 0.25, etx: 2.5, srtt: 1.0, source: "network")
 
-        let config = coordinator.sessionManager.getConfigForDestination?("ANY-0", "") ?? AX25SessionConfig()
+        let config = coordinator.sessionManager.getConfigForDestination?("ANY-0", "", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(config.windowSize, 1, "Global sample should drive global adaptive (high loss -> window 1)")
     }
 
@@ -689,14 +730,19 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.localCallsign = "LOCAL-0"
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
-        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"))
+        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: ""))
+        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: "DIGI-1"))
         coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
 
-        _ = coordinator.sessionManager.session(for: peer, path: DigiPath())
-        _ = coordinator.sessionManager.session(for: peer, path: DigiPath.from(["DIGI-1"]))
+        // The merged branch requires LIVE sessions: ended sessions linger in
+        // the manager's dictionary and must not force merged config onto a
+        // reconnect (audit 2026-08-22), so connect both for real.
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), radio: .primary)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath.from(["DIGI-1"]), radio: .primary)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath.from(["DIGI-1"]), radio: .primary)
 
-        let mergedConfig = coordinator.sessionManager.getConfigForDestination?("PEER-0", "other") ?? AX25SessionConfig()
+        let mergedConfig = coordinator.sessionManager.getConfigForDestination?("PEER-0", "other", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(mergedConfig.windowSize, 1, "Merged config should use min(window) when multiple sessions to same destination")
         XCTAssertGreaterThanOrEqual(mergedConfig.rtoMin ?? 0, 1.0)
         XCTAssertGreaterThanOrEqual(mergedConfig.maxRetries, 10)
@@ -707,11 +753,11 @@ final class SessionCoordinatorTests: XCTestCase {
         defer { SessionCoordinator.shared = nil }
 
         coordinator.adaptiveTransmissionEnabled = true
-        coordinator.applyLinkQualitySample(lossRate: 0.3, etx: 2.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "VIA"))
+        coordinator.applyLinkQualitySample(lossRate: 0.3, etx: 2.5, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: "VIA"))
 
         coordinator.clearAllLearned()
 
-        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "VIA") ?? AX25SessionConfig()
+        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "VIA", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(config.windowSize, 2, "After clear, should fall back to global defaults (window 2)")
         XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 2)
     }
@@ -723,7 +769,7 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.adaptiveTransmissionEnabled = false
         coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 1
 
-        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
+        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(config.windowSize, 4, "When adaptive disabled, should get default session config")
     }
 
@@ -754,11 +800,14 @@ final class SessionCoordinatorTests: XCTestCase {
         defer { SessionCoordinator.shared = nil }
 
         coordinator.adaptiveTransmissionEnabled = true
-        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
-        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"))
+        // Spec 4.2: upgrades need a sustained success streak, not one sample.
+        for _ in 0..<10 {
+            coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: ""), newFrames: 1, retransmits: 0)
+        }
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.5, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: "DIGI-1"), newFrames: 1, retransmits: 1)
 
-        let configDirect = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
-        let configVia = coordinator.sessionManager.getConfigForDestination?("PEER-0", "DIGI-1") ?? AX25SessionConfig()
+        let configDirect = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary) ?? AX25SessionConfig()
+        let configVia = coordinator.sessionManager.getConfigForDestination?("PEER-0", "DIGI-1", .primary) ?? AX25SessionConfig()
 
         XCTAssertEqual(configDirect.windowSize, 3, "Direct route good link -> larger window")
         XCTAssertEqual(configVia.windowSize, 1, "Via route high loss -> window 1")
@@ -769,10 +818,10 @@ final class SessionCoordinatorTests: XCTestCase {
         defer { SessionCoordinator.shared = nil }
 
         coordinator.adaptiveTransmissionEnabled = true
-        coordinator.applyLinkQualitySample(lossRate: 0.3, etx: 2.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
+        coordinator.applyLinkQualitySample(lossRate: 0.3, etx: 2.5, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: ""))
 
-        let configLower = coordinator.sessionManager.getConfigForDestination?("peer-0", "") ?? AX25SessionConfig()
-        let configUpper = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
+        let configLower = coordinator.sessionManager.getConfigForDestination?("peer-0", "", .primary) ?? AX25SessionConfig()
+        let configUpper = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary) ?? AX25SessionConfig()
         XCTAssertEqual(configLower.windowSize, configUpper.windowSize, "Lookup should normalize destination for cache hit")
     }
 
@@ -798,8 +847,8 @@ final class SessionCoordinatorTests: XCTestCase {
 
         // Set up a connected session
         let peer = AX25Address(call: "PEER", ssid: 7)
-        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), channel: 0)
-        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), radio: .primary)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
         // Count data deliveries to detect duplicate processing
         var dataDeliveryCount = 0
@@ -852,8 +901,8 @@ final class SessionCoordinatorTests: XCTestCase {
 
         // Set up connected session
         let peer = AX25Address(call: "PEER", ssid: 7)
-        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), channel: 0)
-        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), radio: .primary)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
         var deliveryCount = 0
         coordinator.sessionManager.onDataReceived = { _, _ in
@@ -899,8 +948,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
         XCTAssertEqual(session.state, .connected)
 
         // Connect — no probe sent yet
@@ -927,8 +976,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
 
@@ -975,8 +1024,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         // Connect and trigger text probe via first inbound I-frame
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
@@ -1010,28 +1059,31 @@ final class SessionCoordinatorTests: XCTestCase {
             "After receiving PONG from text probe, initiator should send PING with capabilities")
     }
 
-    /// Fallback timer sends text probe after 3 seconds even without inbound data.
+    /// Fallback timer sends text probe even without inbound data.
     func testTextProbeFallbackTimerSendsProbe() async throws {
         let coordinator = SessionCoordinator()
         defer { SessionCoordinator.shared = nil }
 
         coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = true
         coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = true
+        #if DEBUG
+        coordinator.testTextProbeFallbackDelay = 0.2
+        #endif
 
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
 
-        // Wait for fallback timer (3s + buffer)
-        try await Task.sleep(nanoseconds: 3_500_000_000)
+        // Wait for fallback timer + small buffer
+        try await Task.sleep(nanoseconds: 400_000_000)
 
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .pending,
-            "Fallback timer should send text probe after 3 seconds")
+            "Fallback timer should send text probe after configured delay")
     }
 
     /// Disconnect cancels pending text probe.
@@ -1045,8 +1097,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
@@ -1071,8 +1123,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "LEGACY", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         // First connection: probe sent, times out → marked not-supported
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
@@ -1094,8 +1146,8 @@ final class SessionCoordinatorTests: XCTestCase {
         // unknown peers get a text probe (already tested above).
         // This test mainly verifies the code path doesn't crash.
         let session2 = coordinator2.sessionManager.session(for: peer)
-        session2.stateMachine.handle(event: .connectRequest)
-        session2.stateMachine.handle(event: .receivedUA)
+        _ = session2.stateMachine.handle(event: .connectRequest)
+        _ = session2.stateMachine.handle(event: .receivedUA)
         coordinator2.sessionManager.onSessionStateChanged?(session2, .connecting, .connected)
 
         // Unknown peer on fresh coordinator → should schedule text probe
@@ -1114,8 +1166,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
@@ -1136,8 +1188,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
 
@@ -1176,8 +1228,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         // Establish capabilities via text probe → PONG
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
@@ -1214,8 +1266,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         // Establish capabilities
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
@@ -1254,7 +1306,7 @@ final class SessionCoordinatorTests: XCTestCase {
         
         // Connect a session from K0EPI-1
         let session = coordinator.sessionManager.session(for: from)
-        session.stateMachine.handle(event: .receivedSABM)
+        _ = session.stateMachine.handle(event: .receivedSABM)
         XCTAssertEqual(session.state, .connected)
         
         var receivedData: Data?
@@ -1332,6 +1384,148 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertNil(receivedData, "Frame from K0EPI-7 (our own callsign) should be filtered as echo")
     }
     
+    // MARK: - effectiveAdaptiveSettings
+
+    func testEffectiveSettingsReturnsGlobalWhenNoDestination() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 3
+
+        let effective = coordinator.effectiveAdaptiveSettings(destination: nil, path: nil)
+        XCTAssertEqual(effective.windowSize.currentAdaptive, 3, "Nil destination should return global settings")
+    }
+
+    func testEffectiveSettingsReturnsPerRouteWhenCached() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
+
+        // Populate per-route cache via sample
+        let routeKey = AdaptiveScope.route(radio: .primary, destination: "PEER-1", path: "DIGI-1")
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "session", scope: routeKey)
+
+        let effective = coordinator.effectiveAdaptiveSettings(destination: "PEER-1", path: "DIGI-1")
+        XCTAssertEqual(effective.windowSize.currentAdaptive, 1, "Per-route cache entry should be returned when available")
+    }
+
+    func testEffectiveSettingsMatchesCaseInsensitivePath() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
+
+        // Session learner caches with uppercase path (from session.path.display).
+        // Spec 4.2: the upgrade needs a sustained success streak.
+        let routeKey = AdaptiveScope.route(radio: .primary, destination: "KB5YZB-7", path: "DRL")
+        for _ in 0..<10 {
+            coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: nil, source: "session", scope: routeKey, newFrames: 1, retransmits: 0)
+        }
+
+        // UI passes lowercase path (raw user input from compose field)
+        let effective = coordinator.effectiveAdaptiveSettings(destination: "kb5yzb-7", path: "drl")
+        XCTAssertEqual(effective.windowSize.currentAdaptive, 3,
+            "Lowercase path from compose view must match uppercase cache key from session learner")
+    }
+
+    func testEffectiveSettingsFallsBackToGlobalWhenNoCacheEntry() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 3
+
+        let effective = coordinator.effectiveAdaptiveSettings(destination: "UNKNOWN-1", path: "")
+        XCTAssertEqual(effective.windowSize.currentAdaptive, 3, "Unknown destination should fall back to global")
+    }
+
+    // MARK: - Global reset on disconnect
+
+    func testGlobalResetsWhenAllSessionsDisconnect() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.localCallsign = "LOCAL-0"
+
+        // Learn high-loss settings
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "network")
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 1)
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.paclen.currentAdaptive, 64)
+
+        // Create and connect a session
+        let peer = AX25Address(call: "PEER", ssid: 1)
+        let session = coordinator.sessionManager.session(for: peer)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
+        XCTAssertEqual(session.state, .connected)
+        coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
+
+        // Drive actual state machine to disconnected so hasActiveSessions reflects reality
+        _ = session.stateMachine.handle(event: .receivedDISC)
+        XCTAssertEqual(session.state, .disconnected)
+        coordinator.sessionManager.onSessionStateChanged?(session, .connected, .disconnected)
+
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 2,
+            "Global window should reset to default (2) after last session disconnects")
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.paclen.currentAdaptive, 128,
+            "Global paclen should reset to default (128) after last session disconnects")
+    }
+
+    func testGlobalDoesNotResetWhenOtherSessionsStillActive() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.localCallsign = "LOCAL-0"
+
+        // Learn high-loss settings
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "network")
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 1)
+
+        // Create two sessions
+        let peer1 = AX25Address(call: "PEER", ssid: 1)
+        let peer2 = AX25Address(call: "PEER", ssid: 2)
+        let session1 = coordinator.sessionManager.session(for: peer1)
+        let session2 = coordinator.sessionManager.session(for: peer2)
+        _ = session1.stateMachine.handle(event: .connectRequest)
+        _ = session1.stateMachine.handle(event: .receivedUA)
+        _ = session2.stateMachine.handle(event: .connectRequest)
+        _ = session2.stateMachine.handle(event: .receivedUA)
+        coordinator.sessionManager.onSessionStateChanged?(session1, .connecting, .connected)
+        coordinator.sessionManager.onSessionStateChanged?(session2, .connecting, .connected)
+
+        // Drive session1 state machine to disconnected, but session2 stays connected
+        _ = session1.stateMachine.handle(event: .receivedDISC)
+        XCTAssertEqual(session1.state, .disconnected)
+        XCTAssertEqual(session2.state, .connected)
+        coordinator.sessionManager.onSessionStateChanged?(session1, .connected, .disconnected)
+
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 1,
+            "Global should NOT reset while another session is still active")
+    }
+
+    // MARK: - hasActiveSessions
+
+    func testHasActiveSessionsReflectsSessionState() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        XCTAssertFalse(coordinator.hasActiveSessions, "No sessions initially")
+
+        let peer = AX25Address(call: "PEER", ssid: 1)
+        let session = coordinator.sessionManager.session(for: peer)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        XCTAssertTrue(coordinator.hasActiveSessions, "Connecting session should count as active")
+
+        _ = session.stateMachine.handle(event: .receivedUA)
+        XCTAssertTrue(coordinator.hasActiveSessions, "Connected session should count as active")
+    }
+
     /// Test that frames from different base callsign are NOT filtered (Bug Fix P2 - verify we didn't break this)
     func testEchoFilterAllowsDifferentCallsign() async throws {
         let coordinator = SessionCoordinator()
@@ -1353,7 +1547,7 @@ final class SessionCoordinatorTests: XCTestCase {
         
         // Connect a session
         let session = coordinator.sessionManager.session(for: from)
-        session.stateMachine.handle(event: .receivedSABM)
+        _ = session.stateMachine.handle(event: .receivedSABM)
         XCTAssertEqual(session.state, .connected)
         
         var receivedData: Data?

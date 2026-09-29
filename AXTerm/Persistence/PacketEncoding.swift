@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum PacketEncoding {
+nonisolated enum PacketEncoding {
     static let printableThreshold: Double = 0.75
     static let separator: Character = ","
     static let repeatedMarker: Character = "*"

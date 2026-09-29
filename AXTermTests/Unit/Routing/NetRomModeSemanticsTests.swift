@@ -40,7 +40,7 @@ final class NetRomModeSemanticsTests: XCTestCase {
             timestamp: timestamp,
             from: AX25Address(call: from),
             to: AX25Address(call: to),
-            via: via.map { AX25Address(call: $0) },
+            via: via.map { AX25Address(call: $0, repeated: true) },
             frameType: frameType,
             control: 0,
             pid: nil,
@@ -326,9 +326,10 @@ final class NetRomModeSemanticsTests: XCTestCase {
         let futureTime = baseTime.addingTimeInterval(120)  // Well beyond 30s half-life
         integration.purgeStaleData(currentDate: futureTime)
 
-        // Then: Route should have decayed/expired
-        XCTAssertTrue(integration.currentRoutes().filter { $0.destination == "K1AAA" }.isEmpty,
-                      "Inferred routes should decay without reinforcement")
+        // Then: Route should still be present (kept for display) but expired.
+        // Evidence is purged but the route entry remains for the UI.
+        XCTAssertFalse(integration.currentRoutes().filter { $0.destination == "K1AAA" }.isEmpty,
+                       "Expired inferred routes should be kept for display")
     }
 
     // MARK: - Hybrid Mode Tests

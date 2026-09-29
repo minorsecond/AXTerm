@@ -43,7 +43,9 @@ final class DatabaseEventLogger: EventLogger {
                 try store.append(entry)
                 try store.pruneIfNeeded(retentionLimit: retentionLimit)
             } catch {
-                return
+                // Was a bare swallow: event-log persistence failing silently
+                // means the local diagnostic trail quietly stops growing.
+                Telemetry.capture(error: error, message: "Event log append/prune failed")
             }
         }
     }

@@ -41,12 +41,17 @@ final class WatchNotificationIntegrationTests: XCTestCase {
         return AppSettingsStore(defaults: defaults)
     }
 
-    private func waitForEventStore(_ store: MockEventLogStore) async {
+    /// Wait for the watch hit to reach the event store, and fail here if it
+    /// never does — otherwise the assertion below reports an empty store as
+    /// though the wrong entry had been written.
+    private func waitForEventStore(_ store: MockEventLogStore,
+                                   file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<10 {
             if !store.appendedEntries.isEmpty {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        XCTFail("the event log store was never written to", file: file, line: line)
     }
 }

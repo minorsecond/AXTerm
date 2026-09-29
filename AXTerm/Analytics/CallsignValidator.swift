@@ -9,12 +9,24 @@ import Foundation
 
 /// Validates and parses amateur radio callsigns.
 /// Filters out non-callsign entities like BEACON, ID, WIDE1-1, etc.
-enum CallsignValidator {
+nonisolated enum CallsignValidator {
+    private static let customServiceEndpointsQueue = DispatchQueue(
+        label: "axterm.callsignValidator.customServiceEndpoints",
+        attributes: .concurrent
+    )
+    private static var customServiceEndpoints: Set<String> = []
 
     // MARK: - Basic Validation (used by Settings)
 
     /// Basic callsign pattern for user input validation
     nonisolated static let callsignPattern = "^[A-Z0-9]{1,6}(?:-[0-9]{1,2})?$"
+
+    // Compiled once; never reallocated. Previously these were created fresh on every
+    // isValidCallsign call, which blocked the main thread in rebuildObservedPaths.
+    private static let callsignForwardRegex =
+        try? NSRegularExpression(pattern: #"^[A-Z]{1,2}[0-9]{1,2}[A-Z]{1,4}$"#)
+    private static let callsignReverseRegex =
+        try? NSRegularExpression(pattern: #"^[0-9][A-Z]{1,2}[0-9]?[A-Z]{1,4}$"#)
 
     /// Normalizes a callsign string (trims whitespace and uppercases)
     nonisolated static func normalize(_ value: String) -> String {
@@ -31,20 +43,27 @@ enum CallsignValidator {
 
     // MARK: - Known Non-Callsign Patterns
 
-    /// Special APRS/AX.25 destinations and pseudo-callsigns to exclude
+    /// Special APRS/AX.25 destinations and pseudo-callsigns to exclude.
+    /// "NODES" is the standard NET/ROM routing-broadcast destination (PID 0xCF);
+    /// it matches the tactical-alias pattern and would otherwise become a phantom
+    /// station connected to every NET/ROM node on the channel.
     private static let nonCallsignPatterns: Set<String> = [
         "ID", "BEACON", "MAIL", "QST", "CQ", "SK", "TEST", "RELAY",
         "GATE", "ECHO", "TEMP", "TRACE", "ALL", "AP", "BLN", "NWS",
         "APRS", "GPS", "DGPS", "TCPIP", "TCPXX", "NOGATE", "RFONLY",
         "IGATE", "APRSD", "APRSM", "APRST", "APRSW", "SPCL", "DF",
-        "DRILL", "DX", "JAVA", "MAIL", "MICE", "SPACE", "SPC", "SYM",
+        "DRILL", "DX", "JAVA", "MICE", "NODES", "SPACE", "SPC", "SYM",
         "TEL", "TELEMETRY", "WX", "WXSVR"
     ]
 
     /// Prefixes that indicate non-callsign entities
     private static let nonCallsignPrefixes: [String] = [
-        "WIDE", "TRACE", "RELAY", "BLN", "NWS", "APRS"
+        "WIDE", "TRACE", "RELAY", "BLN", "NWS", "APRS", "BBS"
     ]
+
+    /// Tactical alias pattern used by some digipeaters and NET/ROM nodes.
+    /// Examples: DRL, DRLNOD. Excludes punctuation and keeps aliases short.
+    private static let routingAliasPattern = #"^[A-Z0-9]{3,6}$"#
 
     // MARK: - Validation
 
@@ -57,7 +76,7 @@ enum CallsignValidator {
         let baseCall = upper.components(separatedBy: "-").first ?? upper
 
         // Check against known non-callsign patterns
-        if nonCallsignPatterns.contains(baseCall) {
+        if isKnownServiceEndpoint(baseCall) {
             return false
         }
 
@@ -85,21 +104,114 @@ enum CallsignValidator {
             return false
         }
 
-        // Check for valid callsign pattern: letters, then digit(s), then letters
-        // This catches most amateur callsigns while rejecting things like "123ABC"
-        let pattern = #"^[A-Z]{1,2}[0-9]{1,2}[A-Z]{1,4}$"#
-        let regex = try? NSRegularExpression(pattern: pattern, options: [])
         let range = NSRange(baseCall.startIndex..., in: baseCall)
 
-        if regex?.firstMatch(in: baseCall, options: [], range: range) != nil {
+        if callsignForwardRegex?.firstMatch(in: baseCall, options: [], range: range) != nil {
             return true
         }
 
         // Also allow reverse pattern for some international calls (e.g., 3DA0XYZ)
-        let reversePattern = #"^[0-9][A-Z]{1,2}[0-9]?[A-Z]{1,4}$"#
-        let reverseRegex = try? NSRegularExpression(pattern: reversePattern, options: [])
+        return callsignReverseRegex?.firstMatch(in: baseCall, options: [], range: range) != nil
+    }
 
-        return reverseRegex?.firstMatch(in: baseCall, options: [], range: range) != nil
+    /// Checks if a candidate is valid for routing/graph node identity.
+    ///
+    /// This is intentionally broader than `isValidCallsign(_:)` so that tactical
+    /// digipeater aliases (e.g. DRL, DRLNOD) can appear in graph and route contexts,
+    /// while still excluding known service endpoints like ID/BEACON/BBS/WIDE.
+    static func isValidRoutingNode(_ candidate: String) -> Bool {
+        let normalized = normalize(candidate)
+        guard !normalized.isEmpty else { return false }
+
+        if isValidCallsign(normalized) {
+            return true
+        }
+
+        let baseCall = normalized.components(separatedBy: "-").first ?? normalized
+        if isKnownServiceEndpoint(baseCall) {
+            return false
+        }
+        for prefix in nonCallsignPrefixes {
+            if baseCall.hasPrefix(prefix) && baseCall.count <= prefix.count + 2 {
+                return false
+            }
+        }
+        guard baseCall.range(of: routingAliasPattern, options: [.regularExpression]) != nil else {
+            return false
+        }
+        // Reject aliases that are purely numeric.
+        guard baseCall.rangeOfCharacter(from: .letters) != nil else {
+            return false
+        }
+
+        return true
+    }
+
+    /// Checks if a candidate is valid in an AX.25 digipeater path.
+    ///
+    /// Accepts either:
+    /// - Standard amateur callsigns (with optional SSID), or
+    /// - Short tactical digi aliases used on packet networks (e.g. DRLNOD),
+    ///   with optional SSID.
+    ///
+    /// Still rejects known service endpoints and APRS-style pseudo paths
+    /// (e.g. WIDE/TRACE/RELAY prefixes) via `isValidRoutingNode`.
+    static func isValidDigipeaterAddress(_ candidate: String) -> Bool {
+        let normalized = normalize(candidate)
+        guard !normalized.isEmpty else { return false }
+
+        let parts = normalized.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count <= 2 else { return false }
+
+        if parts.count == 2 {
+            let ssidPart = String(parts[1])
+            guard let ssid = Int(ssidPart), (0...15).contains(ssid) else {
+                return false
+            }
+        }
+
+        return isValidRoutingNode(normalized)
+    }
+
+    /// Replaces the user-configured service-endpoint ignore list.
+    /// Values are normalized to uppercase, deduplicated, and matched on base callsign.
+    static func configureIgnoredServiceEndpoints(_ values: [String]) {
+        let normalized = Set(values.compactMap { value -> String? in
+            let token = normalize(value)
+            let base = token.components(separatedBy: "-").first ?? token
+            return base.isEmpty ? nil : base
+        })
+        customServiceEndpointsQueue.sync(flags: .barrier) {
+            customServiceEndpoints = normalized
+        }
+    }
+
+    private static func customServiceEndpointsSnapshot() -> Set<String> {
+        customServiceEndpointsQueue.sync { customServiceEndpoints }
+    }
+
+    /// True when a name is a destination rather than a station.
+    ///
+    /// `BEACON`, `ID`, `NODES`, `QST` and friends are addresses that frames
+    /// are sent *to*; nobody holds a licence for them and nobody answers a
+    /// connect request at one. Exposed so the UI can decline to offer actions
+    /// that cannot work, instead of showing an empty profile with a Connect
+    /// button that would key the radio at nothing.
+    static func isServiceEndpoint(_ candidate: String) -> Bool {
+        let upper = candidate.trimmingCharacters(in: .whitespaces).uppercased()
+        let baseCall = upper.components(separatedBy: "-").first ?? upper
+        if isKnownServiceEndpoint(baseCall) { return true }
+        return nonCallsignPrefixes.contains { baseCall.hasPrefix($0) }
+    }
+
+    private static func isKnownServiceEndpoint(_ baseCall: String) -> Bool {
+        if nonCallsignPatterns.contains(baseCall) {
+            return true
+        }
+        if customServiceEndpointsSnapshot().contains(baseCall) {
+            return true
+        }
+        return false
     }
 
     // MARK: - Suffix Extraction

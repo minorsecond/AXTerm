@@ -17,7 +17,7 @@ import Foundation
 ///
 /// This provides adaptive timeouts that respond to network conditions
 /// without being overly sensitive to individual outliers.
-struct RttEstimator {
+nonisolated struct RttEstimator {
     /// Smoothed RTT estimate (nil until first sample)
     var srtt: Double? = nil
 
@@ -80,7 +80,7 @@ struct RttEstimator {
 // MARK: - Link RTT Tracker
 
 /// Tracks RTT and delivery statistics for a link (destination + path).
-struct LinkRttTracker {
+nonisolated struct LinkRttTracker {
     /// Link identifier
     let linkKey: String
 
@@ -160,7 +160,7 @@ struct LinkRttTracker {
 // MARK: - Link Quality Metrics for Adaptive Tuning
 
 /// Suggested adaptive parameters based on link quality.
-struct AdaptiveParameters {
+nonisolated struct AdaptiveParameters {
     /// Suggested packet length (bytes)
     let paclen: Int
 
@@ -220,7 +220,7 @@ extension LinkRttTracker {
 /// - Slow start: exponential growth until loss or threshold
 /// - Congestion avoidance: linear growth after slow start
 /// - On loss: halve the window (multiplicative decrease)
-struct AIMDWindow: Sendable {
+nonisolated struct AIMDWindow: Sendable {
     /// Current congestion window (fractional)
     private(set) var cwnd: Double
 
@@ -297,7 +297,7 @@ struct AIMDWindow: Sendable {
 /// - Start conservative (e.g., 128 bytes)
 /// - Decrease on failure/retry
 /// - Increase after N consecutive successes
-struct PaclenAdapter: Sendable {
+nonisolated struct PaclenAdapter: Sendable {
     /// Current recommended paclen
     private(set) var currentPaclen: Int
 

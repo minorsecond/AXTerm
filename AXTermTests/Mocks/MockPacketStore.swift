@@ -8,7 +8,7 @@
 import Foundation
 @testable import AXTerm
 
-final class MockPacketStore: PacketStore {
+final class MockPacketStore: PacketStore, @unchecked Sendable {
     private(set) var savedPackets: [Packet] = []
     private(set) var pinnedUpdates: [(UUID, Bool)] = []
     private(set) var deleteAllCalled = false

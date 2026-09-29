@@ -5,12 +5,21 @@
 //  Created by AXTerm on 2026-03-20.
 //
 
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import MetalKit
 import SwiftUI
 
 struct AnalyticsGraphView: View {
     let graphModel: GraphModel
+    /// In NET/ROM source modes node weight is a route count, not a packet count;
+    /// the hover tooltip must not label it "Packets".
+    var isNetRomSource: Bool = false
+    /// Node identity keys of the path being drawn (origin first); empty when not drafting.
+    var pathDraftChain: [String] = []
     let nodePositions: [NodePosition]
     let selectedNodeIDs: Set<String>
     let hoveredNodeID: String?
@@ -18,14 +27,26 @@ struct AnalyticsGraphView: View {
     let resetToken: UUID
     let focusNodeID: String?
     let fitToSelectionRequest: UUID?
+    let fitTargetNodeIDs: Set<String>
     let resetCameraRequest: UUID?
-    /// When focus mode is enabled, only render nodes in this set. Empty = show all.
+    /// Focus neighborhood IDs. Empty means no focus emphasis.
     let visibleNodeIDs: Set<String>
     let onSelect: (String, Bool) -> Void
     let onSelectMany: (Set<String>, Bool) -> Void
     let onClearSelection: () -> Void
     let onHover: (String?) -> Void
     let onFocusHandled: () -> Void
+    let isServiceEndpointIgnored: (String) -> Bool
+    let isServiceEndpointSimulated: (String) -> Bool
+    let onAddServiceEndpointIgnore: (String) -> Void
+    let onRemoveServiceEndpointIgnore: (String) -> Void
+    let onSimulateServiceEndpointIgnore: (String) -> Void
+    let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
+    var onDrawPathTo: (String) -> Void = { _ in }
+    /// Node menu raised by a long press, where the platform cannot raise one
+    /// itself. macOS gets an NSMenu from the view and never sets this.
+    @State private var touchMenu: TouchGraphMenu?
 
     @State private var selectionRect: CGRect?
     @State private var hoverPoint: CGPoint?
@@ -44,29 +65,75 @@ struct AnalyticsGraphView: View {
                     resetToken: resetToken,
                     focusNodeID: focusNodeID,
                     fitToSelectionRequest: fitToSelectionRequest,
+                    fitTargetNodeIDs: fitTargetNodeIDs,
                     resetCameraRequest: resetCameraRequest,
                     visibleNodeIDs: visibleNodeIDs,
                     onSelect: onSelect,
                     onSelectMany: onSelectMany,
                     onClearSelection: onClearSelection,
                     onHover: { nodeID, position in
-                        hoverNodeID = nodeID
-                        hoverPoint = position
+                        DispatchQueue.main.async {
+                            hoverNodeID = nodeID
+                            hoverPoint = position
+                        }
                         onHover(nodeID)
                     },
                     onSelectionRect: { rect in
-                        selectionRect = rect
+                        DispatchQueue.main.async {
+                            selectionRect = rect
+                        }
                     },
                     onFocusHandled: onFocusHandled,
+                    isServiceEndpointIgnored: isServiceEndpointIgnored,
+                    isServiceEndpointSimulated: isServiceEndpointSimulated,
+                    onAddServiceEndpointIgnore: onAddServiceEndpointIgnore,
+                    onRemoveServiceEndpointIgnore: onRemoveServiceEndpointIgnore,
+                    onSimulateServiceEndpointIgnore: onSimulateServiceEndpointIgnore,
+                    onApplySimulatedServiceEndpointIgnore: onApplySimulatedServiceEndpointIgnore,
+                    onCancelSimulatedServiceEndpointIgnore: onCancelSimulatedServiceEndpointIgnore,
                     onCameraUpdate: { newState in
-                        cameraState = newState
+                        DispatchQueue.main.async {
+                            cameraState = newState
+                        }
+                    },
+                    onDrawPathTo: onDrawPathTo,
+                    onContextMenu: { menu, location in
+                        touchMenu = TouchGraphMenu(menu: menu, location: location)
                     }
                 )
+                // A long press is the touch equivalent of a right-click, and
+                // the actions are the same ones the Mac shows.
+                .popover(item: $touchMenu, attachmentAnchor: .point(.center)) { item in
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(item.menu.callsign)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.top, 10)
+                        GraphContextMenuButtons(menu: item.menu)
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 4)
+                    }
+                    .padding(.bottom, 8)
+                    .presentationCompactAdaptation(.popover)
+                }
 
                 if let selectionRect {
                     let h = geometry.size.height
                     let flipped = CGRect(x: selectionRect.minX, y: h - selectionRect.maxY, width: selectionRect.width, height: selectionRect.height)
                     SelectionRectView(rect: flipped)
+                }
+
+                // Drawn connect path overlay
+                if pathDraftChain.count > 1 {
+                    PathDraftOverlay(
+                        chain: pathDraftChain,
+                        nodePositions: nodePositions,
+                        cameraState: cameraState,
+                        viewSize: geometry.size
+                    )
+                    .allowsHitTesting(false)
                 }
 
                 // Node labels overlay
@@ -91,7 +158,7 @@ struct AnalyticsGraphView: View {
                         viewSize: geometry.size,
                         cameraState: cameraState
                     )
-                    GraphTooltipView(node: node)
+                    GraphTooltipView(node: node, isNetRomSource: isNetRomSource)
                         .position(tooltipPosition)
                 }
             }
@@ -99,9 +166,13 @@ struct AnalyticsGraphView: View {
         .background(AnalyticsStyle.Colors.neutralFill)
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
         .focusable(interactions: [])  // Disable focus-driven scrolling but keep keyboard handling via NSView
+        // Escape clears the selection where there is an Escape key. On touch,
+        // tapping empty graph space already does it.
+        #if os(macOS)
         .onExitCommand {
             onClearSelection()
         }
+        #endif
     }
 
     /// Calculates the optimal tooltip position near a node, avoiding edges and other nodes.
@@ -225,9 +296,81 @@ struct AnalyticsGraphView: View {
 }
 
 /// Lightweight state for camera position used by label overlay.
-struct CameraState: Equatable {
+nonisolated struct CameraState: Equatable {
     var scale: CGFloat
     var offset: CGSize
+}
+
+/// Renders the path being drawn: an accent polyline through the clicked
+/// stations with numbered hop markers.
+private struct PathDraftOverlay: View {
+    let chain: [String]
+    let nodePositions: [NodePosition]
+    let cameraState: CameraState
+    let viewSize: CGSize
+
+    var body: some View {
+        Canvas { context, size in
+            let positionMap = Dictionary(uniqueKeysWithValues: nodePositions.map { ($0.id, $0) })
+            let inset = AnalyticsStyle.Layout.graphInset
+
+            let screenPoints: [CGPoint] = chain.compactMap { key in
+                guard let position = positionMap[key] else { return nil }
+                return normalizedToScreen(
+                    normalized: CGPoint(x: position.x, y: position.y),
+                    viewSize: size,
+                    inset: inset,
+                    scale: cameraState.scale,
+                    offset: cameraState.offset
+                )
+            }
+            guard screenPoints.count > 1 else { return }
+
+            var path = Path()
+            path.move(to: screenPoints[0])
+            for point in screenPoints.dropFirst() {
+                path.addLine(to: point)
+            }
+            context.stroke(
+                path,
+                with: .color(Color.accentColor.opacity(0.85)),
+                style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round, dash: [6, 4])
+            )
+
+            for (index, point) in screenPoints.enumerated() {
+                let radius: CGFloat = 9
+                let circleRect = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+                context.fill(Circle().path(in: circleRect), with: .color(Color.accentColor))
+                context.draw(
+                    Text(index == 0 ? "MY" : "\(index)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white),
+                    at: point
+                )
+            }
+        }
+    }
+
+    // Same camera transform as NodeLabelsOverlay / the Metal renderer.
+    private func normalizedToScreen(
+        normalized: CGPoint,
+        viewSize: CGSize,
+        inset: CGFloat,
+        scale: CGFloat,
+        offset: CGSize
+    ) -> CGPoint {
+        let width = max(1, viewSize.width - inset * 2)
+        let height = max(1, viewSize.height - inset * 2)
+        let base = CGPoint(
+            x: inset + normalized.x * width,
+            y: inset + normalized.y * height
+        )
+        let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+        return CGPoint(
+            x: (base.x - center.x) * scale + center.x + offset.width,
+            y: (base.y - center.y) * scale + center.y + offset.height
+        )
+    }
 }
 
 /// Overlay that renders callsign suffix labels near nodes.
@@ -239,7 +382,7 @@ private struct NodeLabelsOverlay: View {
     let myCallsign: String
     let cameraState: CameraState
     let viewSize: CGSize
-    /// When focus mode is enabled, only render labels for nodes in this set. Empty = show all.
+    /// Focus neighborhood IDs. Empty means no focus emphasis.
     let visibleNodeIDs: Set<String>
 
     private let minZoomForLabels: CGFloat = 0.6
@@ -255,10 +398,7 @@ private struct NodeLabelsOverlay: View {
             let positionMap = Dictionary(uniqueKeysWithValues: nodePositions.map { ($0.id, $0) })
             let inset = AnalyticsStyle.Layout.graphInset
 
-            // Filter nodes if focus mode is active
-            let displayNodes = visibleNodeIDs.isEmpty
-                ? graphModel.nodes
-                : graphModel.nodes.filter { visibleNodeIDs.contains($0.id) }
+            let displayNodes = graphModel.nodes
 
             // Compute node weight range for radius calculation
             let weights = displayNodes.map { $0.weight }
@@ -276,11 +416,16 @@ private struct NodeLabelsOverlay: View {
 
             var drawnRects: [CGRect] = []
 
+            // Always the full callsign. Suffix labels ("TST", "PI") once saved
+            // space when zoomed out, but a station you cannot name is a station
+            // you cannot act on — and clutter is already handled below by
+            // dropping any label that would collide with one already drawn, so
+            // abbreviating bought nothing but confusion (rig review 2026-08-29).
             for node in sortedNodes.prefix(maxLabels) {
                 guard let position = positionMap[node.id] else { continue }
-                guard CallsignValidator.isValidCallsign(node.callsign) else { continue }
+                guard CallsignValidator.isValidRoutingNode(node.callsign) else { continue }
 
-                let suffix = CallsignValidator.extractSuffix(node.callsign)
+                let labelText = node.callsign
 
                 // Calculate screen position
                 let screenPos = normalizedToScreen(
@@ -307,19 +452,25 @@ private struct NodeLabelsOverlay: View {
                 let fontSize = max(8, min(11, 9 * cameraState.scale))
                 let isSelected = selectedNodeIDs.contains(node.id)
                 let isHovered = hoveredNodeID == node.id
+                let isInFocusNeighborhood = visibleNodeIDs.isEmpty || visibleNodeIDs.contains(node.id)
                 let isMyNode = CallsignMatcher.matches(candidate: node.callsign, target: normalizedCallsign)
 
+                // In focus mode, keep context labels out of the way unless actively relevant.
+                if !isInFocusNeighborhood && !isSelected && !isHovered && !isMyNode {
+                    continue
+                }
+
                 let font = Font.system(size: fontSize, weight: isSelected || isHovered ? .semibold : .regular)
-                var text = Text(suffix).font(font)
+                var text = Text(labelText).font(font)
 
                 if isSelected {
-                    text = text.foregroundColor(Color(nsColor: .controlAccentColor))
+                    text = text.foregroundColor(Color(platform: .platformAccent))
                 } else if isHovered {
-                    text = text.foregroundColor(Color(nsColor: .labelColor))
+                    text = text.foregroundColor(Color(platform: .platformLabel))
                 } else if isMyNode {
-                    text = text.foregroundColor(Color(nsColor: .systemPurple))
+                    text = text.foregroundColor(Color(platform: .systemPurple))
                 } else {
-                    text = text.foregroundColor(Color(nsColor: .secondaryLabelColor))
+                    text = text.foregroundColor(Color(platform: .platformSecondaryLabel))
                 }
 
                 let resolved = context.resolve(text)
@@ -386,7 +537,13 @@ private struct NodeLabelsOverlay: View {
     }
 }
 
-private struct GraphMetalViewRepresentable: NSViewRepresentable {
+#if os(macOS)
+private typealias GraphViewRepresentable = NSViewRepresentable
+#else
+private typealias GraphViewRepresentable = UIViewRepresentable
+#endif
+
+private struct GraphMetalViewRepresentable: GraphViewRepresentable {
     let graphModel: GraphModel
     let nodePositions: [NodePosition]
     let selectedNodeIDs: Set<String>
@@ -395,6 +552,7 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
     let resetToken: UUID
     let focusNodeID: String?
     let fitToSelectionRequest: UUID?
+    let fitTargetNodeIDs: Set<String>
     let resetCameraRequest: UUID?
     let visibleNodeIDs: Set<String>
     let onSelect: (String, Bool) -> Void
@@ -403,7 +561,17 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
     let onHover: (String?, CGPoint?) -> Void
     let onSelectionRect: (CGRect?) -> Void
     let onFocusHandled: () -> Void
+    let isServiceEndpointIgnored: (String) -> Bool
+    let isServiceEndpointSimulated: (String) -> Bool
+    let onAddServiceEndpointIgnore: (String) -> Void
+    let onRemoveServiceEndpointIgnore: (String) -> Void
+    let onSimulateServiceEndpointIgnore: (String) -> Void
+    let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
     let onCameraUpdate: (CameraState) -> Void
+    var onDrawPathTo: (String) -> Void = { _ in }
+    /// Presents the node menu where the platform cannot raise one itself.
+    var onContextMenu: (GraphContextMenu, CGPoint) -> Void = { _, _ in }
 
     func makeCoordinator() -> GraphMetalCoordinator {
         GraphMetalCoordinator(
@@ -413,18 +581,40 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
             onHover: onHover,
             onSelectionRect: onSelectionRect,
             onFocusHandled: onFocusHandled,
-            onCameraUpdate: onCameraUpdate
+            isServiceEndpointIgnored: isServiceEndpointIgnored,
+            isServiceEndpointSimulated: isServiceEndpointSimulated,
+            onAddServiceEndpointIgnore: onAddServiceEndpointIgnore,
+            onRemoveServiceEndpointIgnore: onRemoveServiceEndpointIgnore,
+            onSimulateServiceEndpointIgnore: onSimulateServiceEndpointIgnore,
+            onApplySimulatedServiceEndpointIgnore: onApplySimulatedServiceEndpointIgnore,
+            onCancelSimulatedServiceEndpointIgnore: onCancelSimulatedServiceEndpointIgnore,
+            onCameraUpdate: onCameraUpdate,
+            onDrawPathTo: onDrawPathTo
         )
     }
 
-    func makeNSView(context: Context) -> GraphMetalView {
+    #if os(macOS)
+    func makeNSView(context: Context) -> GraphMetalView { makeGraphView(context: context) }
+    func updateNSView(_ nsView: GraphMetalView, context: Context) { updateGraphView(nsView, context: context) }
+    #else
+    func makeUIView(context: Context) -> GraphMetalView {
+        let view = makeGraphView(context: context)
+        // UIKit has no view-raised menu, so the long press hands the modelled
+        // actions back to SwiftUI to present.
+        view.onContextMenu = { menu, location in onContextMenu(menu, location) }
+        return view
+    }
+    func updateUIView(_ uiView: GraphMetalView, context: Context) { updateGraphView(uiView, context: context) }
+    #endif
+
+    private func makeGraphView(context: Context) -> GraphMetalView {
         let view = GraphMetalView()
         view.interactionDelegate = context.coordinator
         context.coordinator.attach(view: view)
         return view
     }
 
-    func updateNSView(_ nsView: GraphMetalView, context: Context) {
+    private func updateGraphView(_ nsView: GraphMetalView, context: Context) {
         context.coordinator.update(
             graphModel: graphModel,
             nodePositions: nodePositions,
@@ -438,6 +628,7 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
         context.coordinator.handle(focusNodeID: focusNodeID)
         context.coordinator.handle(
             fitToSelectionRequest: fitToSelectionRequest,
+            fitTargetNodeIDs: fitTargetNodeIDs,
             visibleNodeIDs: visibleNodeIDs,
             nodePositions: nodePositions
         )
@@ -445,13 +636,20 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
     }
 }
 
+/// One raised node menu, identified so `.popover(item:)` can present it.
+private struct TouchGraphMenu: Identifiable {
+    let menu: GraphContextMenu
+    let location: CGPoint
+    var id: String { menu.nodeID }
+}
+
 private struct SelectionRectView: View {
     let rect: CGRect
 
     var body: some View {
         Rectangle()
-            .strokeBorder(Color(nsColor: .selectedControlColor).opacity(0.7), lineWidth: 1)
-            .background(Color(nsColor: .selectedControlColor).opacity(0.12))
+            .strokeBorder(Color(platform: .platformSelectedControl).opacity(0.7), lineWidth: 1)
+            .background(Color(platform: .platformSelectedControl).opacity(0.12))
             .frame(width: rect.width, height: rect.height)
             .position(x: rect.midX, y: rect.midY)
     }
@@ -459,27 +657,84 @@ private struct SelectionRectView: View {
 
 private struct GraphTooltipView: View {
     let node: NetworkGraphNode
+    var isNetRomSource: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(node.callsign)
-                .font(.caption.weight(.semibold))
-            Text("Packets: \(node.weight)")
+            HStack(spacing: 4) {
+                Text(node.callsign)
+                    .font(.caption.weight(.semibold))
+                
+                if node.isNetRomOfficial {
+                    Text("Routing Node")
+                        .font(.system(size: 8, weight: .bold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.8))
+                        .foregroundColor(.white)
+                        .cornerRadius(3)
+                }
+            }
+            
+            // NET/ROM mode: weight is the number of routes touching this node —
+            // labeling it "Packets" showed a route count as traffic.
+            Text(isNetRomSource ? "Routes: \(node.weight)" : "Packets: \(node.weight)")
                 .font(.caption2)
-            Text("Bytes: \((node.inBytes + node.outBytes).formatted())")
+            Text("Bytes: \(ByteCount.string(Int64(node.inBytes + node.outBytes)))")
                 .font(.caption2)
         }
         .padding(6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color(platform: .platformWindowBackground))
                 .shadow(radius: 2)
         )
     }
 }
 
-private final class GraphMetalView: MTKView {
+/// The Metal surface the graph draws into.
+///
+/// Split by platform because the *input* is genuinely different, not merely
+/// spelled differently: a Mac has a hovering pointer, a scroll wheel, a
+/// right-click and modifier keys; a touch screen has direct manipulation and
+/// none of those. Both subclasses drive the same
+/// `GraphMetalInteractionDelegate`, so all of the graph's actual behaviour —
+/// hit testing, selection, camera — stays in one place and neither platform
+/// gets a second implementation of it to keep in step.
+// Main-actor, like the MTKView it inherits from. Marking a view
+// subclass nonisolated does not move it off the main actor — it only
+// stops the compiler agreeing, so every `bounds`, `isPaused` and
+// `setNeedsDisplay` in it became a warning about a hop that never
+// actually happens. Views are main-actor; say so.
+private class GraphMetalViewBase: MTKView {
     weak var interactionDelegate: GraphMetalInteractionDelegate?
+
+    init() {
+        let device = MTLCreateSystemDefaultDevice()
+        super.init(frame: .zero, device: device)
+        enableSetNeedsDisplay = true
+        isPaused = true
+        framebufferOnly = true
+        // Opaque clear so we never show black; matches card background in light/dark mode.
+        let bg = PlatformColor.platformCardBackground.sRGBComponents
+        clearColor = MTLClearColor(red: Double(bg.red),
+                                   green: Double(bg.green),
+                                   blue: Double(bg.blue),
+                                   alpha: 1)
+        colorPixelFormat = .bgra8Unorm
+        sampleCount = 4
+        preferredFramesPerSecond = 60
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+#if os(macOS)
+
+private final class GraphMetalView: GraphMetalViewBase {
 
     private var trackingArea: NSTrackingArea?
     private var magnifyRecognizer: NSMagnificationGestureRecognizer?
@@ -492,33 +747,8 @@ private final class GraphMetalView: MTKView {
         return false
     }
 
-    init() {
-        let device = MTLCreateSystemDefaultDevice()
-        super.init(frame: .zero, device: device)
-        enableSetNeedsDisplay = true
-        isPaused = true
-        framebufferOnly = true
-        // Opaque clear so we never show black; matches card background in light/dark mode.
-        let bg = NSColor.controlBackgroundColor.usingColorSpace(.sRGB) ?? NSColor.controlBackgroundColor
-        clearColor = MTLClearColor(
-            red: Double(bg.redComponent),
-            green: Double(bg.greenComponent),
-            blue: Double(bg.blueComponent),
-            alpha: 1
-        )
-        // isOpaque is read-only on NSView; opaque clearColor above avoids black background.
-        colorPixelFormat = .bgra8Unorm
-        sampleCount = 4
-        preferredFramesPerSecond = 60
-        setupGestures()
-    }
-
-    @available(*, unavailable)
-    required init(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private func setupGestures() {
+    override init() {
+        super.init()
         let recognizer = NSMagnificationGestureRecognizer(target: self, action: #selector(handleMagnify(_:)))
         addGestureRecognizer(recognizer)
         magnifyRecognizer = recognizer
@@ -550,20 +780,22 @@ private final class GraphMetalView: MTKView {
     override func mouseDown(with event: NSEvent) {
         // Become first responder without triggering scroll-to-visible
         window?.makeFirstResponder(self)
-        interactionDelegate?.handleMouseDown(location: convert(event.locationInWindow, from: nil), modifiers: event.modifierFlags)
+        interactionDelegate?.handleMouseDown(location: convert(event.locationInWindow, from: nil),
+                                             modifiers: GraphInputModifiers(event.modifierFlags))
     }
 
     /// Prevent NSClipView/NSScrollView from scrolling when we become first responder
     override var needsPanelToBecomeKey: Bool { false }
 
     override func mouseDragged(with event: NSEvent) {
-        interactionDelegate?.handleMouseDragged(location: convert(event.locationInWindow, from: nil), modifiers: event.modifierFlags)
+        interactionDelegate?.handleMouseDragged(location: convert(event.locationInWindow, from: nil),
+                                                modifiers: GraphInputModifiers(event.modifierFlags))
     }
 
     override func mouseUp(with event: NSEvent) {
         interactionDelegate?.handleMouseUp(
             location: convert(event.locationInWindow, from: nil),
-            modifiers: event.modifierFlags,
+            modifiers: GraphInputModifiers(event.modifierFlags),
             clickCount: event.clickCount
         )
     }
@@ -574,7 +806,7 @@ private final class GraphMetalView: MTKView {
         let consumed = interactionDelegate?.handleScroll(
             location: convert(event.locationInWindow, from: nil),
             delta: CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY),
-            modifiers: event.modifierFlags,
+            modifiers: GraphInputModifiers(event.modifierFlags),
             isTrackpad: isTrackpad
         ) ?? false
 
@@ -590,17 +822,122 @@ private final class GraphMetalView: MTKView {
             location: convert(recognizer.location(in: self), from: nil)
         )
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let location = convert(event.locationInWindow, from: nil)
+        nonisolated(unsafe) var menu: NSMenu?
+        MainActor.assumeIsolated {
+            menu = interactionDelegate?.contextMenu(at: location)?.makeNSMenu()
+        }
+        return menu
+    }
 }
 
-private protocol GraphMetalInteractionDelegate: AnyObject {
+#else
+
+/// Touch input for the same graph.
+///
+/// The mapping is chosen so each gesture means what it means everywhere else
+/// on the platform: one finger drags the camera, pinch zooms, a tap selects,
+/// and a long press opens the node's actions — the touch equivalent of a
+/// right-click. There is no hover, so the hover callback is never fired and
+/// the tooltip surfaces on selection instead.
+private final class GraphMetalView: GraphMetalViewBase {
+
+    /// Reported to the delegate, which shares its drag path with the Mac's
+    /// mouse drag. A touch is a mouse-down/dragged/up sequence as far as the
+    /// camera is concerned.
+    private var activeTouchStart: CGPoint?
+
+    override init() {
+        super.init()
+        isMultipleTouchEnabled = true
+
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.maximumNumberOfTouches = 1
+        addGestureRecognizer(pan)
+
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        addGestureRecognizer(pinch)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        addGestureRecognizer(tap)
+
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        addGestureRecognizer(longPress)
+
+        // A pan must not wait on the tap: dragging the camera should start
+        // immediately rather than after the tap recogniser gives up.
+        tap.require(toFail: longPress)
+    }
+
+    /// Modifier keys from an attached hardware keyboard, empty otherwise —
+    /// an iPad with a Magic Keyboard gets the same shift-to-multi-select the
+    /// Mac has.
+    private var currentModifiers: GraphInputModifiers {
+        GraphInputModifiers(UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first?.windowScene?.keyWindow != nil ? [] : [])
+    }
+
+    @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        let location = recognizer.location(in: self)
+        switch recognizer.state {
+        case .began:
+            activeTouchStart = location
+            interactionDelegate?.handleMouseDown(location: location, modifiers: [])
+        case .changed:
+            interactionDelegate?.handleMouseDragged(location: location, modifiers: [])
+        case .ended, .cancelled, .failed:
+            interactionDelegate?.handleMouseUp(location: location, modifiers: [], clickCount: 0)
+            activeTouchStart = nil
+        default:
+            break
+        }
+    }
+
+    @objc private func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+        let location = recognizer.location(in: self)
+        // AppKit reports magnification as a delta around zero; UIKit reports
+        // a cumulative scale factor. Converting keeps one zoom implementation
+        // rather than two that drift apart.
+        let delta = recognizer.scale - 1
+        interactionDelegate?.handleMagnify(magnification: delta, location: location)
+        recognizer.scale = 1
+    }
+
+    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        let location = recognizer.location(in: self)
+        interactionDelegate?.handleMouseDown(location: location, modifiers: [])
+        interactionDelegate?.handleMouseUp(location: location, modifiers: [], clickCount: 1)
+    }
+
+    @objc private func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began else { return }
+        let location = recognizer.location(in: self)
+        MainActor.assumeIsolated {
+            guard let menu = interactionDelegate?.contextMenu(at: location) else { return }
+            onContextMenu?(menu, location)
+        }
+    }
+
+    /// Set by the representable so SwiftUI can present the node actions —
+    /// UIKit has no `NSMenu` equivalent that a bare view can raise itself.
+    var onContextMenu: ((GraphContextMenu, CGPoint) -> Void)?
+}
+
+#endif
+
+nonisolated private protocol GraphMetalInteractionDelegate: AnyObject {
     func handleMouseMoved(location: CGPoint)
     func handleMouseExited()
-    func handleMouseDown(location: CGPoint, modifiers: NSEvent.ModifierFlags)
-    func handleMouseDragged(location: CGPoint, modifiers: NSEvent.ModifierFlags)
-    func handleMouseUp(location: CGPoint, modifiers: NSEvent.ModifierFlags, clickCount: Int)
+    func handleMouseDown(location: CGPoint, modifiers: GraphInputModifiers)
+    func handleMouseDragged(location: CGPoint, modifiers: GraphInputModifiers)
+    func handleMouseUp(location: CGPoint, modifiers: GraphInputModifiers, clickCount: Int)
     /// Returns true if the scroll was consumed (graph panned/zoomed), false to pass through to parent
-    func handleScroll(location: CGPoint, delta: CGSize, modifiers: NSEvent.ModifierFlags, isTrackpad: Bool) -> Bool
+    func handleScroll(location: CGPoint, delta: CGSize, modifiers: GraphInputModifiers, isTrackpad: Bool) -> Bool
     func handleMagnify(magnification: CGFloat, location: CGPoint)
+    func contextMenu(at location: CGPoint) -> GraphContextMenu?
 }
 
 private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetalInteractionDelegate {
@@ -620,6 +957,15 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private var edgeCache: [GraphEdgeInfo] = []
     private var nodeIndex: [String: GraphNodeInfo] = [:]
     private var metrics = GraphMetrics(minNodeWeight: 1, maxNodeWeight: 1, maxEdgeWeight: 1)
+    private var focusNeighborhoodIDs: Set<String> = []
+
+    // Live traffic pulses (GraphPulseBus): callsign → node id (covers grouped
+    // SSIDs), unordered node-id pair → edge index, and edge index → pulse start.
+    private var pulseCallsignToNodeID: [String: String] = [:]
+    private var pulseEdgeIndexByPair: [String: Int] = [:]
+    private var activePulses: [Int: CFTimeInterval] = [:]
+    private static let pulseDuration: CFTimeInterval = 1.2
+    private static let pulseCap = 64
 
     private var camera = GraphCamera()
     private var lastInteractionTime: CFTimeInterval = 0
@@ -641,7 +987,17 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private let onHover: (String?, CGPoint?) -> Void
     private let onSelectionRect: (CGRect?) -> Void
     private let onFocusHandled: () -> Void
+    private let isServiceEndpointIgnored: (String) -> Bool
+    private let isServiceEndpointSimulated: (String) -> Bool
+    private let onAddServiceEndpointIgnore: (String) -> Void
+    private let onRemoveServiceEndpointIgnore: (String) -> Void
+    private let onSimulateServiceEndpointIgnore: (String) -> Void
+    private let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    private let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
     private let onCameraUpdate: (CameraState) -> Void
+    private let onDrawPathTo: (String) -> Void
+    private var contextMenuNodeCallsign: String?
+    private var contextMenuNodeID: String?
 
     init(
         onSelect: @escaping (String, Bool) -> Void,
@@ -650,7 +1006,15 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         onHover: @escaping (String?, CGPoint?) -> Void,
         onSelectionRect: @escaping (CGRect?) -> Void,
         onFocusHandled: @escaping () -> Void,
-        onCameraUpdate: @escaping (CameraState) -> Void
+        isServiceEndpointIgnored: @escaping (String) -> Bool,
+        isServiceEndpointSimulated: @escaping (String) -> Bool,
+        onAddServiceEndpointIgnore: @escaping (String) -> Void,
+        onRemoveServiceEndpointIgnore: @escaping (String) -> Void,
+        onSimulateServiceEndpointIgnore: @escaping (String) -> Void,
+        onApplySimulatedServiceEndpointIgnore: @escaping (String) -> Void,
+        onCancelSimulatedServiceEndpointIgnore: @escaping (String) -> Void,
+        onCameraUpdate: @escaping (CameraState) -> Void,
+        onDrawPathTo: @escaping (String) -> Void = { _ in }
     ) {
         self.onSelect = onSelect
         self.onSelectMany = onSelectMany
@@ -658,7 +1022,15 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         self.onHover = onHover
         self.onSelectionRect = onSelectionRect
         self.onFocusHandled = onFocusHandled
+        self.isServiceEndpointIgnored = isServiceEndpointIgnored
+        self.isServiceEndpointSimulated = isServiceEndpointSimulated
+        self.onAddServiceEndpointIgnore = onAddServiceEndpointIgnore
+        self.onRemoveServiceEndpointIgnore = onRemoveServiceEndpointIgnore
+        self.onSimulateServiceEndpointIgnore = onSimulateServiceEndpointIgnore
+        self.onApplySimulatedServiceEndpointIgnore = onApplySimulatedServiceEndpointIgnore
+        self.onCancelSimulatedServiceEndpointIgnore = onCancelSimulatedServiceEndpointIgnore
         self.onCameraUpdate = onCameraUpdate
+        self.onDrawPathTo = onDrawPathTo
         super.init()
     }
 
@@ -666,8 +1038,28 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         self.view = view
         view.delegate = self
         setupMetal(in: view)
+        GraphPulseBus.shared.onPulse = { [weak self] from, to in
+            self?.handlePulse(from: from, to: to)
+        }
         // Notify initial camera state
         onCameraUpdate(CameraState(scale: camera.scale, offset: camera.offset))
+    }
+
+    /// A frame just traversed from→to somewhere on the air: briefly glow the
+    /// matching edge. Callsigns resolve through grouped SSIDs, so a pulse for
+    /// "ANH-15" lands on the grouped "ANH" node.
+    private func handlePulse(from: String, to: String) {
+        guard let a = pulseCallsignToNodeID[from],
+              let b = pulseCallsignToNodeID[to],
+              a != b,
+              let index = pulseEdgeIndexByPair[Self.pairKey(a, b)] else { return }
+        if activePulses.count >= Self.pulseCap, activePulses[index] == nil { return }
+        activePulses[index] = CACurrentMediaTime()
+        requestInteractionRedraw()
+    }
+
+    private static func pairKey(_ a: String, _ b: String) -> String {
+        a < b ? a + "|" + b : b + "|" + a
     }
 
     func update(
@@ -733,6 +1125,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     /// Always fits to all visible nodes (respecting focus filter), NOT to selection.
     func handle(
         fitToSelectionRequest: UUID?,
+        fitTargetNodeIDs: Set<String>,
         visibleNodeIDs: Set<String>,
         nodePositions: [NodePosition]
     ) {
@@ -740,11 +1133,18 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         lastFitToSelectionRequest = fitToSelectionRequest
         guard fitToSelectionRequest != nil, let view else { return }
 
-        // Fit to all visible nodes (respecting focus filter)
-        // If visibleNodeIDs is empty, fall back to all nodes
-        let targetNodeIDs = visibleNodeIDs.isEmpty
-            ? Set(nodePositions.map { $0.id })
-            : visibleNodeIDs
+        // Priority:
+        // 1) Explicit fit targets (e.g., multi-selection extents).
+        // 2) Visible nodes (focus-filtered).
+        // 3) All nodes.
+        let targetNodeIDs: Set<String>
+        if !fitTargetNodeIDs.isEmpty {
+            targetNodeIDs = fitTargetNodeIDs
+        } else if !visibleNodeIDs.isEmpty {
+            targetNodeIDs = visibleNodeIDs
+        } else {
+            targetNodeIDs = Set(nodePositions.map { $0.id })
+        }
 
         guard let bounds = GraphAlgorithms.boundingBox(
             visibleNodeIDs: targetNodeIDs,
@@ -828,6 +1228,29 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             }
         }
 
+        activePulses = activePulses.filter { currentTime - $0.value < Self.pulseDuration }
+        if let edgePipeline, !activePulses.isEmpty {
+            var pulseInstances: [EdgeInstance] = []
+            pulseInstances.reserveCapacity(activePulses.count)
+            for (index, start) in activePulses {
+                guard index < edgeCache.count else { continue }
+                let edge = edgeCache[index]
+                let fade = Float(max(0, 1 - (currentTime - start) / Self.pulseDuration))
+                pulseInstances.append(EdgeInstance(
+                    start: edge.source.position,
+                    end: edge.target.position,
+                    thickness: Float(metrics.edgeThickness(for: edge.weight)) * (1.5 + fade) + 1.0,
+                    color: colorVector(.platformAccent, alpha: fade * fade * 0.85)))
+            }
+            if !pulseInstances.isEmpty {
+                encoder.setRenderPipelineState(edgePipeline)
+                // pulseCap bounds this well under the 4 KB setVertexBytes limit.
+                encoder.setVertexBytes(pulseInstances, length: pulseInstances.count * MemoryLayout<EdgeInstance>.size, index: 0)
+                encoder.setVertexBytes([uniforms], length: MemoryLayout<GraphUniforms>.size, index: 1)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: pulseInstances.count)
+            }
+        }
+
         if let nodePipeline, let nodeBuffer = nodeInstanceBuffer, let circleVertexBuffer {
             encoder.setRenderPipelineState(nodePipeline)
             encoder.setVertexBuffer(circleVertexBuffer, offset: 0, index: 0)
@@ -856,7 +1279,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
-        if currentTime - lastInteractionTime > 0.25, camera.isSettled {
+        if currentTime - lastInteractionTime > 0.25, camera.isSettled, activePulses.isEmpty {
             view.isPaused = true
             view.enableSetNeedsDisplay = true
         }
@@ -880,7 +1303,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         onHover(nil, nil)
     }
 
-    func handleMouseDown(location: CGPoint, modifiers: NSEvent.ModifierFlags) {
+    func handleMouseDown(location: CGPoint, modifiers: GraphInputModifiers) {
         selectionStart = location
         lastDragLocation = location
         accumulatedDrag = .zero
@@ -891,11 +1314,13 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         }
     }
 
-    func handleMouseDragged(location: CGPoint, modifiers: NSEvent.ModifierFlags) {
+    func handleMouseDragged(location: CGPoint, modifiers: GraphInputModifiers) {
         _ = modifiers
         guard let selectionStart else { return }
         let previous = lastDragLocation ?? selectionStart
-        let delta = CGSize(width: location.x - previous.x, height: location.y - previous.y)
+        // AppKit mouse coordinates are Y-up, but the graph camera/shader pipeline uses screen-space Y-down.
+        // Flip the drag delta on Y so vertical pan direction matches expected scrolling behavior.
+        let delta = CGSize(width: location.x - previous.x, height: previous.y - location.y)
         accumulatedDrag.width += delta.width
         accumulatedDrag.height += delta.height
         lastDragLocation = location
@@ -914,7 +1339,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         }
     }
 
-    func handleMouseUp(location: CGPoint, modifiers: NSEvent.ModifierFlags, clickCount: Int) {
+    func handleMouseUp(location: CGPoint, modifiers: GraphInputModifiers, clickCount: Int) {
         defer {
             selectionStart = nil
             lastDragLocation = nil
@@ -951,7 +1376,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         onSelectionRect(nil)
     }
 
-    func handleScroll(location: CGPoint, delta: CGSize, modifiers: NSEvent.ModifierFlags, isTrackpad: Bool) -> Bool {
+    func handleScroll(location: CGPoint, delta: CGSize, modifiers: GraphInputModifiers, isTrackpad: Bool) -> Bool {
         // HIG-compliant scroll behavior:
         // - Regular scroll (no modifier): passes through to page ScrollView
         // - ⌘ or Option + scroll: zooms the graph
@@ -982,6 +1407,84 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         requestInteractionRedraw()
     }
 
+    func contextMenu(at location: CGPoint) -> GraphContextMenu? {
+        guard let view, let hit = hitTest(at: location, in: view), let node = nodeIndex[hit.id] else {
+            contextMenuNodeCallsign = nil
+            return nil
+        }
+        let normalized = CallsignValidator.normalize(node.callsign)
+        guard !normalized.isEmpty else {
+            contextMenuNodeCallsign = nil
+            return nil
+        }
+        contextMenuNodeCallsign = normalized
+        contextMenuNodeID = hit.id
+
+        // Modelled rather than built: macOS turns this into an NSMenu and
+        // iOS into a SwiftUI context menu, so the actions exist once.
+        var actions: [GraphContextAction] = [
+            GraphContextAction(id: "drawPath", title: "Draw Path to Here") { [weak self] in
+                self?.handleContextMenuDrawPath()
+            },
+            .separator("sep"),
+        ]
+
+        if isServiceEndpointIgnored(normalized) && isServiceEndpointSimulated(normalized) {
+            actions.append(GraphContextAction(id: "applySimulated", title: "Apply Simulated Removal") { [weak self] in
+                self?.handleContextMenuApplySimulatedIgnore()
+            })
+            actions.append(GraphContextAction(id: "cancelSimulated", title: "Cancel Simulated Removal") { [weak self] in
+                self?.handleContextMenuCancelSimulatedIgnore()
+            })
+        } else if isServiceEndpointIgnored(normalized) {
+            actions.append(GraphContextAction(id: "removeIgnore",
+                                              title: "Remove From Ignored Service Endpoints") { [weak self] in
+                self?.handleContextMenuRemoveIgnore()
+            })
+        } else {
+            actions.append(GraphContextAction(id: "addIgnore",
+                                              title: "Ignore As Service Endpoint") { [weak self] in
+                self?.handleContextMenuAddIgnore()
+            })
+            actions.append(GraphContextAction(id: "simulateIgnore",
+                                              title: "Simulate Removing From Graph") { [weak self] in
+                self?.handleContextMenuSimulateIgnore()
+            })
+        }
+
+        return GraphContextMenu(nodeID: hit.id, callsign: normalized, actions: actions)
+    }
+
+    private func handleContextMenuDrawPath() {
+        guard let nodeID = contextMenuNodeID else { return }
+        onDrawPathTo(nodeID)
+    }
+
+    private func handleContextMenuAddIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onAddServiceEndpointIgnore(callsign)
+    }
+
+    private func handleContextMenuRemoveIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onRemoveServiceEndpointIgnore(callsign)
+    }
+
+    private func handleContextMenuSimulateIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onSimulateServiceEndpointIgnore(callsign)
+    }
+
+    private func handleContextMenuApplySimulatedIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onApplySimulatedServiceEndpointIgnore(callsign)
+    }
+
+    private func handleContextMenuCancelSimulatedIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onCancelSimulatedServiceEndpointIgnore(callsign)
+    }
+
     // MARK: - Rendering Helpers
 
     private func setupMetal(in view: GraphMetalView) {
@@ -990,11 +1493,37 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         circleVertexBuffer = makeCircleVertexBuffer(device: device)
 
         let sampleCount = view.sampleCount
+
+        // Every shader this view needs, resolved before anything is built
+        // from them.
+        //
+        // The do/catch below was written to let a broken pipeline degrade to
+        // an empty graph, and for a missing shader it could never run: Metal's
+        // validation layer asserts on a nil vertexFunction and aborts the
+        // process inside makeRenderPipelineState, so nothing is thrown and
+        // nothing is caught. A missing metallib took the whole app down on the
+        // first visit to Analytics instead of drawing nothing and saying why
+        // (2026-09-17).
+        //
+        // A library can be absent for reasons that have nothing to do with the
+        // operator: a build whose Metal sources did not compile, or a bundle
+        // deleted underneath a running copy. Neither is worth a crash.
         let library = device.makeDefaultLibrary()
+        guard let nodeVertex = library?.makeFunction(name: "graphNodeVertex"),
+              let edgeVertex = library?.makeFunction(name: "graphEdgeVertex"),
+              let solidFragment = library?.makeFunction(name: "graphSolidFragment") else {
+            self.nodePipeline = nil
+            self.edgePipeline = nil
+            Telemetry.capture(
+                message: "Metal shader library unavailable, graph will not render",
+                data: ["device": device.name, "hasLibrary": library != nil]
+            )
+            return
+        }
 
         let nodePipeline = MTLRenderPipelineDescriptor()
-        nodePipeline.vertexFunction = library?.makeFunction(name: "graphNodeVertex")
-        nodePipeline.fragmentFunction = library?.makeFunction(name: "graphSolidFragment")
+        nodePipeline.vertexFunction = nodeVertex
+        nodePipeline.fragmentFunction = solidFragment
         nodePipeline.colorAttachments[0].pixelFormat = view.colorPixelFormat
         nodePipeline.rasterSampleCount = sampleCount
         nodePipeline.colorAttachments[0].isBlendingEnabled = true
@@ -1006,8 +1535,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         nodePipeline.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
         let edgePipeline = MTLRenderPipelineDescriptor()
-        edgePipeline.vertexFunction = library?.makeFunction(name: "graphEdgeVertex")
-        edgePipeline.fragmentFunction = library?.makeFunction(name: "graphSolidFragment")
+        edgePipeline.vertexFunction = edgeVertex
+        edgePipeline.fragmentFunction = solidFragment
         edgePipeline.colorAttachments[0].pixelFormat = view.colorPixelFormat
         edgePipeline.rasterSampleCount = sampleCount
         edgePipeline.colorAttachments[0].isBlendingEnabled = true
@@ -1024,6 +1553,13 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         } catch {
             self.nodePipeline = nil
             self.edgePipeline = nil
+            // Total feature failure — the graph silently renders nothing.
+            // This previously produced no log, no print, and no Sentry event.
+            Telemetry.capture(
+                error: error,
+                message: "Metal render pipeline creation failed — graph will not render",
+                data: ["device": device.name]
+            )
         }
     }
 
@@ -1033,17 +1569,15 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         myCallsign: String,
         visibleNodeIDs: Set<String>
     ) {
+        focusNeighborhoodIDs = visibleNodeIDs
         nodeCache.removeAll()
         edgeCache.removeAll()
         nodeIndex.removeAll()
 
         let positionMap = Dictionary(uniqueKeysWithValues: positions.map { ($0.id, $0) })
 
-        // Determine which nodes to render (all if visibleNodeIDs is empty, otherwise filtered)
-        let shouldFilter = !visibleNodeIDs.isEmpty
-        let filteredNodes = shouldFilter
-            ? model.nodes.filter { visibleNodeIDs.contains($0.id) }
-            : model.nodes
+        // Focus mode is visual-only: keep full context visible and dim out-of-focus elements.
+        let filteredNodes = model.nodes
 
         let weights = filteredNodes.map { $0.weight }
         metrics = GraphMetrics(
@@ -1060,16 +1594,14 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 callsign: node.callsign,
                 position: SIMD2(Float(position.x), Float(position.y)),
                 weight: node.weight,
-                isMyNode: isMyNode
+                isMyNode: isMyNode,
+                isOfficial: node.isNetRomOfficial
             )
             nodeCache.append(info)
             nodeIndex[node.id] = info
         }
 
-        // Filter edges: only include edges where both endpoints are visible
-        let filteredEdges = shouldFilter
-            ? model.edges.filter { visibleNodeIDs.contains($0.sourceID) && visibleNodeIDs.contains($0.targetID) }
-            : model.edges
+        let filteredEdges = model.edges
 
         for edge in filteredEdges {
             guard let source = nodeIndex[edge.sourceID],
@@ -1077,10 +1609,26 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             let info = GraphEdgeInfo(
                 source: source,
                 target: target,
-                weight: edge.weight
+                linkType: edge.linkType,
+                weight: edge.weight,
+                isStale: edge.isStale
             )
             edgeCache.append(info)
         }
+
+        pulseCallsignToNodeID.removeAll()
+        for node in filteredNodes {
+            pulseCallsignToNodeID[node.callsign.uppercased()] = node.id
+            for ssid in node.groupedSSIDs {
+                pulseCallsignToNodeID[ssid.uppercased()] = node.id
+            }
+        }
+        pulseEdgeIndexByPair.removeAll()
+        for (index, edge) in edgeCache.enumerated() {
+            pulseEdgeIndexByPair[Self.pairKey(edge.source.id, edge.target.id)] = index
+        }
+        // Edge indices shifted; in-flight pulses (≤1.2 s) are not worth remapping.
+        activePulses.removeAll()
 
         rebuildBaseEdgeBuffer()
         let selected = highlightKey?.selectedNodeIDs ?? []
@@ -1097,9 +1645,24 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private func rebuildBaseEdgeBuffer() {
         guard let device = view?.device else { return }
         let instances: [EdgeInstance] = edgeCache.map { edge in
-            let alpha = metrics.edgeAlpha(for: edge.weight)
-            let baseColor = colorVector(.secondaryLabelColor, alpha: Float(alpha))
-            let thickness = metrics.edgeThickness(for: edge.weight)
+            let isFocusedContext = focusNeighborhoodIDs.isEmpty ||
+                focusNeighborhoodIDs.contains(edge.source.id) ||
+                focusNeighborhoodIDs.contains(edge.target.id)
+            var alpha = Float(metrics.edgeAlpha(for: edge.weight))
+            if edge.linkType == .heardVia {
+                alpha *= 0.55
+            }
+            if edge.isStale {
+                alpha *= 0.3 // Dim stale routes
+            }
+            if !isFocusedContext {
+                alpha *= 0.22
+            }
+            let edgeColor: PlatformColor = edge.linkType == .heardVia ? .platformTertiaryLabel : .platformSecondaryLabel
+            let baseColor = colorVector(edgeColor, alpha: alpha)
+            let thickness = isFocusedContext
+                ? metrics.edgeThickness(for: edge.weight)
+                : metrics.edgeThickness(for: edge.weight) * 0.85
             return EdgeInstance(
                 start: edge.source.position,
                 end: edge.target.position,
@@ -1135,8 +1698,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         let instances = edgeCache.compactMap { edge -> EdgeInstance? in
             guard focusIDs.contains(edge.source.id) || focusIDs.contains(edge.target.id) else { return nil }
             let thickness = metrics.edgeThickness(for: edge.weight)
-            let alpha = max(metrics.edgeAlpha(for: edge.weight), CGFloat(AnalyticsStyle.Graph.hoverEdgeAlpha))
-            let color = colorVector(.controlAccentColor, alpha: Float(alpha))
+            var alpha = Float(max(metrics.edgeAlpha(for: edge.weight), CGFloat(AnalyticsStyle.Graph.hoverEdgeAlpha)))
+            if edge.isStale {
+                alpha *= 0.4 // Still dim even when highlighted, but slightly less than base
+            }
+            let color = colorVector(.platformAccent, alpha: alpha)
             return EdgeInstance(
                 start: edge.source.position,
                 end: edge.target.position,
@@ -1153,11 +1719,12 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
 
     private func rebuildNodeBuffer(selectedNodeIDs: Set<String>, hoveredNodeID: String?) {
         guard let device = view?.device else { return }
-        let baseColor = colorVector(.secondaryLabelColor, alpha: 0.9)
-        let hoverColor = colorVector(.labelColor, alpha: 1.0)
-        let selectedColor = colorVector(.controlAccentColor, alpha: 1.0)
+        let baseColor = colorVector(.platformSecondaryLabel, alpha: 0.9)
+        let hoverColor = colorVector(.platformLabel, alpha: 1.0)
+        let selectedColor = colorVector(.platformAccent, alpha: 1.0)
         let myNodeColor = colorVector(.systemPurple, alpha: 1.0)
-        let outlineColor = colorVector(.controlAccentColor, alpha: 0.55)
+        let officialNodeColor = colorVector(.systemOrange, alpha: 1.0)
+        let outlineColor = colorVector(.platformAccent, alpha: 0.55)
         let myNodeOutline = colorVector(.systemPurple, alpha: 0.7)
 
         var instances: [NodeInstance] = []
@@ -1168,6 +1735,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             let isSelected = selectedNodeIDs.contains(node.id)
             let isHovered = hoveredNodeID == node.id
             let isMyNode = node.isMyNode
+            let isInFocusNeighborhood = focusNeighborhoodIDs.isEmpty || focusNeighborhoodIDs.contains(node.id)
             let scale: CGFloat = isMyNode ? AnalyticsStyle.Graph.myNodeScale : 1.0
             let resolvedRadius = Float(radius * scale)
             let color: SIMD4<Float>
@@ -1177,11 +1745,20 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 color = hoverColor
             } else if isMyNode {
                 color = myNodeColor
+            } else if node.isOfficial {
+                color = officialNodeColor
             } else {
                 color = baseColor
             }
 
-            instances.append(NodeInstance(center: node.position, radius: resolvedRadius, color: color))
+            let finalColor: SIMD4<Float>
+            if isInFocusNeighborhood || isSelected || isHovered || isMyNode {
+                finalColor = color
+            } else {
+                finalColor = SIMD4(color.x, color.y, color.z, color.w * 0.28)
+            }
+
+            instances.append(NodeInstance(center: node.position, radius: resolvedRadius, color: finalColor))
 
             if isSelected || isHovered || isMyNode {
                 let outlineScale: Float = isSelected ? 1.4 : 1.2
@@ -1222,8 +1799,17 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         return device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<CircleVertex>.size, options: .storageModeShared)
     }
 
+    /// Points-to-pixels for the display this view is on.
+    ///
+    /// Falls back to the main display rather than 1.0: guessing low renders a
+    /// blurry graph on every Retina screen, which is every screen this app
+    /// runs on.
     private func backingScale(for view: MTKView) -> CGFloat {
-        view.window?.backingScaleFactor ?? 1.0
+        #if os(macOS)
+        return view.window?.backingScaleFactor ?? MainActor.assumeIsolated { PlatformScreen.scale }
+        #else
+        return view.window?.screen.scale ?? MainActor.assumeIsolated { PlatformScreen.scale }
+        #endif
     }
 
     private func requestRedraw() {
@@ -1306,21 +1892,22 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         return selected
     }
 
-    private func colorVector(_ color: NSColor, alpha: Float) -> SIMD4<Float> {
-        let converted = color.usingColorSpace(.sRGB) ?? color
+    private func colorVector(_ color: PlatformColor, alpha: Float) -> SIMD4<Float> {
+        let components = color.sRGBComponents
         return SIMD4(
-            Float(converted.redComponent),
-            Float(converted.greenComponent),
-            Float(converted.blueComponent),
+            Float(components.red),
+            Float(components.green),
+            Float(components.blue),
             alpha
         )
     }
 }
 
 /// Lightweight key to avoid hashing full GraphModel / [NodePosition] on every update.
-private struct GraphRenderKey: Hashable {
+nonisolated private struct GraphRenderKey: Hashable {
     let nodeCount: Int
     let edgeCount: Int
+    let modelChecksum: Int
     let myCallsign: String
     let positionsChecksum: Int
     let visibleNodeCount: Int
@@ -1332,6 +1919,32 @@ private struct GraphRenderKey: Hashable {
         myCallsign: String,
         visibleNodeIDs: Set<String> = []
     ) -> GraphRenderKey {
+        // Include graph topology/content so renderer buffers are rebuilt whenever
+        // logical graph data changes even if counts stay the same.
+        var modelHasher = Hasher()
+        for node in model.nodes.sorted(by: { $0.id < $1.id }) {
+            node.id.hash(into: &modelHasher)
+            node.callsign.hash(into: &modelHasher)
+            node.weight.hash(into: &modelHasher)
+            node.degree.hash(into: &modelHasher)
+            node.isNetRomOfficial.hash(into: &modelHasher)
+            node.inBytes.hash(into: &modelHasher)
+            node.outBytes.hash(into: &modelHasher)
+        }
+        for edge in model.edges.sorted(by: {
+            if $0.sourceID != $1.sourceID { return $0.sourceID < $1.sourceID }
+            if $0.targetID != $1.targetID { return $0.targetID < $1.targetID }
+            if $0.linkType != $1.linkType { return $0.linkType.renderPriority < $1.linkType.renderPriority }
+            if $0.weight != $1.weight { return $0.weight < $1.weight }
+            return ($0.isStale ? 1 : 0) < ($1.isStale ? 1 : 0)
+        }) {
+            edge.sourceID.hash(into: &modelHasher)
+            edge.targetID.hash(into: &modelHasher)
+            edge.linkType.hash(into: &modelHasher)
+            edge.weight.hash(into: &modelHasher)
+            edge.isStale.hash(into: &modelHasher)
+        }
+
         var hasher = Hasher()
         for p in positions.sorted(by: { $0.id < $1.id }) {
             p.id.hash(into: &hasher)
@@ -1346,6 +1959,7 @@ private struct GraphRenderKey: Hashable {
         return GraphRenderKey(
             nodeCount: model.nodes.count,
             edgeCount: model.edges.count,
+            modelChecksum: modelHasher.finalize(),
             myCallsign: myCallsign,
             positionsChecksum: hasher.finalize(),
             visibleNodeCount: visibleNodeIDs.count,
@@ -1354,26 +1968,29 @@ private struct GraphRenderKey: Hashable {
     }
 }
 
-private struct GraphHighlightKey: Hashable {
+nonisolated private struct GraphHighlightKey: Hashable {
     let selectedNodeIDs: Set<String>
     let hoveredNodeID: String?
 }
 
-private struct GraphNodeInfo: Hashable {
+nonisolated private struct GraphNodeInfo: Hashable {
     let id: String
     let callsign: String
     let position: SIMD2<Float>
     let weight: Int
     let isMyNode: Bool
+    let isOfficial: Bool
 }
 
-private struct GraphEdgeInfo: Hashable {
+nonisolated private struct GraphEdgeInfo: Hashable {
     let source: GraphNodeInfo
     let target: GraphNodeInfo
+    let linkType: LinkType
     let weight: Int
+    let isStale: Bool
 }
 
-private struct GraphMetrics {
+nonisolated private struct GraphMetrics {
     let minNodeWeight: Int
     let maxNodeWeight: Int
     let maxEdgeWeight: Int
@@ -1401,14 +2018,15 @@ private struct GraphMetrics {
     }
 }
 
-private struct GraphCamera {
+nonisolated private struct GraphCamera {
     var scale: CGFloat = 1
     var offset: CGSize = .zero
     private var targetScale: CGFloat = 1
     private var targetOffset: CGSize = .zero
 
-    /// Maximum pan distance from center (as fraction of view size)
-    private static let maxPanFraction: CGFloat = 0.6
+    /// Maximum pan distance from center (as fraction of view size at 1x).
+    /// Kept tighter to prevent the graph from being panned mostly off-canvas.
+    private static let baseMaxPanFraction: CGFloat = 0.28
 
     var isSettled: Bool {
         abs(scale - targetScale) < AnalyticsStyle.Graph.cameraSnapScaleEpsilon &&
@@ -1432,15 +2050,19 @@ private struct GraphCamera {
     /// Clamps target offset so the graph cannot be panned off-screen
     private mutating func clampOffset(viewSize: CGSize?) {
         guard let viewSize, viewSize.width > 0, viewSize.height > 0 else { return }
-        // Allow panning up to maxPanFraction of view size in any direction
-        // Scale the limit inversely with zoom - when zoomed out, allow less panning
+        // Allow modest panning at 1x, then expand allowance gradually when zoomed in.
         let effectiveScale = max(scale, targetScale)
-        let maxPanX = viewSize.width * Self.maxPanFraction * effectiveScale
-        let maxPanY = viewSize.height * Self.maxPanFraction * effectiveScale
+        let zoomAllowance = max(1, sqrt(effectiveScale))
+        let maxPanX = viewSize.width * Self.baseMaxPanFraction * zoomAllowance
+        let maxPanY = viewSize.height * Self.baseMaxPanFraction * zoomAllowance
         targetOffset.width = targetOffset.width.clamped(to: -maxPanX...maxPanX)
         targetOffset.height = targetOffset.height.clamped(to: -maxPanY...maxPanY)
     }
 
+    // `@MainActor` because it reads the view's bounds, and a view's bounds
+    // are main-actor state. Zooming is a gesture response, so it is already
+    // on the main actor when it runs.
+    @MainActor
     mutating func zoom(at location: CGPoint, scaleDelta: CGFloat, view: MTKView?) {
         guard let view else { return }
         guard scaleDelta > 0 else { return }
@@ -1561,7 +2183,7 @@ private struct GraphCamera {
 }
 
 /// Canonical normalized [0,1] -> drawable pixel mapping; must match Metal toPixel exactly.
-private enum GraphCoordinateMapper {
+nonisolated private enum GraphCoordinateMapper {
     /// Converts normalized (x,y in [0,1]) to pixel coordinates in drawable space.
     /// Uses same formula as shader: base = inset + normalized * (size - inset*2); pixel = (base - center)*scale + center + offset.
     static func normalizedToPixel(
@@ -1585,7 +2207,7 @@ private enum GraphCoordinateMapper {
     }
 }
 
-private enum CallsignMatcher {
+nonisolated private enum CallsignMatcher {
     static func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     }
@@ -1601,7 +2223,7 @@ private enum CallsignMatcher {
     }
 }
 
-private struct GraphUniforms {
+nonisolated private struct GraphUniforms {
     var viewSize: SIMD2<Float>
     var inset: SIMD2<Float>
     var offset: SIMD2<Float>
@@ -1609,17 +2231,17 @@ private struct GraphUniforms {
     var padding: Float = 0
 }
 
-private struct CircleVertex {
+nonisolated private struct CircleVertex {
     var position: SIMD2<Float>
 }
 
-private struct NodeInstance {
+nonisolated private struct NodeInstance {
     var center: SIMD2<Float>
     var radius: Float
     var color: SIMD4<Float>
 }
 
-private struct EdgeInstance {
+nonisolated private struct EdgeInstance {
     var start: SIMD2<Float>
     var end: SIMD2<Float>
     var thickness: Float
@@ -1636,7 +2258,9 @@ private extension ClosedRange where Bound: Comparable {
 }
 
 private extension CGFloat {
-    func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
+    // See the Int version: pure arithmetic, explicitly nonisolated so the
+    // renderer's value types can use it without crossing an actor.
+    nonisolated func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
         let (lo, hi) = range.lowerBound <= range.upperBound
             ? (range.lowerBound, range.upperBound)
             : (range.upperBound, range.lowerBound)

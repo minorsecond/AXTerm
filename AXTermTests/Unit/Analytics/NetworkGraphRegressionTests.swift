@@ -743,6 +743,207 @@ final class ClassificationCorrectnessTests: XCTestCase {
             "Infrastructure traffic should not create DirectPeer edges"
         )
     }
+
+    /// Digipeater aliases (without numeric call-area digits) should still appear as routing nodes.
+    func testDigipeaterAliasesIncludedWithoutIncludingServiceEndpoints() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+
+        // Valid endpoint traffic routed via tactical digi aliases.
+        _ = builder.addViaObservation(from: "K5STA", to: "N0CALL", via: ["DRL"], count: 3)
+        _ = builder.addViaObservation(from: "K5STA", to: "N0CALL", via: ["DRLNOD"], count: 2)
+
+        // Service endpoint traffic should not be admitted as routing nodes.
+        _ = builder.addViaObservation(from: "K5STA", to: "ID", via: ["DRL"], count: 2)
+        _ = builder.addViaObservation(from: "K5STA", to: "BEACON", via: ["DRLNOD"], count: 2)
+
+        let packets = builder.buildPackets()
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: true,
+            minimumEdgeCount: 1,
+            maxNodes: 100,
+            stationIdentityMode: .station
+        )
+
+        let graph = NetworkGraphBuilder.buildClassified(packets: packets, options: options, now: now)
+        let nodeIDs = Set(graph.nodes.map(\.id))
+
+        XCTAssertTrue(nodeIDs.contains("DRL"), "DRL alias digipeater should be present as a graph node")
+        XCTAssertTrue(nodeIDs.contains("DRLNOD"), "DRLNOD alias digipeater should be present as a graph node")
+        XCTAssertFalse(nodeIDs.contains("ID"), "ID should remain excluded from graph nodes")
+        XCTAssertFalse(nodeIDs.contains("BEACON"), "BEACON should remain excluded from graph nodes")
+    }
+
+    /// Tactical-alias endpoints are real stations: their traffic must form
+    /// nodes and edges exactly like callsign traffic.
+    func testAliasEndpointTrafficFormsDirectPeer() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        _ = builder.addDirectPeerExchange(between: "DRLNOD", and: "K0EPI", countEachDirection: 3)
+        let packets = builder.buildPackets()
+
+        let graph = NetworkGraphBuilder.buildClassified(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: false,
+                minimumEdgeCount: 1,
+                maxNodes: 100,
+                stationIdentityMode: .station
+            ),
+            now: now
+        )
+
+        let nodeIDs = Set(graph.nodes.map(\.id))
+        XCTAssertTrue(nodeIDs.contains("DRLNOD"), "Alias endpoint must be a graph node")
+        XCTAssertTrue(nodeIDs.contains("K0EPI"))
+        XCTAssertTrue(
+            GraphAssertions.assertEdgeExists(graph, from: "DRLNOD", to: "K0EPI", type: .directPeer),
+            "Bidirectional alias traffic must create a DirectPeer edge"
+        )
+    }
+
+    /// A station whose only traffic is beacons to a service destination still
+    /// exists on air: it becomes a node (with traffic stats) but the service
+    /// destination never does, and no edge is drawn.
+    func testBeaconOnlySendersRemainVisibleAsStations() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        _ = builder.addDirectEndpoint(from: "K5STA", to: "BEACON", count: 3)
+        _ = builder.addDirectEndpoint(from: "N7QRP", to: "ID", count: 2)
+        let packets = builder.buildPackets()
+
+        let graph = NetworkGraphBuilder.buildClassified(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: false,
+                minimumEdgeCount: 1,
+                maxNodes: 100,
+                stationIdentityMode: .station
+            ),
+            now: now
+        )
+
+        let nodeIDs = Set(graph.nodes.map(\.id))
+        XCTAssertTrue(nodeIDs.contains("K5STA"), "Beacon-only sender must be visible as a station")
+        XCTAssertTrue(nodeIDs.contains("N7QRP"))
+        XCTAssertFalse(nodeIDs.contains("BEACON"))
+        XCTAssertFalse(nodeIDs.contains("ID"))
+        XCTAssertTrue(graph.edges.isEmpty, "Service-destination traffic must not create edges")
+
+        let k5sta = graph.nodes.first { $0.id == "K5STA" }
+        XCTAssertEqual(k5sta?.outCount, 3, "Beacon frames still count as the sender's traffic")
+    }
+
+    /// NET/ROM broadcasts (destination "NODES") prove the sender exists but must
+    /// never grow a phantom NODES station.
+    func testNetRomBroadcastsDoNotCreateNodesStation() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        _ = builder.addUIBroadcast(from: "DRLNOD", hearingStation: "NODES")
+        _ = builder.addUIBroadcast(from: "DRLNOD", hearingStation: "NODES")
+        _ = builder.addUIBroadcast(from: "KB5YZB-7", hearingStation: "NODES")
+        let packets = builder.buildPackets()
+
+        let graph = NetworkGraphBuilder.buildClassified(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: false,
+                minimumEdgeCount: 1,
+                maxNodes: 100,
+                stationIdentityMode: .station
+            ),
+            now: now
+        )
+
+        let nodeIDs = Set(graph.nodes.map(\.id))
+        XCTAssertTrue(nodeIDs.contains("DRLNOD"), "Broadcasting node must be visible")
+        XCTAssertTrue(nodeIDs.contains("KB5YZB"))
+        XCTAssertFalse(nodeIDs.contains("NODES"), "The broadcast destination is not a station")
+        XCTAssertTrue(graph.edges.isEmpty)
+    }
+
+    /// A digipeated beacon still credits the digipeater: the digi transmitted,
+    /// so it gains a node, stats, and a hop edge from the sender — while the
+    /// service destination stays out.
+    func testDigipeatedBeaconStillCreditsDigipeater() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        _ = builder.addViaObservation(from: "K5STA", to: "ID", via: ["DRLNOD"], count: 3)
+        let packets = builder.buildPackets()
+
+        let graph = NetworkGraphBuilder.buildClassified(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: true,
+                minimumEdgeCount: 1,
+                maxNodes: 100,
+                stationIdentityMode: .station
+            ),
+            now: now
+        )
+
+        let nodeIDs = Set(graph.nodes.map(\.id))
+        XCTAssertTrue(nodeIDs.contains("K5STA"))
+        XCTAssertTrue(nodeIDs.contains("DRLNOD"), "The digi transmitted the beacon; it must be credited")
+        XCTAssertFalse(nodeIDs.contains("ID"))
+        XCTAssertTrue(
+            GraphAssertions.assertEdgeExists(graph, from: "K5STA", to: "DRLNOD", type: .heardVia),
+            "Sender-to-digi hop is real RF evidence even when the destination is a service name"
+        )
+        XCTAssertFalse(nodeIDs.contains("NODES"))
+    }
+
+    /// Corrupt decodes with symbols must not enter the graph from either endpoint.
+    func testCorruptDecodeEndpointsAreDropped() {
+        let now = Date()
+        let packets = [
+            Packet(
+                timestamp: now.addingTimeInterval(-60),
+                from: AX25Address(call: ":L|VR", ssid: 8),
+                to: AX25Address(call: "KVQ$U(", ssid: 15),
+                frameType: .unknown,
+                info: Data()
+            )
+        ]
+
+        let graph = NetworkGraphBuilder.buildClassified(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: true,
+                minimumEdgeCount: 1,
+                maxNodes: 100,
+                stationIdentityMode: .station
+            ),
+            now: now
+        )
+
+        XCTAssertTrue(graph.nodes.isEmpty, "Corrupt decodes must not become stations")
+        XCTAssertTrue(graph.edges.isEmpty)
+    }
+
+    /// User-configured ignore entries should suppress regional service endpoints from graph identities.
+    func testUserIgnoredServiceEndpointIsExcluded() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        defer { CallsignValidator.configureIgnoredServiceEndpoints([]) }
+
+        CallsignValidator.configureIgnoredServiceEndpoints(["HORSE"])
+
+        _ = builder.addViaObservation(from: "K5STA", to: "N0CALL", via: ["HORSE"], count: 4)
+        let packets = builder.buildPackets()
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: true,
+            minimumEdgeCount: 1,
+            maxNodes: 100,
+            stationIdentityMode: .station
+        )
+
+        let graph = NetworkGraphBuilder.buildClassified(packets: packets, options: options, now: now)
+        let nodeIDs = Set(graph.nodes.map(\.id))
+        XCTAssertFalse(nodeIDs.contains("HORSE"), "Custom ignored endpoint should be excluded from graph nodes")
+    }
 }
 
 // MARK: - ViewModeIntegrationTests

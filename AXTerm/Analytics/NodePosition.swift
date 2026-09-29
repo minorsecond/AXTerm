@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct NodePosition: Hashable, Sendable {
+nonisolated struct NodePosition: Hashable, Sendable {
     let id: String
     let x: Double
     let y: Double

@@ -16,7 +16,10 @@ import Foundation
 // MARK: - Int Clamped Extension
 
 extension Int {
-    func clamped(to range: ClosedRange<Int>) -> Int {
+    // Arithmetic, so it belongs to no actor. The project defaults
+    // un-annotated declarations to the main actor, which made clamping an
+    // integer a main-actor call and every nonisolated caller a warning.
+    nonisolated func clamped(to range: ClosedRange<Int>) -> Int {
         Swift.min(range.upperBound, Swift.max(range.lowerBound, self))
     }
 }
@@ -24,7 +27,7 @@ extension Int {
 // MARK: - Hub Metric
 
 /// Metric used to identify the "primary hub" node
-enum HubMetric: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum HubMetric: String, CaseIterable, Identifiable, Sendable {
     case degree = "Degree"
     case traffic = "Traffic"
     case bridges = "Bridges"
@@ -52,7 +55,7 @@ enum HubMetric: String, CaseIterable, Identifiable, Sendable {
 /// - Focus anchor = "What am I filtering around?" (filters visible graph)
 ///
 /// Users can select different nodes while maintaining focus on an anchor.
-struct GraphFocusState: Equatable, Sendable {
+nonisolated struct GraphFocusState: Equatable, Sendable {
     /// Whether focus mode is enabled (filters graph to k-hop neighborhood)
     var isFocusEnabled: Bool = false
 
@@ -97,7 +100,7 @@ struct GraphFocusState: Equatable, Sendable {
 // MARK: - Filtered Graph Result
 
 /// Result of k-hop filtering: contains the visible subgraph
-struct FilteredGraphResult: Equatable, Sendable {
+nonisolated struct FilteredGraphResult: Equatable, Sendable {
     /// Node IDs within k hops of the focus node(s)
     let visibleNodeIDs: Set<String>
 
@@ -119,7 +122,7 @@ struct FilteredGraphResult: Equatable, Sendable {
 }
 
 /// Hashable key for edges (order-independent for undirected graphs)
-struct FocusEdgeKey: Hashable, Sendable {
+nonisolated struct FocusEdgeKey: Hashable, Sendable {
     let nodeA: String
     let nodeB: String
 
@@ -138,7 +141,7 @@ struct FocusEdgeKey: Hashable, Sendable {
 // MARK: - Graph Algorithms
 
 /// Graph algorithms for k-hop filtering and hub metrics
-enum GraphAlgorithms {
+nonisolated enum GraphAlgorithms {
     // MARK: - K-Hop Neighborhood (BFS)
 
     /// Computes the k-hop neighborhood of a node using BFS.

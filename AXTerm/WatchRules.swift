@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct WatchMatch: Equatable {
+nonisolated struct WatchMatch: Equatable {
     let matchedCallsigns: [String]
     let matchedKeywords: [String]
 
@@ -115,7 +115,7 @@ final class EventLogWatchRecorder: WatchEventRecording {
                 try store.append(entry)
                 try store.pruneIfNeeded(retentionLimit: retentionLimit)
             } catch {
-                return
+                Telemetry.capture(error: error, message: "Watch-rule event append/prune failed")
             }
         }
     }
@@ -123,4 +123,7 @@ final class EventLogWatchRecorder: WatchEventRecording {
 
 protocol NotificationScheduling {
     func scheduleWatchNotification(packet: Packet, match: WatchMatch)
+    func scheduleMailNotification(packet: Packet)
+    func scheduleMentionNotification(packet: Packet)
+    func scheduleConnectionNotification(callsign: String)
 }

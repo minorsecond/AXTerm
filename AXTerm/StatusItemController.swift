@@ -1,0 +1,306 @@
+//
+//  StatusItemController.swift
+//  AXTerm
+//
+//  The menu bar presence, owned by AppKit rather than SwiftUI's
+//  MenuBarExtra.
+//
+//  Why not MenuBarExtra: its controller re-sets the status button's
+//  image from `Update.dispatchActions`, which runs during EVERY window's
+//  render flush — not just the menu's own. Each setImage invalidates
+//  intrinsic size on the 32×24 status window, and a packet flood
+//  producing several main-window render flushes in one display cycle
+//  tripped AppKit's "more Update Constraints passes than views" guard,
+//  which is thrown as an NSException that stalled the app (sampled live
+//  2026-08-29, twice; the second sample showed the main thread inside
+//  -[NSApplication _crashOnException:]). Slowing our own publishes and
+//  decoupling the menu content both failed to stop it, because the
+//  driver is the framework's own update dispatch. Owning the
+//  NSStatusItem directly means the image is set exactly once and the
+//  menu reads live state only at the moment it opens — pinned by
+//  StatusItemControllerTests.
+//
+
+#if os(macOS)
+import AppKit
+import Combine
+
+@MainActor
+final class StatusItemController: NSObject, NSMenuDelegate {
+
+    /// Retained for the life of the app; created in AXTermApp.init.
+    static var shared: StatusItemController?
+
+    private let client: PacketEngine
+    private let settings: AppSettingsStore
+    private let inspectionRouter: PacketInspectionRouter
+    private let defaults: UserDefaults
+
+    private var statusItem: NSStatusItem?
+    /// Pinned by tests: exactly one for the life of the item.
+    private(set) var buttonImageSetCount = 0
+    var isInserted: Bool { statusItem != nil }
+
+    init(client: PacketEngine,
+         settings: AppSettingsStore,
+         inspectionRouter: PacketInspectionRouter,
+         defaults: UserDefaults = AppEnvironment.defaults) {
+        self.client = client
+        self.settings = settings
+        self.inspectionRouter = inspectionRouter
+        self.defaults = defaults
+        super.init()
+
+        // The status bar is not usable until the app finishes launching;
+        // in tests (and any post-launch construction) sync immediately.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didFinishLaunchingNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.syncInsertion() }
+        }
+        // The Settings toggle writes the same defaults key the old
+        // MenuBarExtra(isInserted:) binding used — follow it live.
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: defaults, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.syncInsertion() }
+        }
+        syncInsertion()
+    }
+
+    /// The pure half: whether a status item belongs in the bar, given the
+    /// stored preference and whether there is yet an app to put it in.
+    ///
+    /// `appIsRunning` is not a nicety. AppKit registers its own defaults
+    /// from `+[NSApplication initialize]`, which posts
+    /// `UserDefaults.didChangeNotification`, so the observer in `init` runs
+    /// before NSApp exists. Inserting there builds an NSStatusBarWindow; an
+    /// NSWindow calls `+sharedApplication`; with no NSApp yet that
+    /// constructs a *second* NSApplication, whose own init registers
+    /// defaults, which posts again, which lands back here. AppKit traps on
+    /// the third instance (2026-09-17).
+    ///
+    /// Reachable only with "Run in menu bar" switched on, since that is the
+    /// only case that inserts anything — which made it a crash on every
+    /// launch, from a setting the operator could no longer get in to switch
+    /// back off.
+    static func shouldInsert(runInMenuBar: Bool?, appIsRunning: Bool) -> Bool {
+        guard appIsRunning else { return false }
+        return runInMenuBar ?? AppSettingsStore.defaultRunInMenuBar
+    }
+
+    /// Applies the operator's choice, once there is an app to apply it to.
+    ///
+    /// Answering false before launch is safe rather than merely quiet:
+    /// `setInserted(false)` with nothing inserted touches no AppKit at all.
+    /// And `NSApp.isRunning` is already true when
+    /// `didFinishLaunchingNotification` posts, so the observer in `init`
+    /// still inserts the item on an ordinary launch.
+    private func syncInsertion() {
+        setInserted(Self.shouldInsert(
+            runInMenuBar: defaults.object(forKey: AppSettingsStore.runInMenuBarKey) as? Bool,
+            appIsRunning: NSApp != nil && NSApp.isRunning))
+    }
+
+    func setInserted(_ inserted: Bool) {
+        if inserted {
+            guard statusItem == nil else { return }
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item.button?.image = NSImage(
+                systemSymbolName: "antenna.radiowaves.left.and.right",
+                accessibilityDescription: "AXTerm")
+            buttonImageSetCount += 1
+            let menu = NSMenu()
+            menu.delegate = self
+            item.menu = menu
+            statusItem = item
+        } else if let item = statusItem {
+            NSStatusBar.system.removeStatusItem(item)
+            statusItem = nil
+        }
+    }
+
+    // MARK: - Menu
+
+    /// The pure half: what the menu says, derived from values so tests
+    /// pin it without a status bar.
+    enum MenuModel {
+        static func statusTitle(for status: ConnectionStatus) -> String {
+            switch status {
+            case .connected: return "Connected"
+            case .connecting: return "Connecting"
+            case .disconnected: return "Disconnected"
+            case .failed: return "Connection Failed"
+            }
+        }
+
+        static func connectionAction(for status: ConnectionStatus) -> String {
+            switch status {
+            case .connected, .connecting: return "Disconnect"
+            case .disconnected, .failed: return "Connect"
+            }
+        }
+
+        // MARK: Several radios
+
+        /// The header line. One radio: the string the menu has always shown,
+        /// endpoint and all. Several: how many are up, because the header is
+        /// the one line the operator reads before deciding whether to open
+        /// the submenus.
+        static func headerTitle(radios: [RadioStatusSummary], packetCount: Int) -> String {
+            let packets = "\(packetCount) packets"
+            guard radios.count > 1 else {
+                let radio = radios.first
+                let status = statusTitle(for: radio?.status ?? .disconnected)
+                return "\(status) \u{2014} \(radio?.endpoint ?? "") \u{2022} \(packets)"
+            }
+            let connected = radios.filter { $0.status == .connected }.count
+            if connected == radios.count {
+                return "\(radios.count) radios connected \u{2022} \(packets)"
+            }
+            return "\(connected) of \(radios.count) radios connected \u{2022} \(packets)"
+        }
+
+        /// The ⌘K item. One radio keeps its verb; several act on all of them,
+        /// and any link up or coming up makes the action "Disconnect All" so
+        /// ⌘K always means "stop".
+        static func connectionAction(for statuses: [ConnectionStatus]) -> String {
+            guard statuses.count > 1 else {
+                return connectionAction(for: statuses.first ?? .disconnected)
+            }
+            let anyUp = statuses.contains { $0 == .connected || $0 == .connecting }
+            return anyUp ? "Disconnect All" : "Connect All"
+        }
+    }
+
+    /// Live state is read here and nowhere else — when the operator
+    /// opens the menu, never while it sits closed.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        let radios = client.radioSummaries
+        let status = MenuModel.statusTitle(for: client.status)
+        let primary = settings.primaryRadio
+        let host = client.connectedHost ?? primary?.host ?? AppSettingsStore.defaultHost
+        let port = client.connectedPort.map(String.init) ?? String(primary?.port ?? AppSettingsStore.defaultPort)
+        // One radio: the line the menu has always shown. Several: how many
+        // are up, with one submenu per radio below.
+        let headerTitle = radios.count > 1
+            ? MenuModel.headerTitle(radios: radios, packetCount: client.packets.count)
+            : "\(status) — \(host):\(port) • \(client.packets.count) packets"
+        let header = NSMenuItem(title: headerTitle, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        menu.addItem(.separator())
+
+        menu.addItem(makeItem("Open AXTerm", #selector(openMainWindow)))
+        let toggle = makeItem(MenuModel.connectionAction(for: radios.map(\.status)),
+                              #selector(toggleConnection), key: "k")
+        menu.addItem(toggle)
+        if radios.count > 1 {
+            for radio in radios {
+                let submenu = NSMenu()
+                let state = NSMenuItem(title: "\(MenuModel.statusTitle(for: radio.status)) — \(radio.endpoint)",
+                                       action: nil, keyEquivalent: "")
+                state.isEnabled = false
+                submenu.addItem(state)
+                submenu.addItem(.separator())
+                let action = NSMenuItem(title: MenuModel.connectionAction(for: radio.status),
+                                        action: #selector(toggleRadio(_:)), keyEquivalent: "")
+                action.target = self
+                action.representedObject = radio.id.rawValue
+                submenu.addItem(action)
+                let parent = NSMenuItem(title: radio.name, action: nil, keyEquivalent: "")
+                parent.submenu = submenu
+                menu.addItem(parent)
+            }
+        }
+        menu.addItem(makeItem("Preferences…", #selector(openPreferences)))
+        menu.addItem(.separator())
+
+        let recent = Array(client.packets.suffix(10)).reversed()
+        if !recent.isEmpty {
+            let submenu = NSMenu()
+            for packet in recent {
+                let item = NSMenuItem(
+                    title: "\(packet.fromDisplay) → \(packet.toDisplay) • \(packet.infoPreview)",
+                    action: #selector(openPacket(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = packet.id
+                submenu.addItem(item)
+            }
+            let parent = NSMenuItem(title: "Recent Packets", action: nil, keyEquivalent: "")
+            parent.submenu = submenu
+            menu.addItem(parent)
+            menu.addItem(.separator())
+        }
+
+        #if DEBUG
+        menu.addItem(makeItem("Send Test Event to Sentry", #selector(sendSentryTestEvent)))
+        menu.addItem(.separator())
+        #endif
+
+        menu.addItem(makeItem("Quit AXTerm", #selector(quit)))
+    }
+
+    private func makeItem(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        if !key.isEmpty { item.keyEquivalentModifierMask = [.command] }
+        return item
+    }
+
+    // MARK: - Actions
+
+    @objc private func openMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        let candidates = NSApp.windows.filter { $0.canBecomeMain && !($0 is NSPanel) }
+        let main = candidates.first { $0.identifier?.rawValue.hasPrefix("main") == true }
+            ?? candidates.first
+        main?.makeKeyAndOrderFront(nil)
+        inspectionRouter.consumeOpenWindowRequest()
+    }
+
+    @objc private func toggleConnection() {
+        switch client.status {
+        case .connected, .connecting:
+            client.disconnect(reason: "user toggle connection (menu bar)")
+        case .disconnected, .failed:
+            client.connectUsingSettings()
+        }
+    }
+
+    /// One radio's Connect/Disconnect from its submenu.
+    @objc private func toggleRadio(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        let radio = RadioID(rawValue: raw)
+        switch client.radioManager.state(of: radio) {
+        case .connected, .connecting: client.radioManager.close(radio)
+        case .disconnected, .failed: client.radioManager.open(radio)
+        }
+    }
+
+    @objc private func openPreferences() {
+        // The selector was renamed in macOS 13; try both spellings so
+        // the item works wherever the deployment target lands.
+        if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
+            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func openPacket(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? Packet.ID else { return }
+        inspectionRouter.requestOpenPacket(id: id)
+        openMainWindow()
+    }
+
+    @objc private func sendSentryTestEvent() {
+        SentryManager.shared.sendTestEvent()
+    }
+
+    @objc private func quit() {
+        NSApp.terminate(nil)
+    }
+}
+#endif

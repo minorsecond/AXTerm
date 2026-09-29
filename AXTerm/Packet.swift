@@ -8,7 +8,7 @@
 import Foundation
 
 /// Represents a decoded AX.25 packet
-struct Packet: Identifiable, Hashable, Sendable {
+nonisolated struct Packet: Identifiable, Hashable, Sendable {
     static let infoPreviewLimit: Int = 60
 
     let id: UUID
@@ -25,7 +25,64 @@ struct Packet: Identifiable, Hashable, Sendable {
     /// Cached text decoding of `info` (if mostly printable ASCII).
     let infoText: String?
     let rawAx25: Data
+    /// The TCP endpoint of the link that heard this frame, when it was TCP.
     let kissEndpoint: KISSEndpoint?
+    /// The radio that heard this frame. Nil on frames read back from storage
+    /// written before radios existed, and on synthetic frames.
+    let radioID: RadioID?
+    /// The KISS port nibble the frame arrived with.
+    let kissPort: UInt8
+    /// The link as the operator would name it, for serial and Bluetooth
+    /// links that have no host and port.
+    let linkDescription: String?
+    /// A frame this station transmitted, heard straight back — by another
+    /// of its radios on the same frequency. Kept in the log, counted for no
+    /// station and fed to no metric.
+    let isOwnEcho: Bool
+    /// The session this frame belonged to, when it belonged to one.
+    ///
+    /// Null for most traffic and always will be: a beacon, a NET/ROM
+    /// broadcast, a frame from a station we are not talking to. What it
+    /// buys is the connected exchange read back in order, both directions,
+    /// with every retry present as its own row — which neither the session
+    /// row (totals only) nor the outbound queue (our half only) can show.
+    let sessionId: UUID?
+    /// The queued message this frame was part of delivering. One message
+    /// costs many frames, and a retry is another frame against the same
+    /// message, which is how the cost becomes visible.
+    let messageId: UUID?
+    /// Which way this frame went.
+    ///
+    /// Until 2026-09-17 every stored packet was `rx`: the log held 863
+    /// frames heard and not one frame sent, because the only trace a
+    /// transmission left was a line of console text and an in-memory ring
+    /// buffer that died with the process. After a restart the operator
+    /// could not answer whether a beacon had actually gone out.
+    let direction: Direction
+
+    nonisolated enum Direction: String, Codable, Sendable {
+        case rx
+        /// Handed to the TNC, which is not the same as radiated. Bytes
+        /// reaching Direwolf says nothing about what left the antenna
+        /// (transmission spec, 3.2), so this is the truthful claim: these
+        /// are the bytes we gave the link, at the moment we gave them.
+        case tx
+    }
+
+    /// True when every digipeater in the path has set its has-been-repeated (H)
+    /// bit, or the path is empty (direct frame).
+    ///
+    /// AX.25 digipeating rules: a frame is not "delivered" until each digi in its
+    /// list has actioned it. On a shared-audio attachment (e.g. TCP KISS into the
+    /// digipeater's own TNC) we hear BOTH copies of every digipeated frame — the
+    /// original in transit toward the digi (H=0) and the repeated copy (H=1).
+    /// Acting on the in-transit copy double-processes every frame and, worse, can
+    /// answer a frame the digi has not yet forwarded (field capture 2026-08-22:
+    /// the pre-digipeat UA from KB5YZB-7 via DRLNOD was processed 2 s before the
+    /// real, repeated copy arrived).
+    var isFullyDigipeated: Bool {
+        via.allSatisfy { $0.repeated }
+    }
 
     nonisolated static func computeInfoText(from info: Data) -> String? {
         guard !info.isEmpty else { return nil }
@@ -36,6 +93,29 @@ struct Packet: Identifiable, Hashable, Sendable {
     }
 
     // MARK: - Display Helpers
+
+    /// Determines if this packet is a Command (AX.25 v2.0)
+    var isCommand: Bool {
+        // Command: Dest bit 7 = 1, Src bit 7 = 0
+        // Response: Dest bit 7 = 0, Src bit 7 = 1
+        // (In AX25Address, bit 7 is stored in the `repeated` property for src/dest)
+        if to?.repeated == true && from?.repeated == false {
+            return true
+        }
+        if to?.repeated == false && from?.repeated == true {
+            return false
+        }
+        
+        // V1.0 (both 0 or both 1), or unknown, guess based on frame type
+        let decoded = controlFieldDecoded
+        if decoded.frameClass == .I { return true }
+        if decoded.frameClass == .U {
+            if decoded.uType == .SABM || decoded.uType == .SABME || decoded.uType == .DISC || decoded.uType == .UI {
+                return true
+            }
+        }
+        return false // Defaults to response for RR, RNR, REJ, UA, DM, FRMR
+    }
 
     var fromDisplay: String {
         from?.display ?? "?"
@@ -144,8 +224,18 @@ struct Packet: Identifiable, Hashable, Sendable {
         info: Data = Data(),
         rawAx25: Data = Data(),
         kissEndpoint: KISSEndpoint? = nil,
-        infoText: String? = nil
+        infoText: String? = nil,
+        radioID: RadioID? = nil,
+        kissPort: UInt8 = 0,
+        linkDescription: String? = nil,
+        isOwnEcho: Bool = false,
+        direction: Direction = .rx,
+        sessionId: UUID? = nil,
+        messageId: UUID? = nil
     ) {
+        self.direction = direction
+        self.sessionId = sessionId
+        self.messageId = messageId
         self.id = id
         self.timestamp = timestamp
         self.from = from
@@ -159,6 +249,10 @@ struct Packet: Identifiable, Hashable, Sendable {
         self.infoText = infoText ?? Self.computeInfoText(from: info)
         self.rawAx25 = rawAx25
         self.kissEndpoint = kissEndpoint
+        self.radioID = radioID
+        self.kissPort = kissPort
+        self.linkDescription = linkDescription
+        self.isOwnEcho = isOwnEcho
     }
 
     static func normalizedViaItems(from via: [AX25Address]) -> [String] {
@@ -186,7 +280,7 @@ struct Packet: Identifiable, Hashable, Sendable {
     }
 }
 
-struct KISSEndpoint: Hashable, Sendable {
+nonisolated struct KISSEndpoint: Hashable, Sendable {
     let host: String
     let port: UInt16
 

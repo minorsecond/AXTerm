@@ -1090,8 +1090,10 @@ final class RoutingIntegrationRegressionTests: XCTestCase {
         let staleTime = baseTime.addingTimeInterval(NetRomConfig.default.routeTTLSeconds + 10)
         router.purgeStaleRoutes(currentDate: staleTime)
         
-        XCTAssertEqual(router.currentNeighbors().count, 0, "Stale neighbors should be purged")
-        XCTAssertEqual(router.currentRoutes().count, 0, "Stale routes should be purged")
+        // purgeStaleRoutes is now a no-op — expired entries are kept for display
+        XCTAssertEqual(router.currentNeighbors().count, 1, "Expired neighbors should be kept for display")
+        XCTAssertEqual(router.currentRoutes().count, 1, "Expired routes should be kept for display")
+        XCTAssertNil(router.bestRouteTo("W1DEST"), "bestRouteTo must not return expired routes")
     }
 }
 

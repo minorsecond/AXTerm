@@ -10,7 +10,7 @@ import Foundation
 
 /// Priority levels for TX queue ordering
 /// Higher values = higher priority (processed first)
-enum TxPriority: Int, Codable, Comparable {
+nonisolated enum TxPriority: Int, Codable, Comparable {
     case bulk = 10          // File transfers, bulk sync
     case normal = 50        // Standard messages
     case interactive = 100  // Chat, session control
@@ -21,7 +21,7 @@ enum TxPriority: Int, Codable, Comparable {
 }
 
 /// Digipeater path for routing
-struct DigiPath: Codable, Hashable, Sendable {
+nonisolated struct DigiPath: Codable, Hashable, Sendable {
     let digis: [AX25Address]
 
     init(_ digis: [AX25Address] = []) {
@@ -66,7 +66,7 @@ struct DigiPath: Codable, Hashable, Sendable {
 }
 
 /// Status of an outbound frame in the TX queue
-enum TxFrameStatus: String, Codable {
+nonisolated enum TxFrameStatus: String, Codable {
     case queued         // Waiting to be sent
     case sending        // Currently being transmitted
     case sent           // Sent to TNC (no ack expected or received)
@@ -78,9 +78,11 @@ enum TxFrameStatus: String, Codable {
 
 /// An outbound frame queued for transmission
 /// Immutable once created; status tracked separately
-struct OutboundFrame: Identifiable, Codable, Sendable {
+nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
     let id: UUID
-    let channel: UInt8
+    /// The radio this frame leaves on. The KISS port it is sent with is that
+    /// radio's, looked up at send time; a frame does not carry a port.
+    let radio: RadioID
     let destination: AX25Address
     let source: AX25Address
     let path: DigiPath
@@ -116,9 +118,13 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
     /// N(R) - Receive sequence number for I-frames and S-frames
     let nr: Int?
 
+    /// Explicitly denotes if this frame is a Command (true) or Response (false).
+    /// If nil, the frame encoder will use a heuristic based on frameType.
+    let isCommand: Bool?
+
     init(
         id: UUID = UUID(),
-        channel: UInt8 = 0,
+        radio: RadioID = .primary,
         destination: AX25Address,
         source: AX25Address,
         path: DigiPath = DigiPath(),
@@ -133,10 +139,11 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         ns: Int? = nil,
         nr: Int? = nil,
         displayInfo: String? = nil,
-        isUserPayload: Bool = false
+        isUserPayload: Bool = false,
+        isCommand: Bool? = nil
     ) {
         self.id = id
-        self.channel = channel
+        self.radio = radio
         self.destination = destination
         self.source = source
         self.path = path
@@ -152,18 +159,21 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         self.nr = nr
         self.displayInfo = displayInfo
         self.isUserPayload = isUserPayload
+        self.isCommand = isCommand
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, channel, destination, source, path, createdAt, payload, priority
+        case id, channel, radio, destination, source, path, createdAt, payload, priority
         case frameType, pid, sessionId, axdpMessageId, displayInfo, isUserPayload
-        case controlByte, ns, nr
+        case controlByte, ns, nr, isCommand
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
-        channel = try c.decode(UInt8.self, forKey: .channel)
+        // `channel` was the KISS port, always 0; frames written before radios
+        // existed decode onto the primary radio.
+        radio = try c.decodeIfPresent(RadioID.self, forKey: .radio) ?? .primary
         destination = try c.decode(AX25Address.self, forKey: .destination)
         source = try c.decode(AX25Address.self, forKey: .source)
         path = try c.decode(DigiPath.self, forKey: .path)
@@ -179,12 +189,13 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         controlByte = try c.decodeIfPresent(UInt8.self, forKey: .controlByte)
         ns = try c.decodeIfPresent(Int.self, forKey: .ns)
         nr = try c.decodeIfPresent(Int.self, forKey: .nr)
+        isCommand = try c.decodeIfPresent(Bool.self, forKey: .isCommand)
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
-        try c.encode(channel, forKey: .channel)
+        try c.encode(radio, forKey: .radio)
         try c.encode(destination, forKey: .destination)
         try c.encode(source, forKey: .source)
         try c.encode(path, forKey: .path)
@@ -200,17 +211,16 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         try c.encodeIfPresent(controlByte, forKey: .controlByte)
         try c.encodeIfPresent(ns, forKey: .ns)
         try c.encodeIfPresent(nr, forKey: .nr)
+        try c.encodeIfPresent(isCommand, forKey: .isCommand)
     }
 
-    /// Create a copy of this I-frame with an updated N(R) and control byte.
-    /// Used during retransmission so the peer sees our current receive state
-    /// instead of the stale N(R) from the original transmission.
-    func withUpdatedNR(_ newNR: Int) -> OutboundFrame {
+    func withUpdatedNR(_ newNR: Int, preservePollFinal: Bool = true, forcePoll: Bool = false) -> OutboundFrame {
         guard frameType == "i", let oldNS = ns else { return self }
-        let newControl = AX25Control.iFrame(ns: oldNS, nr: newNR, pf: false)
+        let oldPollFinal = forcePoll || (preservePollFinal && ((controlByte ?? 0) & 0x10 != 0))
+        let newControl = AX25Control.iFrame(ns: oldNS, nr: newNR, pf: oldPollFinal)
         return OutboundFrame(
             id: UUID(),  // New ID for retransmit tracking
-            channel: channel,
+            radio: radio,
             destination: destination,
             source: source,
             path: path,
@@ -225,7 +235,38 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
             ns: oldNS,
             nr: newNR,
             displayInfo: displayInfo,
-            isUserPayload: isUserPayload
+            isUserPayload: isUserPayload,
+            isCommand: isCommand
+        )
+    }
+
+    /// The same frame, bound to a radio.
+    ///
+    /// Sessions know their radio, but the frame builders never did, so
+    /// `AX25SessionManager.processActions` stamps the session's radio here,
+    /// once, on the way out. The id is kept: this is the same transmission,
+    /// not a retry.
+    func onRadio(_ radio: RadioID) -> OutboundFrame {
+        guard radio != self.radio else { return self }
+        return OutboundFrame(
+            id: id,
+            radio: radio,
+            destination: destination,
+            source: source,
+            path: path,
+            createdAt: createdAt,
+            payload: payload,
+            priority: priority,
+            frameType: frameType,
+            pid: pid,
+            sessionId: sessionId,
+            axdpMessageId: axdpMessageId,
+            controlByte: controlByte,
+            ns: ns,
+            nr: nr,
+            displayInfo: displayInfo,
+            isUserPayload: isUserPayload,
+            isCommand: isCommand
         )
     }
 
@@ -245,90 +286,46 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         // - If we initiate (Poll), it's Command.
         // - If we respond (Final), it's Response.
         
-        var isCommand: Bool = true // Default to command
+        var isCommandFlag: Bool = true // Default to command
         
-        let ft = frameType.lowercased()
-        if let ctrl = controlByte {
-            // Check for UA/DM (Response)
-            if (ctrl & ~0x10) == AX25Control.ua || (ctrl & ~0x10) == AX25Control.dm {
-                isCommand = false
-            } 
-            // Check for S-frames response?
-            // If it's an S-frame and PF is set (Final), it's likely a response to a Poll.
-            // But if it's a Poll (P=1), it's a Command?
-            // For simplicity/compatibility:
-            // RR/RNR/REJ are usually Responses in normal flow (checking "I received X"), 
-            // but Commands if Polling "Are you there?".
-            else if ft == "s" {
-                // If PF bit is set, it could be Poll (Command) or Final (Response)
-                let pf = (ctrl & 0x10) != 0
-                // If we are RESPONDING to a poll (Final), isCommand = false
-                // If we are POLLING (Poll), isCommand = true
-                // We need more context.
-                
-                // Heuristic:
-                // If we are sending RR(F=1), it's a Response (to `I P=1` or `RR P=1`).
-                // If we are sending RR(P=1), it's a Command (query).
-                // If we are sending RR(P=0), it's usually a Response (acking I-frames).
-                
-                // Let's assume S-frames are Responses unless we explicitly know they are Commands.
-                // Exceptions: T1 timeout sends RR(P=1) -> Command.
-                // Acking I-frames -> Response.
-                
-                if pf {
-                    // P/F set.
-                    // If it was intended as Poll (Command), we should treat as Command.
-                    // If Final (Response), treat as Response.
-                    // In AX25FrameBuilder, we set 'pf'. We don't distinguish P vs F there.
-                    // But usually unsolicited = Command, solicited = Response.
-                    // For now, let's treat RR/RNR/REJ as Response by default unless P=1?
-                    // Actually, typical implementation:
-                    // I, SABM, DISC, UI -> Command
-                    // UA, DM, FRMR -> Response
-                    // RR, RNR, REJ -> Response (usually)
-                    
-                    // Let's refine based on Control constants if possible, or leave as Default=True (Command) 
-                    // and override for known Responses.
-                    
-                    isCommand = false 
-                } else {
-                    isCommand = false
+        if let explicitCommand = isCommand {
+            isCommandFlag = explicitCommand
+        } else {
+            let ft = frameType.lowercased()
+            if let ctrl = controlByte {
+                // Check for UA/DM (Response)
+                if (ctrl & ~0x10) == AX25Control.ua || (ctrl & ~0x10) == AX25Control.dm {
+                    isCommandFlag = false
+                } 
+                else if ft == "s" {
+                    isCommandFlag = false
                 }
-                
-                // Special case: Timer recovery (T1) sends RR P=1 (Command).
-                // We need to know if 'pf' meant Poll or Final.
-                // 'OutboundFrame' doesn't explicitly store "isPoll" vs "isFinal".
-                // Ideally we'd add 'isCommand' property to OutboundFrame, but that's a larger change.
-                
-                // Quick Fix:
-                // If we assume most traffic is Command (I-frames), we are okay.
-                // Direwolf output shows "I cmd", so our I-frames MUST be commands.
             }
-        }
-        
-        // Overrides based on known types
-        if ft == "u" {
-            // UA, DM are Responses
-            if displayInfo == "UA" || displayInfo == "DM" || displayInfo == "FRMR" {
-                isCommand = false
+            
+            // Overrides based on known types
+            if ft == "u" {
+                // UA, DM are Responses
+                if displayInfo == "UA" || displayInfo == "DM" || displayInfo == "FRMR" {
+                    isCommandFlag = false
+                }
+                // SABM, DISC are Commands
+                if displayInfo == "SABM" || displayInfo == "SABME" || displayInfo == "DISC" {
+                    isCommandFlag = true
+                }
+            } else if ft == "i" {
+                isCommandFlag = true
+            } else if ft == "ui" {
+                isCommandFlag = true
             }
-            // SABM, DISC are Commands
-            if displayInfo == "SABM" || displayInfo == "SABME" || displayInfo == "DISC" {
-                isCommand = true
-            }
-        } else if ft == "i" {
-            isCommand = true
-        } else if ft == "ui" {
-            isCommand = true
         }
         
         // Destination address (7 bytes)
         // Destination is never last - source always follows
-        data.append(destination.encodeForAX25(isLast: false, isDestination: true, isCommand: isCommand))
+        data.append(destination.encodeForAX25(isLast: false, isDestination: true, isCommand: isCommandFlag))
 
         // Source address (7 bytes)
         // Source has command/response bit set, last if no digipeaters
-        data.append(source.encodeForAX25(isLast: path.isEmpty, isDestination: false, isCommand: isCommand))
+        data.append(source.encodeForAX25(isLast: path.isEmpty, isDestination: false, isCommand: isCommandFlag))
 
         // Digipeater addresses (7 bytes each)
         for (index, digi) in path.digis.enumerated() {
@@ -362,7 +359,7 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
 }
 
 /// Tracks the transmission state of an OutboundFrame
-struct TxFrameState: Identifiable, Codable {
+nonisolated struct TxFrameState: Identifiable, Codable {
     let frameId: UUID
     var status: TxFrameStatus
     var attempts: Int
@@ -422,7 +419,7 @@ struct TxFrameState: Identifiable, Codable {
 // MARK: - TX Queue Entry (combines frame + state)
 
 /// Complete entry in the TX queue for display and processing
-struct TxQueueEntry: Identifiable {
+nonisolated struct TxQueueEntry: Identifiable {
     let frame: OutboundFrame
     var state: TxFrameState
 

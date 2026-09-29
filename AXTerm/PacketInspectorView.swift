@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import AppKit
 import UniformTypeIdentifiers
 
 struct PacketInspectorView: View {
@@ -14,6 +13,13 @@ struct PacketInspectorView: View {
     var isPinned: Bool
     var onTogglePin: (() -> Void)?
     var onFilterStation: ((String) -> Void)?
+    /// The other name each end of this packet answers to, when one is known.
+    ///
+    /// A header reading `DRLNOD → K0EPI-7` names one station by its tactical
+    /// alias and one by its callsign, and nothing on the page says the first is
+    /// KE0NCQ. Optional so callers without the directory — iOS — are unchanged.
+    var sourceAlsoKnownAs: String?
+    var destinationAlsoKnownAs: String?
     var onClose: (() -> Void)?
 
     private enum PayloadViewMode: String, CaseIterable {
@@ -33,12 +39,16 @@ struct PacketInspectorView: View {
         isPinned: Bool = false,
         onTogglePin: (() -> Void)? = nil,
         onFilterStation: ((String) -> Void)? = nil,
+        sourceAlsoKnownAs: String? = nil,
+        destinationAlsoKnownAs: String? = nil,
         onClose: (() -> Void)? = nil
     ) {
         self.packet = packet
         self.isPinned = isPinned
         self.onTogglePin = onTogglePin
         self.onFilterStation = onFilterStation
+        self.sourceAlsoKnownAs = sourceAlsoKnownAs
+        self.destinationAlsoKnownAs = destinationAlsoKnownAs
         self.onClose = onClose
     }
 
@@ -50,6 +60,8 @@ struct PacketInspectorView: View {
     @State private var findQuery: String = ""
     @FocusState private var isFindFocused: Bool
     @State private var copyFeedback: CopyFeedback?
+    @State private var pendingExport: ExportableFile?
+    @State private var exportError: String?
 
     private let payloadPreviewLimit: Int = 2048
     private let rawPreviewLimit: Int = 2048
@@ -95,6 +107,14 @@ struct PacketInspectorView: View {
             }
         }
         .frame(minWidth: 560, idealWidth: 700, minHeight: 420, idealHeight: 540)
+        .exportFile($pendingExport) { exportError = $0 }
+        .alert("Export failed", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } })) {
+            Button("OK") { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
     }
 
     // MARK: - Header
@@ -103,13 +123,48 @@ struct PacketInspectorView: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Text(packet.fromDisplay)
-                        .font(.title3.weight(.semibold))
+                    HStack(spacing: 4) {
+                        Text(packet.fromDisplay)
+                            .font(.title3.weight(.semibold))
+                        Button {
+                            ClipboardWriter.copy(packet.fromDisplay)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Copy source callsign")
+                        if let sourceAlsoKnownAs, !sourceAlsoKnownAs.isEmpty {
+                            Text("(\(sourceAlsoKnownAs))")
+                                .font(.subheadline.weight(.regular))
+                                .foregroundStyle(.secondary)
+                                .help("\(packet.fromDisplay) is also known as \(sourceAlsoKnownAs)")
+                        }
+                    }
                     Image(systemName: "arrow.right")
                         .font(.body.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text(packet.toDisplay)
-                        .font(.title3.weight(.semibold))
+                        .padding(.horizontal, 2)
+                    HStack(spacing: 4) {
+                        Text(packet.toDisplay)
+                            .font(.title3.weight(.semibold))
+                        Button {
+                            ClipboardWriter.copy(packet.toDisplay)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Copy destination callsign")
+                        if let destinationAlsoKnownAs, !destinationAlsoKnownAs.isEmpty {
+                            Text("(\(destinationAlsoKnownAs))")
+                                .font(.subheadline.weight(.regular))
+                                .foregroundStyle(.secondary)
+                                .help("\(packet.toDisplay) is also known as \(destinationAlsoKnownAs)")
+                        }
+                    }
                 }
 
                 HStack(spacing: 10) {
@@ -481,7 +536,7 @@ struct PacketInspectorView: View {
                             }
                         }
                         .frame(maxHeight: 200)
-                        .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                        .background(Color(platform: .platformTextBackground).opacity(0.5))
                         .cornerRadius(6)
                     }
                 } else {
@@ -513,7 +568,7 @@ struct PacketInspectorView: View {
                                 Button(callsign) {
                                     onFilterStation?(callsign)
                                 }
-                                .buttonStyle(.link)
+                                .platformLinkButton()
                             }
                         }
                     }
@@ -726,7 +781,7 @@ struct PacketInspectorView: View {
                 }
             }
             .frame(maxHeight: 200)
-            .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+            .background(Color(platform: .platformTextBackground).opacity(0.5))
             .cornerRadius(6)
         }
         .padding(8)
@@ -821,19 +876,18 @@ struct PacketInspectorView: View {
         }
     }
 
+    /// Hands the packet's JSON to the operator to file.
+    ///
+    /// An encoding failure is surfaced rather than beeped at: a beep says
+    /// something went wrong without saying what, and on a device with the
+    /// ringer off it says nothing at all.
     private func saveJSON() {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "packet-\(packet.id.uuidString.prefix(8)).json"
-        panel.allowedContentTypes = [.json]
-        panel.canCreateDirectories = true
-
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            do {
-                try PacketExport(packet: packet).writeJSON(to: url)
-            } catch {
-                NSSound.beep()
-            }
+        do {
+            let data = try PacketExport(packet: packet).jsonData()
+            pendingExport = ExportableFile(
+                name: "packet-\(packet.id.uuidString.prefix(8)).json", data: data)
+        } catch {
+            exportError = "Could not encode this packet: \(error.localizedDescription)"
         }
     }
 }
@@ -854,7 +908,7 @@ private struct PathChip: View {
     }
 }
 
-private enum PayloadSearchHighlighter {
+nonisolated private enum PayloadSearchHighlighter {
     static func highlight(text: String, query: String) -> AttributedString {
         guard !query.isEmpty else { return AttributedString(text) }
 
@@ -869,7 +923,7 @@ private enum PayloadSearchHighlighter {
             if foundRange.location == NSNotFound {
                 break
             }
-            result.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.35), range: foundRange)
+            result.addAttribute(.backgroundColor, value: PlatformColor.platformSearchHighlight, range: foundRange)
             let nextLocation = foundRange.location + foundRange.length
             if nextLocation >= nsText.length {
                 break
@@ -942,7 +996,7 @@ private struct NetRomRouteEntryRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(isAlternate ? Color(NSColor.alternatingContentBackgroundColors[1]) : Color.clear)
+        .background(isAlternate ? Color(platform: .platformAlternatingRow) : Color.clear)
     }
 }
 
@@ -994,7 +1048,7 @@ private struct FormattedNetRomEntryRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(isAlternate ? Color(NSColor.alternatingContentBackgroundColors[1]) : Color.clear)
+        .background(isAlternate ? Color(platform: .platformAlternatingRow) : Color.clear)
     }
 }
 

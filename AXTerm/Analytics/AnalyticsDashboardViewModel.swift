@@ -12,10 +12,24 @@ import os
 
 @MainActor
 final class AnalyticsDashboardViewModel: ObservableObject {
+    typealias DatabaseAggregationProvider = @Sendable (
+        DateInterval,
+        TimeBucket,
+        Calendar,
+        AnalyticsAggregator.Options
+    ) async -> AnalyticsAggregationResult?
+    typealias TimeframePacketsProvider = @Sendable (DateInterval) async -> [Packet]?
+    /// Connection connect/disconnect timestamps around a window plus whether the
+    /// capture is currently live — the inputs for CaptureCoverageBuilder.
+    typealias CaptureEventsProvider = @Sendable (DateInterval) async -> (connects: [Date], disconnects: [Date], isLive: Bool)?
+
     private let logger = Logger(subsystem: "AXTerm", category: "Analytics")
 
     /// Reference to settings store for persistence (optional for backward compat)
     private weak var settingsStore: AppSettingsStore?
+
+    /// Reference to NET/ROM routing system for real-time routing graphs
+    private let netRomIntegration: NetRomIntegration?
 
     @Published var timeframe: AnalyticsTimeframe {
         didSet {
@@ -93,6 +107,25 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
+    /// The frequency channels the operator can scope analytics to, and the
+    /// hidden-radio set, pushed in from the packet engine. With one channel
+    /// and nothing hidden the picker is not shown and scoping is a no-op.
+    @Published private(set) var radioChannels: [AnalyticsRadioChannel] = []
+    private var hiddenRadioIDs: Set<RadioID> = []
+
+    /// Which channel analytics is scoped to. `.all` pools every visible radio
+    /// (same-frequency copies already folded at ingest); a specific channel
+    /// keeps neighbours, routes, quality, coverage and the graph to one
+    /// frequency so different-frequency populations are never averaged.
+    @Published var selectedRadioScope: AnalyticsRadioScope = .all {
+        didSet {
+            guard selectedRadioScope != oldValue else { return }
+            trackFilterChange(reason: "radioScope")
+            scheduleAggregation(reason: "radioScope")
+            scheduleGraphBuild(reason: "radioScope")
+        }
+    }
+
     /// Station identity mode for SSID grouping in the network graph.
     /// When `.station`, ANH, ANH-1, ANH-15 all map to a single "ANH" node.
     /// When `.ssid`, each SSID gets its own node.
@@ -105,7 +138,21 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             layoutKey = nil
             layoutCache.removeAll()
             scheduleGraphBuild(reason: "stationIdentityMode")
+            // Summary, unique-station series, and top lists group by the same
+            // identity mode as the graph, so they must recompute as well.
+            scheduleAggregation(reason: "stationIdentityMode")
             persistStationIdentityMode()
+        }
+    }
+
+    @Published var autoUpdateEnabled: Bool {
+        didSet {
+            guard autoUpdateEnabled != oldValue else { return }
+            persistAutoUpdateEnabled()
+            if autoUpdateEnabled && isActive {
+                scheduleAggregation(reason: "autoUpdateEnabled")
+                scheduleGraphBuild(reason: "autoUpdateEnabled")
+            }
         }
     }
 
@@ -117,13 +164,43 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         didSet {
             guard graphViewMode != oldValue else { return }
             trackFilterChange(reason: "graphViewMode")
-            // View mode only affects edge filtering, not the underlying classified graph.
-            // Recompute the filtered view graph from the cached classified model.
-            applyViewModeFilter()
+
+            // Routed lens is defined to include digipeater-mediated evidence.
+            // Ensure routed mode always has via-path inclusion enabled.
+            if graphViewMode == .routing && !includeViaDigipeaters {
+                includeViaDigipeaters = true
+            }
+
+            let oldNetRomMode = oldValue.netRomRoutingMode
+            let newNetRomMode = graphViewMode.netRomRoutingMode
+
+            if oldNetRomMode == newNetRomMode {
+                // Same data source: only edge-type filtering changed.
+                // Avoid expensive full graph rebuild.
+                applyViewModeFilter()
+                return
+            }
+
+            if graphViewMode.isNetRomMode {
+                // Entering NET/ROM mode or switching NET/ROM routing source
+                queueViewportFitToVisibleNodes()
+                scheduleGraphBuild(reason: "graphViewMode (NET/ROM source)")
+            } else if oldValue.isNetRomMode {
+                // Returning from NET/ROM to packet-derived graph
+                queueViewportFitToVisibleNodes()
+                scheduleGraphBuild(reason: "graphViewMode (Return to Packet)")
+            } else {
+                // Packet mode to packet mode: filter only
+                applyViewModeFilter()
+            }
         }
     }
 
     @Published private(set) var viewState: AnalyticsViewState = .empty
+    @Published private(set) var isAggregationLoading = false
+    @Published private(set) var isGraphLoading = false
+    @Published private(set) var hasLoadedAggregation = false
+    @Published private(set) var hasLoadedGraph = false
 
     // MARK: - Focus Mode State
 
@@ -136,13 +213,21 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// Request for camera to fit to selection (consumed by view)
     @Published var fitToSelectionRequest: UUID?
 
+    /// Optional explicit node IDs to fit when a fit request is issued.
+    /// Empty set means "fit to current visible graph" behavior.
+    @Published var fitTargetNodeIDs: Set<String> = []
+
     /// Request for camera to reset (consumed by view)
     @Published var resetCameraRequest: UUID?
 
     private let calendar: Calendar
+    nonisolated private let databaseAggregationProvider: DatabaseAggregationProvider?
+    nonisolated private let timeframePacketsProvider: TimeframePacketsProvider?
+    nonisolated private let captureEventsProvider: CaptureEventsProvider?
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
     private var cancellables: Set<AnyCancellable> = []
     private var packets: [Packet] = []
+    private var netRomUpdateCount: Int = 0
     private var chartWidth: CGFloat = 640
     private var graphLayoutSeed: Int = 1
     private var selectionState = GraphSelectionState()
@@ -155,13 +240,25 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var aggregationCache: [AggregationCacheKey: AnalyticsAggregationResult] = [:]
     private var graphCache: [GraphCacheKey: GraphModel] = [:]
     private var classifiedGraphCache: [GraphCacheKey: ClassifiedGraphModel] = [:]
-    private let aggregationScheduler: CoalescingScheduler
-    private let graphScheduler: CoalescingScheduler
+    nonisolated private let aggregationScheduler: CoalescingScheduler
+    nonisolated private let graphScheduler: CoalescingScheduler
     private var aggregationTask: Task<Void, Never>?
     private var graphTask: Task<Void, Never>?
     private let telemetryLimiter = TelemetryRateLimiter(minimumInterval: 1.0)
     private var loopDetection = RecomputeLoopDetector()
     private var isActive = false
+    private var latestTimeframePackets: [Packet] = []
+    private var hasPrewarmed = false
+    private var lastPinnedRefitTimestamp: Date = .distantPast
+    private var lastPinnedRefitNodeIDs: Set<String> = []
+    private var lastPinnedRefitBounds: RefitBounds?
+    private var pendingViewportFitToVisibleNodes = false
+
+    /// Gate constants for automatic viewport maintenance.
+    /// Tuned to avoid jarring camera movement while still correcting meaningful drift.
+    private let pinnedRefitCooldown: TimeInterval = 0.45
+    private let pinnedRefitCenterThreshold: Double = 0.02
+    private let pinnedRefitSpanThreshold: Double = 0.03
 
     /// Creates the view model, optionally loading persisted settings.
     ///
@@ -173,12 +270,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     ///   - packetScheduler: RunLoop for packet processing.
     init(
         settingsStore: AppSettingsStore? = nil,
+        netRomIntegration: NetRomIntegration? = nil,
+        databaseAggregationProvider: DatabaseAggregationProvider? = nil,
+        captureEventsProvider: CaptureEventsProvider? = nil,
+        timeframePacketsProvider: TimeframePacketsProvider? = nil,
         calendar: Calendar = .current,
         packetDebounce: TimeInterval = 0.25,
         graphDebounce: TimeInterval = 0.4,
         packetScheduler: RunLoop = .main
     ) {
         self.settingsStore = settingsStore
+        self.netRomIntegration = netRomIntegration
+        self.databaseAggregationProvider = databaseAggregationProvider
+        self.captureEventsProvider = captureEventsProvider
+        self.timeframePacketsProvider = timeframePacketsProvider
         self.calendar = calendar
 
         // Load from settings store or use defaults
@@ -189,6 +294,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let loadedMaxNodes = settingsStore?.analyticsMaxNodes ?? AppSettingsStore.defaultAnalyticsMaxNodes
         let loadedHubMetric = Self.loadHubMetric(from: settingsStore)
         let loadedStationIdentityMode = Self.loadStationIdentityMode(from: settingsStore)
+        let loadedAutoUpdateEnabled = settingsStore?.analyticsAutoUpdateEnabled ?? AppSettingsStore.defaultAnalyticsAutoUpdateEnabled
 
         // Compute default range for bucket resolution
         let defaultRange = loadedTimeframe.dateInterval(
@@ -205,6 +311,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.minEdgeCount = AnalyticsInputNormalizer.minEdgeCount(loadedMinEdgeCount)
         self.maxNodes = AnalyticsInputNormalizer.maxNodes(loadedMaxNodes)
         self.stationIdentityMode = loadedStationIdentityMode
+        self.autoUpdateEnabled = loadedAutoUpdateEnabled
         self.customRangeStart = defaultRange.start
         self.customRangeEnd = defaultRange.end
         self.resolvedBucket = loadedBucket.resolvedBucket(
@@ -219,6 +326,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.focusState.hubMetric = loadedHubMetric
 
         bindPackets(packetScheduler: packetScheduler)
+        bindNetRomUpdates()
+        bindSettingsStore()
         bindFocusState()
     }
 
@@ -269,6 +378,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         settingsStore?.analyticsStationIdentityMode = stationIdentityMode.rawValue
     }
 
+    private func persistAutoUpdateEnabled() {
+        settingsStore?.analyticsAutoUpdateEnabled = autoUpdateEnabled
+    }
+
     private func persistHubMetric() {
         settingsStore?.analyticsHubMetric = focusState.hubMetric.rawValue
     }
@@ -279,11 +392,66 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         packetSubject.send(packets)
     }
 
+    /// Pushes the current radio channels and hidden set in from the packet
+    /// engine. Called whenever radios connect, a frequency is read from the
+    /// rig, or the operator toggles a radio's visibility. A selection whose
+    /// channel has disappeared falls back to "All radios" so the page never
+    /// shows an empty scope. Recomputes only when something actually changed.
+    func updateRadioContext(channels: [AnalyticsRadioChannel], hidden: Set<RadioID>) {
+        let channelsChanged = channels != radioChannels
+        let hiddenChanged = hidden != hiddenRadioIDs
+        guard channelsChanged || hiddenChanged else { return }
+
+        radioChannels = channels
+        hiddenRadioIDs = hidden
+
+        // Drop a stale selection before any recompute, so the picker and the
+        // scoped data agree in the same pass.
+        if case .channel(let id) = selectedRadioScope,
+           !channels.contains(where: { $0.id == id }) {
+            selectedRadioScope = .all   // its didSet schedules the recompute
+        } else {
+            scheduleAggregation(reason: "radioContext")
+            scheduleGraphBuild(reason: "radioContext")
+        }
+    }
+
+    /// The packets after the radio scope — hidden radios removed, and, when a
+    /// channel is selected, narrowed to it. Every metric reads through this,
+    /// so scoping the input scopes the whole page without touching a compute
+    /// path.
+    private func scoped(_ packets: [Packet]) -> [Packet] {
+        AnalyticsRadioFilter.apply(
+            packets, scope: selectedRadioScope,
+            channels: radioChannels, hidden: hiddenRadioIDs)
+    }
+
+    /// The same scope as a value, for the aggregation that runs in SQLite.
+    private var radioSelection: AnalyticsRadioSelection {
+        AnalyticsRadioFilter.selection(
+            scope: selectedRadioScope,
+            channels: radioChannels, hidden: hiddenRadioIDs)
+    }
+
+    /// Precomputes analytics caches while the dashboard is not visible, so first open is fast.
+    /// Safe to call repeatedly; only the first invocation performs work.
+    func prewarmIfNeeded(with packets: [Packet]) {
+        self.packets = packets
+        guard !isActive, !hasPrewarmed else { return }
+        hasPrewarmed = true
+        Task(priority: .utility) { [weak self] in
+            await self?.recomputeAggregation(reason: "prewarm", applyToViewState: false, showLoadingState: false)
+        }
+        Task(priority: .utility) { [weak self] in
+            await self?.rebuildGraph(reason: "prewarm", applyToViewState: false, showLoadingState: false)
+        }
+    }
+
     func updateChartWidth(_ width: CGFloat) {
         guard width > 0, abs(width - chartWidth) > 4 else { return }
         chartWidth = width
-        updateResolvedBucket(reason: "chartWidth")
-        if bucketSelection == .auto {
+        let bucketChanged = updateResolvedBucket(reason: "chartWidth")
+        if bucketSelection == .auto, bucketChanged {
             scheduleAggregation(reason: "chartWidth")
         }
     }
@@ -347,17 +515,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         updateSelectionState()
     }
 
-    /// Clears selection entirely and fits view to all visible nodes.
+    /// Clears selection and focus state, then fits view to all visible nodes.
     /// Called from toolbar "Clear" button and sidebar "Clear Selection" button.
     func clearSelectionAndFit() {
         _ = GraphSelectionReducer.reduce(state: &selectionState, action: .clickBackground)
+        focusState.clearFocus()
         updateSelectionState()
+        recomputeFilteredGraph()
         // Fit to visible nodes after clearing
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
             category: "graph.clearSelection",
-            message: "Selection cleared and fit to view requested"
+            message: "Selection and focus cleared; fit to view requested"
         )
     }
 
@@ -365,7 +536,23 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.hoveredNodeID = nodeID
     }
 
+    func manualRefresh() {
+        guard isActive else { return }
+        // An explicit refresh must recompute, not replay a cached window.
+        aggregationCache.removeAll()
+        graphCache.removeAll()
+        classifiedGraphCache.removeAll()
+        isAggregationLoading = true
+        isGraphLoading = true
+        scheduleAggregation(reason: "manualRefresh")
+        scheduleGraphBuild(reason: "manualRefresh")
+    }
+
     func handleEscape() {
+        if isDraftingPath {
+            cancelPathDraft()
+            return
+        }
         handleBackgroundClick()
     }
 
@@ -374,8 +561,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         isActive = active
         if active {
             logger.debug("Analytics dashboard activated")
-            scheduleAggregation(reason: "activate")
-            scheduleGraphBuild(reason: "activate")
+            if !hasLoadedAggregation {
+                isAggregationLoading = true
+            }
+            if !hasLoadedGraph {
+                isGraphLoading = true
+                // Initial open should frame current graph extents.
+                queueViewportFitToVisibleNodes()
+            }
+            Task { [weak self] in
+                await self?.recomputeAggregation(reason: "activate", applyToViewState: true, showLoadingState: true)
+            }
+            Task { [weak self] in
+                await self?.rebuildGraph(reason: "activate", applyToViewState: true, showLoadingState: true)
+            }
         } else {
             logger.debug("Analytics dashboard deactivated")
             cancelWork()
@@ -389,10 +588,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
         let neighbors = viewState.graphModel.adjacency[selectedNodeID] ?? []
 
-        // Get classified relationships from the classified graph model
+        // Get classified relationships from the classified graph model.
+        // heardMutual counts as direct-decode evidence — without it a station whose
+        // only links are mutual showed an edge on the canvas but "No neighbors
+        // found" in the inspector.
         let relationships = viewState.classifiedGraphModel.relationships(for: selectedNodeID)
         let directPeers = relationships.filter { $0.linkType == .directPeer }
-        let heardDirect = relationships.filter { $0.linkType == .heardDirect }
+        let heardDirect = relationships.filter { $0.linkType == .heardDirect || $0.linkType == .heardMutual }
         let seenVia = relationships.filter { $0.linkType == .heardVia }
 
         return GraphInspectorDetails(
@@ -404,31 +606,148 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
     }
 
-    deinit {
-        let aggTask = aggregationTask
-        let grTask = graphTask
-        let layTask = layoutTask
-        let aggSched = aggregationScheduler
-        let grSched = graphScheduler
-        Task {
-            aggTask?.cancel()
-            grTask?.cancel()
-            layTask?.cancel()
-            aggSched.cancel()
-            grSched.cancel()
+    func selectedMultiNodeDetails() -> GraphMultiInspectorDetails? {
+        let selectedIDs = viewState.selectedNodeIDs
+        guard selectedIDs.count >= 2 else { return nil }
+
+        let nodeByID = Dictionary(uniqueKeysWithValues: viewState.graphModel.nodes.map { ($0.id, $0) })
+        let selectedNodes = selectedIDs.compactMap { nodeByID[$0] }.sorted { $0.callsign < $1.callsign }
+        guard selectedNodes.count >= 2 else { return nil }
+
+        let selectedIDSet = Set(selectedNodes.map(\.id))
+        let selectedCount = selectedNodes.count
+        let possibleInternalLinks = selectedCount * (selectedCount - 1) / 2
+
+        let internalLinks = viewState.graphModel.edges
+            .filter { selectedIDSet.contains($0.sourceID) && selectedIDSet.contains($0.targetID) }
+            .map { edge in
+                GraphMultiInspectorDetails.InternalLink(
+                    sourceID: edge.sourceID,
+                    sourceCallsign: nodeByID[edge.sourceID]?.callsign ?? edge.sourceID,
+                    targetID: edge.targetID,
+                    targetCallsign: nodeByID[edge.targetID]?.callsign ?? edge.targetID,
+                    packetCount: edge.weight,
+                    bytes: edge.bytes
+                )
+            }
+            .sorted {
+                if $0.packetCount != $1.packetCount { return $0.packetCount > $1.packetCount }
+                return $0.sortKey < $1.sortKey
+            }
+
+        let internalPacketCount = internalLinks.reduce(0) { $0 + $1.packetCount }
+        let internalByteCount = internalLinks.reduce(0) { $0 + $1.bytes }
+        // "Total" = payload bytes on any link with at least one selected endpoint,
+        // summed over the same edge set as the internal figure. The old computation
+        // subtracted single-counted link bytes from double-counted per-node totals
+        // (every internal packet is one node's out-bytes AND the other's in-bytes),
+        // over-reporting by exactly the internal byte volume.
+        let touchingByteCount = viewState.graphModel.edges
+            .filter { selectedIDSet.contains($0.sourceID) || selectedIDSet.contains($0.targetID) }
+            .reduce(0) { $0 + $1.bytes }
+
+        var externalAggregate: [String: GraphMultiInspectorDetails.SharedExternalConnection] = [:]
+        for selectedID in selectedIDSet {
+            guard let relationships = viewState.graphModel.adjacency[selectedID] else { continue }
+            for rel in relationships where !selectedIDSet.contains(rel.id) {
+                let callsign = nodeByID[rel.id]?.callsign ?? rel.id
+                var entry = externalAggregate[rel.id] ?? GraphMultiInspectorDetails.SharedExternalConnection(
+                    id: rel.id,
+                    callsign: callsign,
+                    connectedSelectedIDs: [],
+                    totalPackets: 0
+                )
+                entry.connectedSelectedIDs.insert(selectedID)
+                entry.totalPackets += rel.weight
+                externalAggregate[rel.id] = entry
+            }
         }
+
+        let sharedExternalConnections = externalAggregate.values
+            .filter { $0.connectedSelectedIDs.count >= 2 }
+            .sorted {
+                if $0.connectedSelectedIDs.count != $1.connectedSelectedIDs.count {
+                    return $0.connectedSelectedIDs.count > $1.connectedSelectedIDs.count
+                }
+                if $0.totalPackets != $1.totalPackets {
+                    return $0.totalPackets > $1.totalPackets
+                }
+                return $0.callsign < $1.callsign
+            }
+
+        // Relationship breakdown uses classified edges so the inspector can explain interaction type.
+        let relationshipBreakdown = Dictionary(
+            grouping: viewState.classifiedGraphModel.edges.filter {
+                selectedIDSet.contains($0.sourceID) && selectedIDSet.contains($0.targetID)
+            },
+            by: \.linkType
+        ).mapValues { edges in
+            edges.reduce(0) { $0 + $1.weight }
+        }
+
+        return GraphMultiInspectorDetails(
+            selectedNodes: selectedNodes,
+            internalLinks: internalLinks,
+            sharedExternalConnections: sharedExternalConnections,
+            relationshipBreakdown: relationshipBreakdown,
+            possibleInternalLinks: possibleInternalLinks,
+            internalPacketCount: internalPacketCount,
+            internalByteCount: internalByteCount,
+            touchingByteCount: touchingByteCount
+        )
+    }
+
+    deinit {
+        aggregationTask?.cancel()
+        graphTask?.cancel()
+        layoutTask?.cancel()
+        aggregationScheduler.cancel()
+        graphScheduler.cancel()
     }
 
     private func bindPackets(packetScheduler: RunLoop) {
         packetSubject
-            .removeDuplicates(by: { lhs, rhs in
-                lhs.count == rhs.count && lhs.last?.id == rhs.last?.id
-            })
-            .receive(on: packetScheduler)
             .sink { [weak self] packets in
                 self?.packets = packets
+                guard self?.autoUpdateEnabled == true else { return }
                 self?.scheduleAggregation(reason: "packets")
-                self?.scheduleGraphBuild(reason: "packets")
+                // NET/ROM graph modes are built from routing snapshots, not packet edge classification.
+                // Skip packet-driven graph rebuilds in those modes to reduce churn and UI heaviness.
+                if self?.graphViewMode.isNetRomMode == false {
+                    self?.scheduleGraphBuild(reason: "packets")
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func bindNetRomUpdates() {
+        guard let netRomIntegration else { return }
+        
+        netRomIntegration.didUpdate
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in
+                guard self?.autoUpdateEnabled == true else { return }
+                self?.netRomUpdateCount += 1
+                self?.scheduleGraphBuild(reason: "NET/ROM update")
+            }
+            .store(in: &cancellables)
+    }
+
+    private func bindSettingsStore() {
+        guard let settingsStore else { return }
+
+        settingsStore.$ignoredServiceEndpoints
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                // The settings didSet just reconfigured the validator with the
+                // persisted list; while the temporary preview is active the
+                // override must win again.
+                if self.temporarilyShowingIgnoredEndpoints {
+                    self.applyEffectiveIgnoredServiceEndpoints()
+                }
+                self.refreshForServiceEndpointFilterChange()
             }
             .store(in: &cancellables)
     }
@@ -471,6 +790,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func scheduleGraphBuild(reason: String) {
         guard isActive else { return }
+        isGraphLoading = true
         #if DEBUG
         debugLog("Scheduling graph build: \(reason)")
         #endif
@@ -479,19 +799,378 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
-    private func recomputeAggregation(reason: String) async {
+    /// When true, analytics treat the service-endpoint ignore list as empty for
+    /// this session only. This is the "Show All (Temporary)" preview: it swaps the
+    /// validator's *effective* list and never touches persisted settings — the old
+    /// implementation wrote `ignoredServiceEndpoints = []` and a crash mid-preview
+    /// permanently destroyed the user's list.
+    @Published private(set) var temporarilyShowingIgnoredEndpoints = false
+
+    func setTemporarilyShowingIgnoredEndpoints(_ active: Bool) {
+        guard temporarilyShowingIgnoredEndpoints != active else { return }
+        temporarilyShowingIgnoredEndpoints = active
+        applyEffectiveIgnoredServiceEndpoints()
+        refreshForServiceEndpointFilterChange()
+    }
+
+    // MARK: - Hidden Node Accounting
+
+    /// Which stations are hidden from the current graph, split into disjoint
+    /// causes so the "Hidden by filters" badge counts each station exactly once.
+    struct HiddenNodeBreakdown: Equatable {
+        /// Graph nodes outside the focus neighborhood (node identity keys).
+        let focusHiddenIDs: Set<String>
+        /// Valid stations observed in the timeframe that the classified graph
+        /// does not draw — removed by the min-edge threshold, the max-nodes cap,
+        /// or lacking a qualifying link. Disjoint from ignored/simulated because
+        /// those stations fail validation and never enter this universe.
+        let structuralHiddenKeys: Set<String>
+        /// NET/ROM source only: nodes truncated by the max-nodes cap (the NET/ROM
+        /// graph is not packet-derived, so no station universe exists to diff).
+        let maxNodesDroppedCount: Int
+        /// Simulated removals whose station actually appears in the timeframe.
+        let simulatedPresent: Set<String>
+        /// Persisted ignore-list entries whose station actually appears in the
+        /// timeframe. An ignored callsign that never transmits is not a hidden node.
+        let ignoredPresent: Set<String>
+
+        var structuralCount: Int { structuralHiddenKeys.count + maxNodesDroppedCount }
+        var totalCount: Int {
+            focusHiddenIDs.count + structuralCount + simulatedPresent.count + ignoredPresent.count
+        }
+
+        static let empty = HiddenNodeBreakdown(
+            focusHiddenIDs: [],
+            structuralHiddenKeys: [],
+            maxNodesDroppedCount: 0,
+            simulatedPresent: [],
+            ignoredPresent: []
+        )
+    }
+
+    // MARK: - Capture coverage
+
+    /// When the app was actually listening within (and around) the current
+    /// timeframe. Drives coverage-aware rates, chart downtime shading, and the
+    /// partial-coverage health annotation.
+    @Published private(set) var captureCoverage: CaptureCoverage = .empty
+    /// Spans of the current window where we were NOT listening (for chart shading).
+    @Published private(set) var uncoveredWindowIntervals: [DateInterval] = []
+    /// Covered fraction per local hour-of-day across the window (24 entries).
+    @Published private(set) var hourCoverageFractions: [Double] = Array(repeating: 1, count: 24)
+
+    private func updateCaptureCoverage(
+        packets: [Packet],
+        window: DateInterval,
+        events: (connects: [Date], disconnects: [Date], isLive: Bool)?,
+        now: Date
+    ) {
+        // Packet timestamps are the evidence stream; connection events (when the
+        // provider supplies them) give the authoritative interval edges. With no
+        // events at all, coverage degrades to evidence clustering — still
+        // conservative, never claiming unheard listening time.
+        let coverage = CaptureCoverageBuilder.build(
+            connectEvents: events?.connects ?? [],
+            disconnectEvents: events?.disconnects ?? [],
+            evidenceTimes: packets.map(\.timestamp),
+            now: now,
+            isCurrentlyConnected: events?.isLive ?? false
+        )
+        captureCoverage = coverage
+        uncoveredWindowIntervals = coverage.uncoveredIntervals(in: window)
+        hourCoverageFractions = coverage.coverageFractionByHour(in: window, calendar: calendar)
+    }
+
+    // MARK: - Path drafting (draw a connection on the graph)
+
+    /// Non-nil while the user is drawing a connect path on the graph.
+    @Published private(set) var pathDraft: PathDraft?
+    /// Evidence used to validate drawn hops; rebuilt with the activity insights.
+    @Published private(set) var pathDraftContext: PathDraftContext = .empty
+    private var pathDraftChain: [String] = []
+
+    var isDraftingPath: Bool { pathDraft != nil }
+
+    private var myStationIdentityKey: String {
+        let call = settingsStore?.myCallsign ?? ""
+        return CallsignParser.identityKey(for: call, mode: stationIdentityMode)
+    }
+
+    func beginPathDraft() {
+        pathDraftChain = []
+        pathDraft = GraphPathDrafter.makeDraft(
+            originKey: myStationIdentityKey,
+            chain: pathDraftChain,
+            context: pathDraftContext
+        )
+        Telemetry.breadcrumb(category: "graph.pathDraft", message: "Path draft started")
+    }
+
+    /// Starts a draft aimed directly at a node (context-menu entry point).
+    func beginPathDraft(targeting nodeID: String) {
+        beginPathDraft()
+        handlePathDraftNodeClick(nodeID)
+    }
+
+    func cancelPathDraft() {
+        pathDraftChain = []
+        pathDraft = nil
+    }
+
+    /// Routes a graph node click into the draft while drafting.
+    func handlePathDraftNodeClick(_ nodeID: String) {
+        guard pathDraft != nil else { return }
+        pathDraftChain = GraphPathDrafter.chain(
+            after: nodeID,
+            current: pathDraftChain,
+            originKey: myStationIdentityKey
+        )
+        pathDraft = GraphPathDrafter.makeDraft(
+            originKey: myStationIdentityKey,
+            chain: pathDraftChain,
+            context: pathDraftContext
+        )
+    }
+
+    private func updatePathDraftContext(packets: [Packet], identityMode: StationIdentityMode) {
+        let myKey = CallsignParser.identityKey(for: settingsStore?.myCallsign ?? "", mode: identityMode)
+        var digiRepeats: [String: Int] = [:]
+        var provenForMe: Set<String> = []
+        var senderDisplayCounts: [String: [String: Int]] = [:]
+        var directHeard: [String: Int] = [:]
+        var provenConnects: Set<String> = []
+
+        for packet in packets {
+            let fromDisplay = packet.from?.display
+            let fromKey = fromDisplay.flatMap { display -> String? in
+                guard CallsignValidator.isValidRoutingNode(display) else { return nil }
+                return CallsignParser.identityKey(for: display, mode: identityMode)
+            }
+            if let fromKey, let fromDisplay {
+                senderDisplayCounts[fromKey, default: [:]][CallsignValidator.normalize(fromDisplay), default: 0] += 1
+            }
+            // Direct audibility: a frame heard before any digipeater repeated it
+            // (empty via, or no hop with the H bit set) proves the sender is
+            // audible direct at this QTH.
+            let heardDirect = packet.via.allSatisfy { !$0.repeated }
+            if let fromKey, heardDirect {
+                directHeard[fromKey, default: 0] += 1
+                // A direct UA between my station and another is a completed
+                // connect handshake — proof a direct session has worked.
+                if packet.frameType == .u, packet.controlFieldDecoded.uType == .UA,
+                   let toDisplay = packet.to?.display,
+                   CallsignValidator.isValidRoutingNode(toDisplay) {
+                    let toKey = CallsignParser.identityKey(for: toDisplay, mode: identityMode)
+                    if fromKey == myKey {
+                        provenConnects.insert(toKey)
+                    } else if toKey == myKey {
+                        provenConnects.insert(fromKey)
+                    }
+                }
+            }
+            for via in packet.via where via.repeated {
+                let display = via.display
+                guard CallsignValidator.isValidRoutingNode(display) else { continue }
+                let key = CallsignParser.identityKey(for: display, mode: identityMode)
+                digiRepeats[key, default: 0] += 1
+                senderDisplayCounts[key, default: [:]][CallsignValidator.normalize(display), default: 0] += 1
+                if fromKey == myKey {
+                    provenForMe.insert(key)
+                }
+            }
+        }
+
+        // Identity key -> the over-the-air callsign heard most often for it.
+        var preferred: [String: String] = [:]
+        for (key, counts) in senderDisplayCounts {
+            preferred[key] = counts.max { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value < rhs.value }
+                return lhs.key > rhs.key
+            }?.key
+        }
+        if let myCall = settingsStore?.myCallsign, !myCall.isEmpty {
+            preferred[myKey] = CallsignValidator.normalize(myCall)
+        }
+
+        pathDraftContext = PathDraftContext(
+            roles: stationRoles,
+            digiRepeatCounts: digiRepeats,
+            provenDigisForMyStation: provenForMe,
+            preferredDisplay: preferred,
+            directHeardCounts: directHeard,
+            provenDirectConnects: provenConnects
+        )
+
+        // Re-validate an in-progress draft against fresh evidence.
+        if pathDraft != nil {
+            pathDraft = GraphPathDrafter.makeDraft(
+                originKey: myStationIdentityKey,
+                chain: pathDraftChain,
+                context: pathDraftContext
+            )
+        }
+    }
+
+    // MARK: - Activity insights (roles, hourly profile, airtime, sessions)
+
+    @Published private(set) var activityByHourProfile: ActivityByHourProfile = .empty
+    @Published private(set) var airtimeRanking: [AirtimeEntry] = []
+    @Published private(set) var observedSessions: [SessionObservation] = []
+    @Published private(set) var stationDirectory: [StationDirectoryEntry] = []
+    @Published private(set) var stationRoles: [String: Set<StationRole>] = [:]
+
+    private func updateActivityInsights(
+        packets: [Packet],
+        identityMode: StationIdentityMode,
+        windowEnd: Date
+    ) {
+        let roles = StationRoleInference.inferRoles(packets: packets, identityMode: identityMode)
+        stationRoles = roles
+        activityByHourProfile = ActivityByHourCalculator.profile(
+            packets: packets,
+            roles: roles,
+            identityMode: identityMode,
+            calendar: calendar
+        )
+        airtimeRanking = AirtimeRanking.rank(
+            packets: packets,
+            identityMode: identityMode,
+            limit: AnalyticsStyle.Tables.topLimit
+        )
+        observedSessions = SessionObservationCalculator.sessions(
+            packets: packets,
+            identityMode: identityMode,
+            windowEnd: windowEnd
+        )
+        stationDirectory = StationDirectoryBuilder.build(
+            packets: packets,
+            roles: roles,
+            identityMode: identityMode
+        )
+        // Handed down rather than re-derived elsewhere: what this station
+        // publishes to the operator's other stations is then exactly what
+        // the operator is looking at, instead of a second computation that
+        // could quietly disagree with the screen.
+        onStationDirectoryChanged?(stationDirectory)
+    }
+
+    /// Notified whenever the station directory is rebuilt, so the sync
+    /// layer can publish this station's observations without reaching into
+    /// analytics for packets, roles and identity mode.
+    var onStationDirectoryChanged: (([StationDirectoryEntry]) -> Void)?
+
+    /// Base callsigns observed in the current timeframe (senders, destinations,
+    /// repeating digipeaters), before any validity filtering.
+    private(set) var timeframePresentBaseCalls: Set<String> = []
+
+    /// Valid stations (effective validator) as identity keys — the universe the
+    /// classified graph could draw.
+    private(set) var timeframeValidStationKeys: Set<String> = []
+
+    private func updateTimeframeStationPresence(packets: [Packet], identityMode: StationIdentityMode) {
+        var baseCalls: Set<String> = []
+        var validKeys: Set<String> = []
+        for packet in packets {
+            var displays: [String] = []
+            if let from = packet.from?.display { displays.append(from) }
+            if let to = packet.to?.display { displays.append(to) }
+            for via in packet.via where via.repeated { displays.append(via.display) }
+            for display in displays {
+                let normalized = CallsignValidator.normalize(display)
+                guard !normalized.isEmpty else { continue }
+                baseCalls.insert(CallsignParser.parse(normalized).base)
+                if CallsignValidator.isValidRoutingNode(normalized) {
+                    validKeys.insert(CallsignParser.identityKey(for: normalized, mode: identityMode))
+                }
+            }
+        }
+        timeframePresentBaseCalls = baseCalls
+        timeframeValidStationKeys = validKeys
+    }
+
+    /// Computes the hidden-node breakdown for the current graph state.
+    /// `simulatedEndpoints` and `temporarilyUnignored` are view-session state.
+    func hiddenNodeBreakdown(
+        simulatedEndpoints: Set<String>,
+        temporarilyUnignored: Set<String>
+    ) -> HiddenNodeBreakdown {
+        let focusHidden: Set<String>
+        if focusState.isFocusEnabled {
+            focusHidden = Set(viewState.graphModel.nodes.map(\.id))
+                .subtracting(filteredGraph.visibleNodeIDs)
+        } else {
+            focusHidden = []
+        }
+
+        let structuralKeys: Set<String>
+        let maxNodesDropped: Int
+        if graphViewMode.isNetRomMode {
+            structuralKeys = []
+            maxNodesDropped = max(0, viewState.classifiedGraphModel.droppedNodesCount)
+        } else {
+            let drawnIDs = Set(viewState.classifiedGraphModel.nodes.map(\.id))
+            structuralKeys = timeframeValidStationKeys.subtracting(drawnIDs)
+            maxNodesDropped = 0
+        }
+
+        let simulatedPresent = simulatedEndpoints.intersection(timeframePresentBaseCalls)
+        let ignoredPresent = Set((settingsStore?.ignoredServiceEndpoints ?? []).map(CallsignValidator.normalize))
+            .subtracting(simulatedEndpoints)
+            .subtracting(temporarilyUnignored)
+            .intersection(timeframePresentBaseCalls)
+
+        return HiddenNodeBreakdown(
+            focusHiddenIDs: focusHidden,
+            structuralHiddenKeys: structuralKeys,
+            maxNodesDroppedCount: maxNodesDropped,
+            simulatedPresent: simulatedPresent,
+            ignoredPresent: ignoredPresent
+        )
+    }
+
+    /// Pushes the effective ignore list (empty while the temporary preview is
+    /// active, the persisted list otherwise) into the process-wide validator.
+    private func applyEffectiveIgnoredServiceEndpoints() {
+        let effective = temporarilyShowingIgnoredEndpoints
+            ? []
+            : (settingsStore?.ignoredServiceEndpoints ?? [])
+        CallsignValidator.configureIgnoredServiceEndpoints(effective)
+    }
+
+    /// Rebuilds analytics outputs when service-endpoint ignore filters change.
+    /// Classification depends on validator state, so caches must be invalidated.
+    func refreshForServiceEndpointFilterChange() {
+        aggregationCache.removeAll()
+        graphCache.removeAll()
+        classifiedGraphCache.removeAll()
+
+        guard isActive else { return }
+        isAggregationLoading = true
+        isGraphLoading = true
+        scheduleAggregation(reason: "serviceEndpointIgnoreList")
+        scheduleGraphBuild(reason: "serviceEndpointIgnoreList")
+    }
+
+    private func recomputeAggregation(reason: String, applyToViewState: Bool = true, showLoadingState: Bool = true) async {
         let now = Date()
         let packetSnapshot = filteredPackets(now: now)
+        let timeframeInterval = currentDateRange(now: now)
         let bucketSnapshot = resolvedBucket
         let includeViaSnapshot = includeViaDigipeaters
         let key = AggregationCacheKey(
             timeframe: timeframe,
             bucket: bucketSnapshot,
             includeVia: includeViaSnapshot,
+            stationIdentityMode: stationIdentityMode,
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
+            windowStart: bucketSnapshot.normalizedStart(for: timeframeInterval.start, calendar: calendar),
             customStart: customRangeStart,
-            customEnd: customRangeEnd
+            customEnd: customRangeEnd,
+            ignoredServiceEndpointsHash: ignoredServiceEndpointsHash(),
+            // Two scopes can hold the same number of packets, so without this
+            // a radio toggle could be served the other scope's cached result.
+            radioSelection: radioSelection
         )
 
         if loopDetection.record(reason: reason) {
@@ -524,7 +1203,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
 
         if let cached = aggregationCache[key] {
-            applyAggregationResult(cached)
+            if applyToViewState {
+                applyAggregationResult(cached)
+                hasLoadedAggregation = true
+            }
+            if showLoadingState {
+                isAggregationLoading = false
+            }
             return
         }
 
@@ -540,26 +1225,54 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             ]
         )
 
+        let aggregationOptions = AnalyticsAggregator.Options(
+            includeViaDigipeaters: includeViaSnapshot,
+            histogramBinCount: AnalyticsStyle.Histogram.binCount,
+            topLimit: AnalyticsStyle.Tables.topLimit,
+            stationIdentityMode: stationIdentityMode,
+            // The database provider aggregates from columns and cannot be
+            // handed pre-filtered packets, so the scope travels with the
+            // options instead.
+            radioSelection: radioSelection
+        )
+        let provider = databaseAggregationProvider
+        if showLoadingState {
+            isAggregationLoading = true
+        }
+
         aggregationTask?.cancel()
         aggregationTask = Task.detached(priority: .userInitiated) { [calendar] in
             let start = Date()
-            let result = AnalyticsAggregator.aggregate(
-                packets: packetSnapshot,
-                bucket: bucketSnapshot,
-                calendar: calendar,
-                options: AnalyticsAggregator.Options(
-                    includeViaDigipeaters: includeViaSnapshot,
-                    histogramBinCount: AnalyticsStyle.Histogram.binCount,
-                    topLimit: AnalyticsStyle.Tables.topLimit
+            let result: AnalyticsAggregationResult
+            if let providerResult = await provider?(
+                timeframeInterval,
+                bucketSnapshot,
+                calendar,
+                aggregationOptions
+            ) {
+                result = providerResult
+            } else {
+                result = AnalyticsAggregator.aggregate(
+                    packets: packetSnapshot,
+                    bucket: bucketSnapshot,
+                    calendar: calendar,
+                    options: aggregationOptions,
+                    timeframeInterval: timeframeInterval
                 )
-            )
+            }
             let duration = Date().timeIntervalSince(start) * 1000
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 guard !Task.isCancelled else { return }
                 self.aggregationCache[key] = result
-                self.applyAggregationResult(result)
+                if applyToViewState {
+                    self.applyAggregationResult(result)
+                    self.hasLoadedAggregation = true
+                }
+                if showLoadingState {
+                    self.isAggregationLoading = false
+                }
                 self.telemetryLimiter.breadcrumb(
                     category: "analytics.recompute.finished",
                     message: "Analytics recompute finished",
@@ -595,57 +1308,114 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.topDigipeaters = result.topDigipeaters
     }
 
-    private func updateResolvedBucket(reason: String) {
+    @discardableResult
+    private func updateResolvedBucket(reason: String) -> Bool {
         let range = currentDateRange(now: Date())
         let nextBucket = bucketSelection.resolvedBucket(
             for: timeframe,
             chartWidth: chartWidth,
             customRange: range
         )
-        guard nextBucket != resolvedBucket else { return }
+        guard nextBucket != resolvedBucket else { return false }
         resolvedBucket = nextBucket
+        return true
     }
 
     private func currentDateRange(now: Date) -> DateInterval {
         timeframe.dateInterval(now: now, customStart: customRangeStart, customEnd: customRangeEnd)
     }
 
-    private func filteredPackets(now: Date) -> [Packet] {
-        let range = currentDateRange(now: now)
-        return packets.filter { range.contains($0.timestamp) }
+    private func ignoredServiceEndpointsHash() -> Int {
+        // Cache keys must track the *effective* list: while the temporary preview
+        // is active, classification runs with no ignores, and serving a cached
+        // filtered result would defeat the preview (and vice versa on exit).
+        let ignored = temporarilyShowingIgnoredEndpoints
+            ? []
+            : (settingsStore?.ignoredServiceEndpoints ?? [])
+        var hasher = Hasher()
+        for endpoint in ignored.sorted() {
+            endpoint.hash(into: &hasher)
+        }
+        return hasher.finalize()
     }
 
-    private func rebuildGraph(reason: String) async {
+    private func filteredPackets(now: Date) -> [Packet] {
+        let range = currentDateRange(now: now)
+        // Half-open [start, end) to match the SQLite path's `receivedAt >= ? AND < ?`;
+        // DateInterval.contains is closed and would admit a packet stamped exactly at end.
+        return scoped(packets.filter { $0.timestamp >= range.start && $0.timestamp < range.end })
+    }
+
+    private func timeframePacketSnapshot(now: Date) async -> [Packet] {
+        let range = currentDateRange(now: now)
+        if let providerPackets = await timeframePacketsProvider?(range) {
+            // The database provider does not know the radio scope; apply it to
+            // its result so both packet sources honour the same filter.
+            return scoped(providerPackets)
+        }
+        return filteredPackets(now: now)
+    }
+
+    private func rebuildGraph(reason: String, applyToViewState: Bool = true, showLoadingState: Bool = true) async {
         let now = Date()
-        let packetSnapshot = filteredPackets(now: now)
+        let timeframeInterval = currentDateRange(now: now)
+        let packetSnapshot = await timeframePacketSnapshot(now: now)
+        latestTimeframePackets = packetSnapshot
+        updateTimeframeStationPresence(packets: packetSnapshot, identityMode: stationIdentityMode)
+        updateActivityInsights(packets: packetSnapshot, identityMode: stationIdentityMode, windowEnd: timeframeInterval.end)
+        updatePathDraftContext(packets: packetSnapshot, identityMode: stationIdentityMode)
+        let captureEvents = await captureEventsProvider?(timeframeInterval)
+        updateCaptureCoverage(packets: packetSnapshot, window: timeframeInterval, events: captureEvents, now: now)
         let includeViaSnapshot = includeViaDigipeaters
         let minEdgeSnapshot = minEdgeCount
         let maxNodesSnapshot = maxNodes
         let identityModeSnapshot = stationIdentityMode
+        let hideStaleSnapshot = settingsStore?.hideExpiredRoutes ?? AppSettingsStore.defaultHideExpiredRoutes
+        let neighborStaleTTLSnapshot = TimeInterval((settingsStore?.neighborStaleTTLHours ?? AppSettingsStore.defaultNeighborStaleTTLHours) * 3600)
+        let routeStaleTTLSnapshot = TimeInterval((settingsStore?.globalStaleTTLHours ?? AppSettingsStore.defaultGlobalStaleTTLHours) * 3600)
         let key = GraphCacheKey(
             timeframe: timeframe,
             includeVia: includeViaSnapshot,
             minEdgeCount: minEdgeSnapshot,
             maxNodes: maxNodesSnapshot,
             stationIdentityMode: identityModeSnapshot,
+            viewMode: graphViewMode, // Added to differentiate NET/ROM vs Packet modes
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
+            netRomUpdateCount: netRomUpdateCount,
+            windowStart: Date(timeIntervalSince1970: (timeframeInterval.start.timeIntervalSince1970 / 60).rounded(.down) * 60),
             customStart: customRangeStart,
-            customEnd: customRangeEnd
+            customEnd: customRangeEnd,
+            ignoredServiceEndpointsHash: ignoredServiceEndpointsHash()
         )
 
         // Check cache for classified graph
         if let cachedClassified = classifiedGraphCache[key] {
-            applyClassifiedGraphModel(cachedClassified)
-            prepareLayout(reason: "graphCache")
+            if applyToViewState {
+                applyClassifiedGraphModel(cachedClassified)
+                prepareLayout(reason: "graphCache")
+                hasLoadedGraph = true
+            }
+            if showLoadingState {
+                isGraphLoading = false
+            }
             return
         }
 
         // Fallback to legacy cache for backwards compatibility
         if let cached = graphCache[key] {
-            applyGraphModel(cached)
-            prepareLayout(reason: "graphCache")
+            if applyToViewState {
+                applyGraphModel(cached)
+                prepareLayout(reason: "graphCache")
+                hasLoadedGraph = true
+            }
+            if showLoadingState {
+                isGraphLoading = false
+            }
             return
+        }
+        if showLoadingState {
+            isGraphLoading = true
         }
 
         telemetryLimiter.breadcrumb(
@@ -661,27 +1431,72 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             ]
         )
 
+        let routingModeSnapshot = graphViewMode.netRomRoutingMode
+        // Snapshot NET/ROM data on the main actor before detaching,
+        // since NetRomIntegration is @MainActor-isolated.
+        let neighborsSnapshot: [NeighborInfo]?
+        let routesSnapshot: [RouteInfo]?
+        let netRomLocalCallsign: String?
+        if let mode = routingModeSnapshot, let integration = netRomIntegration {
+            neighborsSnapshot = integration.currentNeighbors(forMode: mode)
+            routesSnapshot = integration.currentRoutes(forMode: mode)
+            netRomLocalCallsign = integration.localCallsign
+        } else {
+            neighborsSnapshot = nil
+            routesSnapshot = nil
+            netRomLocalCallsign = nil
+        }
+
         graphTask?.cancel()
         graphTask = Task.detached(priority: .userInitiated) {
             let start = Date()
-            // Build the classified graph with typed edges
-            let classifiedModel = NetworkGraphBuilder.buildClassified(
-                packets: packetSnapshot,
-                options: NetworkGraphBuilder.Options(
-                    includeViaDigipeaters: includeViaSnapshot,
-                    minimumEdgeCount: minEdgeSnapshot,
-                    maxNodes: maxNodesSnapshot,
-                    stationIdentityMode: identityModeSnapshot
-                ),
-                now: now
-            )
+
+            let classifiedModel: ClassifiedGraphModel
+            if let neighbors = neighborsSnapshot, let routes = routesSnapshot, let localCall = netRomLocalCallsign {
+                // Build from pre-snapshotted NET/ROM routing tables
+                classifiedModel = NetworkGraphBuilder.buildFromNetRom(
+                    neighbors: neighbors,
+                    routes: routes,
+                    localCallsign: localCall,
+                    options: NetworkGraphBuilder.Options(
+                        includeViaDigipeaters: includeViaSnapshot,
+                        minimumEdgeCount: minEdgeSnapshot,
+                        maxNodes: maxNodesSnapshot,
+                        stationIdentityMode: identityModeSnapshot,
+                        hideStaleEntries: hideStaleSnapshot,
+                        neighborStaleTTL: neighborStaleTTLSnapshot,
+                        routeStaleTTL: routeStaleTTLSnapshot
+                    ),
+                    packets: packetSnapshot,
+                    now: now
+                )
+            } else {
+                // Build the classified graph with typed edges from packets
+                classifiedModel = NetworkGraphBuilder.buildClassified(
+                    packets: packetSnapshot,
+                    options: NetworkGraphBuilder.Options(
+                        includeViaDigipeaters: includeViaSnapshot,
+                        minimumEdgeCount: minEdgeSnapshot,
+                        maxNodes: maxNodesSnapshot,
+                        stationIdentityMode: identityModeSnapshot
+                    ),
+                    now: now
+                )
+            }
+            
             let duration = Date().timeIntervalSince(start) * 1000
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 guard !Task.isCancelled else { return }
                 self.classifiedGraphCache[key] = classifiedModel
-                self.applyClassifiedGraphModel(classifiedModel)
+                if applyToViewState {
+                    self.applyClassifiedGraphModel(classifiedModel)
+                    self.hasLoadedGraph = true
+                }
+                if showLoadingState {
+                    self.isGraphLoading = false
+                }
                 self.telemetryLimiter.breadcrumb(
                     category: "graph.build.finished",
                     message: "Graph build finished",
@@ -703,7 +1518,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                     )
                 }
 
-                self.prepareLayout(reason: "graphBuild")
+                if applyToViewState {
+                    self.prepareLayout(reason: "graphBuild")
+                }
             }
         }
     }
@@ -718,6 +1535,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.graphModel = viewModel
         viewState.graphNote = classifiedModel.droppedNodesCount > 0 ? "Showing top \(maxNodes) nodes" : nil
         updateNetworkHealth()
+        // Keep explicit fit targets valid as the graph content changes.
+        fitTargetNodeIDs.formIntersection(Set(viewModel.nodes.map(\.id)))
         // Recompute filtered graph when underlying model changes
         recomputeFilteredGraph()
     }
@@ -732,7 +1551,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                     sourceID: edge.sourceID,
                     targetID: edge.targetID,
                     weight: edge.weight,
-                    bytes: edge.bytes
+                    bytes: Int(edge.bytes),
+                    linkType: edge.linkType,
+                    isStale: edge.isStale
                 )
             }
 
@@ -740,27 +1561,30 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         var adjacency: [String: [GraphNeighborStat]] = [:]
         for edge in filteredEdges {
             adjacency[edge.sourceID, default: []].append(
-                GraphNeighborStat(id: edge.targetID, weight: edge.weight, bytes: edge.bytes)
+                GraphNeighborStat(id: edge.targetID, weight: edge.weight, bytes: edge.bytes, isStale: edge.isStale)
             )
             adjacency[edge.targetID, default: []].append(
-                GraphNeighborStat(id: edge.sourceID, weight: edge.weight, bytes: edge.bytes)
+                GraphNeighborStat(id: edge.sourceID, weight: edge.weight, bytes: edge.bytes, isStale: edge.isStale)
             )
         }
 
+        let trafficByNodeID = packetTrafficByNodeID()
+
         // Recalculate degrees based on filtered edges
-        let nodeIDs = Set(classifiedModel.nodes.map { $0.id })
         let updatedNodes = classifiedModel.nodes.map { node in
             let neighbors = adjacency[node.id] ?? []
+            let traffic = trafficByNodeID[node.id]
             return NetworkGraphNode(
                 id: node.id,
                 callsign: node.callsign,
                 weight: node.weight,
-                inCount: node.inCount,
-                outCount: node.outCount,
-                inBytes: node.inBytes,
-                outBytes: node.outBytes,
+                inCount: traffic?.inCount ?? 0,
+                outCount: traffic?.outCount ?? 0,
+                inBytes: traffic?.inBytes ?? 0,
+                outBytes: traffic?.outBytes ?? 0,
                 degree: neighbors.count,
-                groupedSSIDs: node.groupedSSIDs
+                groupedSSIDs: node.groupedSSIDs,
+                isNetRomOfficial: node.isNetRomOfficial
             )
         }
 
@@ -793,6 +1617,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         guard !viewState.classifiedGraphModel.nodes.isEmpty else { return }
         let viewModel = deriveViewGraph(from: viewState.classifiedGraphModel)
         viewState.graphModel = viewModel
+        // Keep explicit fit targets valid as the graph content changes.
+        fitTargetNodeIDs.formIntersection(Set(viewModel.nodes.map(\.id)))
         recomputeFilteredGraph()
     }
 
@@ -806,17 +1632,19 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func updateNetworkHealth() {
         let now = Date()
-        let timeframePackets = filteredPackets(now: now)
+        let timeframePackets = latestTimeframePackets
 
-        // Network Health uses a CANONICAL graph (minEdge=2, no max nodes) that ignores view filters.
+        // Network Health uses a CANONICAL graph (minEdge=1, no max nodes) that ignores view filters.
         // This ensures the health score is stable under Min Edge slider and Max Node count changes.
         // Only timeframe, includeViaDigipeaters toggle, and time passing affect the score.
         let health = NetworkHealthCalculator.calculate(
-            graphModel: viewState.graphModel,
             timeframePackets: timeframePackets,
-            allRecentPackets: packets,
+            allRecentPackets: scoped(packets),
             timeframeDisplayName: timeframe.displayName,
             includeViaDigipeaters: includeViaDigipeaters,
+            stationIdentityMode: stationIdentityMode,
+            timeframeDuration: currentDateRange(now: now).duration,
+            coverage: captureCoverage,
             now: now
         )
         viewState.networkHealth = health
@@ -834,14 +1662,19 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// Returns IDs of stations active in the last 10 minutes
     func activeNodeIDs() -> Set<String> {
         let recentCutoff = Date().addingTimeInterval(-600) // 10 minutes
-        let recentPackets = packets.filter { $0.timestamp >= recentCutoff }
-        var activeCallsigns: Set<String> = []
+        let recentPackets = scoped(packets).filter { $0.timestamp >= recentCutoff }
+        // Node IDs are identity keys ("W1ABC-7" in SSID mode, "W1ABC" in station
+        // mode). Matching on the bare base call selected nothing in SSID mode.
+        var activeKeys: Set<String> = []
         for packet in recentPackets {
-            if let from = packet.from?.call { activeCallsigns.insert(from) }
-            if let to = packet.to?.call { activeCallsigns.insert(to) }
+            if let from = packet.from?.display {
+                activeKeys.insert(CallsignParser.identityKey(for: from, mode: stationIdentityMode))
+            }
+            if let to = packet.to?.display {
+                activeKeys.insert(CallsignParser.identityKey(for: to, mode: stationIdentityMode))
+            }
         }
-        // Map callsigns to node IDs
-        return Set(viewState.graphModel.nodes.filter { activeCallsigns.contains($0.callsign) }.map { $0.id })
+        return Set(viewState.graphModel.nodes.filter { activeKeys.contains($0.id) }.map { $0.id })
     }
 
     // MARK: - Focus Mode Actions
@@ -886,6 +1719,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
         // Request a single fit
         focusState.didAutoFitForCurrentAnchor = true
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
@@ -900,16 +1734,35 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
     }
 
-    /// Sets the currently selected node as the focus anchor.
-    /// Only works if exactly one node is selected.
+    /// Single selection: sets selected node as focus anchor and fits focused graph.
+    /// Multi-selection: keeps current focus state and fits camera to selected node extents.
     func setSelectedAsAnchor() {
-        guard let selectedID = viewState.selectedNodeID,
+        let selectedIDs = viewState.selectedNodeIDs
+        guard !selectedIDs.isEmpty else { return }
+
+        if selectedIDs.count > 1 {
+            // Multi-select action is view-centric: zoom to selected extents.
+            fitTargetNodeIDs = selectedIDs
+            fitToSelectionRequest = UUID()
+
+            Telemetry.breadcrumb(
+                category: "graph.focusSelection",
+                message: "Focused selected node extents",
+                data: [
+                    "selectedCount": selectedIDs.count
+                ]
+            )
+            return
+        }
+
+        guard let selectedID = selectedIDs.first,
               let selectedNode = viewState.graphModel.nodes.first(where: { $0.id == selectedID }) else { return }
 
         focusState.setAnchor(nodeID: selectedID, displayName: selectedNode.callsign)
         recomputeFilteredGraph()
 
-        // Fit to the new focus area
+        // Fit to the new focus area.
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
         focusState.didAutoFitForCurrentAnchor = true
 
@@ -929,6 +1782,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         recomputeFilteredGraph()
 
         // Fit to show all nodes
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
@@ -946,6 +1800,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                   let selectedNode = viewState.graphModel.nodes.first(where: { $0.id == selectedID }) {
             focusState.setAnchor(nodeID: selectedID, displayName: selectedNode.callsign)
             recomputeFilteredGraph()
+            fitTargetNodeIDs = []
             fitToSelectionRequest = UUID()
         }
     }
@@ -968,6 +1823,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// Explicit fit-to-view camera action.
     /// Computes bounding box of visible nodes and fits camera.
     func requestFitToView() {
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
     }
 
@@ -1055,16 +1911,62 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             viewState.nodePositions = cached
             viewState.layoutEnergy = 0
             reconcileSelectionAfterLayout()
+            maintainPinnedSelectionViewportIfNeeded()
+            consumeQueuedViewportFitIfNeeded()
+            // Layout-cycle breadcrumb (CLAUDE.md observability mandate) —
+            // rate-limited; cache hits matter for diagnosing layout churn.
+            telemetryLimiter.breadcrumb(
+                category: "analytics.graph.layout",
+                message: "Layout cache hit",
+                data: ["reason": reason, "nodes": model.nodes.count]
+            )
             return
         }
 
+        let layoutStart = Date()
         let positions = RadialGraphLayout.layout(model: model, myCallsign: myCallsignForLayout)
-        assert(positions.count == model.nodes.count, "Layout dropped nodes: \(positions.count)/\(model.nodes.count)")
+        telemetryLimiter.breadcrumb(
+            category: "analytics.graph.layout",
+            message: "Layout computed",
+            data: [
+                "reason": reason,
+                "nodes": model.nodes.count,
+                "edges": model.edges.count,
+                "durationMs": Int(Date().timeIntervalSince(layoutStart) * 1000)
+            ]
+        )
+        if positions.count != model.nodes.count {
+            // Report in ALL builds before the debug trap: a release layout
+            // that drops nodes previously produced no signal of any kind.
+            Telemetry.capture(
+                message: "Graph layout dropped nodes",
+                data: ["positions": positions.count, "nodes": model.nodes.count, "reason": reason]
+            )
+            assertionFailure("Layout dropped nodes: \(positions.count)/\(model.nodes.count)")
+        }
         layoutKey = key
         layoutCache[key] = positions
         viewState.nodePositions = positions
         viewState.layoutEnergy = 0
         reconcileSelectionAfterLayout()
+        maintainPinnedSelectionViewportIfNeeded()
+        consumeQueuedViewportFitIfNeeded()
+    }
+
+    private func queueViewportFitToVisibleNodes() {
+        pendingViewportFitToVisibleNodes = true
+    }
+
+    private func consumeQueuedViewportFitIfNeeded() {
+        guard pendingViewportFitToVisibleNodes else { return }
+        pendingViewportFitToVisibleNodes = false
+
+        // Preserve explicit focus and selection-fit behavior.
+        if !fitTargetNodeIDs.isEmpty { return }
+        if focusState.isFocusEnabled, focusState.anchorNodeID != nil { return }
+
+        fitTargetNodeIDs = []
+        fitToSelectionRequest = UUID()
     }
 
     private func updateSelectionState() {
@@ -1073,12 +1975,72 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.selectedNodeID = selectionState.primarySelectionID
         captureMissingSelectionIfNeeded()
 
+        // If an explicit fit target is active (selection-focus mode), keep it aligned to selection changes.
+        if !fitTargetNodeIDs.isEmpty {
+            fitTargetNodeIDs.formIntersection(viewState.selectedNodeIDs)
+        }
+
         // Reset auto-fit flag when selection changes (unless via selectPrimaryHub)
         // This ensures explicit selection changes don't trigger unwanted auto-fits
         focusState.didAutoFitForCurrentAnchor = false
 
         // Recompute filtered graph when selection changes
         recomputeFilteredGraph()
+    }
+
+    /// When explicit selection-fit mode is active, keep selected nodes in frame across graph/layout updates.
+    private func maintainPinnedSelectionViewportIfNeeded() {
+        if !fitTargetNodeIDs.isEmpty {
+            let positionedIDs = Set(viewState.nodePositions.map(\.id))
+            let validTargets = fitTargetNodeIDs.intersection(positionedIDs)
+            guard !validTargets.isEmpty else { return }
+            requestPinnedRefitIfNeeded(targetNodeIDs: validTargets)
+            return
+        }
+
+        // Anchor-focused mode should also remain framed when graph/layout updates move nodes.
+        if focusState.isFocusEnabled, focusState.anchorNodeID != nil {
+            let targetIDs = filteredGraph.visibleNodeIDs.isEmpty
+                ? Set(viewState.graphModel.nodes.map(\.id))
+                : filteredGraph.visibleNodeIDs
+            requestPinnedRefitIfNeeded(targetNodeIDs: targetIDs)
+        }
+    }
+
+    private func requestPinnedRefitIfNeeded(targetNodeIDs: Set<String>) {
+        guard !targetNodeIDs.isEmpty else { return }
+        guard let bounds = GraphAlgorithms.boundingBox(
+            visibleNodeIDs: targetNodeIDs,
+            positions: viewState.nodePositions
+        ) else { return }
+
+        let now = Date()
+        let cooldownElapsed = now.timeIntervalSince(lastPinnedRefitTimestamp) >= pinnedRefitCooldown
+        let nodeSetChanged = targetNodeIDs != lastPinnedRefitNodeIDs
+        let driftedEnough = shouldRefitForBoundsChange(bounds)
+
+        // Only auto-refit when either:
+        // 1) target set changed, or
+        // 2) bounds drifted meaningfully and cooldown elapsed.
+        if !nodeSetChanged && !(cooldownElapsed && driftedEnough) {
+            return
+        }
+
+        fitTargetNodeIDs = targetNodeIDs
+        fitToSelectionRequest = UUID()
+        lastPinnedRefitTimestamp = now
+        lastPinnedRefitNodeIDs = targetNodeIDs
+        lastPinnedRefitBounds = RefitBounds(bounds)
+    }
+
+    private func shouldRefitForBoundsChange(
+        _ bounds: (minX: Double, minY: Double, maxX: Double, maxY: Double)
+    ) -> Bool {
+        guard let previous = lastPinnedRefitBounds else { return true }
+        let current = RefitBounds(bounds)
+        let centerDelta = hypot(current.centerX - previous.centerX, current.centerY - previous.centerY)
+        let spanDelta = abs(current.maxSpan - previous.maxSpan)
+        return centerDelta >= pinnedRefitCenterThreshold || spanDelta >= pinnedRefitSpanThreshold
     }
 
     private func captureMissingSelectionIfNeeded() {
@@ -1131,7 +2093,53 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         layoutTask?.cancel()
         aggregationScheduler.cancel()
         graphScheduler.cancel()
+        isAggregationLoading = false
+        isGraphLoading = false
         loopDetection.reset()
+    }
+
+    private func packetTrafficByNodeID() -> [String: NodeTrafficAggregate] {
+        var aggregates: [String: NodeTrafficAggregate] = [:]
+
+        for event in latestTimeframePackets.map({ PacketEvent(packet: $0) }) {
+            guard
+                let rawFrom = event.from,
+                let rawTo = event.to,
+                let from = StationNormalizer.normalize(rawFrom),
+                let to = StationNormalizer.normalize(rawTo)
+            else {
+                continue
+            }
+
+            let fromKey = CallsignParser.identityKey(for: from, mode: stationIdentityMode)
+            let toKey = CallsignParser.identityKey(for: to, mode: stationIdentityMode)
+
+            guard fromKey != toKey else { continue }
+
+            var fromAggregate = aggregates[fromKey, default: NodeTrafficAggregate()]
+            fromAggregate.outCount += 1
+            fromAggregate.outBytes += event.payloadBytes
+            aggregates[fromKey] = fromAggregate
+
+            var toAggregate = aggregates[toKey, default: NodeTrafficAggregate()]
+            toAggregate.inCount += 1
+            toAggregate.inBytes += event.payloadBytes
+            aggregates[toKey] = toAggregate
+        }
+
+        return aggregates
+    }
+}
+
+private struct RefitBounds {
+    let centerX: Double
+    let centerY: Double
+    let maxSpan: Double
+
+    init(_ bounds: (minX: Double, minY: Double, maxX: Double, maxY: Double)) {
+        centerX = (bounds.minX + bounds.maxX) * 0.5
+        centerY = (bounds.minY + bounds.maxY) * 0.5
+        maxSpan = max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY)
     }
 }
 
@@ -1139,10 +2147,17 @@ private struct AggregationCacheKey: Hashable {
     let timeframe: AnalyticsTimeframe
     let bucket: TimeBucket
     let includeVia: Bool
+    let stationIdentityMode: StationIdentityMode
     let packetCount: Int
     let lastTimestamp: Date?
+    /// Resolved window start, quantized to the bucket stride. Rolling timeframes slide
+    /// with the clock; without this the cache would keep serving a window that ended
+    /// long ago whenever no new packets arrive.
+    let windowStart: Date
     let customStart: Date
     let customEnd: Date
+    let ignoredServiceEndpointsHash: Int
+    let radioSelection: AnalyticsRadioSelection
 }
 
 private struct GraphCacheKey: Hashable {
@@ -1151,10 +2166,22 @@ private struct GraphCacheKey: Hashable {
     let minEdgeCount: Int
     let maxNodes: Int
     let stationIdentityMode: StationIdentityMode
+    let viewMode: GraphViewMode
     let packetCount: Int
     let lastTimestamp: Date?
+    let netRomUpdateCount: Int
+    /// Resolved window start quantized to one minute — see AggregationCacheKey.windowStart.
+    let windowStart: Date
     let customStart: Date
     let customEnd: Date
+    let ignoredServiceEndpointsHash: Int
+}
+
+private struct NodeTrafficAggregate {
+    var inCount: Int = 0
+    var outCount: Int = 0
+    var inBytes: Int = 0
+    var outBytes: Int = 0
 }
 
 struct GraphInspectorDetails: Hashable, Sendable {
@@ -1183,6 +2210,44 @@ struct GraphInspectorDetails: Hashable, Sendable {
     }
 }
 
+struct GraphMultiInspectorDetails: Hashable, Sendable {
+    nonisolated struct InternalLink: Hashable, Sendable, Identifiable {
+        let sourceID: String
+        let sourceCallsign: String
+        let targetID: String
+        let targetCallsign: String
+        let packetCount: Int
+        let bytes: Int
+
+        var id: String { "\(sourceID)->\(targetID)" }
+        var sortKey: String { "\(sourceCallsign)|\(targetCallsign)" }
+    }
+
+    nonisolated struct SharedExternalConnection: Hashable, Sendable, Identifiable {
+        let id: String
+        let callsign: String
+        var connectedSelectedIDs: Set<String>
+        var totalPackets: Int
+    }
+
+    let selectedNodes: [NetworkGraphNode]
+    let internalLinks: [InternalLink]
+    let sharedExternalConnections: [SharedExternalConnection]
+    let relationshipBreakdown: [LinkType: Int]
+    let possibleInternalLinks: Int
+    let internalPacketCount: Int
+    let internalByteCount: Int
+    let touchingByteCount: Int
+
+    var selectionCount: Int { selectedNodes.count }
+    var internalLinkCount: Int { internalLinks.count }
+    var density: Double {
+        guard possibleInternalLinks > 0 else { return 0 }
+        return Double(internalLinkCount) / Double(possibleInternalLinks)
+    }
+    var externalReachCount: Int { sharedExternalConnections.count }
+}
+
 private enum AnalyticsInputHasher {
     static func hash(
         timeframe: AnalyticsTimeframe,
@@ -1205,7 +2270,12 @@ private enum AnalyticsInputHasher {
     }
 }
 
-private final class TelemetryRateLimiter {
+/// nonisolated: with SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor this class would
+/// otherwise get an implicitly isolated deinit, and releasing it synchronously
+/// from a @MainActor context aborts in the runtime's task-local teardown
+/// (swift_task_deinitOnExecutorImpl → StopLookupScope, malloc double-free).
+/// State is only touched from the owning main-actor view model.
+nonisolated private final class TelemetryRateLimiter {
     private let minimumInterval: TimeInterval
     private var lastFire: Date?
 

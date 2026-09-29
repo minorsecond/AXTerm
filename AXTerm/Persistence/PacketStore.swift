@@ -7,7 +7,7 @@
 
 import Foundation
 
-protocol PacketStore: Sendable {
+nonisolated protocol PacketStore: Sendable {
     func save(_ packet: Packet) throws
     func loadRecent(limit: Int) throws -> [PacketRecord]
     func deleteAll() throws

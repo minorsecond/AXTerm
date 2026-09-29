@@ -7,10 +7,305 @@
 
 import SwiftUI
 
+nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
+    var showID: Bool = true
+    var showBeacon: Bool = true
+    var showMail: Bool = true
+    var showData: Bool = true
+    var showPrompt: Bool = true
+    var showOther: Bool = true
+    var showSystem: Bool = true
+    /// Show digipeated copies of the local station's own frames (off by default —
+    /// they carry no new content, but confirm the digi is actually relaying us).
+    var showDigipeats: Bool = false
+    /// Show *nothing but* those echoes. Not a message class — an echo is
+    /// still an ID or a DATA line — so this is a separate axis rather than
+    /// another flag in the set above.
+    var digipeatsOnly: Bool = false
+    /// Show only lines this station is a party to — sent by us, addressed to
+    /// us, or digipeated by us.
+    ///
+    /// The single biggest lever on a busy channel: on this operator's own
+    /// capture, 71% of frames involve neither end of their station, and a
+    /// stranger's Winlink session can fill the console for minutes at a time.
+    /// Another axis rather than a class, for the same reason as
+    /// `digipeatsOnly` — our own traffic is still IDs and DATA.
+    var minesOnly: Bool = false
+
+    /// One switch on the filter row.
+    enum Kind: String, CaseIterable, Hashable, Sendable {
+        case id, beacon, mail, data, prompt, other, system, mine, digipeats
+
+        /// The chip's label, and the word used in "Show Only …".
+        var label: String {
+            switch self {
+            case .id: return "ID"
+            case .beacon: return "BCN"
+            case .mail: return "MAIL"
+            case .data: return "DATA"
+            case .prompt: return "CMD"
+            case .other: return "OTHER"
+            case .system: return "SYS"
+            case .mine: return "MINE"
+            case .digipeats: return "DIGI"
+            }
+        }
+
+        /// The seven that partition the console. MINE and DIGI are excluded:
+        /// they narrow the same lines rather than naming a kind of line, so
+        /// treating them as classes would let "show only mine" mean "show
+        /// nothing".
+        static var messageClasses: [Kind] {
+            allCases.filter { !$0.isAxis }
+        }
+
+        /// True for the switches that filter across every class instead of
+        /// selecting one.
+        var isAxis: Bool { self == .mine || self == .digipeats }
+    }
+
+    subscript(kind: Kind) -> Bool {
+        get {
+            switch kind {
+            case .id: return showID
+            case .beacon: return showBeacon
+            case .mail: return showMail
+            case .data: return showData
+            case .prompt: return showPrompt
+            case .other: return showOther
+            case .system: return showSystem
+            case .mine: return minesOnly
+            case .digipeats: return showDigipeats
+            }
+        }
+        set {
+            switch kind {
+            case .id: showID = newValue
+            case .beacon: showBeacon = newValue
+            case .mail: showMail = newValue
+            case .data: showData = newValue
+            case .prompt: showPrompt = newValue
+            case .other: showOther = newValue
+            case .system: showSystem = newValue
+            case .mine: minesOnly = newValue
+            case .digipeats: showDigipeats = newValue
+            }
+        }
+    }
+
+    /// Show this one and nothing else — the mixing-desk solo, so isolating a
+    /// class costs one gesture instead of switching off the other seven.
+    ///
+    /// Soloing a message class leaves `showDigipeats` alone: an echoed DATA
+    /// frame is still DATA, and whether the operator wants to see their own
+    /// echoes is a separate preference from which classes they are reading.
+    mutating func solo(_ kind: Kind) {
+        switch kind {
+        case .digipeats:
+            // "Only DIGI" cannot mean "no message classes" — that shows an
+            // empty console, because every echo is also an ID or a DATA line.
+            for klass in Kind.messageClasses { self[klass] = true }
+            showDigipeats = true
+            digipeatsOnly = true
+            minesOnly = false
+        case .mine:
+            // Same shape: our own traffic is still IDs and DATA.
+            for klass in Kind.messageClasses { self[klass] = true }
+            minesOnly = true
+            digipeatsOnly = false
+        default:
+            for klass in Kind.messageClasses { self[klass] = (klass == kind) }
+            digipeatsOnly = false
+            minesOnly = false
+        }
+    }
+
+    func isSoloed(_ kind: Kind) -> Bool {
+        switch kind {
+        case .digipeats: return digipeatsOnly && showDigipeats && !minesOnly
+        case .mine: return minesOnly && !digipeatsOnly && isShowingEveryClass
+        default:
+            guard !digipeatsOnly, !minesOnly else { return false }
+            return Kind.messageClasses.allSatisfy { self[$0] == ($0 == kind) }
+        }
+    }
+
+    /// Back to every class. Deliberately does not touch `showDigipeats`:
+    /// echoes are off by default because they are noise, and restoring the
+    /// classes should not quietly turn the operator's own echoes back on.
+    mutating func showAllTypes() {
+        for klass in Kind.messageClasses { self[klass] = true }
+        digipeatsOnly = false
+        minesOnly = false
+    }
+
+    /// Every message class switched on. Says nothing about the axes — a
+    /// console showing only our own traffic is still showing every class of
+    /// it.
+    var isShowingEveryClass: Bool {
+        Kind.messageClasses.allSatisfy { self[$0] }
+    }
+
+    /// Nothing filtered at all, on either axis.
+    var isUnrestricted: Bool {
+        isShowingEveryClass && !digipeatsOnly && !minesOnly
+    }
+
+    /// What is being held back, for the line beside the message count. Nil
+    /// when every class is showing.
+    var restrictionSummary: String? {
+        var parts: [String] = []
+        if minesOnly { parts.append("my traffic only") }
+        if digipeatsOnly { parts.append("digipeat echoes only") }
+        if let classes = classRestriction { parts.append(classes) }
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{b7} ")
+    }
+
+    private var classRestriction: String? {
+        let shown = Kind.messageClasses.filter { self[$0] }
+        if shown.count == Kind.messageClasses.count { return nil }
+        if shown.isEmpty { return "every type hidden" }
+        if shown.count == 1 { return "\(shown[0].label) only" }
+        let hidden = Kind.messageClasses.filter { !self[$0] }
+        return "no \(hidden.map(\.label).joined(separator: "/"))"
+    }
+}
+
+nonisolated enum ConsoleVisibilityFilter {
+    static func apply(
+        lines: [ConsoleLine],
+        clearedAt: Date?,
+        flags: ConsoleTypeFilterFlags,
+        localCallsign: String = ""
+    ) -> [ConsoleLine] {
+        let timeFiltered: [ConsoleLine]
+        if let cutoff = clearedAt {
+            timeFiltered = lines.filter { $0.timestamp > cutoff }
+        } else {
+            timeFiltered = lines
+        }
+
+        return timeFiltered.filter { line in
+            // Digipeated echoes of our own frames are copies, not content — hidden
+            // unless the operator opts in. Frames FROM other stations heard via a
+            // digi are the session content itself and are never hidden here.
+            let isEcho = line.isDigipeatEcho(localCallsign: localCallsign)
+            if !flags.showDigipeats, isEcho {
+                return false
+            }
+            // "Only DIGI": every line that is not one of our own echoes goes.
+            if flags.digipeatsOnly, !isEcho {
+                return false
+            }
+            // "Only MINE": lines this station is not a party to go. Needs a
+            // callsign to mean anything — with none set, every line would
+            // vanish, which is a worse answer than not filtering.
+            if flags.minesOnly, !localCallsign.isEmpty,
+               !line.involvesStation(localCallsign) {
+                return false
+            }
+            switch line.kind {
+            case .system, .error:
+                return flags.showSystem
+            case .packet:
+                guard let messageType = line.messageType else { return flags.showOther }
+                switch messageType {
+                case .id: return flags.showID
+                case .beacon: return flags.showBeacon
+                case .mail: return flags.showMail
+                case .data: return flags.showData
+                case .prompt: return flags.showPrompt
+                case .message: return flags.showOther
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Chip strings
+
+extension ConsoleTypeFilterFlags.Kind {
+
+    /// What the chip's tooltip says. String literals, so reading this allocates
+    /// nothing; the strings derived *from* it do, which is why `chipText`
+    /// builds those once.
+    var tooltip: String {
+        switch self {
+        case .mine:
+            return "Only traffic this station is a party to \u{2014} sent by you, addressed to you, or digipeated by you. Matches any SSID of your callsign. On this channel most frames are conversations between other stations."
+        case .id:
+            return "Station identification broadcasts. Stations periodically announce their callsign and capabilities."
+        case .beacon:
+            return "Beacon messages. Periodic broadcasts containing station info, location, or status updates."
+        case .mail:
+            return "Mail notifications. Alerts about new messages waiting at a BBS or mailbox."
+        case .data:
+            return "Content messages. The actual data being exchanged \u{2014} personal messages, bulletins, and transferred information."
+        case .prompt:
+            return "AX.25 Link Control frames. Protocol-level session messages like SABM, DISC, RR, and UA."
+        case .other:
+            return "Unclassified messages. Packets that don't fit other categories."
+        case .system:
+            return "System messages. Connection status, errors, and internal application notifications."
+        case .digipeats:
+            return "Digipeater transmissions. Off-air copies of your own frames as repeated by a digipeater (marked \u{21bb}). They carry no new content, but seeing them confirms the digi is actually relaying you."
+        }
+    }
+
+    /// The three strings each chip's `body` would otherwise build every pass.
+    struct ChipText: Equatable, Sendable {
+        let help: String
+        let soloTitle: String
+        let toggleTitle: String
+    }
+
+    /// Built once for the process. See `FilterToggle.text` for why.
+    static let chipText: [ConsoleTypeFilterFlags.Kind: ChipText] = {
+        var table: [ConsoleTypeFilterFlags.Kind: ChipText] = [:]
+        for kind in ConsoleTypeFilterFlags.Kind.allCases {
+            table[kind] = ChipText(
+                help: kind.tooltip + "\n\nOption-click to show only this type.",
+                soloTitle: "Show Only \(kind.label)",
+                toggleTitle: "Show \(kind.label)")
+        }
+        return table
+    }()
+}
+
 struct ConsoleView: View {
+    /// Console text size, from the operator's setting. Eleven points is
+    /// the historical default, not everyone's eyes.
+    var fontSize: Double = 11
     let lines: [ConsoleLine]
     let showDaySeparators: Bool
     @Binding var clearedAt: Date?
+    /// Local station callsign, used to recognize digipeated copies of our own
+    /// frames. Empty disables digipeat-echo handling (nothing is hidden).
+    var localCallsign: String = ""
+    /// Tapping a callsign in a line asks who it is. Nil keeps the console
+    /// read-only, which is what the Mac wants.
+    var onIdentity: ((String) -> Void)?
+    var onIdentityMenu: ((String) -> Void)?
+    /// Radio names by id, for the per-line radio badge. Empty with one radio,
+    /// so the badge appears only when there is more than one radio to tell
+    /// apart — the same rule the Packets table's Radio column follows.
+    var radioNames: [RadioID: String] = [:]
+    /// Base callsigns this receiver has heard. The callsign scanner treats a
+    /// match as the strongest evidence there is that a token in a message is
+    /// a station rather than a tone code.
+    var heardCallsigns: Set<String> = []
+    /// Telemetry definitions by callsign, for naming `T#` channels.
+    var telemetryDefinitions: [String: APRSTelemetry.Definition] = [:]
+    /// Where this station is, for "how far, which way" beside a decoded APRS
+    /// position. Nil simply leaves the distance off.
+    var observer: GreatCircle.Point?
+    var distanceInMiles: Bool = true
+    /// Bump from the parent to force a bottom re-pin even when the line set is
+    /// unchanged. The Broadcast⇄Session toggle re-lays-out this ScrollView
+    /// without changing its content, which can strand the newest lines above the
+    /// viewport; on a quiet channel no incoming packet rebuilds the list to fix
+    /// it, so the parent signals the toggle here directly. See `scheduleRepin`.
+    var repinSignal: Int = 0
 
     @State private var autoScroll = true
     @State private var isUserNearBottom = true
@@ -18,46 +313,131 @@ struct ConsoleView: View {
     @State private var showUndoClear = false
     @State private var undoClearTask: Task<Void, Never>?
     @State private var previousClearedAt: Date?
+    @State private var scrollToBottomToken = 0
+    /// Debounced write of `isUserNearBottom` from the bottom sentinel, and the
+    /// deferred re-pin after a rebuild. Both are `QuietWindowTimer` rather than
+    /// a cancelled-and-replaced `DispatchWorkItem`: see that type for the
+    /// frozen build that distinction came out of.
+    @State private var nearBottomTimer = QuietWindowTimer(window: 0.12)
+    @State private var repinTimer = QuietWindowTimer(window: 0.2)
 
-    // Message type filters
-    @State private var showID = true
-    @State private var showBeacon = true
-    @State private var showMail = true
-    @State private var showData = true
-    @State private var showPrompt = true
-    @State private var showOther = true
-    @State private var showSystem = true
+    // Message type filters — persisted across view switches and app restarts
+    @AppStorage("consoleFilter_showID") private var showID = true
+    @AppStorage("consoleFilter_showBeacon") private var showBeacon = true
+    @AppStorage("consoleFilter_showMail") private var showMail = true
+    @AppStorage("consoleFilter_showData") private var showData = true
+    @AppStorage("consoleFilter_showPrompt") private var showPrompt = true
+    @AppStorage("consoleFilter_showOther") private var showOther = true
+    @AppStorage("consoleFilter_showSystem") private var showSystem = true
+    @AppStorage("consoleFilter_showDigipeats") private var showDigipeats = false
+    @AppStorage("consoleFilter_digipeatsOnly") private var digipeatsOnly = false
+    @AppStorage("consoleFilter_minesOnly") private var minesOnly = false
+    /// Print APRS frames as they arrived instead of decoding them.
+    ///
+    /// Off by default, because the raw form of the frames this affects is not
+    /// readable — but it is a switch rather than a decision made for the
+    /// operator, because this is a terminal and sometimes the question is
+    /// "what exactly did that station send".
+    @AppStorage("consoleFilter_rawAPRS") private var showsRawAPRS = false
 
-    /// Lines filtered by clear timestamp
-    private var filteredLines: [ConsoleLine] {
-        guard let cutoff = clearedAt else { return lines }
-        return lines.filter { $0.timestamp > cutoff }
+    /// Which rows print their time. Rebuilt with the grouping, not read from
+    /// `body`: asking each row about the one above it would be a lookup per row
+    /// per render on a list that grows all day, and as a computed property this
+    /// rebuilt the whole dictionary — a `timestampString` per group, so a
+    /// `DateFormatter` lookup per group — on every body evaluation. Same reason
+    /// `groupedLines` is stored (CLAUDE.md §12).
+    @State private var timestampRunPositions: [ConsoleLineGroup.ID: ConsoleTimestampRuler.RunPosition] = [:]
+
+    /// Lines filtered by clear timestamp and message type preferences
+    private var typeFilteredLines: [ConsoleLine] {
+        ConsoleVisibilityFilter.apply(
+            lines: lines,
+            clearedAt: clearedAt,
+            flags: currentFilterFlags,
+            localCallsign: localCallsign
+        )
     }
 
-    /// Lines filtered by message type preferences
-    private var typeFilteredLines: [ConsoleLine] {
-        filteredLines.filter { line in
-            switch line.kind {
-            case .system, .error:
-                return showSystem
-            case .packet:
-                guard let messageType = line.messageType else { return showOther }
-                switch messageType {
-                case .id: return showID
-                case .beacon: return showBeacon
-                case .mail: return showMail
-                case .data: return showData
-                case .prompt: return showPrompt
-                case .message: return showOther
-                }
-            }
+    /// The rendered console, rebuilt only when something it depends on changes.
+    ///
+    /// These used to be computed properties read from `body`, which meant the
+    /// whole pipeline — filter every line, group duplicates, split by day — ran
+    /// on **every** body evaluation, over a buffer that sits pegged at its
+    /// 10,000-line cap on a busy channel. Packets arrive continuously, so the
+    /// main thread spent its time re-deriving a list that had barely changed,
+    /// and the app stopped responding. CLAUDE.md §12: no unbounded view-driven
+    /// loops.
+    ///
+    /// `LazyVStack` does not save this: the array has to be fully materialised
+    /// before it can be lazy about drawing it.
+    @State private var groupedLines: [ConsoleLineGroup] = []
+    @State private var dayGroupedLines: [DayGroupedSection<ConsoleLineGroup>] = []
+
+    /// Everything the rendered console depends on, as one comparable value.
+    ///
+    /// `lines.count` alone is not enough: once the buffer is full every append
+    /// also trims, so the count stays at 10,000 while the content changes
+    /// underneath. The newest line's identity is what actually moves.
+    private var renderInputs: String {
+        let flags = [showID, showBeacon, showMail, showData,
+                     showPrompt, showOther, showSystem, showDigipeats]
+            .map { $0 ? "1" : "0" }.joined()
+        return "\(lines.count)|\(lines.last?.id.uuidString ?? "-")|"
+            + "\(clearedAt?.timeIntervalSince1970 ?? 0)|\(flags)|\(localCallsign)"
+    }
+
+    private func rebuildRenderedLines() {
+        let groups = ConsoleLineGrouper.group(typeFilteredLines)
+        groupedLines = groups
+        timestampRunPositions = ConsoleTimestampRuler.runPositions(
+            groups, timestamp: \.primary.timestampString)
+        dayGroupedLines = DayGrouping.group(items: groups, date: { $0.primary.timestamp })
+        // Any change to the visible line set can leave the ScrollView holding an
+        // offset that no longer matches the content — most visibly when the
+        // Session⇄Broadcast toggle swaps in a different filtered set (its peer
+        // filter turns on with an active session), stranding the newest lines
+        // above the viewport with blank space below. Re-pin AFTER the rebuild
+        // settles. See `scheduleRepin`.
+        scheduleRepin()
+    }
+
+    /// Coalesce the bottom sentinel's near-bottom signal: a burst of
+    /// appear/disappear flips (rapid appends plus the scroll-to-bottom below)
+    /// collapses to one write once the scrolling settles, never a per-flip write
+    /// storm inside the update pass. The write runs on a later main-queue turn,
+    /// so it also can't recurse synchronously through `propagate_dirty`.
+    ///
+    /// The sentinel pokes this from inside the SwiftUI update pass, which is the
+    /// worst case for a debounce that allocates per poke — see
+    /// `QuietWindowTimer`.
+    private func scheduleNearBottom(_ value: Bool) {
+        nearBottomTimer.poke {
+            if isUserNearBottom != value { isUserNearBottom = value }
         }
     }
 
-    /// Group duplicates together by content signature.
-    /// Only collapse lines that are explicitly marked as duplicates (received via a different path).
-    private var groupedLines: [ConsoleLineGroup] {
-        ConsoleLineGrouper.group(typeFilteredLines)
+    /// Re-pin the transcript to the bottom AFTER the visible line set settles.
+    ///
+    /// The Session⇄Broadcast toggle does NOT change the compose bar's height —
+    /// both layouts are two rows — so the console is not resized. What changes is
+    /// its CONTENT: `connectionMode` drives the session-peer filter, so toggling
+    /// can swap in a different (often much shorter) filtered set. `.onChange(of:
+    /// groupedLines.count)` misses this when the count happens to match, and even
+    /// when it fires, a `scrollTo` in the same pass resolves the bottom against a
+    /// half-applied layout and can overshoot — an intermittent, timing-dependent
+    /// strand of the newest lines above the viewport.
+    ///
+    /// Deferring past the settle removes the race: the scroll runs after the new
+    /// content is laid out. The quiet window collapses a burst of rebuilds (live
+    /// packets) to a single re-pin once they stop. It targets the last real line,
+    /// never the phantom "bottom" sentinel an overshoot would land past. Only
+    /// while Auto-scroll is on, so a reader who scrolled up is left alone.
+    private func scheduleRepin() {
+        guard autoScroll else { return }
+        repinTimer.poke {
+            guard autoScroll else { return }
+            scrollToBottomToken += 1
+        }
     }
 
     var body: some View {
@@ -66,7 +446,7 @@ struct ConsoleView: View {
                 // Toolbar
                 HStack(spacing: 12) {
                     Toggle("Auto-scroll", isOn: $autoScroll)
-                        .toggleStyle(.checkbox)
+                        .platformCheckboxToggle()
 
                     Spacer()
 
@@ -76,14 +456,31 @@ struct ConsoleView: View {
                     Divider()
                         .frame(height: 16)
 
-                    Text("\(groupedLines.count) messages")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
+                    // Naming the restriction, not just implying it with dim
+                    // chips: an operator who soloed DATA an hour ago and came
+                    // back to a quiet console should not have to audit eight
+                    // switches to find out why.
+                    HStack(spacing: 4) {
+                        Text("\(groupedLines.count) messages")
+                        if let restriction = currentFilterFlags.restrictionSummary {
+                            Text("\u{b7} \(restriction)")
+                                .foregroundStyle(.orange)
+                            Button("Show All") { applyFlags { $0.showAllTypes() } }
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
+                                .help("Turn every message type back on.")
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
 
-                    Button("Clear") {
+                    Button(action: {
                         clearConsole()
+                    }) {
+                        Image(systemName: "trash")
                     }
                     .buttonStyle(.bordered)
+                    .help("Clear Console")
                     .controlSize(.small)
                 }
                 .padding(.horizontal)
@@ -94,62 +491,111 @@ struct ConsoleView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
+                        LazyVStack(alignment: .leading, spacing: ConsoleTheme.rowSpacing) {
                             if showDaySeparators {
                                 ForEach(dayGroupedLines) { section in
                                     DaySeparatorView(date: section.date)
                                         .padding(.vertical, 4)
 
+                                    // Computed per section: a day separator
+                                    // starts a new block, so the row after
+                                    // one always prints its time.
+                                    let runs = ConsoleTimestampRuler.runPositions(
+                                        section.items, timestamp: \.primary.timestampString)
                                     ForEach(section.items) { group in
-                                        ConsoleLineGroupView(group: group)
+                                        ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                                             timestampRun: runs[group.id] ?? .alone,
+                                                             onIdentity: onIdentity,
+                                                             onIdentityMenu: onIdentityMenu,
+                                                             radioNames: radioNames,
+                                                             observer: observer,
+                                                             distanceInMiles: distanceInMiles,
+                                                             showsRawAPRS: showsRawAPRS,
+                                                             heardCallsigns: heardCallsigns,
+                                                             telemetryDefinitions: telemetryDefinitions)
                                             .id(group.id)
                                     }
                                 }
                             } else {
                                 ForEach(groupedLines) { group in
-                                    ConsoleLineGroupView(group: group)
+                                    ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                                             timestampRun: timestampRunPositions[group.id] ?? .alone,
+                                                             onIdentity: onIdentity,
+                                                             onIdentityMenu: onIdentityMenu,
+                                                             radioNames: radioNames,
+                                                             observer: observer,
+                                                             distanceInMiles: distanceInMiles,
+                                                             showsRawAPRS: showsRawAPRS,
+                                                             heardCallsigns: heardCallsigns,
+                                                             telemetryDefinitions: telemetryDefinitions)
                                         .id(group.id)
                                 }
                             }
                             Color.clear
-                                .frame(height: 1)
+                                .frame(height: 10)
                                 .id("bottom")
-                                .background(
-                                    GeometryReader { geometry in
-                                        Color.clear
-                                            .preference(
-                                                key: ConsoleScrollBottomPreferenceKey.self,
-                                                value: geometry.frame(in: .named("consoleScroll")).maxY
-                                            )
-                                    }
-                                )
+                                // DEBOUNCED, never a synchronous write. These
+                                // appearance actions fire from inside SwiftUI's
+                                // update pass; a burst of console appends with the
+                                // scroll-to-bottom below makes this sentinel flip
+                                // appeared/disappeared many times per pass, and
+                                // writing `isUserNearBottom` on each flip re-dirties
+                                // the attribute graph inside the same pass —
+                                // `propagate_dirty` recursing into a 100% main-thread
+                                // stack (sampled twice, 2026-08-29/30, leaf here).
+                                //
+                                // The write is coalesced through `scheduleNearBottom`,
+                                // which cancels-and-reschedules: during a flip storm
+                                // every scheduled write is cancelled by the next flip,
+                                // so ZERO writes land until the scrolling settles, when
+                                // one final write applies the real value. (A naive
+                                // deferred write — schedule on every flip without
+                                // cancelling — is the opposite trap: it re-fires every
+                                // turn into a 100% async loop. Cancel-and-reschedule is
+                                // the difference.)
+                                .onAppear { scheduleNearBottom(true) }
+                                .onDisappear { scheduleNearBottom(false) }
                         }
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .coordinateSpace(name: "consoleScroll")
-                    .background(
-                        GeometryReader { geometry in
-                            Color.clear
-                                .onAppear { scrollViewHeight = geometry.size.height }
-                                .onChange(of: geometry.size.height) { _, newValue in
-                                    scrollViewHeight = newValue
-                                }
-                        }
-                    )
-                    .onPreferenceChange(ConsoleScrollBottomPreferenceKey.self) { bottomY in
-                        let distanceFromBottom = bottomY - scrollViewHeight
-                        isUserNearBottom = distanceFromBottom <= 24
-                    }
+                    .defaultScrollAnchor(.bottom)
                     .onChange(of: groupedLines.count) { _, _ in
-                        guard autoScroll, isUserNearBottom else { return }
-                        Task { @MainActor in
-                            await Task.yield()
+                        guard autoScroll else { return }
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                    .onChange(of: scrollToBottomToken) { _, _ in
+                        // Pin to the last real line, not the phantom "bottom"
+                        // sentinel below the padding — anchoring to the sentinel is
+                        // what an overshoot lands past. No animation: this fires
+                        // after a settle (`scheduleRepin`) or on appear, where a
+                        // slide would just look like the overshoot we're correcting.
+                        if let lastId = groupedLines.last?.id {
+                            proxy.scrollTo(lastId, anchor: .bottom)
+                        } else {
                             proxy.scrollTo("bottom", anchor: .bottom)
                         }
                     }
+                    .onChange(of: autoScroll) { _, newValue in
+                        if newValue {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo("bottom", anchor: .bottom)
+                            }
+                        }
+                    }
+                    .onAppear {
+                        scrollToBottomToken += 1
+                    }
+                    .onChange(of: repinSignal) { _, _ in
+                        scheduleRepin()
+                    }
                 }
                 .background(.background)
+                // Rebuilt here rather than read from `body`: see
+                // `groupedLines`. One pass per actual change instead of one
+                // per view evaluation.
+                .onAppear { rebuildRenderedLines() }
+                .onChange(of: renderInputs) { _, _ in rebuildRenderedLines() }
             }
 
             // Undo clear banner
@@ -158,8 +604,60 @@ struct ConsoleView: View {
                     .padding(12)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+
+            // Jump to Bottom Button.
+            //
+            // Always in the tree, shown/hidden by opacity + scale — never by
+            // `if`, and animated by a modifier scoped to the button alone.
+            //
+            // Why: this button's visibility is driven by `isUserNearBottom`,
+            // which the bottom sentinel flips from its onAppear/onDisappear. If
+            // toggling the button reflowed the ScrollView — or if an animation
+            // on the whole ZStack animated the ScrollView on each flip — the
+            // reflow moved the sentinel across its own visibility boundary,
+            // flipped the flag again, and re-armed the animation: a self-
+            // sustaining 100% main-thread layout loop that beach-balled the app
+            // (sampled 2026-08-29; kicked off by any layout nudge, e.g. opening
+            // the routing popover). Kept as a pure overlay and animating only
+            // opacity/scale (render transforms, not layout), the flag can no
+            // longer feed back into layout, so it cannot oscillate.
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button {
+                        isUserNearBottom = true // Optimistic update
+                        autoScroll = true
+                        scrollToBottomToken += 1
+                    } label: {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .resizable()
+                            .frame(width: 32, height: 32)
+                            .foregroundStyle(.secondary, .regularMaterial)
+                            .background(Circle().fill(.background))
+                            .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding([.bottom, .trailing], 20)
+                }
+            }
+            .opacity(isUserNearBottom ? 0 : 1)
+            .scaleEffect(isUserNearBottom ? 0.8 : 1, anchor: .bottomTrailing)
+            .allowsHitTesting(!isUserNearBottom)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isUserNearBottom)
         }
         .animation(.easeInOut(duration: 0.2), value: showUndoClear)
+        // A callsign tapped inside a message opens the station, not a browser.
+        // Anything that is not one of ours is handed straight back to the
+        // system: intercepting every URL in this subtree would quietly break
+        // any ordinary link that ends up in a console line.
+        .environment(\.openURL, OpenURLAction { url in
+            guard let call = ConsoleCallsignLink.callsign(from: url), let onIdentity else {
+                return .systemAction
+            }
+            onIdentity(call)
+            return .handled
+        })
     }
 
     // MARK: - Filter Toggles
@@ -167,53 +665,99 @@ struct ConsoleView: View {
     @ViewBuilder
     private var filterToggleGroup: some View {
         HStack(spacing: 4) {
+            ForEach(ConsoleTypeFilterFlags.Kind.messageClasses, id: \.self) { kind in
+                chip(kind)
+            }
+            // MINE and DIGI narrow every class rather than selecting one, and
+            // sitting them flush against the class chips read as "nine kinds
+            // of line". Both need a callsign to mean anything: without one
+            // there is no way to tell our traffic, or our echo, from anyone
+            // else's.
+            if !localCallsign.isEmpty {
+                Divider().frame(height: 12).padding(.horizontal, 2)
+                chip(.mine)
+                chip(.digipeats)
+            }
+            // Not a class and not a narrowing: it changes how APRS lines are
+            // printed, not which ones are. Kept apart from both for that
+            // reason, and lit only when it is doing something.
+            Divider().frame(height: 12).padding(.horizontal, 2)
             FilterToggle(
-                label: "ID",
-                isOn: $showID,
-                color: .blue,
-                tooltip: "Station identification broadcasts. Stations periodically announce their callsign and capabilities."
-            )
-            FilterToggle(
-                label: "BCN",
-                isOn: $showBeacon,
-                color: .green,
-                tooltip: "Beacon messages. Periodic broadcasts containing station info, location, or status updates."
-            )
-            FilterToggle(
-                label: "MAIL",
-                isOn: $showMail,
-                color: .orange,
-                tooltip: "Mail notifications. Alerts about new messages waiting at a BBS or mailbox."
-            )
-            FilterToggle(
-                label: "DATA",
-                isOn: $showData,
-                color: .purple,
-                tooltip: "Content messages. The actual data being exchanged — personal messages, bulletins, and transferred information."
-            )
-            FilterToggle(
-                label: "CMD",
-                isOn: $showPrompt,
-                color: .cyan,
-                tooltip: "Commands and prompts. Session control messages like connect/disconnect, BBS menus, and user commands."
-            )
-            FilterToggle(
-                label: "OTHER",
-                isOn: $showOther,
-                color: .brown,
-                tooltip: "Unclassified messages. Packets that don't fit other categories."
-            )
-            FilterToggle(
-                label: "SYS",
-                isOn: $showSystem,
-                color: .gray,
-                tooltip: "System messages. Connection status, errors, and internal application notifications."
-            )
+                label: "RAW",
+                isOn: $showsRawAPRS,
+                color: .secondary,
+                text: .init(
+                    help: "Print APRS frames as they arrived instead of decoding them.\n\n"
+                        + "A Mic-E position keeps its latitude in the AX.25 destination and the rest "
+                        + "in bytes that are not text, so raw is unreadable for most of them — but "
+                        + "this is a terminal, and the wire is what it is for. Hovering a decoded "
+                        + "line shows the same bytes without switching.",
+                    soloTitle: "", toggleTitle: "Show APRS frames raw"))
         }
     }
 
-    private var dayGroupedLines: [DayGroupedSection<ConsoleLineGroup>] {
-        DayGrouping.group(items: groupedLines, date: { $0.primary.timestamp })
+    private func chip(_ kind: ConsoleTypeFilterFlags.Kind) -> some View {
+        FilterToggle(
+            label: kind.label,
+            isOn: binding(for: kind),
+            color: color(for: kind),
+            text: ConsoleTypeFilterFlags.Kind.chipText[kind] ?? .init(help: "", soloTitle: "", toggleTitle: ""),
+            isSoloed: currentFilterFlags.isSoloed(kind),
+            onSolo: { applyFlags { $0.solo(kind) } },
+            onShowAll: { applyFlags { $0.showAllTypes() } })
+    }
+
+    /// The eight switches as one value, so solo can reason about the set
+    /// rather than about eight independent booleans.
+    private var currentFilterFlags: ConsoleTypeFilterFlags {
+        ConsoleTypeFilterFlags(
+            showID: showID, showBeacon: showBeacon, showMail: showMail,
+            showData: showData, showPrompt: showPrompt, showOther: showOther,
+            showSystem: showSystem, showDigipeats: showDigipeats,
+            digipeatsOnly: digipeatsOnly, minesOnly: minesOnly)
+    }
+
+    private func applyFlags(_ change: (inout ConsoleTypeFilterFlags) -> Void) {
+        var flags = currentFilterFlags
+        change(&flags)
+        showID = flags.showID
+        showBeacon = flags.showBeacon
+        showMail = flags.showMail
+        showData = flags.showData
+        showPrompt = flags.showPrompt
+        showOther = flags.showOther
+        showSystem = flags.showSystem
+        showDigipeats = flags.showDigipeats
+        digipeatsOnly = flags.digipeatsOnly
+        minesOnly = flags.minesOnly
+    }
+
+    private func binding(for kind: ConsoleTypeFilterFlags.Kind) -> Binding<Bool> {
+        switch kind {
+        case .mine: return $minesOnly
+        case .id: return $showID
+        case .beacon: return $showBeacon
+        case .mail: return $showMail
+        case .data: return $showData
+        case .prompt: return $showPrompt
+        case .other: return $showOther
+        case .system: return $showSystem
+        case .digipeats: return $showDigipeats
+        }
+    }
+
+    private func color(for kind: ConsoleTypeFilterFlags.Kind) -> Color {
+        switch kind {
+        case .mine: return .pink
+        case .id: return .blue
+        case .beacon: return .green
+        case .mail: return .orange
+        case .data: return .purple
+        case .prompt: return .cyan
+        case .other: return .brown
+        case .system: return .gray
+        case .digipeats: return .indigo
+        }
     }
 
     // MARK: - Clear Actions
@@ -269,13 +813,31 @@ struct ConsoleView: View {
 
 // MARK: - Console Line Grouping
 
-enum ConsoleLineGrouper {
+nonisolated enum ConsoleLineGrouper {
     static func group(_ lines: [ConsoleLine]) -> [ConsoleLineGroup] {
         var groups: [ConsoleLineGroup] = []
         var signatureToIndex: [String: Int] = [:]
+        var errorTextToIndex: [String: Int] = [:]
 
         for line in lines {
-            if line.isDuplicate,
+            if line.kind == .error {
+                // Collapse identical errors wherever they fall, not just
+                // back-to-back. A fault that keeps recurring — the same
+                // handful of connection complaints on every reconnect — stays
+                // one line with a count instead of a growing stack.
+                if let index = errorTextToIndex[line.text] {
+                    groups[index].duplicates.append(line)
+                    continue
+                }
+            } else if line.kind == .system {
+                // Status collapses only when it repeats immediately, so a
+                // recurring status keeps its place in time rather than folding
+                // into an older row.
+                if let lastGroup = groups.last, lastGroup.primary.kind == .system, lastGroup.primary.text == line.text {
+                    groups[groups.count - 1].duplicates.append(line)
+                    continue
+                }
+            } else if line.isDuplicate,
                let signature = line.contentSignature,
                let existingIndex = signatureToIndex[signature] {
                 groups[existingIndex].duplicates.append(line)
@@ -283,6 +845,9 @@ enum ConsoleLineGrouper {
             }
 
             let group = ConsoleLineGroup(primary: line)
+            if line.kind == .error {
+                errorTextToIndex[line.text] = groups.count
+            }
             if let signature = line.contentSignature {
                 signatureToIndex[signature] = groups.count
             }
@@ -296,7 +861,7 @@ enum ConsoleLineGrouper {
 // MARK: - Console Line Group
 
 /// Groups a primary console line with its duplicates (received via different paths)
-struct ConsoleLineGroup: Identifiable {
+nonisolated struct ConsoleLineGroup: Identifiable {
     let id: UUID
     let primary: ConsoleLine
     var duplicates: [ConsoleLine]
@@ -326,17 +891,65 @@ struct ConsoleLineGroup: Identifiable {
     }
 }
 
+/// The URL a callsign inside a message is drawn as.
+///
+/// A private scheme, never registered with the system and never opened by it:
+/// `ConsoleView` intercepts these before they can leave, and anything it does
+/// not recognise is passed through to the normal handler. A tap therefore
+/// opens the station AXTerm already knows about rather than jumping the
+/// operator out to a browser mid-session — QRZ is one click further on, from
+/// the station page or the right-click menu.
+nonisolated enum ConsoleCallsignLink {
+    static let scheme = "axterm-station"
+
+    static func url(for callsign: String) -> URL? {
+        guard let encoded = callsign.addingPercentEncoding(withAllowedCharacters: .alphanumerics)
+        else { return nil }
+        return URL(string: "\(scheme):\(encoded)")
+    }
+
+    /// The callsign a link carries, or nil if this is somebody else's URL.
+    static func callsign(from url: URL) -> String? {
+        guard url.scheme == scheme else { return nil }
+        let raw = url.absoluteString.dropFirst(scheme.count + 1)
+        return raw.removingPercentEncoding.flatMap { $0.isEmpty ? nil : $0 }
+    }
+}
+
 /// View for a grouped console line (primary + collapsed duplicates)
 struct ConsoleLineGroupView: View {
+    var fontSize: Double = 11
     let group: ConsoleLineGroup
+    var localCallsign: String = ""
+    /// Where this row sits among the rows sharing one displayed time.
+    var timestampRun: ConsoleTimestampRuler.RunPosition = .alone
+    var onIdentity: ((String) -> Void)?
+    var onIdentityMenu: ((String) -> Void)?
+    var radioNames: [RadioID: String] = [:]
+    var observer: GreatCircle.Point?
+    var distanceInMiles: Bool = true
+    var showsRawAPRS: Bool = false
+    var heardCallsigns: Set<String> = []
+    var telemetryDefinitions: [String: APRSTelemetry.Definition] = [:]
     @State private var isExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ConsoleLineView(
+                fontSize: fontSize,
                 line: group.primary,
+                timestampRun: timestampRun,
                 duplicateCount: group.duplicateCount,
-                allViaPaths: group.allViaPaths
+                allViaPaths: group.allViaPaths,
+                localCallsign: localCallsign,
+                onIdentity: onIdentity,
+                onIdentityMenu: onIdentityMenu,
+                radioNames: radioNames,
+                observer: observer,
+                distanceInMiles: distanceInMiles,
+                showsRawAPRS: showsRawAPRS,
+                heardCallsigns: heardCallsigns,
+                telemetryDefinitions: telemetryDefinitions
             )
 
             // Expanded duplicates (if any and expanded)
@@ -346,16 +959,16 @@ struct ConsoleLineGroupView: View {
                     HStack(spacing: 4) {
                         Text("├")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
                         Text("via")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
                         Text(group.primary.viaDisplay)
                             .foregroundStyle(.purple)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .font(.system(size: fontSize, weight: .medium, design: .monospaced))
                         Text("at \(group.primary.timestampString)")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
                     }
                     .padding(.leading, 20)
                     .padding(.vertical, 1)
@@ -367,75 +980,167 @@ struct ConsoleLineGroupView: View {
                     HStack(spacing: 4) {
                         Text(isLast ? "└" : "├")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
 
                         if !dup.via.isEmpty {
                             Text("via")
                                 .foregroundStyle(.tertiary)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.system(size: fontSize, design: .monospaced))
                             Text(dup.viaDisplay)
                                 .foregroundStyle(.purple)
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        } else {
+                                .font(.system(size: fontSize, weight: .medium, design: .monospaced))
+                        } else if group.primary.kind == .packet {
                             Text("(no digi path recorded)")
                                 .foregroundStyle(.tertiary)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.system(size: fontSize, design: .monospaced))
                         }
 
                         Text("at \(dup.timestampString)")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
                     }
                     .padding(.leading, 20)
                     .padding(.vertical, 1)
                 }
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if group.duplicateCount > 0 {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
+        // Only claim taps when there is something to expand.
+        //
+        // Attached unconditionally, this gesture covered the whole row and
+        // swallowed every tap and right-click aimed at the callsigns inside
+        // it — the identity view opened only on rows that happened to escape
+        // it. The guard used to be inside the closure, which is too late:
+        // the gesture had already consumed the event.
+        .modifier(ExpandDuplicatesTap(isEnabled: group.duplicateCount > 0,
+                                      isExpanded: $isExpanded))
+    }
+}
+
+/// Row-level tap, installed only where it does something.
+private struct ExpandDuplicatesTap: ViewModifier {
+    let isEnabled: Bool
+    @Binding var isExpanded: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
                 }
-            }
+        } else {
+            content
         }
     }
 }
 
 struct ConsoleLineView: View {
+    var fontSize: Double = 11
     let line: ConsoleLine
+    /// Where this row sits among the rows sharing one displayed time. Decides
+    /// whether the time is printed and how the row is tied to the one above.
+    var timestampRun: ConsoleTimestampRuler.RunPosition = .alone
     var duplicateCount: Int = 0
     var allViaPaths: [[String]] = []
+    var localCallsign: String = ""
+    /// Tapping a callsign asks who it is. Nil leaves the text inert, which is
+    /// what the Mac's console wants — there a callsign is something you copy.
+    var onIdentity: ((String) -> Void)?
+    /// Long press: the menu of things you can do with an identity.
+    var onIdentityMenu: ((String) -> Void)?
+    /// Radio names by id. Empty (one radio) draws no badge, so a single-radio
+    /// station's console reads exactly as it did.
+    var radioNames: [RadioID: String] = [:]
+    /// Where this station is, for "how far, which way" on a decoded position.
+    /// Nil leaves the coordinates to stand on their own rather than inventing
+    /// a distance from a position we do not have.
+    var observer: GreatCircle.Point?
+    var distanceInMiles: Bool = true
+    /// Print APRS frames as they arrived instead of decoding them. The
+    /// terminal's job is to show what is on the air, so the wire is always one
+    /// switch (or one hover) away.
+    var showsRawAPRS: Bool = false
+    /// Base callsigns this receiver has heard, the evidence the callsign
+    /// scanner leans on hardest. Empty simply makes it stricter.
+    var heardCallsigns: Set<String> = []
+    /// Telemetry definitions by callsign, so a `T#` frame can be read as
+    /// named channels instead of five counts and eight bits.
+    var telemetryDefinitions: [String: APRSTelemetry.Definition] = [:]
 
     private let callsignSaturation: Double = 0.35
     private let callsignBrightness: Double = 0.75
 
+    /// A digipeated copy of our own frame — shown dimmed with a repeat marker
+    /// so it reads as the digi's transmission, not new traffic.
+    private var isDigipeatEcho: Bool {
+        line.isDigipeatEcho(localCallsign: localCallsign)
+    }
+
+    private func repeatHelp(_ attribution: ConsoleLine.RepeatAttribution) -> String {
+        let digis = attribution.digis.joined(separator: ", ")
+        switch attribution {
+        case .ourFrameEchoed:
+            return "Our own frame, repeated back by \(digis)."
+        case .heardVia:
+            // The distinction that matters: this copy came off the digi's
+            // transmitter, so it says nothing about whether the originating
+            // station is audible here.
+            return "Heard as \(digis)'s retransmission, not from "
+                 + "\(line.from ?? "the sender") directly."
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
-            // Category indicator (left border) - matches filter button colors
-            RoundedRectangle(cornerRadius: 1)
-                .fill(categoryBorderColor)
-                .frame(width: 3)
-                .help(categoryTooltip)
+            // Enhanced indicator bar with premium styling for system/error messages
+            indicatorBar
 
-            // Timestamp
+            // Printed on every row, dimmed where it repeats the row above.
+            //
+            // Suppressing it outright left a blank, and a blank in the
+            // leftmost column reads as a time that failed to appear rather
+            // than one that was inherited. The fix for that was a hairline
+            // tying the run together — but a full-height rule between two
+            // columns is a column divider, and one that exists only on
+            // grouped runs appears and disappears as the log scrolls. It read
+            // as broken chrome for as long as it existed.
+            //
+            // So don't create the blank. A quiet repeat says "same second"
+            // without inventing a mark to explain itself, every row can be
+            // read on its own, and nothing in the gutter flickers.
             Text(line.timestampString)
                 .foregroundStyle(.tertiary)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: fontSize, design: .monospaced))
+                .opacity(timestampRun.printsTimestamp ? 1 : ConsoleTheme.repeatedTimestampOpacity)
+                .help(line.timestampString)
+
+            // Which transmitter we actually heard. Shown for *any* repeated
+            // copy, not just echoes of our own frames: a station's beacon
+            // heard direct and heard off a digi arrive a second apart with
+            // identical text, and without this marker the two rows are the
+            // same words — so "I hear KB5YZB-7" and "DRLNOD hears KB5YZB-7"
+            // looked like a duplicate (2026-08-31).
+            if let attribution = line.repeatAttribution(localCallsign: localCallsign) {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(attribution.digis.joined(separator: ","))
+                        .font(.system(size: fontSize, weight: .medium, design: .monospaced))
+                }
+                .foregroundStyle(.indigo)
+                .help(repeatHelp(attribution))
+                .accessibilityLabel(repeatHelp(attribution))
+            }
 
             // Callsigns
             if let from = line.from {
-                Text(from)
-                    .fontWeight(.medium)
-                    .foregroundStyle(callsignColor(for: from))
+                callsign(from)
 
                 if let to = line.to {
-                    Text("→")
+                    Text("\u{2192}")
                         .foregroundStyle(.tertiary)
 
-                    Text(to)
-                        .fontWeight(.medium)
-                        .foregroundStyle(callsignColor(for: to))
+                    callsign(to)
                 }
             }
 
@@ -448,28 +1153,237 @@ struct ConsoleLineView: View {
 
             // Duplicate count badge
             if duplicateCount > 0 {
-                DuplicateCountBadge(count: duplicateCount)
+                DuplicateCountBadge(count: duplicateCount, kind: line.kind)
+            }
+
+            // Which radio heard this line. Only when there is more than one
+            // radio to tell apart — `radioNames` is empty otherwise — so the
+            // operator can see at a glance whether a line came from the 705 or
+            // Direwolf, the same attribution the Packets Radio column shows.
+            if let id = line.radioID, let name = radioNames[id] {
+                HStack(spacing: 2) {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.system(size: fontSize - 2, weight: .semibold))
+                    Text(name)
+                        .font(.system(size: fontSize - 1, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.teal)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(.teal.opacity(0.12), in: Capsule())
+                .help("Heard on \(name)")
+                .accessibilityLabel("Heard on \(name)")
             }
 
             // Message text (wraps to container width; no chopping)
-            Text(line.text)
-                .foregroundStyle(messageColor)
-                .textSelection(.enabled)
-                .lineLimit(nil)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            //
+            // Decoded for APRS, raw for everything else. An AX.25 payload is
+            // readable as sent and the terminal is where you go to read it;
+            // a Mic-E position is not text at all. The tooltip carries the raw
+            // bytes either way, so nothing here has to be taken on trust.
+            if let digest = line.aprs, !showsRawAPRS {
+                if let symbol = digest.symbol {
+                    Image(systemName: APRSSymbolGlyph.systemImage(table: symbol.table, code: symbol.code))
+                        .font(.system(size: fontSize))
+                        .foregroundStyle(.secondary)
+                        .help(APRSSymbolGlyph.label(table: symbol.table, code: symbol.code))
+                }
+                messageText(APRSDigestLine.text(for: digest, observer: observer,
+                                                inMiles: distanceInMiles,
+                                                definition: telemetryDefinition))
+                    .help(rawHelp)
+            } else {
+                messageText(line.text)
+            }
         }
         .font(.system(size: 12, design: .monospaced))
-        .padding(.vertical, 2)
-        .padding(.horizontal, 4)
-        .background(rowBackground)
-        .cornerRadius(4)
+        .padding(.vertical, ConsoleTheme.rowPadding)
+        .padding(.horizontal, ConsoleTheme.rowPadding)
+        // Shaped background, not a clip. `.cornerRadius` clips the row's
+        // contents to the rounded rect, which silently truncates anything
+        // that means to overhang the row; `.background(_:in:)` paints the
+        // same shape without imposing a clip on the children.
+        .background(premiumBackground,
+                    in: RoundedRectangle(cornerRadius: ConsoleTheme.rowCornerRadius,
+                                         style: .continuous))
+        .opacity(isDigipeatEcho ? 0.6 : 1.0)
+    }
+    
+    /// The message, with any callsigns in it drawn as links.
+    ///
+    /// `AttributedString` rather than a row of separate `Text` views: the line
+    /// has to stay one selectable, wrapping paragraph, and splitting it into
+    /// views would break both. The link carries an `axterm:` URL that never
+    /// leaves the app — `ConsoleView` intercepts it and opens the station
+    /// instead, so a tap lands on what AXTerm already knows about the station
+    /// rather than in a browser.
+    @ViewBuilder
+    private func messageText(_ text: String) -> some View {
+        let links = linkRanges(in: text)
+        Text(attributed(text))
+            .foregroundStyle(messageColor)
+            .textSelection(.enabled)
+            .lineLimit(nil)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(macOS)
+            // Only where there is a callsign to point at. `Text` draws the
+            // link and makes it clickable but installs no cursor rect for it,
+            // and `.textSelection` makes the whole row one I-beam — so without
+            // this the pointer never changes as it crosses a link, which is
+            // not what Mail, Notes or any other Mac app does.
+            .overlay {
+                if !links.isEmpty {
+                    CallsignCursorOverlay(text: text, ranges: links, font: Self.messageFont)
+                        .allowsHitTesting(false)
+                }
+            }
+            #endif
+    }
+
+    /// The sending station's telemetry definition, if it has sent one.
+    private var telemetryDefinition: APRSTelemetry.Definition? {
+        guard let from = line.from else { return nil }
+        return telemetryDefinitions[CallsignValidator.normalize(from)]
+    }
+
+    /// The runs `attributed(_:)` turned into links, in the same order.
+    private func linkRanges(in text: String) -> [Range<String.Index>] {
+        linkTargets(in: text).map(\.range)
+    }
+
+    #if os(macOS)
+    /// What the row draws the message in — the font the second layout has to
+    /// agree with. Monospaced, so it does.
+    static let messageFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    #endif
+
+    private func attributed(_ text: String) -> AttributedString {
+        var result = AttributedString(text)
+        for (range, url) in linkTargets(in: text) {
+            guard let lower = AttributedString.Index(range.lowerBound, within: result),
+                  let upper = AttributedString.Index(range.upperBound, within: result)
+            else { continue }
+            result[lower..<upper].link = url
+            // Underlined rather than recoloured: the console already uses
+            // colour to say what class of line this is, and a second meaning
+            // for colour in the same row would fight it.
+            result[lower..<upper].underlineStyle = .single
+        }
+        return result
+    }
+
+    /// Everything in the line worth making clickable: web and email addresses,
+    /// which go to the system, and callsigns, which stay in the app.
+    ///
+    /// Web addresses first and unconditionally — they are worth a link whether
+    /// or not anything is listening for a callsign tap. The callsign scanner
+    /// already refuses to look inside them, so the two cannot overlap.
+    private func linkTargets(in text: String) -> [(range: Range<String.Index>, url: URL)] {
+        var targets = CallsignScanner.webLinks(in: text)
+        guard onIdentity != nil else { return targets }
+        for hit in CallsignScanner.links(in: text, heard: heardCallsigns) {
+            guard let url = ConsoleCallsignLink.url(for: hit.callsign) else { continue }
+            targets.append((hit.range, url))
+        }
+        return targets
+    }
+
+    /// What arrived, byte for byte, for the decoded line's tooltip.
+    ///
+    /// Printable characters as themselves and everything else as hex, because
+    /// the bytes that matter most in a Mic-E frame are the ones that are not
+    /// text — rendering them as replacement characters would hide exactly what
+    /// the operator came to the tooltip to see.
+    private var rawHelp: String {
+        guard let info = line.aprsInfo else { return line.text }
+        let body = info.map { byte -> String in
+            (byte >= 0x20 && byte < 0x7F)
+                ? String(UnicodeScalar(byte))
+                : String(format: "<%02X>", byte)
+        }.joined()
+        return "As received (\(info.count) bytes):\n\(body)"
+    }
+
+    /// One callsign: plain text, or a tap target when someone is listening.
+    ///
+    /// Deliberately not a `Button` — a button style would fight the monospaced
+    /// console layout and add padding that breaks the column alignment every
+    /// line depends on. A tap gesture keeps the row exactly as it looked.
+    @ViewBuilder
+    private func callsign(_ call: String) -> some View {
+        let text = Text(call)
+            .fontWeight(.medium)
+            .foregroundStyle(callsignColor(for: call))
+
+        if let onIdentity {
+            // `.onTapGesture` beside `.onLongPressGesture` is unreliable: the
+            // long-press recogniser can consume the tap, so a callsign opened
+            // its profile sometimes and did nothing other times. A
+            // simultaneous gesture lets both live, and the Mac gets a
+            // right-click menu instead of a press-and-hold it has no idiom for.
+            text
+                .contentShape(Rectangle())
+                .onTapGesture { onIdentity(call) }
+                #if os(iOS)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.45)
+                        .onEnded { _ in (onIdentityMenu ?? onIdentity)(call) })
+                #else
+                .contextMenu {
+                    Button("Show Profile") { (onIdentityMenu ?? onIdentity)(call) }
+                    Button("Quick Look") { onIdentity(call) }
+                    if let qrz = QRZLink.url(for: call) {
+                        Divider()
+                        // The URL is worked out from the callsign, not looked
+                        // up, so this is "go and see" rather than a claim that
+                        // the page exists. Service endpoints get no entry.
+                        Link(QRZLink.title(for: call), destination: qrz)
+                    }
+                    Divider()
+                    Button("Copy Callsign") { ClipboardWriter.copy(call) }
+                }
+                #endif
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Shows what is known about \(call)")
+        } else {
+            text
+        }
+    }
+
+    // MARK: - Premium Styling Components
+    
+    /// Enhanced indicator bar with emphasis for system/error messages
+    @ViewBuilder
+    private var indicatorBar: some View {
+        RoundedRectangle(cornerRadius: 1)
+            .fill(indicatorBarColor)
+            .frame(width: ConsoleTheme.indicatorBarWidth)
+            .help(categoryTooltip)
+    }
+    
+    /// Premium indicator color that emphasizes system/error messages
+    private var indicatorBarColor: Color {
+        switch line.kind {
+        case .system:
+            return Color.gray.opacity(ConsoleTheme.systemIndicatorOpacity)
+        case .error:
+            return ConsoleTheme.errorAccent
+        case .packet:
+            return categoryBorderColor  // Keep existing packet colors
+        }
+    }
+    
+    /// Premium background with subtle tint for system/error messages
+    private var premiumBackground: Color {
+        return ConsoleTheme.backgroundColor(for: line.kind)
     }
 
     /// Left border color based on message category (matches filter buttons)
     private var categoryBorderColor: Color {
         switch line.kind {
         case .error:
-            return .red
+            return ConsoleTheme.errorAccent
         case .system:
             return .gray  // Matches SYS filter button
         case .packet:
@@ -513,21 +1427,19 @@ struct ConsoleLineView: View {
         }
     }
 
+    // Note: rowBackground is now handled by premiumBackground
+    // This property is kept for backward compatibility but should not be used
     private var rowBackground: Color {
-        switch line.kind {
-        case .system:
-            return Color.gray.opacity(0.05)
-        case .error:
-            return Color.red.opacity(0.08)
-        case .packet:
-            return .clear
-        }
+        return premiumBackground
     }
 
     private var messageColor: Color {
         switch line.kind {
         case .system: return .secondary
-        case .error: return .red
+        // The old full-red message text made a busy channel's reconnect churn
+        // read as a wall of alarm. The line stays neutral like a system line;
+        // the muted accent bar to its left is what marks it as an error.
+        case .error: return .secondary
         case .packet: return .primary
         }
     }
@@ -567,43 +1479,110 @@ struct DigiPathIndicator: View {
 /// Badge showing number of duplicate receptions
 struct DuplicateCountBadge: View {
     let count: Int
+    let kind: ConsoleLine.Kind
 
     var body: some View {
         Text("+\(count)")
             .font(.system(size: 9, weight: .medium, design: .monospaced))
-            .foregroundStyle(.purple)
+            .foregroundStyle(kind == .error ? ConsoleTheme.errorAccent : .purple)
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
-            .background(Color.purple.opacity(0.15))
+            .background((kind == .error ? ConsoleTheme.errorAccent : Color.purple).opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 3))
-            .help("Received \(count + 1) times via different paths (click to expand)")
+            .help(kind == .packet ? "Received \(count + 1) times via different paths (click to expand)" : "Occurred \(count + 1) times consecutively (click to expand)")
     }
 }
 
 /// Toggle button for filtering message types
+/// One switch on the console's filter row.
+///
+/// Plain click toggles. Option-click *solos* — shows this class and nothing
+/// else — because isolating one type by switching off the other seven was
+/// eight gestures to answer one question. Option-clicking a soloed chip puts
+/// everything back.
+///
+/// The same two actions are in the right-click menu, because a modifier
+/// nobody knows about is a feature nobody has.
 struct FilterToggle: View {
     let label: String
     @Binding var isOn: Bool
     let color: Color
-    var tooltip: String = ""
+    /// The chip's help text and its two menu titles, already built.
+    ///
+    /// These used to be interpolated and concatenated inside `body`
+    /// (`tooltip + "…"`, `"Show Only \(label)"`, `"Show \(label)"`), and `body`
+    /// runs for all ten chips on every pass of the console's update. String
+    /// literals are free; those three are fresh allocations each time. Cheap
+    /// while the update loop settles, and the app's largest single source of
+    /// string garbage when it does not — the frozen build of 2026-09-18 held
+    /// 2.97 million CFStrings and ~9,000 live `HelpStyleConfiguration`
+    /// elements, with this body the heaviest AXTerm frame in both samples.
+    /// `ConsoleTypeFilterFlags.Kind.chipText` builds them once for the process.
+    var text: ConsoleTypeFilterFlags.Kind.ChipText = .init(help: "", soloTitle: "", toggleTitle: "")
+    /// Whether this chip is the only one showing.
+    var isSoloed: Bool = false
+    /// Show only this class. Nil leaves the chip a plain toggle.
+    var onSolo: (() -> Void)?
+    var onShowAll: (() -> Void)?
 
     var body: some View {
         Text(label)
             .font(.system(size: 9, weight: .medium, design: .monospaced))
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
-            .background(isOn ? color.opacity(0.2) : Color.gray.opacity(0.1))
+            .background(isOn ? color.opacity(isSoloed ? 0.35 : 0.2) : Color.gray.opacity(0.1))
             .foregroundStyle(isOn ? color : .secondary)
             .clipShape(RoundedRectangle(cornerRadius: 4))
+            // A soloed chip is doing something the other seven are not, and
+            // "lit" alone does not distinguish "on" from "the only one on".
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(color, lineWidth: isSoloed ? 1 : 0))
             .contentShape(Rectangle())
-            .onTapGesture {
-                isOn.toggle()
+            .modifier(SoloTapGesture(isSoloed: isSoloed,
+                                     onToggle: { isOn.toggle() },
+                                     onSolo: onSolo,
+                                     onShowAll: onShowAll))
+            .contextMenu {
+                if let onSolo, let onShowAll {
+                    if isSoloed {
+                        Button("Show All Types") { onShowAll() }
+                    } else {
+                        Button(text.soloTitle) { onSolo() }
+                    }
+                    Divider()
+                }
+                Toggle(text.toggleTitle, isOn: $isOn)
             }
-            .help(tooltip)
+            .help(text.help)
     }
 }
 
-private struct ConsoleScrollBottomPreferenceKey: PreferenceKey {
+/// Option-click means "solo"; a plain click still toggles.
+///
+/// `TapGesture().modifiers(_:)` is macOS-only, so on iOS the chip stays a
+/// plain toggle and the menu carries the solo action instead.
+private struct SoloTapGesture: ViewModifier {
+    let isSoloed: Bool
+    let onToggle: () -> Void
+    let onSolo: (() -> Void)?
+    let onShowAll: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .highPriorityGesture(TapGesture().modifiers(.option).onEnded {
+                guard let onSolo, let onShowAll else { return onToggle() }
+                isSoloed ? onShowAll() : onSolo()
+            })
+            .onTapGesture(perform: onToggle)
+        #else
+        content.onTapGesture(perform: onToggle)
+        #endif
+    }
+}
+
+nonisolated private struct ConsoleScrollBottomPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {

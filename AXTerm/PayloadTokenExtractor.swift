@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct PayloadTokenSummary: Equatable {
+nonisolated struct PayloadTokenSummary: Equatable {
     let callsigns: [String]
     let frequencies: [String]
     let urls: [String]
@@ -17,7 +17,7 @@ struct PayloadTokenSummary: Equatable {
     }
 }
 
-enum PayloadTokenExtractor {
+nonisolated enum PayloadTokenExtractor {
     static func summarize(text: String) -> PayloadTokenSummary {
         let normalized = text.uppercased()
         let urls = extractURLs(from: text)

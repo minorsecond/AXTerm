@@ -7,6 +7,6 @@
 
 import Foundation
 
-struct PacketInspectorSelection: Identifiable, Hashable {
+nonisolated struct PacketInspectorSelection: Identifiable, Hashable {
     let id: Packet.ID
 }

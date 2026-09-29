@@ -5,6 +5,7 @@
 //  Created by Codex on 1/30/26.
 //
 
+import Combine
 import Foundation
 
 /// Routing mode for NET/ROM integration.
@@ -23,24 +24,34 @@ enum NetRomRoutingMode: Sendable {
 /// passive inference engine, and link quality estimator.
 @MainActor
 final class NetRomIntegration {
-    private let localCallsign: String
+    let localCallsign: String
     private var mode: NetRomRoutingMode
 
     private let router: NetRomRouter
     private var passiveInference: NetRomPassiveInference?
     private var linkEstimator: LinkQualityEstimator
-    private var duplicateTracker: PacketDuplicateTracker
+    /// One retry/duplicate tracker per radio. Two radios on one frequency
+    /// each hear the same frame; the copy folded onto the second radio must
+    /// not be judged against the first radio's sighting, or it is dropped as
+    /// an ingestion artefact before it can count as that radio's evidence.
+    private var duplicateTrackers: [RadioID: PacketDuplicateTracker] = [:]
 
     private let routerConfig: NetRomConfig
     private let inferenceConfig: NetRomInferenceConfig
     private let linkConfig: LinkQualityConfig
+    
+    // MARK: - Publishers
+    
+    private let updateSubject = PassthroughSubject<Void, Never>()
+    
+    /// Publishes when the integration state changes (e.g. new routing data, expiration)
+    var didUpdate: AnyPublisher<Void, Never> {
+        updateSubject.eraseToAnyPublisher()
+    }
 
     /// Optional persistence for recording broadcast intervals (adaptive stale threshold).
     private weak var persistence: NetRomPersistence?
 
-    #if DEBUG
-    private static var retainedForTests: [NetRomIntegration] = []
-    #endif
 
     init(
         localCallsign: String,
@@ -64,11 +75,6 @@ final class NetRomIntegration {
 
         self.router = NetRomRouter(localCallsign: localCallsign, config: routerConfig)
         self.linkEstimator = LinkQualityEstimator(config: linkConfig)
-        self.duplicateTracker = PacketDuplicateTracker(
-            source: linkConfig.source,
-            ingestionDedupWindow: linkConfig.ingestionDedupWindow,
-            retryDuplicateWindow: linkConfig.retryDuplicateWindow
-        )
 
         if mode == .inference || mode == .hybrid {
             self.passiveInference = NetRomPassiveInference(
@@ -78,9 +84,6 @@ final class NetRomIntegration {
             )
         }
 
-        #if DEBUG
-        Self.retainedForTests.append(self)
-        #endif
     }
 
     /// Set or update the persistence reference.
@@ -92,6 +95,13 @@ final class NetRomIntegration {
 
     func setMode(_ newMode: NetRomRoutingMode) {
         guard mode != newMode else { return }
+        // A mode switch changes routing semantics wholesale — always crumb it.
+        Telemetry.breadcrumb(
+            category: "netrom.routing",
+            message: "Routing mode changed",
+            data: ["from": String(describing: mode), "to": String(describing: newMode)],
+            level: .info
+        )
         mode = newMode
 
         if newMode == .inference || newMode == .hybrid {
@@ -112,17 +122,25 @@ final class NetRomIntegration {
     // MARK: - Packet Observation
 
     func observePacket(_ packet: Packet, timestamp: Date, isDuplicate: Bool = false) {
-        var duplicateStatus = duplicateTracker.status(for: packet, at: timestamp)
+        let radio = packet.radioID ?? .primary
+        var duplicateStatus = duplicateTrackers[radio, default: makeDuplicateTracker()].status(for: packet, at: timestamp)
         if isDuplicate && duplicateStatus != .ingestionDedup {
             duplicateStatus = .retryDuplicate
         }
 
         if duplicateStatus == .ingestionDedup {
+            #if DEBUG
+            appendTrace(packet, timestamp: timestamp, "dropped: ingestionDedup")
+            #endif
             return
         }
 
         let baseClassification = PacketClassifier.classify(packet: packet)
         let classification: PacketClassification = duplicateStatus == .retryDuplicate ? .retryOrDuplicate : baseClassification
+        #if DEBUG
+        appendTrace(packet, timestamp: timestamp,
+                    "dup=\(duplicateStatus) base=\(baseClassification) used=\(classification) mode=\(mode)")
+        #endif
 
         // Always update link quality estimator
         linkEstimator.observePacket(
@@ -137,7 +155,7 @@ final class NetRomIntegration {
         if let broadcastResult = NetRomBroadcastParser.parse(packet: packet) {
             // Don't reinforce routing from retry/duplicate broadcasts.
             if classification != .retryOrDuplicate {
-                processNetRomBroadcast(broadcastResult, classification: classification)
+                processNetRomBroadcast(broadcastResult, classification: classification, radio: radio)
             }
             return // Don't double-process as regular packet
         }
@@ -147,6 +165,10 @@ final class NetRomIntegration {
         let normalizedFrom = CallsignValidator.normalize(rawFrom)
         let observedQuality = linkQualityForNeighbor(normalizedFrom)
 
+        // allowedRouteSources deliberately excludes "harvested" (and "inferred")
+        // in both branches below: hearing the anchor node on the air proves the
+        // anchor is alive, not that the table we scraped from it is still true.
+        // Harvested freshness renews only when a ROUTES listing is re-scraped.
         switch mode {
         case .classic:
             // Classic mode: only direct observations become neighbors
@@ -180,7 +202,8 @@ final class NetRomIntegration {
     }
 
     /// Process a parsed NET/ROM broadcast, adding the sender as a neighbor and updating routes.
-    private func processNetRomBroadcast(_ result: NetRomBroadcastResult, classification: PacketClassification) {
+    private func processNetRomBroadcast(_ result: NetRomBroadcastResult, classification: PacketClassification,
+                                        radio: RadioID = .primary) {
         let normalizedOrigin = CallsignValidator.normalize(result.originCallsign)
         guard !normalizedOrigin.isEmpty else { return }
 
@@ -207,7 +230,11 @@ final class NetRomIntegration {
         }
 
         // First, ensure the broadcast sender is registered as a neighbor
-        // NET/ROM broadcasts are always direct (no digipeating), so the sender is a neighbor
+        // NET/ROM broadcasts are always direct (no digipeating), so the sender is a neighbor.
+        // Stamped with the radio that heard it, so the neighbour lands on the
+        // right radio — and so `broadcastRoutes`' neighbour lookup, keyed by
+        // (radio, origin), finds it and does not drop every route as "origin
+        // is not a neighbour".
         let syntheticPacket = Packet(
             timestamp: result.timestamp,
             from: AX25Address(call: normalizedOrigin),
@@ -219,13 +246,15 @@ final class NetRomIntegration {
             info: Data(),
             rawAx25: Data(),
             kissEndpoint: nil,
-            infoText: nil
+            infoText: nil,
+            radioID: radio
         )
 
         // Register as neighbor with high quality (broadcast reception implies good link)
         if shouldRefreshNeighbor(for: classification) {
             let observedQuality = linkQualityForNeighbor(normalizedOrigin)
             router.observePacket(syntheticPacket, observedQuality: max(observedQuality, 200), direction: .incoming, timestamp: result.timestamp)
+            router.markAsOfficial(call: normalizedOrigin, radio: radio)
         }
 
         // Convert broadcast entries to RouteInfo and feed to router
@@ -240,9 +269,11 @@ final class NetRomIntegration {
             )
         }
 
-        // Process the broadcast routes through the router
+        // Process the broadcast routes through the router, on the radio that
+        // heard the broadcast — its routes are reached through this radio.
         router.broadcastRoutes(
             from: normalizedOrigin,
+            radio: radio,
             quality: 255, // Broadcast sender quality - actual route quality is in each entry
             destinations: routeInfos,
             timestamp: result.timestamp
@@ -252,6 +283,41 @@ final class NetRomIntegration {
     /// Process an explicit NET/ROM broadcast (classic routing).
     func broadcastRoutes(from origin: String, quality: Int, destinations: [RouteInfo], timestamp: Date) {
         router.broadcastRoutes(from: origin, quality: quality, destinations: destinations, timestamp: timestamp)
+    }
+
+    /// Session-scraped route knowledge (see HarvestedRoutePolicy).
+    ///
+    /// Same funnel as broadcasts on purpose: broadcastRoutes is the single
+    /// place route learning is validated, scaled by our own link to the
+    /// origin, and stored. The router silently drops claims from an origin
+    /// that is not a neighbor — correct, since there is no link quality to
+    /// scale by — but for harvested rows that silence would be baffling in
+    /// the field (a session relayed through a digipeater harvests nothing),
+    /// so the drop leaves a breadcrumb.
+    func harvestedRoutes(from anchor: String, destinations: [RouteInfo], timestamp: Date) {
+        guard !destinations.isEmpty else { return }
+        let normalized = CallsignValidator.normalize(anchor)
+        let isNeighbor = router.currentNeighbors().contains { $0.call == normalized }
+        if !isNeighbor {
+            Telemetry.breadcrumb(
+                category: "netrom.harvest",
+                message: "Harvested routes dropped — anchor is not a direct neighbor",
+                data: ["anchor": normalized, "rows": destinations.count],
+                level: .info
+            )
+        } else {
+            Telemetry.breadcrumb(
+                category: "netrom.harvest",
+                message: "Routes harvested from a node's ROUTES table",
+                data: [
+                    "anchor": normalized,
+                    "rows": destinations.count,
+                    "destinations": destinations.map(\.destination).joined(separator: " ")
+                ],
+                level: .info
+            )
+        }
+        router.broadcastRoutes(from: anchor, quality: 255, destinations: destinations, timestamp: timestamp)
     }
 
     // MARK: - Query Methods
@@ -295,6 +361,12 @@ final class NetRomIntegration {
     }
 
     /// Get routes filtered by mode.
+    ///
+    /// "harvested" routes (scraped from a node's own ROUTES listing) appear in
+    /// hybrid mode only — deliberately. Classic mode is the protocol-faithful
+    /// view and a scraped table is not protocol traffic; inference mode is the
+    /// traffic-derived view and a scrape is not traffic. Hybrid already
+    /// returns everything, so harvested rides along with no extra filter.
     func currentRoutes(forMode mode: NetRomRoutingMode) -> [RouteInfo] {
         let all = router.currentRoutes()
         switch mode {
@@ -333,12 +405,36 @@ final class NetRomIntegration {
         }
     }
 
+    func hasRoute(to destination: String) -> Bool {
+        router.hasRoute(to: destination)
+    }
+
     func bestRouteTo(_ destination: String) -> RouteInfo? {
         router.bestRouteTo(destination)
     }
 
-    func linkQuality(from: String, to: String) -> Int {
-        linkEstimator.linkQuality(from: from, to: to)
+    /// Every known next hop for a destination, best first — the attempt
+    /// order for auto-try.
+    func candidateRoutes(to destination: String) -> [RouteInfo] {
+        router.candidateRoutes(to: destination)
+    }
+
+    func linkQuality(from: String, to: String, radio: RadioID = .primary) -> Int {
+        linkEstimator.linkQuality(from: from, to: to, radio: radio)
+    }
+
+    func linkETX(from: String, to: String, radio: RadioID = .primary) -> Double? {
+        linkEstimator.etx(from: from, to: to, radio: radio)
+    }
+
+    func effectiveTTL(from: String, to: String, radio: RadioID = .primary) -> TimeInterval {
+        linkEstimator.effectiveTTL(from: from, to: to, radio: radio)
+    }
+
+    /// The radio a neighbor is best heard on, for choosing where a datagram
+    /// to it should leave.
+    func radio(forNeighbor call: String) -> RadioID? {
+        router.radio(forNeighbor: call)
     }
 
     // MARK: - Maintenance
@@ -347,6 +443,7 @@ final class NetRomIntegration {
         linkEstimator.purgeStaleData(currentDate: currentDate)
         passiveInference?.purgeStaleEvidence(currentDate: currentDate)
         router.purgeStaleRoutes(currentDate: currentDate)
+        updateSubject.send()
     }
 
     // MARK: - Export/Import
@@ -418,29 +515,58 @@ final class NetRomIntegration {
         return (try? persistence.getAllOriginIntervals()) ?? []
     }
 
+    #if DEBUG
+    /// Test seam: one line per `observePacket`, for diagnosing inference that
+    /// fails only under full-suite parallel load.
+    ///
+    /// Reading the code was not enough. Four inference tests in
+    /// `NetRomIntegrationWiringTests` failed together once on 2026-09-19 and
+    /// never again — not in ten fresh processes, not in eight further parallel
+    /// full runs, and not in a single-process sequential run of all 7,213
+    /// tests. Every gate on the path (the 0.25 s ingestion dedup, the 2 s retry
+    /// window, the classifier, the 60-against-25 quality floor) reads as
+    /// deterministic for those inputs, so the next occurrence needs the
+    /// pipeline's own numbers rather than another reading of the source.
+    private(set) var observationTrace: [String] = []
+
+    private func appendTrace(_ packet: Packet, timestamp: Date, _ note: String) {
+        guard AppEnvironment.isUnitTestHost, observationTrace.count < 1024 else { return }
+        let from = packet.from?.display ?? "?"
+        let to = packet.to?.display ?? "?"
+        let via = packet.via.map { "\($0.display)\($0.repeated ? "*" : "")" }.joined(separator: ",")
+        observationTrace.append(
+            "t+\(Int(timestamp.timeIntervalSince1970) % 1000) \(from)>\(to)"
+            + (via.isEmpty ? "" : " via \(via)") + " \(note)")
+    }
+
+    /// Everything the inference engine believes right now, in one line.
+    var inferenceState: String {
+        guard let passiveInference else { return "inference: off" }
+        return passiveInference.debugEvidenceSummary
+    }
+    #endif
+
     // MARK: - Reset (Debug)
 
     /// Reset all routing state. Used by debug rebuild functionality.
     /// Creates fresh router and link estimator instances.
-    func reset(localCallsign: String? = nil) {
-        let callsign = localCallsign ?? self.localCallsign
-
-        // Create fresh router
-        let newRouter = NetRomRouter(localCallsign: callsign, config: routerConfig)
-
-        // Replace the router reference - this requires making router a var
-        // Since router is let, we need a different approach
-        // We'll clear the existing data by importing empty arrays
-        router.importNeighbors([])
-        router.importRoutes([])
-
-        // Create fresh link estimator
-        linkEstimator = LinkQualityEstimator(config: linkConfig)
-        duplicateTracker = PacketDuplicateTracker(
+    private func makeDuplicateTracker() -> PacketDuplicateTracker {
+        PacketDuplicateTracker(
             source: linkConfig.source,
             ingestionDedupWindow: linkConfig.ingestionDedupWindow,
             retryDuplicateWindow: linkConfig.retryDuplicateWindow
         )
+    }
+
+    func reset(localCallsign: String? = nil) {
+        let callsign = localCallsign ?? self.localCallsign
+
+        // Clear existing router data
+        router.reset()
+
+        // Create fresh link estimator
+        linkEstimator = LinkQualityEstimator(config: linkConfig)
+        duplicateTrackers.removeAll()
 
         // Recreate passive inference if needed
         if mode == .inference || mode == .hybrid {
@@ -467,13 +593,15 @@ final class NetRomIntegration {
         let forwardQuality = linkEstimator.linkQuality(from: normalized, to: localCallsign)
         let reverseQuality = linkEstimator.linkQuality(from: localCallsign, to: normalized)
 
-        // If we have link quality observations, use the average
-        if forwardQuality > 0 || reverseQuality > 0 {
-            let avgQuality = max(forwardQuality, reverseQuality)
-            // Blend with base quality to avoid cold start issues
-            return max(routerConfig.neighborBaseQuality, avgQuality)
+        // Use the average of the observed directions. The old code took the *max*
+        // (discarding the worse direction) and floored the result at
+        // neighborBaseQuality, so a neighbor could never read below ~80 no matter
+        // how bad its link. Cold start is handled by the estimator's warm-up prior.
+        if forwardQuality > 0 && reverseQuality > 0 {
+            return (forwardQuality + reverseQuality) / 2
         }
-
+        if forwardQuality > 0 { return forwardQuality }
+        if reverseQuality > 0 { return reverseQuality }
         return routerConfig.neighborBaseQuality
     }
 
@@ -486,13 +614,18 @@ final class NetRomIntegration {
     ) {
         let refreshNeighbor = shouldRefreshNeighbor(for: classification)
         let refreshRoutes = shouldRefreshRoute(for: classification)
+        // The radio that heard this frame — its neighbours and routes are its
+        // own. `router.observePacket` reads it from the packet; the route
+        // refresh must be told, or it targets the primary radio's routes and
+        // silently no-ops on the radio that actually heard the origin.
+        let radio = packet.radioID ?? .primary
 
         if refreshNeighbor {
             router.observePacket(packet, observedQuality: observedQuality, direction: .incoming, timestamp: timestamp)
         }
 
         if refreshRoutes, let origin = packet.from?.display {
-            router.refreshRoutes(from: origin, timestamp: timestamp, allowedSourceTypes: allowedRouteSources)
+            router.refreshRoutes(from: origin, radio: radio, timestamp: timestamp, allowedSourceTypes: allowedRouteSources)
         }
     }
 

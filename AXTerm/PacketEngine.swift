@@ -12,15 +12,34 @@ import GRDB
 import Network
 
 /// Connection status for the KISS TCP client
-enum ConnectionStatus: String {
+nonisolated enum ConnectionStatus: String {
     case disconnected = "Disconnected"
     case connecting = "Connecting"
     case connected = "Connected"
     case failed = "Failed"
+
+    /// Map from KISSLinkState
+    init(linkState: KISSLinkState) {
+        switch linkState {
+        case .disconnected: self = .disconnected
+        case .connecting: self = .connecting
+        case .connected: self = .connected
+        case .failed: self = .failed
+        }
+    }
+}
+
+/// Transport type for KISS connections
+nonisolated enum KISSTransportType: String, CaseIterable, Identifiable, Sendable {
+    case network = "Network"
+    case serial = "Local USB Serial"
+    case ble = "Bluetooth LE"
+
+    var id: String { rawValue }
 }
 
 /// Filter settings for packet display
-struct PacketFilters: Equatable {
+nonisolated struct PacketFilters: Equatable {
     var showUI: Bool = true
     var showI: Bool = true
     var showS: Bool = true
@@ -40,7 +59,7 @@ struct PacketFilters: Equatable {
 }
 
 /// Raw data chunk for the Raw view
-struct RawChunk: Identifiable, Hashable, Sendable {
+nonisolated struct RawChunk: Identifiable, Hashable, Sendable {
     let id: UUID
     let timestamp: Date
     let data: Data
@@ -80,15 +99,53 @@ final class PacketEngine: ObservableObject {
     private let rawStore: RawStore?
     private let persistenceWorker: PersistenceWorker?
     private let eventLogger: EventLogger?
+    nonisolated private let eventLogStore: EventLogStore?
     private let watchMatcher: WatchMatching
     private let watchRecorder: WatchEventRecording?
-    private let notificationScheduler: NotificationScheduling?
+    let notificationScheduler: NotificationScheduling?
     private var cancellables: Set<AnyCancellable> = []
     private let packetInsertSubject = PassthroughSubject<Packet, Never>()
 
     /// Called when an I-frame (AXDP/user payload) is successfully transmitted.
     /// Parameter: payload byte count. Used for sender progress highlighting.
     var onUserFrameTransmitted: ((Int) -> Void)?
+    /// A link reported a fault. Set by the app layer for anything that has to
+    /// know a transmission may not have reached the air — the APRS
+    /// reachability probe, whose queued send has already returned success by
+    /// the time the radio fails to key.
+    var onLinkError: ((String) -> Void)?
+
+    /// One frame this station put on the air.
+    ///
+    /// Our own transmissions never enter `packets` — that array is what was
+    /// *heard*, and a frame we sent is only heard if something repeats it —
+    /// so anything that shows both directions of a channel has to be told
+    /// separately. Without this the map's traffic strip showed a busy channel
+    /// and no sign of the operator's own beacon, which is the one frame they
+    /// are usually watching for.
+    var onFrameTransmitted: ((TransmittedFrame) -> Void)?
+
+    /// A frame handed to the radio, reduced to what a log line needs.
+    struct TransmittedFrame: Sendable {
+        let id: UUID
+        let at: Date
+        let from: String
+        let to: String
+        let via: [String]
+        /// The payload as text, or the control frame's name when it has none.
+        let text: String
+        let radio: RadioID
+        /// True when this radio can say whether the frame reached the air, so
+        /// the line can be shown as pending until it does. False for a
+        /// hardware TNC, which accepts the bytes and reports nothing further.
+        let awaitsKeying: Bool
+    }
+
+    /// The radio keyed, or gave up, on frames it was holding. Counts, not
+    /// identities: frame identity is lost at the KISS boundary, and the
+    /// transmitter is strictly in order, so the oldest pending frame is the
+    /// one this is about.
+    var onTransmitOutcome: ((RadioID, _ onAir: Int, _ dropped: Int) -> Void)?
 
     // MARK: - Debug Logging (Debug Builds Only)
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
@@ -127,6 +184,144 @@ final class PacketEngine: ObservableObject {
     /// NET/ROM routing integration for passive route inference and link quality estimation.
     /// Observes all incoming packets to build routing tables.
     private(set) var netRomIntegration: NetRomIntegration?
+    /// Appends a sample of every measured link on each snapshot save, so the
+    /// station profile can show how a path has behaved rather than only how
+    /// it behaves now.
+    private(set) var linkQualityHistory: SQLiteLinkQualityHistoryStore?
+    /// The operator's own notes and photos about stations.
+    private(set) var stationNotes: SQLiteStationNoteStore?
+    /// What the network has said and shown about what each station runs.
+    private(set) var stationServices: SQLiteStationServiceStore?
+    /// Observed paths, kept across launches so the network graph does not
+    /// start every session convinced the network is empty.
+    private(set) var networkPaths: SQLiteNetworkPathStore?
+    /// Per-station totals from the whole log rather than the in-memory
+    /// window. See StationStats for why the two disagree.
+    private(set) var stationStats: SQLiteStationStatsStore?
+    /// Connected-mode sessions that survive a relaunch.
+    private(set) var terminalSessions: SQLiteTerminalSessionStore?
+    /// The personal mailbox: messages left by callers, and who called.
+    private(set) var bbsMessages: SQLiteBBSMessageStore?
+
+    /// APRS text messaging + queries: inbound parse/auto-reply and the
+    /// outbound ack/retry log. Nil when the app runs without a database.
+    private(set) var aprsMessaging: APRSMessagingService?
+
+    /// The "who can hear me" reachability probe. No database needed; the app
+    /// wires its transmit/heard/candidate closures.
+    let aprsProbe = APRSReachabilityProbe()
+
+    /// Objects and items heard on the air: fires, closures, shelters, aid
+    /// stations, hazards. The one incident-reporting channel that needs
+    /// nothing upstream — see Docs/APRSObjects.md.
+    @Published private(set) var aprsObjects = APRSObjectStore()
+
+    /// NWS watches and warnings relayed onto APRS. Internet-fed upstream, so
+    /// every one carries the time we heard it — see `APRSWeatherAlert`.
+    @Published private(set) var aprsAlerts = APRSWeatherAlertStore()
+
+    /// Files an NWS alert, if this bulletin is one.
+    /// APRS only ever rides in a UI frame with PID 0xF0, so nothing else may
+    /// reach the incident layers.
+    ///
+    /// Without this, text inside a connected-mode session is read as APRS. A
+    /// BBS directory listing begins with `)` — the APRS *item* DTI — and the
+    /// log holds 368 such I-frames (`)  18536 free  (A,B,H,J,K,L,R,S,V,`).
+    /// Every one of them is currently rejected by the name rules, measured
+    /// against the real payloads, so this changes no present behaviour. It is
+    /// here because the failure mode if one ever did parse is a fabricated
+    /// hazard on an emergency map, and because the replay path already
+    /// filtered this way while the live path did not — two paths disagreeing
+    /// about what counts as APRS is how the other two bugs in this area
+    /// happened.
+    private static func carriesAPRS(_ packet: Packet) -> Bool {
+        packet.frameType == .ui && packet.pid == 0xF0 && !packet.info.isEmpty
+    }
+
+    /// - Parameter announce: false when replaying stored history, which files
+    ///   the same alerts again and must not reprint hours of them.
+    private func recordWeatherAlert(from packet: Packet, sentBy station: String,
+                                    announce: Bool = true) {
+        guard Self.carriesAPRS(packet),
+              case .bulletin(let id, let text)? = APRSMessage.parse(info: packet.info),
+              let alert = APRSWeatherAlert.classify(
+                bulletinID: id, text: text, from: station, heard: packet.timestamp)
+        else { return }
+        if aprsAlerts.record(alert), announce {
+            TxLog.inbound(.frame, "NWS alert relayed onto APRS", [
+                "severity": alert.severity.label,
+                "gateway": alert.source,
+            ])
+        }
+    }
+
+    /// File an object we transmitted ourselves.
+    ///
+    /// Our own frames never enter the packet log, so nothing else would ever
+    /// tell the store about them: an operator would place a road closure, see
+    /// the sheet dismiss, and watch nothing appear — the same silence the
+    /// pending-transmission work exists to remove. It lands here under our own
+    /// callsign, which is also what makes `mayRemove` recognise it as ours.
+    @MainActor
+    func recordOwnAPRSObject(_ info: String, from station: String, at when: Date = Date()) {
+        guard let report = APRSObjectReport.parse(info: Data(info.utf8)) else { return }
+        _ = aprsObjects.record(report, from: station, at: when)
+    }
+
+    /// Files an object or item report, if this packet is one.
+    ///
+    /// - Parameter announce: false when replaying stored history.
+    private func recordAPRSObject(from packet: Packet, sentBy station: String,
+                                  announce: Bool = true) {
+        guard Self.carriesAPRS(packet),
+              let report = APRSObjectReport.parse(info: packet.info) else { return }
+        if aprsObjects.record(report, from: station, at: packet.timestamp), announce {
+            TxLog.inbound(.frame, "APRS object heard", [
+                "name": report.name,
+                "from": station,
+                "live": String(report.isLive),
+                "symbol": report.symbolLabel,
+            ])
+        }
+    }
+
+    /// The APRS stations we've heard — real positions only, never plain AX.25
+    /// nodes/BBSes — as reachability-probe snapshots, excluding us. The probe
+    /// floods one `?APRS?` and folds these in as replies arrive, so no scope or
+    /// cap is applied here: scope is a view filter and the flood reaches
+    /// everyone in earshot regardless.
+    func aprsHeardStations() -> [APRSReachabilityProbe.HeardStation] {
+        let ours = Set(aprsOurCallsigns())
+        return stations.compactMap { station in
+            guard let aprs = station.aprs else { return nil }
+            let call = station.call.uppercased()
+            guard !ours.contains(call) else { return nil }
+            let hasMotion = (aprs.speedKnots ?? 0) > 0
+            return APRSReachabilityProbe.HeardStation(
+                callsign: call,
+                lastHeard: station.lastHeard,
+                direct: station.lastVia.isEmpty,
+                stationClass: APRSStationClass.classify(code: aprs.symbolCode,
+                                                        hasMotion: hasMotion))
+        }
+    }
+
+    /// How often each station we have heard normally transmits, by callsign.
+    ///
+    /// The probe needs this to tell an answer from a coincidence: a station
+    /// beaconing every few seconds lands inside any listening window and proves
+    /// nothing by it, while one that beacons every ten minutes transmitting
+    /// fifteen seconds after a query is worth reporting. Computed from the
+    /// packet log in one pass, at the moment the query goes out — a station's
+    /// cadence does not change inside a two-minute window.
+    func aprsBeaconIntervals() -> [String: TimeInterval] {
+        var times: [String: [Date]] = [:]
+        for packet in packets {
+            guard let from = packet.from?.display.uppercased() else { continue }
+            times[from, default: []].append(packet.timestamp)
+        }
+        return times.compactMapValues { APRSAnswerEvidence.typicalInterval(of: $0) }
+    }
 
     /// NET/ROM persistence for saving/loading routing state.
     private var netRomPersistence: NetRomPersistence?
@@ -157,29 +352,187 @@ final class PacketEngine: ObservableObject {
     // MARK: - Published State
 
     @Published private(set) var status: ConnectionStatus = .disconnected
+
+    /// Set when another station on this channel is transmitting under our
+    /// callsign — see `StationIdentityMonitor`. Two AXTerms sharing one
+    /// Direwolf with the same SSID is the usual cause, and the resulting
+    /// AX.25 breakage has no other visible symptom.
+    @Published private(set) var identityCollision: StationIdentityMonitor.Collision?
+    private let identityMonitor = StationIdentityMonitor()
+    /// Last callsign the monitor was primed with, so changing identity clears
+    /// frames sent under the old one — they are not evidence about the new.
+    private var identityMonitorCallsign = ""
+
+    /// Clears the warning. The collision itself is not fixed by dismissing
+    /// it, so this only silences the banner until the next report interval.
+    func dismissIdentityCollision() {
+        identityCollision = nil
+    }
     @Published private(set) var lastError: String?
+    /// Per-link deferred console posts, so a connection error that recovers
+    /// can be dropped before it is ever shown. Keyed by the link, whose object
+    /// is reused across a reconnect cycle. See `deferConnectionError`.
+    private var pendingConnectionErrors: [ObjectIdentifier: DispatchWorkItem] = [:]
     @Published private(set) var bytesReceived: Int = 0
+    @Published private(set) var lastRxTime: Date = .distantPast
+    @Published private(set) var lastTxTime: Date = .distantPast
+    /// The built-in modem's last telemetry per link, to log only transitions.
+    private var lastModemTelemetry: [String: ModemTelemetry] = [:]
+    /// The same two clocks, per radio, for the sidebar's radio rows.
+    @Published private(set) var lastRxByRadio: [RadioID: Date] = [:]
+    @Published private(set) var lastTxByRadio: [RadioID: Date] = [:]
+
+    /// The radios the operator has switched off in the sidebar. Empty — the
+    /// default, and the only state a one-radio station can be in — shows
+    /// every radio's traffic interleaved: the universal view. A hidden radio
+    /// still receives and still counts; it is only not drawn. Kept per
+    /// device, like the map's layer toggles.
+    /// Written to the settings store's own defaults, **not**
+    /// `UserDefaults.standard`.
+    ///
+    /// This was the one piece of engine state that ignored the injected store
+    /// and went straight to the process-wide domain. In the app the two are the
+    /// same object, so nothing changed for an operator; everywhere else they
+    /// are not. A `--test-mode` instance, which exists to keep its settings out
+    /// of the real ones, read and rewrote the operator's actual hidden radios;
+    /// and every unit test that built an engine shared this key with every
+    /// other one, however carefully it isolated its own suite — which is what
+    /// made `RadioVisibilityTests` fail at random under the parallel run.
+    @Published var hiddenRadioIDs: Set<RadioID> = [] {
+        didSet {
+            guard hiddenRadioIDs != oldValue else { return }
+            settings.defaults.set(hiddenRadioIDs.map(\.rawValue).sorted(), forKey: Self.hiddenRadiosKey)
+        }
+    }
+    static let hiddenRadiosKey = "radios.hidden"
     @Published private(set) var connectedHost: String?
     @Published private(set) var connectedPort: UInt16?
 
     @Published private(set) var packets: [Packet] = []
+    /// True while the stored packet history is being read back.
+    ///
+    /// The table has nothing to draw until this finishes, and drawing an
+    /// empty table with column headers and no rows reads as "no packets",
+    /// not as "still reading" — a wrong answer held for several seconds.
+    @Published private(set) var isLoadingPersistedPackets = false
+    @Published var packetsClearedAt: Date? = nil
     @Published private(set) var consoleLines: [ConsoleLine] = []
     @Published private(set) var rawChunks: [RawChunk] = []
     @Published private(set) var stations: [Station] = []
+    /// Base callsigns heard this session, for the console's callsign scanner.
+    ///
+    /// The scanner's strongest signal: a token in a message that matches a
+    /// station we have actually received is a callsign in a way no pattern can
+    /// argue with. Base calls rather than full addresses, because hearing
+    /// `WA0DE-9` tells us `WA0DE-7` is the same licensee.
+    var heardBaseCallsigns: Set<String> {
+        Set(stations.map { CallsignValidator.normalize($0.call).baseCallsign })
+    }
+
+    /// Each station's telemetry definition, by full callsign.
+    ///
+    /// `PARM`/`UNIT`/`EQNS`/`BITS` are addressed to the sending station itself
+    /// and arrive hours apart from the `T#` frames they describe, so they are
+    /// collected per station as they are heard (`StationTracker`) and looked up
+    /// when a frame needs naming. Full callsign, not base: a station's
+    /// telemetry belongs to that SSID's hardware, and `-1`'s channels are not
+    /// `-9`'s.
+    var telemetryDefinitions: [String: APRSTelemetry.Definition] {
+        stations.reduce(into: [:]) { map, station in
+            if let definition = station.telemetryDefinition {
+                map[CallsignValidator.normalize(station.call)] = definition
+            }
+        }
+    }
+    
+    // Mobilinkd Telemetry
+    @Published var mobilinkdBatteryLevel: Int?
+    /// What the TNC said it is, when it answered the in-band KISS
+    /// hardware query ("direwolf 1.7"). Nil until it answers; most
+    /// hardware TNCs never do, which is itself the honest answer.
+    @Published private(set) var tncIdentity: String?
+    @Published var mobilinkdInputLevel: MobilinkdInputLevel?
 
     @Published var selectedStationCall: String?
     @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
+    
+    // MARK: - Frame Statistics (Diagnostics)
+    @Published private(set) var frameStats: FrameStatistics = FrameStatistics()
+    
+    struct FrameStatistics {
+        var totalFramesReceived: Int = 0
+        var ax25FramesReceived: Int = 0
+        var telemetryFramesReceived: Int = 0
+        var unknownFramesReceived: Int = 0
+        
+        var frameSizeHistogram: [String: Int] = [:]  // "size_range" -> count
+        var frameTypeHistogram: [String: Int] = [:]   // "frameType" -> count
+        
+        mutating func recordFrame(type: String, size: Int) {
+            totalFramesReceived += 1
+            frameTypeHistogram[type, default: 0] += 1
+            
+            let sizeRange: String
+            if size < 20 {
+                sizeRange = "0-19"
+            } else if size < 50 {
+                sizeRange = "20-49"
+            } else if size < 100 {
+                sizeRange = "50-99"
+            } else {
+                sizeRange = "100+"
+            }
+            frameSizeHistogram[sizeRange, default: 0] += 1
+        }
+        
+        var diagnosticSummary: String {
+            let typeStr = frameTypeHistogram.map { "\($0.key):\($0.value)" }.joined(separator: ", ")
+            let sizeStr = frameSizeHistogram.map { "\($0.key):\($0.value)" }.joined(separator: ", ")
+            return "Total:\(totalFramesReceived) Types:[\(typeStr)] Sizes:[\(sizeStr)]"
+        }
+    }
 
     /// Publisher for incoming packets - subscribe to receive all decoded packets
     var packetPublisher: AnyPublisher<Packet, Never> {
         packetInsertSubject.eraseToAnyPublisher()
     }
 
+    // MARK: - Connection Config Snapshot
+
+    /// Captures all connection-relevant settings at a point in time.
+    /// Used to detect whether settings actually changed while the settings panel was open.
+    ///
+    /// NOTE: Mobilinkd-specific settings (modemType, gains) are intentionally EXCLUDED.
+    /// Those settings are stored in TNC4 EEPROM and applied via auto-calibration,
+    /// NOT via KISS init commands on connect. Changing them in the UI should NOT
+    /// trigger a serial port close/reopen cycle, which disrupts the running demodulator.
+    struct ConnectionConfigSnapshot: Equatable {
+        /// Every enabled radio's transport, so a change to any radio is a
+        /// change. Mobilinkd gains are not part of a signature.
+        let radios: [String]
+
+        init(settings: AppSettingsStore) {
+            self.radios = settings.radios.filter { $0.enabled && !$0.archived }.map(\.transportSignature)
+        }
+    }
+
+    /// Snapshot taken when connection logic is suspended (settings panel opens).
+    private var suspendedConfigSnapshot: ConnectionConfigSnapshot?
+
     // MARK: - Private State
 
-    private var connection: NWConnection?
-    private var parser = KISSFrameParser()
+    /// The station's radios and the links that carry them. The engine reads
+    /// frames out of it already attributed to a radio, and hands frames to
+    /// it addressed to one.
+    let radioManager: RadioManager
+    /// For bytes handed straight to the engine — tools and tests — as if
+    /// from the primary radio's TNC.
+    private var injectionParser = KISSFrameParser()
     private var stationTracker = StationTracker()
+    /// One transmission heard by two radios is one packet.
+    private var crossRadioDedup = CrossRadioDedup()
+    /// How many frames were a second radio's copy of one already logged.
+    @Published private(set) var crossRadioFolds = 0
 
     // MARK: - Console Line Duplicate Detection
 
@@ -199,26 +552,73 @@ final class PacketEngine: ObservableObject {
         consoleStore: ConsoleStore? = nil,
         rawStore: RawStore? = nil,
         eventLogger: EventLogger? = nil,
+        eventLogStore: EventLogStore? = nil,
         watchMatcher: WatchMatching? = nil,
         watchRecorder: WatchEventRecording? = nil,
         notificationScheduler: NotificationScheduling? = nil,
-        databaseWriter: (any GRDB.DatabaseWriter)? = nil
+        databaseWriter: (any GRDB.DatabaseWriter)? = nil,
+        linkFactory: RadioManager.LinkFactory? = nil
     ) {
         self.maxPackets = maxPackets
         self.maxConsoleLines = maxConsoleLines
         self.maxRawChunks = maxRawChunks
         self.settings = settings
+        self.hiddenRadioIDs = Set((settings.defaults.stringArray(forKey: Self.hiddenRadiosKey) ?? [])
+            .map(RadioID.init(rawValue:)))
         self.packetStore = packetStore
         self.consoleStore = consoleStore
         self.rawStore = rawStore
         self.persistenceWorker = PersistenceWorker(packetStore: packetStore, consoleStore: consoleStore, rawStore: rawStore)
         self.eventLogger = eventLogger
+        self.eventLogStore = eventLogStore
         self.watchMatcher = watchMatcher ?? WatchRuleMatcher(settings: settings)
         self.watchRecorder = watchRecorder
         self.notificationScheduler = notificationScheduler
+        self.radioManager = linkFactory.map { RadioManager(linkFactory: $0) } ?? RadioManager()
 
         // Initialize NET/ROM persistence
         if let writer = databaseWriter {
+            // The time series of what links have been like. Nil when the app
+            // runs without a database — the profile then shows current values
+            // only, which is what it always showed.
+            if let queue = writer as? DatabaseQueue {
+                self.linkQualityHistory = SQLiteLinkQualityHistoryStore(dbQueue: queue)
+                self.stationNotes = SQLiteStationNoteStore(dbQueue: queue)
+                self.stationServices = SQLiteStationServiceStore(dbQueue: queue)
+                self.networkPaths = SQLiteNetworkPathStore(dbQueue: queue)
+                self.stationStats = SQLiteStationStatsStore(dbQueue: queue)
+                let sessions = SQLiteTerminalSessionStore(dbQueue: queue)
+                self.terminalSessions = sessions
+                // Nothing is connected at this point, so any session still
+                // marked live belongs to a process that did not come back:
+                // force quit, power cut, debugger stopped. Capped here, once,
+                // before anything can open a new one — otherwise the history
+                // says "Still connected" about a contact that ended days ago.
+                do {
+                    let capped = try sessions.capInterruptedSessions()
+                    if capped > 0 {
+                        TxLog.debug(.session, "Capped sessions left open by a previous run",
+                                   ["count": capped])
+                    }
+                } catch {
+                    TxLog.warning(.session, "Could not cap interrupted sessions",
+                                  ["error": String(describing: error)])
+                }
+                // Lifetime counts for stations already on the list. One pass
+                // over v_station_counts, held rather than re-asked: the
+                // sidebar draws on every packet and this must never be in
+                // that path.
+                self.loadLifetimeStationCounts()
+                self.bbsMessages = SQLiteBBSMessageStore(dbQueue: queue)
+                self.aprsMessaging = APRSMessagingService(
+                    store: SQLiteAPRSMessageStore(dbQueue: queue))
+                // A path nobody has seen for a fortnight is not evidence any
+                // more; leaving it in would draw a neighbour that moved away.
+                // Discarded deliberately: pruning is housekeeping, and a
+                // failure here must not take down the packet path.
+                _ = try? self.networkPaths?.prune(
+                    before: Date().addingTimeInterval(-SQLiteNetworkPathStore.retention))
+            }
             self.netRomPersistence = try? NetRomPersistence(database: writer)
             #if DEBUG
             if netRomPersistence != nil {
@@ -254,8 +654,14 @@ final class PacketEngine: ObservableObject {
         }
 
         configureStationSubscription()
+        observeRadios()
         observeSettings()
         observeCapabilityStore()
+        // Console history first: the terminal is the landing view, its query is
+        // milliseconds, and the PersistenceWorker actor serializes all loads —
+        // enqueued after the 5000-packet station loads it used to appear
+        // seconds late, leaving the terminal empty-then-popping at launch.
+        loadPersistedConsole()
         loadPersistedPackets(reason: "startup")
     }
 
@@ -263,11 +669,67 @@ final class PacketEngine: ObservableObject {
         netRomSnapshotTimer?.invalidate()
     }
 
+    // MARK: - USB Device Path Resolution
+
+    /// Resolve a serial device path, falling back to auto-detection if the configured path doesn't exist.
+    /// Scans `/dev/cu.*` for `usbmodem` devices (TNC4 uses CDC-ACM).
+    /// Does NOT modify saved settings — returns the resolved path for this connection attempt only.
+    func resolveSerialDevicePath(_ configuredPath: String) -> String {
+        if !configuredPath.isEmpty && FileManager.default.fileExists(atPath: configuredPath) {
+            return configuredPath
+        }
+
+        debugTrace("Configured serial path missing or empty, scanning for USB devices", ["path": configuredPath])
+
+        do {
+            let devContents = try FileManager.default.contentsOfDirectory(atPath: "/dev")
+            let usbDevices = devContents
+                .filter { $0.hasPrefix("cu.") && $0.lowercased().contains("usbmodem") }
+                .sorted()
+
+            if let first = usbDevices.first {
+                let resolved = "/dev/\(first)"
+                debugTrace("Auto-detected USB serial device", ["resolved": resolved])
+                return resolved
+            }
+        } catch {
+            debugTrace("Failed to scan /dev for USB devices: \(error)")
+        }
+
+        // Return original path — KISSLinkSerial will handle the missing device gracefully
+        return configuredPath
+    }
+
     // MARK: - Connection Management
 
-    func connect(host: String = "localhost", port: UInt16 = 8001) {
-        disconnect()
+    /// Brings the links into line with the radios in settings and opens them.
+    ///
+    /// A link that is already up for a radio that has not changed is kept as
+    /// it is; a serial or Bluetooth link has its config applied in place and
+    /// decides for itself whether that needs a reconnect. So calling this
+    /// with nothing changed changes nothing — which is what stops the
+    /// "connect, drop, connect" loop a resume after the settings pane used to
+    /// produce.
+    func connectUsingSettings() {
+        // A fresh connect attempt drops the stale failure banner; if this
+        // attempt fails too, the error is set again. Without this, the red
+        // banner outlived a successful manual reconnect.
+        lastError = nil
+        // This call brings the links into line with whatever the settings say
+        // right now, so any "settings changed while suspended" baseline is by
+        // definition already satisfied.
+        if isConnectionLogicSuspended {
+            suspendedConfigSnapshot = ConnectionConfigSnapshot(settings: settings)
+        }
+        loadPersistedPackets(reason: "connect")
+        radioManager.reconcile(settings.radios, open: true)
+        refreshLinkSummary()
+    }
 
+    /// One explicit TCP TNC, as the test harness asks for it: the primary
+    /// radio's profile with this host and port, and nothing else open.
+    /// Settings are not written.
+    func connect(host: String = "localhost", port: UInt16 = 8001) {
         guard port > 0 else {
             status = .failed
             lastError = "Invalid port \(port)"
@@ -276,50 +738,81 @@ final class PacketEngine: ObservableObject {
             SentryManager.shared.captureConnectionFailure("Connection failed: invalid port \(port)")
             return
         }
-
-        status = .connecting
-        lastError = nil
-        connectedHost = host
-        connectedPort = port
-        SentryManager.shared.breadcrumbConnectAttempt(host: host, port: port)
-        SentryManager.shared.setConnectionTags(host: host, port: port)
-        eventLogger?.log(level: .info, category: .connection, message: "Connecting to \(host):\(port)", metadata: nil)
-        loadPersistedPackets(reason: "connect")
-
-        let nwHost = NWEndpoint.Host(host)
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            status = .failed
-            lastError = "Invalid port \(port)"
-            addErrorLine("Connection failed: invalid port \(port)", category: .connection)
-            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: invalid port \(port)", metadata: nil)
-            SentryManager.shared.captureConnectionFailure("Connection failed: invalid port \(port)")
-            return
-        }
-
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
-
-        connection = NWConnection(host: nwHost, port: nwPort, using: params)
-
-        let hostCopy = host
-        let portCopy = port
-        connection?.stateUpdateHandler = { [weak self] state in
-            guard let self = self else { return }
-            Task { @MainActor [weak self] in
-                self?.handleConnectionState(state, host: hostCopy, port: portCopy)
-            }
-        }
-
-        connection?.start(queue: .main)
+        var radio = settings.primaryRadio ?? RadioProfile(id: .primary, name: "Direwolf")
+        radio.kind = .tcp
+        radio.host = host
+        radio.port = Int(port)
+        radio.enabled = true
+        radio.archived = false
+        connectOverriding(with: radio)
     }
 
-    func disconnect() {
-        connection?.cancel()
-        connection = nil
-        parser.reset()
+    #if os(macOS)
+    /// The primary radio on this serial device, and nothing else open. The
+    /// same device already open is kept and has the config applied in place.
+    func connectSerial(config: SerialConfig) {
+        var radio = settings.primaryRadio ?? RadioProfile(id: .primary, name: "Serial TNC")
+        radio.kind = .serial
+        radio.serialDevicePath = config.devicePath
+        radio.serialBaudRate = config.baudRate
+        radio.serialAutoReconnect = config.autoReconnect
+        radio.mobilinkdEnabled = config.mobilinkdConfig != nil
+        if let mobilinkd = config.mobilinkdConfig {
+            radio.mobilinkdModemType = Int(mobilinkd.modemType.rawValue)
+            radio.mobilinkdOutputGain = Int(mobilinkd.outputGain)
+            radio.mobilinkdInputGain = Int(mobilinkd.inputGain)
+        }
+        radio.enabled = true
+        radio.archived = false
+        connectOverriding(with: radio)
+    }
+    #endif
+
+    /// The primary radio on this Bluetooth peripheral, and nothing else open.
+    /// The same peripheral already open is kept and has the config applied
+    /// in place.
+    func connectBLE(config: BLEConfig) {
+        var radio = settings.primaryRadio ?? RadioProfile(id: .primary, name: "Bluetooth TNC")
+        radio.kind = .ble
+        radio.blePeripheralUUID = config.peripheralUUID
+        radio.blePeripheralName = config.peripheralName
+        radio.bleAutoReconnect = config.autoReconnect
+        radio.mobilinkdEnabled = config.mobilinkdConfig != nil
+        if let mobilinkd = config.mobilinkdConfig {
+            radio.mobilinkdModemType = Int(mobilinkd.modemType.rawValue)
+            radio.mobilinkdOutputGain = Int(mobilinkd.outputGain)
+            radio.mobilinkdInputGain = Int(mobilinkd.inputGain)
+        }
+        radio.enabled = true
+        radio.archived = false
+        connectOverriding(with: radio)
+    }
+
+    private func connectOverriding(with radio: RadioProfile) {
+        lastError = nil
+        loadPersistedPackets(reason: "connect")
+        radioManager.reconcile([radio], open: true)
+        refreshLinkSummary()
+    }
+
+    func disconnect(reason: String = "unknown") {
+        let previousStatus = status
+        radioManager.closeAll()
+        injectionParser.reset()
         status = .disconnected
+        tncIdentity = nil
         connectedHost = nil
         connectedPort = nil
+        addSystemLine("Disconnected (reason: \(reason))", category: .connection)
+        // Persist the disconnect: capture-coverage intervals need the closing
+        // edge (connects were logged for months, disconnects never were).
+        eventLogger?.log(level: .info, category: .connection, message: "Disconnected (reason: \(reason))", metadata: nil)
+        SentryManager.shared.addBreadcrumb(
+            category: "kiss.connection",
+            message: "Disconnected",
+            level: .info,
+            data: ["reason": reason, "previousStatus": previousStatus.rawValue]
+        )
         SentryManager.shared.breadcrumbDisconnect()
     }
 
@@ -329,9 +822,18 @@ final class PacketEngine: ObservableObject {
     /// - Parameter frame: The frame to send
     /// - Parameter completion: Callback with success or error
     func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
-        guard status == .connected, let conn = connection else {
-            let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
-            TxLog.error(.transport, "Send failed: not connected", error: error, ["frameId": String(frame.id.uuidString.prefix(8))])
+        lastTxTime = Date()
+        lastTxByRadio[frame.radio] = lastTxTime
+        guard let activeLink = radioManager.session(for: frame.radio), activeLink.state == .connected else {
+            // A typed error rather than an ad-hoc NSError, so the layers above
+            // can tell "the link is down" from a send that genuinely failed
+            // and report the two differently (see `SendFailure`).
+            let error = KISSTransportError.notConnected
+            TxLog.warning(.transport, "Send skipped: link is down", [
+                "frameId": String(frame.id.uuidString.prefix(8)),
+                "radio": String(describing: frame.radio),
+                "dest": frame.destination.display
+            ])
             addErrorLine("Send failed: not connected", category: .transmission)
             completion?(.failure(error))
             return
@@ -356,29 +858,67 @@ final class PacketEngine: ObservableObject {
         )
         TxLog.hexDump(.ax25, "AX.25 frame", data: ax25Data)
 
-        // Wrap in KISS frame (port 0, data frame)
-        let kissData = KISS.encodeFrame(payload: ax25Data, port: frame.channel)
+        // Wrap in KISS frame for the radio's port on its link.
+        let port = radioManager.kissPort(for: frame.radio)
+        let kissData = KISS.encodeFrame(payload: ax25Data, port: port)
         debugTrace("TX KISS", [
-            "port": frame.channel,
+            "port": port,
+            "radio": frame.radio.rawValue,
             "len": kissData.count,
             "hex": hexPrefix(kissData)
         ])
         TxLog.kissSend(frameId: frame.id, size: kissData.count)
+        ChannelActivityMonitor.shared.record(
+            callsign: frame.source.display, frameBytes: kissData.count, isTransmit: true)
+        // Remembered so the same frame arriving back — directly or repeated by
+        // a digipeater — is not mistaken for another station using our address.
+        // The monitor is primed to the current callsign here as well as on
+        // receive: priming only on receive reset it on the first frame heard,
+        // which wiped the fingerprint of a transmission just recorded and made
+        // our own echo of it look like a stranger.
+        syncIdentityMonitorCallsign()
+        identityMonitor.recordTransmitted(
+            source: frame.source.display,
+            destination: frame.destination.display,
+            control: frame.controlByte ?? 0,
+            info: frame.payload)
         TxLog.hexDump(.kiss, "KISS frame", data: kissData)
 
-        // Log the transmission: user payload as DATA (purple), protocol as SYS
+        LinkDebugLog.shared.recordTxBytes(kissData.count)
+        LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+            timestamp: Date(), direction: .tx, rawBytes: kissData,
+            frameType: frame.frameType, byteCount: kissData.count))
+
+        // Log the transmission: user payload as DATA (purple), protocol as CMD
         let showAsData: Bool
         if let text = frame.displayInfo, !text.isEmpty {
             showAsData = frame.isUserPayload || (frame.frameType.lowercased() == "i" && !isProtocolDisplayInfo(text))
             if showAsData {
-                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text)
+                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text, via: frame.path.digis.map { $0.display })
                 appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
             } else {
-                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(text)", category: .transmission)
+                // Build a richer control frame description for TX CMD lines
+                let txDesc = txControlFrameDescription(frame) ?? text
+                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: txDesc, via: frame.path.digis.map { $0.display }, messageType: .prompt)
+                appendConsoleLine(line, category: .packet, packetID: nil, byteCount: txDesc.utf8.count)
             }
         } else {
-            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(frame.displayInfo ?? "")", category: .transmission)
+            let txDesc = txControlFrameDescription(frame) ?? frame.displayInfo ?? ""
+            let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: txDesc, via: frame.path.digis.map { $0.display }, messageType: .prompt)
+            appendConsoleLine(line, category: .packet, packetID: nil, byteCount: txDesc.utf8.count)
         }
+        // Announced at hand-off, not at completion: "we keyed" is what an
+        // operator watching the channel needs to see, and the completion
+        // callback for a queued KISS write can be a long way behind the air.
+        onFrameTransmitted?(TransmittedFrame(
+            id: frame.id,
+            at: Date(),
+            from: frame.source.display,
+            to: frame.destination.display,
+            via: frame.path.digis.map(\.display),
+            text: Self.transmittedText(frame, description: txControlFrameDescription(frame)),
+            radio: frame.radio,
+            awaitsKeying: settings.radio(frame.radio)?.kind == .modem))
         eventLogger?.log(
             level: .info,
             category: .transmission,
@@ -391,13 +931,13 @@ final class PacketEngine: ObservableObject {
             ]
         )
 
-        // Send via connection
-        conn.send(content: kissData, completion: .contentProcessed { [weak self] error in
+        let sendCompletion: (Error?) -> Void = { [weak self] error in
+            guard let self else { return }
             Task { @MainActor in
                 if let error = error {
                     TxLog.kissSendComplete(frameId: frame.id, success: false, error: error)
-                    self?.addErrorLine("Send failed: \(error.localizedDescription)", category: .transmission)
-                    self?.eventLogger?.log(
+                    self.addErrorLine("Send failed: \(error.localizedDescription)", category: .transmission)
+                    self.eventLogger?.log(
                         level: .error,
                         category: .transmission,
                         message: "Send failed: \(error.localizedDescription)",
@@ -411,102 +951,244 @@ final class PacketEngine: ObservableObject {
                         "dest": frame.destination.display,
                         "size": kissData.count
                     ])
-                    self?.addSystemLine("Frame sent successfully", category: .transmission)
+                    // The radio it went out on, so hiding that radio hides
+                    // our own traffic on it too — the way the Packets table
+                    // has always treated it.
+                    self.addSystemLine("Frame sent successfully", category: .transmission,
+                                       radios: [frame.radio])
                     // Notify for sender progress highlighting (I-frames with AXDP PID)
                     if frame.frameType.lowercased() == "i", frame.pid == 0xF0 {
-                        self?.onUserFrameTransmitted?(frame.payload.count)
+                        self.onUserFrameTransmitted?(frame.payload.count)
                     }
                     completion?(.success(()))
                 }
             }
-        })
-    }
+        }
 
-    private func handleConnectionState(_ state: NWConnection.State, host: String, port: UInt16) {
-        switch state {
-        case .ready:
-            status = .connected
-            addSystemLine("Connected to \(host):\(port)", category: .connection)
-            eventLogger?.log(level: .info, category: .connection, message: "Connected to \(host):\(port)", metadata: nil)
-            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Connected", level: .info, data: nil)
-            startReceiving()
+        // The log has always held what we heard and never what we sent, so
+        // a beacon that went out left nothing behind a restart could find.
+        // Decoded back from the bytes on the wire rather than rebuilt from
+        // the frame we started with, so what is stored is what was sent and
+        // the Packets view renders it exactly as it renders a received one.
+        //
+        // At hand-off, and deliberately: a KISS write reaching the TNC is
+        // the last moment this side can speak to (spec 3.2), the completion
+        // callback can lag the air by a long way, and a frame dropped from
+        // the log because its callback never came is the one an operator
+        // most needs to see.
+        persistTransmittedFrame(ax25Data, frame: frame, link: activeLink, port: port)
 
-        case .failed(let error):
-            status = .failed
-            lastError = error.localizedDescription
-            addErrorLine("Connection failed: \(error.localizedDescription)", category: .connection)
-            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(error.localizedDescription)", metadata: nil)
-            SentryManager.shared.captureConnectionFailure("Connection failed: \(error.localizedDescription)", error: error)
-
-        case .cancelled:
-            status = .disconnected
-            addSystemLine("Disconnected", category: .connection)
-            eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
-            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Cancelled", level: .info, data: nil)
-
-        case .waiting(let error):
-            lastError = error.localizedDescription
-            eventLogger?.log(level: .warning, category: .connection, message: "Waiting: \(error.localizedDescription)", metadata: nil)
-            SentryManager.shared.captureConnectionFailure("Connection waiting: \(error.localizedDescription)", error: error)
-
-        default:
-            break
+        activeLink.send(kissData) { error in
+            sendCompletion(error)
         }
     }
 
-    private func startReceiving() {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
-            guard let self = self else { return }
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
+    /// Store a frame we transmitted, on the same path a received one takes.
+    ///
+    /// Never blocks or fails a send: `persistPacket` hands off to a Task and
+    /// returns, and a frame we cannot decode is logged raw rather than
+    /// dropped — being unable to read our own bytes back is itself worth
+    /// keeping.
+    private func persistTransmittedFrame(_ ax25Data: Data, frame: OutboundFrame,
+                                         link: LinkSession, port: UInt8) {
+        let decoded = AX25.decodeFrame(ax25: ax25Data)
+        let packet = Packet(
+            id: frame.id,
+            timestamp: Date(),
+            from: decoded?.from ?? frame.source,
+            to: decoded?.to ?? frame.destination,
+            via: decoded?.via ?? frame.path.digis,
+            frameType: decoded?.frameType ?? .unknown,
+            control: decoded?.control ?? 0,
+            controlByte1: decoded?.controlByte1,
+            pid: decoded?.pid,
+            info: decoded?.info ?? frame.payload,
+            rawAx25: ax25Data,
+            radioID: frame.radio,
+            kissPort: port,
+            linkDescription: link.endpointDescription,
+            direction: .tx,
+            // Already on the frame; it had simply never been written down.
+            sessionId: frame.sessionId
+        )
+        persistPacket(packet)
+    }
 
-                if let data = content, !data.isEmpty {
-                    self.handleIncomingData(data)
-                }
+    // MARK: - Mobilinkd Commands
 
-                if let error = error {
-                    self.lastError = error.localizedDescription
-                    self.addErrorLine("Receive error: \(error.localizedDescription)", category: .connection)
-                    self.eventLogger?.log(level: .error, category: .connection, message: "Receive error: \(error.localizedDescription)", metadata: nil)
-                    return
-                }
-
-                if isComplete {
-                    self.disconnect()
-                    return
-                }
-
-                // Continue receiving
-                self.startReceiving()
+    /// One-shot poll of audio input levels. Stops the demodulator during measurement,
+    /// then sends RESET to restart it. Do NOT call this in a loop.
+    func sendPollInputLevel() {
+        guard let activeLink = radioManager.primarySession else { return }
+        let pollFrame = Data(MobilinkdTNC.pollInputLevel())
+        let resetFrame = Data(MobilinkdTNC.reset())
+        activeLink.send(pollFrame) { [weak activeLink] _ in
+            // Send RESET after a delay to allow measurement to complete,
+            // then restart the demodulator for normal packet reception.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+                activeLink?.send(resetFrame) { _ in }
             }
         }
     }
 
-    func handleIncomingData(_ data: Data) {
-        bytesReceived += data.count
-
-        TxLog.kissReceive(size: data.count)
-        debugTrace("RX KISS chunk", [
-            "len": data.count,
-            "hex": hexPrefix(data)
-        ])
-
-        // Always log raw chunk
-        appendRawChunk(RawChunk(data: data))
-
-        // Parse KISS frames from the chunk
-        let ax25Frames = parser.feed(data)
-
-        if !ax25Frames.isEmpty {
-            TxLog.debug(.kiss, "Parsed KISS frames", ["count": ax25Frames.count])
-        }
-
-        for ax25Data in ax25Frames {
-            processAX25Frame(ax25Data)
+    /// Sends the ADJUST_INPUT_LEVELS command to trigger the TNC4's auto-AGC.
+    /// Stops the demodulator during calibration; sends RESET after 5s to restart.
+    func sendAdjustInputLevels() {
+        guard let activeLink = radioManager.primarySession else { return }
+        let frame = Data(MobilinkdTNC.adjustInputLevels())
+        let resetFrame = Data(MobilinkdTNC.reset())
+        activeLink.send(frame) { [weak activeLink] _ in
+            // Auto-adjust takes several seconds (gain stepping + measurements).
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5.0) {
+                activeLink?.send(resetFrame) { _ in }
+            }
         }
     }
 
-    private func processAX25Frame(_ ax25Data: Data) {
+    /// Sends a SET_INPUT_GAIN command to set manual input gain level (0-4, 6dB steps).
+    func sendSetInputGain(_ level: UInt8) {
+        guard let activeLink = radioManager.primarySession else { return }
+        let frame = Data(MobilinkdTNC.setInputGain(level))
+        activeLink.send(frame) { _ in }
+    }
+
+    /// Asks the TNC to name itself via the in-band KISS hardware query.
+    /// Safe on the wire (SetHardware is advisory and never leaves the
+    /// TNC); the answer, if any, lands in `tncIdentity`.
+    func identifyTNC() {
+        guard let activeLink = radioManager.primarySession else { return }
+        activeLink.send(TNCIdentifier.queryFrame()) { _ in }
+        debugTrace("TNC identity query sent", [:])
+    }
+
+    /// Sends RESET to restart the TNC4 demodulator.
+    func sendMobilinkdReset() {
+        guard let activeLink = radioManager.primarySession else { return }
+        let frame = Data(MobilinkdTNC.reset())
+        activeLink.send(frame) { _ in }
+    }
+
+    /// KISS bytes handed straight to the engine, as if from the primary
+    /// radio's TNC. The live path is `RadioManager` → `ingest`; this exists
+    /// for tools and tests that have bytes and no link.
+    func handleIncomingData(_ data: Data) {
+        noteReceivedBytes(data, link: "injected")
+        for frame in injectionParser.feedFrames(data) {
+            switch frame.output {
+            case .ax25(let ax25):
+                frameStats.recordFrame(type: "AX.25", size: ax25.count)
+                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+                    timestamp: Date(), direction: .rx, rawBytes: ax25,
+                    frameType: "AX25", byteCount: ax25.count))
+                processAX25Frame(ax25, radio: radioManager.primaryRadioID ?? .primary, kissPort: frame.port)
+            case .mobilinkdTelemetry(let telemetry):
+                absorbTelemetry(telemetry, isPrimary: true)
+            case .unknown(let command, let payload):
+                noteUnknownFrame(command: command, payload: payload)
+            }
+        }
+    }
+
+    private func noteReceivedBytes(_ data: Data, link: String) {
+        bytesReceived += data.count
+        lastRxTime = Date()
+        LinkDebugLog.shared.recordRxBytes(data.count)
+        TxLog.kissReceive(size: data.count)
+        debugTrace("RX KISS chunk", [
+            "len": data.count,
+            "link": link,
+            "hex": hexPrefix(data)
+        ])
+        // Always log raw chunk
+        appendRawChunk(RawChunk(data: data))
+    }
+
+    /// Telemetry is a fact about one TNC. The engine's published copy is the
+    /// primary radio's, because that is the one the single-radio surfaces
+    /// describe; the link keeps its own regardless.
+    private func absorbTelemetry(_ telemetryData: Data, isPrimary: Bool, radios: [RadioID] = []) {
+        frameStats.recordFrame(type: "Telemetry", size: telemetryData.count)
+        if let identity = TNCIdentifier.identity(fromTelemetryFrame: telemetryData) {
+            // The TNC answered the hardware query with its name — Direwolf
+            // does; this rides the same SetHardware command Mobilinkd
+            // telemetry uses, so it is checked first and everything else
+            // falls through unchanged.
+            if isPrimary { tncIdentity = identity }
+            debugTrace("TNC identified itself", ["identity": identity])
+        } else if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
+            if isPrimary { mobilinkdInputLevel = inputLevel }
+            debugTrace("Mobilinkd InputLevel", [
+                "vpp": inputLevel.vpp, "vavg": inputLevel.vavg,
+                "vmin": inputLevel.vmin, "vmax": inputLevel.vmax
+            ])
+        } else if let battery = MobilinkdTNC.parseBatteryLevel(telemetryData) {
+            if isPrimary { mobilinkdBatteryLevel = battery }
+            debugTrace("Mobilinkd Battery", ["level": battery])
+        } else if let gain = MobilinkdTNC.parseInputGain(telemetryData) {
+            // The TNC4 reports the gain its auto-adjust settled on. Written
+            // to the profile of every radio on this link (a Bluetooth TNC
+            // carries one); `updateRadio` is a no-op when it already agrees.
+            for radio in radios where settings.radio(radio)?.mobilinkdInputGain != gain {
+                settings.updateRadio(radio) { $0.mobilinkdInputGain = gain }
+                debugTrace("Mobilinkd Auto-Gain Updated", ["radio": radio.rawValue, "newGain": gain])
+            }
+        } else {
+            // Not "Mobilinkd Telemetry": the Mobilinkd parsers above simply
+            // share KISS SetHardware (0x06) with everything else that rides
+            // it, so naming the unrecognised case after them made a Direwolf
+            // link look like it had a Mobilinkd on it. Say what is true —
+            // a hardware frame nothing here understands.
+            debugTrace("Unrecognised KISS hardware frame", ["hex": hexPrefix(telemetryData)])
+        }
+        LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+            timestamp: Date(), direction: .rx, rawBytes: telemetryData,
+            frameType: "Telemetry", byteCount: telemetryData.count))
+    }
+
+    private func noteUnknownFrame(command cmd: UInt8, payload: Data) {
+        frameStats.recordFrame(type: "Unknown(0x\(String(format: "%02X", cmd)))", size: payload.count)
+        debugTrace("Unknown KISS Frame", ["cmd": String(format: "0x%02X", cmd), "len": payload.count])
+        LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+            timestamp: Date(), direction: .rx, rawBytes: payload,
+            frameType: "Unknown(0x\(String(format: "%02X", cmd)))", byteCount: payload.count))
+        LinkDebugLog.shared.recordParseError(
+            message: "Unknown KISS command: 0x\(String(format: "%02X", cmd))",
+            rawBytes: payload)
+    }
+
+    /// The engine's one-line summary of its links, for the surfaces that
+    /// still show one status, one host, one TNC: the aggregate status and the
+    /// primary radio's link.
+    private func refreshLinkSummary() {
+        let aggregate = radioManager.aggregateStatus
+        if status != aggregate { status = aggregate }
+        let primary = radioManager.primarySession
+        connectedHost = primary?.tcpEndpoint?.host
+        connectedPort = primary?.tcpEndpoint?.port
+        if tncIdentity != primary?.tncIdentity { tncIdentity = primary?.tncIdentity }
+        if mobilinkdBatteryLevel != primary?.mobilinkdBatteryLevel { mobilinkdBatteryLevel = primary?.mobilinkdBatteryLevel }
+        if mobilinkdInputLevel != primary?.mobilinkdInputLevel { mobilinkdInputLevel = primary?.mobilinkdInputLevel }
+    }
+
+    private func observeRadios() {
+        radioManager.delegate = self
+        radioManager.ingest
+            .sink { [weak self] ingest in
+                guard let self else { return }
+                self.frameStats.recordFrame(type: "AX.25", size: ingest.ax25.count)
+                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+                    timestamp: ingest.at, direction: .rx, rawBytes: ingest.ax25,
+                    frameType: "AX25", byteCount: ingest.ax25.count))
+                self.processAX25Frame(ingest.ax25, radio: ingest.radio, kissPort: ingest.kissPort,
+                                      tcpEndpoint: ingest.tcpEndpoint, linkDescription: ingest.linkDescription)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func processAX25Frame(_ ax25Data: Data, radio: RadioID, kissPort: UInt8 = 0,
+                                  tcpEndpoint: KISSEndpoint? = nil, linkDescription: String? = nil) {
+        debugTrace("processAX25Frame called", ["len": ax25Data.count, "radio": radio.rawValue, "hex": hexPrefix(ax25Data)])
+        digipeatIfAsked(ax25Data, radio: radio)
         TxLog.hexDump(.ax25, "Received AX.25 frame", data: ax25Data)
         debugTrace("RX AX.25 raw", [
             "len": ax25Data.count,
@@ -514,14 +1196,19 @@ final class PacketEngine: ObservableObject {
         ])
 
         guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
-            TxLog.ax25DecodeError(reason: "Invalid frame structure", size: ax25Data.count)
+            let reason = AX25.decodeFailureReason(ax25: ax25Data)
+            LinkDebugLog.shared.recordParseError(
+                message: "AX.25 decode failed (\(ax25Data.count) bytes)",
+                rawBytes: ax25Data)
+            TxLog.ax25DecodeError(reason: reason, size: ax25Data.count)
             eventLogger?.log(
                 level: .warning,
                 category: .parser,
                 message: "Failed to decode AX.25 frame",
-                metadata: ["byteCount": "\(ax25Data.count)"]
+                metadata: ["byteCount": "\(ax25Data.count)", "reason": reason]
             )
-            SentryManager.shared.captureDecodeFailure(byteCount: ax25Data.count)
+            // The single Sentry event for this failure (throttled per reason).
+            SentryManager.shared.captureDecodeFailure(byteCount: ax25Data.count, reason: reason)
             return
         }
 
@@ -543,9 +1230,87 @@ final class PacketEngine: ObservableObject {
             "infoHex": hexPrefix(decoded.info)
         ])
 
-        let host = connectedHost ?? settings.host
-        let port = connectedPort ?? settings.portValue
-        let endpoint = KISSEndpoint(host: host, port: port)
+        // One transmission, two receivers. With several radios the same bytes
+        // arriving on a second radio inside the window are the frame already
+        // logged, not another: the station gets a second "heard on", and
+        // nothing else counts twice — not the packet, not the airtime, not
+        // the retry tracker, which would otherwise have scored the copy as a
+        // failed delivery.
+        let now = Date()
+        lastRxByRadio[radio] = now
+        if radioManager.profiles.count > 1,
+           case .additionalRadio(let firstRadio) = crossRadioDedup.admit(raw: ax25Data, radio: radio, at: now) {
+            crossRadioFolds += 1
+            // The same bytes, as this radio heard them: not a packet, but
+            // evidence about this radio's link to the sender. The metrics are
+            // keyed by radio, so it lands on this radio's entry and no other.
+            let copy = Packet(
+                timestamp: now, from: decoded.from, to: decoded.to, via: decoded.via,
+                frameType: decoded.frameType, control: decoded.control, controlByte1: decoded.controlByte1,
+                pid: decoded.pid, info: decoded.info, rawAx25: ax25Data, kissEndpoint: tcpEndpoint,
+                radioID: radio, kissPort: kissPort, linkDescription: linkDescription)
+            if let src = decoded.from?.display {
+                stationTracker.noteHeard(src, on: radio, at: now, via: StationTracker.heardVia(copy),
+                                         packet: copy)
+                stations = stationTracker.stations
+            }
+            observePacketForNetRom(copy)
+            debugTrace("Cross-radio duplicate folded", [
+                "radio": radio.rawValue, "first": firstRadio.rawValue, "len": ax25Data.count])
+            return
+        }
+
+        // Another station transmitting as us corrupts every AX.25 link this
+        // station has, and produces no other error. Checked on every frame
+        // because the offending one may be the only evidence. Every address
+        // this station operates as counts as "us": the station callsign and
+        // each radio's own.
+        syncIdentityMonitorCallsign()
+        var ownCallsigns: Set<String> = [settings.myCallsign]
+        for profile in settings.activeRadios where profile.enabled {
+            ownCallsigns.insert(profile.resolvedCallsign(station: settings.myCallsign))
+        }
+
+        var isOwnEcho = false
+        switch identityMonitor.classifyReceived(
+            source: decoded.from?.display,
+            destination: decoded.to?.display,
+            control: decoded.control,
+            info: decoded.info,
+            ownCallsigns: ownCallsigns,
+            frameType: decoded.frameType.rawValue,
+            viaRepeated: decoded.via.contains { $0.repeated }) {
+        case .foreign:
+            break
+        case .ownEcho:
+            // Our own transmission, heard by another of our radios. It is
+            // logged — the operator can see the two radios share a channel —
+            // but it is evidence of nothing about any other station, and its
+            // airtime was counted when it was sent.
+            isOwnEcho = true
+        case .collision(let collision):
+            identityCollision = collision
+            addErrorLine("Another station is transmitting as \(collision.callsign) \u{2014} give one device a different SSID.",
+                         category: .connection)
+            eventLogger?.log(level: .warning, category: .connection,
+                             message: "Callsign collision on channel",
+                             metadata: ["callsign": collision.callsign,
+                                        "destination": collision.destination,
+                                        "frameType": collision.frameType])
+        }
+
+        if let src = decoded.from?.display, !isOwnEcho {
+            ChannelActivityMonitor.shared.record(
+                callsign: src, frameBytes: ax25Data.count, isTransmit: false)
+            // Pulse the first RF hop: src → first digipeater, or src → dest.
+            if let hop = decoded.via.first?.display ?? decoded.to?.display {
+                GraphPulseBus.shared.pulse(from: src, to: hop)
+            }
+        }
+
+        // Provenance: the TCP endpoint of the link that heard the frame, or
+        // nothing for a serial or Bluetooth link, which has none.
+        let endpoint = tcpEndpoint
 
         let packet = Packet(
             timestamp: Date(),
@@ -558,7 +1323,11 @@ final class PacketEngine: ObservableObject {
             pid: decoded.pid,
             info: decoded.info,
             rawAx25: ax25Data,
-            kissEndpoint: endpoint
+            kissEndpoint: endpoint,
+            radioID: radio,
+            kissPort: kissPort,
+            linkDescription: linkDescription,
+            isOwnEcho: isOwnEcho
         )
 
         SentryManager.shared.breadcrumbDecodeSuccessSampled(packet: packet)
@@ -567,10 +1336,21 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - MHeard (Station Tracking)
 
+    /// Frames sent under an old identity are not evidence about the new one:
+    /// a callsign change clears what the monitor remembers.
+    private func syncIdentityMonitorCallsign() {
+        guard identityMonitorCallsign != settings.myCallsign else { return }
+        identityMonitorCallsign = settings.myCallsign
+        identityMonitor.reset()
+        identityCollision = nil
+    }
+
     private func updateMHeard(for packet: Packet) {
-        guard let stationCall = packet.from?.display else { return }
+        guard let stationCall = packet.from?.display, !packet.isOwnEcho else { return }
         stationTracker.update(with: packet)
         stations = stationTracker.stations
+        recordAPRSObject(from: packet, sentBy: stationCall)
+        recordWeatherAlert(from: packet, sentBy: stationCall)
         if let heardCount = stationTracker.heardCount(for: stationCall) {
             SentryManager.shared.addBreadcrumb(
                 category: "stations.update.on_packet_insert",
@@ -584,11 +1364,22 @@ final class PacketEngine: ObservableObject {
     // MARK: - Capped Array Helpers
 
     private func insertPacketSorted(_ packet: Packet) {
-        // NOTE: Persisted packets load newest-first; appending new packets at the end
-        // caused "All Packets" to appear stale because fresh rows landed off-screen.
+        PacketEngine.insertPacketMaintainingCap(packet, into: &packets, maxPackets: maxPackets)
+    }
+
+    /// Maintains packet ordering and in-memory cap while preserving newest packets.
+    /// Extracted for deterministic unit testing.
+    nonisolated static func insertPacketMaintainingCap(
+        _ packet: Packet,
+        into packets: inout [Packet],
+        maxPackets: Int
+    ) {
+        // Packets are kept in ascending timestamp order (oldest -> newest).
+        // When capped, drop oldest entries so newly received packets stay visible
+        // and downstream analytics/health calculations keep fresh activity.
         PacketOrdering.insert(packet, into: &packets)
         if packets.count > maxPackets {
-            packets.removeLast(packets.count - maxPackets)
+            packets.removeFirst(packets.count - maxPackets)
         }
     }
 
@@ -607,26 +1398,200 @@ final class PacketEngine: ObservableObject {
         persistRawChunk(chunk)
     }
 
+    // MARK: - Digipeating
+
+    /// Recently repeated frames, so two paths delivering the same
+    /// original do not become two transmissions. Keyed by frame hash;
+    /// eight seconds outlives any sane duplicate delivery.
+    private var recentDigipeats: [Int: Date] = [:]
+
+    /// Repeats a frame addressed via this station, when the operator
+    /// has switched digipeating on. One bit changes; see AX25Digipeater.
+    private func digipeatIfAsked(_ raw: Data, radio: RadioID) {
+        // Per radio: a radio repeats only when its own digipeater is on, and
+        // only on its own channel. Explicit call/alias plus the APRS New-N
+        // paradigm (fill-in WIDE1-1, wide-area WIDEn-N within the hop cap).
+        guard let profile = settings.radio(radio), profile.digi.enabled else { return }
+        let myCall = CallsignNormalizer.toAddress(profile.resolvedCallsign(station: settings.myCallsign))
+        guard let repeated = AX25Digipeater.repeatFrame(
+            raw, myCall: myCall, aliases: profile.digi.aliases,
+            fillIn: profile.digi.fillIn, wideAreaMaxHops: profile.digi.wideAreaMaxHops)
+        else { return }
+
+        let key = raw.hashValue
+        let now = Date()
+        let window = TimeInterval(max(1, profile.digi.dupeSeconds))
+        recentDigipeats = recentDigipeats.filter { now.timeIntervalSince($0.value) < window }
+        guard recentDigipeats[key] == nil else { return }
+        recentDigipeats[key] = now
+
+        // Back out the radio that heard it: a repeat belongs to the channel
+        // the original was on.
+        guard radioManager.send(ax25: repeated, radio: radio) else { return }
+        let who = AX25.decodeFrame(ax25: raw).map {
+            "\($0.from?.display ?? "?") \u{2192} \($0.to?.display ?? "?")"
+        } ?? "frame"
+        addSystemLine("\u{21bb} Digipeated \(who)", category: .connection)
+        TxLog.outbound(.ax25, "Digipeated", ["frame": who, "bytes": repeated.count])
+        SentryManager.shared.addBreadcrumb(
+            category: "ax25.digipeat", message: "Repeated a frame",
+            level: .info, data: ["frame": who])
+    }
+
+    /// A notice about the app. Never hidden by the per-radio filter.
     private func addSystemLine(_ text: String, category: ConsoleEntryRecord.Category) {
         appendConsoleLine(ConsoleLine.system(text), category: category)
+    }
+
+    /// A notice about one or more radios — a link, a transmission, a reply.
+    /// Hides with them. An empty set means a radio we cannot name, which hides
+    /// with the primary rather than escaping the filter.
+    private func addSystemLine(_ text: String, category: ConsoleEntryRecord.Category,
+                               radios: Set<RadioID>) {
+        appendConsoleLine(ConsoleLine.system(text, radios: radios), category: category)
+    }
+
+    /// Public wrapper for addSystemLine so SessionCoordinator can post adaptive-change notifications.
+    ///
+    /// `radio` names the radio the notice is about, when the caller knows it.
+    /// Left out, the notice is the app's and shows whatever is hidden — so a
+    /// caller that *does* know should say, or its line will not follow its
+    /// radio out of sight.
+    func appendSystemNotification(_ text: String, radio: RadioID? = nil) {
+        if let radio {
+            addSystemLine(text, category: .transmission, radios: [radio])
+        } else {
+            addSystemLine(text, category: .transmission)
+        }
     }
 
     private func addErrorLine(_ text: String, category: ConsoleEntryRecord.Category) {
         appendConsoleLine(ConsoleLine.error(text), category: category)
     }
 
+    // MARK: - Control Frame SYS Logging
+
+    /// Format a via path with H-bit indicators (digi callsigns with `*` suffix = has been repeated).
+    private func formatViaPath(_ via: [AX25Address]) -> String {
+        guard !via.isEmpty else { return "" }
+        let formatted = via.map { addr -> String in
+            addr.repeated ? "\(addr.display)*" : addr.display
+        }.joined(separator: ",")
+        return " via \(formatted)"
+    }
+
+    /// Build a human-readable control frame description for SYS logging.
+    /// Examples: "SABM P", "UA F", "RR(3)", "I(1,3) P", "REJ(5) F"
+    /// - Parameter isCommand: whether the frame's address bits mark it a command.
+    ///   Nil where that is unknowable (an outbound frame we built, before the
+    ///   address is encoded), in which case the bit is shown as `P/F`.
+    private func describeControlFrame(_ decoded: AX25ControlFieldDecoded,
+                                      isCommand: Bool? = nil) -> String? {
+        let pf = (decoded.pf ?? 0) == 1
+        // P on a command, F on a response. Printing `P/F` for both throws away
+        // the one bit that says whether the peer is *asking* us something or
+        // *answering* us — which is the whole difference between a poll and a
+        // final, and the first thing you need when a link is trading
+        // supervisory frames and getting nowhere.
+        let pfLabel: String = switch isCommand {
+        case .some(true): " P"
+        case .some(false): " F"
+        case .none: " P/F"
+        }
+
+        switch decoded.frameClass {
+        case .U:
+            guard let uType = decoded.uType else { return nil }
+            switch uType {
+            case .UI:
+                return nil  // UI frames are data, not control — skip SYS line
+            case .SABM, .SABME, .DISC:
+                return "\(uType.rawValue)\(pf ? " P" : "")"
+            case .XID:
+                // Command or response — P/F alone can't say which; the
+                // console line just names the negotiation frame.
+                return "XID\(pf ? pfLabel : "")"
+            case .UA, .DM, .FRMR:
+                return "\(uType.rawValue)\(pf ? " F" : "")"
+            case .UNKNOWN:
+                return "U?\(pf ? pfLabel : "")"
+            }
+        case .S:
+            guard let sType = decoded.sType else { return nil }
+            let nr = decoded.nr ?? 0
+            return "\(sType.rawValue)(\(nr))\(pf ? pfLabel : "")"
+        case .I:
+            let ns = decoded.ns ?? 0
+            let nr = decoded.nr ?? 0
+            return "I(\(ns),\(nr))\(pf ? " P" : "")"
+        case .unknown:
+            return nil
+        }
+    }
+
+    /// Log an RX control frame as a SYS line in the console.
+    /// Called from handleIncomingPacket for all decoded frames.
+    private func logRxControlFrame(_ packet: Packet, decoded: AX25ControlFieldDecoded) {
+        guard let description = describeControlFrame(decoded, isCommand: packet.isCommand),
+              let from = packet.from, let to = packet.to else { return }
+        // Preserve H-bit markers (`DRLNOD*`) so the console can tell a digipeated
+        // copy from the original — plain `.display` drops the star, which made a
+        // digi's repeat of our own frame indistinguishable from our TX-time line.
+        let line = ConsoleLine.packet(
+            from: from.display,
+            to: to.display,
+            text: description,
+            via: Packet.normalizedViaItems(from: packet.via),
+            messageType: .prompt,
+            radioID: packet.radioID
+        )
+        appendConsoleLine(line, category: .packet, packetID: nil, byteCount: description.utf8.count)
+    }
+
+    /// Build a richer control frame description for outbound frames.
+    /// Returns nil if the frame doesn't have enough info for a richer description.
+    /// One line of what a transmitted frame said.
+    ///
+    /// A beacon or a message has a payload; an RR, a SABM or a UA does not,
+    /// and naming the frame is more use to somebody watching a connect than
+    /// an empty line would be. Newlines are collapsed because the strip this
+    /// feeds is one row per frame.
+    nonisolated static func transmittedText(_ frame: OutboundFrame, description: String?) -> String {
+        let payload = (frame.displayInfo ?? "")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        if !payload.isEmpty { return payload }
+        if let description, !description.isEmpty { return description }
+        return frame.frameType.uppercased()
+    }
+
+    private func txControlFrameDescription(_ frame: OutboundFrame) -> String? {
+        guard let controlByte = frame.controlByte else { return nil }
+        let decoded = AX25ControlFieldDecoder.decode(control: controlByte, controlByte1: nil)
+        // `OutboundFrame` records which it built, so our own frames read the
+        // same way received ones do — a log where half the frames say `P/F` is
+        // only half legible.
+        return describeControlFrame(decoded, isCommand: frame.isCommand)
+    }
+
     /// Append decoded AXDP/session chat to the console so it appears in the terminal.
     /// Called when AXDP chat is received—the raw I-frame payload is binary so it never
     /// reaches the console via the normal packet path.
-    func appendSessionChatLine(from fromDisplay: String, text: String) {
+    func appendSessionChatLine(from fromDisplay: String, text: String, via: [String] = [],
+                               radioID: RadioID? = nil) {
         TxLog.debug(.session, "appendSessionChatLine called", [
             "from": fromDisplay,
             "textLength": text.count,
             "preview": String(text.prefix(50)),
+            "via": via.joined(separator: ","),
             "currentLineCount": consoleLines.count
         ])
         let toDisplay = settings.myCallsign
-        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text)
+        // Attributed to the session's radio, so the per-radio filter reaches
+        // connected-mode conversation the way it reaches monitored frames.
+        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text, via: via,
+                                      radioID: radioID)
         appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
         TxLog.debug(.session, "appendSessionChatLine complete", [
             "newLineCount": consoleLines.count
@@ -665,6 +1630,40 @@ final class PacketEngine: ObservableObject {
         }
     }
 
+    /// Determine if an I-frame should be skipped from console display.
+    /// Only skip I-frames (PID 0xF0) that belong to the user's active sessions,
+    /// since SessionCoordinator will deliver those via appendSessionChatLine.
+    /// Monitored traffic (other stations talking to each other) should appear in console.
+    private func shouldSkipIFrame(_ packet: Packet) -> Bool {
+        // Only consider I-frames with session data (PID 0xF0)
+        guard packet.frameType == .i, packet.pid == 0xF0 else {
+            return false
+        }
+
+        guard let from = packet.from, let to = packet.to else {
+            return false
+        }
+
+        let myCallDisplay = settings.myCallsign
+        guard !myCallDisplay.isEmpty else { return false }
+        let local = CallsignNormalizer.toAddress(myCallDisplay)
+
+        let isFromLocal = CallsignNormalizer.addressesMatch(from, local)
+        let isToLocal = CallsignNormalizer.addressesMatch(to, local)
+        guard isFromLocal || isToLocal else {
+            return false
+        }
+
+        let peer = isFromLocal ? to : from
+        guard let coordinator = SessionCoordinator.shared else {
+            return false
+        }
+
+        // Only suppress raw I-frame console lines if there's an active connected
+        // session with the peer. Without a session, keep the wire payload visible.
+        return coordinator.sessionManager.connectedSession(withPeer: peer) != nil
+    }
+
     /// True if displayInfo is a protocol label (AXDP PING, SABM, etc.), not user chat
     private func isProtocolDisplayInfo(_ s: String) -> Bool {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -682,20 +1681,132 @@ final class PacketEngine: ObservableObject {
         return "\(from.uppercased())|\(to.uppercased())|\(normalizedText)"
     }
 
+    /// Returns the text to render in terminal for packet payload.
+    /// Falls back to placeholders so empty/binary UI/I frames remain visible.
+    private func packetConsoleDisplayText(_ packet: Packet) -> String? {
+        if let text = packet.infoText {
+            return text
+        }
+        guard packet.frameType == .ui || packet.frameType == .i else {
+            return nil
+        }
+        if packet.info.isEmpty {
+            return "[no payload]"
+        }
+        return "[\(packet.info.count) bytes]"
+    }
+
     // MARK: - Filtering
 
-    func filteredPackets(search: String, filters: PacketFilters, stationCall: String?) -> [Packet] {
-        PacketFilter.filter(
-            packets: packets,
+    /// How many frames the table could show at most — everything received
+    /// since the last Clear. The denominator in "1,204 of 24,353".
+    var visiblePacketCount: Int {
+        guard let clearedAt = packetsClearedAt else { return packets.count }
+        return packets.reduce(into: 0) { $0 += $1.timestamp < clearedAt ? 0 : 1 }
+    }
+
+    func filteredPackets(search: String, filters: PacketFilters, stationCall: String?,
+                         hiddenRadios: Set<RadioID> = []) -> [Packet] {
+        let visiblePackets = packets.filter { packet in
+            if let clearedAt = packetsClearedAt, packet.timestamp < clearedAt {
+                return false
+            }
+            return true
+        }
+        return PacketFilter.filter(
+            packets: visiblePackets,
             search: search,
             filters: filters,
             stationCall: stationCall,
-            pinnedIDs: pinnedPacketIDs
+            pinnedIDs: pinnedPacketIDs,
+            hiddenRadios: hiddenRadios
         )
+    }
+
+    // MARK: - Radios as the status surfaces see them
+
+    /// Every enabled radio, in the operator's order, with its link's state.
+    var radioSummaries: [RadioStatusSummary] {
+        let station = settings.myCallsign
+        return radioManager.profiles.map { radio in
+            let state = radioManager.state(of: radio.id)
+            let session = radioManager.session(for: radio.id)
+            return RadioStatusSummary(
+                id: radio.id, name: radio.name.isEmpty ? RadioProfile.defaultName(for: radio) : radio.name,
+                callsign: radio.resolvedCallsign(station: station),
+                status: Self.connectionStatus(for: state),
+                endpoint: radio.displayEndpoint,
+                host: radio.kind == .tcp ? radio.host : "",
+                port: radio.kind == .tcp ? radio.port : nil,
+                lastError: session?.lastError ?? radioManager.unavailableReasons[radio.id],
+                lastRx: lastRxByRadio[radio.id],
+                lastTx: lastTxByRadio[radio.id],
+                frequencyHz: radioManager.rigStatus[radio.id]?.frequencyHz ?? (radio.kind == .modem ? radio.frequencyHz : nil),
+                modeLabel: radioManager.rigStatus[radio.id]?.modeLabel,
+                dcd: radioManager.modemTelemetry[radio.id]?.dcd,
+                ptt: radioManager.modemTelemetry[radio.id]?.ptt,
+                rxLevelDBFS: radioManager.modemTelemetry[radio.id]?.rxPeakDBFS)
+        }
+    }
+
+    /// Radio names by id, for the Packets table's Radio column. Empty with
+    /// one radio, and then the column does not exist.
+    var radioNames: [RadioID: String] {
+        guard settings.hasMultipleRadios else { return [:] }
+        return Dictionary(uniqueKeysWithValues: settings.activeRadios.map {
+            ($0.id, $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name)
+        })
+    }
+
+    /// The names of the radios still shown when some are hidden; nil when
+    /// every radio is visible, so a scope line costs no words.
+    var visibleRadioNames: [String]? {
+        guard !hiddenRadioIDs.isEmpty else { return nil }
+        let names = settings.activeRadios
+            .filter { $0.enabled && !hiddenRadioIDs.contains($0.id) }
+            .map { $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name }
+        return names.isEmpty ? nil : names
+    }
+
+    /// A station is hidden only when every radio that heard it is hidden, so
+    /// one heard on both radios stays one dot on the map.
+    func isVisible(_ station: Station) -> Bool {
+        RadioVisibility.isVisible(station, hidden: hiddenRadioIDs)
+    }
+
+    static func connectionStatus(for state: KISSLinkState) -> ConnectionStatus {
+        switch state {
+        case .connected: .connected
+        case .connecting: .connecting
+        case .failed: .failed
+        case .disconnected: .disconnected
+        }
     }
 
     func packet(with id: Packet.ID) -> Packet? {
         packets.first { $0.id == id }
+    }
+
+    /// Corrects the in-memory station counts against the whole log.
+    ///
+    /// Only the number changes. Adding a row for every callsign ever heard
+    /// would turn a list of who is on the air into a historical roster, which
+    /// is a different feature.
+    func loadLifetimeStationCounts() {
+        guard let store = stationStats else { return }
+        // The hop is a method call, not a nested `MainActor.run` closure.
+        // That closure captured the weak `self` variable from the enclosing
+        // concurrent one, which is a data race the compiler rejects outright
+        // in Swift 6 — and awaiting an optional does the same job.
+        Task.detached(priority: .utility) { [weak self] in
+            guard let counts = try? store.allStationCounts(), !counts.isEmpty else { return }
+            await self?.applyLifetimeCounts(counts)
+        }
+    }
+
+    private func applyLifetimeCounts(_ counts: [String: Int]) {
+        stationTracker.applyLifetimeCounts(counts)
+        stations = stationTracker.stations
     }
 
     func isPinned(_ id: Packet.ID) -> Bool {
@@ -722,8 +1833,11 @@ final class PacketEngine: ObservableObject {
     // MARK: - Clear Actions
 
     func clearPackets() {
-        packets.removeAll()
-        pinnedPacketIDs.removeAll()
+        packetsClearedAt = Date()
+    }
+    
+    func restorePackets() {
+        packetsClearedAt = nil
     }
 
     func clearConsole(clearPersisted: Bool = true) {
@@ -758,27 +1872,37 @@ final class PacketEngine: ObservableObject {
         insertPacketSorted(packet)
         packetInsertSubject.send(packet)
 
+        // Log RX control frames (SABM, UA, DM, DISC, RR, REJ, I) as SYS lines with digi H-bit status
+        let controlDecoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
+        logRxControlFrame(packet, decoded: controlDecoded)
+
         // Feed packet to NET/ROM integration for route inference
         observePacketForNetRom(packet)
 
         // Check for AXDP capabilities in UI frames
         detectAXDPCapabilities(from: packet)
 
-        // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) – SessionCoordinator
-        // will deliver reassembled chat via appendSessionChatLine. Raw chunks would show truncated text.
-        let skipRawIFrameLine = packet.frameType == .i && packet.pid == 0xF0
+        // Parse APRS message-class frames (messages, acks, queries, bulletins)
+        // and let the messaging service store them and auto-reply.
+        detectAPRSMessage(from: packet)
+
+        // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) AND the user is
+        // part of the session – SessionCoordinator will deliver reassembled chat via
+        // appendSessionChatLine. For monitored traffic (other stations' sessions),
+        // we DO want to show the I-frame content in the console.
+        let skipRawIFrameLine = shouldSkipIFrame(packet)
         if packet.frameType == .i {
             TxLog.debug(.axdp, "I-frame received at wire", [
                 "from": packet.fromDisplay,
                 "to": packet.toDisplay,
-                "pid": packet.pid,
+                "pid": packet.pid as Any,
                 "infoLen": packet.info.count,
                 "hasMagic": AXDP.hasMagic(packet.info),
                 "prefixHex": packet.info.prefix(8).map { String(format: "%02X", $0) }.joined()
             ])
         }
 
-        if !skipRawIFrameLine, let text = packet.infoText {
+        if !skipRawIFrameLine, let text = packetConsoleDisplayText(packet) {
             // Extract via path as array of callsign strings
             let viaPath = Packet.normalizedViaItems(from: packet.via)
 
@@ -797,10 +1921,32 @@ final class PacketEngine: ObservableObject {
                 text: text,
                 timestamp: packet.timestamp,
                 via: viaPath,
-                isDuplicate: isDuplicate
+                isDuplicate: isDuplicate,
+                radioID: packet.radioID,
+                // The bytes, not `text`: a Mic-E payload does not survive the
+                // trip through `infoText`. Only UI frames carry APRS.
+                aprsInfo: packet.frameType == .ui ? packet.info : nil
             )
 
             appendConsoleLine(line, category: .packet, packetID: packet.id, byteCount: packet.info.count)
+            
+            // Handle Notification Triggers (Mail and Mentions)
+            if !isDuplicate {
+                let textUpper = text.uppercased()
+                let myCallUpper = settings.myCallsign.uppercased()
+                
+                if !myCallUpper.isEmpty {
+                    if line.messageType == .mail && textUpper.contains(myCallUpper) {
+                        notificationScheduler?.scheduleMailNotification(packet: packet)
+                    } else if settings.notifyOnMention {
+                        let toCallUpper = packet.toDisplay.uppercased()
+                        // Avoid spam if we are directly receiving this packet (we assume we're already engaged)
+                        if toCallUpper != myCallUpper && textUpper.contains(myCallUpper) {
+                            notificationScheduler?.scheduleMentionNotification(packet: packet)
+                        }
+                    }
+                }
+            }
         }
 
         persistPacket(packet)
@@ -810,7 +1956,7 @@ final class PacketEngine: ObservableObject {
     /// Feed a packet to NET/ROM integration for passive route inference.
     /// Called from handleIncomingPacket for live packets.
     private func observePacketForNetRom(_ packet: Packet) {
-        guard let integration = netRomIntegration else { return }
+        guard let integration = netRomIntegration, !packet.isOwnEcho else { return }
 
         integration.observePacket(packet, timestamp: packet.timestamp, isDuplicate: false)
 
@@ -831,6 +1977,49 @@ final class PacketEngine: ObservableObject {
 
     /// Detect and store AXDP capabilities from packet payload (UI frames).
     /// Capability discovery happens via PING/PONG message exchange.
+    /// Hand an inbound UI frame to the APRS messaging service when it is a
+    /// message-class frame (`:` message/ack/rej or `?` query). Direct-vs-
+    /// digipeated is read from the H-bit so the service can tell a direct copy
+    /// from a relayed one, and the reply path is the reverse of the used digis.
+    private func detectAPRSMessage(from packet: Packet) {
+        guard let svc = aprsMessaging,
+              packet.frameType == .ui, !packet.isOwnEcho,
+              let sender = packet.from?.display,
+              let parsed = APRSMessage.parse(info: packet.info) else { return }
+        let usedDigis = packet.via.filter { $0.repeated }
+        let context = APRSMessagingService.InboundContext(
+            sender: sender,
+            ourCalls: aprsOurCallsigns(),
+            radioID: packet.radioID?.rawValue,
+            replyPath: usedDigis.reversed().map { $0.display },
+            viaDirect: usedDigis.isEmpty,
+            receivedAt: packet.timestamp,
+            // `?APRST` answers with the whole received path, so it needs the
+            // destination and every digipeater — used or not — not just the
+            // used ones the reply path is built from.
+            destination: packet.toDisplay,
+            // The has-been-repeated bit is part of the path, and `?APRST`
+            // quotes the path verbatim: a real Xastir answers a digipeated
+            // query "PATH= ORACLE-1>APZAXT,RFDIGI-1*" and an un-digipeated
+            // copy of the same query "…,WIDE1-1" with no star. `display`
+            // deliberately omits it everywhere else, so it is added here.
+            viaPath: packet.via.map { $0.repeated ? $0.display + "*" : $0.display })
+        svc.receive(parsed, context: context)
+    }
+
+    /// Every callsign that names us for "is this message addressed to me" —
+    /// the station call and each radio's resolved call+SSID.
+    private func aprsOurCallsigns() -> [String] {
+        var calls: Set<String> = []
+        let station = settings.myCallsign
+        if !station.isEmpty { calls.insert(station.uppercased()) }
+        for radio in settings.activeRadios {
+            let call = radio.resolvedCallsign(station: station)
+            if !call.isEmpty { calls.insert(call.uppercased()) }
+        }
+        return Array(calls)
+    }
+
     private func detectAXDPCapabilities(from packet: Packet) {
         guard let fromAddress = packet.from else { return }
 
@@ -882,8 +2071,69 @@ final class PacketEngine: ObservableObject {
         loadPersistedPackets(reason: "manual")
     }
 
+    func aggregateAnalytics(
+        in timeframe: DateInterval,
+        bucket: TimeBucket,
+        calendar: Calendar,
+        options: AnalyticsAggregator.Options
+    ) async -> AnalyticsAggregationResult? {
+        guard settings.persistHistory, let persistenceWorker else { return nil }
+        do {
+            return try await persistenceWorker.aggregateAnalytics(
+                in: timeframe,
+                bucket: bucket,
+                calendar: calendar,
+                options: options
+            )
+        } catch {
+            SentryManager.shared.capturePersistenceFailure("aggregate analytics", error: error)
+            return nil
+        }
+    }
+
+    /// Connection connect/disconnect timestamps for capture-coverage derivation.
+    /// The lookback is padded so an interval that began before the window still
+    /// covers into it.
+    func captureConnectionEvents(around window: DateInterval) async -> (connects: [Date], disconnects: [Date])? {
+        guard let eventLogStore else { return nil }
+        let padded = DateInterval(
+            start: window.start.addingTimeInterval(-30 * 24 * 3600),
+            end: window.end
+        )
+        let store = eventLogStore
+        return await Task.detached(priority: .userInitiated) { () -> (connects: [Date], disconnects: [Date])? in
+            guard let events = try? store.loadEvents(category: .connection, in: padded) else { return nil }
+            var connects: [Date] = []
+            var disconnects: [Date] = []
+            for event in events {
+                if event.message.hasPrefix("Connected") {
+                    connects.append(event.createdAt)
+                } else if event.message.hasPrefix("Disconnected") {
+                    disconnects.append(event.createdAt)
+                }
+            }
+            return (connects, disconnects)
+        }.value
+    }
+
+    func loadPackets(in timeframe: DateInterval) async -> [Packet]? {
+        guard settings.persistHistory, let persistenceWorker else { return nil }
+        do {
+            return try await persistenceWorker.loadPackets(in: timeframe)
+        } catch {
+            SentryManager.shared.capturePersistenceFailure("load packets in timeframe", error: error)
+            return nil
+        }
+    }
+
     private func loadPersistedPackets(reason: String) {
         guard settings.persistHistory, let persistenceWorker else { return }
+        // One read at a time. Startup and the first connect both ask for
+        // this, and they arrive close enough together that neither sees the
+        // other's result: the history was being read twice, concurrently,
+        // in full — 5,000 packets each — which is most of the delay before
+        // the table drew anything.
+        guard !isLoadingPersistedPackets else { return }
         if !packets.isEmpty {
             if stations.isEmpty {
                 rebuildStations(from: packets)
@@ -903,7 +2153,9 @@ final class PacketEngine: ObservableObject {
             level: .info,
             data: ["retentionLimit": limit, "reason": reason]
         )
+        isLoadingPersistedPackets = true
         Task {
+            defer { isLoadingPersistedPackets = false }
             do {
                 let result = try await persistenceWorker.loadPackets(limit: limit)
                 applyLoadedPackets(result.packets, pinnedIDs: result.pinnedIDs)
@@ -914,7 +2166,7 @@ final class PacketEngine: ObservableObject {
                     data: ["packetCount": result.packets.count, "stationCount": stations.count, "reason": reason]
                 )
             } catch {
-                SentryManager.shared.capturePersistenceFailure("loadRecent packets", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("loadRecent packets", error: error)
                 SentryManager.shared.captureMessage(
                     "stations.initial_load.failed",
                     level: .error,
@@ -935,9 +2187,10 @@ final class PacketEngine: ObservableObject {
         let limit = min(settings.consoleRetentionLimit, maxConsoleLines)
         Task {
             do {
-                consoleLines = try await persistenceWorker.loadConsole(limit: limit)
+                let loaded = try await persistenceWorker.loadConsole(limit: limit)
+                consoleLines = Self.mergeLoadedConsoleLines(loaded, into: consoleLines, maxLines: maxConsoleLines)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("loadRecent console", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("loadRecent console", error: error)
             }
         }
     }
@@ -947,16 +2200,120 @@ final class PacketEngine: ObservableObject {
         let limit = min(settings.rawRetentionLimit, maxRawChunks)
         Task {
             do {
-                rawChunks = try await persistenceWorker.loadRaw(limit: limit)
+                let loaded = try await persistenceWorker.loadRaw(limit: limit)
+                rawChunks = Self.mergeLoadedRawChunks(loaded, into: rawChunks, maxChunks: maxRawChunks)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("loadRecent raw", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("loadRecent raw", error: error)
             }
         }
     }
 
-    private func rebuildStations(from packets: [Packet]) {
+    nonisolated static func mergeLoadedConsoleLines(
+        _ loaded: [ConsoleLine],
+        into current: [ConsoleLine],
+        maxLines: Int
+    ) -> [ConsoleLine] {
+        if current.isEmpty {
+            return Array(loaded.suffix(maxLines))
+        }
+
+        var byId: [UUID: ConsoleLine] = [:]
+        for line in loaded {
+            byId[line.id] = line
+        }
+        // Prefer current (live) lines when IDs collide.
+        for line in current {
+            byId[line.id] = line
+        }
+
+        var merged = Array(byId.values)
+        merged.sort {
+            if $0.timestamp == $1.timestamp {
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            return $0.timestamp < $1.timestamp
+        }
+        if merged.count > maxLines {
+            merged.removeFirst(merged.count - maxLines)
+        }
+        return merged
+    }
+
+    nonisolated static func mergeLoadedRawChunks(
+        _ loaded: [RawChunk],
+        into current: [RawChunk],
+        maxChunks: Int
+    ) -> [RawChunk] {
+        if current.isEmpty {
+            return Array(loaded.suffix(maxChunks))
+        }
+
+        var byId: [UUID: RawChunk] = [:]
+        for chunk in loaded {
+            byId[chunk.id] = chunk
+        }
+        // Prefer current (live) chunks when IDs collide.
+        for chunk in current {
+            byId[chunk.id] = chunk
+        }
+
+        var merged = Array(byId.values)
+        merged.sort {
+            if $0.timestamp == $1.timestamp {
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            return $0.timestamp < $1.timestamp
+        }
+        if merged.count > maxChunks {
+            merged.removeFirst(merged.count - maxChunks)
+        }
+        return merged
+    }
+
+    /// Internal, not private, so a test can prove the incident layers are
+    /// actually rebuilt here — testing the seed function alone would pass even
+    /// if nothing ever called it, which was the bug.
+    func rebuildStations(from packets: [Packet]) {
         stationTracker.rebuild(from: packets)
         stations = stationTracker.stations
+        seedAPRSLayersIfEmpty(from: packets)
+    }
+
+    /// Replays the incident layers — objects, items and NWS alerts — from the
+    /// stored packet log.
+    ///
+    /// `updateMHeard` files these as they arrive and nothing ever rebuilt
+    /// them, so every launch started the incident map empty while the packets
+    /// that made it sat in the log. A repeater object came back on its next
+    /// beacon and hid the bug; the cases the layer exists for did not. A
+    /// one-shot hazard — a fire, a road closure, an aid station placed once —
+    /// and any object whose sender had since gone off the air were gone for
+    /// good. `liveWindow` compounded it: with an empty store, an object's age
+    /// was measured from app start rather than from the last time anyone
+    /// actually repeated it.
+    ///
+    /// Seeded only into an empty store, never over live state. `record`
+    /// overwrites `heard` and increments `timesHeard`, so replaying the log on
+    /// a mid-session rebuild — a radio reconnect calls this too — would drag
+    /// current objects backwards in time, possibly out of `live()`, and
+    /// double-count their repeats. It would also wipe objects we placed
+    /// ourselves, which never enter the packet log at all
+    /// (`recordOwnAPRSObject`).
+    func seedAPRSLayersIfEmpty(from packets: [Packet]) {
+        let seedObjects = aprsObjects.placed.isEmpty && aprsObjects.killed.isEmpty
+        let seedAlerts = aprsAlerts.alerts.isEmpty
+        guard seedObjects || seedAlerts else { return }
+        // Ascending time order is required, not cosmetic: a kill retires the
+        // placement before it, and a move supersedes it. Replayed out of
+        // order, a stood-down hazard comes back as live.
+        let ordered = packets
+            .filter { !$0.isOwnEcho && Self.carriesAPRS($0) }
+            .sorted { $0.timestamp < $1.timestamp }
+        for packet in ordered {
+            guard let station = packet.from?.display else { continue }
+            if seedObjects { recordAPRSObject(from: packet, sentBy: station, announce: false) }
+            if seedAlerts { recordWeatherAlert(from: packet, sentBy: station, announce: false) }
+        }
     }
 
     private func persistPacket(_ packet: Packet) {
@@ -974,7 +2331,7 @@ final class PacketEngine: ObservableObject {
                     )
                 }
             } catch {
-                SentryManager.shared.capturePersistenceFailure("save/prune packet", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("save/prune packet", error: error)
             }
         }
     }
@@ -986,7 +2343,16 @@ final class PacketEngine: ObservableObject {
         byteCount: Int? = nil
     ) {
         guard settings.persistHistory, let persistenceWorker else { return }
-        let metadata = ConsoleEntryMetadata(from: line.from, to: line.to, via: line.via.isEmpty ? nil : line.via)
+        let radios: [String]?
+        switch line.subject {
+        case .app: radios = nil
+        case .radios(let ids): radios = ids.map(\.rawValue).sorted()
+        case .unnamedRadio: radios = []
+        }
+        let metadata = ConsoleEntryMetadata(from: line.from, to: line.to,
+                                            via: line.via.isEmpty ? nil : line.via,
+                                            radios: radios,
+                                            aprs: line.aprsInfo?.base64EncodedString())
         let metadataJSON = metadata.hasValues ? DeterministicJSON.encode(metadata) : nil
         let entry = ConsoleEntryRecord(
             id: line.id,
@@ -1003,7 +2369,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.appendConsole(entry, retentionLimit: retentionLimit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("append/prune console", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("append/prune console", error: error)
             }
         }
     }
@@ -1026,7 +2392,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.appendRaw(entry, retentionLimit: retentionLimit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("append/prune raw", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("append/prune raw", error: error)
             }
         }
     }
@@ -1037,12 +2403,53 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.setPinned(packetId: id, pinned: pinned)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("setPinned", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("setPinned", error: error)
+            }
+        }
+    }
+
+    // MARK: - Connection Logic Suspension
+    
+    /// If true, automatic connection attempts triggered by settings changes are suspended.
+    /// Used by the Settings UI to prevent link thrashing while the user is configuring parameters.
+    var isConnectionLogicSuspended: Bool = false {
+        didSet {
+            if isConnectionLogicSuspended {
+                // Capture current settings when panel opens
+                suspendedConfigSnapshot = ConnectionConfigSnapshot(settings: settings)
+                debugTrace("Connection logic suspended — snapshot captured")
+            } else {
+                // Compare snapshot to current settings on panel close
+                let currentSnapshot = ConnectionConfigSnapshot(settings: settings)
+                if currentSnapshot != suspendedConfigSnapshot {
+                    debugTrace("Settings changed while suspended — reconnecting")
+                    connectUsingSettings()
+                } else {
+                    debugTrace("Settings unchanged while suspended — skipping reconnect")
+                }
+                suspendedConfigSnapshot = nil
             }
         }
     }
 
     private func observeSettings() {
+        // The radios. Every transport scalar mirrors into the primary radio's
+        // profile, so one sink over the list sees them all. A tweak to a link
+        // that is up is applied in place; only a link that did not exist
+        // loads history, as an explicit connect does.
+        settings.$radios
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] radios in
+                guard let self, !self.isConnectionLogicSuspended else { return }
+                if self.radioManager.reconcile(radios, open: true) > 0 {
+                    self.loadPersistedPackets(reason: "connect")
+                }
+                self.refreshLinkSummary()
+            }
+            .store(in: &cancellables)
+
+        // Retention settings
         settings.$retentionLimit
             .dropFirst()
             .sink { [weak self] newLimit in
@@ -1102,7 +2509,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.prunePackets(retentionLimit: limit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("prune packets", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("prune packets", error: error)
             }
         }
     }
@@ -1113,7 +2520,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.pruneConsole(retentionLimit: limit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("prune console", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("prune console", error: error)
             }
         }
     }
@@ -1124,7 +2531,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.pruneRaw(retentionLimit: limit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("prune raw", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("prune raw", error: error)
             }
         }
     }
@@ -1135,7 +2542,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.deleteAllConsole()
             } catch {
-                SentryManager.shared.capturePersistenceFailure("deleteAll console", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("deleteAll console", error: error)
             }
         }
     }
@@ -1146,7 +2553,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.deleteAllRaw()
             } catch {
-                SentryManager.shared.capturePersistenceFailure("deleteAll raw", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("deleteAll raw", error: error)
             }
         }
     }
@@ -1276,7 +2683,7 @@ final class PacketEngine: ObservableObject {
             #if DEBUG
             print("[NETROM:STARTUP] ❌ Error loading snapshot: \(error)")
             #endif
-            SentryManager.shared.capturePersistenceFailure("load netrom snapshot", errorDescription: error.localizedDescription)
+            SentryManager.shared.capturePersistenceFailure("load netrom snapshot", error: error)
         }
     }
 
@@ -1290,29 +2697,22 @@ final class PacketEngine: ObservableObject {
             return
         }
 
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
+        // Gather state on MainActor before moving to background
+        let neighbors = integration.currentNeighbors()
+        let routes = integration.currentRoutes()
+        let linkStats = integration.exportLinkStats()
+        let lastPacketID = Int64(self.packets.count)
 
+        #if DEBUG
+        print("[NETROM:SAVE] Saving snapshot:")
+        print("[NETROM:SAVE]   - Neighbors: \(neighbors.count)")
+        print("[NETROM:SAVE]   - Routes: \(routes.count)")
+        print("[NETROM:SAVE]   - LinkStats: \(linkStats.count)")
+        print("[NETROM:SAVE]   - lastPacketID: \(lastPacketID)")
+        #endif
+
+        Task.detached(priority: .utility) {
             do {
-                // Get current state from integration (on main actor)
-                let neighbors = await MainActor.run { integration.currentNeighbors() }
-                let routes = await MainActor.run { integration.currentRoutes() }
-                let linkStats = await MainActor.run { integration.exportLinkStats() }
-
-                // Generate a stable packet ID for high-water mark
-                let lastPacketID = await MainActor.run { Int64(self.packets.count) }
-
-                #if DEBUG
-                await MainActor.run {
-                    print("[NETROM:SAVE] Saving snapshot:")
-                    print("[NETROM:SAVE]   - Neighbors: \(neighbors.count)")
-                    print("[NETROM:SAVE]   - Routes: \(routes.count)")
-                    print("[NETROM:SAVE]   - LinkStats: \(linkStats.count)")
-                    print("[NETROM:SAVE]   - lastPacketID: \(lastPacketID)")
-                }
-                #endif
-
-                // Save atomically
                 try persistence.saveSnapshot(
                     neighbors: neighbors,
                     routes: routes,
@@ -1322,16 +2722,34 @@ final class PacketEngine: ObservableObject {
                 )
 
                 #if DEBUG
-                await MainActor.run {
-                    print("[NETROM:SAVE] ✓ Snapshot saved successfully")
-                }
+                print("[NETROM:SAVE] ✓ Snapshot saved successfully")
                 #endif
+
+                // Append to the time series while the stats are already in
+                // hand. The store rate-limits itself per link, so calling on
+                // every snapshot costs a cheap MAX() lookup and usually
+                // writes nothing.
+                if let history = await self.linkQualityHistory {
+                    do {
+                        let now = Date()
+                        try history.record(linkStats, at: now)
+                        try history.prune(
+                            before: now.addingTimeInterval(-SQLiteLinkQualityHistoryStore.retention))
+                    } catch {
+                        // History is a convenience, never a precondition:
+                        // losing a sample must not fail the snapshot that
+                        // routing actually depends on.
+                        #if DEBUG
+                        print("[NETROM:SAVE] link history sample failed: \(error)")
+                        #endif
+                    }
+                }
             } catch {
+                #if DEBUG
+                print("[NETROM:SAVE] ❌ Error saving snapshot: \(error)")
+                #endif
                 await MainActor.run {
-                    #if DEBUG
-                    print("[NETROM:SAVE] ❌ Error saving snapshot: \(error)")
-                    #endif
-                    SentryManager.shared.capturePersistenceFailure("save netrom snapshot", errorDescription: error.localizedDescription)
+                    SentryManager.shared.capturePersistenceFailure("save netrom snapshot", error: error)
                 }
             }
         }
@@ -1345,10 +2763,16 @@ final class PacketEngine: ObservableObject {
             withTimeInterval: NetRomSnapshotConfig.saveIntervalSeconds,
             repeats: true
         ) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                self?.saveNetRomSnapshot()
-                // Prune old entries periodically (first run will be after initial interval)
-                self?.pruneOldNetRomEntries()
+                self.saveNetRomSnapshot()
+                // Prune old entries from persistence
+                self.pruneOldNetRomEntries()
+                // Purge stale routes and neighbors from in-memory integration
+                self.netRomIntegration?.purgeStaleData(currentDate: Date())
+                #if DEBUG
+                print("[NETROM:ENGINE] Purged stale data at \(Date())")
+                #endif
             }
         }
     }
@@ -1410,7 +2834,7 @@ final class PacketEngine: ObservableObject {
                 }
                 #endif
                 await MainActor.run {
-                    SentryManager.shared.capturePersistenceFailure("prune netrom entries", errorDescription: error.localizedDescription)
+                    SentryManager.shared.capturePersistenceFailure("prune netrom entries", error: error)
                 }
             }
         }
@@ -1453,7 +2877,7 @@ final class PacketEngine: ObservableObject {
                 }
                 #endif
                 await MainActor.run {
-                    SentryManager.shared.capturePersistenceFailure("clear netrom data", errorDescription: error.localizedDescription)
+                    SentryManager.shared.capturePersistenceFailure("clear netrom data", error: error)
                 }
             }
         }
@@ -1469,8 +2893,8 @@ final class PacketEngine: ObservableObject {
 
     #if DEBUG
     /// Rebuild all NET/ROM routing data from scratch by replaying all packets.
-    /// This clears existing neighbors, routes, and link stats, then replays every
-    /// packet in the database through the NET/ROM integration.
+    /// This replays every packet in the database through the NET/ROM integration.
+    /// The operation is guarded to avoid destructive wipes when no packets are available.
     ///
     /// - Parameter progress: Optional callback for progress updates (0.0-1.0)
     /// - Returns: A summary of the rebuild results
@@ -1488,32 +2912,15 @@ final class PacketEngine: ObservableObject {
             )
         }
 
-        print("[DEBUG:REBUILD] Starting full NET/ROM rebuild from packets...")
+        axDebugPrint("[DEBUG:REBUILD] Starting full NET/ROM rebuild from packets...")
 
-        // Step 1: Clear persistence
-        do {
-            try persistence.clearAll()
-            print("[DEBUG:REBUILD] ✓ Cleared persistence tables")
-        } catch {
-            return DebugRebuildResult(
-                success: false,
-                packetsProcessed: 0,
-                neighborsFound: 0,
-                routesFound: 0,
-                linkStatsFound: 0,
-                errorMessage: "Failed to clear persistence: \(error.localizedDescription)"
-            )
-        }
-
-        // Step 2: Reset integration state
-        integration.reset()
-        print("[DEBUG:REBUILD] ✓ Reset integration state")
-
-        // Step 3: Load all packets from database
+        // Step 1: Build replay set BEFORE mutating in-memory/persisted NET/ROM state.
+        // Prefer persisted packets, but include current in-memory packets that may not yet
+        // have been flushed to disk (or use in-memory entirely when persistence is empty).
         let packetRecords: [PacketRecord]
         do {
             packetRecords = try packetStore.loadAllChronological()
-            print("[DEBUG:REBUILD] ✓ Loaded \(packetRecords.count) packets from database")
+            axDebugPrint("[DEBUG:REBUILD] ✓ Loaded \(packetRecords.count) packets from database")
         } catch {
             return DebugRebuildResult(
                 success: false,
@@ -1525,13 +2932,64 @@ final class PacketEngine: ObservableObject {
             )
         }
 
-        // Step 4: Replay all packets through integration
-        let total = packetRecords.count
-        var processed = 0
+        let livePacketsSnapshot = packets
+        var replayPackets = packetRecords.map { $0.toPacket() }
 
-        for record in packetRecords {
-            let packet = record.toPacket()
+        if replayPackets.isEmpty {
+            replayPackets = livePacketsSnapshot.sorted(by: PacketOrdering.shouldPrecede)
+            axDebugPrint("[DEBUG:REBUILD] Using \(replayPackets.count) in-memory packets for rebuild")
+        } else {
+            let persistedIDs = Set(replayPackets.map(\.id))
+            let unsavedLive = livePacketsSnapshot.filter { !persistedIDs.contains($0.id) }
+            if !unsavedLive.isEmpty {
+                replayPackets.append(contentsOf: unsavedLive)
+                replayPackets.sort(by: PacketOrdering.shouldPrecede)
+                axDebugPrint("[DEBUG:REBUILD] Added \(unsavedLive.count) live packets not yet in persistence")
+            }
+        }
+
+        guard !replayPackets.isEmpty else {
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: 0,
+                neighborsFound: integration.currentNeighbors().count,
+                routesFound: integration.currentRoutes().count,
+                linkStatsFound: integration.exportLinkStats().count,
+                errorMessage: "No packets available for replay (database and live memory are empty). Existing NET/ROM state was not modified."
+            )
+        }
+
+        let previousNeighbors = integration.currentNeighbors()
+        let previousRoutes = integration.currentRoutes()
+        let previousLinkStats = integration.exportLinkStats()
+
+        // Step 2: Clear persistence
+        do {
+            try persistence.clearAll()
+            axDebugPrint("[DEBUG:REBUILD] ✓ Cleared persistence tables")
+        } catch {
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: 0,
+                neighborsFound: previousNeighbors.count,
+                routesFound: previousRoutes.count,
+                linkStatsFound: previousLinkStats.count,
+                errorMessage: "Failed to clear persistence: \(error.localizedDescription)"
+            )
+        }
+
+        // Step 3: Reset integration state
+        integration.reset()
+        axDebugPrint("[DEBUG:REBUILD] ✓ Reset integration state")
+
+        // Step 4: Replay all packets through integration
+        let total = replayPackets.count
+        var processed = 0
+        var latestPacketTimestamp = replayPackets[0].timestamp
+
+        for packet in replayPackets {
             integration.observePacket(packet, timestamp: packet.timestamp, isDuplicate: false)
+            latestPacketTimestamp = packet.timestamp
 
             processed += 1
             if processed % 100 == 0 || processed == total {
@@ -1539,24 +2997,59 @@ final class PacketEngine: ObservableObject {
                 progress?(pct)
 
                 if processed % 500 == 0 {
-                    print("[DEBUG:REBUILD] Processed \(processed)/\(total) packets (\(Int(pct * 100))%)")
+                    axDebugPrint("[DEBUG:REBUILD] Processed \(processed)/\(total) packets (\(Int(pct * 100))%)")
                 }
             }
         }
 
-        print("[DEBUG:REBUILD] ✓ Replayed \(processed) packets")
+        axDebugPrint("[DEBUG:REBUILD] ✓ Replayed \(processed) packets")
 
-        // Step 5: Get results
+        // Step 5: Purge stale entries relative to the replay horizon instead of wall-clock now.
+        // This preserves snapshot semantics when replaying older captures.
+        integration.purgeStaleData(currentDate: latestPacketTimestamp)
+        axDebugPrint("[DEBUG:REBUILD] ✓ Purged stale entries (anchor=\(latestPacketTimestamp))")
+
+        // Step 6: Get results
         let neighbors = integration.currentNeighbors()
         let routes = integration.currentRoutes()
         let linkStats = integration.exportLinkStats()
 
-        print("[DEBUG:REBUILD] Results:")
-        print("[DEBUG:REBUILD]   - Neighbors: \(neighbors.count)")
-        print("[DEBUG:REBUILD]   - Routes: \(routes.count)")
-        print("[DEBUG:REBUILD]   - Link Stats: \(linkStats.count)")
+        axDebugPrint("[DEBUG:REBUILD] Results:")
+        axDebugPrint("[DEBUG:REBUILD]   - Neighbors: \(neighbors.count)")
+        axDebugPrint("[DEBUG:REBUILD]   - Routes: \(routes.count)")
+        axDebugPrint("[DEBUG:REBUILD]   - Link Stats: \(linkStats.count)")
 
-        // Step 6: Save to persistence
+        let previousTotal = previousNeighbors.count + previousRoutes.count + previousLinkStats.count
+        let rebuiltTotal = neighbors.count + routes.count + linkStats.count
+        if previousTotal > 0 && rebuiltTotal == 0 {
+            integration.importNeighbors(previousNeighbors)
+            integration.importRoutes(previousRoutes)
+            integration.importLinkStats(previousLinkStats)
+            do {
+                try persistence.saveSnapshot(
+                    neighbors: previousNeighbors,
+                    routes: previousRoutes,
+                    linkStats: previousLinkStats,
+                    lastPacketID: Int64(total),
+                    configHash: nil
+                )
+            } catch {
+                axDebugPrint("[DEBUG:REBUILD] ⚠️ Rollback snapshot save failed: \(error)")
+                // A failed rollback leaves the persisted routing state
+                // inconsistent with memory — that is a data-integrity event.
+                SentryManager.shared.capturePersistenceFailure("rebuild rollback snapshot", error: error)
+            }
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: processed,
+                neighborsFound: previousNeighbors.count,
+                routesFound: previousRoutes.count,
+                linkStatsFound: previousLinkStats.count,
+                errorMessage: "Rebuild produced empty routing data; previous state was restored."
+            )
+        }
+
+        // Step 7: Save to persistence
         do {
             try persistence.saveSnapshot(
                 neighbors: neighbors,
@@ -1565,7 +3058,7 @@ final class PacketEngine: ObservableObject {
                 lastPacketID: Int64(total),
                 configHash: nil
             )
-            print("[DEBUG:REBUILD] ✓ Saved rebuilt state to persistence")
+            axDebugPrint("[DEBUG:REBUILD] ✓ Saved rebuilt state to persistence")
         } catch {
             return DebugRebuildResult(
                 success: false,
@@ -1577,7 +3070,7 @@ final class PacketEngine: ObservableObject {
             )
         }
 
-        print("[DEBUG:REBUILD] ✓ Rebuild complete!")
+        axDebugPrint("[DEBUG:REBUILD] ✓ Rebuild complete!")
 
         return DebugRebuildResult(
             success: true,
@@ -1603,13 +3096,230 @@ struct DebugRebuildResult {
 }
 #endif
 
+// MARK: - KISSLinkDelegate
+
+extension PacketEngine: RadioManagerDelegate {
+    func radioManager(_ manager: RadioManager, link: LinkSession, didReceiveBytes data: Data) {
+        noteReceivedBytes(data, link: link.endpointDescription)
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didReceiveTelemetry frame: Data, port: UInt8) {
+        absorbTelemetry(frame, isPrimary: link === manager.primarySession,
+                        radios: manager.radios(onLink: link.key))
+        if link === manager.primarySession { refreshLinkSummary() }
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didReceiveUnknown command: UInt8, payload: Data) {
+        noteUnknownFrame(command: command, payload: payload)
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry) {
+        // Only the transitions are worth a line: PTT and carrier.
+        let previous = lastModemTelemetry[link.key]
+        lastModemTelemetry[link.key] = telemetry
+        if previous?.ptt != telemetry.ptt {
+            LinkDebugLog.shared.recordStateChange(from: previous?.ptt == true ? "PTT on" : "PTT off",
+                                                  to: telemetry.ptt ? "PTT on" : "PTT off",
+                                                  endpoint: link.endpointDescription)
+            TxLog.debug(.modem, telemetry.ptt ? "PTT on" : "PTT off", ["link": link.endpointDescription])
+        }
+        if previous?.dcd != telemetry.dcd {
+            TxLog.debug(.modem, telemetry.dcd ? "Carrier detected" : "Channel clear", ["link": link.endpointDescription])
+        }
+        // What actually reached the air since the last report. A first report
+        // carries the counters' whole history, which is not news about any
+        // frame this session is showing, so it resolves nothing.
+        if let previous {
+            let onAir = Int(telemetry.framesSent &- previous.framesSent)
+            let dropped = Int(telemetry.framesDropped &- previous.framesDropped)
+            if onAir > 0 || dropped > 0 {
+                for radio in manager.radios(onLink: link.key) {
+                    onTransmitOutcome?(radio, onAir, dropped)
+                }
+            }
+        }
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateRigStatus status: RigStatus, model: String?) {
+        // The radio's own frequency and name become facts about the radio
+        // profile; `updateRadio` is a no-op when nothing changed.
+        for radio in manager.radios(onLink: link.key) {
+            settings.updateRadio(radio) { (profile: inout RadioProfile) in
+                if let hz = status.frequencyHz { profile.frequencyHz = hz }
+                if let model, profile.rigModel != model { profile.rigModel = model }
+            }
+        }
+    }
+
+    // MARK: Quieting reconnect churn
+
+    /// A connection error that clears within this grace is normal reconnect
+    /// churn — a radio still coming up, or a link flapping while it settles —
+    /// and never reaches the console. One that outlasts it is a real problem
+    /// the operator should see. The debug log and the top banner still get
+    /// every error at once; only the console waits.
+    private static let connectionErrorGrace: TimeInterval = 6
+
+    /// Hold a connection error back from the console for the grace period. If
+    /// the link is still not connected when it elapses, show it then; if it
+    /// came back up, the trouble was churn and stays out of the log.
+    private func deferConnectionError(_ message: String, for link: LinkSession,
+                                      category: ConsoleEntryRecord.Category) {
+        let id = ObjectIdentifier(link)
+        pendingConnectionErrors[id]?.cancel()
+        let work = DispatchWorkItem { [weak self, weak link] in
+            guard let self else { return }
+            self.pendingConnectionErrors[id] = nil
+            guard let link, link.state != .connected else { return }
+            self.addErrorLine(message, category: category)
+        }
+        pendingConnectionErrors[id] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.connectionErrorGrace, execute: work)
+    }
+
+    /// The link is up: drop any error we were holding back for it.
+    private func clearPendingConnectionError(for link: LinkSession) {
+        let id = ObjectIdentifier(link)
+        pendingConnectionErrors[id]?.cancel()
+        pendingConnectionErrors[id] = nil
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didChangeState state: KISSLinkState, from previous: KISSLinkState) {
+        let endpoint = link.endpointDescription
+        LinkDebugLog.shared.recordStateChange(from: previous.rawValue, to: state.rawValue, endpoint: endpoint)
+
+        switch state {
+        case .connecting:
+            eventLogger?.log(level: .info, category: .connection, message: "Connecting to \(endpoint)", metadata: nil)
+            if link === manager.primarySession, let tcp = link.tcpEndpoint {
+                SentryManager.shared.breadcrumbConnectAttempt(host: tcp.host, port: tcp.port)
+                SentryManager.shared.setConnectionTags(host: tcp.host, port: tcp.port)
+            }
+
+        case .connected:
+            clearPendingConnectionError(for: link)
+            addSystemLine("Connected to \(endpoint)", category: .connection,
+                          radios: radioManager.radios(carriedBy: link))
+            eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)
+            // A link that just came up clears its own error; recompute the
+            // engine-level banner from what is still failed, so a recovered
+            // radio takes the red banner down instead of it staying up forever.
+            recomputeConnectionError()
+            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Connected", level: .info, data: nil)
+            // Ask the TNC to name itself — an advisory SetHardware frame on
+            // the link, never transmitted on RF. Direwolf answers; anything
+            // that does not implement the extension ignores it. Network
+            // transport only: poking hardware-dependent commands at serial
+            // or BLE TNCs is Mobilinkd's lane.
+            if link.transport == .tcp {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak link] in
+                    guard let link, link.state == .connected else { return }
+                    link.identifyTNC()
+                }
+            }
+
+        case .disconnected:
+            addSystemLine("Disconnected", category: .connection,
+                          radios: radioManager.radios(carriedBy: link))
+            eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
+            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Disconnected", level: .info, data: nil)
+
+        case .failed:
+            deferConnectionError("Connection to \(endpoint) failed", for: link, category: .connection)
+            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(endpoint)", metadata: nil)
+            SentryManager.shared.captureConnectionFailure("KISS link failed: \(endpoint)")
+        }
+
+        refreshLinkSummary()
+    }
+
+    /// Recompute the top connection banner from the links that are failed
+    /// *now*. Each `LinkSession` clears its own `lastError` on `.connected`, so
+    /// a recovered radio drops out and the banner clears once nothing is
+    /// failed — fixing the banner that used to stay up permanently after any
+    /// failure because nothing ever cleared the engine-level error.
+    private func recomputeConnectionError() {
+        let stillFailed = radioManager.sessions.values.first {
+            $0.state == .failed && $0.lastError != nil
+        }
+        lastError = stillFailed?.lastError
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didError message: String) {
+        // A link that dropped because this machine slept is not a fault, and
+        // reading a POSIX error number should not be how an operator learns
+        // they closed their laptop. Said plainly, kept out of the banner, and
+        // not reported: the app asked for the sleep to happen.
+        if SystemPowerMonitor.shared.cause(forDropAt: Date()) == .systemSleep {
+            addSystemLine("\(link.endpointDescription) went down while this machine was asleep. Reconnecting.",
+                          category: .connection)
+            eventLogger?.log(level: .info, category: .connection,
+                             message: "Link down over system sleep: \(link.endpointDescription)",
+                             metadata: ["detail": message])
+            return
+        }
+        lastError = message
+        onLinkError?(message)
+        LinkDebugLog.shared.recordParseError(message: "Link error: \(message)")
+        // Hold the console line back over the grace period: while a link is
+        // still coming up or retrying, the same "lost the radio" and "macOS is
+        // refusing" complaints repeat on every attempt, which used to bury the
+        // log at startup. The banner and the debug log above already carry it
+        // at once; the console only shows it if it outlasts the reconnect.
+        deferConnectionError(message, for: link, category: .connection)
+        eventLogger?.log(level: .error, category: .connection, message: message, metadata: nil)
+    }
+
+    /// The event that 2026-09-18 had no equivalent of.
+    ///
+    /// That night produced twenty error-level reports that a frame could not
+    /// be sent and none at all that the station was off the air, which is the
+    /// wrong way round: the failed sends were a consequence, and the outage
+    /// was the thing nobody knew about until morning.
+    func radioManager(_ manager: RadioManager, link: LinkSession, hasBeenDownFor seconds: TimeInterval) {
+        let howLong = PowerInterruption.duration(seconds)
+        let message = "\(link.endpointDescription) has been down for \(howLong) and is still trying. Nothing this station sends on it is going out."
+        addErrorLine(message, category: .connection)
+        eventLogger?.log(level: .error, category: .connection, message: message,
+                         metadata: ["link": link.endpointDescription,
+                                    "downSeconds": "\(Int(seconds))"])
+        TxLog.error(.transport, "Link down too long", error: nil, [
+            "link": link.endpointDescription,
+            "downSeconds": Int(seconds),
+            "lastError": link.lastError ?? "none"
+        ])
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, droppedFrameOnUnassignedPort port: UInt8) {
+        // Logged, not dropped silently (CLAUDE.md §4) — and said once per
+        // link and port, because it is a configuration fact, not an event.
+        let message = "\(link.endpointDescription) sent frames on KISS port \(port), which no radio uses. Add a radio for that port, or fix the TNC's channel numbering."
+        LinkDebugLog.shared.recordParseError(message: "KISS port \(port) on \(link.endpointDescription) has no radio")
+        addErrorLine(message, category: .connection)
+        eventLogger?.log(level: .warning, category: .connection, message: message,
+                         metadata: ["link": link.endpointDescription, "port": "\(port)"])
+    }
+}
+
 private struct ConsoleEntryMetadata: Codable {
     let from: String?
     let to: String?
     let via: [String]?
+    /// The radios this line is about, so a reloaded transcript hides with the
+    /// same sidebar switches a live one does. Absent for app notices, which
+    /// belong to no radio; an empty array is a radio we could not name.
+    var radios: [String]?
+    /// The APRS information field, base64, for lines that decoded as APRS.
+    ///
+    /// Stored so a reloaded transcript reads the same as a live one. The bytes
+    /// rather than the decoded words: they are the ground truth, they are
+    /// about eighty bytes, and storing them means an improvement to the
+    /// decoder reaches old lines instead of leaving the history rendered by
+    /// whichever version happened to be running that day.
+    var aprs: String?
 
     var hasValues: Bool {
-        from != nil || to != nil || (via != nil && !via!.isEmpty)
+        from != nil || to != nil || (via != nil && !via!.isEmpty) || aprs != nil || radios != nil
     }
 }
 

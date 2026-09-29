@@ -29,6 +29,7 @@ import XCTest
 // MARK: - Reassembly Buffer Lifecycle Tests
 
 /// Tests verifying reassembly buffer is properly cleared on session lifecycle events
+@MainActor
 final class ReassemblyBufferLifecycleTests: XCTestCase {
     
     /// Test that reassembly buffer is cleared when session disconnects
@@ -230,15 +231,19 @@ final class ReassemblyBufferLifecycleTests: XCTestCase {
 // MARK: - Flag Clearing Race Condition Tests
 
 /// Tests verifying the peersInAXDPReassembly flag is handled correctly
+@MainActor
 final class FlagClearingRaceConditionTests: XCTestCase {
     
     /// Test that flag is cleared properly when AXDP chat is delivered
     func testFlagClearedOnAXDPChatDelivery() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
 
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
@@ -246,8 +251,8 @@ final class FlagClearingRaceConditionTests: XCTestCase {
 
             let peer = AX25Address(call: "TEST", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             viewModel.setCurrentSession(session)
             
             // Send AXDP data to set the flag
@@ -278,23 +283,26 @@ final class FlagClearingRaceConditionTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
 
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
 
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()
 
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "TEST", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             viewModel.setCurrentSession(session)
             
             // Step 1: Send AXDP data (sets flag)
@@ -325,22 +333,25 @@ final class FlagClearingRaceConditionTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
             let peer = AX25Address(call: "TEST", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             viewModel.setCurrentSession(session)
             
             // Send AXDP data (sets flag)
@@ -362,6 +373,7 @@ final class FlagClearingRaceConditionTests: XCTestCase {
 // MARK: - Multi-Fragment Message Integrity Tests
 
 /// Tests verifying multi-fragment AXDP messages are fully delivered
+@MainActor
 final class MultiFragmentMessageIntegrityTests: XCTestCase {
     
     /// Test that a large multi-fragment AXDP message is fully delivered
@@ -378,8 +390,8 @@ final class MultiFragmentMessageIntegrityTests: XCTestCase {
             
             let peer = AX25Address(call: "TEST", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Create a large message (like Lorem Ipsum from the bug report)
             let longText = """
@@ -431,8 +443,8 @@ final class MultiFragmentMessageIntegrityTests: XCTestCase {
             
             // Connect all sessions
             for session in sessions {
-                session.stateMachine.handle(event: .connectRequest)
-                session.stateMachine.handle(event: .receivedUA)
+                _ = session.stateMachine.handle(event: .connectRequest)
+                _ = session.stateMachine.handle(event: .receivedUA)
             }
             
             // Each station sends a complete message
@@ -469,8 +481,8 @@ final class MultiFragmentMessageIntegrityTests: XCTestCase {
             // Station sends AXDP, then plain text, then AXDP again
             let station = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: station)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Round 1: AXDP message
             let axdpMessage1 = createAXDPChatMessage(text: "AXDP Message 1")
@@ -523,6 +535,7 @@ final class MultiFragmentMessageIntegrityTests: XCTestCase {
 // MARK: - SessionCoordinator Buffer Clearing Tests
 
 /// Tests verifying SessionCoordinator properly clears buffers
+@MainActor
 final class SessionCoordinatorBufferClearingTests: XCTestCase {
     
     /// Test that buffer is cleared for disconnected session's peer
@@ -612,6 +625,7 @@ final class SessionCoordinatorBufferClearingTests: XCTestCase {
 
 // MARK: - Reassembly Resync Tests
 
+@MainActor
 final class ReassemblyResyncTests: XCTestCase {
     
     /// Test that a corrupted buffer (leading garbage before AXDP magic)

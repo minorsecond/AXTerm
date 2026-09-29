@@ -10,7 +10,7 @@ import Foundation
 // MARK: - KISS Protocol
 
 /// KISS protocol constants and utilities
-enum KISS {
+nonisolated enum KISS {
     // KISS framing bytes
     static let FEND: UInt8 = 0xC0
     static let FESC: UInt8 = 0xDB
@@ -100,25 +100,49 @@ enum KISS {
 
 // MARK: - KISS Frame Parser
 
+/// Output from the KISS frame parser
+nonisolated enum KISSFrameOutput: Equatable {
+    case ax25(Data)
+    case mobilinkdTelemetry(Data) // Raw hardware frame payload
+    case unknown(command: UInt8, payload: Data)
+}
+
+/// One deframed KISS frame together with the port it arrived on.
+///
+/// The command byte's high nibble is the TNC port. Direwolf numbers its
+/// channels this way, so a multi-port TNC is several radios behind one byte
+/// stream. For years this parser read the nibble for a log line and then
+/// returned the payload alone, which folded every port into one.
+/// `feedFrames` keeps the port; `feed` is the older, port-less view kept for
+/// the callers (and the many tests) that only want the bytes.
+nonisolated struct KISSParsedFrame: Equatable {
+    let port: UInt8
+    let output: KISSFrameOutput
+}
+
 /// Stateful parser for extracting KISS frames from a TCP byte stream.
 /// Handles arbitrary chunk boundaries and frame splitting.
-struct KISSFrameParser {
+nonisolated struct KISSFrameParser {
     private var buffer = Data()
     private var inFrame = false
 
     init() {}
 
-    /// Feed a chunk of data from TCP. Returns zero or more complete AX.25 frame payloads.
-    /// Each returned Data is an unescaped AX.25 frame (KISS command byte stripped).
-    mutating func feed(_ chunk: Data) -> [Data] {
-        var frames: [Data] = []
+    /// Feed a chunk of data from TCP. Returns zero or more processed KISS frames.
+    mutating func feed(_ chunk: Data) -> [KISSFrameOutput] {
+        feedFrames(chunk).map(\.output)
+    }
+
+    /// Like `feed`, but every frame carries the KISS port it arrived on.
+    mutating func feedFrames(_ chunk: Data) -> [KISSParsedFrame] {
+        var frames: [KISSParsedFrame] = []
 
         for byte in chunk {
             if byte == KISS.FEND {
                 if inFrame && !buffer.isEmpty {
                     // End of frame - process it
-                    if let payload = processKISSFrame(buffer) {
-                        frames.append(payload)
+                    if let result = processKISSFrame(buffer) {
+                        frames.append(result)
                     }
                 }
                 // Start fresh for next frame
@@ -139,33 +163,68 @@ struct KISSFrameParser {
         inFrame = false
     }
 
-    /// Process a complete KISS frame buffer, returning the AX.25 payload if valid
-    private func processKISSFrame(_ data: Data) -> Data? {
+    /// Process a complete KISS frame buffer.
+    /// Returns nil for malformed or unrecognized frames (logged, not passed downstream).
+    private func processKISSFrame(_ data: Data) -> KISSParsedFrame? {
         guard !data.isEmpty else { return nil }
 
         // First byte is KISS command byte
         let command = data[0]
 
-        // Only handle data frames on port 0 for now
         // Command byte format: high nibble = port, low nibble = command type
-        let port = (command >> 4) & 0x0F
         let cmdType = command & 0x0F
+        let port = (command >> 4) & 0x0F
 
-        guard port == 0 && cmdType == 0 else { return nil }
+        let escapedPayload = data.count > 1 ? data.subdata(in: 1..<data.count) : Data()
+        let payload = KISS.unescape(escapedPayload)
 
-        // Rest is the AX.25 frame (escaped)
-        guard data.count > 1 else { return nil }
-        let escapedPayload = data.subdata(in: 1..<data.count)
+        TxLog.debug(.kiss, "KISS frame received", [
+            "command": String(format: "0x%02X", command),
+            "cmdType": String(format: "0x%02X", cmdType),
+            "port": String(format: "0x%02X", port),
+            "payloadLen": payload.count
+        ])
 
-        // Unescape and return
-        return KISS.unescape(escapedPayload)
+        // Handle Data Frame (any port — some multi-port TNCs or firmware variants use ports other than 0)
+        if cmdType == KISS.CMD_DATA {
+            // A valid AX.25 frame requires at minimum 15 bytes (src + dst + control).
+            // An empty payload means we got a bare command byte with no data — discard it.
+            guard !payload.isEmpty else {
+                // Malformed frames MUST be logged, not dropped silently
+                // (CLAUDE.md §4). Warning level so the crumb survives flood
+                // control and reaches Sentry attached to any later event.
+                TxLog.warning(.kiss, "Discarding DATA frame with empty payload")
+                return nil
+            }
+            return KISSParsedFrame(port: port, output: .ax25(payload))
+        }
+
+        // Handle Mobilinkd Hardware Command (0x06)
+        // This is used for battery levels and other telemetry
+        if cmdType == 0x06 {
+            // Reconstruct full frame: parseBatteryLevel expects [CMD, SUB, DATA...]
+            var fullFrame = Data([command])
+            fullFrame.append(payload)
+            return KISSParsedFrame(port: port, output: .mobilinkdTelemetry(fullFrame))
+        }
+
+        // Unrecognized command type — log and discard.
+        // This catches noise bytes between valid frames and non-standard TNC commands.
+        // Per CLAUDE.md: "Malformed frames MUST be logged, not dropped silently."
+        // Warning level so the crumb survives flood control and reaches Sentry.
+        TxLog.warning(.kiss, "Discarding unrecognized KISS command", [
+            "command": String(format: "0x%02X", command),
+            "cmdType": String(format: "0x%02X", cmdType),
+            "payloadLen": payload.count
+        ])
+        return nil
     }
 }
 
 // MARK: - AX.25 Decoding
 
 /// AX.25 frame encoding/decoding utilities (pure functions)
-enum AX25 {
+nonisolated enum AX25 {
 
     // MARK: - TX Frame Types for Control Field Encoding
 
@@ -235,6 +294,17 @@ enum AX25 {
 
         let address = AX25Address(call: callsign, ssid: ssid, repeated: repeated)
         return AddressDecodeResult(address: address, nextOffset: offset + 7, isLast: isLast)
+    }
+
+    /// Explain why decodeFrame returned nil for the given bytes, so decode
+    /// failures reach Sentry differentiated by cause instead of as one
+    /// undifferentiated bucket. Only called on the failure path, so
+    /// re-examining the bytes costs nothing in the common case.
+    static func decodeFailureReason(ax25 data: Data) -> String {
+        if data.count < 15 { return "frame shorter than 15-byte minimum" }
+        if decodeAddress(data: data, offset: 0) == nil { return "invalid destination address" }
+        if decodeAddress(data: data, offset: 7) == nil { return "invalid source address" }
+        return "unrecognized structure"
     }
 
     /// Decode an AX.25 frame from raw data

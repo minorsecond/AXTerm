@@ -101,6 +101,118 @@ final class NetRomLinkQualityTests: XCTestCase {
         XCTAssertLessThanOrEqual(quality, 255)
     }
 
+    func testSinglePacketDoesNotClaimNearPerfectQuality() {
+        // Cold start blends the first observation with the 0.5 prior: one I-frame
+        // must not instantly assert df = 1.0 (the old behavior yielded ~252/255
+        // from a single packet, indistinguishable from a proven link).
+        var estimator = makeEstimator()
+        let now = Date(timeIntervalSince1970: 1_700_002_050)
+        testClock = now
+
+        estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: now), timestamp: now)
+
+        let quality = estimator.linkQuality(from: "W0ABC", to: "N0CALL")
+        XCTAssertGreaterThan(quality, 0)
+        XCTAssertLessThan(quality, 220, "One packet of evidence must not read as near-certainty")
+
+        let stats = estimator.linkStats(from: "W0ABC", to: "N0CALL")
+        XCTAssertEqual(stats.dfEstimate ?? 0, 0.75, accuracy: 0.01,
+                       "First sample is the running mean of the 0.5 prior and the observation")
+    }
+
+    func testDuplicatesDoNotAdvanceAdaptiveTTLArrivals() {
+        // Retries are not fresh arrivals: a link with 2 real arrivals plus a burst
+        // of retry duplicates must keep the base sliding-window TTL (the adaptive
+        // TTL needs >= 3 genuine arrivals).
+        var estimator = makeEstimator()
+        let start = Date(timeIntervalSince1970: 1_700_002_060)
+        testClock = start
+
+        estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: start), timestamp: start)
+        let second = start.addingTimeInterval(30)
+        testClock = second
+        estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: second), timestamp: second)
+
+        for i in 0..<5 {
+            let ts = second.addingTimeInterval(Double(i + 1) * 3)
+            testClock = ts
+            estimator.observePacket(
+                makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts),
+                timestamp: ts,
+                isDuplicate: true
+            )
+        }
+
+        XCTAssertEqual(
+            estimator.effectiveTTL(from: "W0ABC", to: "N0CALL"),
+            estimator.config.slidingWindowSeconds,
+            "Duplicates must not unlock the adaptive TTL"
+        )
+    }
+
+    func testAliasLinkAccumulatesQuality() {
+        // Tactical aliases (NET/ROM node idents like DRLNOD) are real stations;
+        // links to them must be tracked or their neighbor quality can never
+        // reflect observed link performance.
+        var estimator = makeEstimator()
+        let start = Date(timeIntervalSince1970: 1_700_002_070)
+        for offset in 0..<10 {
+            let ts = start.addingTimeInterval(Double(offset) * 5)
+            testClock = ts
+            estimator.observePacket(makePacket(from: "DRLNOD", to: "K0EPI-7", timestamp: ts), timestamp: ts)
+        }
+
+        XCTAssertGreaterThan(estimator.linkQuality(from: "DRLNOD", to: "K0EPI-7"), 0,
+                             "Alias link must accumulate quality evidence")
+        XCTAssertNotNil(estimator.linkStats(from: "DRLNOD", to: "K0EPI-7").dfEstimate)
+    }
+
+    func testServiceDestinationsRemainExcludedFromLinkQuality() {
+        // Beacons, IDs, and NET/ROM broadcasts are not station-to-station links.
+        var estimator = makeEstimator()
+        let start = Date(timeIntervalSince1970: 1_700_002_080)
+        for (index, destination) in ["ID", "BEACON", "NODES", "MAIL"].enumerated() {
+            for offset in 0..<5 {
+                let ts = start.addingTimeInterval(Double(index * 100 + offset))
+                testClock = ts
+                estimator.observePacket(
+                    makePacket(from: "DRLNOD", to: destination, frameType: .ui, timestamp: ts),
+                    timestamp: ts
+                )
+            }
+        }
+
+        for destination in ["ID", "BEACON", "NODES", "MAIL"] {
+            XCTAssertEqual(estimator.linkQuality(from: "DRLNOD", to: destination), 0,
+                           "\(destination) is a service destination, not a link partner")
+        }
+        XCTAssertTrue(estimator.exportLinkStats().isEmpty,
+                      "No link records may exist for service-destination traffic")
+    }
+
+    func testAliasNeighborQualityLearnsFromLinkEvidence() {
+        // End to end: with alias links tracked, NetRomIntegration's neighbor
+        // quality for an alias must move off the cold-start base on evidence
+        // instead of being frozen at neighborBaseQuality forever.
+        let integration = NetRomIntegration(localCallsign: "K0EPI-7", mode: .hybrid)
+        let start = Date(timeIntervalSince1970: 1_700_002_090)
+
+        for offset in 0..<20 {
+            let ts = start.addingTimeInterval(Double(offset) * 10)
+            integration.observePacket(makePacket(from: "DRLNOD", to: "K0EPI-7", timestamp: ts), timestamp: ts)
+        }
+
+        XCTAssertGreaterThan(integration.linkQuality(from: "DRLNOD", to: "K0EPI-7"), 0,
+                             "Integration must track the alias link")
+
+        let neighbor = integration.currentNeighbors().first { $0.call == "DRLNOD" }
+        XCTAssertNotNil(neighbor, "Alias heard directly must be a neighbor")
+        if let neighbor {
+            XCTAssertNotEqual(neighbor.quality, NetRomConfig.default.neighborBaseQuality,
+                              "Alias neighbor quality must reflect link evidence, not the frozen cold-start base")
+        }
+    }
+
     func testQualityIncreasesWithMorePackets() {
         var estimator = makeEstimator()
         let start = Date(timeIntervalSince1970: 1_700_002_100)
@@ -929,5 +1041,140 @@ final class NetRomLinkQualityTests: XCTestCase {
         } else {
             XCTAssertEqual(run1.stats.dfEstimate, run2.stats.dfEstimate, "dfEstimate nil state must match")
         }
+    }
+
+    // MARK: - Connection handshake evidence (field capture 2026-08-23:
+    // a successful SABM/UA handshake to KB5YZB-7 left df=0.0 because the UA
+    // carried no weight while the SABM retry and REJ carried penalties).
+
+    func testUAResponseCreditsForwardDeliveryOfSABM() {
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_010_000)
+        testClock = now
+        // SABM P from K0EPI-7, answered by UA F from KB5YZB-7.
+        estimator.observePacket(
+            makePacket(from: "K0EPI-7", to: "KB5YZB-7", frameType: .u, control: 0x3F, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+        now = now.addingTimeInterval(2); testClock = now
+        estimator.observePacket(
+            makePacket(from: "KB5YZB-7", to: "K0EPI-7", frameType: .u, control: 0x73, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let stats = estimator.linkStats(from: "K0EPI-7", to: "KB5YZB-7")
+        XCTAssertGreaterThan(stats.dfEstimate ?? 0, 0.3,
+                             "A solicited UA is direct proof the SABM was delivered forward")
+    }
+
+    func testHandshakeWithOneRetryStaysAboveAdaptiveGate() {
+        // SABM, T1-retry SABM, then UA: the retry is real loss evidence but the
+        // UA proves the link works. df must stay above the df>0.05 gate that
+        // feeds network-wide adaptive, or a working link reads as dead.
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_011_000)
+        testClock = now
+        let sabm = makePacket(from: "K0EPI-7", to: "KB5YZB-7", frameType: .u, control: 0x3F, controlByte1: nil, timestamp: now)
+        estimator.observePacket(sabm, timestamp: now)
+        now = now.addingTimeInterval(8); testClock = now
+        estimator.observePacket(
+            makePacket(from: "K0EPI-7", to: "KB5YZB-7", frameType: .u, control: 0x3F, controlByte1: nil, timestamp: now),
+            timestamp: now,
+            isDuplicate: true
+        )
+        now = now.addingTimeInterval(2); testClock = now
+        estimator.observePacket(
+            makePacket(from: "KB5YZB-7", to: "K0EPI-7", frameType: .u, control: 0x73, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let stats = estimator.linkStats(from: "K0EPI-7", to: "KB5YZB-7")
+        XCTAssertGreaterThan(stats.dfEstimate ?? 0, 0.2,
+                             "One premature T1 retry must not outweigh a completed handshake")
+    }
+
+    func testDMRefusalStillProvesForwardDelivery() {
+        // DM refuses the connect, but the peer HEARD the SABM — delivery proof.
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_012_000)
+        testClock = now
+        estimator.observePacket(
+            makePacket(from: "K0EPI-7", to: "K0NTS-7", frameType: .u, control: 0x3F, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+        now = now.addingTimeInterval(1); testClock = now
+        estimator.observePacket(
+            makePacket(from: "K0NTS-7", to: "K0EPI-7", frameType: .u, control: 0x0F, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let stats = estimator.linkStats(from: "K0EPI-7", to: "K0NTS-7")
+        XCTAssertGreaterThan(stats.dfEstimate ?? 0, 0.3)
+    }
+
+    func testRejPenalizesTheLossyDirectionNotTheSender() {
+        // REJ from K0EPI-7 reports a missed I-frame FROM KB5YZB-7: the loss
+        // evidence belongs to KB5YZB-7→K0EPI-7, not to the REJ's own sender.
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_013_000)
+        testClock = now
+        // Establish forward evidence on the peer's link with an I-frame.
+        estimator.observePacket(
+            makePacket(from: "KB5YZB-7", to: "K0EPI-7", frameType: .i, control: 0x00, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+        let peerDfBefore = estimator.linkStats(from: "KB5YZB-7", to: "K0EPI-7").dfEstimate ?? 0
+
+        now = now.addingTimeInterval(2); testClock = now
+        // REJ(0) response from K0EPI-7 (mod-8 control 0x09).
+        estimator.observePacket(
+            makePacket(from: "K0EPI-7", to: "KB5YZB-7", frameType: .s, control: 0x09, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let senderStats = estimator.linkStats(from: "K0EPI-7", to: "KB5YZB-7")
+        XCTAssertNil(senderStats.dfEstimate,
+                     "Sending a REJ says nothing about the sender's own forward delivery")
+        let peerDfAfter = estimator.linkStats(from: "KB5YZB-7", to: "K0EPI-7").dfEstimate ?? 0
+        XCTAssertLessThan(peerDfAfter, peerDfBefore,
+                          "The REJ is loss evidence for the direction that dropped the I-frame")
+    }
+
+    // MARK: - Observation-count continuity across restarts
+
+    func testObservationCountCarriesAcrossRestartWhenNewEvidenceArrives() {
+        // Field capture 2026-08-23: K0NTS-1→N3HYM-15 had 7 observations before
+        // an app restart; fresh traffic after the restart RESET the exported
+        // count to live-only, re-darkening every minObs>=5 gate downstream.
+        // Restored estimates already seed the live EWMAs — the evidence-count
+        // credit must carry the same way.
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_020_000)
+        testClock = now
+
+        estimator.importLinkStats([
+            LinkStatRecord(
+                fromCall: "K0NTS-1",
+                toCall: "N3HYM-15",
+                quality: 126,
+                lastUpdated: now,
+                dfEstimate: 1.0,
+                drEstimate: 0.53,
+                duplicateCount: 1,
+                observationCount: 7
+            )
+        ])
+
+        now = now.addingTimeInterval(5); testClock = now
+        estimator.observePacket(
+            makePacket(from: "K0NTS-1", to: "N3HYM-15", frameType: .i, control: 0x00, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let stats = estimator.linkStats(from: "K0NTS-1", to: "N3HYM-15")
+        XCTAssertGreaterThanOrEqual(stats.observationCount, 8,
+                                    "7 restored observations + 1 live must not collapse to 1")
+        XCTAssertGreaterThanOrEqual(stats.duplicateCount, 1,
+                                    "Restored duplicate credit carries too")
     }
 }

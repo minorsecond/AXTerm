@@ -10,13 +10,26 @@ import XCTest
 import SwiftUI
 @testable import AXTerm
 
+@MainActor
 final class TerminalViewTests: XCTestCase {
+    @MainActor
+    private func createViewModel(sourceCall: String = "N0CALL") -> ObservableTerminalTxViewModel {
+        let settings = AppSettingsStore()
+        let client = PacketEngine(settings: settings)
+        let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
+        return ObservableTerminalTxViewModel(
+            client: client,
+            settings: settings,
+            sourceCall: sourceCall,
+            sessionManager: sessionManager
+        )
+    }
 
     // MARK: - Observable ViewModel Tests
 
     func testObservableViewModelInitialization() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             XCTAssertEqual(viewModel.sourceCall, "N0CALL")
             XCTAssertTrue(viewModel.composeText.wrappedValue.isEmpty)
@@ -26,7 +39,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelComposeBinding() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             viewModel.composeText.wrappedValue = "Hello World"
 
@@ -37,7 +50,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelDestinationBinding() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             viewModel.destinationCall.wrappedValue = "K0ABC"
 
@@ -47,7 +60,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelDigiPathBinding() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             viewModel.digiPath.wrappedValue = "WIDE1-1"
 
@@ -57,7 +70,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelCanSendRequiresText() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             // Initially cannot send (no text)
             XCTAssertFalse(viewModel.canSend)
@@ -74,7 +87,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelUpdateSourceCall() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             viewModel.updateSourceCall("K0NEW")
 
@@ -84,7 +97,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelClearCompose() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
             viewModel.composeText.wrappedValue = "Some text"
 
             viewModel.clearCompose()
@@ -95,7 +108,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelQueueDepthInitiallyZero() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             XCTAssertEqual(viewModel.queueDepth, 0)
             XCTAssertTrue(viewModel.queueEntries.isEmpty)
@@ -104,7 +117,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelEnqueueMessage() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
             viewModel.composeText.wrappedValue = "Test message"
             viewModel.destinationCall.wrappedValue = "K0ABC"
 
@@ -122,9 +135,12 @@ final class TerminalViewTests: XCTestCase {
     func testTerminalTabAllCases() {
         let allCases = TerminalTab.allCases
 
-        XCTAssertEqual(allCases.count, 2)
+        XCTAssertEqual(allCases.count, 3)
         XCTAssertTrue(allCases.contains(.session))
         XCTAssertTrue(allCases.contains(.transfers))
+        // History is where connected-mode sessions live once they end. The
+        // Session tab is a strip of live tabs, capped and lost on relaunch.
+        XCTAssertTrue(allCases.contains(.history))
     }
 
     func testTerminalTabRawValues() {
@@ -150,5 +166,53 @@ final class TerminalViewTests: XCTestCase {
         // Terminal should be first in the list (the default view)
         XCTAssertEqual(allCases[0], .terminal)
         XCTAssertEqual(allCases[1], .packets)
+    }
+
+    /// There is no fixed default any more: how to reach a station is derived
+    /// from what is known about it — a remembered choice, a NET/ROM route, or
+    /// the digipeaters its frames actually came through. A constant here was
+    /// what made the sidebar say "Via DRLNOD" and then call direct.
+    /// See `StationConnectModeTests`.
+    @MainActor
+    func testStationConnectModeFollowsTheEvidence() {
+        let coordinator = ConnectCoordinator()
+        XCTAssertEqual(
+            coordinator.preferredMode(for: "K0NTS-7", hasNetRomRoute: false, heardVia: []),
+            .ax25)
+        XCTAssertEqual(
+            coordinator.preferredMode(for: "KB5YZB-7", hasNetRomRoute: false,
+                                      heardVia: ["DRLNOD"]),
+            .ax25ViaDigi)
+    }
+
+    func testConnectCoordinatorImmediateRequestTriggersNavigationCallback() {
+        let coordinator = ConnectCoordinator()
+        var didNavigate = false
+        coordinator.navigateToTerminal = { didNavigate = true }
+        let intent = ConnectIntent(
+            kind: .ax25Direct,
+            to: "N0CALL",
+            sourceContext: .stations,
+            suggestedRoutePreview: nil,
+            validationErrors: [],
+            routeHint: nil,
+            note: nil
+        )
+        coordinator.requestConnect(ConnectRequest(intent: intent, mode: .ax25,
+                                                  executeImmediately: true,
+                                                  origin: .explicitAction))
+        XCTAssertTrue(didNavigate)
+    }
+
+    func testFailedStateRemainsVisibleInConnectBarModel() {
+        let vm = ConnectBarViewModel()
+        vm.applySuggestedTo("N0CALL")
+        vm.markConnecting()
+        vm.markFailed(reason: .timeout, detail: "Timed out waiting for UA")
+        if case .failed = vm.barState {
+            XCTAssertTrue(true)
+        } else {
+            XCTFail("Expected failed state to remain visible")
+        }
     }
 }

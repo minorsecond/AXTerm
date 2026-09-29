@@ -7,12 +7,14 @@
 
 import Foundation
 
-enum AutoScrollDecision {
+nonisolated enum AutoScrollDecision {
     static func shouldAutoScroll(
-        isUserAtTop: Bool,
+        isUserAtTarget: Bool,
         followNewest: Bool,
-        didRequestScrollToTop: Bool
+        didRequestScrollToTarget: Bool
     ) -> Bool {
-        didRequestScrollToTop || followNewest || isUserAtTop
+        // If the user explicitly requested it, always scroll.
+        // Otherwise, only follow live data if they are already at the target point.
+        didRequestScrollToTarget || (followNewest && isUserAtTarget)
     }
 }

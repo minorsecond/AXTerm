@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct NetworkGraphNode: Hashable, Sendable, Identifiable {
+nonisolated struct NetworkGraphNode: Hashable, Sendable, Identifiable {
     let id: String
     let callsign: String
     let weight: Int
@@ -19,6 +19,7 @@ struct NetworkGraphNode: Hashable, Sendable, Identifiable {
     /// SSIDs grouped into this node (only populated when stationIdentityMode == .station)
     /// Example: When "ANH", "ANH-1", and "ANH-15" are grouped, this contains ["ANH", "ANH-1", "ANH-15"]
     let groupedSSIDs: [String]
+    let isNetRomOfficial: Bool
 
     init(
         id: String,
@@ -29,7 +30,8 @@ struct NetworkGraphNode: Hashable, Sendable, Identifiable {
         inBytes: Int,
         outBytes: Int,
         degree: Int,
-        groupedSSIDs: [String] = []
+        groupedSSIDs: [String] = [],
+        isNetRomOfficial: Bool = false
     ) {
         self.id = id
         self.callsign = callsign
@@ -40,6 +42,7 @@ struct NetworkGraphNode: Hashable, Sendable, Identifiable {
         self.outBytes = outBytes
         self.degree = degree
         self.groupedSSIDs = groupedSSIDs.isEmpty ? [callsign] : groupedSSIDs
+        self.isNetRomOfficial = isNetRomOfficial
     }
 
     /// Whether this node represents multiple grouped SSIDs
@@ -56,20 +59,39 @@ struct NetworkGraphNode: Hashable, Sendable, Identifiable {
     }
 }
 
-struct NetworkGraphEdge: Hashable, Sendable {
+nonisolated struct NetworkGraphEdge: Hashable, Sendable {
     let sourceID: String
     let targetID: String
     let weight: Int
     let bytes: Int
+    let linkType: LinkType
+    let isStale: Bool
+
+    init(
+        sourceID: String,
+        targetID: String,
+        weight: Int,
+        bytes: Int,
+        linkType: LinkType = .directPeer,
+        isStale: Bool
+    ) {
+        self.sourceID = sourceID
+        self.targetID = targetID
+        self.weight = weight
+        self.bytes = bytes
+        self.linkType = linkType
+        self.isStale = isStale
+    }
 }
 
-struct GraphNeighborStat: Hashable, Sendable {
+nonisolated struct GraphNeighborStat: Hashable, Sendable {
     let id: String
     let weight: Int
     let bytes: Int
+    let isStale: Bool
 }
 
-struct GraphModel: Hashable, Sendable {
+nonisolated struct GraphModel: Hashable, Sendable {
     let nodes: [NetworkGraphNode]
     let edges: [NetworkGraphEdge]
     let adjacency: [String: [GraphNeighborStat]]

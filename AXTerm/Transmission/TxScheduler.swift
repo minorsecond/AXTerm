@@ -9,7 +9,7 @@
 import Foundation
 
 /// Statistics about the TX queue state
-struct TxQueueStatistics {
+nonisolated struct TxQueueStatistics {
     var totalQueued: Int = 0
     var totalSent: Int = 0
     var totalAcked: Int = 0
@@ -24,7 +24,7 @@ struct TxQueueStatistics {
 /// - FIFO within same priority
 /// - Per-destination rate limiting via TokenBucket
 /// - Frame state tracking (queued → sending → sent → acked/failed)
-struct TxScheduler {
+nonisolated struct TxScheduler {
 
     // MARK: - Configuration
 

@@ -90,6 +90,7 @@ final class KISSEncodingTests: XCTestCase {
         let input = Data(repeating: 0xDB, count: 10)
         let escaped = KISS.escape(input)
 
+        // Each FEND becomes 2 bytes
         XCTAssertEqual(escaped.count, 20)
         for i in stride(from: 0, to: 20, by: 2) {
             XCTAssertEqual(escaped[i], 0xDB)
@@ -235,7 +236,7 @@ final class KISSEncodingTests: XCTestCase {
         let frames = parser.feed(kissFrame)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], payload)
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, payload) } else { XCTFail() }
     }
 
     func testParserMultipleFrames() {
@@ -252,9 +253,9 @@ final class KISSEncodingTests: XCTestCase {
         let frames = parser.feed(data)
 
         XCTAssertEqual(frames.count, 3)
-        XCTAssertEqual(frames[0], payload1)
-        XCTAssertEqual(frames[1], payload2)
-        XCTAssertEqual(frames[2], payload3)
+        if case .ax25(let d0) = frames[0] { XCTAssertEqual(d0, payload1) } else { XCTFail() }
+        if case .ax25(let d1) = frames[1] { XCTAssertEqual(d1, payload2) } else { XCTFail() }
+        if case .ax25(let d2) = frames[2] { XCTAssertEqual(d2, payload3) } else { XCTFail() }
     }
 
     func testParserFragmentedInput() {
@@ -264,14 +265,14 @@ final class KISSEncodingTests: XCTestCase {
         let kissFrame = KISS.encodeFrame(payload: payload, port: 0)
 
         // Feed one byte at a time
-        var allFrames: [Data] = []
+        var allFrames: [KISSFrameOutput] = []
         for byte in kissFrame {
             let frames = parser.feed(Data([byte]))
             allFrames.append(contentsOf: frames)
         }
 
         XCTAssertEqual(allFrames.count, 1)
-        XCTAssertEqual(allFrames[0], payload)
+        if case .ax25(let d) = allFrames[0] { XCTAssertEqual(d, payload) } else { XCTFail() }
     }
 
     func testParserMultipleFENDs() {
@@ -285,7 +286,7 @@ final class KISSEncodingTests: XCTestCase {
         let frames = parser.feed(data)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0x42]))
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, Data([0x42])) } else { XCTFail() }
     }
 
     func testParserStripsCommandByte() {
@@ -296,7 +297,7 @@ final class KISSEncodingTests: XCTestCase {
 
         XCTAssertEqual(frames.count, 1)
         // Command byte (0x00) should be stripped
-        XCTAssertEqual(frames[0], Data([0x41, 0x42, 0x43]))
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, Data([0x41, 0x42, 0x43])) } else { XCTFail() }
     }
 
     func testParserHandlesEscaping() {
@@ -308,7 +309,7 @@ final class KISSEncodingTests: XCTestCase {
         let frames = parser.feed(kissFrame)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], original)
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, original) } else { XCTFail() }
     }
 
     func testParserEmptyFrame() {
@@ -353,7 +354,9 @@ final class KISSEncodingTests: XCTestCase {
         XCTAssertEqual(frames.count, 1)
 
         // Decode AX.25
-        let decoded = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] { frameData = d } else { XCTFail(); return }
+        let decoded = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.from?.call, "N0CALL")
         XCTAssertEqual(decoded?.to?.call, "CQ")
@@ -373,7 +376,9 @@ final class KISSEncodingTests: XCTestCase {
 
         XCTAssertEqual(frames.count, 1)
 
-        let decoded = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] { frameData = d } else { XCTFail(); return }
+        let decoded = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.info, infoWithFEND)
     }
@@ -388,7 +393,7 @@ final class KISSEncodingTests: XCTestCase {
         let frames = parser.feed(kissFrame)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], largePayload)
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, largePayload) } else { XCTFail() }
     }
 
     func testFrameAllSpecialBytes() {
@@ -405,7 +410,7 @@ final class KISSEncodingTests: XCTestCase {
         let frames = parser.feed(kissFrame)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], payload)
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, payload) } else { XCTFail() }
     }
 
     func testParserMemoryReset() {

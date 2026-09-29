@@ -188,6 +188,7 @@ Don’t literally count 10 frames globally. Do it like this:
 	•	Then:
 	•	if failStreak >= 1 or loss_rate_EWMA > 0.2 or ETX_EWMA > 2.0 → decrease paclen
 	•	else if successStreak >= 10 → increase paclen (up to cap), reset successStreak to something like 5 (so it doesn’t rocket upward)
+	•	and only if SRTT ≤ 5 s. Clean and fast are different properties: loss says the path works, round trip says what a mistake on it costs. A 12-second link that never drops a frame still cannot afford a wider window, because every recovery on it takes a minute. The RTT test gates *upgrades only* — a slow but clean path keeps whatever it has already earned, since shrinking a working link helps nobody.
 
 This avoids oscillation.
 
@@ -674,15 +675,134 @@ On receiving an I-frame with seq `ns`:
 - If `ns == VR` (expected):
   - accept payload
   - `VR = (VR + 1) mod M`
-  - send RR (or piggyback in outgoing I frames)
-- Else:
-  - send REJ (or SREJ if negotiated) to request retransmit
+  - **P=1:** answer immediately with RR F=1 — that single RR is cumulative
+    and acknowledges everything delivered so far
+  - **P=0:** arm T2 (if not already armed) and send nothing yet
+- Else if `ns` is inside the **receive span** ahead of `VR`:
+  - buffer the frame for later delivery
+  - send REJ once per gap (or SREJ if negotiated); start T1 to time the
+    retransmission we just asked for. REJ carries `N(R)`, so it settles any
+    pending T2 ack debt.
+- Else (outside the span — most likely a duplicate):
+  - discard; re-advertise `VR` cumulatively (immediately with F=1 on P=1,
+    otherwise via T2 like any other ack)
+
+#### T2 delayed acknowledgment
+
+Acks are cumulative, so one RR answers a whole burst — sending one per frame
+spends a key-up (~0.5 s of channel at 1200 baud) per frame and, on simplex,
+risks colliding with the peer's next I-frame, converting the ack itself into
+inbound loss and a go-back-N resend. Rules:
+
+- An in-sequence P=0 delivery **arms T2 once**; frames arriving while it runs
+  do not push the deadline back. Re-arming per frame is unbounded — any
+  arrival cadence faster than T2 defers the ack forever and the peer's T1
+  fires first (observed as RTO oscillation in the adaptive harness).
+- The debt is settled by whatever carries `N(R)` first: the F=1 response to a
+  P=1 poll, an outgoing I-frame's piggybacked `N(R)`, a REJ, or the RR that
+  T2 itself fires (F=0). A settled debt disarms T2; a stale T2 expiry with
+  nothing owed stays silent.
+- **T2 must sit inside every plausible peer T1.** Production default 2.0 s:
+  longer than one max-size frame's airtime at 1200 baud (~1.9 s, so
+  back-to-back frames batch), comfortably under the 3.0 s RTO floor. Timers
+  clamp T2 to ⅔ of `rtoMin` to keep the invariant when either is configured.
+- In practice T2 rarely fires: RMS gateways end every burst with a P=1 frame
+  (field capture 2026-08-24: 208 inbound I-frames, every burst
+  poll-terminated), and the mandatory F=1 response carries the ack.
+
+#### Receive span
+
+The receive span is `M / 2` — how far ahead of `VR` an out-of-sequence I-frame
+may sit and still be buffered. Inside it, a sequence number ahead of `VR` is
+unambiguously a future frame; at or beyond it, the same number may be a
+duplicate one lap back, and buffering it as "future" would deliver a lap-old
+payload when `VR` wraps onto it.
+
+**The span is not `K`.** `K` is the *transmit* window this station chose for
+frames it sends; it says nothing about how many frames the peer keeps in
+flight, and nothing negotiates a common value without XID. Deriving the span
+from `K` means a station that has throttled itself to `K=2` throws away frames
+a peer running four outstanding frames legitimately sent — and once `VR`
+reaches them, it must ask for frames the peer already sent and considers
+delivered. That deadlocks the link. Field capture 2026-08-24 (W0ARP-10):
+`N(S)=7` arrived twice while `VR=4`, was discarded both times, and the session
+died 60 s later still waiting for it.
+
+The out-of-sequence buffer must be able to hold a full span; sizing it to `K`
+silently re-discards frames the span test just accepted.
+
+#### T1 during REJ recovery
+
+While a REJ is outstanding, T1 is timing the *peer's* retransmission, not
+anything this station sent. An inbound RR must therefore leave it alone — it
+must be neither stopped nor restarted:
+
+- Stopping it disarms REJ recovery. On a receive-heavy link nothing of ours is
+  ever outstanding, so a peer's keepalive polls cancel T1 before it can fire
+  and a single lost REJ strands the gap permanently.
+- Restarting it is the same stall by another route: each poll pushes the
+  deadline out, so a peer polling faster than the RTO keeps T1 alive forever
+  without it ever expiring.
+
+T1 stops on an RR only when no gap is outstanding.
+
+#### Selective reject (SREJ)
+
+Available only after XID negotiation (below). A receive gap draws
+`SREJ(V(R))` — retransmit exactly the missing frame — instead of go-back-N
+REJ. Discipline:
+
+- One SREJ outstanding per gap; T1 times the awaited retransmission.
+- The F-bit asymmetry (§4.3.2.4) is load-bearing: **SREJ F=1 acknowledges
+  everything below N(R); SREJ F=0 acknowledges nothing.** Sending an F=0
+  SREJ therefore must NOT settle the T2 ack debt (the cumulative RR still
+  goes out), and receiving one must not clear the send buffer.
+- When filling one gap exposes another (frames beyond it still buffered),
+  SREJ the new missing frame immediately — waiting costs a full T1.
+- Transmit side: an inbound SREJ resends only frame N(R), with N(R)
+  refreshed to the current V(R). Duplicate SREJs for the same frame are
+  suppressed (T1 owns the retry), same as the REJ amplification guard.
+
+### 7.5.1 AX.25 2.2 parameter negotiation (XID)
+
+Before the first SABM to an unknown station (per-callsign cache), send an
+XID command (control 0xBF) offering: SREJ, our PACLEN as N1, our K —
+**modulo 8 explicitly**. Wire format and bit values follow the field
+reference (Direwolf xid.c): FI 0x82, GI 0x80, 16-bit group length,
+PI 2 / 3 / 6 / 8 / 9 / 10. A command offers a menu; a response picks one.
+
+Outcomes, all cached per callsign so the cost is paid at most once:
+
+- **XID response** → adopt: SREJ iff selected; PACLEN = min(ours, their
+  N1); K = min(ours, their k). N1/k are notifications — ceilings, never
+  raised. Then SABM.
+- **FRMR** → the spec's documented pre-2.2 answer (§6.3.2): "use
+  defaults". Proceed with plain SABM. Never an error.
+- **Silence** → one RTO, then plain SABM.
+- A malformed XID response resolves as unsupported — a peer's encoding bug
+  must not strand the connect.
+
+Inbound: an XID command draws a response selecting the intersection of the
+offer and our capabilities; the SABM that follows opens the session with
+exactly what the response promised.
+
+**Modulo 128 is deliberately not offered.** Extended mode changes the
+control-field length of every I- and S-frame, and the inbound KISS decode
+pipeline is not session-aware — it cannot know where a peer's two-byte
+control field ends. At 1200 baud the window is not the bottleneck anyway:
+k=7 × 256 bytes keeps ~14 s of airtime in flight. SREJ and the N1/k
+exchange carry all the value at deployable risk.
 
 ### 7.6 Send logic (I frames)
 Maintain send buffer for unacked frames:
 - `VS` next sequence to send
 - `VA` oldest unacked
 - Send while `(VS - VA) < K` and queue not empty
+- **Checkpoint (§6.2): the frame that fills the send window carries P=1** —
+  the peer's mandatory F=1 response acks the burst at once, which matters
+  against receivers that batch acks on T2. Only on window-full, not on every
+  burst end: some node stacks (DRLNOD, live capture) DM a session that polls
+  on every idle line.
 - Start T1 if not running
 - On RR with `nr`:
   - ack frames up to `nr-1`
@@ -953,6 +1073,46 @@ struct RttEstimator {
 - **K:** window size (max in-flight I frames)
 - **ETX/ETT:** expected transmissions / expected transmission time
 
+## 16) Third-party wire protocols over connected mode (Winlink B2F)
+
+AXTerm can run **wire-exact third-party protocols** (protocols whose byte
+stream is defined outside AXTerm) over an AX.25 connected session. The first
+of these is the Winlink **FBB/B2F** mail exchange. Rules:
+
+- Third-party protocol bytes are carried in I-frames with **PID `0xF0`** and
+  **MUST NOT** be wrapped in an AXDP envelope — the remote end is a foreign
+  implementation and the byte stream must match its specification exactly.
+  (§9.4's "keep the AXDP TLV envelope" applies to AXTerm's own file
+  transfers, not to foreign protocols.)
+- The protocol conversation claims the session's delivered byte stream
+  **exclusively** (`AX25SessionManager.claimDelivery`), so terminal
+  line-splitting and AXDP magic-detection never see foreign bytes. Claims
+  are released when the conversation ends.
+- Session parameters remain fixed at creation (§7.8); the protocol layer
+  never mutates link config mid-session.
+- Protocol timeouts are stretched by expected on-air time for bytes queued
+  at L2 (the peer cannot answer before our bytes finish transmitting).
+
+Checklist:
+- [x] Exclusive session byte-stream claim (terminal + AXDP bypass)
+  - Implementation notes: `AX25SessionManager.claimDelivery/releaseDelivery`;
+    tested in `SessionDeliveryClaimTests`.
+- [x] Winlink B2F engine as a pure sans-IO state machine
+  - Implementation notes: `AXTerm/Winlink/Protocol/B2FSessionEngine.swift`,
+    scripted-dialog tests in `B2FSessionEngineTests` (byte-at-a-time safe).
+- [x] LZHUF payload compression, fixture-exact against wl2k-go
+  - Implementation notes: `AXTerm/Winlink/Protocol/LZHUF.swift`; interop
+    fixtures embedded in `LZHUFFixtures.swift`.
+- [x] AX.25 and Telnet transports behind one `WinlinkTransport` interface
+  - Implementation notes: `AXTerm/Winlink/Session/`; runner pumps
+    transport ↔ engine ↔ store (`WinlinkSessionRunner`).
+- [ ] Token-bucket pacing for third-party bulk sends (blocked on §4.3
+  pacing being enforced on the live send path generally)
+
+See `Docs/Winlink.md` for the full subsystem design.
+
+---
+
 ## Meta: Implementation checklist behavior (do not remove content)
 
 When implementing from this document, you MUST:
@@ -975,7 +1135,55 @@ Reserved TLV ranges:
 LinkKey / PeerKey Definition:
 
 	•	PeerKey = destCall+ssid
-	•	LinkKey = (PeerKey, pathSignature, channel)
+	•	LinkKey = (PeerKey, pathSignature, radioID) — radioID names the radio the link runs on (see Docs/MultiRadio.md); it was the KISS channel before radios existed, and one radio still maps to one KISS port
+
+---
+
+## 17) NET/ROM transport (L3/L4) over connected mode
+
+AXTerm speaks real NET/ROM — the L3 datagram format and the L4 circuit
+transport carried in I-frames with **PID `0xCF`** — as node-to-node
+protocol, distinct from the 0xF0 terminal relay ("connect and type
+`C <dest>`"). The wire format and state machine are transcribed from the
+Linux AF_NETROM reference (itself from the ARRL 7th CNC NET/ROM paper),
+with exactly three documented deviations.
+
+**Normative details live in `Docs/NetRomTransport.md`.** Summary of the
+rules that interact with this spec:
+
+- One L3 datagram per I-frame. PID is the demux: the session machinery
+  carries the PID with every delivered payload (including resequenced
+  ones), and `AX25SessionManager.onNetRomDatagram` receives 0xCF bytes
+  before delivery claims, terminal, or AXDP ever see them.
+- Never answer an unmatched NET/ROM frame with a reset — unsolicited
+  CONACK|CHOKE replies are documented (in the reference source) to kill
+  BPQ nodes.
+- Protocol-extension frames (opcode 0: INP3, L3RTT, IP) are carried
+  opaque and never interpreted.
+- A circuit rides an L2 link to its **next hop**, taken from the route
+  table (`bestRouteTo(_:)?.origin`) and **pinned** for the circuit's
+  life. The L3 destination is the far station; the AX.25 destination is
+  always the neighbor.
+- **One datagram, one I-frame.** Fragment size follows the neighbor's
+  paclen; an oversized datagram is refused, never split. Note the
+  interaction with §4.2: adaptive paclen collapse to 64 under loss
+  shrinks NET/ROM fragments accordingly.
+- A dropped L2 link fails every circuit pinned to it immediately, rather
+  than retrying to N2.
+- **Being a node** — announcing (NODES broadcasts) and forwarding
+  (transit routing) are both **off by default** and gated on explicit
+  settings. Announcing writes this station into other operators'
+  routing tables; forwarding commits this transmitter to other people's
+  packets. Neither may arrive as a side effect of an app update.
+- **Never advertise what this station will not carry.** With forwarding
+  off, a NODES broadcast contains exactly one entry: this station. A
+  node advertising routes it will not forward is a black hole.
+- The NODES destination field is a **callsign**; alias-shaped route
+  destinations (EVANS, DRLNOD) are skipped rather than encoded.
+- Code: `AXTerm/NetRom/` (codec, circuit state machine, endpoint, link
+  driver, circuit-as-session, NODES origination, forwarding, auto-try);
+  tests: `AXTermTests/Unit/NetRom/` and
+  `AXTermTests/Integration/Relay/NetRomTransportIntegrationTests.swift`.
 
 ---
 

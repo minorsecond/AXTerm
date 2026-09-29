@@ -9,24 +9,79 @@ import SwiftUI
 
 struct PacketTableView: View {
     let packets: [Packet]
+    /// Radio names by id; empty with one radio, and then no row names one.
+    var radioNames: [RadioID: String] = [:]
+    /// True while stored history is still being read back.
+    var isLoadingHistory = false
     @Binding var selection: Set<Packet.ID>
     let onInspectSelection: () -> Void
     let onCopyInfo: (Packet) -> Void
     let onCopyRawHex: (Packet) -> Void
-    @State private var isAtTop = true
+    
+    @State private var isAtBottom = true
     @State private var followNewest = true
-    @State private var pendingNewPackets = 0
-    @State private var lastTopPacketID: Packet.ID?
-    @State private var scrollToTopToken = 0
+    @State private var scrollToBottomToken = 0
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        table.overlay { emptyState }
+    }
+
+    /// What the page says when there are no rows.
+    ///
+    /// A table with column headers and nothing under them reads as "no
+    /// packets" — which was the wrong answer for the several seconds the
+    /// stored history took to come back, and no answer at all on a fresh
+    /// install. Say which it is.
+    @ViewBuilder
+    private var emptyState: some View {
+        if packets.isEmpty {
+            if isLoadingHistory {
+                VStack(spacing: 8) {
+                    ProgressView()
+                    Text("Reading stored packets\u{2026}")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            } else {
+                ContentUnavailableView(
+                    "No packets yet",
+                    systemImage: "dot.radiowaves.left.and.right",
+                    description: Text("Frames appear here as the radio hears them."))
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var table: some View {
+        #if os(macOS)
+        appKitTable
+        #else
+        // AppKit's NSTableView is what keeps a live packet stream smooth on
+        // macOS; `List` gives the same virtualisation on iOS, so the touch
+        // build gets a view written for a narrow screen rather than a wrapped
+        // table with six columns nobody can read.
+        PacketTableTouchView(
+            packets: packets,
+            radioNames: radioNames,
+            selection: $selection,
+            onInspectSelection: onInspectSelection,
+            onCopyInfo: onCopyInfo,
+            onCopyRawHex: onCopyRawHex)
+        #endif
+    }
+
+    #if os(macOS)
+    private var appKitTable: some View {
+        ZStack(alignment: .bottomTrailing) {
             PacketNSTableView(
                 packets: packets,
+                radioNames: radioNames,
                 selection: $selection,
-                isAtTop: $isAtTop,
+                isAtBottom: $isAtBottom, // Corrected binding name
                 followNewest: $followNewest,
-                scrollToTopToken: scrollToTopToken,
+                scrollToBottomToken: scrollToBottomToken, // Corrected parameter name
                 onInspectSelection: onInspectSelection,
                 onCopyInfo: onCopyInfo,
                 onCopyRawHex: onCopyRawHex
@@ -41,67 +96,30 @@ struct PacketTableView: View {
                 .allowsHitTesting(false)
             )
 
-            if pendingNewPackets > 0 {
+            // Jump to Bottom Button
+            if !isAtBottom {
                 Button {
-                    followNewest = true
-                    pendingNewPackets = 0
-                    scrollToTopToken += 1
+                    isAtBottom = true
+                    followNewest = true // Should auto-resume following
+                    scrollToBottomToken += 1
                 } label: {
-                    Label("New packets (\(pendingNewPackets))", systemImage: "arrow.up.circle.fill")
-                        .labelStyle(.titleAndIcon)
+                    Image(systemName: "arrow.down.circle.fill")
+                        .resizable()
+                        .frame(width: 32, height: 32)
+                        .foregroundStyle(.secondary, .regularMaterial)
+                        .background(Circle().fill(.background)) // Ensure background for visibility
+                        .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .padding([.top, .trailing], 12)
-            }
-        }
-        .onChange(of: packets) { _, newPackets in
-            guard !newPackets.isEmpty else {
-                pendingNewPackets = 0
-                lastTopPacketID = nil
-                return
-            }
-
-            // Snapshot old top BEFORE we update it
-            let previousTopID = lastTopPacketID
-
-            if isAtTop || followNewest {
-                // User is following live: no “new packets” badge
-                pendingNewPackets = 0
-            } else {
-                // User is scrolled away: count how many items got inserted above their current top row
-                let nextCount = countNewPackets(previousTopID: previousTopID, packets: newPackets)
-                if nextCount > 0 {
-                    pendingNewPackets += nextCount
-                }
-            }
-
-            // Update for next change
-            lastTopPacketID = newPackets.first?.id
-        }
-        .onChange(of: isAtTop) { _, newValue in
-            if newValue {
-                pendingNewPackets = 0
-                followNewest = true
-                lastTopPacketID = packets.first?.id
-            } else {
-                followNewest = false
+                .buttonStyle(.plain)
+                .padding([.bottom, .trailing], 20)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
         }
         .onAppear {
-            if lastTopPacketID == nil {
-                lastTopPacketID = packets.first?.id
-            }
+            // Initial scroll to bottom on load
+            scrollToBottomToken += 1
         }
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isAtBottom)
     }
-
-    private func countNewPackets(previousTopID: Packet.ID?, packets: [Packet]) -> Int {
-        guard let previousTopID else {
-            return packets.count
-        }
-        if let index = packets.firstIndex(where: { $0.id == previousTopID }) {
-            return index
-        }
-        return packets.count
-    }
+    #endif
 }

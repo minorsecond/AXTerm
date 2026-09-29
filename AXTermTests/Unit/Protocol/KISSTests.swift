@@ -57,7 +57,12 @@ final class KISSTests: XCTestCase {
         let frames = parser.feed(chunk)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0x01, 0x02, 0x03]))
+        XCTAssertEqual(frames.count, 1)
+        if case .ax25(let data) = frames[0] {
+            XCTAssertEqual(data, Data([0x01, 0x02, 0x03]))
+        } else {
+            XCTFail("Expected .ax25 frame")
+        }
     }
 
     func testKISSStreamParserSplitsFramesAcrossChunks() {
@@ -72,7 +77,12 @@ final class KISSTests: XCTestCase {
         let chunk2 = Data([0x03, 0x04, 0xC0])
         let frames2 = parser.feed(chunk2)
         XCTAssertEqual(frames2.count, 1)
-        XCTAssertEqual(frames2[0], Data([0x01, 0x02, 0x03, 0x04]))
+        XCTAssertEqual(frames2.count, 1)
+        if case .ax25(let data) = frames2[0] {
+            XCTAssertEqual(data, Data([0x01, 0x02, 0x03, 0x04]))
+        } else {
+            XCTFail("Expected .ax25 frame")
+        }
     }
 
     func testKISSStreamParserMultipleFramesInOneChunk() {
@@ -83,8 +93,19 @@ final class KISSTests: XCTestCase {
         let frames = parser.feed(chunk)
 
         XCTAssertEqual(frames.count, 2)
-        XCTAssertEqual(frames[0], Data([0x01, 0x02]))
-        XCTAssertEqual(frames[1], Data([0x03, 0x04]))
+        XCTAssertEqual(frames.count, 2)
+        
+        if case .ax25(let data1) = frames[0] {
+            XCTAssertEqual(data1, Data([0x01, 0x02]))
+        } else {
+            XCTFail("Frame 0: Expected .ax25 frame")
+        }
+        
+        if case .ax25(let data2) = frames[1] {
+            XCTAssertEqual(data2, Data([0x03, 0x04]))
+        } else {
+            XCTFail("Frame 1: Expected .ax25 frame")
+        }
     }
 
     func testKISSStreamParserWithEscapedContent() {
@@ -95,17 +116,27 @@ final class KISSTests: XCTestCase {
         let frames = parser.feed(chunk)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0xC0])) // Unescaped FEND
+        XCTAssertEqual(frames.count, 1)
+        if case .ax25(let data) = frames[0] {
+            XCTAssertEqual(data, Data([0xC0])) // Unescaped FEND
+        } else {
+             XCTFail("Expected .ax25 frame")
+        }
     }
 
-    func testKISSStreamParserIgnoresNonPort0() {
+    func testKISSStreamParserAcceptsNonPort0DataFrames() {
         var parser = KISSFrameParser()
 
-        // Frame on port 1 (command byte 0x10)
+        // Frame on port 1 (command byte 0x10) — data frames on any port should be accepted
         let chunk = Data([0xC0, 0x10, 0x01, 0x02, 0xC0])
         let frames = parser.feed(chunk)
 
-        XCTAssertEqual(frames.count, 0, "Should ignore non-port-0 frames")
+        XCTAssertEqual(frames.count, 1, "Should accept data frames on any KISS port")
+        if case .ax25(let data) = frames[0] {
+            XCTAssertEqual(data, Data([0x01, 0x02]))
+        } else {
+            XCTFail("Expected .ax25 frame")
+        }
     }
 
     func testKISSStreamParserReset() {
@@ -120,7 +151,12 @@ final class KISSTests: XCTestCase {
         // New frame should work independently
         let frames = parser.feed(Data([0xC0, 0x00, 0x03, 0x04, 0xC0]))
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0x03, 0x04]))
+        
+        if case .ax25(let data) = frames[0] {
+            XCTAssertEqual(data, Data([0x03, 0x04]))
+        } else {
+             XCTFail("Expected .ax25 frame")
+        }
     }
 
     func testKISSStreamParserEmptyFrame() {
@@ -226,6 +262,11 @@ final class KISSTests: XCTestCase {
         let frames = parser.feed(kissFrame)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], originalPayload)
+        XCTAssertEqual(frames.count, 1)
+        if case .ax25(let data) = frames[0] {
+            XCTAssertEqual(data, originalPayload)
+        } else {
+             XCTFail("Expected .ax25 frame")
+        }
     }
 }

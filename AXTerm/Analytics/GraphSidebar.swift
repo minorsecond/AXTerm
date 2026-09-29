@@ -12,13 +12,18 @@
 //  - All copy centralized in GraphCopy.swift
 //
 
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 private typealias Copy = GraphCopy
 
 // MARK: - Sidebar Tab
 
-enum GraphSidebarTab: String, CaseIterable, Identifiable {
+nonisolated enum GraphSidebarTab: String, CaseIterable, Identifiable {
     case overview = "Overview"
     case inspector = "Inspector"
 
@@ -47,13 +52,23 @@ struct GraphSidebar: View {
 
     // Inspector tab data
     let selectedNodeDetails: GraphInspectorDetails?
+    let selectedMultiNodeDetails: GraphMultiInspectorDetails?
     let onSetAsAnchor: () -> Void
     let onClearSelection: () -> Void
+    let isServiceEndpointIgnored: (String) -> Bool
+    let isServiceEndpointSimulated: (String) -> Bool
+    let onAddServiceEndpointIgnore: (String) -> Void
+    let onRemoveServiceEndpointIgnore: (String) -> Void
+    let onSimulateServiceEndpointIgnore: (String) -> Void
+    let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
 
     // Hub metric for Primary Hub action
     @Binding var hubMetric: HubMetric
-
+    var fixedHeight: CGFloat? = nil
     var body: some View {
+        // Stable sidebar height (matches develop visuals) and shared by Overview/Inspector.
+        let resolvedHeight = max(fixedHeight ?? 0, AnalyticsStyle.Layout.graphHeight + 320)
         VStack(spacing: 0) {
             // Tab picker
             tabPicker
@@ -67,6 +82,7 @@ struct GraphSidebar: View {
             tabContent
         }
         .frame(width: AnalyticsStyle.Layout.inspectorWidth)
+        .frame(height: resolvedHeight, alignment: .top)
         .background(AnalyticsStyle.Colors.neutralFill)
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
     }
@@ -87,26 +103,32 @@ struct GraphSidebar: View {
     // MARK: - Tab Content
 
     private var tabContent: some View {
-        // Use ZStack to prevent layout shifts - both views are always rendered
-        ZStack {
-            // Overview tab
-            SidebarOverviewContent(
-                health: networkHealth,
-                hubMetric: $hubMetric,
-                onFocusPrimaryHub: onFocusPrimaryHub,
-                onShowActiveNodes: onShowActiveNodes,
-                onExportSummary: onExportSummary
-            )
-            .opacity(selectedTab == .overview ? 1 : 0)
-
-            // Inspector tab
-            SidebarInspectorContent(
-                details: selectedNodeDetails,
-                onSetAsAnchor: onSetAsAnchor,
-                onClearSelection: onClearSelection
-            )
-            .opacity(selectedTab == .inspector ? 1 : 0)
+        Group {
+            if selectedTab == .overview {
+                SidebarOverviewContent(
+                    health: networkHealth,
+                    hubMetric: $hubMetric,
+                    onFocusPrimaryHub: onFocusPrimaryHub,
+                    onShowActiveNodes: onShowActiveNodes,
+                    onExportSummary: onExportSummary
+                )
+            } else {
+                SidebarInspectorContent(
+                    details: selectedNodeDetails,
+                    multiDetails: selectedMultiNodeDetails,
+                    onSetAsAnchor: onSetAsAnchor,
+                    onClearSelection: onClearSelection,
+                    isServiceEndpointIgnored: isServiceEndpointIgnored,
+                    isServiceEndpointSimulated: isServiceEndpointSimulated,
+                    onAddServiceEndpointIgnore: onAddServiceEndpointIgnore,
+                    onRemoveServiceEndpointIgnore: onRemoveServiceEndpointIgnore,
+                    onSimulateServiceEndpointIgnore: onSimulateServiceEndpointIgnore,
+                    onApplySimulatedServiceEndpointIgnore: onApplySimulatedServiceEndpointIgnore,
+                    onCancelSimulatedServiceEndpointIgnore: onCancelSimulatedServiceEndpointIgnore
+                )
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -124,47 +146,45 @@ private struct SidebarOverviewContent: View {
     @State private var showingHubMetricPicker = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                // Header
-                headerSection
+        VStack(alignment: .leading, spacing: 12) {
+            // Header
+            headerSection
 
-                Divider()
+            Divider()
 
-                // Health score
-                healthScoreSection
+            // Health score
+            healthScoreSection
 
-                // Reasons
-                if !health.reasons.isEmpty {
-                    reasonsSection
-                }
-
-                Divider()
-
-                // Metrics grid
-                metricsSection
-
-                // Warnings
-                if !health.warnings.isEmpty {
-                    Divider()
-                    warningsSection
-                }
-
-                // Activity trend
-                if !health.activityTrend.isEmpty {
-                    Divider()
-                    trendSection
-                }
-
-                Divider()
-
-                // Quick actions
-                actionsSection
-
-                Spacer(minLength: 0)
+            // Reasons
+            if !health.reasons.isEmpty {
+                reasonsSection
             }
-            .padding(12)
+
+            Divider()
+
+            // Metrics grid
+            metricsSection
+
+            // Warnings
+            if !health.warnings.isEmpty {
+                Divider()
+                warningsSection
+            }
+
+            // Activity trend
+            if !health.activityTrend.isEmpty {
+                Divider()
+                trendSection
+            }
+
+            Divider()
+
+            // Quick actions
+            actionsSection
+
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Sections
@@ -215,11 +235,12 @@ private struct SidebarOverviewContent: View {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.caption2)
-                        .foregroundStyle(Color(nsColor: .systemGreen))
+                        .foregroundStyle(Color(platform: .systemGreen))
                     Text(reason)
                         .font(.caption)
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 }
+                .help(reason)
             }
         }
     }
@@ -256,7 +277,7 @@ private struct SidebarOverviewContent: View {
                 )
                 MetricCell(
                     label: Copy.Health.packetRateLabel,
-                    value: String(format: "%.1f", health.metrics.packetRate),
+                    value: formatPacketRate(health.metrics.packetRate),
                     tooltip: Copy.Health.packetRateTooltip
                 )
                 MetricCell(
@@ -271,6 +292,14 @@ private struct SidebarOverviewContent: View {
                 )
             }
         }
+    }
+
+    /// Packets per minute with a unit and enough precision that a quiet band
+    /// (e.g. 0.04/min) doesn't render as "0.0".
+    private func formatPacketRate(_ rate: Double) -> String {
+        if rate <= 0 { return "0/min" }
+        if rate < 1 { return String(format: "%.2f/min", rate) }
+        return String(format: "%.1f/min", rate)
     }
 
     /// Dynamic percentage formatting per HIG:
@@ -295,9 +324,9 @@ private struct SidebarOverviewContent: View {
 
             ForEach(health.warnings) { warning in
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: warning.severity == .warning ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                    Image(systemName: warning.severity == .info ? "info.circle.fill" : "exclamationmark.triangle.fill")
                         .font(.caption)
-                        .foregroundStyle(warning.severity == .warning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemBlue))
+                        .foregroundStyle(severityColor(for: warning.severity))
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(warning.title)
@@ -311,11 +340,18 @@ private struct SidebarOverviewContent: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(warning.severity == .warning
-                              ? Color(nsColor: .systemOrange).opacity(0.1)
-                              : Color(nsColor: .systemBlue).opacity(0.1))
+                        .fill(severityColor(for: warning.severity).opacity(0.1))
                 )
+                .help("\(warning.title): \(warning.detail)")
             }
+        }
+    }
+
+    private func severityColor(for severity: NetworkWarning.WarningSeverity) -> Color {
+        switch severity {
+        case .info: return Color(platform: .systemBlue)
+        case .caution: return Color(platform: .systemYellow)
+        case .warning: return Color(platform: .systemOrange)
         }
     }
 
@@ -403,7 +439,7 @@ private struct SidebarOverviewContent: View {
                     .tag(metric)
                 }
             }
-            .pickerStyle(.radioGroup)
+            .platformRadioGroup()
             .labelsHidden()
         }
         .padding(12)
@@ -414,10 +450,10 @@ private struct SidebarOverviewContent: View {
 
     private func ratingColor(_ rating: HealthRating) -> Color {
         switch rating {
-        case .excellent: return Color(nsColor: .systemGreen)
-        case .good: return Color(nsColor: .systemBlue)
-        case .fair: return Color(nsColor: .systemOrange)
-        case .poor: return Color(nsColor: .systemRed)
+        case .excellent: return Color(platform: .systemGreen)
+        case .good: return Color(platform: .systemBlue)
+        case .fair: return Color(platform: .systemOrange)
+        case .poor: return Color(platform: .systemRed)
         case .unknown: return AnalyticsStyle.Colors.textSecondary
         }
     }
@@ -435,18 +471,216 @@ private struct SidebarOverviewContent: View {
 /// Content for the Inspector tab (Node Details)
 private struct SidebarInspectorContent: View {
     let details: GraphInspectorDetails?
+    let multiDetails: GraphMultiInspectorDetails?
     let onSetAsAnchor: () -> Void
     let onClearSelection: () -> Void
+    let isServiceEndpointIgnored: (String) -> Bool
+    let isServiceEndpointSimulated: (String) -> Bool
+    let onAddServiceEndpointIgnore: (String) -> Void
+    let onRemoveServiceEndpointIgnore: (String) -> Void
+    let onSimulateServiceEndpointIgnore: (String) -> Void
+    let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
+    @State private var showAllSelectedStationsSheet = false
 
     var body: some View {
-        if let details {
-            nodeDetailsView(details)
-        } else {
-            emptyStateView
+        Group {
+            if let multiDetails {
+                multiNodeDetailsView(multiDetails)
+            } else if let details {
+                nodeDetailsView(details)
+            } else {
+                emptyStateView
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Node Details
+
+    private func multiNodeDetailsView(_ details: GraphMultiInspectorDetails) -> some View {
+        let maxSelectedRows = 10
+        let maxInlineNames = 10
+        let displayedSelectedRows = Array(details.selectedNodes.prefix(maxSelectedRows))
+        let displayedNames = details.selectedNodes.prefix(maxInlineNames).map(\.callsign)
+        let remainingNames = max(0, details.selectedNodes.count - displayedNames.count)
+        let namesSummary = remainingNames > 0
+            ? "\(displayedNames.joined(separator: ", ")) +\(remainingNames) more"
+            : displayedNames.joined(separator: ", ")
+
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(Copy.Inspector.tabLabel)
+                    .font(.headline)
+
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(details.selectionCount)")
+                        .font(.title2.weight(.semibold).monospacedDigit())
+                    Text(Copy.Inspector.multiSelectionTitle)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+
+                Text(namesSummary)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 2)
+                    .background(Color.clear)
+                    .contentShape(Rectangle())
+                    .help(Copy.Inspector.multiSelectionListTooltip)
+
+                if details.selectedNodes.count > maxSelectedRows {
+                    Button {
+                        showAllSelectedStationsSheet = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "rectangle.expand.vertical")
+                                .font(.caption2)
+                            Text("View All (\(details.selectedNodes.count))")
+                            Spacer()
+                        }
+                        .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    .help("Open a full list of all selected stations in a dedicated view.")
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.internalLinksLabel,
+                        value: "\(details.internalLinkCount)/\(details.possibleInternalLinks)",
+                        tooltip: Copy.Inspector.internalLinksTooltip
+                    )
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.selectionDensityLabel,
+                        value: String(format: "%.0f%%", details.density * 100),
+                        tooltip: Copy.Inspector.selectionDensityTooltip
+                    )
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.packetsWithinSelectionLabel,
+                        value: details.internalPacketCount.formatted(),
+                        tooltip: Copy.Inspector.packetsWithinSelectionTooltip
+                    )
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.bytesWithinSelectionLabel,
+                        value: ByteCount.string(Int64(details.internalByteCount)),
+                        tooltip: Copy.Inspector.bytesWithinSelectionTooltip
+                    )
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.bytesTouchingSelectionLabel,
+                        value: ByteCount.string(Int64(details.touchingByteCount)),
+                        tooltip: Copy.Inspector.bytesTouchingSelectionTooltip
+                    )
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.sharedExternalRelaysLabel,
+                        value: details.externalReachCount.formatted(),
+                        tooltip: Copy.Inspector.sharedExternalRelaysTooltip
+                    )
+
+                    Text(Copy.Inspector.selectionBytesLegend)
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .padding(.top, 2)
+                }
+
+                Divider()
+
+                if !details.relationshipBreakdown.isEmpty {
+                    relationshipBreakdownSection(details.relationshipBreakdown)
+                    Divider()
+                }
+
+                if !details.internalLinks.isEmpty {
+                    groupedSectionHeader(
+                        Copy.Inspector.withinSelectionHeader,
+                        systemImage: "link",
+                        tooltip: Copy.Inspector.withinSelectionTooltip
+                    )
+                    ForEach(details.internalLinks.prefix(8)) { link in
+                        internalLinkRow(link)
+                    }
+                    if details.internalLinks.count > 8 {
+                        Text("+ \(details.internalLinks.count - 8) more links")
+                            .font(.caption2)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    }
+                    Divider()
+                }
+
+                if !details.sharedExternalConnections.isEmpty {
+                    groupedSectionHeader(
+                        Copy.Inspector.sharedConnectionsHeader,
+                        systemImage: "point.3.connected.trianglepath.dotted",
+                        tooltip: Copy.Inspector.sharedConnectionsTooltip
+                    )
+                    ForEach(details.sharedExternalConnections.prefix(6)) { connection in
+                        sharedConnectionRow(connection)
+                    }
+                    if details.sharedExternalConnections.count > 6 {
+                        Text("+ \(details.sharedExternalConnections.count - 6) more shared connections")
+                            .font(.caption2)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    }
+                    Divider()
+                }
+
+                groupedSectionHeader(
+                    Copy.Inspector.selectedStationsHeader,
+                    systemImage: "dot.circle.and.hand.point.up.left.fill",
+                    tooltip: Copy.Inspector.selectedStationsTooltip
+                )
+                ForEach(displayedSelectedRows) { node in
+                    selectedStationRow(node)
+                }
+                if details.selectedNodes.count > displayedSelectedRows.count {
+                    Text("+ \(details.selectedNodes.count - displayedSelectedRows.count) more selected stations")
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .help("Inspector stays compact. Use View All to inspect every selected station.")
+                }
+
+                Divider()
+
+                VStack(spacing: 8) {
+                    Button(action: onSetAsAnchor) {
+                        HStack {
+                            Image(systemName: "scope")
+                            Text(Copy.Focus.focusSelectionLabel)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .help(Copy.Focus.focusSelectionTooltip)
+                    .accessibilityLabel(Copy.Focus.focusSelectionAccessibility)
+
+                    Button(action: onClearSelection) {
+                        HStack {
+                            Image(systemName: "xmark")
+                            Text(Copy.Toolbar.clearSelectionLabel + " Selection")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .help(Copy.Selection.nodeChipClearTooltip)
+                    .accessibilityLabel(Copy.Selection.clearButtonAccessibility)
+                }
+            }
+            .padding(12)
+        }
+        .id("multi-\(details.selectionCount)-\(details.selectedNodes.map(\.id).joined(separator: ","))")
+        .onChange(of: details.selectionCount) { _, _ in
+            showAllSelectedStationsSheet = false
+        }
+        .sheet(isPresented: $showAllSelectedStationsSheet) {
+            AllSelectedStationsSheet(nodes: details.selectedNodes)
+        }
+    }
 
     private func nodeDetailsView(_ details: GraphInspectorDetails) -> some View {
         ScrollView {
@@ -494,14 +728,14 @@ private struct SidebarInspectorContent: View {
                         value: details.node.outCount,
                         tooltip: Copy.Inspector.packetsOutTooltip
                     )
-                    InspectorMetricRow(
+                    InspectorMetricStringRow(
                         title: Copy.Inspector.bytesInLabel,
-                        value: details.node.inBytes,
+                        value: ByteCount.string(Int64(details.node.inBytes)),
                         tooltip: Copy.Inspector.bytesInTooltip
                     )
-                    InspectorMetricRow(
+                    InspectorMetricStringRow(
                         title: Copy.Inspector.bytesOutLabel,
-                        value: details.node.outBytes,
+                        value: ByteCount.string(Int64(details.node.outBytes)),
                         tooltip: Copy.Inspector.bytesOutTooltip
                     )
                     InspectorMetricRow(
@@ -510,6 +744,12 @@ private struct SidebarInspectorContent: View {
                         tooltip: Copy.Inspector.degreeTooltip
                     )
                 }
+
+                Text(Copy.Inspector.trafficContextLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(Copy.Inspector.trafficContextTooltip)
 
                 Divider()
 
@@ -549,6 +789,126 @@ private struct SidebarInspectorContent: View {
         }
     }
 
+    private func relationshipBreakdownSection(_ breakdown: [LinkType: Int]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            groupedSectionHeader(
+                Copy.Inspector.interactionTypesHeader,
+                systemImage: "arrow.triangle.branch",
+                tooltip: Copy.Inspector.interactionTypesTooltip
+            )
+
+            if let direct = breakdown[.directPeer] {
+                InspectorMetricStringRow(
+                    title: Copy.Inspector.directPeersSection,
+                    value: direct.formatted(),
+                    tooltip: Copy.Inspector.directPeersSectionTooltip
+                )
+            }
+            // heardMutual is direct-decode evidence in both directions; fold it in
+            // so the breakdown sums to the internal-link count.
+            if breakdown[.heardDirect] != nil || breakdown[.heardMutual] != nil {
+                let heardDirect = (breakdown[.heardDirect] ?? 0) + (breakdown[.heardMutual] ?? 0)
+                InspectorMetricStringRow(
+                    title: Copy.Inspector.heardDirectSection,
+                    value: heardDirect.formatted(),
+                    tooltip: Copy.Inspector.heardDirectSectionTooltip
+                )
+            }
+            if let heardVia = breakdown[.heardVia] {
+                InspectorMetricStringRow(
+                    title: Copy.Inspector.heardViaSection,
+                    value: heardVia.formatted(),
+                    tooltip: Copy.Inspector.heardViaSectionTooltip
+                )
+            }
+        }
+    }
+
+    private func groupedSectionHeader(_ title: String, systemImage: String, tooltip: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
+        .help(tooltip)
+    }
+
+    private func internalLinkRow(_ link: GraphMultiInspectorDetails.InternalLink) -> some View {
+        HStack(spacing: 8) {
+            Text("\(link.sourceCallsign)  \u{2194}  \(link.targetCallsign)")
+                .font(.caption)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            Text(link.packetCount.formatted())
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
+        .help(String(format: Copy.Inspector.internalLinkRowTooltipTemplate, link.packetCount, link.bytes))
+    }
+
+    private func sharedConnectionRow(_ connection: GraphMultiInspectorDetails.SharedExternalConnection) -> some View {
+        HStack(spacing: 8) {
+            Text(connection.callsign)
+                .font(.caption)
+            Spacer(minLength: 6)
+            Text("\(connection.connectedSelectedIDs.count)x")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            Text(connection.totalPackets.formatted())
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
+        .help(
+            String(
+                format: Copy.Inspector.sharedConnectionRowTooltipTemplate,
+                connection.connectedSelectedIDs.count,
+                connection.totalPackets
+            )
+        )
+        .contextMenu {
+            serviceEndpointContextMenu(for: connection.callsign)
+        }
+    }
+
+    private func selectedStationRow(_ node: NetworkGraphNode) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(node.callsign)
+                    .font(.caption)
+                Spacer()
+                Text("\(node.degree)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            }
+            Text("In \(node.inCount.formatted()) • Out \(node.outCount.formatted())")
+                .font(.caption2)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
+        .help(String(format: Copy.Inspector.selectedStationRowTooltipTemplate, node.inCount, node.outCount, node.degree))
+        .contextMenu {
+            serviceEndpointContextMenu(for: node.callsign)
+        }
+    }
+
     // MARK: - Relationship Sections
 
     @ViewBuilder
@@ -560,7 +920,7 @@ private struct SidebarInspectorContent: View {
                 tooltip: Copy.Inspector.directPeersSectionTooltip,
                 relationships: details.directPeers,
                 icon: "arrow.left.arrow.right",
-                iconColor: Color(nsColor: .systemGreen)
+                iconColor: Color(platform: .systemGreen)
             )
         }
 
@@ -571,7 +931,7 @@ private struct SidebarInspectorContent: View {
                 tooltip: Copy.Inspector.heardDirectSectionTooltip,
                 relationships: details.heardDirect,
                 icon: "antenna.radiowaves.left.and.right",
-                iconColor: Color(nsColor: .systemBlue)
+                iconColor: Color(platform: .systemBlue)
             )
         }
 
@@ -582,7 +942,7 @@ private struct SidebarInspectorContent: View {
                 tooltip: Copy.Inspector.heardViaSectionTooltip,
                 relationships: details.seenVia,
                 icon: "arrow.triangle.branch",
-                iconColor: Color(nsColor: .systemOrange)
+                iconColor: Color(platform: .systemOrange)
             )
         }
 
@@ -652,6 +1012,35 @@ private struct SidebarInspectorContent: View {
                 Text(String(format: Copy.Inspector.lastHeardTemplate, relativeTimeString(lastHeard)))
                     .font(.caption2)
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary.opacity(0.7))
+            }
+        }
+        .contextMenu {
+            serviceEndpointContextMenu(for: rel.id)
+        }
+    }
+
+    @ViewBuilder
+    private func serviceEndpointContextMenu(for callsign: String) -> some View {
+        let normalized = CallsignValidator.normalize(callsign)
+        if !normalized.isEmpty {
+            if isServiceEndpointIgnored(normalized) && isServiceEndpointSimulated(normalized) {
+                Button("Apply Simulated Removal") {
+                    onApplySimulatedServiceEndpointIgnore(normalized)
+                }
+                Button("Cancel Simulated Removal") {
+                    onCancelSimulatedServiceEndpointIgnore(normalized)
+                }
+            } else if isServiceEndpointIgnored(normalized) {
+                Button("Remove From Ignored Service Endpoints") {
+                    onRemoveServiceEndpointIgnore(normalized)
+                }
+            } else {
+                Button("Ignore As Service Endpoint") {
+                    onAddServiceEndpointIgnore(normalized)
+                }
+                Button("Simulate Removing From Graph") {
+                    onSimulateServiceEndpointIgnore(normalized)
+                }
             }
         }
     }
@@ -740,6 +1129,93 @@ private struct InspectorMetricRow: View {
                 .monospacedDigit()
         }
         .font(.caption)
+        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .help(tooltip)
+    }
+}
+
+private struct AllSelectedStationsSheet: View {
+    let nodes: [NetworkGraphNode]
+    @State private var searchText = ""
+    @Environment(\.dismiss) private var dismiss
+
+    private var filteredNodes: [NetworkGraphNode] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return nodes }
+        return nodes.filter { $0.callsign.localizedCaseInsensitiveContains(query) }
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Selected Stations")
+                    .font(.headline)
+                Spacer()
+                Text("\(filteredNodes.count)/\(nodes.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            }
+
+            TextField("Filter callsigns", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(filteredNodes) { node in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(node.callsign)
+                                    .font(.body)
+                                Text("In \(node.inCount.formatted()) • Out \(node.outCount.formatted())")
+                                    .font(.caption)
+                                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            }
+                            Spacer()
+                            Text("Degree \(node.degree)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 520, idealWidth: 620, maxWidth: 700, minHeight: 520, idealHeight: 640, maxHeight: 740)
+        .platformEscape { dismiss() }
+    }
+}
+
+private struct InspectorMetricStringRow: View {
+    let title: String
+    let value: String
+    let tooltip: String
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .monospacedDigit()
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
         .help(tooltip)
     }
 }
@@ -758,7 +1234,9 @@ private struct MetricCell: View {
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
         .help(tooltip)
     }
 }
@@ -804,7 +1282,7 @@ private struct HealthGaugeView: View {
             Circle()
                 .trim(from: 0.15, to: 0.85)
                 .stroke(
-                    Color(nsColor: .separatorColor),
+                    Color(platform: .platformSeparator),
                     style: StrokeStyle(lineWidth: 6, lineCap: .round)
                 )
                 .rotationEffect(.degrees(90))
@@ -827,11 +1305,11 @@ private struct HealthGaugeView: View {
 
     private var gaugeColor: Color {
         switch rating {
-        case .excellent: return Color(nsColor: .systemGreen)
-        case .good: return Color(nsColor: .systemBlue)
-        case .fair: return Color(nsColor: .systemOrange)
-        case .poor: return Color(nsColor: .systemRed)
-        case .unknown: return Color(nsColor: .tertiaryLabelColor)
+        case .excellent: return Color(platform: .systemGreen)
+        case .good: return Color(platform: .systemBlue)
+        case .fair: return Color(platform: .systemOrange)
+        case .poor: return Color(platform: .systemRed)
+        case .unknown: return Color(platform: .platformTertiaryLabel)
         }
     }
 }
@@ -850,8 +1328,16 @@ struct GraphSidebar_Previews: PreviewProvider {
                 onShowActiveNodes: {},
                 onExportSummary: {},
                 selectedNodeDetails: nil,
+                selectedMultiNodeDetails: nil,
                 onSetAsAnchor: {},
                 onClearSelection: {},
+                isServiceEndpointIgnored: { _ in false },
+                isServiceEndpointSimulated: { _ in false },
+                onAddServiceEndpointIgnore: { _ in },
+                onRemoveServiceEndpointIgnore: { _ in },
+                onSimulateServiceEndpointIgnore: { _ in },
+                onApplySimulatedServiceEndpointIgnore: { _ in },
+                onCancelSimulatedServiceEndpointIgnore: { _ in },
                 hubMetric: .constant(.degree)
             )
 
@@ -863,8 +1349,16 @@ struct GraphSidebar_Previews: PreviewProvider {
                 onShowActiveNodes: {},
                 onExportSummary: {},
                 selectedNodeDetails: previewDetails,
+                selectedMultiNodeDetails: nil,
                 onSetAsAnchor: {},
                 onClearSelection: {},
+                isServiceEndpointIgnored: { _ in false },
+                isServiceEndpointSimulated: { _ in false },
+                onAddServiceEndpointIgnore: { _ in },
+                onRemoveServiceEndpointIgnore: { _ in },
+                onSimulateServiceEndpointIgnore: { _ in },
+                onApplySimulatedServiceEndpointIgnore: { _ in },
+                onCancelSimulatedServiceEndpointIgnore: { _ in },
                 hubMetric: .constant(.degree)
             )
 
@@ -876,8 +1370,16 @@ struct GraphSidebar_Previews: PreviewProvider {
                 onShowActiveNodes: {},
                 onExportSummary: {},
                 selectedNodeDetails: nil,
+                selectedMultiNodeDetails: nil,
                 onSetAsAnchor: {},
                 onClearSelection: {},
+                isServiceEndpointIgnored: { _ in false },
+                isServiceEndpointSimulated: { _ in false },
+                onAddServiceEndpointIgnore: { _ in },
+                onRemoveServiceEndpointIgnore: { _ in },
+                onSimulateServiceEndpointIgnore: { _ in },
+                onApplySimulatedServiceEndpointIgnore: { _ in },
+                onCancelSimulatedServiceEndpointIgnore: { _ in },
                 hubMetric: .constant(.degree)
             )
         }
@@ -906,7 +1408,8 @@ struct GraphSidebar_Previews: PreviewProvider {
                 // Activity metrics (fixed 10-minute window)
                 activeStations: 7,
                 packetRate: 0.5,
-                freshness: 0.28  // 7/25
+                freshness: 0.28,  // 7/25
+                coverageFraction: 1
             ),
             warnings: [
                 NetworkWarning(
@@ -940,9 +1443,9 @@ struct GraphSidebar_Previews: PreviewProvider {
                 groupedSSIDs: ["W0ARP", "W0ARP-1", "W0ARP-10", "W0ARP-15"]  // Grouped SSIDs
             ),
             neighbors: [
-                GraphNeighborStat(id: "N0XCR", weight: 44, bytes: 512),
-                GraphNeighborStat(id: "KC0LDY", weight: 11, bytes: 128),
-                GraphNeighborStat(id: "WB4CIW", weight: 11, bytes: 128)
+                GraphNeighborStat(id: "N0XCR", weight: 44, bytes: 512, isStale: false),
+                GraphNeighborStat(id: "KC0LDY", weight: 11, bytes: 128, isStale: false),
+                GraphNeighborStat(id: "WB4CIW", weight: 11, bytes: 128, isStale: false)
             ],
             directPeers: [
                 StationRelationship(id: "N0XCR", linkType: .directPeer, packetCount: 44, lastHeard: Date().addingTimeInterval(-300), viaDigipeaters: [], score: 1.0),

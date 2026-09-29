@@ -5,64 +5,100 @@
 //  Created by AXTerm on 2026-02-21.
 //
 
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Charts
 import SwiftUI
 
 struct AnalyticsDashboardView: View {
     @ObservedObject var packetEngine: PacketEngine
     @ObservedObject var settings: AppSettingsStore
+    let connectCoordinator: ConnectCoordinator?
     @StateObject private var viewModel: AnalyticsDashboardViewModel
     @State private var graphResetToken = UUID()
     @State private var focusNodeID: String?
     @State private var sidebarTab: GraphSidebarTab = .overview
     @State private var showExportToast = false
+    @State private var endpointActionBanner: EndpointActionBannerState?
+    @State private var endpointSimulationSet: Set<String> = []
+    @State private var temporarilyUnignoredEndpoints: Set<String> = []
+    @State private var endpointBannerDismissTask: Task<Void, Never>?
+    @State private var temporaryShowAllActive = false
+    @State private var temporaryShowAllSnapshot: TemporaryShowAllSnapshot?
+    @State private var showCustomRangePopover = false
+    @State private var showGraphOptionsPopover = false
+    @State private var showHiddenByFiltersPopover = false
+    @State private var graphViewportHeight: CGFloat = AnalyticsStyle.Layout.graphHeight
+    @State private var preferredPacketViewMode: GraphViewMode = .connectivity
+    @State private var preferredNetRomViewMode: GraphViewMode = .netromHybrid
 
-    init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
+    init(
+        packetEngine: PacketEngine,
+        settings: AppSettingsStore,
+        viewModel: AnalyticsDashboardViewModel,
+        connectCoordinator: ConnectCoordinator? = nil
+    ) {
         self.packetEngine = packetEngine
         self.settings = settings
+        self.connectCoordinator = connectCoordinator
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
-    @State private var scrollOffset: CGFloat = 0
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
+    private enum EndpointBannerMode {
+        case undoIgnore
+        case undoRemove
+        case simulation
+    }
+
+    private struct EndpointActionBannerState: Identifiable {
+        let id = UUID()
+        let callsign: String
+        let mode: EndpointBannerMode
+    }
+
+    private struct TemporaryShowAllSnapshot {
+        let minEdgeCount: Int
+        let maxNodes: Int
+        let focusState: GraphFocusState
+        let simulationSet: Set<String>
+        let temporarilyUnignoredEndpoints: Set<String>
+        let temporarilyUnhiddenCallsigns: [String]
+        let temporarilyUnhiddenCount: Int
+    }
+
     var body: some View {
-        ZStack(alignment: .top) {
-            // Main scrollable content
-            ScrollView {
-                VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
-                    // Spacer for the floating header
-                    Color.clear
-                        .frame(height: filterSectionHeight)
-
-                    summarySection
-                    chartsSection
-                    graphSection
-                }
-                .padding(AnalyticsStyle.Layout.pagePadding)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: ScrollOffsetPreferenceKey.self,
-                            value: geo.frame(in: .named("scroll")).minY
-                        )
-                    }
-                )
-            }
-            .scrollDisabled(false)
-            .defaultScrollAnchor(.top)  // Prevent scroll jumping on layout changes
-            .coordinateSpace(name: "scroll")
-            .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
-                scrollOffset = -value
-            }
-
-            // Floating glass control bar
-            FloatingControlBar(
-                scrollOffset: scrollOffset,
-                reduceTransparency: reduceTransparency
-            ) {
+        ZStack(alignment: .bottom) {
+            // Pinned filter bar above the scrollable content (HIG: full-width bar
+            // with bar material, never a floating overlay that covers content).
+            VStack(spacing: 0) {
                 filterSection
+                    .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        reduceTransparency
+                            ? AnyShapeStyle(Color(platform: .platformWindowBackground))
+                            : AnyShapeStyle(.bar)
+                    )
+
+                Divider()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
+                        summarySection
+                        chartsSection
+                        channelActivitySection
+                        stationsSection
+                        graphSection
+                    }
+                    .padding(AnalyticsStyle.Layout.pagePadding)
+                }
+                .defaultScrollAnchor(.top)  // Prevent scroll jumping on layout changes
             }
 
             // Export toast notification
@@ -84,122 +120,369 @@ struct AnalyticsDashboardView: View {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+
+            if let endpointActionBanner {
+                VStack {
+                    Spacer()
+                    endpointActionBannerView(endpointActionBanner)
+                        .padding(.bottom, showExportToast ? 72 : 20)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .onAppear {
             viewModel.trackDashboardOpened()
-            viewModel.setActive(true)
             viewModel.updatePackets(packetEngine.packets)
+            pushRadioContext()
+            syncPreferredGraphModes(with: viewModel.graphViewMode)
+            Task { @MainActor in
+                viewModel.setActive(true)
+            }
         }
         .onDisappear {
             viewModel.setActive(false)
         }
         .onReceive(packetEngine.$packets) { packets in
             viewModel.updatePackets(packets)
+            // A frequency read from the rig or a radio connecting arrives
+            // alongside traffic; refresh the channels here too. Cheap: a no-op
+            // when nothing changed.
+            pushRadioContext()
+        }
+        .onReceive(packetEngine.$hiddenRadioIDs) { hidden in
+            // The emitted value, not a re-read of the property. @Published
+            // publishes in willSet, so at this point the engine still holds
+            // the set from before the operator's toggle, and pushing that put
+            // analytics one change behind: hide a radio and its traffic stayed
+            // on the page (2026-09-17).
+            pushRadioContext(hidden: hidden)
         }
         .onChange(of: viewModel.viewState.selectedNodeID) { _, newValue in
             packetEngine.selectedStationCall = newValue
+            if newValue == nil {
+                sidebarTab = .overview
+            }
+        }
+        .onChange(of: viewModel.graphViewMode) { _, newValue in
+            syncPreferredGraphModes(with: newValue)
+        }
+        .onChange(of: settings.ignoredServiceEndpoints) { _, newValue in
+            let normalized = Set(newValue.map(CallsignValidator.normalize))
+            endpointSimulationSet = endpointSimulationSet.intersection(normalized)
+            temporarilyUnignoredEndpoints.subtract(normalized)
         }
     }
 
-    /// Estimated height of the filter section for the spacer
-    private var filterSectionHeight: CGFloat {
-        viewModel.timeframe == .custom ? 100 : 60
+    /// Pushes the current frequency channels and hidden-radio set into the
+    /// view model, so analytics can scope to a channel and drop hidden radios.
+    /// Frequencies come from the rig where it reports them, else the radio's
+    /// stored frequency; radios with neither are each their own channel.
+    /// - Parameter hidden: the hidden set to apply. Defaults to the engine's
+    ///   current one, which is right everywhere except inside that property's
+    ///   own publisher, where the new value has not been stored yet.
+    private func pushRadioContext(hidden: Set<RadioID>? = nil) {
+        let radios = packetEngine.radioSummaries.map {
+            AnalyticsRadioChannel.Radio(id: $0.id, name: $0.name, frequencyHz: $0.frequencyHz)
+        }
+        let hidden = hidden ?? packetEngine.hiddenRadioIDs
+        viewModel.updateRadioContext(
+            channels: AnalyticsRadioChannel.channels(radios: radios, hidden: hidden),
+            hidden: hidden)
     }
 
-    private var filterSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Main controls row - wraps on narrow windows
-            FlowLayout(spacing: 12) {
-                FilterControlGroup(title: "Timeframe") {
-                    Picker("Timeframe", selection: $viewModel.timeframe) {
-                        ForEach(AnalyticsTimeframe.allCases, id: \.self) { timeframe in
-                            Text(timeframe.displayName)
-                                .lineLimit(1)
-                                .tag(timeframe)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
+    @ViewBuilder
+    private func endpointActionBannerView(_ banner: EndpointActionBannerState) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: banner.mode == .undoRemove ? "arrow.uturn.backward.circle.fill" : "minus.circle.fill")
+                .foregroundStyle(banner.mode == .undoRemove ? .orange : .blue)
+
+            Text(endpointBannerMessage(for: banner))
+                .font(.callout.weight(.medium))
+                .lineLimit(2)
+
+            Spacer(minLength: 8)
+
+            switch banner.mode {
+            case .undoIgnore:
+                Button("Undo") {
+                    undoIgnore(for: banner.callsign)
                 }
-
-                FilterControlGroup(title: "Bucket") {
-                    Picker("Bucket", selection: $viewModel.bucketSelection) {
-                        ForEach(AnalyticsBucketSelection.allCases, id: \.self) { bucket in
-                            Text(bucket.displayName)
-                                .lineLimit(1)
-                                .tag(bucket)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            case .undoRemove:
+                Button("Undo") {
+                    undoRemove(for: banner.callsign)
                 }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Min edge count")
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    HStack(spacing: 8) {
-                        Slider(
-                            value: Binding(
-                                get: { Double(viewModel.minEdgeCount) },
-                                set: { viewModel.minEdgeCount = Int($0) }
-                            ),
-                            in: 1...10,
-                            step: 1
-                        )
-                        .frame(width: 100)
-                        Text("\(viewModel.minEdgeCount)")
-                            .font(.caption.monospacedDigit())
-                            .frame(width: 20, alignment: .trailing)
-                    }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            case .simulation:
+                Button("Apply") {
+                    applySimulation(for: banner.callsign)
                 }
-
-                Stepper(value: $viewModel.maxNodes, in: AnalyticsStyle.Graph.minNodes...300, step: 10) {
-                    Text("Max: \(viewModel.maxNodes)")
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                }
-                .fixedSize()
-
-                Spacer(minLength: 0)
-
-                Button("Reset") {
-                    graphResetToken = UUID()
-                    viewModel.resetGraphView()
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button("Cancel") {
+                    cancelSimulation(for: banner.callsign)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+        .padding(.horizontal, 20)
+    }
 
-            if viewModel.timeframe == .custom {
-                HStack(spacing: 12) {
-                    DatePicker("Start", selection: $viewModel.customRangeStart, displayedComponents: [.date, .hourAndMinute])
-                        .datePickerStyle(.compact)
-                    DatePicker("End", selection: $viewModel.customRangeEnd, displayedComponents: [.date, .hourAndMinute])
-                        .datePickerStyle(.compact)
+    private func endpointBannerMessage(for banner: EndpointActionBannerState) -> String {
+        switch banner.mode {
+        case .undoIgnore:
+            return "\(banner.callsign) removed from graph/routes analytics."
+        case .undoRemove:
+            return "\(banner.callsign) restored to graph/routes analytics."
+        case .simulation:
+            return "Simulating removal of \(banner.callsign). Apply to keep, or cancel to restore."
+        }
+    }
+
+    private var filterSection: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .center, spacing: 12) {
+                Picker("Timeframe", selection: $viewModel.timeframe) {
+                    ForEach(AnalyticsTimeframe.allCases, id: \.self) { timeframe in
+                        Text(timeframe.displayName)
+                            .lineLimit(1)
+                            .tag(timeframe)
+                    }
                 }
-                .font(.caption)
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
+
+                if viewModel.timeframe == .custom {
+                    Button {
+                        showCustomRangePopover.toggle()
+                    } label: {
+                        Label("Range", systemImage: "calendar")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .popover(isPresented: $showCustomRangePopover, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            DatePicker("Start", selection: $viewModel.customRangeStart, displayedComponents: [.date, .hourAndMinute])
+                                .datePickerStyle(.compact)
+                            DatePicker("End", selection: $viewModel.customRangeEnd, displayedComponents: [.date, .hourAndMinute])
+                                .datePickerStyle(.compact)
+                        }
+                        .padding(12)
+                        .frame(width: 320)
+                    }
+                }
+
+                Picker("Bucket", selection: $viewModel.bucketSelection) {
+                    ForEach(AnalyticsBucketSelection.allCases, id: \.self) { bucket in
+                        Text(bucket.displayName)
+                            .lineLimit(1)
+                            .tag(bucket)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
+
+                // Only when there is more than one channel to choose between —
+                // one radio, or several sharing a frequency, needs no picker.
+                if viewModel.radioChannels.count > 1 {
+                    Picker("Channel", selection: $viewModel.selectedRadioScope) {
+                        Text("All radios").tag(AnalyticsRadioScope.all)
+                        ForEach(viewModel.radioChannels) { channel in
+                            Text(channel.label).tag(AnalyticsRadioScope.channel(channel.id))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    .controlSize(.small)
+                    .help("Scope analytics to one frequency. Radios on the same "
+                          + "frequency roll up into one channel; different "
+                          + "frequencies stay separate, so their neighbours, "
+                          + "routes and link quality are never averaged together.")
+                }
+
+                Toggle("Auto-update", isOn: $viewModel.autoUpdateEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help("Automatically refresh analytics as new packets arrive")
+
+                Button {
+                    viewModel.manualRefresh()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Refresh analytics now")
+
+                Button {
+                    showGraphOptionsPopover.toggle()
+                } label: {
+                    Label("Options", systemImage: "slider.horizontal.3")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .popover(isPresented: $showGraphOptionsPopover, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Graph Options")
+                            .font(.headline)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Min edge count")
+                                .font(.caption)
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            HStack(spacing: 8) {
+                                Slider(
+                                    value: Binding(
+                                        get: { Double(viewModel.minEdgeCount) },
+                                        set: { viewModel.minEdgeCount = Int($0) }
+                                    ),
+                                    in: 1...10,
+                                    step: 1
+                                )
+                                .frame(width: 140)
+                                Text("\(viewModel.minEdgeCount)")
+                                    .font(.caption.monospacedDigit())
+                                    .frame(width: 20, alignment: .trailing)
+                            }
+                        }
+                        .help(viewModel.graphViewMode.isNetRomMode
+                              ? GraphCopy.GraphControls.minEdgeCountNetRomTooltip
+                              : GraphCopy.GraphControls.minEdgeCountTooltip)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Max nodes")
+                                .font(.caption)
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            Stepper(value: $viewModel.maxNodes, in: AnalyticsStyle.Graph.minNodes...300, step: 10) {
+                                Text("\(viewModel.maxNodes)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(12)
+                    .frame(width: 240)
+                }
             }
+        }
+    }
+
+    private var channelActivitySection: some View {
+        AnalyticsCard(title: "Channel Activity") {
+            ChannelAirtimeLanesView(monitor: ChannelActivityMonitor.shared)
+                .padding(.top, 2)
+        }
+    }
+
+    private var stationsSection: some View {
+        AnalyticsCard(title: "Stations & Sessions") {
+            LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
+                ChartCard(title: "Station directory", height: 260) {
+                    if viewModel.hasLoadedGraph {
+                        StationDirectoryCard(entries: viewModel.stationDirectory)
+                            .help("Every valid station heard in the selected timeframe, newest first, with inferred roles: Node (sends NET/ROM broadcasts), BBS (mail announcements or SID software banners), Digi (observed repeating frames), Keyboarder (connected-mode data), Beacon (transmits but none of the above).")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading stations")
+                    }
+                }
+
+                ChartCard(title: "Observed sessions", height: 260) {
+                    if viewModel.hasLoadedGraph {
+                        ObservedSessionsCard(sessions: viewModel.observedSessions)
+                            .help("Connected-mode AX.25 sessions reconstructed from SABM/DISC control frames, data flow, and sustained polling. Shows who actually uses the network, not just who beacons.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading sessions")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Airtime estimate per bucket from the packet and payload-byte series.
+    /// Assumptions documented in the card tooltip (1200 baud, 32 framing bytes,
+    /// 300 ms fixed per-frame overhead).
+    private var channelUtilizationPoints: [AnalyticsSeriesPoint] {
+        let series = viewModel.viewState.series
+        let bucketSeconds = viewModel.resolvedBucket.durationSeconds
+        guard bucketSeconds > 0 else { return [] }
+        let bytesByBucket = Dictionary(uniqueKeysWithValues: series.bytesPerBucket.map { ($0.bucket, $0.value) })
+        let coverage = viewModel.captureCoverage
+        return series.packetsPerBucket.map { point in
+            // Divide by LISTENING time in the bucket, not wall time — a
+            // half-covered bucket would otherwise under-report utilization 2x.
+            let bucketWindow = DateInterval(start: point.bucket, duration: bucketSeconds)
+            let covered = coverage.intervals.isEmpty
+                ? bucketSeconds
+                : coverage.coveredSeconds(in: bucketWindow)
+            return AnalyticsSeriesPoint(
+                bucket: point.bucket,
+                value: AnalyticsStyle.Channel.utilizationPercent(
+                    packets: point.value,
+                    payloadBytes: bytesByBucket[point.bucket] ?? 0,
+                    bucketSeconds: max(1, covered)
+                )
+            )
         }
     }
 
     private var summarySection: some View {
         AnalyticsCard(title: "Summary") {
-            if let summary = viewModel.viewState.summary {
+            if let summary = viewModel.viewState.summary, viewModel.hasLoadedAggregation {
                 LazyVGrid(columns: metricColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                    SummaryMetricCard(title: "Total packets", value: summary.totalPackets.formatted())
-                    SummaryMetricCard(title: "Unique stations", value: summary.uniqueStations.formatted())
-                    SummaryMetricCard(title: "Payload bytes", value: ByteCountFormatter.string(fromByteCount: Int64(summary.totalPayloadBytes), countStyle: .file))
-                    SummaryMetricCard(title: "UI frames", value: summary.uiFrames.formatted())
-                    SummaryMetricCard(title: "I frames", value: summary.iFrames.formatted())
-                    SummaryMetricCard(title: "Info-text ratio", value: String(format: "%.0f%%", summary.infoTextRatio * 100))
+                    SummaryMetricCard(
+                        title: "Total packets",
+                        value: summary.totalPackets.formatted(),
+                        tooltip: "AX.25 frames received during the selected timeframe."
+                    )
+                    SummaryMetricCard(
+                        title: "Unique stations",
+                        value: summary.uniqueStations.formatted(),
+                        tooltip: "Distinct valid stations observed as sender, destination, or repeating digipeater. Service endpoints (BEACON, ID, WIDE…) are excluded. Grouping follows the graph’s Identity setting (Station merges SSIDs)."
+                    )
+                    SummaryMetricCard(
+                        title: "Payload bytes",
+                        value: ByteCount.string(Int64(summary.totalPayloadBytes)),
+                        tooltip: "Sum of AX.25 information-field bytes. Headers, control fields, and FCS are not counted; supervisory frames carry 0."
+                    )
+                    SummaryMetricCard(
+                        title: "UI frames",
+                        value: summary.uiFrames.formatted(),
+                        tooltip: "Unnumbered Information frames (beacons, APRS, unconnected traffic)."
+                    )
+                    SummaryMetricCard(
+                        title: "I frames",
+                        value: summary.iFrames.formatted(),
+                        tooltip: "Numbered Information frames (connected-mode data)."
+                    )
+                    SummaryMetricCard(
+                        title: "Other frames",
+                        value: max(0, summary.totalPackets - summary.uiFrames - summary.iFrames).formatted(),
+                        tooltip: "Supervisory and unnumbered control frames (RR, RNR, REJ, SABM, UA, DISC…). Without this card, UI + I appeared to lose packets against the total."
+                    )
+                    SummaryMetricCard(
+                        title: "Info-text ratio",
+                        value: String(format: "%.0f%%", summary.infoTextRatio * 100),
+                        tooltip: "Share of frames carrying printable info text."
+                    )
                 }
             } else {
-                Text("No packets yet")
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    .padding(.vertical, 6)
+                LazyVGrid(columns: metricColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
+                    ForEach(0..<7, id: \.self) { _ in
+                        SummaryMetricPlaceholderCard()
+                    }
+                }
             }
         }
     }
@@ -208,50 +491,181 @@ struct AnalyticsDashboardView: View {
         AnalyticsCard(title: "Charts") {
             LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                 ChartCard(title: "Packets over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.packetsPerBucket, valueLabel: "Packets", bucket: viewModel.resolvedBucket)
-                        .background(ChartWidthReader { width in
-                            viewModel.updateChartWidth(width)
-                        })
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.packetsPerBucket,
+                            valueLabel: "Packets",
+                            bucket: viewModel.resolvedBucket,
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
+                        )
+                            .background(ChartWidthReader { width in
+                                viewModel.updateChartWidth(width)
+                            })
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading packets")
+                    }
                 }
 
-                ChartCard(title: "Bytes over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes", bucket: viewModel.resolvedBucket)
+                ChartCard(title: "Payload bytes over time") {
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.bytesPerBucket,
+                            valueLabel: "Bytes",
+                            bucket: viewModel.resolvedBucket,
+                            valueFormatter: { ByteCount.string(Int64($0)) },
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
+                        )
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading bytes")
+                    }
                 }
 
                 ChartCard(title: "Unique stations over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.uniqueStationsPerBucket, valueLabel: "Stations", bucket: viewModel.resolvedBucket)
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.uniqueStationsPerBucket,
+                            valueLabel: "Stations",
+                            bucket: viewModel.resolvedBucket,
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
+                        )
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading stations")
+                    }
                 }
 
                 ChartCard(title: "Traffic intensity (hour vs day)", height: AnalyticsStyle.Layout.heatmapHeight) {
-                    HeatmapView(data: viewModel.viewState.heatmap)
+                    if viewModel.hasLoadedAggregation {
+                        HeatmapView(data: viewModel.viewState.heatmap)
+                            .overlay(alignment: .topTrailing) {
+                                HeatmapIntensityLegend()
+                                    .padding(.trailing, 4)
+                            }
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading heatmap")
+                    }
                 }
 
-                ChartCard(title: "Payload size distribution") {
-                    HistogramChart(data: viewModel.viewState.histogram)
+                ChartCard(title: "Payload size distribution (non-empty frames)") {
+                    if viewModel.hasLoadedAggregation {
+                        HistogramChart(data: viewModel.viewState.histogram)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading distribution")
+                    }
+                }
+
+                ChartCard(title: "Channel utilization") {
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(
+                            points: channelUtilizationPoints,
+                            valueLabel: "Utilization",
+                            bucket: viewModel.resolvedBucket,
+                            valueFormatter: { "\($0)%" },
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
+                        )
+                        .help("Estimated share of channel airtime in use, assuming 1200 baud, ~32 framing bytes, and ~300 ms of TXDelay/flags per frame. Above roughly 30% a shared CSMA channel sees growing collision rates.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading utilization")
+                    }
+                }
+
+                ChartCard(title: "Frame types over time") {
+                    if viewModel.hasLoadedAggregation {
+                        FrameTypeStackChart(series: viewModel.viewState.series)
+                            .help("Stacked frame mix per interval: I = connected-mode data, UI = beacons and unconnected traffic, Other = supervisory and control frames (RR, SABM, UA…).")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading frame types")
+                    }
+                }
+
+                ChartCard(title: "Retransmit requests (REJ/SREJ)") {
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.rejectFramesPerBucket,
+                            valueLabel: "REJ/SREJ",
+                            bucket: viewModel.resolvedBucket,
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
+                        )
+                        .help("REJ and SREJ supervisory frames per interval — peers asking for retransmits. Sustained nonzero values indicate RF loss on connected links.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading link stress")
+                    }
+                }
+
+                ChartCard(title: "Activity by hour") {
+                    if viewModel.hasLoadedGraph {
+                        ActivityByHourChart(
+                            profile: viewModel.activityByHourProfile,
+                            hourCoverageFractions: viewModel.hourCoverageFractions
+                        )
+                            .help("When your network is alive, by local hour over the selected timeframe, split by traffic kind. Gray-shaded hours are ones the app barely listened to — quiet there means downtime, not a dead channel. Chat = connected data between regular stations; BBS/Node = connected data touching an inferred Node or BBS (role-based inference from routing broadcasts, mail announcements, and SID software banners — not message content); Beacons = unconnected UI frames; Routing = NET/ROM broadcasts; Control = supervisory frames.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading hourly profile")
+                    }
+                }
+
+                ChartCard(title: "Top airtime consumers") {
+                    if viewModel.hasLoadedGraph {
+                        AirtimeListView(entries: viewModel.airtimeRanking)
+                            .help("Estimated transmit airtime per station over the selected timeframe (sender plus every digipeater that repeated the frame; 1200 baud, ~300 ms per-frame overhead). Airtime is the honest measure of channel load — long data frames cost far more than short polls.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading airtime")
+                    }
                 }
 
                 ChartCard(title: "Top talkers") {
-                    TopListView(rows: viewModel.viewState.topTalkers)
+                    if viewModel.hasLoadedAggregation {
+                        TopListView(rows: viewModel.viewState.topTalkers)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading top talkers")
+                    }
                 }
 
                 ChartCard(title: "Top destinations") {
-                    TopListView(rows: viewModel.viewState.topDestinations)
+                    if viewModel.hasLoadedAggregation {
+                        TopListView(rows: viewModel.viewState.topDestinations)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading destinations")
+                    }
                 }
 
                 ChartCard(title: "Top digipeaters") {
-                    TopListView(rows: viewModel.viewState.topDigipeaters)
+                    if viewModel.hasLoadedAggregation {
+                        TopListView(rows: viewModel.viewState.topDigipeaters)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading digipeaters")
+                    }
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if viewModel.isAggregationLoading && viewModel.hasLoadedAggregation {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Updating charts")
+                            .font(.caption)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(.top, 4)
+                    .padding(.leading, 4)
+                    .allowsHitTesting(false)
                 }
             }
         }
     }
 
     private var graphSection: some View {
-        AnalyticsCardWithControls(title: "Network graph") {
+        AnalyticsCardWithControls(title: "Network Graph") {
             // Right-aligned controls in header
             networkGraphHeaderControls
         } content: {
             VStack(spacing: 8) {
-                // Graph toolbar (HIG: single canonical location for view controls)
+                // One combined row: view controls + legend (a full-width toolbar
+                // row above a separate legend row wasted vertical space).
+                HStack(spacing: 12) {
                 GraphToolbar(
                     focusState: $viewModel.focusState,
                     selectedNodeCount: viewModel.viewState.selectedNodeIDs.count,
@@ -272,43 +686,151 @@ struct AnalyticsDashboardView: View {
                     },
                     onChangeAnchor: {
                         viewModel.setSelectedAsAnchor()
+                    },
+                    isDraftingPath: viewModel.isDraftingPath,
+                    onTogglePathDraft: {
+                        if viewModel.isDraftingPath {
+                            viewModel.cancelPathDraft()
+                        } else {
+                            viewModel.beginPathDraft()
+                        }
                     }
                 )
 
+                    Divider()
+                        .frame(height: 14)
+
+                    if showsMyNodeLegend {
+                        LegendItem(color: .systemPurple, label: "My Node")
+                    }
+                    if showsRoutingNodeLegend {
+                        LegendItem(color: .systemOrange, label: "Routing Node")
+                    }
+                    if showsStationLegend {
+                        LegendItem(color: .platformSecondaryLabel, label: "Station")
+                    }
+
+                    Divider()
+                        .frame(height: 14)
+
+                    nodeSizeVisualLegend
+
+                    edgeVisualLegend
+
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+
+                if let draft = viewModel.pathDraft {
+                    PathDraftHUD(
+                        draft: draft,
+                        onConnect: { performDraftConnect(draft) },
+                        onCancel: { viewModel.cancelPathDraft() }
+                    )
+                }
+
                 // Graph and sidebar
                 HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                    AnalyticsGraphView(
-                        graphModel: viewModel.viewState.graphModel,
-                        nodePositions: viewModel.viewState.nodePositions,
-                        selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
-                        hoveredNodeID: viewModel.viewState.hoveredNodeID,
-                        myCallsign: settings.myCallsign,
-                        resetToken: graphResetToken,
-                        focusNodeID: focusNodeID,
-                        fitToSelectionRequest: viewModel.fitToSelectionRequest,
-                        resetCameraRequest: viewModel.resetCameraRequest,
-                        visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
-                        onSelect: { nodeID, isShift in
-                            viewModel.handleNodeClick(nodeID, isShift: isShift)
-                            // Switch to Inspector tab when a node is selected
-                            if !isShift {
-                                sidebarTab = .inspector
+                    ZStack {
+                        AnalyticsGraphView(
+                            graphModel: viewModel.viewState.graphModel,
+                            isNetRomSource: viewModel.graphViewMode.isNetRomMode,
+                            pathDraftChain: viewModel.pathDraft?.chainKeys ?? [],
+                            nodePositions: viewModel.viewState.nodePositions,
+                            selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
+                            hoveredNodeID: viewModel.viewState.hoveredNodeID,
+                            myCallsign: settings.myCallsign,
+                            resetToken: graphResetToken,
+                            focusNodeID: focusNodeID,
+                            fitToSelectionRequest: viewModel.fitToSelectionRequest,
+                            fitTargetNodeIDs: viewModel.fitTargetNodeIDs,
+                            resetCameraRequest: viewModel.resetCameraRequest,
+                            visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
+                            onSelect: { nodeID, isShift in
+                                // While drawing a path, clicks build the path
+                                // instead of changing the selection.
+                                if viewModel.isDraftingPath {
+                                    viewModel.handlePathDraftNodeClick(nodeID)
+                                    return
+                                }
+                                viewModel.handleNodeClick(nodeID, isShift: isShift)
+                                // Switch to Inspector tab whenever a selection exists (single or multi).
+                                if !viewModel.viewState.selectedNodeIDs.isEmpty {
+                                    sidebarTab = .inspector
+                                }
+                            },
+                            onSelectMany: { nodeIDs, isShift in
+                                viewModel.handleSelectionRect(nodeIDs, isShift: isShift)
+                                if !viewModel.viewState.selectedNodeIDs.isEmpty {
+                                    sidebarTab = .inspector
+                                }
+                            },
+                            onClearSelection: {
+                                viewModel.handleBackgroundClick()
+                            },
+                            onHover: { nodeID in
+                                viewModel.updateHover(for: nodeID)
+                            },
+                            onFocusHandled: {
+                                focusNodeID = nil
+                            },
+                            isServiceEndpointIgnored: { callsign in
+                                settings.isServiceEndpointIgnored(callsign)
+                            },
+                            isServiceEndpointSimulated: { callsign in
+                                endpointSimulationSet.contains(CallsignValidator.normalize(callsign))
+                            },
+                            onAddServiceEndpointIgnore: { callsign in
+                                ignoreServiceEndpoint(callsign)
+                            },
+                            onRemoveServiceEndpointIgnore: { callsign in
+                                removeIgnoredServiceEndpoint(callsign)
+                            },
+                            onSimulateServiceEndpointIgnore: { callsign in
+                                simulateServiceEndpointRemoval(callsign)
+                            },
+                            onApplySimulatedServiceEndpointIgnore: { callsign in
+                                applySimulation(for: callsign)
+                            },
+                            onCancelSimulatedServiceEndpointIgnore: { callsign in
+                                cancelSimulation(for: callsign)
+                            },
+                            onDrawPathTo: { nodeID in
+                                viewModel.beginPathDraft(targeting: nodeID)
                             }
-                        },
-                        onSelectMany: { nodeIDs, isShift in
-                            viewModel.handleSelectionRect(nodeIDs, isShift: isShift)
-                        },
-                        onClearSelection: {
-                            viewModel.handleBackgroundClick()
-                        },
-                        onHover: { nodeID in
-                            viewModel.updateHover(for: nodeID)
-                        },
-                        onFocusHandled: {
-                            focusNodeID = nil
+                        )
+                        if (!viewModel.hasLoadedGraph || viewModel.isGraphLoading) && viewModel.viewState.graphModel.nodes.isEmpty {
+                            AnalyticsLoadingOverlay(label: "Building network graph")
+                        }
+
+                        if viewModel.isGraphLoading && !viewModel.viewState.graphModel.nodes.isEmpty {
+                            Color.clear
+                                .overlay(alignment: .topLeading) {
+                                    HStack(spacing: 6) {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                        Text("Updating graph…")
+                                            .font(.caption2)
+                                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .padding(8)
+                                    .allowsHitTesting(false)
+                                }
+                        }
+                    }
+                    .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: GraphViewportHeightPreferenceKey.self,
+                                value: proxy.size.height
+                            )
                         }
                     )
-                    .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
                     .onAppear {
                         viewModel.setMyCallsignForLayout(settings.myCallsign)
                     }
@@ -327,12 +849,13 @@ struct AnalyticsDashboardView: View {
                         onShowActiveNodes: {
                             let activeIDs = viewModel.activeNodeIDs()
                             viewModel.handleSelectionRect(activeIDs, isShift: false)
+                            if !viewModel.viewState.selectedNodeIDs.isEmpty {
+                                sidebarTab = .inspector
+                            }
                         },
                         onExportSummary: {
                             let summary = viewModel.exportNetworkSummary()
-                            let pasteboard = NSPasteboard.general
-                            pasteboard.clearContents()
-                            pasteboard.setString(summary, forType: .string)
+                            ClipboardWriter.copy(summary)
                             // Show toast feedback
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 showExportToast = true
@@ -345,6 +868,7 @@ struct AnalyticsDashboardView: View {
                             }
                         },
                         selectedNodeDetails: viewModel.selectedNodeDetails(),
+                        selectedMultiNodeDetails: viewModel.selectedMultiNodeDetails(),
                         onSetAsAnchor: {
                             viewModel.setSelectedAsAnchor()
                         },
@@ -352,8 +876,36 @@ struct AnalyticsDashboardView: View {
                             // Clear selection AND fit to nodes (per UX spec)
                             viewModel.clearSelectionAndFit()
                         },
-                        hubMetric: $viewModel.focusState.hubMetric
+                        isServiceEndpointIgnored: { callsign in
+                            settings.isServiceEndpointIgnored(callsign)
+                        },
+                        isServiceEndpointSimulated: { callsign in
+                            endpointSimulationSet.contains(CallsignValidator.normalize(callsign))
+                        },
+                        onAddServiceEndpointIgnore: { callsign in
+                            ignoreServiceEndpoint(callsign)
+                        },
+                        onRemoveServiceEndpointIgnore: { callsign in
+                            removeIgnoredServiceEndpoint(callsign)
+                        },
+                        onSimulateServiceEndpointIgnore: { callsign in
+                            simulateServiceEndpointRemoval(callsign)
+                        },
+                        onApplySimulatedServiceEndpointIgnore: { callsign in
+                            applySimulation(for: callsign)
+                        },
+                        onCancelSimulatedServiceEndpointIgnore: { callsign in
+                            cancelSimulation(for: callsign)
+                        },
+                        hubMetric: $viewModel.focusState.hubMetric,
+                        fixedHeight: graphViewportHeight
                     )
+                }
+                .onPreferenceChange(GraphViewportHeightPreferenceKey.self) { newHeight in
+                    guard newHeight > 0 else { return }
+                    if abs(graphViewportHeight - newHeight) > 1 {
+                        graphViewportHeight = newHeight
+                    }
                 }
             }
 
@@ -365,7 +917,9 @@ struct AnalyticsDashboardView: View {
             }
 
             // Keyboard shortcuts hint
-            Text("Click to select, Shift-drag to select, drag to pan, ⌘ or Opt + scroll to zoom, Esc clears")
+            Text(viewModel.isDraftingPath
+                 ? "Drawing path: click stations in order from your node \u{00B7} click the last again to undo \u{00B7} click an earlier hop to prune \u{00B7} Esc cancels"
+                 : "Click to select, Shift-drag to select, right-click a node for path/ignore actions, drag to pan, \u{2318} or Opt + scroll to zoom, Esc clears")
                 .font(.caption)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .padding(.top, 4)
@@ -377,53 +931,850 @@ struct AnalyticsDashboardView: View {
     /// Controls scoped to the Network Graph card: View Mode and Station Identity.
     /// These settings affect only the graph visualization, not global analytics or Network Health.
     private var networkGraphHeaderControls: some View {
-        HStack(spacing: 16) {
-            // Include via digipeaters toggle
-            Toggle(isOn: $viewModel.includeViaDigipeaters) {
-                Text(GraphCopy.GraphControls.includeViaLabel)
-                    .font(.caption)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .help(GraphCopy.GraphControls.includeViaTooltip)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 14) {
+                HStack(spacing: 6) {
+                    Text(GraphCopy.ViewMode.sourceLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    AnalyticsSegmentedPicker(
+                        selection: graphSourceBinding,
+                        items: GraphSourceChoice.allCases,
+                        label: { $0.label },
+                        tooltip: { $0.tooltip }
+                    )
+                }
 
-            Divider()
-                .frame(height: 20)
+                HStack(spacing: 6) {
+                    Text(GraphCopy.ViewMode.pickerLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
 
-            // View Mode: Connectivity | Routing | All
-            HStack(spacing: 4) {
-                Text(GraphCopy.ViewMode.pickerLabel)
-                    .font(.caption)
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                Picker("", selection: $viewModel.graphViewMode) {
-                    ForEach(GraphViewMode.allCases) { mode in
-                        Text(mode.rawValue)
-                            .tag(mode)
+                    if viewModel.graphViewMode.isNetRomMode {
+                        AnalyticsSegmentedPicker(
+                            selection: netRomModeBinding,
+                            items: [GraphViewMode.netromClassic, GraphViewMode.netromInferred, GraphViewMode.netromHybrid],
+                            label: { labelForGraphMode($0) },
+                            tooltip: { $0.tooltip }
+                        )
+                    } else {
+                        AnalyticsSegmentedPicker(
+                            selection: packetModeBinding,
+                            items: [GraphViewMode.connectivity, GraphViewMode.routing, GraphViewMode.all],
+                            label: { labelForGraphMode($0) },
+                            tooltip: { $0.tooltip }
+                        )
                     }
                 }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .controlSize(.small)
-            }
-            .help(GraphCopy.ViewMode.pickerTooltip)
 
-            // Station Identity: Station | SSID
-            HStack(spacing: 4) {
-                Text(GraphCopy.StationIdentity.pickerLabel)
+                Divider()
+                    .frame(height: 18)
+
+                if canConfigureDigipeaterPaths {
+                    Toggle(isOn: $viewModel.includeViaDigipeaters) {
+                        Text(GraphCopy.GraphControls.includeViaLabel)
+                            .font(.caption)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help(GraphCopy.GraphControls.includeViaTooltip)
+                } else {
+                    Text(digipeaterPathStatusLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AnalyticsStyle.Colors.neutralFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .help(digipeaterPathStatusTooltip)
+                }
+
+                HStack(spacing: 4) {
+                    Text(GraphCopy.StationIdentity.pickerLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+
+                    Picker(GraphCopy.StationIdentity.pickerLabel, selection: $viewModel.stationIdentityMode) {
+                        ForEach(StationIdentityMode.allCases) { mode in
+                            Text(mode.shortName).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .help(GraphCopy.StationIdentity.pickerTooltip)
+                }
+
+                if temporaryShowAllActive || totalHiddenNodesCount > 0 {
+                    Button {
+                        showHiddenByFiltersPopover.toggle()
+                    } label: {
+                        if temporaryShowAllActive {
+                            Label("Showing all (temporary +\(temporaryUnhiddenCount))", systemImage: "eye")
+                                .font(.caption)
+                        } else {
+                            Label("Hidden by filters: \(totalHiddenNodesCount)", systemImage: "line.3.horizontal.decrease.circle")
+                                .font(.caption)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help(
+                        temporaryShowAllActive
+                            ? "Temporary show-all is active. Open to restore your previous filters."
+                            : "Some nodes exist in current data but are hidden by active filters."
+                    )
+                    .popover(isPresented: $showHiddenByFiltersPopover, arrowEdge: .bottom) {
+                        hiddenByFiltersPopover
+                    }
+                }
+            }
+
+            Text(graphViewSummaryText)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+    }
+
+    private var hiddenByFiltersPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Hidden By Filters")
+                .font(.headline)
+
+            HStack(spacing: 8) {
+                Button(temporaryShowAllActive ? "Restore Filters" : "Show All (Temporary)") {
+                    if temporaryShowAllActive {
+                        exitTemporaryShowAll()
+                    } else {
+                        enterTemporaryShowAll()
+                    }
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                if temporaryShowAllActive {
+                    Button("Keep Current View") {
+                        endTemporaryShowAllWithoutRestore()
+                        showHiddenByFiltersPopover = false
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                if focusHiddenNodeCount > 0 || structuralHiddenNodeCount > 0 || simulatedHiddenNodeCount > 0 {
+                    Button("Clear View Filters") {
+                        viewModel.clearFocus()
+                        viewModel.minEdgeCount = 1
+                        viewModel.maxNodes = 300
+                        clearAllSimulations()
+                        showHiddenByFiltersPopover = false
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            if temporaryShowAllActive {
+                Text("Temporarily unhidden: \(temporaryUnhiddenCount)")
                     .font(.caption)
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                Picker("", selection: $viewModel.stationIdentityMode) {
-                    Text(StationIdentityMode.station.shortName)
-                        .tag(StationIdentityMode.station)
-                    Text(StationIdentityMode.ssid.shortName)
-                        .tag(StationIdentityMode.ssid)
+                if !temporaryUnhiddenPreview.isEmpty {
+                    Text(temporaryUnhiddenPreview.joined(separator: ", "))
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .lineLimit(2)
                 }
-                .pickerStyle(.segmented)
-                .fixedSize()
+            }
+
+            if structuralHiddenNodeCount > 0 {
+                // The min-edge slider hides connections, never stations, so it is
+                // not part of this count — labeling it "Min Edge" overstated it.
+                Text("Not drawn (max nodes / no drawable link): \(structuralHiddenNodeCount)")
+                    .font(.caption)
+                    .help("Valid stations observed in the timeframe that the graph doesn't draw: dropped by the Max nodes cap, or without a qualifying link to another valid station. The Min edge slider hides connections, not stations.")
+            }
+            if focusHiddenNodeCount > 0 {
+                Text("Focus Mode: \(focusHiddenNodeCount)")
+                    .font(.caption)
+            }
+            if simulatedHiddenNodeCount > 0 {
+                Text("Simulated Removals: \(simulatedHiddenNodeCount)")
+                    .font(.caption)
+            }
+            if persistedIgnoredNodeCount > 0 {
+                Text("Ignored Endpoints: \(persistedIgnoredNodeCount)")
+                    .font(.caption)
+            }
+            if !temporarilyUnignoredEndpoints.isEmpty {
+                Text("Temporarily Unignored: \(temporarilyUnignoredEndpoints.count)")
+                    .font(.caption)
+            }
+
+            Divider()
+
+            if focusHiddenNodeCount > 0 {
+                Button("Exit Focus") {
+                    viewModel.clearFocus()
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.bordered)
                 .controlSize(.small)
             }
-            .help(GraphCopy.StationIdentity.pickerTooltip)
+
+            if structuralHiddenNodeCount > 0 && viewModel.maxNodes < 300 {
+                Button("Increase Max Nodes (+50)") {
+                    viewModel.maxNodes = min(300, viewModel.maxNodes + 50)
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if simulatedHiddenNodeCount > 0 {
+                Button("Clear Simulations") {
+                    clearAllSimulations()
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if !temporarilyUnignoredEndpoints.isEmpty {
+                Button("Re-hide Temporary Nodes") {
+                    restoreTemporarilyUnignoredEndpoints()
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if !hiddenNodeEntries.isEmpty {
+                Divider()
+                Text("Hidden Nodes")
+                    .font(.caption.weight(.semibold))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(hiddenNodeEntries.prefix(24), id: \.id) { entry in
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(entry.callsign)
+                                        .font(.caption.monospaced())
+                                    Text(entry.reason)
+                                        .font(.caption2)
+                                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                                }
+                                Spacer(minLength: 8)
+                                HStack(spacing: 4) {
+                                    Button(primaryActionLabel(for: entry)) {
+                                        showHiddenNode(entry)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+
+                                    if entry.reasonKind == .ignored {
+                                        Button("Unignore") {
+                                            removeIgnoredServiceEndpoint(entry.callsign)
+                                            selectCallsignIfVisible(entry.callsign)
+                                            showHiddenByFiltersPopover = false
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.mini)
+                                        .help("Remove this node from ignored endpoints permanently.")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 190)
+            }
         }
+        .padding(12)
+        .frame(width: 320)
+    }
+}
+
+
+
+extension AnalyticsDashboardView {
+    private enum HiddenNodeReason {
+        case focusMode
+        case simulated
+        case ignored
+    }
+
+    private struct HiddenNodeEntry: Identifiable {
+        let id: String
+        let callsign: String
+        let reason: String
+        let reasonKind: HiddenNodeReason
+        let nodeID: String?
+    }
+
+    private var hiddenNodeEntries: [HiddenNodeEntry] {
+        var entries: [HiddenNodeEntry] = []
+
+        if viewModel.focusState.isFocusEnabled {
+            let hiddenFocusNodes = viewModel.viewState.graphModel.nodes
+                .filter { !viewModel.filteredGraph.visibleNodeIDs.contains($0.id) }
+                .prefix(16)
+            entries.append(contentsOf: hiddenFocusNodes.map {
+                HiddenNodeEntry(
+                    id: "focus:\($0.id)",
+                    callsign: $0.callsign,
+                    reason: "Hidden by focus mode",
+                    reasonKind: .focusMode,
+                    nodeID: $0.id
+                )
+            })
+        }
+
+        let breakdown = hiddenBreakdown
+        entries.append(contentsOf: breakdown.simulatedPresent.sorted().map {
+            HiddenNodeEntry(
+                id: "sim:\($0)",
+                callsign: $0,
+                reason: "Simulated removal",
+                reasonKind: .simulated,
+                nodeID: nil
+            )
+        })
+
+        entries.append(contentsOf: breakdown.ignoredPresent.sorted().map {
+            HiddenNodeEntry(
+                id: "ignore:\($0)",
+                callsign: $0,
+                reason: "Ignored endpoint",
+                reasonKind: .ignored,
+                nodeID: nil
+            )
+        })
+
+        // Deduplicate by callsign while preserving first reason.
+        var seen = Set<String>()
+        return entries.filter { entry in
+            guard !seen.contains(entry.callsign) else { return false }
+            seen.insert(entry.callsign)
+            return true
+        }
+    }
+
+    private var temporaryUnhiddenCount: Int {
+        temporaryShowAllSnapshot?.temporarilyUnhiddenCount ?? 0
+    }
+
+    private var temporaryUnhiddenPreview: [String] {
+        guard let snapshot = temporaryShowAllSnapshot else { return [] }
+        return Array(snapshot.temporarilyUnhiddenCallsigns.prefix(8))
+    }
+
+    /// Disjoint per-cause hidden sets from the view model: each hidden station
+    /// counts exactly once, min-edge-filtered nodes are included, and ignore-list
+    /// entries only count when the station is actually present in the timeframe.
+    private var hiddenBreakdown: AnalyticsDashboardViewModel.HiddenNodeBreakdown {
+        viewModel.hiddenNodeBreakdown(
+            simulatedEndpoints: endpointSimulationSet,
+            temporarilyUnignored: temporarilyUnignoredEndpoints
+        )
+    }
+
+    private var structuralHiddenNodeCount: Int { hiddenBreakdown.structuralCount }
+
+    private var focusHiddenNodeCount: Int { hiddenBreakdown.focusHiddenIDs.count }
+
+    private var simulatedHiddenNodeCount: Int { hiddenBreakdown.simulatedPresent.count }
+
+    private var persistedIgnoredNodeCount: Int { hiddenBreakdown.ignoredPresent.count }
+
+    private var totalHiddenNodesCount: Int { hiddenBreakdown.totalCount }
+
+    private func performDraftConnect(_ draft: PathDraft) {
+        guard let intent = draft.connectIntent() else { return }
+        guard let connectCoordinator else {
+            viewModel.cancelPathDraft()
+            return
+        }
+        connectCoordinator.activeContext = .stations
+        connectCoordinator.requestConnect(
+            ConnectRequest(intent: intent, mode: draft.connectMode,
+                           executeImmediately: true, origin: .explicitAction)
+        )
+        viewModel.cancelPathDraft()
+    }
+
+    private func normalizedEndpoint(_ callsign: String) -> String {
+        CallsignValidator.normalize(callsign)
+    }
+
+    private func isEndpointIgnored(_ callsign: String) -> Bool {
+        settings.isServiceEndpointIgnored(normalizedEndpoint(callsign))
+    }
+
+    private func ignoreServiceEndpoint(_ callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        guard !isEndpointIgnored(normalized) else { return }
+        settings.addIgnoredServiceEndpoint(normalized)
+        endpointSimulationSet.remove(normalized)
+        temporarilyUnignoredEndpoints.remove(normalized)
+        showEndpointBanner(callsign: normalized, mode: .undoIgnore, autoDismissAfter: 8)
+    }
+
+    private func removeIgnoredServiceEndpoint(_ callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        guard isEndpointIgnored(normalized) else { return }
+        settings.removeIgnoredServiceEndpoint(normalized)
+        endpointSimulationSet.remove(normalized)
+        temporarilyUnignoredEndpoints.remove(normalized)
+        showEndpointBanner(callsign: normalized, mode: .undoRemove, autoDismissAfter: 8)
+    }
+
+    private func simulateServiceEndpointRemoval(_ callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        guard !isEndpointIgnored(normalized) else { return }
+        settings.addIgnoredServiceEndpoint(normalized)
+        endpointSimulationSet.insert(normalized)
+        showEndpointBanner(callsign: normalized, mode: .simulation, autoDismissAfter: nil)
+    }
+
+    private func applySimulation(for callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        endpointSimulationSet.remove(normalized)
+        showEndpointBanner(callsign: normalized, mode: .undoIgnore, autoDismissAfter: 8)
+    }
+
+    private func cancelSimulation(for callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        if endpointSimulationSet.contains(normalized) {
+            endpointSimulationSet.remove(normalized)
+            settings.removeIgnoredServiceEndpoint(normalized)
+        }
+        dismissEndpointBanner()
+    }
+
+    private func clearAllSimulations() {
+        for endpoint in endpointSimulationSet {
+            settings.removeIgnoredServiceEndpoint(endpoint)
+        }
+        endpointSimulationSet.removeAll()
+        dismissEndpointBanner()
+    }
+
+    private func showIgnoredNodeOnce(_ callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        if isEndpointIgnored(normalized) {
+            settings.removeIgnoredServiceEndpoint(normalized)
+            temporarilyUnignoredEndpoints.insert(normalized)
+        }
+        selectCallsignIfVisible(normalized)
+    }
+
+    private func restoreTemporarilyUnignoredEndpoints() {
+        for endpoint in temporarilyUnignoredEndpoints {
+            if !isEndpointIgnored(endpoint) {
+                settings.addIgnoredServiceEndpoint(endpoint)
+            }
+        }
+        temporarilyUnignoredEndpoints.removeAll()
+    }
+
+    private func enterTemporaryShowAll() {
+        guard !temporaryShowAllActive else { return }
+        let hiddenAtEntry = hiddenNodeEntries.map(\.callsign)
+        temporaryShowAllSnapshot = TemporaryShowAllSnapshot(
+            minEdgeCount: viewModel.minEdgeCount,
+            maxNodes: viewModel.maxNodes,
+            focusState: viewModel.focusState,
+            simulationSet: endpointSimulationSet,
+            temporarilyUnignoredEndpoints: temporarilyUnignoredEndpoints,
+            temporarilyUnhiddenCallsigns: hiddenAtEntry,
+            temporarilyUnhiddenCount: hiddenAtEntry.count
+        )
+        temporaryShowAllActive = true
+
+        viewModel.clearFocus()
+        viewModel.minEdgeCount = 1
+        viewModel.maxNodes = 300
+        endpointSimulationSet.removeAll()
+        temporarilyUnignoredEndpoints.removeAll()
+        // Session-only override: the persisted ignore list is never touched, so a
+        // crash or quit during the preview cannot lose it.
+        viewModel.setTemporarilyShowingIgnoredEndpoints(true)
+    }
+
+    private func exitTemporaryShowAll() {
+        guard temporaryShowAllActive, let snapshot = temporaryShowAllSnapshot else { return }
+        temporaryShowAllActive = false
+        temporaryShowAllSnapshot = nil
+
+        viewModel.minEdgeCount = snapshot.minEdgeCount
+        viewModel.maxNodes = snapshot.maxNodes
+        viewModel.focusState = snapshot.focusState
+        endpointSimulationSet = snapshot.simulationSet
+        temporarilyUnignoredEndpoints = snapshot.temporarilyUnignoredEndpoints
+        viewModel.setTemporarilyShowingIgnoredEndpoints(false)
+    }
+
+    private func endTemporaryShowAllWithoutRestore() {
+        guard temporaryShowAllActive else { return }
+        temporaryShowAllActive = false
+        temporaryShowAllSnapshot = nil
+        // "Keep Current View" is the one explicit, user-chosen path that makes the
+        // shown-all state permanent: persist the cleared list, then drop the
+        // session override.
+        settings.ignoredServiceEndpoints = []
+        viewModel.setTemporarilyShowingIgnoredEndpoints(false)
+    }
+
+    private func showHiddenNode(_ entry: HiddenNodeEntry) {
+        switch entry.reasonKind {
+        case .ignored:
+            showIgnoredNodeOnce(entry.callsign)
+            showHiddenByFiltersPopover = false
+            return
+        case .simulated:
+            cancelSimulation(for: entry.callsign)
+            selectCallsignIfVisible(entry.callsign)
+            showHiddenByFiltersPopover = false
+            return
+        case .focusMode:
+            break
+        }
+
+        if !temporaryShowAllActive {
+            enterTemporaryShowAll()
+        }
+        if let nodeID = entry.nodeID {
+            viewModel.handleNodeClick(nodeID, isShift: false)
+            focusNodeID = nodeID
+            sidebarTab = .inspector
+        } else {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(160))
+                if let node = viewModel.viewState.graphModel.nodes.first(where: {
+                    CallsignValidator.normalize($0.callsign) == entry.callsign
+                }) {
+                    viewModel.handleNodeClick(node.id, isShift: false)
+                    focusNodeID = node.id
+                    sidebarTab = .inspector
+                }
+            }
+        }
+        showHiddenByFiltersPopover = false
+    }
+
+    private func selectCallsignIfVisible(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(140))
+            if let node = viewModel.viewState.graphModel.nodes.first(where: {
+                CallsignValidator.normalize($0.callsign) == normalized
+            }) {
+                viewModel.handleNodeClick(node.id, isShift: false)
+                focusNodeID = node.id
+                sidebarTab = .inspector
+            }
+        }
+    }
+
+    private func primaryActionLabel(for entry: HiddenNodeEntry) -> String {
+        switch entry.reasonKind {
+        case .focusMode:
+            return "Show"
+        case .simulated:
+            return "Cancel Sim"
+        case .ignored:
+            return "Show Once"
+        }
+    }
+
+    private func undoIgnore(for callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        settings.removeIgnoredServiceEndpoint(normalized)
+        endpointSimulationSet.remove(normalized)
+        dismissEndpointBanner()
+    }
+
+    private func undoRemove(for callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        settings.addIgnoredServiceEndpoint(normalized)
+        dismissEndpointBanner()
+    }
+
+    private func showEndpointBanner(callsign: String, mode: EndpointBannerMode, autoDismissAfter: TimeInterval?) {
+        endpointBannerDismissTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            endpointActionBanner = EndpointActionBannerState(callsign: callsign, mode: mode)
+        }
+
+        guard let autoDismissAfter else { return }
+        endpointBannerDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(autoDismissAfter * 1_000_000_000))
+            if Task.isCancelled { return }
+            dismissEndpointBanner()
+        }
+    }
+
+    private func dismissEndpointBanner() {
+        endpointBannerDismissTask?.cancel()
+        endpointBannerDismissTask = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
+            endpointActionBanner = nil
+        }
+    }
+
+    private var graphSourceBinding: Binding<GraphSourceChoice> {
+        Binding(
+            get: {
+                viewModel.graphViewMode.isNetRomMode ? .netrom : .packets
+            },
+            set: { newSource in
+                switch newSource {
+                case .packets:
+                    if viewModel.graphViewMode.isNetRomMode {
+                        viewModel.graphViewMode = preferredPacketViewMode
+                    }
+                case .netrom:
+                    if !viewModel.graphViewMode.isNetRomMode {
+                        viewModel.graphViewMode = preferredNetRomViewMode
+                    }
+                }
+            }
+        )
+    }
+
+    private var packetModeBinding: Binding<GraphViewMode> {
+        Binding(
+            get: {
+                if viewModel.graphViewMode.isNetRomMode { return preferredPacketViewMode }
+                return viewModel.graphViewMode
+            },
+            set: { newMode in
+                guard [.connectivity, .routing, .all].contains(newMode) else { return }
+                if newMode == .routing, !viewModel.includeViaDigipeaters {
+                    viewModel.includeViaDigipeaters = true
+                }
+                viewModel.graphViewMode = newMode
+            }
+        )
+    }
+
+    private var netRomModeBinding: Binding<GraphViewMode> {
+        Binding(
+            get: {
+                if viewModel.graphViewMode.isNetRomMode { return viewModel.graphViewMode }
+                return preferredNetRomViewMode
+            },
+            set: { newMode in
+                guard [.netromClassic, .netromInferred, .netromHybrid].contains(newMode) else { return }
+                viewModel.graphViewMode = newMode
+            }
+        )
+    }
+
+    private var graphViewSummaryText: String {
+        // Each line leads with what the SOURCE means (heard-talking vs
+        // can-route), then what the LENS narrows it to — so the caption alone
+        // tells the operator which question the graph is answering.
+        let packetSource = "Packets: who was heard talking on the air."
+        let netromSource = "NET/ROM: who can route to whom."
+        switch viewModel.graphViewMode {
+        case .connectivity:
+            return "\(packetSource) Direct — direct peer traffic and direct-heard RF evidence only."
+        case .routing:
+            return "\(packetSource) Routed — digipeater-mediated paths plus direct peers."
+        case .all:
+            return viewModel.includeViaDigipeaters
+                ? "\(packetSource) Combined — all packet-derived relationship evidence."
+                : "\(packetSource) Combined — digipeater-mediated paths omitted while that toggle is off."
+        case .netromClassic:
+            return "\(netromSource) Classic — broadcast NODES tables with direct neighbors."
+        case .netromInferred:
+            return "\(netromSource) Inferred — routes discovered passively from observed traffic."
+        case .netromHybrid:
+            return "\(netromSource) Hybrid — broadcast NODES tables merged with inferred routes."
+        }
+    }
+
+    private var edgeVisualLegend: some View {
+        HStack(spacing: 8) {
+            EdgeStrokeLegendItem(
+                label: "Weak",
+                lineColor: Color(platform: .platformSecondaryLabel),
+                thickness: 1.0,
+                opacity: 0.55,
+                tooltip: edgeWeakTooltip
+            )
+
+            EdgeStrokeLegendItem(
+                label: "Strong",
+                lineColor: Color(platform: .platformSecondaryLabel),
+                thickness: 2.4,
+                opacity: 0.92,
+                tooltip: edgeStrongTooltip
+            )
+
+            if showsViaStrokeLegend {
+                EdgeStrokeLegendItem(
+                    label: "Via",
+                    lineColor: Color(platform: .platformTertiaryLabel),
+                    thickness: 1.6,
+                    opacity: 0.72,
+                    tooltip: "Digipeater-mediated path evidence. Reachability on network, not direct RF proof."
+                )
+            }
+
+            Text(edgeDimLegendLabel)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(platform: .platformCardBackground).opacity(0.88))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(platform: .platformSeparator).opacity(0.7), lineWidth: 0.5)
+                )
+                .help(edgeDimLegendTooltip)
+        }
+    }
+
+    private var nodeSizeVisualLegend: some View {
+        HStack(spacing: 8) {
+            ScaleDotLegendItem(
+                label: nodeSizeLowerLabel,
+                diameter: 6,
+                tooltip: nodeSizeSmallTooltip
+            )
+            ScaleDotLegendItem(
+                label: nodeSizeHigherLabel,
+                diameter: 12,
+                tooltip: nodeSizeLargeTooltip
+            )
+        }
+    }
+
+    private func labelForGraphMode(_ mode: GraphViewMode) -> String {
+        switch mode {
+        case .connectivity:
+            return GraphCopy.ViewMode.connectivityLabel
+        case .routing:
+            return GraphCopy.ViewMode.routingLabel
+        case .all:
+            return GraphCopy.ViewMode.allLabel
+        case .netromClassic:
+            return GraphCopy.ViewMode.netromClassicLabel
+        case .netromInferred:
+            return GraphCopy.ViewMode.netromInferredLabel
+        case .netromHybrid:
+            return GraphCopy.ViewMode.netromHybridLabel
+        }
+    }
+
+    private func syncPreferredGraphModes(with mode: GraphViewMode) {
+        if mode.isNetRomMode {
+            preferredNetRomViewMode = mode
+        } else {
+            preferredPacketViewMode = mode
+        }
+    }
+
+    private var showsViaStrokeLegend: Bool {
+        guard !viewModel.graphViewMode.isNetRomMode else { return false }
+        guard viewModel.includeViaDigipeaters else { return false }
+        return viewModel.graphViewMode == .routing || viewModel.graphViewMode == .all
+    }
+
+    private var edgeWeakTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Thinner/lighter lines indicate lower relative route quality in this view."
+        }
+        return "Thinner/lighter lines indicate lower relative packet volume in this view."
+    }
+
+    private var edgeStrongTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Thicker/darker lines indicate higher relative route quality in this view."
+        }
+        return "Thicker/darker lines indicate higher relative packet volume in this view."
+    }
+
+    private var edgeDimLegendLabel: String {
+        if viewModel.focusState.isFocusEnabled, viewModel.focusState.anchorNodeID != nil {
+            return "Dimmed: context"
+        }
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Dimmed: stale"
+        }
+        return "Dimmed: lower evidence"
+    }
+
+    private var edgeDimLegendTooltip: String {
+        if viewModel.focusState.isFocusEnabled, viewModel.focusState.anchorNodeID != nil {
+            return "Dimmed lines are outside the active focus neighborhood."
+        }
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Dimmed lines are stale NET/ROM routes or weaker context."
+        }
+        return "Dimmer lines represent weaker relative evidence in the current packet view."
+    }
+
+    private var nodeSizeSmallTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Smaller node: lower relative route centrality in the current NET/ROM view. Low-priority nodes hide their labels until you zoom in."
+        }
+        return "Smaller node: lower relative traffic/connection weight in the current packet view. Low-priority nodes hide their labels until you zoom in."
+    }
+
+    private var nodeSizeLargeTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Larger node: higher relative route centrality in the current NET/ROM view."
+        }
+        return "Larger node: higher relative traffic/connection weight in the current packet view."
+    }
+
+    private var nodeSizeLowerLabel: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Lower centrality"
+        }
+        return "Lower weight"
+    }
+
+    private var nodeSizeHigherLabel: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Higher centrality"
+        }
+        return "Higher weight"
+    }
+
+    private var canConfigureDigipeaterPaths: Bool {
+        !viewModel.graphViewMode.isNetRomMode && viewModel.graphViewMode == .all
+    }
+
+    private var digipeaterPathStatusLabel: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Digipeater Paths: Packet source only"
+        }
+        if viewModel.graphViewMode == .routing {
+            return "Digipeater Paths: Required in Routed lens"
+        }
+        return "Digipeater Paths: Not used in Direct lens"
+    }
+
+    private var digipeaterPathStatusTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return GraphCopy.GraphControls.includeViaUnavailableTooltip
+        }
+        if viewModel.graphViewMode == .routing {
+            return "Routed lens always includes digipeater-mediated paths. Use Combined to toggle this."
+        }
+        return "Direct lens excludes digipeater-mediated paths by definition. Switch to Combined to configure this."
     }
 
     private var metricColumns: [GridItem] {
@@ -432,6 +1783,70 @@ struct AnalyticsDashboardView: View {
 
     private var chartColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: AnalyticsStyle.Layout.cardSpacing), count: AnalyticsStyle.Layout.chartColumns)
+    }
+
+    private var visibleGraphNodesForLegend: [NetworkGraphNode] {
+        let nodes = viewModel.viewState.graphModel.nodes
+        let visibleNodeIDs = viewModel.filteredGraph.visibleNodeIDs
+        guard !visibleNodeIDs.isEmpty else { return nodes }
+        return nodes.filter { visibleNodeIDs.contains($0.id) }
+    }
+
+    private var normalizedMyCallsignForLegend: String {
+        CallsignValidator.normalize(settings.myCallsign)
+    }
+
+    private var showsMyNodeLegend: Bool {
+        guard !normalizedMyCallsignForLegend.isEmpty else { return false }
+        return visibleGraphNodesForLegend.contains { node in
+            nodeMatchesMyCallsign(node.callsign)
+        }
+    }
+
+    private var showsRoutingNodeLegend: Bool {
+        visibleGraphNodesForLegend.contains { $0.isNetRomOfficial }
+    }
+
+    private var showsStationLegend: Bool {
+        visibleGraphNodesForLegend.contains { node in
+            let isMyNode = !normalizedMyCallsignForLegend.isEmpty && nodeMatchesMyCallsign(node.callsign)
+            return !isMyNode && !node.isNetRomOfficial
+        }
+    }
+
+    private func nodeMatchesMyCallsign(_ nodeCallsign: String) -> Bool {
+        let node = CallsignValidator.normalize(nodeCallsign)
+        let mine = normalizedMyCallsignForLegend
+        guard !mine.isEmpty else { return false }
+        if node == mine { return true }
+        if node.hasPrefix("\(mine)-") { return true }
+        if mine.hasPrefix("\(node)-") { return true }
+        return false
+    }
+}
+
+private enum GraphSourceChoice: String, CaseIterable, Identifiable {
+    case packets
+    case netrom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .packets:
+            return GraphCopy.ViewMode.packetSourceLabel
+        case .netrom:
+            return GraphCopy.ViewMode.netRomSourceLabel
+        }
+    }
+
+    var tooltip: String {
+        switch self {
+        case .packets:
+            return GraphCopy.ViewMode.packetSourceTooltip
+        case .netrom:
+            return GraphCopy.ViewMode.netRomSourceTooltip
+        }
     }
 }
 
@@ -502,9 +1917,61 @@ private struct AnalyticsCardWithControls<Content: View, Controls: View>: View {
     }
 }
 
+private struct AnalyticsLoadingRow: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct AnalyticsLoadingOverlay: View {
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct ChartLoadingPlaceholder: View {
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AnalyticsStyle.Colors.neutralFill)
+        .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
+    }
+}
+
 private struct SummaryMetricCard: View {
     let title: String
     let value: String
+    var tooltip: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -519,6 +1986,517 @@ private struct SummaryMetricCard: View {
         .padding(12)
         .background(AnalyticsStyle.Colors.neutralFill)
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
+        .help(tooltip ?? title)
+    }
+}
+
+private struct SummaryMetricPlaceholderCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(AnalyticsStyle.Colors.cardStroke)
+                .frame(width: 90, height: 10)
+            RoundedRectangle(cornerRadius: 4)
+                .fill(AnalyticsStyle.Colors.cardStroke)
+                .frame(width: 50, height: 18)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(AnalyticsStyle.Colors.neutralFill)
+        .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
+        .redacted(reason: .placeholder)
+    }
+}
+
+private struct LegendItem: View {
+    let color: PlatformColor
+    let label: String
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(Color(platform: color))
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+    }
+}
+
+private struct EdgeStrokeLegendItem: View {
+    let label: String
+    let lineColor: Color
+    let thickness: CGFloat
+    let opacity: Double
+    let tooltip: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Capsule()
+                .fill(lineColor.opacity(opacity))
+                .frame(width: 20, height: thickness)
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(platform: .platformCardBackground).opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(platform: .platformSeparator).opacity(0.7), lineWidth: 0.5)
+        )
+        .help(tooltip)
+    }
+}
+
+private struct ScaleDotLegendItem: View {
+    let label: String
+    let diameter: CGFloat
+    let tooltip: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(Color(platform: .platformSecondaryLabel).opacity(0.95))
+                .frame(width: diameter, height: diameter)
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(platform: .platformCardBackground).opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(platform: .platformSeparator).opacity(0.7), lineWidth: 0.5)
+        )
+        .help(tooltip)
+    }
+}
+
+private struct GraphViewportHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+
+private struct PathDraftHUD: View {
+    let draft: PathDraft
+    let onConnect: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                    .foregroundStyle(Color.accentColor)
+                Text("Drawing path")
+                    .font(.caption.weight(.semibold))
+
+                chainChips
+
+                Spacer()
+
+                Button("Cancel", action: onCancel)
+                    .controlSize(.small)
+                    .help("Stop drawing (Esc)")
+
+                Button {
+                    onConnect()
+                } label: {
+                    Label(connectTitle, systemImage: "bolt.horizontal.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!draft.isConnectable)
+                .help(draft.isConnectable
+                      ? "Connect using exactly the drawn path: \(draft.previewText)"
+                      : "Click a destination station to complete the path.")
+            }
+
+            if draft.viaHops.isEmpty && draft.destinationKey == nil {
+                Text("Click stations in order from your node. Click the last station again to undo, an earlier one to prune back, Esc to cancel.")
+                    .font(.caption2)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            }
+
+            ForEach(draft.warnings, id: \.self) { warning in
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(Color(platform: .systemOrange))
+                    Text(warning)
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private var connectTitle: String {
+        draft.viaHops.isEmpty ? "Connect" : "Connect via \(draft.viaHops.count) digi\(draft.viaHops.count == 1 ? "" : "s")"
+    }
+
+    /// The first drawn station is the one leg MY transmitter must reach —
+    /// its reachability badge rides on that chip.
+    private var reachabilityBadge: (text: String, isWarning: Bool)? {
+        draft.firstHopReachability.map { ($0.badgeText, $0.isWarning) }
+    }
+
+    private var chainChips: some View {
+        HStack(spacing: 4) {
+            chip(text: draft.originDisplay, badge: nil, isWarning: false)
+            ForEach(draft.viaHops) { hop in
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 8))
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                chip(
+                    text: hop.displayCallsign,
+                    badge: hop.verdict.badgeText,
+                    isWarning: hop.verdict.isWarning,
+                    secondBadge: hop.id == draft.viaHops.first?.id ? reachabilityBadge : nil
+                )
+                .help(firstHopHelp(base: hop.verdict.explanation, isFirst: hop.id == draft.viaHops.first?.id))
+            }
+            if let destination = draft.destinationDisplay {
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 8))
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                chip(
+                    text: destination,
+                    badge: draft.destinationIsInfrastructure ? "NODE/BBS" : nil,
+                    isWarning: false,
+                    secondBadge: draft.viaHops.isEmpty ? reachabilityBadge : nil
+                )
+                .help(firstHopHelp(
+                    base: draft.destinationIsInfrastructure
+                        ? "Destination is a node or BBS — continue to further stations from its prompt after connecting."
+                        : "Destination station.",
+                    isFirst: draft.viaHops.isEmpty
+                ))
+            }
+        }
+    }
+
+    private func firstHopHelp(base: String, isFirst: Bool) -> String {
+        guard isFirst, let reachability = draft.firstHopReachability else { return base }
+        return base + " " + reachability.explanation
+    }
+
+    private func chip(
+        text: String,
+        badge: String?,
+        isWarning: Bool,
+        secondBadge: (text: String, isWarning: Bool)? = nil
+    ) -> some View {
+        HStack(spacing: 4) {
+            Text(text)
+                .font(.caption.monospaced())
+            if let badge {
+                badgeView(badge, isWarning: isWarning)
+            }
+            if let secondBadge {
+                badgeView(secondBadge.text, isWarning: secondBadge.isWarning)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color(platform: .platformCardBackground), in: RoundedRectangle(cornerRadius: 5))
+    }
+
+    private func badgeView(_ text: String, isWarning: Bool) -> some View {
+        let tint = isWarning ? Color(platform: .systemOrange) : Color(platform: .systemGreen)
+        return Text(text)
+            .font(.system(size: 9, weight: .bold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(tint.opacity(0.28), in: Capsule())
+            .overlay(Capsule().strokeBorder(tint.opacity(0.5), lineWidth: 0.5))
+            .foregroundStyle(tint)
+    }
+}
+
+private struct StationDirectoryCard: View {
+    let entries: [StationDirectoryEntry]
+    private let maxRows = 10
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        if entries.isEmpty {
+            EmptyChartPlaceholder(text: "No stations heard")
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(entries.prefix(maxRows)) { entry in
+                    HStack(spacing: 8) {
+                        Text(entry.callsign)
+                            .font(.caption.monospaced())
+                            .frame(minWidth: 84, alignment: .leading)
+                        ForEach(entry.roleBadges, id: \.self) { badge in
+                            Text(badge)
+                                .font(.system(size: 9, weight: .semibold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(badgeColor(badge).opacity(0.18), in: Capsule())
+                                .foregroundStyle(badgeColor(badge))
+                        }
+                        Spacer()
+                        Text("\(entry.frameCount) frames")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        Text("Last \(Self.timeFormatter.string(from: entry.lastHeard))")
+                            .font(.caption2)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .frame(minWidth: 76, alignment: .trailing)
+                    }
+                    .help("\(entry.callsign): \(entry.roleBadges.joined(separator: ", ")). First heard \(entry.firstHeard.formatted()), last heard \(entry.lastHeard.formatted()), \(entry.frameCount) frames, ~\(String(format: "%.0f", entry.airtimeSeconds)) s of airtime in this timeframe.")
+                }
+                if entries.count > maxRows {
+                    Text("+ \(entries.count - maxRows) more stations")
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func badgeColor(_ badge: String) -> Color {
+        switch badge {
+        case "Node": return Color(platform: .systemOrange)
+        case "BBS": return Color(platform: .systemPurple)
+        case "Digi": return Color(platform: .systemTeal)
+        case "Keyboarder": return AnalyticsStyle.Colors.accent
+        default: return Color(platform: .systemGray)
+        }
+    }
+}
+
+private struct ObservedSessionsCard: View {
+    let sessions: [SessionObservation]
+    private let maxRows = 8
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        if sessions.isEmpty {
+            EmptyChartPlaceholder(text: "No connected sessions observed")
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(sessions.prefix(maxRows)) { session in
+                    HStack(spacing: 8) {
+                        Text("\(session.stationA) \u{2194} \(session.stationB)")
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                        if !session.wasEstablished {
+                            Text("NO ANSWER")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color(platform: .systemOrange).opacity(0.18), in: Capsule())
+                                .foregroundStyle(Color(platform: .systemOrange))
+                        } else if session.end == nil {
+                            Text("ACTIVE")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color(platform: .systemGreen).opacity(0.18), in: Capsule())
+                                .foregroundStyle(Color(platform: .systemGreen))
+                        }
+                        Spacer()
+                        Text(sessionSummary(session))
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .lineLimit(1)
+                    }
+                    .help(sessionTooltip(session))
+                }
+                if sessions.count > maxRows {
+                    Text("+ \(sessions.count - maxRows) more sessions")
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func sessionSummary(_ session: SessionObservation) -> String {
+        var parts: [String] = [Self.timeFormatter.string(from: session.start)]
+        if !session.wasEstablished {
+            parts.append("\(session.frameCount) tries")
+            return parts.joined(separator: " \u{00B7} ")
+        }
+        if let duration = session.duration {
+            parts.append(durationText(duration))
+        }
+        if session.byteCount > 0 {
+            parts.append(ByteCount.string(Int64(session.byteCount)))
+        }
+        if !session.viaDigipeaters.isEmpty {
+            parts.append("via \(session.viaDigipeaters.joined(separator: ","))")
+        }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
+    private func sessionTooltip(_ session: SessionObservation) -> String {
+        if !session.wasEstablished {
+            return "Connect attempt from \(session.stationA) to \(session.stationB) starting \(session.start.formatted()): \(session.frameCount) frames of SABM retries/refusals with no established link. Repeated no-answer attempts can indicate a station that is off the air or out of range."
+        }
+        let endText = session.end.map { "ended \($0.formatted())" } ?? "still active at the end of the window"
+        return "AX.25 session observed on channel between \(session.stationA) and \(session.stationB): started \(session.start.formatted()), \(endText). \(session.frameCount) frames (\(session.iFrameCount) data), \(session.byteCount) payload bytes."
+    }
+
+    private func durationText(_ duration: TimeInterval) -> String {
+        if duration < 60 { return String(format: "%.0f s", duration) }
+        let minutes = Int(duration) / 60
+        if minutes < 60 { return "\(minutes) min" }
+        return String(format: "%dh %02dm", minutes / 60, minutes % 60)
+    }
+}
+
+private struct AirtimeListView: View {
+    let entries: [AirtimeEntry]
+
+    var body: some View {
+        if entries.isEmpty {
+            EmptyChartPlaceholder(text: "No data")
+        } else {
+            let maxAirtime = max(0.001, entries.map(\.airtimeSeconds).max() ?? 0.001)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(entries) { entry in
+                    HStack(spacing: 8) {
+                        Text(entry.callsign)
+                            .frame(minWidth: 84, alignment: .leading)
+                        GeometryReader { proxy in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(AnalyticsStyle.Colors.accent.opacity(0.35))
+                                .frame(
+                                    width: max(2, proxy.size.width * CGFloat(entry.airtimeSeconds / maxAirtime)),
+                                    height: 8
+                                )
+                                .frame(maxHeight: .infinity, alignment: .center)
+                        }
+                        Text(airtimeText(entry.airtimeSeconds))
+                            .monospacedDigit()
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .frame(minWidth: 56, alignment: .trailing)
+                    }
+                    .font(.caption)
+                    .frame(height: 16)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func airtimeText(_ seconds: Double) -> String {
+        if seconds < 60 { return String(format: "%.1f s", seconds) }
+        let minutes = Int(seconds) / 60
+        let remainder = Int(seconds) % 60
+        return "\(minutes)m \(String(format: "%02d", remainder))s"
+    }
+}
+
+private struct ActivityByHourChart: View {
+    let profile: ActivityByHourProfile
+    /// Covered fraction per hour; hours we barely listened to are hatched so a
+    /// quiet 3 AM bar means the network was quiet, not that the app was closed.
+    var hourCoverageFractions: [Double] = Array(repeating: 1, count: 24)
+
+    private struct HourClassPoint: Identifiable {
+        let hour: Int
+        let className: String
+        let value: Int
+        var id: String { "\(hour)-\(className)" }
+    }
+
+    private var uncoveredHours: [Int] {
+        guard hourCoverageFractions.count == 24 else { return [] }
+        return (0..<24).filter { hourCoverageFractions[$0] < 0.25 }
+    }
+
+    private var points: [HourClassPoint] {
+        var result: [HourClassPoint] = []
+        for (hour, counts) in profile.hours.enumerated() {
+            for trafficClass in TrafficClass.allCases {
+                if let value = counts[trafficClass], value > 0 {
+                    result.append(HourClassPoint(hour: hour, className: trafficClass.displayName, value: value))
+                }
+            }
+        }
+        return result
+    }
+
+    var body: some View {
+        if profile.totalCount == 0 {
+            EmptyChartPlaceholder(text: "No data")
+        } else {
+            Chart {
+                ForEach(uncoveredHours, id: \.self) { hour in
+                    RectangleMark(
+                        xStart: .value("Hour", Double(hour) - 0.5),
+                        xEnd: .value("Hour", Double(hour) + 0.5)
+                    )
+                    .foregroundStyle(Color(platform: .systemGray).opacity(0.10))
+                }
+                ForEach(points) { point in
+                    BarMark(
+                        x: .value("Hour", point.hour),
+                        y: .value("Frames", point.value)
+                    )
+                    .foregroundStyle(by: .value("Type", point.className))
+                }
+            }
+            .chartForegroundStyleScale([
+                "Chat": AnalyticsStyle.Colors.accent,
+                "BBS/Node": Color(platform: .systemPurple),
+                "Beacons": Color(platform: .systemTeal),
+                "Routing": Color(platform: .systemOrange),
+                "Control": Color(platform: .systemGray).opacity(0.5)
+            ])
+            .chartXScale(domain: -0.5...23.5)
+            .chartXAxis {
+                AxisMarks(values: [0, 4, 8, 12, 16, 20]) { value in
+                    AxisGridLine()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisValueLabel {
+                        if let hour = value.as(Int.self) {
+                            Text(String(format: "%02d", hour))
+                        }
+                    }
+                    .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                }
+            }
+            .chartLegend(position: .top, alignment: .leading, spacing: 4)
+            .chartPlotStyle { plotArea in
+                plotArea.background(AnalyticsStyle.Colors.chartPlotBackground)
+            }
+        }
     }
 }
 
@@ -556,6 +2534,11 @@ private struct TimeSeriesChart: View {
     let points: [AnalyticsSeriesPoint]
     let valueLabel: String
     let bucket: TimeBucket
+    /// Formats axis and tooltip values (e.g. byte counts). Defaults to plain numbers.
+    var valueFormatter: ((Int) -> String)? = nil
+    /// Spans where the app was not listening — shaded so downtime never reads
+    /// as a silent channel.
+    var uncoveredIntervals: [DateInterval] = []
     @State private var selectedPoint: AnalyticsSeriesPoint?
     @State private var hoverLocation: CGPoint?
 
@@ -563,6 +2546,13 @@ private struct TimeSeriesChart: View {
         let f = DateFormatter()
         f.dateStyle = .none
         f.timeStyle = .short
+        return f
+    }()
+
+    private static let secondsFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .medium
         return f
     }()
 
@@ -578,27 +2568,33 @@ private struct TimeSeriesChart: View {
             EmptyChartPlaceholder(text: "No data")
         } else {
             Chart {
+                ForEach(Array(uncoveredIntervals.enumerated()), id: \.offset) { _, gap in
+                    RectangleMark(
+                        xStart: .value("Offline", gap.start),
+                        xEnd: .value("Offline", gap.end)
+                    )
+                    .foregroundStyle(Color(platform: .systemGray).opacity(0.10))
+                }
+
+                // The deployment target is macOS 15.6, so the macOS 13 check
+                // this used to carry was always true and the second branch
+                // was unreachable. It was not free: an if/else inside a chart
+                // builds _ConditionalContent, whose ChartContent conformance
+                // only exists on macOS 27, so a dead branch made the chart
+                // depend on an OS none of our users are on.
                 ForEach(points, id: \.bucket) { point in
-                    if #available(macOS 13.0, *) {
-                        LineMark(
-                            x: .value("Time", point.bucket),
-                            y: .value(valueLabel, point.value)
-                        )
-                        .interpolationMethod(AnalyticsStyle.Chart.smoothLines ? .catmullRom : .linear)
-                        .foregroundStyle(AnalyticsStyle.Colors.accent)
-                    } else {
-                        LineMark(
-                            x: .value("Time", point.bucket),
-                            y: .value(valueLabel, point.value)
-                        )
-                        .foregroundStyle(AnalyticsStyle.Colors.accent)
-                    }
+                    LineMark(
+                        x: .value("Time", point.bucket),
+                        y: .value(valueLabel, point.value)
+                    )
+                    .interpolationMethod(AnalyticsStyle.Chart.smoothLines ? .catmullRom : .linear)
+                    .foregroundStyle(AnalyticsStyle.Colors.accent)
                 }
 
                 // Highlight selected point with a rule mark
                 if let selectedPoint {
                     RuleMark(x: .value("Selected", selectedPoint.bucket))
-                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                        .foregroundStyle(Color(platform: .platformTertiaryLabel))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 2]))
 
                     PointMark(
@@ -609,22 +2605,61 @@ private struct TimeSeriesChart: View {
                     .symbolSize(60)
                 }
             }
-            .chartYScale(domain: .automatic(includesZero: true))
+            .chartYScale(domain: .automatic(includesZero: true), range: .plotDimension(startPadding: 8, endPadding: 8))
+            .chartXScale(range: .plotDimension(startPadding: 6, endPadding: 6))
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 5)) { value in
-                    AxisGridLine()
-                        .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
-                    AxisValueLabel(format: xAxisFormat(for: bucket), centered: false)
+                if shortRangeSpansBoundary {
+                    AxisMarks(values: .stride(by: .hour, count: 6)) { value in
+                        AxisGridLine()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                        AxisTick()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                        AxisValueLabel(centered: true) {
+                            if let date = value.as(Date.self) {
+                                Text(shortRangeBoundaryLabel(for: date))
+                            }
+                        }
                         .font(.caption2)
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                    }
+                } else if spansMultipleDays {
+                    AxisMarks(values: .stride(by: .day)) { _ in
+                        AxisGridLine()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                        AxisTick()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                        AxisValueLabel(format: multiDayXAxisFormat, centered: true)
+                            .font(.caption2)
+                            .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                    }
+                } else {
+                    AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                        AxisGridLine()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                        AxisTick()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                        AxisValueLabel(centered: false) {
+                            if let date = value.as(Date.self) {
+                                Text(xAxisLabel(for: date))
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                    }
                 }
             }
             .chartYAxis {
-                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { value in
                     AxisGridLine()
                         .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
-                    AxisValueLabel()
+                    AxisTick()
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                    AxisValueLabel {
+                        if let intValue = value.as(Int.self) {
+                            Text(valueFormatter?(intValue) ?? intValue.formatted())
+                        }
+                    }
+                    .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                 }
             }
             .chartPlotStyle { plotArea in
@@ -659,7 +2694,8 @@ private struct TimeSeriesChart: View {
                                 TimeSeriesChartTooltip(
                                     point: selectedPoint,
                                     valueLabel: valueLabel,
-                                    bucket: bucket
+                                    bucket: bucket,
+                                    valueFormatter: valueFormatter
                                 )
                                 .position(
                                     x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
@@ -675,17 +2711,52 @@ private struct TimeSeriesChart: View {
     }
 
     /// Returns a compact time format for x-axis labels based on bucket size
-    private func xAxisFormat(for bucket: TimeBucket) -> Date.FormatStyle {
+    private var spansMultipleDays: Bool {
+        guard let first = points.first?.bucket, let last = points.last?.bucket else { return false }
+        return !Calendar.current.isDate(first, inSameDayAs: last)
+    }
+
+    private var shortRangeSpansBoundary: Bool {
+        guard spansMultipleDays,
+              let first = points.first?.bucket,
+              let last = points.last?.bucket else { return false }
+        return last.timeIntervalSince(first) <= 36 * 3600
+    }
+
+    private var multiDaySpanDays: Int {
+        guard let first = points.first?.bucket, let last = points.last?.bucket else { return 0 }
+        let start = Calendar.current.startOfDay(for: first)
+        let end = Calendar.current.startOfDay(for: last)
+        return max(0, Calendar.current.dateComponents([.day], from: start, to: end).day ?? 0)
+    }
+
+    private var multiDayXAxisFormat: Date.FormatStyle {
+        // HIG-aligned: concise labels for broad ranges.
+        if multiDaySpanDays >= 6 {
+            return .dateTime.weekday(.abbreviated)
+        }
+        return .dateTime.month(.abbreviated).day()
+    }
+
+    private func shortRangeBoundaryLabel(for date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.component(.hour, from: date) == 0 {
+            return date.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return date.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+    }
+
+    private func xAxisLabel(for date: Date) -> String {
         switch bucket {
-        case .tenSeconds, .minute, .fiveMinutes, .fifteenMinutes:
-            // Short time format: "2:30 PM" or "14:30"
-            return .dateTime.hour(.defaultDigits(amPM: .abbreviated)).minute(.twoDigits)
+        case .tenSeconds:
+            // Without seconds, six consecutive 10s buckets would share one label.
+            return Self.secondsFormatter.string(from: date)
+        case .minute, .fiveMinutes, .fifteenMinutes:
+            return Self.timeFormatter.string(from: date)
         case .hour:
-            // Hour only: "2 PM" or "14:00"
-            return .dateTime.hour(.defaultDigits(amPM: .abbreviated))
+            return Self.timeFormatter.string(from: date)
         case .day:
-            // Date only: "Jan 15"
-            return .dateTime.month(.abbreviated).day()
+            return Self.dateTimeFormatter.string(from: date)
         }
     }
 }
@@ -694,11 +2765,19 @@ private struct TimeSeriesChartTooltip: View {
     let point: AnalyticsSeriesPoint
     let valueLabel: String
     let bucket: TimeBucket
+    var valueFormatter: ((Int) -> String)? = nil
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .none
         f.timeStyle = .short
+        return f
+    }()
+
+    private static let secondsFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .medium
         return f
     }()
 
@@ -714,19 +2793,22 @@ private struct TimeSeriesChartTooltip: View {
             Text(formattedTime)
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-            Text("\(valueLabel): \(point.value)")
+            Text("\(valueLabel): \(valueFormatter?(point.value) ?? point.value.formatted())")
                 .font(.caption.weight(.medium))
         }
         .padding(6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color(platform: .platformWindowBackground))
                 .shadow(radius: 2)
         )
     }
 
     private var formattedTime: String {
         switch bucket {
+        case .tenSeconds:
+            // Seconds precision — otherwise six consecutive buckets share a header.
+            return Self.secondsFormatter.string(from: point.bucket)
         case .minute, .fiveMinutes, .fifteenMinutes:
             return Self.timeFormatter.string(from: point.bucket)
         default:
@@ -756,18 +2838,24 @@ private struct HistogramChart: View {
                     .opacity(selectedBin == nil || selectedBin?.label == bin.label ? 1 : 0.5)
                 }
             }
+            .chartYScale(range: .plotDimension(startPadding: 8, endPadding: 8))
+            .chartXScale(range: .plotDimension(startPadding: 6, endPadding: 6))
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Histogram.maxLabelCount)) { _ in
                     AxisGridLine()
                         .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisTick()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                     AxisValueLabel()
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                 }
             }
             .chartYAxis {
-                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
                     AxisGridLine()
                         .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisTick()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                     AxisValueLabel()
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                 }
@@ -822,9 +2910,51 @@ private struct HistogramChartTooltip: View {
         .padding(6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color(platform: .platformWindowBackground))
                 .shadow(radius: 2)
         )
+    }
+}
+
+private struct FrameTypeStackChart: View {
+    let series: AnalyticsSeries
+
+    private struct FrameTypePoint: Identifiable {
+        let bucket: Date
+        let type: String
+        let value: Int
+        var id: String { "\(type)-\(bucket.timeIntervalSinceReferenceDate)" }
+    }
+
+    private var points: [FrameTypePoint] {
+        let i = series.iFramesPerBucket.map { FrameTypePoint(bucket: $0.bucket, type: "I", value: $0.value) }
+        let ui = series.uiFramesPerBucket.map { FrameTypePoint(bucket: $0.bucket, type: "UI", value: $0.value) }
+        let other = series.otherFramesPerBucket.map { FrameTypePoint(bucket: $0.bucket, type: "Other", value: $0.value) }
+        return i + ui + other
+    }
+
+    var body: some View {
+        if series.iFramesPerBucket.isEmpty && series.uiFramesPerBucket.isEmpty && series.otherFramesPerBucket.isEmpty {
+            EmptyChartPlaceholder(text: "No data")
+        } else {
+            Chart(points) { point in
+                BarMark(
+                    x: .value("Time", point.bucket),
+                    y: .value("Frames", point.value)
+                )
+                .foregroundStyle(by: .value("Type", point.type))
+            }
+            .chartForegroundStyleScale([
+                "I": AnalyticsStyle.Colors.accent,
+                "UI": AnalyticsStyle.Colors.accent.opacity(0.55),
+                "Other": Color(platform: .systemGray).opacity(0.5)
+            ])
+            .chartYScale(domain: .automatic(includesZero: true))
+            .chartLegend(position: .top, alignment: .leading, spacing: 4)
+            .chartPlotStyle { plotArea in
+                plotArea.background(AnalyticsStyle.Colors.chartPlotBackground)
+            }
+        }
     }
 }
 
@@ -835,17 +2965,34 @@ private struct TopListView: View {
         if rows.isEmpty {
             EmptyChartPlaceholder(text: "No data")
         } else {
+            let maxCount = max(1, rows.map(\.count).max() ?? 1)
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(rows) { row in
-                    HStack {
+                    HStack(spacing: 8) {
                         Text(row.label)
-                        Spacer()
+                            .frame(minWidth: 84, alignment: .leading)
+                        // Proportional bar makes rankings scannable at a glance.
+                        GeometryReader { proxy in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(AnalyticsStyle.Colors.accent.opacity(0.35))
+                                .frame(
+                                    width: max(2, proxy.size.width * CGFloat(row.count) / CGFloat(maxCount)),
+                                    height: 8
+                                )
+                                .frame(maxHeight: .infinity, alignment: .center)
+                        }
                         Text("\(row.count)")
+                            .monospacedDigit()
                             .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .frame(minWidth: 40, alignment: .trailing)
                     }
                     .font(.caption)
+                    .frame(height: 16)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(row.label), \(row.count)")
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 }
@@ -885,13 +3032,18 @@ private struct HeatmapView: View {
                         for row in 0..<rows {
                             for col in 0..<cols {
                                 let value = data.matrix[row][col]
-                                let alpha = AnalyticsStyle.Heatmap.minAlpha + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * (Double(value) / Double(maxValue))
+                                // Zero traffic renders unfilled; the minimum tint is
+                                // reserved for cells with at least one packet.
+                                let alpha = value == 0
+                                    ? 0
+                                    : AnalyticsStyle.Heatmap.minAlpha + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * (Double(value) / Double(maxValue))
+                                // 1pt gap keeps adjacent nonzero hours visually distinct.
                                 let rect = CGRect(
                                     x: labelWidth + CGFloat(col) * cellWidth,
                                     y: CGFloat(row) * cellHeight,
                                     width: cellWidth,
                                     height: cellHeight
-                                )
+                                ).insetBy(dx: 1, dy: 1)
                                 let path = Path(roundedRect: rect, cornerRadius: AnalyticsStyle.Heatmap.cellCornerRadius)
                                 context.fill(path, with: .color(AnalyticsStyle.Colors.accent.opacity(alpha)))
 
@@ -899,7 +3051,7 @@ private struct HeatmapView: View {
                                 if let hovered = hoveredCell, hovered.row == row, hovered.col == col {
                                     context.stroke(
                                         Path(roundedRect: rect.insetBy(dx: 1, dy: 1), cornerRadius: AnalyticsStyle.Heatmap.cellCornerRadius),
-                                        with: .color(Color(nsColor: .labelColor)),
+                                        with: .color(Color(platform: .platformLabel)),
                                         lineWidth: 2
                                     )
                                 }
@@ -984,6 +3136,29 @@ private struct HeatmapView: View {
     }
 }
 
+private struct HeatmapIntensityLegend: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("less")
+            HStack(spacing: 1) {
+                ForEach(0..<5, id: \.self) { step in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(AnalyticsStyle.Colors.accent.opacity(
+                            AnalyticsStyle.Heatmap.minAlpha
+                                + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * Double(step) / 4
+                        ))
+                        .frame(width: 10, height: 8)
+                }
+            }
+            Text("more")
+        }
+        .font(.caption2)
+        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Heatmap intensity legend, lighter cells mean fewer packets")
+    }
+}
+
 private struct HeatmapTooltip: View {
     let xLabel: String
     let yLabel: String
@@ -991,7 +3166,7 @@ private struct HeatmapTooltip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("\(yLabel), \(xLabel)")
+            Text("\(yLabel), \(xLabel):00–\(xLabel):59")
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
             Text("\(value) packets")
@@ -1000,7 +3175,7 @@ private struct HeatmapTooltip: View {
         .padding(6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color(platform: .platformWindowBackground))
                 .shadow(radius: 2)
         )
     }
@@ -1029,7 +3204,7 @@ private struct ChartTooltip: View {
             .padding(6)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .fill(Color(platform: .platformWindowBackground))
                     .shadow(radius: 2)
             )
     }
@@ -1037,25 +3212,6 @@ private struct ChartTooltip: View {
 
 // Old GraphInspectorView, NodeDetailsView, and MetricRow removed
 // Now using GraphSidebar component with tabbed Overview/Inspector
-
-private struct FilterControlGroup<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    init(title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-            content
-        }
-    }
-}
 
 private struct ChartWidthReader: View {
     let onChange: (CGFloat) -> Void
@@ -1079,111 +3235,4 @@ private struct ChartWidthReader: View {
     }
 }
 
-// MARK: - Flow Layout for Responsive Controls
 
-/// A layout that wraps content to the next row when it doesn't fit.
-private struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = layout(subviews: subviews, proposal: proposal)
-        return result.size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = layout(subviews: subviews, proposal: proposal)
-        for (index, position) in result.positions.enumerated() {
-            subviews[index].place(
-                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
-                proposal: .unspecified
-            )
-        }
-    }
-
-    private func layout(subviews: Subviews, proposal: ProposedViewSize) -> (size: CGSize, positions: [CGPoint]) {
-        let maxWidth = proposal.width ?? .infinity
-        var positions: [CGPoint] = []
-        var currentX: CGFloat = 0
-        var currentY: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalHeight: CGFloat = 0
-        var totalWidth: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-
-            if currentX + size.width > maxWidth && currentX > 0 {
-                // Move to next row
-                currentX = 0
-                currentY += rowHeight + spacing
-                rowHeight = 0
-            }
-
-            positions.append(CGPoint(x: currentX, y: currentY))
-            currentX += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-            totalWidth = max(totalWidth, currentX - spacing)
-        }
-
-        totalHeight = currentY + rowHeight
-        return (CGSize(width: totalWidth, height: totalHeight), positions)
-    }
-}
-
-// MARK: - Floating Control Bar
-
-/// Preference key for tracking scroll offset
-private struct ScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-/// Floating glass control bar that sticks to the top of the scroll view.
-/// Uses material blur when available, falls back to solid background for accessibility.
-private struct FloatingControlBar<Content: View>: View {
-    let scrollOffset: CGFloat
-    let reduceTransparency: Bool
-    @ViewBuilder let content: Content
-
-    /// Threshold in points before the bar transitions to "scrolled" state
-    private let scrollThreshold: CGFloat = 12
-    /// Corner radius for the pill-shaped bar
-    private let cornerRadius: CGFloat = 14
-
-    private var isScrolled: Bool {
-        scrollOffset > scrollThreshold
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            content
-                .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
-                .padding(.vertical, 10)
-        }
-        .background(
-            Group {
-                if reduceTransparency {
-                    // Solid background for accessibility
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                } else {
-                    // Glass effect with material blur - more opaque for better readability
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(.regularMaterial)
-                        .opacity(isScrolled ? 1 : 0.92)
-                }
-            }
-        )
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(isScrolled ? 0.12 : 0.06), radius: isScrolled ? 8 : 4, y: 2)
-        .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
-        .padding(.top, 8)
-        .animation(.easeOut(duration: 0.2), value: isScrolled)
-    }
-}

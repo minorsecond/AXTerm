@@ -11,7 +11,7 @@ import Foundation
 // MARK: - Connection Mode
 
 /// Transport mode for transmission
-enum TxConnectionMode: String, CaseIterable, Codable {
+nonisolated enum TxConnectionMode: String, CaseIterable, Codable {
     case datagram = "Datagram"   // UI frames - no connection, best effort
     case connected = "Connected" // SABM/UA session with I-frames
 
@@ -35,7 +35,7 @@ enum TxConnectionMode: String, CaseIterable, Codable {
 
 /// ViewModel managing terminal TX state: compose input, queue, and history.
 /// Note: This is a struct for testability. Wrap in ObservableObject for SwiftUI use.
-struct TerminalTxViewModel {
+nonisolated struct TerminalTxViewModel {
 
     // MARK: - Compose State
 

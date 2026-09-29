@@ -250,12 +250,16 @@ final class TxAdaptiveSettingsViewModelTests: XCTestCase {
     func testUpdateFromLinkQualityGoodLink() {
         var viewModel = TxAdaptiveSettingsViewModel(settings: TxAdaptiveSettings())
 
-        viewModel.updateFromLinkQuality(lossRate: 0.02, etx: 1.1, srtt: 1.5)
-
-        // With good link, paclen should be default
+        // A single good sample holds the defaults (anti-flap, spec 4.2);
+        // sustained evidence earns the upgrade.
+        viewModel.updateFromLinkQuality(lossRate: 0.02, etx: 1.1, srtt: 1.5, newFrames: 1, retransmits: 0)
         XCTAssertEqual(viewModel.settings.paclen.currentAdaptive, 128)
+        XCTAssertEqual(viewModel.settings.windowSize.currentAdaptive, 2)
 
-        // Window size should increase
-        XCTAssertGreaterThan(viewModel.settings.windowSize.currentAdaptive, 2)
+        for _ in 0..<9 {
+            viewModel.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: 1.5, newFrames: 1, retransmits: 0)
+        }
+        XCTAssertGreaterThan(viewModel.settings.windowSize.currentAdaptive, 2,
+                             "sustained clean traffic raises the window")
     }
 }

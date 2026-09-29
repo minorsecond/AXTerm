@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum PayloadFormatter {
+nonisolated enum PayloadFormatter {
     static let defaultBytesPerLine: Int = 16
 
     static func hexString(_ data: Data, bytesPerLine: Int = defaultBytesPerLine) -> String {

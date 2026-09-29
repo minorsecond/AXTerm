@@ -15,10 +15,11 @@ final class MHeardTests: XCTestCase {
         let later = now.addingTimeInterval(10)
         var tracker = StationTracker()
 
+        // H-bit set: the copy we heard came out of WIDE1-1's transmitter.
         let firstPacket = Packet(
             timestamp: now,
             from: AX25Address(call: "N0CALL", ssid: 1),
-            via: [AX25Address(call: "WIDE1", ssid: 1)]
+            via: [AX25Address(call: "WIDE1", ssid: 1, repeated: true)]
         )
         tracker.update(with: firstPacket)
 
@@ -29,7 +30,7 @@ final class MHeardTests: XCTestCase {
         let secondPacket = Packet(
             timestamp: later,
             from: AX25Address(call: "N0CALL", ssid: 1),
-            via: [AX25Address(call: "WIDE2", ssid: 1)]
+            via: [AX25Address(call: "WIDE2", ssid: 1, repeated: true)]
         )
         tracker.update(with: secondPacket)
 
@@ -37,6 +38,45 @@ final class MHeardTests: XCTestCase {
         XCTAssertEqual(tracker.stations.first?.heardCount, 2)
         XCTAssertEqual(tracker.stations.first?.lastHeard, later)
         XCTAssertEqual(tracker.stations.first?.lastVia, ["WIDE2-1"])
+    }
+
+    /// Regression (field capture 2026-08-22): the sidebar said "Via DRLNOD,
+    /// FNKTWN" for a station an entire direct session was proving we hear
+    /// directly. lastVia only updated on non-empty via, so a stale digi path
+    /// stuck forever once recorded. Hearing a station direct must clear it.
+    func testDirectReceptionClearsStaleDigiPath() {
+        var tracker = StationTracker()
+        let station = AX25Address(call: "KB5YZB", ssid: 7)
+
+        tracker.update(with: Packet(
+            timestamp: Date(),
+            from: station,
+            via: [AX25Address(call: "DRLNOD", ssid: 0, repeated: true),
+                  AX25Address(call: "FNKTWN", ssid: 0, repeated: true)]
+        ))
+        XCTAssertEqual(tracker.stations.first?.lastVia, ["DRLNOD", "FNKTWN"])
+
+        tracker.update(with: Packet(
+            timestamp: Date().addingTimeInterval(5),
+            from: station,
+            via: []
+        ))
+        XCTAssertEqual(tracker.stations.first?.lastVia, [],
+                       "direct reception must clear the stale digipeated path")
+    }
+
+    /// A via list whose H-bits are all clear means the frame had NOT been
+    /// repeated yet — what we heard was the origin's own transmitter, so the
+    /// heard-path is direct regardless of the requested path.
+    func testUnrepeatedViaCountsAsDirect() {
+        var tracker = StationTracker()
+        tracker.update(with: Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "K0EPI", ssid: 7),
+            via: [AX25Address(call: "DRLNOD", ssid: 0, repeated: false)]
+        ))
+        XCTAssertEqual(tracker.stations.first?.lastVia, [],
+                       "an unacted via request is not a heard path")
     }
 
     func testStationHeardCountIncrements() {

@@ -8,7 +8,7 @@
 import Foundation
 
 extension String {
-    func wordSafeTruncate(limit: Int, trailing: String = "...") -> String {
+    nonisolated func wordSafeTruncate(limit: Int, trailing: String = "...") -> String {
         guard count > limit else { return self }
         let truncatedLimit = max(0, limit - trailing.count)
         let endIndex = index(startIndex, offsetBy: truncatedLimit, limitedBy: endIndex) ?? endIndex

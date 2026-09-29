@@ -14,7 +14,7 @@
 import Foundation
 
 /// Classification of an AX.25 packet based on its control field semantics.
-enum PacketClassification: String, Codable, Hashable, Sendable {
+nonisolated enum PacketClassification: String, Codable, Hashable, Sendable {
     /// I-frame carrying new data or routing information.
     /// High-value evidence for routing freshness and link quality.
     case dataProgress
@@ -133,7 +133,7 @@ enum PacketClassification: String, Codable, Hashable, Sendable {
 }
 
 /// Pure function classifier for AX.25 packets based on decoded control fields.
-enum PacketClassifier {
+nonisolated enum PacketClassifier {
 
     /// Classify a packet based on its control field semantics.
     ///
@@ -224,8 +224,8 @@ enum PacketClassifier {
             // UI frames are typically beacons or broadcasts
             return .uiBeacon
 
-        case .SABM, .SABME, .DISC, .UA, .DM, .FRMR:
-            // Session control frames
+        case .SABM, .SABME, .DISC, .UA, .DM, .FRMR, .XID:
+            // Session control frames (XID is 2.2 parameter negotiation)
             return .sessionControl
 
         case .UNKNOWN:
@@ -295,7 +295,9 @@ enum PacketClassifier {
 
 // MARK: - Packet Extension
 
-extension Packet {
+// Nonisolated, like the type it extends: only the project's main-actor
+// default put these members on an actor.
+nonisolated extension Packet {
     /// Get the classification for this packet
     var classification: PacketClassification {
         PacketClassifier.classify(packet: self)

@@ -298,14 +298,25 @@ final class AX25ControlFieldDecoderTests: XCTestCase {
     /// Test decoding unknown U-frame returns UNKNOWN uType but still U frameClass
     func testDecodeUnknownUFrame() {
         // Unknown U-frame pattern (not matching known types)
-        // 0xAF is a U-frame (bits 0-1 = 0b11) but not a known subtype
-        let controlBytes: [UInt8] = [0xAF]
+        // 0x23 is a U-frame (bits 0-1 = 0b11) with no assigned subtype.
+        // (0xAF, the previous example, is XID — decoded since 2.2
+        // negotiation landed.)
+        let controlBytes: [UInt8] = [0x23]
 
         let decoded = AX25ControlFieldDecoder.decode(controlBytes: controlBytes)
 
         XCTAssertEqual(decoded.frameClass, .U)
         XCTAssertEqual(decoded.uType, .UNKNOWN)
-        XCTAssertEqual(decoded.ctl0, 0xAF)
+        XCTAssertEqual(decoded.ctl0, 0x23)
+    }
+
+    func testDecodeXIDCommandAndResponseForms() {
+        for (byte, pf) in [(UInt8(0xAF), 0), (UInt8(0xBF), 1)] {
+            let decoded = AX25ControlFieldDecoder.decode(controlBytes: [byte])
+            XCTAssertEqual(decoded.frameClass, .U)
+            XCTAssertEqual(decoded.uType, .XID)
+            XCTAssertEqual(decoded.pf, pf)
+        }
     }
 
     /// Test decoding does not crash on malformed input

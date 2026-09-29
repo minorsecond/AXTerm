@@ -10,18 +10,65 @@ import SwiftUI
 struct StationRowView: View {
     let station: Station
     let isSelected: Bool
+    var isConnected: Bool = false
 
     /// AXDP capability for this station (nil if not known)
     var capability: AXDPCapability?
 
+    /// The station's other name, when the network has published one.
+    ///
+    /// A row holds whatever the AX.25 address field carried, which for a node
+    /// is often the tactical alias. `DRLNOD` alone is unplaceable — it is not a
+    /// licence and no directory has it — and `N0HI-7` alone is unrecognisable
+    /// to an operator who only ever sees SOLBPQ in node tables. Showing both
+    /// costs one dim word and removes the need to go and look it up.
+    var alsoKnownAs: String?
+
+    /// The node this station is a dial-out leg of, when it is one.
+    ///
+    /// A node asked to connect onward dials as the *operator*, under a free
+    /// SSID of their own callsign — so `K0EPI-6` appears in this list looking
+    /// like a stranger transmitting under the operator's licence, when it is
+    /// DRLNOD carrying their own session (field question 2026-08-28 18:53).
+    var relayLegOf: String?
+
+    /// "IC-705, Direwolf" — the radios that heard this station, most recent
+    /// first. Nil with one radio, when it would say the same thing on every
+    /// row.
+    var heardOn: String?
+
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    if let aprs = station.aprs {
+                        APRSSymbolView(table: aprs.symbolTable, code: aprs.symbolCode, size: 12)
+                            .foregroundStyle(.tint)
+                            .help("APRS: \(APRSSymbolGlyph.label(table: aprs.symbolTable, code: aprs.symbolCode))"
+                                  + (aprs.speedKnots.map { $0 > 0 ? " · \($0) kt" : "" } ?? ""))
+                    }
                     Text(station.call)
-                        .font(.system(.body, design: .monospaced))
+                        .font(.system(.subheadline, design: .monospaced))
                         .fontWeight(isSelected ? .semibold : .regular)
                         .help("Station callsign")
+
+                    if let alsoKnownAs, !alsoKnownAs.isEmpty {
+                        Text(alsoKnownAs)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .help("\(station.call) is also known as \(alsoKnownAs) — "
+                                  + "one of the two is a tactical node alias, the other the "
+                                  + "licence behind it. Learned from node tables and beacons; "
+                                  + "see Nodes for who announced it.")
+                    }
+
+                    if isConnected {
+                        Image(systemName: "link.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.green)
+                            .help("Connected session")
+                    }
 
                     // AXDP capability badge
                     if capability != nil {
@@ -29,16 +76,27 @@ struct StationRowView: View {
                     }
                 }
 
-                Text(station.subtitle)
-                    .font(.caption)
+                Text(heardOn.map { "\(station.subtitle) | \($0)" } ?? station.subtitle)
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .help("Packet count and last heard time")
+                    .help(heardOn.map { "Packet count, last heard time, and the radios that heard it: \($0), most recent first." }
+                          ?? "Packet count and last heard time")
 
                 if !station.lastViaDisplay.isEmpty {
                     Text("Via \(station.lastViaDisplay)")
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .help("Last heard digipeater path")
+                }
+
+                if let relayLegOf, !relayLegOf.isEmpty {
+                    Label("\(relayLegOf) dialing out as you", systemImage: "arrow.uturn.right")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .labelStyle(.titleAndIcon)
+                        .help("This is not another station: \(relayLegOf) connects "
+                              + "onward on your behalf using a spare SSID of your own "
+                              + "callsign. Its traffic is your session's downstream leg.")
                 }
             }
 
@@ -47,10 +105,22 @@ struct StationRowView: View {
             if isSelected {
                 Image(systemName: "checkmark")
                     .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
             }
         }
-        .padding(.vertical, 2)
-        .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+        .padding(.vertical, 3)
+        .padding(.horizontal, 6)
+        .background(
+            Group {
+                if isConnected {
+                    Color.green.opacity(0.10)
+                } else if isSelected {
+                    Color.accentColor.opacity(0.15)
+                } else {
+                    Color.clear
+                }
+            }
+        )
         .cornerRadius(4)
     }
 }

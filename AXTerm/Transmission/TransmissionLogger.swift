@@ -17,7 +17,7 @@ import OSLog
 // MARK: - Log Category
 
 /// Categories for transmission logging
-enum TxLogCategory: String {
+nonisolated enum TxLogCategory: String {
     case kiss = "KISS"
     case ax25 = "AX25"
     case fx25 = "FX25"
@@ -33,6 +33,7 @@ enum TxLogCategory: String {
     case path = "PATH"
     case settings = "SETTINGS"
     case adaptive = "ADAPTIVE"
+    case modem = "MODEM"
 
     var emoji: String {
         switch self {
@@ -51,6 +52,7 @@ enum TxLogCategory: String {
         case .path: return "🛤️"
         case .settings: return "⚙️"
         case .adaptive: return "📊"
+        case .modem: return "🎛️"
         }
     }
 }
@@ -58,7 +60,7 @@ enum TxLogCategory: String {
 // MARK: - Log Direction
 
 /// Direction indicator for message flow
-enum TxLogDirection: String {
+nonisolated enum TxLogDirection: String {
     case outbound = "TX"
     case inbound = "RX"
     case internal_ = "──"
@@ -114,7 +116,7 @@ final class TxLog {
 
     private init() {}
 
-    static func configure(wireDebugEnabled: Bool) {
+    nonisolated static func configure(wireDebugEnabled: Bool) {
         Task { @MainActor in
             shared.verboseConsole = wireDebugEnabled
             shared.captureWireEvents = wireDebugEnabled
@@ -125,42 +127,71 @@ final class TxLog {
     // MARK: - Public API
 
     /// Log an outbound (TX) message
-    static func outbound(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+    nonisolated static func outbound(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.log(direction: .outbound, category: category, message: message, data: data, level: .info)
         }
     }
 
     /// Log an inbound (RX) message
-    static func inbound(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+    nonisolated static func inbound(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.log(direction: .inbound, category: category, message: message, data: data, level: .info)
         }
     }
 
     /// Log an internal operation
-    static func debug(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+    nonisolated static func debug(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.log(direction: .internal_, category: category, message: message, data: data, level: .debug)
         }
     }
 
     /// Log a warning
-    static func warning(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+    nonisolated static func warning(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.log(direction: .internal_, category: category, message: message, data: data, level: .warning)
         }
     }
 
     /// Log an error (always captured by Sentry)
-    static func error(_ category: TxLogCategory, _ message: String, error: Error? = nil, _ data: [String: Any]? = nil) {
+    nonisolated static func error(_ category: TxLogCategory, _ message: String, error: Error? = nil, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.logError(category: category, message: message, error: error, data: data)
         }
     }
 
+    /// Report an event that permanently discarded received user data.
+    ///
+    /// Always a captured Sentry EVENT, never just a breadcrumb: paths like the
+    /// receive-gap flush deliberately keep the link alive (resetting the retry
+    /// counter), which suppresses the link-failure event that would otherwise
+    /// have shipped the surrounding breadcrumbs — so data loss must carry its
+    /// own event or it is invisible in production.
+    nonisolated static func dataLoss(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+        warning(category, message, data)  // local log + breadcrumb
+        Task { @MainActor in
+            var extra = data ?? [:]
+            extra["category"] = category.rawValue
+            SentryManager.shared.captureDataLoss(message, extra: extra)
+        }
+    }
+
+    /// Report a protocol/state invariant violation.
+    ///
+    /// Ships a non-fatal Sentry event in ALL builds (throttled per message).
+    /// Call this immediately before the debug `assertionFailure` so release
+    /// builds — where asserts compile out — still produce a signal instead of
+    /// silently corrupting protocol state.
+    nonisolated static func invariantViolation(_ message: String, _ data: [String: Any]? = nil) {
+        warning(.session, "INVARIANT VIOLATION: \(message)", data)
+        Task { @MainActor in
+            SentryManager.shared.captureInvariantViolation(message, extra: data)
+        }
+    }
+
     /// Log frame hex dump (DEBUG only, truncated)
-    static func hexDump(_ category: TxLogCategory, _ label: String, data: Data, maxBytes: Int = 64) {
+    nonisolated static func hexDump(_ category: TxLogCategory, _ label: String, data: Data, maxBytes: Int = 64) {
         #if DEBUG
         Task { @MainActor in
             shared.logHexDump(category: category, label: label, data: data, maxBytes: maxBytes)
@@ -170,41 +201,41 @@ final class TxLog {
 
     // MARK: - KISS-specific logging
 
-    static func kissConnect(host: String, port: UInt16) {
+    nonisolated static func kissConnect(host: String, port: UInt16) {
         outbound(.kiss, "Connecting", ["host": host, "port": port])
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.kiss",
             message: "KISS connect",
             level: .info,
             data: ["host": host, "port": port]
-        )
+        ) }
     }
 
-    static func kissConnected(host: String, port: UInt16) {
+    nonisolated static func kissConnected(host: String, port: UInt16) {
         inbound(.kiss, "Connected", ["host": host, "port": port])
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.kiss",
             message: "KISS connected",
             level: .info,
             data: ["host": host, "port": port]
-        )
+        ) }
     }
 
-    static func kissDisconnected(reason: String? = nil) {
+    nonisolated static func kissDisconnected(reason: String? = nil) {
         debug(.kiss, "Disconnected", reason.map { ["reason": $0] })
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.kiss",
             message: "KISS disconnected",
             level: .info,
             data: reason.map { ["reason": $0] }
-        )
+        ) }
     }
 
-    static func kissSend(frameId: UUID, size: Int) {
+    nonisolated static func kissSend(frameId: UUID, size: Int) {
         outbound(.kiss, "Send frame", ["frameId": frameId.uuidString.prefix(8), "size": size])
     }
 
-    static func kissSendComplete(frameId: UUID, success: Bool, error: Error? = nil) {
+    nonisolated static func kissSendComplete(frameId: UUID, success: Bool, error: Error? = nil) {
         if success {
             debug(.kiss, "Send complete", ["frameId": String(frameId.uuidString.prefix(8))])
         } else {
@@ -212,32 +243,32 @@ final class TxLog {
         }
     }
 
-    static func kissReceive(size: Int) {
+    nonisolated static func kissReceive(size: Int) {
         inbound(.kiss, "Received", ["size": size])
     }
 
     // MARK: - AX.25-specific logging
 
-    static func ax25Encode(dest: String, src: String, type: String, size: Int) {
+    nonisolated static func ax25Encode(dest: String, src: String, type: String, size: Int) {
         outbound(.ax25, "Encode \(type)", ["dest": dest, "src": src, "size": size])
     }
 
-    static func ax25Decode(dest: String, src: String, type: String, size: Int) {
+    nonisolated static func ax25Decode(dest: String, src: String, type: String, size: Int) {
         inbound(.ax25, "Decode \(type)", ["dest": dest, "src": src, "size": size])
     }
 
-    static func ax25DecodeError(reason: String, size: Int) {
-        error(.ax25, "Decode failed: \(reason)", error: nil, ["size": size])
-        SentryManager.shared.captureMessage(
-            "AX.25 decode failed: \(reason)",
-            level: .warning,
-            extra: ["size": size]
-        )
+    nonisolated static func ax25DecodeError(reason: String, size: Int) {
+        // Warning breadcrumb only. The single Sentry EVENT for a decode
+        // failure is SentryManager.captureDecodeFailure (throttled, with
+        // reason) at the PacketEngine call site — this used to be reported
+        // three times per bad frame, which turned a noisy channel into a
+        // quota incident.
+        warning(.ax25, "Decode failed: \(reason)", ["size": size])
     }
 
     // MARK: - AXDP-specific logging
 
-    static func axdpEncode(type: String, sessionId: UInt16, messageId: UInt32, payloadSize: Int) {
+    nonisolated static func axdpEncode(type: String, sessionId: UInt16, messageId: UInt32, payloadSize: Int) {
         outbound(.axdp, "Encode \(type)", [
             "session": sessionId,
             "msgId": messageId,
@@ -245,7 +276,7 @@ final class TxLog {
         ])
     }
 
-    static func axdpDecode(type: String, sessionId: UInt16, messageId: UInt32, payloadSize: Int) {
+    nonisolated static func axdpDecode(type: String, sessionId: UInt16, messageId: UInt32, payloadSize: Int) {
         inbound(.axdp, "Decode \(type)", [
             "session": sessionId,
             "msgId": messageId,
@@ -253,30 +284,54 @@ final class TxLog {
         ])
     }
 
-    static func axdpDecodeError(reason: String, data: Data) {
-        error(.axdp, "Decode failed: \(reason)", error: nil, ["size": data.count])
-        SentryManager.shared.captureMessage(
-            "AXDP decode failed: \(reason)",
+    /// AX.25 link failure (N2 exhausted). A SINGLE failure is normal radio
+    /// life and stays a warning breadcrumb — no event, no barrage under
+    /// ordinary use. Only when the coordinator's escalation logic flags rapid
+    /// repetition (3 failures in 10 minutes — the pattern that smells like a
+    /// defect) does one throttled Sentry EVENT ship, carrying the whole crumb
+    /// trail (T1 timeouts, adaptive collapse, retransmissions) that is
+    /// otherwise invisible in production.
+    nonisolated static func linkFailure(peer: String, path: String, retries: Int, escalated: Bool) {
+        warning(.session, "AX.25 link failure (N2 exhausted)", [
+            "peer": peer, "path": path, "retries": retries
+        ])
+        guard escalated else { return }
+        Task { @MainActor in SentryManager.shared.captureThrottled(
+            key: "ax25.linkFailure.repeated",
+            message: "Repeated AX.25 link failures (3 in 10 min)",
             level: .warning,
-            extra: ["size": data.count]
-        )
+            extra: ["peer": peer, "path": path, "retries": retries]
+        ) }
     }
 
-    static func axdpPing(peer: String) {
+    nonisolated static func axdpDecodeError(reason: String, data: Data) {
+        // Breadcrumb via TxLog.warning; the single throttled event ships here.
+        // (Previously TxLog.error + a second captureMessage = two events per
+        // malformed AXDP frame, unthrottled.)
+        warning(.axdp, "Decode failed: \(reason)", ["size": data.count])
+        Task { @MainActor in SentryManager.shared.captureThrottled(
+            key: "decode.axdp.\(reason)",
+            message: "AXDP decode failed: \(reason)",
+            level: .warning,
+            extra: ["size": data.count]
+        ) }
+    }
+
+    nonisolated static func axdpPing(peer: String) {
         outbound(.axdp, "PING", ["peer": peer])
     }
 
-    static func axdpPong(peer: String, rtt: Double?) {
+    nonisolated static func axdpPong(peer: String, rtt: Double?) {
         inbound(.axdp, "PONG", ["peer": peer, "rtt": rtt.map { String(format: "%.1fms", $0 * 1000) } ?? "n/a"])
     }
 
-    static func axdpCapability(peer: String, caps: [String]) {
+    nonisolated static func axdpCapability(peer: String, caps: [String]) {
         inbound(.capability, "Capabilities", ["peer": peer, "caps": caps.joined(separator: ", ")])
     }
 
     // MARK: - Compression logging
 
-    static func compressionEncode(algorithm: String, originalSize: Int, compressedSize: Int) {
+    nonisolated static func compressionEncode(algorithm: String, originalSize: Int, compressedSize: Int) {
         let ratio = originalSize > 0 ? Double(compressedSize) / Double(originalSize) : 1.0
         outbound(.compression, "Compress (\(algorithm))", [
             "original": originalSize,
@@ -285,25 +340,28 @@ final class TxLog {
         ])
     }
 
-    static func compressionDecode(algorithm: String, compressedSize: Int, decompressedSize: Int) {
+    nonisolated static func compressionDecode(algorithm: String, compressedSize: Int, decompressedSize: Int) {
         inbound(.compression, "Decompress (\(algorithm))", [
             "compressed": compressedSize,
             "decompressed": decompressedSize
         ])
     }
 
-    static func compressionError(operation: String, reason: String) {
-        error(.compression, "\(operation) failed: \(reason)")
-        SentryManager.shared.captureMessage(
-            "Compression \(operation) failed: \(reason)",
+    nonisolated static func compressionError(operation: String, reason: String) {
+        // Breadcrumb + one throttled event (was TxLog.error + captureMessage =
+        // two unthrottled events per failure).
+        warning(.compression, "\(operation) failed: \(reason)")
+        Task { @MainActor in SentryManager.shared.captureThrottled(
+            key: "compression.\(operation).\(reason)",
+            message: "Compression \(operation) failed: \(reason)",
             level: .warning,
             extra: nil
-        )
+        ) }
     }
 
     // MARK: - Queue logging
 
-    static func queueEnqueue(frameId: UUID, dest: String, priority: String, queueDepth: Int) {
+    nonisolated static func queueEnqueue(frameId: UUID, dest: String, priority: String, queueDepth: Int) {
         debug(.queue, "Enqueue", [
             "frameId": String(frameId.uuidString.prefix(8)),
             "dest": dest,
@@ -312,14 +370,14 @@ final class TxLog {
         ])
     }
 
-    static func queueDequeue(frameId: UUID, dest: String) {
+    nonisolated static func queueDequeue(frameId: UUID, dest: String) {
         debug(.queue, "Dequeue", [
             "frameId": String(frameId.uuidString.prefix(8)),
             "dest": dest
         ])
     }
 
-    static func queueCancel(frameId: UUID, reason: String) {
+    nonisolated static func queueCancel(frameId: UUID, reason: String) {
         debug(.queue, "Cancel", [
             "frameId": String(frameId.uuidString.prefix(8)),
             "reason": reason
@@ -328,35 +386,35 @@ final class TxLog {
 
     // MARK: - Session logging
 
-    static func sessionOpen(sessionId: UUID, peer: String, mode: String) {
+    nonisolated static func sessionOpen(sessionId: UUID, peer: String, mode: String) {
         outbound(.session, "Open", [
             "session": String(sessionId.uuidString.prefix(8)),
             "peer": peer,
             "mode": mode
         ])
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.session",
             message: "Session open",
             level: .info,
             data: ["peer": peer, "mode": mode]
-        )
+        ) }
     }
 
-    static func sessionClose(sessionId: UUID, peer: String, reason: String) {
+    nonisolated static func sessionClose(sessionId: UUID, peer: String, reason: String) {
         debug(.session, "Close", [
             "session": String(sessionId.uuidString.prefix(8)),
             "peer": peer,
             "reason": reason
         ])
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.session",
             message: "Session close",
             level: .info,
             data: ["peer": peer, "reason": reason]
-        )
+        ) }
     }
 
-    static func sessionStateChange(sessionId: UUID, from: String, to: String) {
+    nonisolated static func sessionStateChange(sessionId: UUID, from: String, to: String) {
         debug(.session, "State: \(from) → \(to)", [
             "session": String(sessionId.uuidString.prefix(8))
         ])
@@ -364,7 +422,7 @@ final class TxLog {
 
     // MARK: - RTT/Congestion logging
 
-    static func rttUpdate(peer: String, srtt: Double, rttvar: Double, rto: Double) {
+    nonisolated static func rttUpdate(peer: String, srtt: Double, rttvar: Double, rto: Double) {
         debug(.rtt, "Update", [
             "peer": peer,
             "srtt": String(format: "%.1fms", srtt * 1000),
@@ -373,7 +431,7 @@ final class TxLog {
         ])
     }
 
-    static func congestionWindowChange(peer: String, cwnd: Int, reason: String) {
+    nonisolated static func congestionWindowChange(peer: String, cwnd: Int, reason: String) {
         debug(.congestion, reason, [
             "peer": peer,
             "cwnd": cwnd
@@ -382,7 +440,7 @@ final class TxLog {
 
     // MARK: - Path logging
 
-    static func pathSuggestion(dest: String, path: String, score: Double, reason: String) {
+    nonisolated static func pathSuggestion(dest: String, path: String, score: Double, reason: String) {
         debug(.path, "Suggestion", [
             "dest": dest,
             "path": path.isEmpty ? "(direct)" : path,
@@ -393,7 +451,11 @@ final class TxLog {
 
     // MARK: - Adaptive transmission logging (always to console in DEBUG so user can verify it's working)
 
-    static func adaptiveLearning(source: String, lossRate: Double, etx: Double, srtt: Double?, rto: Double?, window: Int, paclen: Int, maxRetries: Int, reason: String) {
+    /// `forwardLoss`/`reverseLoss` are recorded separately because they are
+    /// acted on separately, and because a line reading `loss=0.25` gave no
+    /// way to tell a link dropping our frames from one merely being shouted
+    /// at — the two call for opposite responses.
+    nonisolated static func adaptiveLearning(source: String, lossRate: Double, forwardLoss: Double? = nil, reverseLoss: Double? = nil, etx: Double, srtt: Double?, rto: Double?, window: Int, paclen: Int, maxRetries: Int, reason: String) {
         var data: [String: Any] = [
             "source": source,
             "loss": String(format: "%.2f", lossRate),
@@ -403,15 +465,19 @@ final class TxLog {
             "maxRetries": maxRetries,
             "reason": reason
         ]
+        if let f = forwardLoss { data["lossOut"] = String(format: "%.2f", f) }
+        if let r = reverseLoss { data["lossIn"] = String(format: "%.2f", r) }
         if let s = srtt { data["srtt"] = String(format: "%.2fs", s) }
         if let r = rto { data["rto"] = String(format: "%.2fs", r) }
         #if DEBUG
-        print("[ADAPTIVE] 📊 Learning | \(source) | loss=\(String(format: "%.2f", lossRate)) etx=\(String(format: "%.2f", etx))\(srtt.map { " srtt=\(String(format: "%.2fs", $0))" } ?? "")\(rto.map { " rto=\(String(format: "%.2fs", $0))" } ?? "") → K=\(window) P=\(paclen) N2=\(maxRetries) | \(reason)")
+        let direction = (forwardLoss.map { " out=\(String(format: "%.2f", $0))" } ?? "")
+            + (reverseLoss.map { " in=\(String(format: "%.2f", $0))" } ?? "")
+        print("[ADAPTIVE] 📊 Learning | \(source) | loss=\(String(format: "%.2f", lossRate))\(direction) etx=\(String(format: "%.2f", etx))\(srtt.map { " srtt=\(String(format: "%.2fs", $0))" } ?? "")\(rto.map { " rto=\(String(format: "%.2fs", $0))" } ?? "") → K=\(window) P=\(paclen) N2=\(maxRetries) | \(reason)")
         #endif
         debug(.adaptive, "Learning", data)
     }
 
-    static func adaptiveConfigSynced(window: Int, paclen: Int, rtoMin: Double, rtoMax: Double, maxRetries: Int, initialRto: Double) {
+    nonisolated static func adaptiveConfigSynced(window: Int, paclen: Int, rtoMin: Double, rtoMax: Double, maxRetries: Int, initialRto: Double) {
         let data: [String: Any] = [
             "window": window,
             "paclen": paclen,
@@ -426,35 +492,35 @@ final class TxLog {
         debug(.adaptive, "Config synced", data)
     }
 
-    static func adaptiveCleared(reason: String) {
+    nonisolated static func adaptiveCleared(reason: String) {
         #if DEBUG
         print("[ADAPTIVE] 📊 Cleared | \(reason)")
         #endif
         debug(.adaptive, "Cleared", ["reason": reason])
     }
 
-    static func adaptiveDisabled() {
+    nonisolated static func adaptiveDisabled() {
         #if DEBUG
         print("[ADAPTIVE] 📊 Disabled – using fixed defaults")
         #endif
         debug(.adaptive, "Disabled", nil)
     }
 
-    static func adaptiveEnabled() {
+    nonisolated static func adaptiveEnabled() {
         #if DEBUG
         print("[ADAPTIVE] 📊 Enabled – learning from session and network")
         #endif
         debug(.adaptive, "Enabled", nil)
     }
 
-    static func adaptiveStationReset(callsign: String) {
+    nonisolated static func adaptiveStationReset(callsign: String) {
         #if DEBUG
         print("[ADAPTIVE] 📊 Station reset to default | \(callsign)")
         #endif
         debug(.adaptive, "Station reset", ["callsign": callsign])
     }
 
-    static func adaptiveSampleIgnored(reason: String, lossRate: Double? = nil, etx: Double? = nil) {
+    nonisolated static func adaptiveSampleIgnored(reason: String, lossRate: Double? = nil, etx: Double? = nil) {
         var data: [String: Any] = ["reason": reason]
         if let l = lossRate { data["loss"] = String(format: "%.2f", l) }
         if let e = etx { data["etx"] = String(format: "%.2f", e) }
@@ -510,14 +576,17 @@ final class TxLog {
             logger.error("\(osLogMessage)")
         }
 
-        // Sentry breadcrumb (all builds, sampling for high-volume)
+        // Sentry breadcrumb (all builds). Flood control lives centrally in
+        // SentryManager.addBreadcrumb: per-category budgets with suppressed-
+        // count summaries, plus content redaction honoring the operator's
+        // "send packet contents" setting.
         let sentryCategory = "tx.\(category.rawValue.lowercased())"
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: sentryCategory,
             message: "\(direction.rawValue): \(message)",
             level: mapToSentryLevel(level),
             data: data
-        )
+        ) }
     }
 
     private func logError(category: TxLogCategory, message: String, error: Error?, data: [String: Any]?) {
@@ -539,18 +608,18 @@ final class TxLog {
         var extra = data ?? [:]
         extra["category"] = category.rawValue
         if let error = error {
-            SentryManager.shared.capture(
+            Task { @MainActor in SentryManager.shared.capture(
                 error: error,
                 context: "TX[\(category.rawValue)]: \(message)",
                 level: .error,
                 extra: extra
-            )
+            ) }
         } else {
-            SentryManager.shared.captureMessage(
+            Task { @MainActor in SentryManager.shared.captureMessage(
                 "TX[\(category.rawValue)]: \(message)",
                 level: .error,
                 extra: extra
-            )
+            ) }
         }
     }
 
@@ -582,4 +651,20 @@ final class TxLog {
         case .error: return .error
         }
     }
+}
+
+// MARK: - Debug-only trace printing
+
+/// Debug-only console trace, compiled out of release builds.
+///
+/// The AX.25/AXDP receive path emitted these on every frame via bare `print(...)`. In a
+/// release build that is synchronous console I/O on the main thread for every packet, and
+/// the interpolated arguments (send-buffer key arrays, hex dumps) were built even when
+/// nothing consumed them. Taking the message as an @autoclosure means release builds skip
+/// the formatting as well as the write.
+@inline(__always)
+nonisolated func axDebugPrint(_ message: @autoclosure () -> String) {
+#if DEBUG
+    print(message())
+#endif
 }

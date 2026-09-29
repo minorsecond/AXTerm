@@ -1,0 +1,285 @@
+import XCTest
+@testable import AXTerm
+
+@MainActor
+final class AdaptiveStatusStoreTests: XCTestCase {
+
+    func testEffectiveAdaptivePrefersSelectedSessionWhenAvailable() {
+        let store = AdaptiveStatusStore()
+        var global = TxAdaptiveSettings()
+        global.windowSize.currentAdaptive = 2
+        global.paclen.currentAdaptive = 128
+        global.maxRetries.currentAdaptive = 15
+        store.updateGlobal(settings: global, lossRate: 0.12, etx: 1.6, srtt: nil, updatedAt: Date())
+
+        var session = TxAdaptiveSettings()
+        session.windowSize.currentAdaptive = 1
+        session.paclen.currentAdaptive = 64
+        session.maxRetries.currentAdaptive = 10
+        store.updateSession(
+            id: "N0HI-7|WIDE1-1",
+            destination: "N0HI-7",
+            pathSignature: "WIDE1-1",
+            settings: session,
+            lossRate: 0.22,
+            etx: 2.4,
+            srtt: nil,
+            updatedAt: Date()
+        )
+
+        store.setSelectedSession(id: "N0HI-7|WIDE1-1")
+        XCTAssertEqual(store.effectiveAdaptive?.k, 1)
+        XCTAssertEqual(store.effectiveAdaptive?.p, 64)
+        XCTAssertEqual(store.effectiveAdaptive?.n2, 10)
+
+        store.setSelectedSession(id: "UNKNOWN|")
+        XCTAssertEqual(store.effectiveAdaptive?.k, 2)
+        XCTAssertEqual(store.effectiveAdaptive?.p, 128)
+        XCTAssertEqual(store.effectiveAdaptive?.n2, 15)
+    }
+
+    /// The store must surface the controller's learning state — the smoothed
+    /// metrics decisions are actually made on, the streak progress toward the
+    /// next upgrade, the probation trial, and the what-happened counters —
+    /// so the UI can show its work (CLAUDE.md: tooltips must explain WHY).
+    func testSessionParamsCarryLearningStateAndMetrics() {
+        let store = AdaptiveStatusStore()
+        var settings = TxAdaptiveSettings()
+        // Earn an upgrade (opens probation) then take a hit (rollback).
+        for _ in 0..<10 {
+            settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: 2.0, newFrames: 1, retransmits: 0)
+        }
+        let probationRemaining = settings.probation?.framesRemaining
+        XCTAssertNotNil(probationRemaining, "precondition: upgrade opened a trial")
+
+        store.updateSession(
+            id: "KB5YZB-7|DRLNOD", destination: "KB5YZB-7", pathSignature: "DRLNOD",
+            settings: settings, lossRate: 0.0, etx: 1.0, srtt: 2.0, updatedAt: Date()
+        )
+
+        let params = store.sessionAdaptiveByID["KB5YZB-7|DRLNOD"]
+        XCTAssertEqual(params?.smoothedLoss ?? -1, settings.lossRateEWMA ?? -2, accuracy: 0.0001,
+                       "the store carries the EWMA the controller decides on")
+        XCTAssertEqual(params?.smoothedEtx ?? -1, settings.etxEWMA ?? -2, accuracy: 0.0001)
+        XCTAssertEqual(params?.successStreak, settings.successStreak)
+        XCTAssertEqual(params?.upgradeStreakRequirement, settings.upgradeStreakRequirement)
+        XCTAssertEqual(params?.probationFramesRemaining, probationRemaining,
+                       "an upgrade on trial is visible to the user")
+        XCTAssertEqual(params?.metrics, settings.metrics)
+        XCTAssertEqual(params?.metrics.upgradesAttempted, 1)
+    }
+
+    func testGlobalParamsCarryLearningStateAndMetrics() {
+        let store = AdaptiveStatusStore()
+        var settings = TxAdaptiveSettings()
+        settings.updateFromLinkQuality(lossRate: 0.4, etx: 3.0, srtt: nil, newFrames: 0, retransmits: 2)
+        store.updateGlobal(settings: settings, lossRate: 0.4, etx: 3.0, srtt: nil, updatedAt: Date())
+
+        let params = store.globalAdaptive
+        XCTAssertEqual(params?.smoothedLoss ?? -1, 0.4, accuracy: 0.0001)
+        XCTAssertNil(params?.probationFramesRemaining, "no trial open")
+        XCTAssertEqual(params?.metrics.retransmitsSeen, 2)
+    }
+
+    // MARK: - Learning narrative (the user-facing "show your work" strings)
+
+    private func params(from settings: TxAdaptiveSettings) -> AdaptiveParams {
+        AdaptiveParams(settings: settings, lossRate: nil, etx: nil, srtt: nil,
+                       updatedAt: Date(), destination: nil, pathSignature: nil)
+    }
+
+    func testNarrativeDuringProbationExplainsTheTrial() {
+        var settings = TxAdaptiveSettings()
+        for _ in 0..<10 {
+            settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: nil, newFrames: 1, retransmits: 0)
+        }
+        let narrative = params(from: settings).learningNarrative
+        XCTAssertTrue(narrative.contains("trial"),
+                      "an upgrade on trial must say so: \(narrative)")
+        XCTAssertTrue(narrative.contains("10"),
+                      "and say how many clean frames confirm it: \(narrative)")
+    }
+
+    func testNarrativeShowsStreakProgressTowardUpgrade() {
+        var settings = TxAdaptiveSettings()
+        for _ in 0..<4 {
+            settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: nil, newFrames: 1, retransmits: 0)
+        }
+        let narrative = params(from: settings).learningNarrative
+        XCTAssertTrue(narrative.contains("4") && narrative.contains("10"),
+                      "streak progress reads as N of M: \(narrative)")
+    }
+
+    func testNarrativeWithNoEvidenceSaysSo() {
+        let narrative = params(from: TxAdaptiveSettings()).learningNarrative
+        XCTAssertTrue(narrative.lowercased().contains("no") || narrative.lowercased().contains("waiting"),
+                      "no evidence must never read as a verdict: \(narrative)")
+    }
+
+    func testActivitySummaryCountsWhatHappened() {
+        var settings = TxAdaptiveSettings()
+        // Upgrade (attempt 1) then failure during trial (rollback 1).
+        for _ in 0..<10 {
+            settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: nil, newFrames: 1, retransmits: 0)
+        }
+        settings.updateFromLinkQuality(lossRate: 0.5, etx: 4.0, srtt: nil, newFrames: 0, retransmits: 1)
+
+        let summary = params(from: settings).activitySummary
+        XCTAssertTrue(summary.contains("1 upgrade"), summary)
+        XCTAssertTrue(summary.contains("1 rolled back"), summary)
+    }
+
+    func testActivitySummaryQuietWhenNothingHappened() {
+        let summary = params(from: TxAdaptiveSettings()).activitySummary
+        XCTAssertTrue(summary.lowercased().contains("no"),
+                      "an idle controller reports idleness, not zeros: \(summary)")
+    }
+
+    func testSessionHistoryIsCappedToTenMinutes() {
+        let store = AdaptiveStatusStore()
+        let now = Date()
+
+        var settings = TxAdaptiveSettings()
+        settings.windowSize.currentAdaptive = 1
+        settings.paclen.currentAdaptive = 64
+        settings.maxRetries.currentAdaptive = 10
+
+        store.updateSession(
+            id: "N0HI-7|",
+            destination: "N0HI-7",
+            pathSignature: "",
+            settings: settings,
+            lossRate: 0.2,
+            etx: 2.6,
+            srtt: nil,
+            updatedAt: now.addingTimeInterval(-11 * 60)
+        )
+        store.updateSession(
+            id: "N0HI-7|",
+            destination: "N0HI-7",
+            pathSignature: "",
+            settings: settings,
+            lossRate: 0.18,
+            etx: 2.1,
+            srtt: nil,
+            updatedAt: now
+        )
+
+        store.setSelectedSession(id: "N0HI-7|")
+        let history = store.effectiveETXHistory
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(history.first?.etx ?? 0, 2.1, accuracy: 0.001)
+    }
+}
+
+/// What the toolbar shows when nobody has selected a session.
+///
+/// The adaptive tuner keeps its state per channel and per route. The display
+/// did not: its key was `destination|path`, and a channel-wide figure has
+/// neither, so every radio's channel collapsed onto one entry — and the
+/// toolbar itself showed `globalAdaptive`, the operator's configured baseline,
+/// which no link sample ever touches. On a two-radio station that read
+/// "All channels · K2 P128 N2 15" with ETX, loss and RTO all blank and
+/// "waiting for evidence" underneath, while the log showed both radios
+/// learning from real traffic.
+@MainActor
+final class AdaptiveChannelScopeDisplayTests: XCTestCase {
+
+    private func settings(k: Int, p: Int) -> TxAdaptiveSettings {
+        var s = TxAdaptiveSettings()
+        s.windowSize.currentAdaptive = k
+        s.paclen.currentAdaptive = p
+        s.maxRetries.currentAdaptive = 15
+        return s
+    }
+
+    private let direwolf = RadioID(rawValue: "direwolf")
+    private let ic705 = RadioID(rawValue: "ic705")
+
+    /// The defect itself: the key the coordinator files a channel figure
+    /// under. A channel scope has no destination and no path, so if the key
+    /// does not carry the radio, both radios write to the same entry and the
+    /// last one to learn erases the other.
+    func testEachRadiosChannelGetsItsOwnKey() {
+        let coordinator = SessionCoordinator()
+        let a = coordinator.adaptiveSessionID(radio: direwolf, destination: "", path: "")
+        let b = coordinator.adaptiveSessionID(radio: ic705, destination: "", path: "")
+        XCTAssertNotEqual(a, b, "both radios' channels collapsed onto one entry")
+    }
+
+    /// And the same route reached over two radios is two routes.
+    func testTheSameRouteOverTwoRadiosGetsTwoKeys() {
+        let coordinator = SessionCoordinator()
+        XCTAssertNotEqual(
+            coordinator.adaptiveSessionID(radio: direwolf, destination: "N0HI-7", path: "WIDE1-1"),
+            coordinator.adaptiveSessionID(radio: ic705, destination: "N0HI-7", path: "WIDE1-1"))
+    }
+
+    /// Two radios' channel figures are different measurements of different
+    /// channels and must not overwrite each other.
+    func testEachRadiosChannelKeepsItsOwnFigures() {
+        let store = AdaptiveStatusStore()
+        store.updateSession(id: "\(direwolf.rawValue)||", destination: "", pathSignature: "",
+                            radio: direwolf, settings: settings(k: 2, p: 128),
+                            lossRate: 0.19, etx: 3.43, srtt: nil)
+        store.updateSession(id: "\(ic705.rawValue)||", destination: "", pathSignature: "",
+                            radio: ic705, settings: settings(k: 1, p: 64),
+                            lossRate: 0.59, etx: 5.83, srtt: nil)
+
+        XCTAssertEqual(store.sessionAdaptiveByID["\(direwolf.rawValue)||"]?.k, 2)
+        XCTAssertEqual(store.sessionAdaptiveByID["\(direwolf.rawValue)||"]?.etx, 3.43)
+        XCTAssertEqual(store.sessionAdaptiveByID["\(ic705.rawValue)||"]?.k, 1)
+        XCTAssertEqual(store.sessionAdaptiveByID["\(ic705.rawValue)||"]?.etx, 5.83)
+    }
+
+    /// With nothing selected the toolbar shows a real channel, not the
+    /// baseline — and says which channel it is.
+    func testTheDefaultChannelIsShownInsteadOfTheBaseline() {
+        let store = AdaptiveStatusStore()
+        store.updateGlobal(settings: settings(k: 2, p: 128),
+                           lossRate: nil, etx: nil, srtt: nil)
+        XCTAssertNil(store.effectiveAdaptive?.radio, "the baseline belongs to no radio")
+
+        store.updateSession(id: "\(ic705.rawValue)||", destination: "", pathSignature: "",
+                            radio: ic705, settings: settings(k: 1, p: 64),
+                            lossRate: 0.59, etx: 5.83, srtt: nil)
+        store.setDefaultChannel(id: "\(ic705.rawValue)||")
+
+        XCTAssertEqual(store.effectiveAdaptive?.radio, ic705)
+        XCTAssertEqual(store.effectiveAdaptive?.etx, 5.83,
+                       "the figure shown must be one a link sample produced")
+        XCTAssertEqual(AdaptiveScopeLabel.text(for: store.effectiveAdaptive,
+                                               radioName: { _ in "IC-705" },
+                                               hasMultipleRadios: true),
+                       "IC-705 channel")
+    }
+
+    /// A selected session still wins over the default channel.
+    func testASelectedRouteStillWins() {
+        let store = AdaptiveStatusStore()
+        store.updateSession(id: "\(ic705.rawValue)||", destination: "", pathSignature: "",
+                            radio: ic705, settings: settings(k: 1, p: 64),
+                            lossRate: 0.59, etx: 5.83, srtt: nil)
+        store.setDefaultChannel(id: "\(ic705.rawValue)||")
+        store.updateSession(id: "\(ic705.rawValue)|N0HI-7|WIDE1-1",
+                            destination: "N0HI-7", pathSignature: "WIDE1-1",
+                            radio: ic705, settings: settings(k: 4, p: 256),
+                            lossRate: 0.01, etx: 1.05, srtt: nil)
+        store.setSelectedSession(id: "\(ic705.rawValue)|N0HI-7|WIDE1-1")
+
+        XCTAssertEqual(store.effectiveAdaptive?.k, 4)
+        XCTAssertEqual(store.effectiveAdaptive?.destination, "N0HI-7")
+    }
+
+    /// The default falling away — the radio goes, its entry goes — must not
+    /// leave the toolbar showing a stale channel's numbers.
+    func testAMissingDefaultFallsBackToTheBaseline() {
+        let store = AdaptiveStatusStore()
+        store.updateGlobal(settings: settings(k: 2, p: 128),
+                           lossRate: nil, etx: nil, srtt: nil)
+        store.setDefaultChannel(id: "\(ic705.rawValue)||")
+        XCTAssertNil(store.effectiveScopeID)
+        XCTAssertEqual(store.effectiveAdaptive?.k, 2)
+        XCTAssertNil(store.effectiveAdaptive?.radio)
+    }
+}

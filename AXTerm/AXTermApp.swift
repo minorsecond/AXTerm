@@ -7,39 +7,43 @@
 
 import GRDB
 import SwiftUI
+import UserNotifications
 
 @main
 struct AXTermApp: App {
     @NSApplicationDelegateAdaptor(AXTermAppDelegate.self) private var appDelegate
     @StateObject private var settings: AppSettingsStore
     @StateObject private var inspectionRouter: PacketInspectionRouter
-    /// Controls MenuBarExtra visibility via @AppStorage to avoid feedback loops.
-    /// @Published bindings to MenuBarExtra(isInserted:) cause SwiftUI scene updates
-    /// to trigger Combine publishes, creating an infinite invalidation loop.
-    @AppStorage(AppSettingsStore.runInMenuBarKey) private var runInMenuBar = AppSettingsStore.defaultRunInMenuBar
+    /// Personal mailbox settings. Owned here rather than in ContentView so the
+    /// Settings scene and the BBS view observe the same object — two instances
+    /// would each read the same defaults and neither would see the other's
+    /// changes until relaunch.
+    @StateObject private var bbsSettings = BBSSettings()
+    // The menu bar item's visibility is read straight from UserDefaults
+    // by StatusItemController; no scene state is involved any more.
     private let packetStore: PacketStore?
     private let consoleStore: ConsoleStore?
     private let rawStore: RawStore?
     private let eventStore: EventLogStore?
     private let eventLogger: EventLogger?
     private let notificationManager: NotificationAuthorizationManager
+    private let winlinkContext: WinlinkContext
     private let client: PacketEngine
 
     init() {
-        let isUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let isUnitTests = AppEnvironment.isUnitTestHost
         let testConfig = TestModeConfiguration.shared
-        let isTestModeRun = isUnitTests || testConfig.isTestMode
-        let defaults: UserDefaults
-        if isTestModeRun {
-            let suiteName = "com.rosswardrup.AXTerm.test.\(testConfig.instanceID)"
-            defaults = UserDefaults(suiteName: suiteName) ?? .standard
-            defaults.removePersistentDomain(forName: suiteName)
-        } else {
-            defaults = .standard
-        }
+        // `AppEnvironment.defaults` is the one place that decides this, and the
+        // scene used to build the same suite name itself and wipe it. Under
+        // `xcodebuild test` that name is the same in every parallel worker —
+        // `instanceID` is "default" unless an instance name, port or callsign
+        // was passed — so every worker's scene wiped the suite the others were
+        // using, from another process, at whatever moment it happened to start.
+        // Two copies of one decision is how the second one ends up wrong.
+        let defaults = AppEnvironment.defaults
         let settingsStore = AppSettingsStore(defaults: defaults)
         _settings = StateObject(wrappedValue: settingsStore)
-        let router = PacketInspectionRouter()
+        let router = PacketInspectionRouter.shared
         _inspectionRouter = StateObject(wrappedValue: router)
 
         TxLog.configure(wireDebugEnabled: WireDebugSettings.isEnabled)
@@ -86,42 +90,109 @@ struct AXTermApp: App {
         let appState = DefaultAppStateProvider()
         let notificationScheduler = UserNotificationScheduler(settings: settingsStore, appState: appState)
         let notificationManager = NotificationAuthorizationManager()
-        let notificationHandler = NotificationActionHandler(router: router)
         self.packetStore = packetStore
         self.consoleStore = consoleStore
         self.rawStore = rawStore
         self.eventStore = eventStore
         self.eventLogger = eventLogger
         self.notificationManager = notificationManager
+        self.winlinkContext = WinlinkContext(
+            store: queue.map { SQLiteWinlinkStore(dbQueue: $0) },
+            settings: WinlinkSettings(defaults: defaults),
+            profile: StationProfile(defaults: defaults),
+            contactStore: queue.map { SQLiteContactStore(dbQueue: $0) },
+            appSettings: settingsStore,
+            activityStore: queue.map { SQLiteStationActivityStore(dbQueue: $0) },
+            terminalSessionReplication: queue.map { SQLiteTerminalSessionReplicationStore(dbQueue: $0) },
+            bbsMailboxReplication: queue.map { SQLiteBBSMailboxReplicationStore(dbQueue: $0) })
         self.client = PacketEngine(
             settings: settingsStore,
             packetStore: packetStore,
             consoleStore: consoleStore,
             rawStore: rawStore,
             eventLogger: eventLogger,
+            eventLogStore: eventStore,
             watchRecorder: watchRecorder,
             notificationScheduler: notificationScheduler,
             databaseWriter: queue
         )
 
         // Determine connection settings (test mode overrides take precedence)
-        let effectiveHost = testConfig.effectiveHost(default: settingsStore.host)
-        let effectivePort = testConfig.effectivePort(default: settingsStore.portValue)
+        let primary = settingsStore.primaryRadio
+        let effectiveHost = testConfig.effectiveHost(default: primary?.host ?? AppSettingsStore.defaultHost)
+        let effectivePort = testConfig.effectivePort(
+            default: UInt16(clamping: primary?.port ?? AppSettingsStore.defaultPort))
 
         SentryManager.shared.setConnectionTags(host: effectiveHost, port: effectivePort)
 
+        // The rig's dual profile: --radios seeds the radio list, one TCP
+        // radio per hub, and the app connects to all of them.
+        if testConfig.isTestMode, !testConfig.radios.isEmpty {
+            settingsStore.radios = testConfig.radios.enumerated().map { index, endpoint in
+                var radio = RadioProfile(
+                    id: index == 0 ? .primary : RadioID(),
+                    name: "Hub \(Character(UnicodeScalar(65 + index) ?? "A"))")
+                radio.kind = .tcp
+                radio.host = endpoint.host
+                radio.port = endpoint.port
+                return radio
+            }
+        }
+
         // Auto-connect if settings say so OR if test mode requests it
         if !isUnitTests && (settingsStore.autoConnectOnLaunch || testConfig.autoConnect) {
-            self.client.connect(host: effectiveHost, port: effectivePort)
+            if testConfig.isTestMode, testConfig.radios.isEmpty {
+                // Test mode always uses network with explicit host/port
+                self.client.connect(host: effectiveHost, port: effectivePort)
+            } else {
+                self.client.connectUsingSettings()
+            }
         }
         appDelegate.settings = settingsStore
-        appDelegate.notificationDelegate = notificationHandler
+
+        // The menu bar item lives in AppKit — see StatusItemController's
+        // header for why SwiftUI's MenuBarExtra had to go. Skipped in
+        // unit tests: the test host has no business inserting status
+        // items, and tests construct their own controllers.
+        if !isUnitTests, StatusItemController.shared == nil {
+            StatusItemController.shared = StatusItemController(
+                client: client,
+                settings: settingsStore,
+                inspectionRouter: router,
+                defaults: defaults)
+        }
     }
 
     var body: some Scene {
         let windowTitle = "AXTerm" + TestModeConfiguration.shared.windowTitleSuffix
         WindowGroup(windowTitle, id: "main") {
-            ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter)
+            // The unit-test host mounts no UI at all: the full
+            // ContentView spins up the map pre-warm, sync passes and
+            // lookup tasks underneath five thousand tests that
+            // construct their own worlds — churn, sockets and (until
+            // 2026-08-29) a visible window over the operator's editor.
+            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+                Text("AXTerm unit-test host")
+                    .frame(width: 200, height: 40)
+            } else if ProcessInfo.processInfo.arguments.contains("--console-hang-repro") {
+                // Isolated reproduction of the ConsoleView layout-loop hang.
+                // Hosts the real ConsoleView and self-terminates; see
+                // ConsoleHangReproHarness.
+                ConsoleHangReproHarness()
+            } else {
+                ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings)
+                    // @AppStorage follows the isolated suite under test
+                    // mode; in production this is .standard, so it is a
+                    // no-op. Belt-and-suspenders with AppEnvironment.defaults.
+                    .defaultAppStorage(AppEnvironment.defaults)
+                    // Launch and every return to the foreground: pull whatever
+                    // the operator's other devices did while this one was away.
+                    .task { winlinkContext.appBecameActive() }
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: NSApplication.didBecomeActiveNotification)) { _ in
+                        winlinkContext.appBecameActive()
+                    }
+            }
         }
         .commands {
             CommandGroup(after: .windowArrangement) {
@@ -141,7 +212,12 @@ struct AXTermApp: App {
                 consoleStore: consoleStore,
                 rawStore: rawStore,
                 eventLogger: eventLogger,
-                notificationManager: notificationManager
+                notificationManager: notificationManager,
+                winlinkSettings: winlinkContext.settings,
+                stationProfile: winlinkContext.profile,
+                locationService: winlinkContext.locationService,
+                winlinkSync: winlinkContext.sync,
+                bbsSettings: bbsSettings
             )
         }
 
@@ -149,19 +225,59 @@ struct AXTermApp: App {
             DiagnosticsView(settings: settings, eventStore: eventStore)
         }
 
-        MenuBarExtra("AXTerm", systemImage: "antenna.radiowaves.left.and.right", isInserted: $runInMenuBar) {
-            MenuBarView(
-                client: client,
-                settings: settings,
-                inspectionRouter: inspectionRouter
-            )
-
-            #if DEBUG
-            Divider()
-            Button("Send Test Event to Sentry") {
-                SentryManager.shared.sendTestEvent()
+        WindowGroup("New Winlink Message", id: "winlinkCompose", for: String.self) { $draftMID in
+            if let draftMID, let store = winlinkContext.store {
+                WinlinkComposeWindow(
+                    store: store,
+                    myCallsign: settings.myCallsign,
+                    draftMID: draftMID,
+                    locationService: winlinkContext.locationService,
+                    contactStore: winlinkContext.contactStore,
+                    onChanged: { winlinkContext.refreshUnread() }
+                )
             }
-            #endif
         }
+
+        WindowGroup("Winlink Message", id: "winlinkMessage", for: String.self) { $mid in
+            if let mid, let store = winlinkContext.store {
+                WinlinkMessageWindow(
+                    store: store,
+                    mid: mid,
+                    myCallsign: settings.myCallsign,
+                    onDraftSaved: { winlinkContext.refreshUnread() })
+            }
+        }
+
+        // A window rather than a sheet: a map wants to be resized,
+        // zoomed and put full-screen, and a sheet can do none of those.
+        Window("Winlink Station Map", id: "winlinkMap") {
+            WinlinkScopeWindow(
+                stations: (try? winlinkContext.store?.stations()) ?? [],
+                linkQuality: winlinkContext.mapLinkQuality,
+                observerGrid: winlinkContext.settings.gridSquare)
+        }
+        .defaultSize(width: 820, height: 700)
+
+        // A window, not a settings pane: the probe log is something to
+        // leave open beside the terminal while the rotation works, and a
+        // settings sheet closes the moment you look away from it.
+        Window("Ping Activity", id: "pingActivity") {
+            if let coordinator = SessionCoordinator.shared {
+                PingActivityView(prober: coordinator.pingProber, settings: settings)
+            } else {
+                ContentUnavailableView(
+                    "Radio not started",
+                    systemImage: "antenna.radiowaves.left.and.right.slash",
+                    description: Text("Probe history appears once the radio is running."))
+            }
+        }
+        .defaultSize(width: 760, height: 560)
+
+        // No MenuBarExtra scene: the menu bar item is an AppKit
+        // NSStatusItem owned by StatusItemController (created in init).
+        // SwiftUI's MenuBarExtraController re-set the status button
+        // image during every window's render flush, and a packet flood
+        // tripped AppKit's constraint-loop guard on the status window —
+        // thrown as an NSException that froze the app (2026-08-29).
     }
 }

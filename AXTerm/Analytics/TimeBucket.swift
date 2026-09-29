@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum TimeBucket: String, CaseIterable, Hashable, Sendable {
+nonisolated enum TimeBucket: String, CaseIterable, Hashable, Sendable {
     case tenSeconds
     case minute
     case fiveMinutes
@@ -84,7 +84,7 @@ enum TimeBucket: String, CaseIterable, Hashable, Sendable {
     }
 }
 
-struct BucketKey: Hashable, Comparable, Sendable {
+nonisolated struct BucketKey: Hashable, Comparable, Sendable {
     let date: Date
 
     init(date: Date, bucket: TimeBucket, calendar: Calendar) {

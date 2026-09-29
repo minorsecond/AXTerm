@@ -10,7 +10,7 @@ import XCTest
 
 @MainActor
 final class PacketOrderingTests: XCTestCase {
-    func testIncomingPacketsStaySortedNewestFirst() {
+    func testIncomingPacketsStaySortedOldestFirst() {
         var packets: [Packet] = []
         let base = Date()
         let packetA = Packet(id: UUID(), timestamp: base.addingTimeInterval(-10), from: AX25Address(call: "A"))
@@ -21,7 +21,7 @@ final class PacketOrderingTests: XCTestCase {
         PacketOrdering.insert(packetB, into: &packets)
         PacketOrdering.insert(packetC, into: &packets)
 
-        XCTAssertEqual(packets.map(\.id), [packetB.id, packetC.id, packetA.id])
+        XCTAssertEqual(packets.map(\.id), [packetA.id, packetC.id, packetB.id])
     }
 
     func testIncomingPacketsUseIdTiebreaker() {
@@ -35,7 +35,7 @@ final class PacketOrderingTests: XCTestCase {
         PacketOrdering.insert(packetA, into: &packets)
         PacketOrdering.insert(packetB, into: &packets)
 
-        XCTAssertEqual(packets.map(\.id), [higherID, lowerID])
+        XCTAssertEqual(packets.map(\.id), [lowerID, higherID])
     }
 
     func testSelectionRemainsAfterInsert() {

@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-final class SQLiteEventLogStore: EventLogStore, @unchecked Sendable {
+nonisolated final class SQLiteEventLogStore: EventLogStore, @unchecked Sendable {
     private let dbQueue: DatabaseQueue
 
     init(dbQueue: DatabaseQueue) {
@@ -34,9 +34,21 @@ final class SQLiteEventLogStore: EventLogStore, @unchecked Sendable {
         }
     }
 
+    func loadEvents(category: AppEventRecord.Category, in window: DateInterval) throws -> [AppEventRecord] {
+        try dbQueue.read { db in
+            try AppEventRecord
+                .filter(Column("category") == category.rawValue)
+                .filter(Column("createdAt") >= window.start && Column("createdAt") < window.end)
+                .order(Column("createdAt").asc)
+                .fetchAll(db)
+        }
+    }
+
     func deleteAll() throws {
         try dbQueue.write { db in
             _ = try AppEventRecord.deleteAll(db)
+            // Reclaim disk space immediately
+            try db.execute(sql: "PRAGMA incremental_vacuum")
         }
     }
 
@@ -58,6 +70,8 @@ final class SQLiteEventLogStore: EventLogStore, @unchecked Sendable {
                 """,
                 arguments: [overflow]
             )
+            // Reclaim disk space incrementally (up to 100 pages ~400KB at a time)
+            try db.execute(sql: "PRAGMA incremental_vacuum(100)")
         }
     }
 }

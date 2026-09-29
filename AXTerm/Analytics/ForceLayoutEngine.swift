@@ -8,13 +8,13 @@
 import CoreGraphics
 import Foundation
 
-struct ForceLayoutState: Hashable, Sendable {
+nonisolated struct ForceLayoutState: Hashable, Sendable {
     var positions: [String: CGPoint]
     var velocities: [String: CGVector]
     var energy: Double
 }
 
-enum ForceLayoutEngine {
+nonisolated enum ForceLayoutEngine {
     static func initialize(
         nodes: [NetworkGraphNode],
         previous: [String: CGPoint],
@@ -150,7 +150,7 @@ enum ForceLayoutEngine {
     }
 }
 
-private extension CGVector {
+nonisolated private extension CGVector {
     static func + (lhs: CGVector, rhs: CGVector) -> CGVector {
         CGVector(dx: lhs.dx + rhs.dx, dy: lhs.dy + rhs.dy)
     }

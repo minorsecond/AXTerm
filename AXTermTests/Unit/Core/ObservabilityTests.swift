@@ -119,6 +119,26 @@ final class ObservabilityTests: XCTestCase {
         XCTAssertEqual(config.profilesSampleRate, 0.0, accuracy: 0.001)
     }
 
+    func testSentryConfiguration_profilesSampleRateSupportsLegacyAndGeneratedKeys() {
+        let generatedKeyConfig = SentryConfiguration.load(
+            infoPlist: MockInfoPlistReader([
+                "SENTRY_DSN": "https://test@sentry.io/123",
+                "SentryProfilesSampleRate": "0.4"
+            ]),
+            enabledByUser: true
+        )
+        XCTAssertEqual(generatedKeyConfig.profilesSampleRate, 0.4, accuracy: 0.001)
+
+        let legacyKeyConfig = SentryConfiguration.load(
+            infoPlist: MockInfoPlistReader([
+                "SENTRY_DSN": "https://test@sentry.io/123",
+                "sentry_profiles_sample_rate": "0.3"
+            ]),
+            enabledByUser: true
+        )
+        XCTAssertEqual(legacyKeyConfig.profilesSampleRate, 0.3, accuracy: 0.001)
+    }
+
     func testSentryConfiguration_boolParsing() {
         // Test various boolean representations
         let testCases: [(value: Any, expected: Bool)] = [
@@ -154,6 +174,64 @@ final class ObservabilityTests: XCTestCase {
         )
 
         XCTAssertEqual(config.dsn, "https://env@sentry.io/2")
+    }
+
+    func testResolveGitCommit_prefersEnvironmentVariables() {
+        let resolved = SentryConfiguration.resolveGitCommit(
+            infoPlistValue: "plist-hash",
+            environmentVariables: ["GIT_COMMIT_HASH": "env-hash"]
+        )
+        XCTAssertEqual(resolved, "env-hash")
+    }
+
+    func testResolveGitCommit_ignoresUnknownAndFallsBack() {
+        let resolved = SentryConfiguration.resolveGitCommit(
+            infoPlistValue: "plist-hash",
+            environmentVariables: ["SENTRY_GIT_COMMIT": "unknown"]
+        )
+        XCTAssertEqual(resolved, "plist-hash")
+    }
+
+    /// Nothing supplies a commit, so nothing is reported.
+    ///
+    /// The point is what does *not* happen: this used to fork `git` and wait
+    /// on it, and when a SwiftUI body asked for a configuration the wait
+    /// re-entered the display cycle and took the app down.
+    func testResolveGitCommit_isNilWhenNothingRecordedOne() {
+        XCTAssertNil(SentryConfiguration.resolveGitCommit(
+            infoPlistValue: nil, environmentVariables: [:]))
+    }
+
+    /// The value the xcconfigs actually ship. It must read as absent rather
+    /// than tagging every build with the string "unknown".
+    /// The shape Scripts/stamp-git-commit.sh writes: a short SHA, with a
+    /// suffix when the tree it was built from had uncommitted changes.
+    /// Nothing may narrow this to bare hex, or a dirty build would report
+    /// no commit at all and we would be back where we started.
+    func testResolveGitCommit_keepsWhatTheBuildScriptStamps() {
+        XCTAssertEqual(
+            SentryConfiguration.resolveGitCommit(
+                infoPlistValue: "f5f682c1c67f", environmentVariables: [:]),
+            "f5f682c1c67f")
+        XCTAssertEqual(
+            SentryConfiguration.resolveGitCommit(
+                infoPlistValue: "f5f682c1c67f-dirty", environmentVariables: [:]),
+            "f5f682c1c67f-dirty")
+    }
+
+    func testResolveGitCommit_treatsTheShippedPlaceholderAsAbsent() {
+        XCTAssertNil(SentryConfiguration.resolveGitCommit(
+            infoPlistValue: "unknown", environmentVariables: [:]))
+    }
+
+    /// A settings row reads this on every redraw, so it has to be a plain
+    /// read of an already-resolved value.
+    func testIsDSNConfigured_matchesTheLoadedConfiguration() {
+        let loaded = SentryConfiguration.load(
+            infoPlist: InfoPlistReader(bundle: .main),
+            environmentVariables: ProcessInfo.processInfo.environment
+        )
+        XCTAssertEqual(SentryConfiguration.isDSNConfigured, loaded.dsn != nil)
     }
 
     // MARK: - Packet Payload Tests
@@ -263,23 +341,14 @@ final class ObservabilityTests: XCTestCase {
     // MARK: - Settings Store Tests
 
     @MainActor
-    func testAppSettingsStore_sanitizesViaDeferredUpdate() async {
-        let suiteName = "AXTermTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        let store = AppSettingsStore(defaults: defaults)
-
-        store.port = "999999"
-        XCTAssertEqual(store.port, "999999") // deferred
-
-        await Task.yield()
-        XCTAssertEqual(store.port, "65535")
-
-        store.host = "   "
-        XCTAssertEqual(store.host, "   ") // deferred
-
-        await Task.yield()
-        XCTAssertEqual(store.host, AppSettingsStore.defaultHost)
+    func testConnectionSanitizersClampAndDefault() {
+        // The host and port live on the radio profile now; the sanitisers the
+        // old setters deferred to are still the rule for what a profile may hold.
+        XCTAssertEqual(AppSettingsStore.sanitizePort(999999), 65535)
+        XCTAssertEqual(AppSettingsStore.sanitizePort(0), 1)
+        XCTAssertEqual(AppSettingsStore.sanitizePort(8001), 8001)
+        XCTAssertEqual(AppSettingsStore.sanitizeHost("   "), AppSettingsStore.defaultHost)
+        XCTAssertEqual(AppSettingsStore.sanitizeHost(" 10.0.0.5 "), "10.0.0.5")
     }
 
     @MainActor
@@ -294,4 +363,3 @@ final class ObservabilityTests: XCTestCase {
         XCTAssertEqual(store.sentrySendConnectionDetails, AppSettingsStore.defaultSentrySendConnectionDetails)
     }
 }
-

@@ -91,6 +91,56 @@ final class AX25FrameBuildingTests: XCTestCase {
         XCTAssertEqual(address.call, "N0CALL")
     }
 
+    // MARK: - C/R vs H-bit (regression: ambiguous cc=11 frames)
+
+    // A source/destination address carries the command/response bit in bit 7.
+    // The decoder stores a received C-bit in `repeated`, so re-encoding such an
+    // address must derive bit 7 from command/response and ignore `repeated` --
+    // otherwise a response built from a parsed address emits both C-bits set
+    // (cc=11), which a strict peer (Direwolf) rejects and the link stalls.
+    func testSrcDestCRBitIgnoresRepeatedFlag() {
+        let parsed = AX25Address(call: "K0EPI", ssid: 5, repeated: true)
+
+        // As a response source, bit 7 must be 1 (not driven by `repeated`).
+        let respSrc = parsed.encodeForAX25(isLast: true, isDestination: false, isCommand: false)
+        XCTAssertEqual(respSrc[6] & 0x80, 0x80, "Response source C-bit should be 1")
+
+        // As a command source, bit 7 must be 0 even though `repeated` is true.
+        let cmdSrc = parsed.encodeForAX25(isLast: true, isDestination: false, isCommand: true)
+        XCTAssertEqual(cmdSrc[6] & 0x80, 0x00, "Command source C-bit should be 0, not the H-bit")
+
+        // As a command destination, bit 7 must be 1.
+        let cmdDest = parsed.encodeForAX25(isLast: false, isDestination: true, isCommand: true)
+        XCTAssertEqual(cmdDest[6] & 0x80, 0x80, "Command destination C-bit should be 1")
+    }
+
+    // Digipeater addresses (encoded with no isCommand) still use bit 7 as the
+    // has-been-repeated H-bit.
+    func testDigipeaterAddressStillUsesHBit() {
+        let used = AX25Address(call: "WIDE1", ssid: 1, repeated: true)
+        XCTAssertEqual(used.encodeForAX25(isLast: true)[6] & 0x80, 0x80, "Repeated digi H-bit should be 1")
+
+        let unused = AX25Address(call: "WIDE1", ssid: 1, repeated: false)
+        XCTAssertEqual(unused.encodeForAX25(isLast: true)[6] & 0x80, 0x00, "Unused digi H-bit should be 0")
+    }
+
+    // Full-frame regression: an RR response whose source was populated from a
+    // parsed address (repeated=true) must serialize as an unambiguous response
+    // -- dest C-bit 0, src C-bit 1 -- never both set.
+    func testRRResponseFromParsedAddressIsUnambiguous() {
+        let localAddr = AX25Address(call: "K0EPI", ssid: 5, repeated: true)   // parsed carryover
+        let remoteAddr = AX25Address(call: "K0EPI", ssid: 9, repeated: false)
+
+        let rr = AX25FrameBuilder.buildRR(from: localAddr, to: remoteAddr, nr: 0, pf: true, isCommand: false)
+        let bytes = rr.encodeAX25()
+
+        let destCR = bytes[6] & 0x80    // destination SSID byte
+        let srcCR = bytes[13] & 0x80    // source SSID byte (direct, no digis)
+        XCTAssertFalse(destCR != 0 && srcCR != 0, "RR response must not set both C-bits (cc=11)")
+        XCTAssertEqual(destCR, 0x00, "RR response destination C-bit should be 0")
+        XCTAssertEqual(srcCR, 0x80, "RR response source C-bit should be 1")
+    }
+
     func testAddressEncodingClampsSSID() {
         // SSID > 15 should be clamped
         let highSSID = AX25Address(call: "TEST", ssid: 20)

@@ -259,7 +259,9 @@ final class BackwardsCompatibilityTests: XCTestCase {
         let parsed = parser.feed(kissFrame)
 
         XCTAssertEqual(parsed.count, 1, "Should produce one AX.25 frame")
-        XCTAssertEqual(parsed.first, ax25Frame)
+        if case .ax25(let data) = parsed[0] {
+            XCTAssertEqual(data, ax25Frame)
+        } else { XCTFail() }
     }
 
     /// Verifies KISS framing works with AXDP-encoded AX.25 frames
@@ -277,10 +279,14 @@ final class BackwardsCompatibilityTests: XCTestCase {
         let parsed = parser.feed(kissFrame)
 
         XCTAssertEqual(parsed.count, 1)
-        XCTAssertEqual(parsed.first, ax25Frame)
+        var parsedFrame: Data?
+        if case .ax25(let data) = parsed[0] {
+            XCTAssertEqual(data, ax25Frame)
+            parsedFrame = data
+        } else { XCTFail() }
 
         // Verify the payload inside is still valid AXDP
-        let decodedAX25 = AX25.decodeFrame(ax25: parsed.first!)
+        let decodedAX25 = AX25.decodeFrame(ax25: parsedFrame!)
         XCTAssertNotNil(decodedAX25)
         XCTAssertTrue(AXDP.hasMagic(decodedAX25!.info))
     }

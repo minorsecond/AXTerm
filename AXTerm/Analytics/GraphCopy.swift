@@ -10,7 +10,7 @@ import Foundation
 
 // MARK: - Graph View Controls
 
-enum GraphCopy {
+nonisolated enum GraphCopy {
 
     // MARK: Toolbar Actions
 
@@ -45,6 +45,9 @@ enum GraphCopy {
         static let setAsAnchorLabel = "Focus Around This Node"
         static let setAsAnchorTooltip = "Filter the graph to show only nodes within the specified hop distance of this station. Enables focus mode if not already active."
         static let setAsAnchorAccessibility = "Set this node as focus anchor"
+        static let focusSelectionLabel = "Focus Around Selection"
+        static let focusSelectionTooltip = "Keep the current selection and zoom to the selected stations' extents."
+        static let focusSelectionAccessibility = "Focus around selected stations"
 
         static let hopCountLabel = "Hop Distance"
         static let hopCountTooltip = "Number of connection steps from the anchor node to include. Higher values show more of the network."
@@ -111,7 +114,7 @@ enum GraphCopy {
         // Header / overall score
         static let headerLabel = "Network Health"
         static let headerTooltip = "Composite score combining network topology (selected timeframe) and recent activity (last 10 minutes). View filters (Min Edge, Max Nodes) don't affect this score."
-        static let overallScoreTooltip = "Composite health score (0–100). Formula: 60% topology + 40% activity. Uses a canonical graph (minEdge=2) that ignores view filters."
+        static let overallScoreTooltip = "Composite health score (0–100). Formula: 60% topology + 40% activity. Uses a canonical graph (every observed link, no view filters). Shows Unknown until at least 3 stations and 10 packets are observed."
         static let scoreExperimentalNote = "View filters don't affect health: Min/Max edge filters only change what's drawn in the graph."
 
         // MARK: Topology Metrics (timeframe-dependent, canonical graph)
@@ -122,7 +125,7 @@ enum GraphCopy {
             tf.isEmpty ? "Stations Heard" : "Stations (\(tf))"
         }
         static func stationsHeardTooltip(_ tf: String) -> String {
-            "Unique stations in the canonical health graph during the \(tf.isEmpty ? "selected timeframe" : tf) window. Uses minEdge=2, ignoring view filters."
+            "Unique valid stations heard during the \(tf.isEmpty ? "selected timeframe" : tf) window (senders, destinations, and repeating digipeaters). Grouping follows the Identity setting; view filters are ignored."
         }
 
         static let totalPacketsLabel = "Packets"
@@ -138,7 +141,7 @@ enum GraphCopy {
             tf.isEmpty ? "Main Cluster" : "Cluster (\(tf))"
         }
         static func mainClusterTooltip(_ tf: String) -> String {
-            "C1: Percentage of stations in the largest connected group during the \(tf.isEmpty ? "selected timeframe" : tf) window. Computed from canonical graph (minEdge=2). Higher values indicate a well-connected network."
+            "C1: Percentage of stations in the largest connected group during the \(tf.isEmpty ? "selected timeframe" : tf) window. Computed from the canonical graph, ignoring view filters. Higher values indicate a well-connected network."
         }
 
         static let connectivityRatioLabel = "Connectivity"
@@ -146,15 +149,20 @@ enum GraphCopy {
             tf.isEmpty ? "Connectivity" : "Connect (\(tf))"
         }
         static func connectivityRatioTooltip(_ tf: String) -> String {
-            "C2: Percentage of possible links that exist in the canonical graph. Formula: actualEdges / possibleEdges × 100. Based on \(tf.isEmpty ? "selected timeframe" : tf)."
+            "C2: Average links per station relative to a target of 3 (a resilient packet mesh). Formula: meanDegree / 3 × 100, capped at 100. Based on \(tf.isEmpty ? "selected timeframe" : tf)."
         }
 
-        static let isolationReductionLabel = "Isolation"
+        // "Linked", not "Isolation": the value is isolation *reduction* —
+        // the share of heard stations that have at least one observed link,
+        // so higher is better. Labeled "Isolation N%" it read as "N% are
+        // isolated" and flatly contradicted the "Isolated: 4" count beside it
+        // (rig review 2026-08-29).
+        static let isolationReductionLabel = "Linked"
         static func isolationReductionLabelWithTimeframe(_ tf: String) -> String {
-            tf.isEmpty ? "Isolation" : "Isolation (\(tf))"
+            tf.isEmpty ? "Linked" : "Linked (\(tf))"
         }
         static func isolationReductionTooltip(_ tf: String) -> String {
-            "C3: Higher is better. 100 means no isolated stations. Formula: 100 - (% isolated nodes). Based on canonical graph during \(tf.isEmpty ? "selected timeframe" : tf)."
+            "C3: Share of heard stations that have at least one observed link — higher is better. 100 means none are isolated. Formula: 100 - (% stations with no links). Based on \(tf.isEmpty ? "selected timeframe" : tf)."
         }
 
         static let topRelayShareLabel = "Top Relay"
@@ -168,10 +176,10 @@ enum GraphCopy {
         // MARK: Activity Metrics (fixed 10-minute window)
 
         static let activeStationsLabel = "Active (10m)"
-        static let activeStationsTooltip = "A1: Percentage of stations heard in the last 10 minutes. Independent of selected timeframe. Used in activity score."
+        static let activeStationsTooltip = "A1: Stations heard in the last 10 minutes. The activity score uses this as a share of all stations in the selected timeframe."
 
         static let packetRateLabel = "Rate (10m)"
-        static let packetRateTooltip = "A2: Packets per minute over the last 10 minutes, EMA-smoothed for stability. Normalized to ideal rate of 1.0 pkt/min. Independent of selected timeframe."
+        static let packetRateTooltip = "A2: Packets per minute over the last 10 minutes. Scores 100 from 1 to 30 pkt/min, then declines — beyond ~30 pkt/min a shared 1200-baud channel approaches saturation."
 
         // MARK: Other
 
@@ -182,14 +190,14 @@ enum GraphCopy {
         static let freshnessTooltip = "Ratio of recently active stations (10m) to total stations in the selected timeframe."
 
         static let isolatedNodesLabel = "Isolated"
-        static let isolatedNodesTooltip = "Stations with no observed connections in the canonical health graph (minEdge=2). View filters don't affect this count."
+        static let isolatedNodesTooltip = "Stations heard during the timeframe with no observed link to another valid station. View filters don't affect this count."
     }
 
     // MARK: Score Breakdown
 
     enum ScoreBreakdown {
         static let headerLabel = "Score Breakdown"
-        static let headerTooltip = "Composite score formula: 60% topology + 40% activity. Uses canonical graph (minEdge=2) that ignores view filters."
+        static let headerTooltip = "Composite score formula: 60% topology + 40% activity. Uses a canonical graph that ignores view filters."
 
         // Topology metrics (timeframe-dependent) - 60% total
         static let topologyLabel = "Topology (TF)"
@@ -199,20 +207,20 @@ enum GraphCopy {
         static let c1MainClusterTooltip = "Percentage of nodes in the largest connected component. Weight: 50% of topology score (30% of final)."
 
         static let c2ConnectivityLabel = "C2: Connectivity"
-        static let c2ConnectivityTooltip = "Percentage of possible edges that exist. Formula: actualEdges / possibleEdges × 100. Weight: 30% of topology score (18% of final)."
+        static let c2ConnectivityTooltip = "Average links per station vs a target of 3. Formula: meanDegree / 3 × 100, capped at 100. Weight: 30% of topology score (18% of final)."
 
         static let c3IsolationLabel = "C3: Isolation Reduction"
-        static let c3IsolationTooltip = "100 minus percentage of isolated nodes. Higher is better. Weight: 20% of topology score (12% of final)."
+        static let c3IsolationTooltip = "100 minus the percentage of stations with no observed links. Weight: 20% of topology score (12% of final)."
 
         // Activity metrics (10-minute window) - 40% total
         static let activityLabel = "Activity (10m)"
         static let activityTooltip = "40% of final score. Formula: 0.6×A1 + 0.4×A2. Based on last 10 minutes regardless of timeframe."
 
         static let a1ActiveNodesLabel = "A1: Active Nodes"
-        static let a1ActiveNodesTooltip = "Percentage of stations heard in last 10 minutes. Weight: 60% of activity score (24% of final)."
+        static let a1ActiveNodesTooltip = "Share of timeframe stations heard in the last 10 minutes. Weight: 60% of activity score (24% of final)."
 
         static let a2PacketRateLabel = "A2: Packet Rate"
-        static let a2PacketRateTooltip = "Normalized packet rate (ideal = 1.0 pkt/min). EMA-smoothed. Weight: 40% of activity score (16% of final)."
+        static let a2PacketRateTooltip = "Packet rate scored against channel capacity (100 from 1–30 pkt/min, lower when idle or saturated). Weight: 40% of activity score (16% of final)."
 
         // Legacy labels for backward compatibility
         static let connectivityLabel = "Connectivity"
@@ -232,7 +240,7 @@ enum GraphCopy {
 
     enum Warnings {
         static let singleRelayDominance = "Single relay dominance"
-        static let singleRelayDominanceDetail = "Over 60% of traffic flows through one station."
+        static let singleRelayDominanceDetail = "Over 60% of network links involve one station."
 
         static let staleNodes = "Stale stations"
         static let staleNodesDetail = "Many stations haven't been heard recently."
@@ -250,20 +258,39 @@ enum GraphCopy {
     // MARK: Graph View Modes
 
     enum ViewMode {
-        static let pickerLabel = "View"
-        static let pickerTooltip = "Changes which link types are shown in the network graph. Does not affect Network Health."
+        static let pickerLabel = "Lens"
+        static let pickerTooltip = "Choose which relationships to emphasize for the selected graph source."
 
-        static let connectivityLabel = "Connectivity"
-        static let connectivityDescription = "Direct connections"
-        static let connectivityTooltip = "Show direct peer exchanges and likely direct RF links. Best for understanding who you can work directly."
+        static let sourceLabel = "Source"
+        static let sourceTooltip = "Choose where graph relationships come from."
+        static let packetSourceLabel = "Packets"
+        static let packetSourceTooltip = "Who was HEARD talking to whom. Edges come from observed AX.25 frames — the actual RF activity on the channel, whether or not anyone can route through it."
+        static let netRomSourceLabel = "NET/ROM"
+        static let netRomSourceTooltip = "Who can ROUTE to whom. Edges come from the NET/ROM routing layer — broadcast NODES tables and inferred routes — so this is reachability, not who was overheard."
 
-        static let routingLabel = "Routing"
-        static let routingDescription = "Packet flow paths"
-        static let routingTooltip = "Emphasize digipeater paths and network routing. Shows how packets flow through the network."
+        static let connectivityLabel = "Direct"
+        static let connectivityDescription = "Direct RF evidence + direct peer links"
+        static let connectivityTooltip = "Packet source: show direct peer traffic and direct-heard RF evidence. Excludes digipeater-mediated edges."
 
-        static let allLabel = "All"
-        static let allDescription = "Everything"
-        static let allTooltip = "Show all connection types with clear visual hierarchy."
+        static let routingLabel = "Routed"
+        static let routingDescription = "Direct peer + digipeater-mediated paths"
+        static let routingTooltip = "Packet source: shows digipeater-mediated packet paths alongside direct peer edges."
+
+        static let allLabel = "Combined"
+        static let allDescription = "All packet-derived relationship evidence"
+        static let allTooltip = "Packet source: combines direct, routed, and infrastructure relationship evidence."
+
+        static let netromClassicLabel = "Classic"
+        static let netromClassicDescription = "Broadcast routing table + direct neighbors"
+        static let netromClassicTooltip = "NET/ROM source: official broadcast-derived routes with direct neighbor topology."
+
+        static let netromInferredLabel = "Inferred"
+        static let netromInferredDescription = "Passively inferred routing relationships"
+        static let netromInferredTooltip = "NET/ROM source: inferred from observed traffic, including non-broadcasted active paths."
+
+        static let netromHybridLabel = "Hybrid"
+        static let netromHybridDescription = "Classic + inferred routing merged"
+        static let netromHybridTooltip = "NET/ROM source: merges broadcast and inferred routes for the broadest routing picture."
     }
 
     // MARK: Link Types (for legend and tooltips)
@@ -308,6 +335,8 @@ enum GraphCopy {
 
         static let degreeLabel = "Connections"
         static let degreeTooltip = "Number of unique stations this node has communicated with."
+        static let trafficContextLabel = "Traffic from packet observations. Connections reflect the current source and lens."
+        static let trafficContextTooltip = "Traffic metrics stay consistent across Packet and NET/ROM sources for the selected timeframe. Relationship and connection sections follow the current source/lens."
 
         static let neighborsLabel = "Top Neighbors"
         static let neighborsTooltip = "Stations most frequently in contact with this node."
@@ -326,6 +355,45 @@ enum GraphCopy {
 
         static let viaDigipeaterTemplate = "via %@"
         static let lastHeardTemplate = "Last: %@"
+
+        // Multi-selection inspector
+        static let multiSelectionTitle = "Stations Selected"
+        static let multiSelectionListTooltip = "Stations currently included in this selection."
+
+        static let internalLinksLabel = "Internal Links"
+        static let internalLinksTooltip = "Links where both endpoints are selected. Format: observed links / possible links."
+
+        static let selectionDensityLabel = "Selection Density"
+        static let selectionDensityTooltip = "How tightly connected the selected stations are."
+
+        static let packetsWithinSelectionLabel = "Internal Packets"
+        static let packetsWithinSelectionTooltip = "Packets on internal links (selected-to-selected only)."
+
+        static let bytesWithinSelectionLabel = "Internal Bytes"
+        static let bytesWithinSelectionTooltip = "Payload bytes on internal links (selected-to-selected only)."
+
+        static let bytesTouchingSelectionLabel = "Selected Bytes (Total)"
+        static let bytesTouchingSelectionTooltip = "Payload bytes on any link where at least one endpoint is selected."
+        static let selectionBytesLegend = "Internal = selected-to-selected. Total = all traffic touching selected stations."
+
+        static let sharedExternalRelaysLabel = "Shared External Relays"
+        static let sharedExternalRelaysTooltip = "Stations outside the selection that connect to two or more selected stations."
+
+        static let interactionTypesHeader = "Interaction Types"
+        static let interactionTypesTooltip = "Breakdown of within-selection links by relationship type."
+
+        static let withinSelectionHeader = "Within Selection"
+        static let withinSelectionTooltip = "Links where both endpoints are selected stations."
+
+        static let sharedConnectionsHeader = "Shared Connections"
+        static let sharedConnectionsTooltip = "Outside stations that connect to multiple selected stations."
+
+        static let selectedStationsHeader = "Selected Stations"
+        static let selectedStationsTooltip = "Per-station summary for each selected station."
+
+        static let selectedStationRowTooltipTemplate = "Packets in: %d, packets out: %d, unique connections: %d."
+        static let sharedConnectionRowTooltipTemplate = "Connected to %d selected stations with %d packets."
+        static let internalLinkRowTooltipTemplate = "Packets: %d, bytes: %d."
     }
 
     // MARK: Station Identity Mode
@@ -352,11 +420,13 @@ enum GraphCopy {
     // MARK: Graph Controls (Network Graph Card Header)
 
     enum GraphControls {
-        static let includeViaLabel = "Include via digipeaters"
-        static let includeViaTooltip = "Shows links observed through digipeater paths in Routing/All views."
+        static let includeViaLabel = "Include Digipeater Paths"
+        static let includeViaTooltip = "Combined lens only: include digipeater-mediated packet paths and intermediate digipeater hops."
+        static let includeViaUnavailableTooltip = "Digipeater-path toggle is available only in Packet source Combined lens."
 
         static let minEdgeCountLabel = "Min edge"
         static let minEdgeCountTooltip = "Minimum packets required to display a connection in the graph (view only)."
+        static let minEdgeCountNetRomTooltip = "NET/ROM source: minimum route quality required to display a connection. Each slider step raises the threshold by 25 (of 255). View only."
 
         static let maxNodesLabel = "Max"
         static let maxNodesTooltip = "Limits visible nodes to keep the graph readable (view only)."
