@@ -1306,6 +1306,13 @@ final class AppSettingsStore: ObservableObject {
     /// The radio the single-connection scalars describe, and the one the
     /// engine connects to until it can hold several: the first enabled radio,
     /// or the first radio at all when none is enabled.
+    /// Every enabled radio is on an APRS channel, so the packet services
+    /// (ping, the NET/ROM node, the mailbox, AXDP) have nowhere to run.
+    var allRadiosOnAPRS: Bool {
+        let enabled = activeRadios.filter(\.enabled)
+        return !enabled.isEmpty && enabled.allSatisfy(\.aprsEnabled)
+    }
+
     var primaryRadio: RadioProfile? {
         activeRadios.first { $0.enabled } ?? activeRadios.first
     }

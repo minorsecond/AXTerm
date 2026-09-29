@@ -51,6 +51,7 @@ struct SettingsView: View {
                     sidebarRow(.transmission)
                 }
                 Section("Services") {
+                    sidebarRow(.aprs)
                     sidebarRow(.winlink)
                     #if os(macOS)
                     sidebarRow(.bbs)
@@ -108,6 +109,8 @@ struct SettingsView: View {
             #else
             EmptyView()
             #endif
+        case .aprs:
+            APRSSettingsView(settings: settings)
         case .advanced:
             AdvancedSettingsView(
                 settings: settings,
@@ -160,6 +163,7 @@ extension SettingsTab {
         case .transmission: return "Transmission"
         case .winlink: return "Winlink"
         case .bbs: return "BBS"
+        case .aprs: return "APRS"
         case .advanced: return "Advanced"
         case .linkDebug: return "Link Debug"
         }
@@ -173,6 +177,7 @@ extension SettingsTab {
         case .transmission: return "antenna.radiowaves.left.and.right"
         case .winlink: return "envelope.fill"
         case .bbs: return "tray.full.fill"
+        case .aprs: return "mappin.and.ellipse"
         case .advanced: return "wrench.and.screwdriver.fill"
         case .linkDebug: return "ant.fill"
         }
@@ -186,6 +191,7 @@ extension SettingsTab {
         case .transmission: return .orange
         case .winlink: return .teal
         case .bbs: return .indigo
+        case .aprs: return .green
         case .advanced: return .brown
         case .linkDebug: return .purple
         }

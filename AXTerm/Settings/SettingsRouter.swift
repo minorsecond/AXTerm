@@ -85,6 +85,7 @@ nonisolated enum SettingsTab: Hashable {
     case transmission
     case winlink
     case bbs
+    case aprs
     case advanced
     case linkDebug
 }

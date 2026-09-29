@@ -207,6 +207,7 @@ struct RadioDetailView: View {
     /// annotates itself from on a packet channel.
     let client: PacketEngine
     @StateObject private var viewModel: ConnectionTransportViewModel
+    @EnvironmentObject private var router: SettingsRouter
     /// Supplied by the single-radio pane: the one door to a second radio.
     var onAddSecondRadio: (() -> Void)?
 
@@ -410,7 +411,11 @@ struct RadioDetailView: View {
             }
 
 
-            if settings.hasMultipleRadios, page == .onAir {
+            // Beacon and APRS belong to a radio, so a single radio shows them
+            // here too. They used to appear only on the On the Air page, which
+            // exists once there are two radios, and a single-radio station had
+            // nowhere to choose an APRS symbol or mark its channel as APRS.
+            if !settings.hasMultipleRadios || page == .onAir {
                 Section {
                     Toggle("Beacon on this radio", isOn: beaconBinding(\.enabled))
                     if beaconBinding(\.enabled).wrappedValue {
@@ -447,15 +452,22 @@ struct RadioDetailView: View {
                 }
 
                 Section {
-                    Toggle("APRS on this radio", isOn: aprsServiceBinding)
-                        .help("This radio's channel is APRS: APRS messages and the \u{201C}Who can hear me\u{201D} query may go out on it. Leave off for a node or BBS frequency. Switched on for you the first time this radio is given an APRS position beacon, and yours to change after that.")
-                    if settings.radio(radioID)?.aprsEnabled == true { aprsPathRow }
+                    LabeledContent("APRS channel") {
+                        HStack {
+                            Text(isAPRSChannel ? "Yes" : "No").foregroundStyle(.secondary)
+                            Button("APRS settings\u{2026}") { router.navigate(to: .aprs) }
+                        }
+                    }
                 } header: {
                     Text("APRS")
                 } footer: {
-                    Text(aprsSectionFooter)
+                    Text("Whether this radio is on an APRS channel, and its path, are set under APRS with the rest of the APRS settings.")
                 }
+            }
 
+            // With one radio these are the station-wide switches under
+            // Transmission; with several, each radio says which it runs.
+            if settings.hasMultipleRadios, page == .onAir {
                 Section {
                     Toggle("Ping stations", isOn: serviceBinding(\.pings))
                     Toggle("Announce the NET/ROM node", isOn: serviceBinding(\.announcesNode))
@@ -865,7 +877,7 @@ struct RadioDetailView: View {
     private var packetSectionFooter: String {
         if isAPRSChannel {
             return "Off while this radio is on an APRS channel. Nothing here has been changed — "
-                + "switch APRS off above and these come back as you left them."
+                + "switch APRS off under APRS and these come back as you left them."
         }
         return "Whether a service runs at all is set under Transmission and BBS; these rows only "
             + "say which radios it uses (the mailbox is one shared store)."

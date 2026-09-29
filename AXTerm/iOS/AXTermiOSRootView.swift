@@ -164,7 +164,7 @@ struct AXTermiOSRootView: View {
     /// router speaks in `SettingsTab`, so the mapping lives here rather than
     /// asking every caller to know which shell it is talking to.
     fileprivate enum SettingsDestination: Hashable {
-        case identity, winlink, radios, transmission, diagnostics, mailbox
+        case identity, winlink, radios, transmission, diagnostics, mailbox, aprsSettings
         /// One radio's form, pushed over the radios list.
         case radio(RadioID)
         /// The mailbox itself, pushed — the phone's home for it.
@@ -180,6 +180,7 @@ struct AXTermiOSRootView: View {
             case .transmission: self = .transmission
             case .notifications, .linkDebug: self = .diagnostics
             case .bbs: self = .mailbox
+            case .aprs: self = .aprsSettings
             }
         }
     }
@@ -900,6 +901,9 @@ struct AXTermiOSRootView: View {
                     NavigationLink(value: SettingsDestination.transmission) {
                         Label("Transmission", systemImage: "antenna.radiowaves.left.and.right")
                     }
+                    NavigationLink(value: SettingsDestination.aprsSettings) {
+                        Label("APRS", systemImage: "mappin.and.ellipse")
+                    }
 
                     NavigationLink(value: SettingsDestination.mailbox) {
                         Label("Mailbox", systemImage: "tray.full")
@@ -998,10 +1002,19 @@ struct AXTermiOSRootView: View {
         case .radios:
             radiosScreen
         case .radio(let id):
+            // These settings pages link to one another through the router,
+            // which the macOS Settings window supplies and this shell must too.
             RadioDetailView(radioID: id, settings: settings, client: client)
+                .environmentObject(SettingsRouter.shared)
+                .navigationBarTitleDisplayMode(.inline)
+        case .aprsSettings:
+            APRSSettingsView(settings: settings)
+                .environmentObject(SettingsRouter.shared)
+                .navigationTitle("APRS")
                 .navigationBarTitleDisplayMode(.inline)
         case .transmission:
             TransmissionSettingsView(settings: settings, client: client)
+                .environmentObject(SettingsRouter.shared)
                 .navigationTitle("Transmission")
                 .navigationBarTitleDisplayMode(.inline)
         case .diagnostics:
@@ -1045,6 +1058,7 @@ struct AXTermiOSRootView: View {
         } else if let only = settings.activeRadios.first {
             RadioDetailView(radioID: only.id, settings: settings, client: client,
                             onAddSecondRadio: { settingsPath.append(.radio(settings.addRadio().id)) })
+                .environmentObject(SettingsRouter.shared)
                 .id(only.id)
                 .navigationTitle("Connection")
                 .navigationBarTitleDisplayMode(.inline)

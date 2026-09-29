@@ -164,125 +164,17 @@ struct TransmissionSettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                if settings.hasMultipleRadios {
-                    // Each radio owns its beacon now, so there is no single
-                    // station beacon to edit here — a packet node and an APRS
-                    // node send different things on different channels.
-                    Text("Each radio has its own beacon — its text, path and "
-                         + "interval live with the radio. Configure them under "
-                         + "Settings → Radios.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Open Radios\u{2026}") { router.navigate(to: .radios, radio: nil) }
-                } else {
-                    Toggle("Send a beacon", isOn: beaconField(\.enabled, default: false))
-
-                    if beaconField(\.enabled, default: false).wrappedValue {
-                        VStack(alignment: .leading, spacing: 4) {
-                            TextField("Beacon text", text: beaconField(\.text, default: ""), axis: .vertical)
-                                .textFieldStyle(.roundedBorder)
-                                .lineLimit(1...3)
-                            Text("\(beaconField(\.text, default: "").wrappedValue.utf8.count) of "
-                                 + "\(BeaconPlan.maxTextBytes) bytes · sent to BEACON as "
-                                 + "an unconnected frame")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        LabeledContent("Via digipeaters") {
-                            TextField("direct", text: beaconField(\.path, default: ""))
-                                .textFieldStyle(.roundedBorder)
-                                .frame(maxWidth: 160)
-                        }
-                        .help("Up to \(BeaconPlan.maxDigis) hops, comma or space separated. "
-                              + "A beacon is the one thing worth digipeating — its whole "
-                              + "purpose is to reach stations that cannot hear this one "
-                              + "directly. Each hop is another transmission on a shared "
-                              + "channel, so two is usually plenty.")
-
-                        durationRow(
-                            "Send every",
-                            value: beaconField(\.intervalMinutes, default: 30),
-                            presets: [10, 15, 20, 30, 45, 60, 90, 120, 240],
-                            label: Self.minutesLabel
-                        )
-
-                        if case let .failure(problem) = BeaconPlan.plan(
-                            text: beaconField(\.text, default: "").wrappedValue,
-                            path: beaconField(\.path, default: "").wrappedValue) {
-                            Text(problem.operatorText)
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                        } else {
-                            HStack {
-                                Button("Send one now") {
-                                    SessionCoordinator.shared?.sendBeacon(settings)
-                                }
-                                Text("Goes out on the air immediately.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+                // Each radio owns its beacon (text or an APRS position), so
+                // there is no station beacon to edit here, even with one radio.
+                Text(settings.hasMultipleRadios
+                     ? "Each radio has its own beacon: its text or APRS position, path and interval live with the radio."
+                     : "The radio's beacon (text or an APRS position with its symbol) is set on the radio's page.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(settings.hasMultipleRadios ? "Open Radios\u{2026}" : "Open Connection\u{2026}") {
+                    router.navigate(to: .radios, radio: nil)
                 }
-            }
-
-            PreferencesSection("APRS") {
-                // With several radios each one says whether its channel is
-                // APRS on its own page. With one, that page has no On the Air
-                // half, so the switch lives here; without it a single-radio
-                // station could only get APRS by choosing a position beacon,
-                // which this page doesn't offer either.
-                if !settings.hasMultipleRadios, let radio = settings.primaryRadio {
-                    Toggle("This radio is on an APRS channel", isOn: Binding(
-                        get: { settings.radio(radio.id)?.aprsEnabled ?? false },
-                        set: { value in settings.updateRadio(radio.id) { $0.aprsEnabled = value } }))
-                        .help("APRS messages and the \u{201C}Who can hear me\u{201D} query may go out on this radio. Leave off for a node or BBS frequency.")
-                    if settings.radio(radio.id)?.aprsEnabled == true {
-                        LabeledContent("APRS path") {
-                            HStack(spacing: 8) {
-                                TextField("direct", text: Binding(
-                                    get: { settings.radio(radio.id)?.effectiveAPRSPath ?? "" },
-                                    set: { value in
-                                        settings.updateRadio(radio.id) { $0.aprsPath = value.uppercased() }
-                                        SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
-                                    }))
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(maxWidth: 160)
-                                Menu {
-                                    ForEach(APRSPath.presets, id: \.self) { preset in
-                                        Button(APRSPath.label(preset)) {
-                                            settings.updateRadio(radio.id) { $0.aprsPath = preset }
-                                            SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
-                                        }
-                                    }
-                                } label: {
-                                    Image(systemName: "list.bullet")
-                                }
-                                .menuStyle(.borderlessButton)
-                                .frame(width: 28)
-                                .help("Common paths.")
-                            }
-                        }
-                    }
-                    Text("On an APRS channel the packet services (node announcements, the mailbox, pings, AXDP probes) stay off: a shared beacon channel is no place for them. Their settings are kept and come back if you switch this off.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Picker("Auto-reply", selection: Binding(
-                    get: { APRSMessagingService.AutoReply(rawValue: settings.aprsAutoReplyRaw) ?? .full },
-                    set: { settings.aprsAutoReplyRaw = $0.rawValue })) {
-                    Text("Full — ACK + answer queries").tag(APRSMessagingService.AutoReply.full)
-                    Text("ACK only").tag(APRSMessagingService.AutoReply.ackOnly)
-                    Text("Manual — never auto-transmit").tag(APRSMessagingService.AutoReply.manual)
-                }
-                Text("What AXTerm transmits on its own — under your callsign — when an "
-                     + "APRS message or directed query addressed to you arrives. Full auto-ACKs "
-                     + "messages and answers ?APRSP / ?VER / ?APRSD; Manual sends nothing until you do.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
 
             PreferencesSection("Ping", id: .ping) {
@@ -296,6 +188,8 @@ struct TransmissionSettingsView: View {
 
                 Toggle("Ping stations automatically", isOn: $settings.pingEnabled)
                     .onChange(of: settings.pingEnabled) { _, _ in applyNetRomSettings() }
+                    .disabled(settings.allRadiosOnAPRS)
+                if settings.allRadiosOnAPRS { aprsLockNote }
 
                 if settings.pingEnabled {
                     RadioServiceRows(
@@ -398,8 +292,10 @@ struct TransmissionSettingsView: View {
             }
 
             PreferencesSection("NET/ROM Node", id: .netRomNode) {
+                if settings.allRadiosOnAPRS { aprsLockNote }
                 Toggle("Run the node — answer callers with the node shell",
                        isOn: $settings.netRomAcceptInbound)
+                    .disabled(settings.allRadiosOnAPRS)
                     .help("Accept NET/ROM circuits AND plain AX.25 connects "
                           + "to the node alias. Callers land at an AXTerm "
                           + "node prompt with NODES, ROUTES, MH, INFO; BBS "
@@ -447,6 +343,7 @@ struct TransmissionSettingsView: View {
 
                 Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
                     .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
+                    .disabled(settings.allRadiosOnAPRS)
                     .help("Sends NODES broadcasts so neighbours learn this station exists and "
                           + "can route to it. Every node that hears one writes this station "
                           + "into its own routing table.")
@@ -482,6 +379,7 @@ struct TransmissionSettingsView: View {
                 Toggle("Carry other stations' traffic (transit routing)",
                        isOn: $settings.netRomForwarding)
                     .onChange(of: settings.netRomForwarding) { _, _ in applyNetRomSettings() }
+                    .disabled(settings.allRadiosOnAPRS)
                     .help("Forwards NET/ROM datagrams addressed to other nodes. This spends "
                           + "this station's airtime on other people's packets and makes it "
                           + "answerable for delivering them.")
@@ -496,7 +394,9 @@ struct TransmissionSettingsView: View {
             }
 
             PreferencesSection("AXDP Protocol", id: .axdpProtocol) {
+                if settings.allRadiosOnAPRS { aprsLockNote }
                 Toggle("Enable AXDP Extensions", isOn: $txAdaptiveSettings.axdpExtensionsEnabled)
+                    .disabled(settings.allRadiosOnAPRS)
                     .onChange(of: txAdaptiveSettings.axdpExtensionsEnabled) { _, _ in
                         syncAdaptiveSettingsToSessionCoordinator()
                     }
@@ -672,6 +572,24 @@ struct TransmissionSettingsView: View {
     /// that is simply "the beacon"; the beacon now lives on the radio, so
     /// this edits the same per-radio config the scheduler reads. Writing
     /// re-applies so the change takes effect at the next beacon.
+    /// Why a packet service's switch is greyed out. The services are also
+    /// kept off APRS radios where they run (RadioProfile.runsPacketServices);
+    /// this makes the settings say so instead of offering a switch that
+    /// would do nothing.
+    private var aprsLockNote: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "mappin.and.ellipse").foregroundStyle(.green)
+            Text(settings.hasMultipleRadios
+                 ? "Off: every radio is on an APRS channel. A shared beacon channel is no place for it. Change this under APRS."
+                 : "Off: this radio is on an APRS channel. A shared beacon channel is no place for it. Change this under APRS.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("APRS\u{2026}") { router.navigate(to: .aprs) }
+                .controlSize(.small)
+        }
+    }
+
     private func beaconField<V>(_ keyPath: WritableKeyPath<BeaconConfig, V>,
                                default def: V) -> Binding<V> {
         Binding(

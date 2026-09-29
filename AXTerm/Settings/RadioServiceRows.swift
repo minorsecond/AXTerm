@@ -18,10 +18,13 @@ struct RadioServiceRows: View {
     var body: some View {
         if settings.hasMultipleRadios {
             ForEach(settings.activeRadios) { radio in
+                // Only packet services use these rows (ping, node
+                // announcements), and none of them runs on an APRS channel.
                 Toggle("\(verb) \(radio.name.isEmpty ? RadioProfile.defaultName(for: radio) : radio.name)",
                        isOn: binding(for: radio.id))
-                    .disabled(!radio.enabled)
-                    .help(radio.enabled ? help : "This radio is switched off.")
+                    .disabled(!radio.enabled || radio.aprsEnabled)
+                    .help(!radio.enabled ? "This radio is switched off."
+                          : radio.aprsEnabled ? "This radio is on an APRS channel (Settings → APRS)." : help)
             }
         }
     }

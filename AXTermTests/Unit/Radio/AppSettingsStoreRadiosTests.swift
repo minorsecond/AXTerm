@@ -22,6 +22,23 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
         super.tearDown()
     }
 
+    // MARK: - APRS
+
+    /// The packet services' switches lock when no radio could run them.
+    func testAllRadiosOnAPRSNeedsEveryEnabledRadioOnAPRS() {
+        let settings = AppSettingsStore(defaults: defaults)
+        let first = settings.activeRadios[0].id
+        XCTAssertFalse(settings.allRadiosOnAPRS)
+        settings.updateRadio(first) { $0.aprsEnabled = true }
+        XCTAssertTrue(settings.allRadiosOnAPRS, "one radio, on APRS")
+
+        let second = settings.addRadio().id
+        settings.updateRadio(second) { $0.enabled = true }
+        XCTAssertFalse(settings.allRadiosOnAPRS, "a packet radio can still run them")
+        settings.updateRadio(second) { $0.enabled = false }
+        XCTAssertTrue(settings.allRadiosOnAPRS, "a switched-off radio runs nothing")
+    }
+
     // MARK: - Migration
 
     /// A station that had one TNC before this build has one radio after it,
