@@ -77,6 +77,8 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     /// reads the configuration outright, so the first pass has nothing to do.
     private var appliedGeneration: UInt64 = 0
     private var sampleRate: Double = 48_000
+    /// Nil unless the capture default is set. See `ModemAudioCapture`.
+    private var capture: ModemAudioCapture?
     private var demodulator: AFSKDemodulator?
     /// Replaced with a rate-derived hold when the engine starts; this is only
     /// the value before an audio format is known.
@@ -127,6 +129,8 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         try audio.start()
         guard let format = audio.format else { throw ModemError.audio("no audio format") }
         sampleRate = format.sampleRate
+        capture = ModemAudioCapture.makeIfEnabled(sampleRate: sampleRate)
+        if let capture { TxLog.debug(.transport, "Recording receive audio", ["path": capture.url.path]) }
         rebuildDSP()
         rxClock = 0
         txWrittenTotal = 0
@@ -155,6 +159,8 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
             _ = stopped.wait(timeout: .now() + .seconds(2))
             thread = nil
         }
+        capture?.finish()
+        capture = nil
         pending.withLock { $0.removeAll() }
         txRing.drain()
     }
@@ -299,6 +305,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     }
 
     private func receive(_ block: [Float]) {
+        capture?.append(block)
         guard let demodulator else { return }
         if isMuted { return }
         demodulator.process(block) { [self] event in

@@ -239,7 +239,7 @@ final class AFSKSensitivityBenchTests: XCTestCase {
                                .integrator(bits: 2.5), .integrator(bits: 3.0)]
                               as [AFSKDemodulator.DetectorFilter?]).map { f in
                 Self.decodeRate(twists: ModemLinkConfig.slicerTwistsDB, snrDB: 30, twistDB: 0,
-                                detectorFilter: f ?? .sharpLowpass, trials: 20,
+                                detectorFilter: f ?? .sharpLowpass(transitionHz: 60), trials: 20,
                                 payloadLength: length)
             }
             out += String(format: "%7d %6d %6d %6d %6d %6d\n", length,
@@ -253,7 +253,7 @@ final class AFSKSensitivityBenchTests: XCTestCase {
                                    .integrator(bits: 2.5), .integrator(bits: 3.0)]
                                   as [AFSKDemodulator.DetectorFilter?]).map { f in
                     Self.decodeRate(twists: ModemLinkConfig.slicerTwistsDB, snrDB: snr,
-                                    twistDB: twist, detectorFilter: f ?? .sharpLowpass)
+                                    twistDB: twist, detectorFilter: f ?? .sharpLowpass(transitionHz: 60))
                 }
                 out += String(format: "%3.0f %5.0f %6d %6d %6d %6d %6d\n", snr, twist,
                               row[0], row[1], row[2], row[3], row[4])
@@ -289,7 +289,7 @@ final class AFSKSensitivityBenchTests: XCTestCase {
     /// sharp filter while 1200 baud moves to an integrator. Asserted rather
     /// than assumed, because the two modes now differ deliberately.
     func testThreeHundredBaudKeepsTheSharpFilterAndStillDecodes() {
-        XCTAssertEqual(ModemMode.afsk300.parameters.detectorFilter, .sharpLowpass)
+        XCTAssertEqual(ModemMode.afsk300.parameters.detectorFilter, .sharpLowpass(transitionHz: 60))
         XCTAssertEqual(ModemMode.afsk1200.parameters.detectorFilter, .integrator(bits: 2.5))
 
         let mode = ModemMode.afsk300.parameters

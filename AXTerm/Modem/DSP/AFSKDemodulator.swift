@@ -110,7 +110,14 @@ nonisolated final class AFSKDemodulator {
         /// A sharp lowpass: passband to about half the baud, stopband before
         /// the shift. Needed when the beat between the two tones falls below
         /// the bit rate and a short window cannot separate them.
-        case sharpLowpass
+        ///
+        /// `transitionHz` is the knob, and it is a direct trade: a windowed
+        /// sinc is `3.3 / transitionHz` seconds long whatever the sample rate,
+        /// so a narrower transition buys frequency selectivity and pays for it
+        /// in intersymbol interference. It is an associated value rather than
+        /// a constant because the right answer is a measurement, and a
+        /// constant buried in the demodulator cannot be swept.
+        case sharpLowpass(transitionHz: Double)
     }
 
     /// Which smoothing a mode wants — the mode says so itself.
@@ -160,8 +167,8 @@ nonisolated final class AFSKDemodulator {
         // shift — to keep the two tones apart.
         let lpf: [Float]
         switch detectorFilter ?? Self.defaultFilter(for: mode) {
-        case .sharpLowpass:
-            lpf = FIRFilter.lowPass(sampleRate: demodSampleRate, cutoffHz: mode.baud * 0.45, transitionHz: shift * 0.3)
+        case .sharpLowpass(let transitionHz):
+            lpf = FIRFilter.lowPass(sampleRate: demodSampleRate, cutoffHz: mode.baud * 0.45, transitionHz: transitionHz)
         case .integrator(let bits):
             let integration = Int((bits * demodSampleRate / mode.baud).rounded())
             lpf = FIRFilter.lowPass(sampleRate: demodSampleRate, cutoffHz: mode.baud / 2, taps: integration | 1)

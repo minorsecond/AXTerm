@@ -277,6 +277,28 @@ a wrong answer about why nobody can be heard.
 | `afsk300` | 1600 / 1800 Hz | 300 | USB-D, filter ≥ 1.8 kHz | HF; tune 1.7 kHz below the channel |
 | `g3ruh9600RxIF` | — | 9600 | 12 kHz IF out | declared, receive-only, not yet implemented; hidden from the picker |
 
+### Recording what the demodulator heard (`ModemAudioCapture`)
+
+When nothing decodes there are two explanations that look identical from
+inside the app — the signal never arrived, or it arrived and could not be
+read — and no amount of staring at the radio separates them. The capture taps
+the samples handed to the demodulator, after the audio device, the channel
+selection and the network stream, and writes them to a plain 16-bit mono WAV.
+
+Off unless asked for, and it records receive audio only:
+
+    defaults write com.rosswardrup.AXTerm modemCaptureRx -bool true
+
+Files land in the container's `tmp/axterm-modem-capture` unless
+`modemCapturePath` says otherwise, and the header is rewritten on every flush,
+so the file is playable while the app is still running. A recording stops after
+an hour, about 330 MB at 48 kHz. Turn it off with `-bool false`.
+
+`CapturedAudioDecodeTests` reads one back through every mode and prints the
+frames, checksum failures and peak tone discrimination for each, which answers
+both halves of the question at once — whether there is a signal, and whether it
+is the one you thought you were sending.
+
 ### Validation against Direwolf
 
 `TestRig/scripts/modem_xval.sh` runs Direwolf's `gen_packets` and `atest` in

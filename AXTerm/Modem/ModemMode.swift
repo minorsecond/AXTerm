@@ -41,10 +41,10 @@ nonisolated enum ModemMode: String, Codable, CaseIterable, Sendable {
             // The 200 Hz beat falls below the 300 bd bit rate, so no short
             // window can separate the tones; only a sharp filter does.
             return Parameters(markHz: 1600, spaceHz: 1800, baud: 300, demodSampleRate: 12_000,
-                              isTxCapable: true, detectorFilter: .sharpLowpass)
+                              isTxCapable: true, detectorFilter: .sharpLowpass(transitionHz: 60))
         case .g3ruh9600RxIF:
             return Parameters(markHz: 0, spaceHz: 0, baud: 9600, demodSampleRate: 48_000,
-                              isTxCapable: false, detectorFilter: .sharpLowpass)
+                              isTxCapable: false, detectorFilter: .sharpLowpass(transitionHz: 2_880))
         }
     }
 
