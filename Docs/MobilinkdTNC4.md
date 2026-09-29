@@ -181,5 +181,11 @@ first.
 Unit tests cover the command bytes, reply parsing, the settings diff and
 restore, the level assistant and the profile migration.
 
-Not yet tested on hardware: a TNC4 on USB serial, and Bluetooth on iOS, where
-the link also stops when the app goes to the background.
+`TNC4SerialLiveTests.swift` does the same over USB and is skipped unless
+`TEST_RUNNER_AXTERM_TNC4_USB=1` is set. On 2026-09-29 it confirmed the session,
+applying and restoring settings, measuring, and a five-minute receive
+(38 packets). When the cable was pulled mid-session, the link noticed at once,
+retried with backoff, and was back and decoding about 16 seconds later.
+
+Not yet tested on hardware: Bluetooth on iOS, where the link also stops when
+the app goes to the background.
