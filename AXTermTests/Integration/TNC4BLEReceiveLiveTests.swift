@@ -145,6 +145,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
             ("firmware version", [0x28]), ("hardware version", [0x29]), ("API version", [0x7B]),
             ("modem type", [0xC1, 0x81]), ("supported modem types", [0xC1, 0x83]),
             ("input gain", [0x0D]), ("input twist", [0x19]), ("output gain", [0x0C]),
+            ("PTT channel", [0x50]), ("output twist", [0x1B]), ("TX delay", [0x21]),
         ]
         for (_, body) in queries {
             link.send(Data([0xC0, 0x06] + body + [0xC0])) { _ in }
@@ -167,6 +168,80 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         let names: [UInt8: String] = [1: "1200 AFSK", 2: "300 AFSK", 3: "9600", 4: "PSK31", 5: "M17"]
         note("TNC4: modem type \(modem.map { "\($0) (\(names[$0] ?? "unknown"))" } ?? "no reply")")
         XCTAssertNotNil(modem, "the TNC4 did not answer EXT_GET_MODEM_TYPE")
+    }
+
+    /// THIS ONE TRANSMITS. Send one APRS status frame and listen for
+    /// digipeaters repeating it, which proves the TNC4 keys the radio and puts
+    /// a decodable signal on the air. Needs its own switch on top of the BLE
+    /// one, so running the file never keys a radio by accident:
+    ///
+    ///     TEST_RUNNER_AXTERM_TNC4_BLE=1 TEST_RUNNER_AXTERM_TNC4_TX=1 xcodebuild test ...
+    ///
+    /// TEST_RUNNER_AXTERM_TNC4_TX_CALL and _PATH set the source and path
+    /// (default K0EPI-2 via WIDE1-1,WIDE2-1).
+    func testTransmitAPRSStatusOverBLE() throws {
+        guard env["AXTERM_TNC4_TX"] == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_AXTERM_TNC4_TX=1 to transmit")
+        }
+        let (call, ssid) = CallsignNormalizer.parse(env["AXTERM_TNC4_TX_CALL"] ?? "K0EPI-2")
+        let source = AX25Address(call: call, ssid: ssid)
+        let path = (env["AXTERM_TNC4_TX_PATH"] ?? "WIDE1-1,WIDE2-1").split(separator: ",").map(String.init)
+        let text = ">AXTerm TNC4 transmit test"
+
+        let device = try discoverTNC4()
+        let recorder = TNC4Recorder()
+        let link = KISSLinkBLE(config: BLEConfig(
+            peripheralUUID: device.id.uuidString, peripheralName: device.name,
+            autoReconnect: false, mobilinkdConfig: MobilinkdConfig()))
+        link.delegate = recorder
+        link.open()
+        defer { link.close() }
+        XCTAssertTrue(waitFor(seconds: 30) { link.state == .connected }, "never reached .connected over BLE")
+        guard link.state == .connected else { return }
+        // Writes made in the first moment after .connected can be dropped.
+        _ = waitFor(seconds: 3) { false }
+
+        // Optional TX level. SET_OUTPUT_GAIN changes the TNC4's working copy
+        // only; it is written to flash by an explicit SAVE, which this never
+        // sends, so a power cycle puts the old level back.
+        if let gain = env["AXTERM_TNC4_OUTPUT_GAIN"].flatMap(UInt16.init) {
+            link.send(Data([0xC0, 0x06, 0x01, UInt8(gain >> 8), UInt8(gain & 0xFF), 0xC0])) { _ in }
+            _ = waitFor(seconds: 1.5) { false }
+            let echoed = recorder.snapshot().frames.last { $0.count >= 4 && $0[0] == 0x06 && $0[1] == 0x0C }
+                .map { Int($0[2]) << 8 | Int($0[3]) }
+            note("TNC4: output gain set to \(gain), TNC4 reports \(echoed.map(String.init) ?? "no reply") (not saved)")
+            XCTAssertEqual(echoed, Int(gain), "the TNC4 did not confirm the output gain")
+        }
+
+        let frame = AX25FrameBuilder.buildUI(
+            from: source, to: AX25Address(call: APRSBeacon.tocall),
+            via: DigiPath.from(path), payload: Data(text.utf8))
+        let kiss = KISS.encodeFrame(payload: frame.encodeAX25(), port: 0)
+        let sentAt = Date()
+        var sendError: Error?
+        link.send(kiss) { sendError = $0 }
+        note("TNC4: sent \(source.display)>\(APRSBeacon.tocall),\(path.joined(separator: ",")):\(text) "
+            + "(\(kiss.count) bytes) at \(sentAt)")
+
+        let listen = Double(env["AXTERM_TNC4_LISTEN_SECONDS"] ?? "") ?? 60
+        _ = waitFor(seconds: listen) { false }
+        XCTAssertNil(sendError, "the BLE write failed: \(String(describing: sendError))")
+
+        var repeats = 0
+        for f in recorder.snapshot().frames where (f.first ?? 0xFF) & 0x0F == 0 {
+            guard let d = AX25.decodeFrame(ax25: Data(f.dropFirst())) else { continue }
+            let via = d.via.map { $0.display + ($0.repeated ? "*" : "") }.joined(separator: ",")
+            let line = "\(d.from?.display ?? "?")>\(d.to?.display ?? "?")\(via.isEmpty ? "" : ",\(via)"): "
+                + String(decoding: d.info.prefix(50), as: UTF8.self)
+            if d.from?.call == source.call && d.from?.ssid == source.ssid {
+                repeats += 1
+                note("TNC4 heard our packet: \(line)")
+            } else {
+                note("  other: \(line)")
+            }
+        }
+        note("TNC4: \(repeats) digipeated copies of our packet in \(Int(listen)) s")
+        XCTAssertGreaterThan(repeats, 0, "no digipeater repeated the test packet — \(notes.suffix(2).joined(separator: " | "))")
     }
 
     /// Find the TNC4 by its advertised Mobilinkd service, connect, and listen.
@@ -249,5 +324,41 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         }
         return condition()
+    }
+}
+
+/// The frame the transmit test sends, pinned byte for byte. Runs everywhere;
+/// no radio involved.
+final class TNC4TestPacketEncodingTests: XCTestCase {
+
+    func testTheAPRSStatusTestFrameEncodesCorrectly() {
+        let frame = AX25FrameBuilder.buildUI(
+            from: AX25Address(call: "K0EPI", ssid: 2), to: AX25Address(call: APRSBeacon.tocall),
+            via: DigiPath.from(["WIDE2-1", "WIDE1-1"]), payload: Data(">AXTerm TNC4 transmit test".utf8))
+        let ax25 = frame.encodeAX25()
+        let kiss = KISS.encodeFrame(payload: ax25, port: 0)
+        let hex = { (d: Data) in d.map { String(format: "%02X", $0) }.joined(separator: " ") }
+        let attachment = XCTAttachment(string: "AX.25: \(hex(ax25))\nKISS:  \(hex(kiss))")
+        attachment.name = "test frame bytes"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        func call(_ s: String) -> [UInt8] { s.padding(toLength: 6, withPad: " ", startingAt: 0).utf8.map { $0 << 1 } }
+        var expected: [UInt8] = []
+        expected += call("APZAXT") + [0xE0]  // destination, SSID 0, C bit set (command)
+        expected += call("K0EPI") + [0x64]   // source, SSID 2, C bit clear
+        expected += call("WIDE2") + [0x62]   // SSID 1, H bit clear, not last
+        expected += call("WIDE1") + [0x63]   // SSID 1, H bit clear, end of address field
+        expected += [0x03, 0xF0]             // UI, no layer 3
+        expected += Array(">AXTerm TNC4 transmit test".utf8)
+        XCTAssertEqual(hex(ax25), hex(Data(expected)))
+        XCTAssertEqual(kiss.first, 0xC0); XCTAssertEqual(kiss[1], 0x00); XCTAssertEqual(kiss.last, 0xC0)
+        XCTAssertEqual(kiss.count, expected.count + 3, "nothing in this frame needs KISS escaping")
+
+        let d = AX25.decodeFrame(ax25: ax25)
+        XCTAssertEqual(d?.from?.display, "K0EPI-2")
+        XCTAssertEqual(d?.to?.display, "APZAXT")
+        XCTAssertEqual(d?.via.map(\.display), ["WIDE2-1", "WIDE1-1"])
+        XCTAssertEqual(d?.frameType, .ui)
     }
 }
