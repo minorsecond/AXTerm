@@ -548,6 +548,139 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         XCTAssertGreaterThan(packets, 0, "not decoding after the assistant")
     }
 
+    // MARK: - Longer runs (receive-only)
+
+    /// Needs a person: power-cycle the TNC4 while this waits. The app's link,
+    /// with auto-reconnect on, has to notice the drop, come back by itself and
+    /// be hearing again. Auto-reconnect used to hang in .connecting for good.
+    func testReconnectAfterPowerCycleOverBLE() throws {
+        let device = try discoverTNC4()
+        let recorder = TNC4Recorder()
+        let link = KISSLinkBLE(config: BLEConfig(
+            peripheralUUID: device.id.uuidString, peripheralName: device.name, autoReconnect: true))
+        link.delegate = recorder
+        link.open()
+        defer { closeAndWait(link) }
+        XCTAssertTrue(waitFor(seconds: 45) { link.state == .connected }, "never connected")
+        guard link.state == .connected else { return }
+        note("TNC4: connected; waiting up to 3 minutes for the power cycle")
+
+        let dropped = waitFor(seconds: 180) { link.state != .connected }
+        note("TNC4: \(dropped ? "dropped (\(link.state.rawValue))" : "never dropped")")
+        guard dropped else { throw XCTSkip("the TNC4 was not power-cycled") }
+        let back = waitFor(seconds: 120) { link.state == .connected }
+        note("TNC4: \(back ? "back by itself" : "did not come back"); states \(recorder.snapshot().states.map(\.rawValue))")
+        XCTAssertTrue(back, "auto-reconnect did not bring the link back")
+        guard back else { return }
+
+        let mark = recorder.snapshot().frames.count
+        link.send(Data(MobilinkdTNC.getInputGain())) { _ in }
+        let heard = waitFor(seconds: 4) { recorder.snapshot().frames.dropFirst(mark).contains { MobilinkdTNC.parseInputGain($0) != nil } }
+        let packetMark = recorder.snapshot().frames.count
+        _ = waitFor(seconds: 60) { false }
+        let packets = recorder.snapshot().frames.dropFirst(packetMark).filter { ($0.first ?? 0xFF) & 0x0F == 0 }.count
+        note("TNC4: after reconnect it \(heard ? "answers" : "does NOT answer"), \(packets) packets in 60 s")
+        XCTAssertTrue(heard, "reconnected but deaf")
+        XCTAssertGreaterThan(packets, 0, "reconnected but not decoding")
+    }
+
+    /// Save writes the TNC4's working settings to flash. Run it only right
+    /// after a power cycle, when working and saved settings are the same, so
+    /// nothing changes. Needs TEST_RUNNER_AXTERM_TNC4_SAVE=1 on top.
+    func testSaveOverBLE() throws {
+        guard env["AXTERM_TNC4_SAVE"] == "1" else { throw XCTSkip("Set TEST_RUNNER_AXTERM_TNC4_SAVE=1 (right after a power cycle)") }
+        let device = try discoverTNC4()
+        let recorder = TNC4Recorder()
+        let link = KISSLinkBLE(config: BLEConfig(
+            peripheralUUID: device.id.uuidString, peripheralName: device.name, autoReconnect: false))
+        link.delegate = recorder
+        link.open()
+        defer { closeAndWait(link) }
+        XCTAssertTrue(waitFor(seconds: 45) { link.state == .connected }, "never connected")
+        guard link.state == .connected else { return }
+
+        func settings() -> MobilinkdSettings? {
+            let mark = recorder.snapshot().frames.count
+            link.send(Data(MobilinkdSession.readRequests.reduce(Data(), +))) { _ in }
+            _ = waitFor(seconds: 3) { false }
+            var state = MobilinkdDeviceState()
+            for f in recorder.snapshot().frames.dropFirst(mark) { if let r = MobilinkdReply.parse(f) { state.apply(r) } }
+            return MobilinkdSettings(reportedBy: state)
+        }
+        let before = settings()
+        let mark = recorder.snapshot().frames.count
+        link.saveSettingsToTNC()
+        let saved = waitFor(seconds: 4) { recorder.snapshot().frames.dropFirst(mark).contains { MobilinkdReply.parse($0) == .saved } }
+        let after = settings()
+        note("TNC4 save: \(saved ? "acknowledged" : "no acknowledgement"); settings before \(before.map { "\($0)" } ?? "?") after \(after.map { "\($0)" } ?? "?")")
+        XCTAssertTrue(saved, "the TNC4 did not acknowledge SAVE")
+        XCTAssertEqual(before, after, "saving changed a setting")
+    }
+
+    /// Stay connected for a while and keep decoding, through the link's
+    /// battery polls (every five minutes) and the startup watchdog.
+    /// TEST_RUNNER_AXTERM_TNC4_MINUTES sets the length (default 10).
+    func testLongReceiveOverBLE() throws {
+        let minutes = Int(env["AXTERM_TNC4_MINUTES"] ?? "") ?? 10
+        let device = try discoverTNC4()
+        let recorder = TNC4Recorder()
+        let link = KISSLinkBLE(config: BLEConfig(
+            peripheralUUID: device.id.uuidString, peripheralName: device.name, autoReconnect: false))
+        link.delegate = recorder
+        link.open()
+        defer { closeAndWait(link) }
+        XCTAssertTrue(waitFor(seconds: 45) { link.state == .connected }, "never connected")
+        guard link.state == .connected else { return }
+
+        var perMinute: [Int] = []
+        for _ in 0..<minutes {
+            let mark = recorder.snapshot().frames.count
+            _ = waitFor(seconds: 60) { false }
+            perMinute.append(recorder.snapshot().frames.dropFirst(mark).filter { ($0.first ?? 0xFF) & 0x0F == 0 }.count)
+            if link.state != .connected { break }
+        }
+        let batteries = recorder.snapshot().frames.compactMap(MobilinkdTNC.parseBatteryLevel)
+        note("TNC4 long receive: packets per minute \(perMinute), total \(perMinute.reduce(0, +)); "
+            + "battery replies \(batteries); still \(link.state.rawValue)")
+        XCTAssertEqual(link.state, .connected, "the link dropped")
+        XCTAssertEqual(perMinute.count, minutes)
+        let lastThree = perMinute.suffix(3).reduce(0, +)
+        XCTAssertGreaterThan(lastThree, 0, "decoding stopped")
+    }
+
+    /// Decode rate at two input gains, alternated on the same link so the
+    /// channel's traffic is shared fairly. TEST_RUNNER_AXTERM_TNC4_GAINS
+    /// ("0,4") and _WINDOW_SECONDS (90) set the comparison.
+    func testGainComparisonOverBLE() throws {
+        let gains = (env["AXTERM_TNC4_GAINS"] ?? "0,4").split(separator: ",").compactMap { Int($0) }
+        let window = Double(env["AXTERM_TNC4_WINDOW_SECONDS"] ?? "") ?? 90
+        let device = try discoverTNC4()
+        let recorder = TNC4Recorder()
+        var config = BLEConfig(peripheralUUID: device.id.uuidString, peripheralName: device.name, autoReconnect: false)
+        let link = KISSLinkBLE(config: config)
+        link.delegate = recorder
+        link.open()
+        defer { closeAndWait(link) }
+        XCTAssertTrue(waitFor(seconds: 45) { link.state == .connected }, "never connected")
+        guard link.state == .connected else { return }
+
+        var totals: [Int: Int] = [:]
+        for round in 0..<2 {
+            for gain in gains {
+                config.mobilinkdConfig = MobilinkdConfig(settings: MobilinkdSettings(inputGain: gain))
+                link.updateConfig(config)
+                _ = waitFor(seconds: 2.5) { false }   // re-centre after the change
+                let mark = recorder.snapshot().frames.count
+                _ = waitFor(seconds: window) { false }
+                let n = recorder.snapshot().frames.dropFirst(mark).filter { ($0.first ?? 0xFF) & 0x0F == 0 }.count
+                totals[gain, default: 0] += n
+                note("TNC4: round \(round + 1), gain \(gain): \(n) packets in \(Int(window)) s")
+            }
+        }
+        note("TNC4 gain comparison: " + gains.map { "gain \($0): \(totals[$0] ?? 0)" }.joined(separator: ", "))
+        XCTAssertEqual(link.state, .connected)
+    }
+
     /// Open a link and make sure the TNC4 is actually heard before using it.
     /// About one connection in four comes up with notifications "enabled" and
     /// nothing ever arriving; a fresh connection clears it. This probes with

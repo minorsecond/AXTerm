@@ -97,7 +97,8 @@ AXTerm used to poll the battery five seconds after connecting and every minute
 after that, which left the TNC4 deaf until the next transmission. Every command
 in that list now goes out with a RESET after it, and the battery is polled every
 five minutes. In the same two-minute listening test, packets decoded went from 5
-to 16.
+to 16. A ten-minute run afterwards decoded 84 packets, 5 to 13 in every minute,
+through two battery polls.
 
 Mobilinkd's configuration apps never send RESET, so a TNC4 that has just been
 configured in one of them stops decoding until it transmits or reconnects.
@@ -112,8 +113,10 @@ post blocked the task that handles commands. AXTerm doesn't send it. The
 settings page reads the same information with individual queries.
 
 Several connect/disconnect cycles within a minute have also left the TNC4 hung
-until it rebooted. That only happened under test. Auto-reconnect recovers from
-it.
+until it rebooted, and a new connection made a few seconds after closing the
+last one sometimes didn't come up. Both only happened under test.
+Auto-reconnect recovers from them: after a power cycle mid-session the link
+reconnected by itself and went straight back to decoding.
 
 ### Settings live in RAM until saved
 
@@ -149,6 +152,14 @@ sends its UA about a second after the carrier drops. At gain 4 the TNC4 missed
 every UA and welcome. At gain 0, with the radio's volume at 3, the handshake
 completed in the last two runs. The node's `TXDELAY` (150 ms on K0EPI-7) could
 be raised to 400 or 500 ms to cover the rest.
+
+Low gain isn't free, though. At the same volume (3), alternating 90-second
+windows on 144.390 gave 15 packets at gain 0 against 30 at gain 4: the weaker
+stations fell below what the TNC4 could decode. So get the level from the
+radio's volume and keep the TNC4's gain as low as that allows. Turn the IC-V8
+up, then run "Find the right gain", which keeps the lowest gain that still
+fills the range. At volume 3 it chose gain 3, so volume 3 is too low for
+gain 0.
 
 ### TX delay
 
