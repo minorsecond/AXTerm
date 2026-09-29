@@ -229,7 +229,49 @@ struct TransmissionSettingsView: View {
                 }
             }
 
-            PreferencesSection("APRS Messaging") {
+            PreferencesSection("APRS") {
+                // With several radios each one says whether its channel is
+                // APRS on its own page. With one, that page has no On the Air
+                // half, so the switch lives here; without it a single-radio
+                // station could only get APRS by choosing a position beacon,
+                // which this page doesn't offer either.
+                if !settings.hasMultipleRadios, let radio = settings.primaryRadio {
+                    Toggle("This radio is on an APRS channel", isOn: Binding(
+                        get: { settings.radio(radio.id)?.aprsEnabled ?? false },
+                        set: { value in settings.updateRadio(radio.id) { $0.aprsEnabled = value } }))
+                        .help("APRS messages and the \u{201C}Who can hear me\u{201D} query may go out on this radio. Leave off for a node or BBS frequency.")
+                    if settings.radio(radio.id)?.aprsEnabled == true {
+                        LabeledContent("APRS path") {
+                            HStack(spacing: 8) {
+                                TextField("direct", text: Binding(
+                                    get: { settings.radio(radio.id)?.effectiveAPRSPath ?? "" },
+                                    set: { value in
+                                        settings.updateRadio(radio.id) { $0.aprsPath = value.uppercased() }
+                                        SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+                                    }))
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(maxWidth: 160)
+                                Menu {
+                                    ForEach(APRSPath.presets, id: \.self) { preset in
+                                        Button(APRSPath.label(preset)) {
+                                            settings.updateRadio(radio.id) { $0.aprsPath = preset }
+                                            SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+                                        }
+                                    }
+                                } label: {
+                                    Image(systemName: "list.bullet")
+                                }
+                                .menuStyle(.borderlessButton)
+                                .frame(width: 28)
+                                .help("Common paths.")
+                            }
+                        }
+                    }
+                    Text("On an APRS channel the packet services (node announcements, the mailbox, pings, AXDP probes) stay off: a shared beacon channel is no place for them. Their settings are kept and come back if you switch this off.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Picker("Auto-reply", selection: Binding(
                     get: { APRSMessagingService.AutoReply(rawValue: settings.aprsAutoReplyRaw) ?? .full },
                     set: { settings.aprsAutoReplyRaw = $0.rawValue })) {
