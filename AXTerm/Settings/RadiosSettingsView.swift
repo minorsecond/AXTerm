@@ -523,6 +523,12 @@ struct RadioDetailView: View {
             }
         }
         .formStyle(.grouped)
+        // Read a TNC4 as soon as this radio's link comes up, while the page
+        // is open (see MobilinkdSettingsSections.readTNC4WhenUp).
+        .task(id: viewModel.radioState) {
+            await MobilinkdSettingsSections.readTNC4WhenUp(radioID: radioID, client: client,
+                                                           state: viewModel.radioState)
+        }
         // Pinned rather than scrolled with the rows. Inside the Form it left
         // the page it was switching, so a form scrolled past its first
         // section showed neither which page it was on nor a way back.

@@ -20,7 +20,6 @@ struct MobilinkdSettingsSections: View {
     @State private var toneEndsAt: Date?
     @State private var measuring = false
     @State private var confirmingSave = false
-    @State private var refreshedOnce = false
     @State private var confirmingAssistant = false
     @StateObject private var assistant = MobilinkdLevelAssistantRunner()
 
@@ -43,25 +42,21 @@ struct MobilinkdSettingsSections: View {
     }
 
     var body: some View {
-        if applies {
-            Group {
+        Group {
+            if applies {
                 statusSection
                 receiveSection
                 transmitSection
                 interfaceSection
                 saveSection
             }
-            .onAppear {
-                if connected, !refreshedOnce { refreshedOnce = true; control?.refreshMobilinkdStatus() }
-            }
-            .onChange(of: connected) { _, isUp in
-                if isUp { control?.refreshMobilinkdStatus() }
-            }
-            .onDisappear {
-                assistant.cancel()
-                control?.stopMeasuringInput()
-                control?.stopTestTone()
-            }
+        }
+        // The TNC4 is read from the radio form (RadioDetailView), which is
+        // always on screen; see readTNC4WhenUp.
+        .onDisappear {
+            assistant.cancel()
+            control?.stopMeasuringInput()
+            control?.stopTestTone()
         }
     }
 
@@ -445,5 +440,34 @@ final class MobilinkdLevelAssistantRunner: ObservableObject {
         running = false
         status = nil
         resultMessage = message
+    }
+}
+
+extension MobilinkdSettingsSections {
+    /// Read the TNC4 once a radio's link is up and its Mobilinkd controls are
+    /// there, and once more if the report hasn't arrived a few seconds later.
+    ///
+    /// Run from the radio form, keyed on the link's state, so it happens
+    /// whenever the radio comes up while settings are open. It used to hang
+    /// off the TNC4 sections themselves, which aren't on screen until the TNC
+    /// has identified itself, and the page stayed empty until it was reopened.
+    @MainActor
+    static func readTNC4WhenUp(radioID: RadioID, client: PacketEngine, state: KISSLinkState) async {
+        guard state == .connected else { return }
+        // The controls come with the link, a moment after the state flips.
+        var control = client.mobilinkdControl(for: radioID)
+        for _ in 0..<20 where control == nil {
+            try? await Task.sleep(for: .milliseconds(250))
+            if Task.isCancelled { return }
+            control = client.mobilinkdControl(for: radioID)
+        }
+        guard let control else { return }
+        control.refreshMobilinkdStatus()
+        try? await Task.sleep(for: .seconds(4))
+        if Task.isCancelled { return }
+        let device = client.mobilinkdDevices[radioID]
+        if device?.batteryMillivolts == nil || device?.hardwareVersion == nil {
+            control.refreshMobilinkdStatus()
+        }
     }
 }
