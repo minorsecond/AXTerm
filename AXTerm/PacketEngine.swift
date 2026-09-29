@@ -1048,7 +1048,7 @@ final class PacketEngine: ObservableObject {
     /// Sends a SET_INPUT_GAIN command to set manual input gain level (0-4, 6dB steps).
     func sendSetInputGain(_ level: UInt8) {
         guard let activeLink = radioManager.primarySession else { return }
-        let frame = Data(MobilinkdTNC.setInputGain(level))
+        let frame = Data(MobilinkdTNC.setInputGain(UInt16(level)))
         activeLink.send(frame) { _ in }
     }
 

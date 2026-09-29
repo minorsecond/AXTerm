@@ -13,7 +13,7 @@ final class RadioProfileTests: XCTestCase {
             serialDevicePath: serialPath, serialBaudRate: 9600, serialAutoReconnect: true,
             blePeripheralUUID: "", blePeripheralName: bleName, bleAutoReconnect: true,
             mobilinkdEnabled: false, mobilinkdModemType: 1,
-            mobilinkdOutputGain: 11, mobilinkdInputGain: 0,
+            mobilinkdOutputGain: 63, mobilinkdInputGain: 0,
             capabilities: TNCCapabilities())
     }
 

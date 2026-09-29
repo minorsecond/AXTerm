@@ -34,8 +34,9 @@ nonisolated final class MobilinkdStartupReceptionGuard {
                 hasSeenInboundKISSFrame = true
                 return
             case .mobilinkdTelemetry:
+                // Keep reading: an AX.25 frame later in the same chunk still
+                // counts, and stopping here sent a RESET nobody needed.
                 hasSeenInboundKISSFrame = true
-                return
             default:
                 continue
             }

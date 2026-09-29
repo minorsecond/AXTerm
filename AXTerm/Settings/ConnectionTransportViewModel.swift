@@ -1080,11 +1080,11 @@ final class ConnectionTransportViewModel: ObservableObject {
         didSet { update { $0.mobilinkdModemType = Int(mobilinkdModemType.rawValue) } }
     }
 
-    @Published var mobilinkdInputGain: Double = 4.0 {
+    @Published var mobilinkdInputGain: Double = 0.0 {
         didSet { update { $0.mobilinkdInputGain = Int(mobilinkdInputGain) } }
     }
 
-    @Published var mobilinkdOutputGain: Double = 128.0 {
+    @Published var mobilinkdOutputGain: Double = 63.0 {
         didSet { update { $0.mobilinkdOutputGain = Int(mobilinkdOutputGain) } }
     }
     

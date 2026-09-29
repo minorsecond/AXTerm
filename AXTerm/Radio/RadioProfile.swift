@@ -49,7 +49,8 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
 
     var mobilinkdEnabled: Bool = false
     var mobilinkdModemType: Int = 1
-    var mobilinkdOutputGain: Int = 11
+    // TNC4 firmware defaults (KissHardware.hpp init()).
+    var mobilinkdOutputGain: Int = 63
     var mobilinkdInputGain: Int = 0
 
     var capabilities: TNCCapabilities = TNCCapabilities()
@@ -206,8 +207,13 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         bleAutoReconnect = try c.decodeIfPresent(Bool.self, forKey: .bleAutoReconnect) ?? true
         mobilinkdEnabled = try c.decodeIfPresent(Bool.self, forKey: .mobilinkdEnabled) ?? false
         mobilinkdModemType = try c.decodeIfPresent(Int.self, forKey: .mobilinkdModemType) ?? 1
-        mobilinkdOutputGain = try c.decodeIfPresent(Int.self, forKey: .mobilinkdOutputGain) ?? 11
+        mobilinkdOutputGain = try c.decodeIfPresent(Int.self, forKey: .mobilinkdOutputGain) ?? 63
         mobilinkdInputGain = try c.decodeIfPresent(Int.self, forKey: .mobilinkdInputGain) ?? 0
+        // 11 was the old default, labelled as the TNC4's factory value when the
+        // firmware's is 63. It could never have reached a TNC while Mobilinkd
+        // mode was off, and applying it now that the gains are really sent
+        // would leave the transmit audio far too quiet.
+        if !mobilinkdEnabled && mobilinkdOutputGain == 11 { mobilinkdOutputGain = 63 }
         capabilities = try c.decodeIfPresent(TNCCapabilities.self, forKey: .capabilities) ?? TNCCapabilities()
         kissPort = try c.decodeIfPresent(UInt8.self, forKey: .kissPort) ?? 0
         callsign = try c.decodeIfPresent(String.self, forKey: .callsign) ?? ""
@@ -344,6 +350,20 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         c.setsRadioModeOnConnect = setsRadioModeOnConnect
         c.maxTransmitSeconds = maxTransmitSeconds
         return c
+    }
+
+    /// What a Bluetooth LE link to this radio's TNC is built from.
+    var bleConfig: BLEConfig {
+        BLEConfig(
+            peripheralUUID: blePeripheralUUID,
+            peripheralName: blePeripheralName,
+            autoReconnect: bleAutoReconnect,
+            mobilinkdConfig: mobilinkdConfig,
+            timing: KISSTimingParameters(
+                txDelayMs: txDelayMs,
+                persistence: UInt8(clamping: persistence),
+                slotTimeMs: slotTimeMs,
+                txTailMs: txTailMs))
     }
 
     /// The Mobilinkd settings as the links take them, or nil when the TNC is

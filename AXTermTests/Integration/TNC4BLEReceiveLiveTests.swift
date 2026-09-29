@@ -371,6 +371,74 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         XCTAssertGreaterThan(readings, 3, "too few level readings to say anything")
     }
 
+    // MARK: - The app's own link, no workarounds
+
+    /// Receive-only. Exercises KISSLinkBLE exactly as the app builds it: it
+    /// has to come up able to hear every time (it probes and reconnects a deaf
+    /// connection itself), apply a profile's TNC4 levels, and put the TNC4's
+    /// own levels back when it closes.
+    func testAppLinkAppliesAndRestoresLevelsOverBLE() throws {
+        let device = try discoverTNC4()
+
+        func open(_ mobilinkd: MobilinkdConfig?) -> (KISSLinkBLE, TNC4Recorder)? {
+            let recorder = TNC4Recorder()
+            let link = KISSLinkBLE(config: BLEConfig(
+                peripheralUUID: device.id.uuidString, peripheralName: device.name,
+                autoReconnect: false, mobilinkdConfig: mobilinkd,
+                timing: KISSTimingParameters(txDelayMs: 500)))
+            link.delegate = recorder
+            link.open()
+            guard waitFor(seconds: 45, { link.state == .connected }) else {
+                note("TNC4: never connected; states \(recorder.snapshot().states.map(\.rawValue)), errors \(recorder.snapshot().errors)")
+                link.close(); return nil
+            }
+            return (link, recorder)
+        }
+        /// Ask the open link for the TNC4's input gain; the reply reaches the
+        /// delegate because the session has finished by now.
+        func inputGain(_ link: KISSLinkBLE, _ recorder: TNC4Recorder) -> Int? {
+            let mark = recorder.snapshot().frames.count
+            link.send(Data(MobilinkdTNC.getInputGain())) { _ in }
+            _ = waitFor(seconds: 3) { recorder.snapshot().frames.dropFirst(mark).contains { MobilinkdTNC.parseInputGain($0) != nil } }
+            return recorder.snapshot().frames.dropFirst(mark).compactMap(MobilinkdTNC.parseInputGain).last
+        }
+        func close(_ link: KISSLinkBLE) {
+            link.close()
+            _ = waitFor(seconds: 3) { link.state == .disconnected }
+            _ = waitFor(seconds: 2) { false }
+        }
+
+        // 1. Five plain connections: every one must come up hearing.
+        var original: Int?
+        var heard = 0
+        for i in 1...5 {
+            guard let (link, recorder) = open(nil) else { continue }
+            let gain = inputGain(link, recorder)
+            note("TNC4: plain connection \(i): \(gain.map { "input gain \($0)" } ?? "DEAF")")
+            if gain != nil { heard += 1; original = original ?? gain }
+            close(link)
+        }
+        XCTAssertEqual(heard, 5, "every connection the link reports as up must hear the TNC4")
+        guard let original else { return }
+
+        // 2. Mobilinkd mode with the IC-V8's input gain.
+        let wanted: UInt8 = original == 0 ? 2 : 0
+        guard let (link, recorder) = open(MobilinkdConfig(outputGain: 63, inputGain: wanted)) else {
+            return XCTFail("Mobilinkd-mode link never connected")
+        }
+        let applied = inputGain(link, recorder)
+        note("TNC4: Mobilinkd mode asked for input gain \(wanted), TNC4 reports \(applied.map(String.init) ?? "nothing")")
+        XCTAssertEqual(applied, Int(wanted), "the profile's input gain was not applied")
+        close(link)
+
+        // 3. Back to the TNC4's own setting after the link let go.
+        guard let (after, afterRecorder) = open(nil) else { return XCTFail("could not reconnect to check") }
+        let restored = inputGain(after, afterRecorder)
+        note("TNC4: after closing, input gain \(restored.map(String.init) ?? "nothing") (was \(original))")
+        XCTAssertEqual(restored, original, "closing did not put the TNC4's own input gain back")
+        close(after)
+    }
+
     /// Open a link and make sure the TNC4 is actually heard before using it.
     /// About one connection in four comes up with notifications "enabled" and
     /// nothing ever arriving; a fresh connection clears it. This probes with
@@ -403,7 +471,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
                     // Working memory only (no SAVE). The TNC4 re-measures its
                     // input centre for a second and starts streaming levels,
                     // so RESET afterwards to get back to packets.
-                    link.send(Data(MobilinkdTNC.setInputGain(gain))) { _ in }
+                    link.send(Data(MobilinkdTNC.setInputGain(UInt16(gain)))) { _ in }
                     _ = waitFor(seconds: 2.5) { false }
                     link.send(Data(MobilinkdTNC.reset())) { _ in }
                     _ = waitFor(seconds: 1) { false }

@@ -258,11 +258,7 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         }
         #endif
         if let ble = session.link as? KISSLinkBLE {
-            ble.updateConfig(BLEConfig(
-                peripheralUUID: radio.blePeripheralUUID,
-                peripheralName: radio.blePeripheralName,
-                autoReconnect: radio.bleAutoReconnect,
-                mobilinkdConfig: radio.mobilinkdConfig))
+            ble.updateConfig(radio.bleConfig)
         }
         #if os(macOS)
         if let modem = session.link as? ModemRadioLink, let config = radio.modemConfig {
@@ -456,11 +452,7 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
                                    autoReconnect: radio.tcpAutoReconnect)
             #endif
         case .ble:
-            return KISSLinkBLE(config: BLEConfig(
-                peripheralUUID: radio.blePeripheralUUID,
-                peripheralName: radio.blePeripheralName,
-                autoReconnect: radio.bleAutoReconnect,
-                mobilinkdConfig: radio.mobilinkdConfig))
+            return KISSLinkBLE(config: radio.bleConfig)
         case .modem:
             #if os(macOS)
             guard let config = radio.modemConfig else { return nil }

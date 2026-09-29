@@ -19,16 +19,44 @@ final class MobilinkdTests: XCTestCase {
         let inGain = MobilinkdTNC.setInputGain(4)
         XCTAssertEqual(inGain, [0xC0, 0x06, 0x02, 0x00, 4, 0xC0])
         
-        // Test Modem Type (Extended Command 0xC1 0x82)
+        // Modem type is an extended command (0xC1 0x82), carried inside a
+        // SetHardware frame. The firmware only dispatches extended commands
+        // from its hardware handler, so without the 0x06 the TNC4 ignored it.
         let modem1200 = MobilinkdTNC.setModemType(.afsk1200)
-        XCTAssertEqual(modem1200, [0xC0, 0xC1, 0x82, 0x01, 0xC0])
-        
+        XCTAssertEqual(modem1200, [0xC0, 0x06, 0xC1, 0x82, 0x01, 0xC0])
+
         let modem9600 = MobilinkdTNC.setModemType(.fsk9600)
-        XCTAssertEqual(modem9600, [0xC0, 0xC1, 0x82, 0x03, 0xC0])
-        
+        XCTAssertEqual(modem9600, [0xC0, 0x06, 0xC1, 0x82, 0x03, 0xC0])
+
         // Test Battery Poll
         let poll = MobilinkdTNC.pollBatteryLevel()
         XCTAssertEqual(poll, [0xC0, 0x06, 0x06, 0xC0])
+    }
+
+    /// The queries AXTerm uses to see what the TNC4 holds before changing it,
+    /// with opcodes from the firmware's KissHardware.hpp.
+    func testQueryFrames() {
+        XCTAssertEqual(MobilinkdTNC.getFirmwareVersion(), [0xC0, 0x06, 0x28, 0xC0])
+        XCTAssertEqual(MobilinkdTNC.getOutputGain(), [0xC0, 0x06, 0x0C, 0xC0])
+        XCTAssertEqual(MobilinkdTNC.getInputGain(), [0xC0, 0x06, 0x0D, 0xC0])
+        XCTAssertEqual(MobilinkdTNC.getModemType(), [0xC0, 0x06, 0xC1, 0x81, 0xC0])
+    }
+
+    /// Output gain is a big-endian uint16 and the firmware allows 256, which
+    /// does not fit a byte.
+    func testOutputGainCarriesBothBytes() {
+        XCTAssertEqual(MobilinkdTNC.setOutputGain(256), [0xC0, 0x06, 0x01, 0x01, 0x00, 0xC0])
+    }
+
+    /// Replies captured from a TNC4 Rev B on firmware 2.5.14 (2026-09-29).
+    func testParsesRealTNC4Replies() {
+        XCTAssertEqual(MobilinkdTNC.parseFirmwareVersion(Data([0x06, 0x28, 0x32, 0x2E, 0x35, 0x2E, 0x31, 0x34])), "2.5.14")
+        XCTAssertEqual(MobilinkdTNC.parseOutputGain(Data([0x06, 0x0C, 0x00, 0x3F])), 63)
+        XCTAssertEqual(MobilinkdTNC.parseInputGain(Data([0x06, 0x0D, 0x00, 0x04])), 4)
+        XCTAssertEqual(MobilinkdTNC.parseModemType(Data([0x06, 0xC1, 0x81, 0x01])), 1)
+        XCTAssertNil(MobilinkdTNC.parseModemType(Data([0x06, 0xC1, 0x83, 0x01, 0x03, 0x05])),
+                     "the supported-types list is a different reply")
+        XCTAssertNil(MobilinkdTNC.parseOutputGain(Data([0x06, 0x0D, 0x00, 0x04])))
     }
     
     func testBatteryParsing() {

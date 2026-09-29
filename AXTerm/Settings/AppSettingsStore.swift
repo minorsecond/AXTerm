@@ -165,7 +165,7 @@ final class AppSettingsStore: ObservableObject {
 
     static let defaultMobilinkdEnabled = false
     static let defaultMobilinkdModemType = 1 // 1200 baud
-    static let defaultMobilinkdOutputGain = 11   // TNC4 factory default
+    static let defaultMobilinkdOutputGain = 63   // TNC4 factory default (KissHardware.hpp)
     static let defaultMobilinkdInputGain = 0     // TNC4 factory default
 
 

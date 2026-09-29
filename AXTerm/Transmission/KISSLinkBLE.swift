@@ -18,6 +18,8 @@ struct BLEConfig: Equatable, Sendable {
     var peripheralName: String
     var autoReconnect: Bool
     var mobilinkdConfig: MobilinkdConfig?
+    /// Sent to the TNC as KISS parameters every time the link comes up.
+    var timing: KISSTimingParameters
 
     static let defaultAutoReconnect = true
 
@@ -25,12 +27,20 @@ struct BLEConfig: Equatable, Sendable {
         peripheralUUID: String,
         peripheralName: String = "",
         autoReconnect: Bool = Self.defaultAutoReconnect,
-        mobilinkdConfig: MobilinkdConfig? = nil
+        mobilinkdConfig: MobilinkdConfig? = nil,
+        timing: KISSTimingParameters = .default
     ) {
         self.peripheralUUID = peripheralUUID
         self.peripheralName = peripheralName
         self.autoReconnect = autoReconnect
         self.mobilinkdConfig = mobilinkdConfig
+        self.timing = timing
+    }
+
+    /// Whether moving from `self` to `other` needs a new BLE connection, as
+    /// opposed to settings that can be sent down the one already open.
+    func needsReconnect(to other: BLEConfig) -> Bool {
+        peripheralUUID != other.peripheralUUID
     }
 }
 
@@ -343,6 +353,44 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     /// Whether we're waiting for all service discoveries to complete
     private var waitingForAllServices = false
 
+    // MARK: - Mobilinkd Session
+    //
+    // Everything below runs on bleQueue, where CoreBluetooth delivers.
+
+    /// True when the TX characteristic chosen is the Mobilinkd one, which only
+    /// Mobilinkd firmware advertises.
+    private var isMobilinkdPeripheral = false
+
+    private enum MobilinkdPhase {
+        case idle
+        /// Waiting for the answer to `MobilinkdSession.probe`.
+        case probing
+        /// Waiting for the gains and modem type the TNC4 holds.
+        case readingLevels
+        /// Setting the profile's values; their echoes are still to come.
+        case applying
+        /// Putting the TNC4 back on the way out.
+        case restoring
+    }
+    private var mobilinkdPhase: MobilinkdPhase = .idle
+    private var sessionTimer: DispatchSourceTimer?
+    private var probeAttempts = 0
+    private static let probeTimeout: TimeInterval = 3
+    private static let maxProbeAttempts = 3
+    private static let levelReadTimeout: TimeInterval = 2
+    /// Set while a deaf connection is being dropped on purpose, so the
+    /// disconnect that follows reconnects instead of reporting a failure.
+    private var reconnectingAfterDeafLink = false
+    /// Re-frames inbound bytes so the session's own replies can be held back.
+    private var inboundParser = KISSFrameParser()
+    /// One entry per reply the session is owed; see MobilinkdSession.ExpectedReplies.
+    private var expectedReplies = MobilinkdSession.ExpectedReplies()
+    private var levelReader = MobilinkdSession.Reader()
+    /// What the TNC4 held before this link changed anything.
+    private var levelsFound: MobilinkdSession.Levels?
+    /// What this link set it to.
+    private var levelsApplied: MobilinkdSession.Levels?
+
     // MARK: - Init
 
     init(config: BLEConfig) {
@@ -377,6 +425,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
         timer?.cancel()
         batTimer?.cancel()
+        sessionTimer?.cancel()
 
         // Cancel the BLE connection synchronously if possible.
         // CBCentralManager tolerates cancelPeripheralConnection from any thread.
@@ -516,21 +565,56 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         writeBLE(data, completion: completion)
     }
 
-    /// Update configuration. If connected, reconnects with new config.
+    /// Update configuration.
+    ///
+    /// The radio manager calls this whenever any radio's settings change, so
+    /// an unchanged config is ignored. A different peripheral needs a new
+    /// connection; anything else (timing, Mobilinkd levels) is sent down the
+    /// open one. Dropping the link for a slider move used to cost a reconnect
+    /// every time the auto-gain wrote the profile.
     func updateConfig(_ newConfig: BLEConfig) {
         bleQueue.async { [weak self] in
-            guard let self else { return }
-            let wasConnected: Bool
+            guard let self, newConfig != self.config else { return }
             self.lock.lock()
-            wasConnected = self._state == .connected
+            let wasConnected = self._state == .connected
             self.lock.unlock()
 
+            let old = self.config
             self.config = newConfig
+            guard wasConnected else { return }
 
-            if wasConnected {
-                self.closeInternal(reason: "Config changed")
-                self.openInternal()
+            if old.needsReconnect(to: newConfig) {
+                self.closeInternal(reason: "Config changed") { [weak self] in
+                    self?.openInternal()
+                }
+            } else {
+                self.applyLive(from: old)
             }
+        }
+    }
+
+    /// Send changed settings down a link that is already up.
+    private func applyLive(from old: BLEConfig) {
+        if old.timing != config.timing {
+            sendInitFrames(config.timing.frames(), index: 0) { _ in }
+        }
+        guard isMobilinkdPeripheral, old.mobilinkdConfig != config.mobilinkdConfig else { return }
+
+        if let wanted = config.mobilinkdConfig.map(MobilinkdSession.Levels.init) {
+            if let current = levelsApplied ?? levelsFound {
+                sendSessionFrames(MobilinkdSession.frames(toReach: wanted, from: current))
+                levelsApplied = wanted
+            } else {
+                // Mobilinkd mode was just switched on: find out what the TNC4
+                // holds first, so it can be put back later.
+                startLevelRead()
+            }
+            if config.mobilinkdConfig?.isBatteryMonitoringEnabled == true { startBatteryPolling() }
+        } else {
+            // Mobilinkd mode switched off: give the TNC4 its own settings back.
+            sendSessionFrames(MobilinkdSession.restoreFrames(applied: levelsApplied, found: levelsFound))
+            levelsApplied = nil
+            cancelBatteryPolling()
         }
     }
 
@@ -551,6 +635,13 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         _totalBytesOut = 0
         lock.unlock()
 
+        // Every attempt starts from a clean connection. Auto-reconnect comes
+        // through here after an unexpected disconnect, and it used to inherit
+        // `_kissInitDone = true` from the connection that dropped, so the new
+        // one never sent its KISS init and sat in .connecting for good.
+        resetConnectionState()
+        probeAttempts = 0
+
         // Create central manager on the BLE queue
         centralManager = CBCentralManager(delegate: self, queue: bleQueue)
         // Connection continues in centralManagerDidUpdateState
@@ -558,7 +649,38 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     // MARK: - Private: Close
 
-    private func closeInternal(reason: String) {
+    /// Close the link, first putting back any TNC4 settings this link changed.
+    ///
+    /// `then` runs once the link is fully down, which is later than usual when
+    /// there is something to restore: the writes need a moment to leave before
+    /// the connection is cancelled, or CoreBluetooth may drop them.
+    private func closeInternal(reason: String, then completion: (() -> Void)? = nil) {
+        lock.lock()
+        let connected = _state == .connected
+        lock.unlock()
+
+        let restore = MobilinkdSession.restoreFrames(applied: levelsApplied, found: levelsFound)
+        guard connected, isMobilinkdPeripheral, !restore.isEmpty, mobilinkdPhase != .restoring else {
+            teardown(reason: reason)
+            completion?()
+            return
+        }
+
+        KISSLinkLog.info(endpointDescription, message: "Putting the TNC4's own settings back before disconnecting")
+        cancelBatteryPolling()
+        cancelStartupRecoveryWatchdog()
+        cancelSessionTimer()
+        mobilinkdPhase = .restoring
+        expectedReplies.expect(repliesTo: restore)
+        sendInitFrames(restore, index: 0) { [weak self] _ in
+            self?.bleQueue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.teardown(reason: reason)
+                completion?()
+            }
+        }
+    }
+
+    private func teardown(reason: String, finalState: KISSLinkState = .disconnected) {
         cancelReconnectTimer()
         cancelBatteryPolling()
         cancelStartupRecoveryWatchdog()
@@ -569,18 +691,16 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         let periph = peripheral
         let cm = centralManager
         peripheral = nil
-        txCharacteristic = nil
-        rxCharacteristic = nil
         centralManager = nil
         let pendingCompletion = pendingWriteCompletion
         pendingWriteData = nil
         pendingWriteCompletion = nil
-        _kissInitDone = false
-        _txFromKnownService = false
-        pendingServices.removeAll()
-        discoveredServiceCharacteristics.removeAll()
-        waitingForAllServices = false
         lock.unlock()
+
+        resetConnectionState()
+        // The link is going away on purpose, so there is nothing left to restore.
+        levelsFound = nil
+        levelsApplied = nil
 
         // Fail any deferred write that was waiting for buffer space
         pendingCompletion?(KISSBLEError.notConnected)
@@ -590,8 +710,30 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
             cm.cancelPeripheralConnection(periph)
         }
 
-        setState(.disconnected)
+        setState(finalState)
         KISSLinkLog.closed(endpointDescription, reason: reason)
+    }
+
+    /// Forget everything tied to one BLE connection. What the TNC4 held
+    /// before AXTerm touched it (`levelsFound`) survives, so a link that drops
+    /// and reconnects can still put it back at the end.
+    private func resetConnectionState() {
+        cancelSessionTimer()
+        lock.lock()
+        txCharacteristic = nil
+        rxCharacteristic = nil
+        _kissInitDone = false
+        _txFromKnownService = false
+        pendingServices.removeAll()
+        discoveredServiceCharacteristics.removeAll()
+        waitingForAllServices = false
+        lock.unlock()
+        isMobilinkdPeripheral = false
+        mobilinkdPhase = .idle
+        reconnectingAfterDeafLink = false
+        inboundParser.reset()
+        expectedReplies.removeAll()
+        levelReader = MobilinkdSession.Reader()
     }
 
     // MARK: - Private: Reconnect
@@ -631,80 +773,193 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     // MARK: - Private: KISS Init
 
-    /// Send KISS parameter frames and Mobilinkd-specific config after BLE connection.
-    /// Same init sequence as the serial transport.
+    /// Bring a freshly subscribed link up to .connected.
+    ///
+    /// Every TNC gets the profile's KISS timing. A Mobilinkd then has to prove
+    /// it can be heard (`MobilinkdSession.probe`), has the profile's levels
+    /// applied if Mobilinkd mode is on, and gets a demodulator RESET. Only
+    /// then is the link reported connected.
     private func sendKISSInit() {
-        // TNC4 KISS Init Strategy — MINIMAL DISRUPTION:
-        //
-        // The TNC4 auto-starts its demodulator on BLE connect. The EEPROM holds
-        // calibrated gain/twist/DC-offset from ADJUST_INPUT_LEVELS.
-        //
-        // We send ONLY the transmit timing parameters (TXDELAY, PERSISTENCE, SLOTTIME, TXTAIL)
-        // to ensure proper TX operation. We do NOT send RESET or demodulator config commands
-        // that would disrupt the already-running receiver.
+        let t = config.timing
+        KISSLinkLog.info(endpointDescription, message: "Sending KISS timing: TXDELAY \(t.txDelayMs) ms, "
+            + "persistence \(t.persistence), slot \(t.slotTimeMs) ms, tail \(t.txTailMs) ms")
 
-        KISSLinkLog.info(endpointDescription, message: "Sending KISS transmit timing parameters")
-
-        // Standard KISS parameters for reliable transmission
-        // TXDELAY: 30 (300ms) - time to key PTT before data
-        // PERSISTENCE: 63 (p=0.25) - CSMA persistence parameter
-        // SLOTTIME: 10 (100ms) - CSMA slot time
-        // TXTAIL: 5 (50ms) - time to hold PTT after last byte
-        // FULLDUPLEX: 0 (half-duplex)
-        
-        let txDelay: UInt8 = 30      // 300ms
-        let persistence: UInt8 = 63  // p=0.25
-        let slotTime: UInt8 = 10     // 100ms
-        let txTail: UInt8 = 5        // 50ms
-        let fullDuplex: UInt8 = 0    // half-duplex
-        
-        var initFrames: [Data] = []
-        
-        // Build KISS parameter frames manually
-        // KISS frame format: FEND | CMD | DATA | FEND
-        // CMD byte: (port << 4) | command_type
-        let fend: UInt8 = 0xC0
-        let port: UInt8 = 0
-        
-        // TXDELAY (command 1)
-        initFrames.append(Data([fend, (port << 4) | 1, txDelay, fend]))
-        
-        // PERSISTENCE (command 2)
-        initFrames.append(Data([fend, (port << 4) | 2, persistence, fend]))
-        
-        // SLOTTIME (command 3)
-        initFrames.append(Data([fend, (port << 4) | 3, slotTime, fend]))
-        
-        // TXTAIL (command 4)
-        initFrames.append(Data([fend, (port << 4) | 4, txTail, fend]))
-        
-        // FULLDUPLEX (command 5)
-        initFrames.append(Data([fend, (port << 4) | 5, fullDuplex, fend]))
-        
-        // Send all init frames sequentially
-        sendInitFrames(initFrames, index: 0) { [weak self] error in
+        sendInitFrames(t.frames(), index: 0) { [weak self] error in
             guard let self else { return }
-            
             if let error {
                 KISSLinkLog.error(self.endpointDescription, message: "KISS init failed: \(error.localizedDescription)")
                 self.setState(.failed)
                 return
             }
-            
-            setState(.connected)
-            KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready")
-
-            startupReceptionGuard.resetForNewConnection()
-            connectionOpenedAt = Date()
-            ongoingNoAX25RecoveryAttempts = 0
-            
-            // Start battery polling if Mobilinkd config is present
-            if let mobiConfig = self.config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
-                self.startBatteryPolling()
+            if self.isMobilinkdPeripheral {
+                self.startProbe()
+            } else {
+                self.finishConnect()
             }
-            
-            self.scheduleStartupRecoveryWatchdogIfNeeded()
         }
+    }
+
+    private func finishConnect() {
+        setState(.connected)
+        KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready")
+
+        startupReceptionGuard.resetForNewConnection()
+        connectionOpenedAt = Date()
+        ongoingNoAX25RecoveryAttempts = 0
+
+        if let mobiConfig = config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
+            startBatteryPolling()
+        }
+        scheduleStartupRecoveryWatchdogIfNeeded()
+    }
+
+    // MARK: - Private: Mobilinkd Session
+
+    private func startProbe() {
+        mobilinkdPhase = .probing
+        startSessionTimer(after: Self.probeTimeout) { [weak self] in self?.probeTimedOut() }
+        expectedReplies.expect(repliesTo: [MobilinkdSession.probe])
+        writeBLE(MobilinkdSession.probe) { _ in }
+    }
+
+    private func probeAnswered(_ reply: Data) {
+        cancelSessionTimer()
+        probeAttempts = 0
+        KISSLinkLog.info(endpointDescription, message: "TNC4 answered, firmware \(MobilinkdTNC.parseFirmwareVersion(reply) ?? "?")")
+        if config.mobilinkdConfig != nil {
+            startLevelRead()
+        } else {
+            sendSessionFrames(MobilinkdSession.connectFrames(wanted: nil, found: nil)) { [weak self] in
+                self?.finishConnect()
+            }
+        }
+    }
+
+    /// The TNC4 took our writes and sent nothing back. Drop the connection and
+    /// make a new one, which clears it; give up after a few tries.
+    private func probeTimedOut() {
+        probeAttempts += 1
+        mobilinkdPhase = .idle
+        guard probeAttempts < Self.maxProbeAttempts else {
+            KISSLinkLog.error(endpointDescription, message: "TNC4 still silent after \(probeAttempts) connections")
+            teardown(reason: "TNC4 not answering", finalState: .failed)
+            notifyError("The TNC4 connected over Bluetooth but isn't sending anything back, even after "
+                + "reconnecting. Turning it off and on again usually clears this.")
+            scheduleReconnectIfEnabled()
+            return
+        }
+        KISSLinkLog.info(endpointDescription, message: "TNC4 connected but silent (attempt \(probeAttempts)); reconnecting")
+        lock.lock()
+        let periph = peripheral
+        let cm = centralManager
+        lock.unlock()
+        guard let periph, let cm else { return }
+        reconnectingAfterDeafLink = true
+        cm.cancelPeripheralConnection(periph)
+    }
+
+    /// Ask the TNC4 for the settings the profile manages, so they can be put
+    /// back when the link closes.
+    private func startLevelRead() {
+        mobilinkdPhase = .readingLevels
+        levelReader = MobilinkdSession.Reader()
+        startSessionTimer(after: Self.levelReadTimeout) { [weak self] in self?.levelReadTimedOut() }
+        expectedReplies.expect(repliesTo: MobilinkdSession.readRequests)
+        sendInitFrames(MobilinkdSession.readRequests, index: 0) { _ in }
+    }
+
+    private func levelsRead(_ current: MobilinkdSession.Levels) {
+        cancelSessionTimer()
+        // Keep the first reading: after a drop and reconnect the TNC4 still
+        // holds what this link set, not what the owner had.
+        if levelsFound == nil { levelsFound = current }
+        let wanted = config.mobilinkdConfig.map(MobilinkdSession.Levels.init)
+        levelsApplied = wanted
+        KISSLinkLog.info(endpointDescription, message: "TNC4 held \(current); applying \(wanted.map { "\($0)" } ?? "nothing")")
+        let frames = MobilinkdSession.connectFrames(wanted: wanted, found: current)
+        sendSessionFrames(frames) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let connected = self._state == .connected
+            self.lock.unlock()
+            if !connected { self.finishConnect() }
+        }
+    }
+
+    /// Without knowing what the TNC4 held, changing it would leave it changed
+    /// for good, so change nothing and carry on with its own settings.
+    private func levelReadTimedOut() {
+        KISSLinkLog.error(endpointDescription, message: "TNC4 did not report its levels; leaving them as they are")
+        sendSessionFrames(MobilinkdSession.connectFrames(wanted: nil, found: nil)) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let connected = self._state == .connected
+            self.lock.unlock()
+            if !connected { self.finishConnect() }
+        }
+    }
+
+    /// Send frames whose replies belong to the session, which keeps those
+    /// replies (and only those) out of PacketEngine.
+    private func sendSessionFrames(_ frames: [Data], then completion: (() -> Void)? = nil) {
+        guard !frames.isEmpty else { completion?(); return }
+        mobilinkdPhase = .applying
+        expectedReplies.expect(repliesTo: frames)
+        sendInitFrames(frames, index: 0) { [weak self] _ in
+            guard let self else { return }
+            if self.mobilinkdPhase == .applying { self.mobilinkdPhase = .idle }
+            completion?()
+        }
+    }
+
+    /// Re-frame inbound bytes from a Mobilinkd, holding back replies to the
+    /// session's own questions and acting on them.
+    private func filterMobilinkdInbound(_ data: Data) -> Data {
+        var out = Data()
+        for frame in inboundParser.feedFrames(data) {
+            switch frame.output {
+            case .ax25(let payload):
+                out.append(KISS.encodeFrame(payload: payload, port: frame.port))
+            case .mobilinkdTelemetry(let hardware):
+                if expectedReplies.claim(hardware) {
+                    handleSessionReply(hardware)
+                    continue
+                }
+                out.append(KISS.FEND)
+                out.append((frame.port << 4) | 0x06)
+                out.append(KISS.escape(Data(hardware.dropFirst())))
+                out.append(KISS.FEND)
+            case .unknown:
+                continue
+            }
+        }
+        return out
+    }
+
+    private func handleSessionReply(_ frame: Data) {
+        switch mobilinkdPhase {
+        case .probing where MobilinkdSession.isProbeReply(frame):
+            probeAnswered(frame)
+        case .readingLevels:
+            levelReader.observe(frame)
+            if let levels = levelReader.levels { levelsRead(levels) }
+        default:
+            break   // echoes of what the session just set
+        }
+    }
+
+    private func startSessionTimer(after seconds: TimeInterval, _ handler: @escaping () -> Void) {
+        cancelSessionTimer()
+        let timer = DispatchSource.makeTimerSource(queue: bleQueue)
+        timer.schedule(deadline: .now() + seconds)
+        timer.setEventHandler(handler: handler)
+        sessionTimer = timer
+        timer.resume()
+    }
+
+    private func cancelSessionTimer() {
+        sessionTimer?.cancel()
+        sessionTimer = nil
     }
     
     /// Recursively send init frames with a small delay between each
@@ -1005,11 +1260,28 @@ extension KISSLinkBLE: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        if reconnectingAfterDeafLink {
+            // We dropped a connection that came up deaf; make a fresh one.
+            resetConnectionState()
+            bleQueue.asyncAfter(deadline: .now() + 1.0) { [weak self, weak central] in
+                guard let self, let central else { return }
+                self.lock.lock()
+                self.peripheral = peripheral
+                self.lock.unlock()
+                peripheral.delegate = self
+                central.connect(peripheral, options: nil)
+            }
+            return
+        }
+
         lock.lock()
-        txCharacteristic = nil
-        rxCharacteristic = nil
         self.peripheral = nil
         lock.unlock()
+        // Clear the rest of the per-connection state too; auto-reconnect used
+        // to find `_kissInitDone` still set and never finish connecting.
+        resetConnectionState()
+        cancelBatteryPolling()
+        cancelStartupRecoveryWatchdog()
 
         if error != nil {
             setState(.failed)
@@ -1165,7 +1437,8 @@ extension KISSLinkBLE: CBPeripheralDelegate {
         rxCharacteristic = rx
         _txFromKnownService = bestTX!.priority == 3
         lock.unlock()
-        
+        isMobilinkdPeripheral = tx.uuid == BLECharacteristicUUIDs.mobilinkdTX
+
         KISSLinkLog.info(endpointDescription, message: "Final characteristic selection: TX=\(tx.uuid), RX=\(rx.uuid)")
         
         // Subscribe to RX notifications
@@ -1208,8 +1481,12 @@ extension KISSLinkBLE: CBPeripheralDelegate {
             cancelOngoingNoAX25Recovery()
         }
 
+        // A Mobilinkd's stream is re-framed so the session's own replies can
+        // be held back (see MobilinkdSession.isSessionReply).
+        let delivered = isMobilinkdPeripheral ? filterMobilinkdInbound(data) : data
+        guard !delivered.isEmpty else { return }
         Task { @MainActor [weak self] in
-            self?.delegate?.linkDidReceive(data)
+            self?.delegate?.linkDidReceive(delivered)
         }
     }
 
