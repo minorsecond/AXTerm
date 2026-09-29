@@ -31,6 +31,8 @@ nonisolated private final class TNC4Recorder: KISSLinkDelegate, @unchecked Senda
     private(set) var errors: [String] = []
     /// KISS payloads with the FENDs stripped and escapes undone.
     private(set) var frames: [Data] = []
+    /// When each entry in `frames` arrived.
+    private(set) var frameTimes: [Date] = []
 
     func linkDidReceive(_ data: Data) {
         lock.lock(); defer { lock.unlock() }
@@ -39,7 +41,7 @@ nonisolated private final class TNC4Recorder: KISSLinkDelegate, @unchecked Senda
         while let end = buffer.dropFirst().firstIndex(of: 0xC0) {
             let raw = buffer[buffer.startIndex..<end].drop { $0 == 0xC0 }
             buffer = Data(buffer[end...])
-            if !raw.isEmpty { frames.append(Self.unescape(Data(raw))) }
+            if !raw.isEmpty { frames.append(Self.unescape(Data(raw))); frameTimes.append(Date()) }
         }
     }
 
@@ -49,6 +51,11 @@ nonisolated private final class TNC4Recorder: KISSLinkDelegate, @unchecked Senda
 
     func linkDidError(_ message: String) {
         lock.lock(); errors.append(message); lock.unlock()
+    }
+
+    func timedFrames() -> [(Date, Data)] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(zip(frameTimes, frames))
     }
 
     func snapshot() -> (states: [KISSLinkState], errors: [String], frames: [Data], rawBytes: Int) {
@@ -154,6 +161,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         _ = waitFor(seconds: 1.5) { false }
 
         let snap = recorder.snapshot()
+        note("TNC4 link counters: \(link.totalBytesIn) bytes in from CoreBluetooth, \(link.totalBytesOut) bytes out")
         note("TNC4: \(snap.rawBytes) raw bytes, \(snap.frames.count) KISS frames, states \(snap.states.map(\.rawValue)), errors \(snap.errors)")
         for f in snap.frames where f.first != 0x06 {
             note("TNC4 other frame: " + f.prefix(24).map { String(format: "%02X", $0) }.joined(separator: " "))
@@ -188,29 +196,22 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         let path = (env["AXTERM_TNC4_TX_PATH"] ?? "WIDE1-1,WIDE2-1").split(separator: ",").map(String.init)
         let text = ">AXTerm TNC4 transmit test"
 
-        let device = try discoverTNC4()
-        let recorder = TNC4Recorder()
-        let link = KISSLinkBLE(config: BLEConfig(
-            peripheralUUID: device.id.uuidString, peripheralName: device.name,
-            autoReconnect: false, mobilinkdConfig: MobilinkdConfig()))
-        link.delegate = recorder
-        link.open()
+        // A live link first (a deaf one can't hear the digipeats), with any
+        // output and input gain from the environment applied, unsaved.
+        let (link, recorder) = try openLiveLink()
         defer { link.close() }
-        XCTAssertTrue(waitFor(seconds: 30) { link.state == .connected }, "never reached .connected over BLE")
-        guard link.state == .connected else { return }
-        // Writes made in the first moment after .connected can be dropped.
-        _ = waitFor(seconds: 3) { false }
 
-        // Optional TX level. SET_OUTPUT_GAIN changes the TNC4's working copy
-        // only; it is written to flash by an explicit SAVE, which this never
-        // sends, so a power cycle puts the old level back.
-        if let gain = env["AXTERM_TNC4_OUTPUT_GAIN"].flatMap(UInt16.init) {
-            link.send(Data([0xC0, 0x06, 0x01, UInt8(gain >> 8), UInt8(gain & 0xFF), 0xC0])) { _ in }
+        // Optional TX delay in ms, as a standard KISS TXDELAY frame (10 ms
+        // units). The TNC4 keeps it in working memory only, like the gain.
+        if let ms = env["AXTERM_TNC4_TXDELAY_MS"].flatMap(Int.init) {
+            let units = UInt8(clamping: ms / 10)
+            link.send(Data([0xC0, 0x01, units, 0xC0])) { _ in }
+            _ = waitFor(seconds: 1) { false }
+            link.send(Data([0xC0, 0x06, 0x21, 0xC0])) { _ in }   // GET_TXDELAY
             _ = waitFor(seconds: 1.5) { false }
-            let echoed = recorder.snapshot().frames.last { $0.count >= 4 && $0[0] == 0x06 && $0[1] == 0x0C }
-                .map { Int($0[2]) << 8 | Int($0[3]) }
-            note("TNC4: output gain set to \(gain), TNC4 reports \(echoed.map(String.init) ?? "no reply") (not saved)")
-            XCTAssertEqual(echoed, Int(gain), "the TNC4 did not confirm the output gain")
+            let echoed = recorder.snapshot().frames.last { $0.count >= 3 && $0[0] == 0x06 && $0[1] == 0x21 }.map { Int($0[2]) }
+            note("TNC4: TX delay set to \(Int(units) * 10) ms, TNC4 reports \(echoed.map { "\($0 * 10) ms" } ?? "no reply")")
+            XCTAssertEqual(echoed, Int(units), "the TNC4 did not confirm the TX delay")
         }
 
         let frame = AX25FrameBuilder.buildUI(
@@ -242,6 +243,188 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         }
         note("TNC4: \(repeats) digipeated copies of our packet in \(Int(listen)) s")
         XCTAssertGreaterThan(repeats, 0, "no digipeater repeated the test packet — \(notes.suffix(2).joined(separator: " | "))")
+    }
+
+    /// THIS ONE TRANSMITS. Open and close an AX.25 connection with a node:
+    /// SABM, wait for UA (or DM), log whatever the node sends, then DISC and
+    /// wait for its UA. Proves both directions against a real peer without
+    /// relying on distant digipeaters. Same TX switch as above.
+    ///
+    /// TEST_RUNNER_AXTERM_TNC4_NODE sets the node (default K0EPI-7) and
+    /// TEST_RUNNER_AXTERM_TNC4_TX_CALL the source (default K0EPI-2).
+    func testConnectToNodeOverBLE() throws {
+        guard env["AXTERM_TNC4_TX"] == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_AXTERM_TNC4_TX=1 to transmit")
+        }
+        let me = { () -> AX25Address in
+            let (c, s) = CallsignNormalizer.parse(env["AXTERM_TNC4_TX_CALL"] ?? "K0EPI-2"); return AX25Address(call: c, ssid: s)
+        }()
+        let node = { () -> AX25Address in
+            let (c, s) = CallsignNormalizer.parse(env["AXTERM_TNC4_NODE"] ?? "K0EPI-7"); return AX25Address(call: c, ssid: s)
+        }()
+
+        let (link, recorder) = try openLiveLink()
+        defer { link.close() }
+
+        func send(_ frame: OutboundFrame) {
+            link.send(KISS.encodeFrame(payload: frame.encodeAX25(), port: 0)) { _ in }
+            note("TNC4 >> \(me.display)>\(node.display) \(frame.displayInfo ?? "?")")
+        }
+        /// Frames from the node to us, decoded, from index `from` on.
+        func fromNode(after from: Int) -> [(index: Int, control: UInt8, info: Data)] {
+            recorder.snapshot().frames.enumerated().compactMap { i, f in
+                guard i >= from, (f.first ?? 0xFF) & 0x0F == 0,
+                      let d = AX25.decodeFrame(ax25: Data(f.dropFirst())),
+                      d.from?.call == node.call, d.from?.ssid == node.ssid,
+                      d.to?.call == me.call, d.to?.ssid == me.ssid else { return nil }
+                return (i, d.control, d.info)
+            }
+        }
+        func name(_ c: UInt8) -> String {
+            if c & 0x01 == 0 { return "I ns=\((c >> 1) & 7) nr=\(c >> 5)" }
+            if c & 0x03 == 0x01 { return ["RR", "RNR", "REJ", "SREJ"][Int((c >> 2) & 3)] + " nr=\(c >> 5)" }
+            switch c & 0xEF {
+            case 0x2F: return "SABM"; case 0x6F: return "SABME"; case 0x63: return "UA"
+            case 0x0F: return "DM"; case 0x43: return "DISC"; case 0x87: return "FRMR"
+            case 0x03: return "UI"; case 0xAF: return "XID"; default: return String(format: "U %02X", c)
+            }
+        }
+
+        var answer: UInt8?
+        for attempt in 1...3 where answer == nil {
+            let mark = recorder.snapshot().frames.count
+            send(AX25FrameBuilder.buildSABM(from: me, to: node))
+            _ = waitFor(seconds: 8) {
+                fromNode(after: mark).contains { [0x63, 0x0F].contains($0.control & 0xEF) }
+            }
+            answer = fromNode(after: mark).first { [0x63, 0x0F].contains($0.control & 0xEF) }?.control
+            note("TNC4: SABM attempt \(attempt): \(answer.map(name) ?? "no answer")")
+        }
+
+        if let answer, answer & 0xEF == 0x63 {
+            // Connected. Give the node a moment to send its greeting, then leave.
+            let mark = recorder.snapshot().frames.count
+            _ = waitFor(seconds: 4) { false }
+            for f in fromNode(after: mark) {
+                let text = String(decoding: f.info.prefix(80), as: UTF8.self).replacingOccurrences(of: "\r", with: "⏎")
+                note("TNC4 << \(name(f.control)) \(text)")
+            }
+            let discMark = recorder.snapshot().frames.count
+            send(AX25FrameBuilder.buildDISC(from: me, to: node))
+            let closed = waitFor(seconds: 8) {
+                fromNode(after: discMark).contains { [0x63, 0x0F].contains($0.control & 0xEF) }
+            }
+            note("TNC4: DISC answered: \(closed ? fromNode(after: discMark).map { name($0.control) }.joined(separator: ",") : "no")")
+            XCTAssertTrue(closed, "the node never acknowledged DISC")
+        }
+        // Everything the TNC4 handed up during the test, from anyone, so a
+        // missing answer can be told apart from a deaf receiver.
+        let snap = recorder.snapshot()
+        note("TNC4: \(link.totalBytesIn) bytes in, \(link.totalBytesOut) out, \(snap.frames.count) KISS frames")
+        for f in snap.frames {
+            guard (f.first ?? 0xFF) & 0x0F == 0, let d = AX25.decodeFrame(ax25: Data(f.dropFirst())) else {
+                note("  hw: " + f.prefix(8).map { String(format: "%02X", $0) }.joined(separator: " ")); continue
+            }
+            note("  heard: \(d.from?.display ?? "?")>\(d.to?.display ?? "?") \(name(d.control))")
+        }
+        XCTAssertEqual(answer.map { $0 & 0xEF }, 0x63, "the node did not accept the connection with UA")
+    }
+
+    /// THIS ONE TRANSMITS (one short UI frame). Measure the TNC4's input
+    /// level before and in the seconds after a transmission, to see whether
+    /// the input is knocked off centre by the unkey and how long it takes to
+    /// come back. Nothing is saved; the level poll takes the demodulator off
+    /// packets, so RESET is sent at the end.
+    func testInputAfterTransmitOverBLE() throws {
+        guard env["AXTERM_TNC4_TX"] == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_AXTERM_TNC4_TX=1 to transmit")
+        }
+        let (call, ssid) = CallsignNormalizer.parse(env["AXTERM_TNC4_TX_CALL"] ?? "K0EPI-2")
+        let (link, recorder) = try openLiveLink()
+        defer { link.close() }
+
+        let poll = Data(MobilinkdTNC.pollInputLevel())
+        for _ in 0..<3 { link.send(poll) { _ in }; _ = waitFor(seconds: 0.6) { false } }
+        _ = waitFor(seconds: 1) { false }
+
+        let frame = AX25FrameBuilder.buildUI(
+            from: AX25Address(call: call, ssid: ssid), to: AX25Address(call: "TEST"),
+            payload: Data("AXTerm TNC4 turnaround test".utf8))
+        let sentAt = Date()
+        link.send(KISS.encodeFrame(payload: frame.encodeAX25(), port: 0)) { _ in }
+        note("TNC4: sent UI frame at t=0")
+        while Date().timeIntervalSince(sentAt) < 6 {
+            link.send(poll) { _ in }
+            _ = waitFor(seconds: 0.4) { false }
+        }
+        _ = waitFor(seconds: 1.5) { false }
+        link.send(Data(MobilinkdTNC.reset())) { _ in }
+        _ = waitFor(seconds: 0.5) { false }
+
+        var readings = 0
+        for (at, f) in recorder.timedFrames() {
+            guard let l = MobilinkdTNC.parseInputLevel(f) else { continue }
+            readings += 1
+            note(String(format: "  t=%+5.2fs  vavg %5d  vmin %5d  vmax %5d  vpp %5d",
+                        at.timeIntervalSince(sentAt), l.vavg, l.vmin, l.vmax, l.vpp))
+        }
+        XCTAssertGreaterThan(readings, 3, "too few level readings to say anything")
+    }
+
+    /// Open a link and make sure the TNC4 is actually heard before using it.
+    /// About one connection in four comes up with notifications "enabled" and
+    /// nothing ever arriving; a fresh connection clears it. This probes with
+    /// GET_FIRMWARE_VERSION and reconnects up to three times.
+    private func openLiveLink() throws -> (KISSLinkBLE, TNC4Recorder) {
+        let device = try discoverTNC4()
+        for attempt in 1...3 {
+            let recorder = TNC4Recorder()
+            let link = KISSLinkBLE(config: BLEConfig(
+                peripheralUUID: device.id.uuidString, peripheralName: device.name,
+                autoReconnect: false, mobilinkdConfig: MobilinkdConfig()))
+            link.delegate = recorder
+            link.open()
+            guard waitFor(seconds: 30, { link.state == .connected }) else {
+                link.close(); continue
+            }
+            _ = waitFor(seconds: 2) { false }
+            link.send(Data([0xC0, 0x06, 0x28, 0xC0])) { _ in }
+            if waitFor(seconds: 3, { recorder.snapshot().frames.contains { $0.count > 2 && $0[0] == 0x06 && $0[1] == 0x28 } }) {
+                note("TNC4: link live on attempt \(attempt)")
+                if let out = env["AXTERM_TNC4_OUTPUT_GAIN"].flatMap(UInt16.init) {
+                    // Working memory only, like the input gain below.
+                    link.send(Data([0xC0, 0x06, 0x01, UInt8(out >> 8), UInt8(out & 0xFF), 0xC0])) { _ in }
+                    _ = waitFor(seconds: 1.5) { false }
+                    let echoed = recorder.snapshot().frames.last { $0.count >= 4 && $0[0] == 0x06 && $0[1] == 0x0C }
+                        .map { Int($0[2]) << 8 | Int($0[3]) }
+                    note("TNC4: output gain set to \(out), TNC4 reports \(echoed.map(String.init) ?? "no reply") (not saved)")
+                }
+                if let gain = env["AXTERM_TNC4_INPUT_GAIN"].flatMap(UInt8.init) {
+                    // Working memory only (no SAVE). The TNC4 re-measures its
+                    // input centre for a second and starts streaming levels,
+                    // so RESET afterwards to get back to packets.
+                    link.send(Data(MobilinkdTNC.setInputGain(gain))) { _ in }
+                    _ = waitFor(seconds: 2.5) { false }
+                    link.send(Data(MobilinkdTNC.reset())) { _ in }
+                    _ = waitFor(seconds: 1) { false }
+                    let echoed = recorder.snapshot().frames.last { $0.count >= 4 && $0[0] == 0x06 && $0[1] == 0x0D }
+                        .map { Int($0[2]) << 8 | Int($0[3]) }
+                    note("TNC4: input gain set to \(gain), TNC4 reports \(echoed.map(String.init) ?? "no reply") (not saved)")
+                }
+                if env["AXTERM_TNC4_RESET_ON_CONNECT"] == "1" {
+                    // Restart the demodulator, as AXTerm's own watchdog does
+                    // after 30-90 s of silence, but straight away.
+                    link.send(Data(MobilinkdTNC.reset())) { _ in }
+                    _ = waitFor(seconds: 1) { false }
+                    note("TNC4: sent demodulator RESET")
+                }
+                return (link, recorder)
+            }
+            note("TNC4: attempt \(attempt) came up deaf (\(link.totalBytesIn) bytes in); reconnecting")
+            link.close()
+            _ = waitFor(seconds: 3) { false }
+        }
+        throw XCTSkip("could not get a live BLE link to the TNC4 in three attempts")
     }
 
     /// Find the TNC4 by its advertised Mobilinkd service, connect, and listen.
