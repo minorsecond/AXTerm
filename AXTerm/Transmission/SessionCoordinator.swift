@@ -2706,8 +2706,9 @@ final class SessionCoordinator: ObservableObject {
         // Note: onDataDeliveredForReassembly is wired up in setupCallbacks() already
 
         // Cancel previous subscription to prevent duplicate packet processing.
-        // ContentView.init() can be called multiple times by SwiftUI, each time
-        // calling subscribeToPackets on the same shared coordinator instance.
+        // Each main window wires the shared coordinator once when it is
+        // installed (see MainWindowServicesBox), so a second window, or the
+        // window reopened from the menu bar, calls this again.
         packetSubscription?.cancel()
         packetSubscription = client.packetPublisher
             .receive(on: DispatchQueue.main)

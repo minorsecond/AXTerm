@@ -20,12 +20,12 @@ struct AXTermiOSRootView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var client: PacketEngine
 
-    @ObservedObject private var sessionCoordinator: SessionCoordinator
+    @StateObject private var sessionCoordinator: SessionCoordinator
     /// The personal mailbox: settings, the service that answers calls, and
     /// the folders it shares. Built here for the same reason the Mac builds
-    /// them in `ContentView.init` — this is the one place holding both the
-    /// coordinator (which owns inbound calls) and the engine (which owns the
-    /// database and the frame sink).
+    /// them in `ContentView.makeServices` — this is the one place holding
+    /// both the coordinator (which owns inbound calls) and the engine (which
+    /// owns the database and the frame sink).
     @ObservedObject var bbsSettings: BBSSettings
     @StateObject private var bbsService: BBSService
     @StateObject private var bbsLibrary: BBSFileLibrary
@@ -189,9 +189,41 @@ struct AXTermiOSRootView: View {
         self.settings = settings
         self.client = client
         _bbsSettings = ObservedObject(wrappedValue: bbsSettings)
+        _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            netRomIntegration: client.netRomIntegration,
+            databaseAggregationProvider: { interval, bucket, calendar, options in
+                await client.aggregateAnalytics(in: interval, bucket: bucket,
+                                                calendar: calendar, options: options)
+            },
+            captureEventsProvider: { interval in
+                guard let events = await client.captureConnectionEvents(around: interval) else { return nil }
+                let isLive = await MainActor.run { client.status == .connected }
+                return (events.connects, events.disconnects, isLive)
+            }))
+
+        // The coordinator's wiring and the mailbox services are built once,
+        // when SwiftUI first installs this view; see MainWindowServicesBox.
+        // The app's body runs again on every settings change, and so does
+        // this initialiser, but its box is never opened after the first.
+        let setup = MainWindowServicesBox {
+            Self.makeServices(context: context, settings: settings, client: client,
+                              bbsSettings: bbsSettings)
+        }
+        _sessionCoordinator = StateObject(wrappedValue: setup.services.coordinator)
+        _bbsLibrary = StateObject(wrappedValue: setup.services.bbsLibrary)
+        _callsignLookup = StateObject(wrappedValue: setup.services.callsignLookup)
+        _bbsService = StateObject(wrappedValue: setup.services.bbsService)
+    }
+
+    /// The shared session coordinator, wired to the engine, and the mailbox
+    /// built around it. Called once per install, from `MainWindowServicesBox`.
+    private static func makeServices(context: WinlinkContext, settings: AppSettingsStore,
+                                     client: PacketEngine,
+                                     bbsSettings: BBSSettings) -> MainWindowServices {
         // The Mac wires the coordinator to the station's identity and to the
-        // radio in `ContentView.init`; this shell has to do the same or the
-        // transmit path runs with neither. Field capture 2026-08-25: a connect
+        // radio in `ContentView.makeServices`; this shell has to do the same
+        // or the transmit path runs with neither. Field capture 2026-08-25: a connect
         // to W0ARP-10 went out as `src=NOCALL` and every T1 retry logged
         // "Skipping sendFrame - packetEngine not set". The gateway answered
         // `UA F=1` — the link was up on its side — but with no packet
@@ -275,26 +307,11 @@ struct AXTermiOSRootView: View {
         // As on the Mac: the send returns before the radio keys, so a fault
         // during the listen is what tells the probe the query never went out.
         client.onLinkError = { [weak probe] message in probe?.transmitDidFail(message) }
-        self.sessionCoordinator = coordinator
-
-        _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(
-            settingsStore: settings,
-            netRomIntegration: client.netRomIntegration,
-            databaseAggregationProvider: { interval, bucket, calendar, options in
-                await client.aggregateAnalytics(in: interval, bucket: bucket,
-                                                calendar: calendar, options: options)
-            },
-            captureEventsProvider: { interval in
-                guard let events = await client.captureConnectionEvents(around: interval) else { return nil }
-                let isLive = await MainActor.run { client.status == .connected }
-                return (events.connects, events.disconnects, isLive)
-            }))
 
         // Built before the mailbox so the mailbox can read its cache.
         let lookup = CallsignLookupService(
             store: context.store,
             isNetworkEnabled: context.settings.callsignLookupEnabled)
-        _callsignLookup = StateObject(wrappedValue: lookup)
 
         // The mailbox, wired exactly as the Mac wires it. Hoisted closures
         // rather than one expression, which pushes the type checker past
@@ -311,7 +328,6 @@ struct AXTermiOSRootView: View {
         }
         let contested: () -> String? = { context.contestedIdentityHolder }
         let library = BBSFileLibrary(store: client.bbsMessages)
-        _bbsLibrary = StateObject(wrappedValue: library)
         let supportsAXDP: (String) -> Bool = { [weak client] callsign in
             client?.capabilityStore.hasCapabilities(for: callsign) ?? false
         }
@@ -327,7 +343,7 @@ struct AXTermiOSRootView: View {
                 return BBSShell.HeardStation(callsign: station.call, lastHeard: lastHeard)
             }
         }
-        _bbsService = StateObject(wrappedValue: BBSService(
+        let bbsService = BBSService(
             store: client.bbsMessages,
             settings: bbsSettings,
             coordinator: coordinator,
@@ -341,7 +357,9 @@ struct AXTermiOSRootView: View {
             licenceRecord: licence,
             announce: { [weak client] line in client?.appendSystemNotification(line) },
             resolveLicences: { [weak lookup] callsigns in await lookup?.resolveAll(callsigns) },
-            contestedIdentityHolder: contested))
+            contestedIdentityHolder: contested)
+        return MainWindowServices(coordinator: coordinator, bbsLibrary: library,
+                                  callsignLookup: lookup, bbsService: bbsService)
     }
 
     var body: some View {

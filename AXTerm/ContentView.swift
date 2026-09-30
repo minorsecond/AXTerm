@@ -330,17 +330,36 @@ struct ContentView: View {
                 await client.loadPackets(in: interval)
             }
         ))
+        _bbsSettings = ObservedObject(wrappedValue: bbsSettings)
+        // The coordinator's wiring and the mailbox services are built once,
+        // when SwiftUI first installs this view; see MainWindowServicesBox.
+        // Every later pass through this initialiser leaves its box unopened.
+        let setup = MainWindowServicesBox {
+            Self.makeServices(client: client, settings: settings,
+                              winlinkContext: winlinkContext, bbsSettings: bbsSettings)
+        }
+        _sessionCoordinator = StateObject(wrappedValue: setup.services.coordinator)
+        _bbsLibrary = StateObject(wrappedValue: setup.services.bbsLibrary)
+        _callsignLookup = StateObject(wrappedValue: setup.services.callsignLookup)
+        _bbsService = StateObject(wrappedValue: setup.services.bbsService)
+    }
+
+    /// The shared session coordinator, wired to the engine, and the mailbox
+    /// built around it. Called once per window, from `MainWindowServicesBox`.
+    private static func makeServices(client: PacketEngine, settings: AppSettingsStore,
+                                     winlinkContext: WinlinkContext,
+                                     bbsSettings: BBSSettings) -> MainWindowServices {
         // Get or create the shared session coordinator so Settings can update the same instance.
         // Only seed @Published properties on a new coordinator — re-seeding an existing shared
         // instance during view init triggers "Publishing changes from within view updates".
         let coordinator: SessionCoordinator
         if let existing = SessionCoordinator.shared {
             coordinator = existing
-            // This initialiser runs inside AXTermApp's body, which is
-            // evaluated again every time any setting publishes. Assigning
-            // the callsign here unconditionally published `localCallsign`
-            // from inside that view update on every settings edit: 36 of the
-            // 61 warnings logged with the Settings window open on
+            // This runs while SwiftUI installs the window, inside a view
+            // update. It used to run on every settings edit as well, from
+            // the initialiser, and assigning the callsign unconditionally
+            // there published `localCallsign` from inside the update: 36 of
+            // the 61 warnings logged with the Settings window open on
             // 2026-09-29. With a window up, the onChange in
             // presentationLayer keeps the callsign in step; a change made
             // while no window was open catches up on the next turn of the
@@ -439,11 +458,9 @@ struct ContentView: View {
         // to key, so the probe hears about that the only way it can: a link
         // fault arriving while it is listening.
         client.onLinkError = { [weak probe] message in probe?.transmitDidFail(message) }
-        _sessionCoordinator = StateObject(wrappedValue: coordinator)
         // The personal mailbox. Built here because this is the one place that
         // holds both the coordinator (which owns inbound calls) and the engine
         // (which owns the database and the frame sink).
-        _bbsSettings = ObservedObject(wrappedValue: bbsSettings)
         // Hoisted rather than inlined: as one expression the closures push the
         // type checker past its budget.
         let sendFrames: ([OutboundFrame]) -> Void = { [weak client] frames in
@@ -460,7 +477,6 @@ struct ContentView: View {
         }
         let contested: () -> String? = { winlinkContext.contestedIdentityHolder }
         let library = BBSFileLibrary(store: client.bbsMessages)
-        _bbsLibrary = StateObject(wrappedValue: library)
         let supportsAXDP: (String) -> Bool = { [weak client] callsign in
             client?.capabilityStore.hasCapabilities(for: callsign) ?? false
         }
@@ -468,7 +484,6 @@ struct ContentView: View {
         let lookup = CallsignLookupService(
             store: winlinkContext.store,
             isNetworkEnabled: winlinkContext.settings.callsignLookupEnabled)
-        _callsignLookup = StateObject(wrappedValue: lookup)
         // Cached only: the mailbox answers calls unattended, and looking a
         // caller up over the internet the moment they connect would tell a
         // third party who is talking to this station.
@@ -481,7 +496,7 @@ struct ContentView: View {
                 return BBSShell.HeardStation(callsign: station.call, lastHeard: lastHeard)
             }
         }
-        _bbsService = StateObject(wrappedValue: BBSService(
+        let bbsService = BBSService(
             store: client.bbsMessages,
             settings: bbsSettings,
             coordinator: coordinator,
@@ -495,7 +510,9 @@ struct ContentView: View {
             licenceRecord: licence,
             announce: { [weak client] line in client?.appendSystemNotification(line) },
             resolveLicences: { [weak lookup] callsigns in await lookup?.resolveAll(callsigns) },
-            contestedIdentityHolder: contested))
+            contestedIdentityHolder: contested)
+        return MainWindowServices(coordinator: coordinator, bbsLibrary: library,
+                                  callsignLookup: lookup, bbsService: bbsService)
     }
 
     /// The window, assembled in layers.
