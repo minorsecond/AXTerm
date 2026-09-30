@@ -285,7 +285,8 @@ struct ModemRigSection: View {
     }
 }
 
-/// Drive level, timing, and the two tests.
+/// Drive level, the transmit watchdog, and the two tests. TX delay and the
+/// rest of the timing are the radio's Timing section (`RadioTimingSection`).
 struct ModemTransmitSection: View {
     @ObservedObject var viewModel: ConnectionTransportViewModel
 
@@ -322,16 +323,6 @@ struct ModemTransmitSection: View {
             .help("The tone keys the radio and plays a steady 1200 Hz mark for two seconds. The test frame is a UI frame to TEST "
                   + "from this radio's callsign, sent through the normal path so another station's decoder can confirm the chain.")
 
-            timingRow("TXDELAY", value: $viewModel.txDelayMs, unit: "ms", range: 0...2000, step: 10,
-                      help: "Preamble before the first frame, so the radio is fully on the air. 300 ms suits an IC-705 over USB; "
-                          + "shorten it once frames decode reliably at the other end.")
-            timingRow("TXTAIL", value: $viewModel.txTailMs, unit: "ms", range: 0...1000, step: 10,
-                      help: "Flags after the last frame before PTT drops, covering the USB audio path's delay.")
-            timingRow("Persistence", value: $viewModel.persistence, unit: "", range: 0...255, step: 1,
-                      help: "P of p-persistence CSMA: the chance in 256 of transmitting each slot once the channel is clear. 63 is the "
-                          + "customary quarter; lower it on a busy channel.")
-            timingRow("Slot time", value: $viewModel.slotTimeMs, unit: "ms", range: 10...1000, step: 10,
-                      help: "How long to wait between rolls of the persistence dice.")
             timingRow("Max transmission", value: $viewModel.maxTransmitSeconds, unit: "s", range: 3...120, step: 1,
                       help: "The watchdog: PTT is forced off after this long no matter what, so a fault cannot hold the transmitter.")
         } header: {

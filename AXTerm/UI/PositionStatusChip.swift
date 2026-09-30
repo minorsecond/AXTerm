@@ -38,7 +38,7 @@ struct PositionStatusChip: View {
 
     var body: some View {
         Button {
-            SettingsRouter.shared.navigate(to: .general)
+            SettingsRouter.shared.navigate(to: .stationPosition)
         } label: {
             HStack(spacing: 5) {
                 // The symbol carries the warning colour; orange text as well

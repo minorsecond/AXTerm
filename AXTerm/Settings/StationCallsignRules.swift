@@ -29,8 +29,8 @@ nonisolated enum StationCallsignRules {
     /// only the base is kept, and where the SSID is set instead. Nil when the
     /// typed callsign has no suffix.
     ///
-    /// With one radio the sidebar calls its page Connection, and its Identity
-    /// section is the first thing on it.
+    /// Every radio's page is under Radios, one radio or several, with
+    /// Identity just below its connection.
     static func ssidGuidance(for typed: String, hasMultipleRadios: Bool) -> String? {
         let normalized = CallsignValidator.normalize(typed)
         guard hasSuffix(normalized) else { return nil }
@@ -42,9 +42,9 @@ nonisolated enum StationCallsignRules {
             return kept + " SSIDs are set per radio: open the radio under Radios and pick one under Identity."
         }
         if !base.isEmpty, let ssid = SSIDConvention.ssid(of: normalized), ssid > 0 {
-            return kept + " To go on the air as \(base)-\(ssid), pick \(ssid) under Identity on the Connection page."
+            return kept + " To go on the air as \(base)-\(ssid), pick \(ssid) under Identity on your radio's page under Radios."
         }
-        return kept + " Your radio's SSID is set under Identity on the Connection page."
+        return kept + " Your radio's SSID is set under Identity on its page under Radios."
     }
 
     /// The SSID a callsign carries under the station's own call, or nil when

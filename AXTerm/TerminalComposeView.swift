@@ -1461,15 +1461,14 @@ struct TerminalComposeView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.yellow)
-                    Text("Please set your Callsign in Settings before transmitting.")
+                    Text("Set your callsign before transmitting.")
                         .font(.system(size: 11, weight: .medium))
                     Spacer()
-                    Button("Open Settings") {
-                        // Named destination rather than a bare open: the
-                        // callsign lives in Identity, and dropping the
-                        // operator on whatever tab was last used is how this
-                        // ends up looking like the button does nothing.
-                        SettingsRouter.shared.navigate(to: .general)
+                    Button("Set Up\u{2026}") {
+                        // No callsign means a station that has not been set
+                        // up, so this opens first-run setup: the callsign,
+                        // where the station is, and its radio.
+                        SettingsRouter.shared.presentSetup()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)

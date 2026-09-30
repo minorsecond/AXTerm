@@ -138,7 +138,7 @@ struct LinkLayerSettingsView: View {
                 .foregroundStyle(.tertiary)
 
             Button("Open Radio Settings\u{2026}") {
-                SettingsRouter.shared.navigate(to: .radios)
+                SettingsRouter.shared.navigate(to: .radioConnection, radio: settings.primaryRadio?.id)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)

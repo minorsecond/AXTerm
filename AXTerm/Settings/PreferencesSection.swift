@@ -7,22 +7,21 @@
 
 import SwiftUI
 
-/// A container for Settings preferences that supports deep linking and highlighting.
+/// A Settings section a deep link can land on.
 ///
-/// Wraps standard Form Sections but adds an `.id()` for ScrollViewReader
-/// and a visual highlight effect controlled by `SettingsRouter`.
+/// A plain `Section` with an `.id` that `SettingsForm` scrolls to when
+/// `SettingsRouter.highlightSection` names it.
 struct PreferencesSection<Content: View>: View {
     let id: SettingsSection?
     let title: String
-    @EnvironmentObject var router: SettingsRouter
     @ViewBuilder let content: Content
-    
+
     init(_ title: String, id: SettingsSection? = nil, @ViewBuilder content: () -> Content) {
         self.title = title
         self.id = id
         self.content = content()
     }
-    
+
     var body: some View {
         if let id = id {
             Section(title) {
@@ -32,6 +31,45 @@ struct PreferencesSection<Content: View>: View {
         } else {
             Section(title) {
                 content
+            }
+        }
+    }
+}
+
+/// A grouped Settings form that scrolls to the section a deep link names.
+///
+/// `sections` lists the sections this page holds. When the router's
+/// `highlightSection` is one of them, the form takes it (clearing it, so a
+/// later visit does not jump) and scrolls it to the top. The work is put on
+/// the next turn of the run loop because the router is an `ObservableObject`,
+/// and clearing it from inside the update that showed the page is what
+/// SwiftUI reports as publishing during a view update.
+struct SettingsForm<Content: View>: View {
+    let sections: Set<SettingsSection>
+    @EnvironmentObject private var router: SettingsRouter
+    @ViewBuilder let content: Content
+
+    init(landing sections: Set<SettingsSection>, @ViewBuilder content: () -> Content) {
+        self.sections = sections
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            Form { content }
+                .formStyle(.grouped)
+                .onAppear { land(proxy) }
+                .onChange(of: router.highlightSection) { _, _ in land(proxy) }
+        }
+    }
+
+    private func land(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            guard let section = router.consume(sections) else { return }
+            // One more turn so a page that has just been pushed has laid out
+            // the section before it is asked to scroll there.
+            DispatchQueue.main.async {
+                withAnimation { proxy.scrollTo(section, anchor: .top) }
             }
         }
     }

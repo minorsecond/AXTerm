@@ -40,11 +40,10 @@ struct SettingsView: View {
     @State private var sidebarSelection: SettingsTab? = SettingsRouter.shared.selectedTab
 
     var body: some View {
-        // A sidebar, not a tab strip: eight tabs crammed into a 550-point
-        // toolbar read as clutter and hid what the pages had in common.
-        // Grouped the way the app thinks — who you are, the radio, the
-        // services running on it, and the machinery underneath — in a
-        // window the operator can finally resize.
+        // A sidebar, not a tab strip. Grouped the way the app thinks: who
+        // and where the station is, its radios, the services running on
+        // them, and the machinery underneath. Each setting has one home, and
+        // the homes do not move when a second radio is added.
         NavigationSplitView {
             // Optional selection: the non-optional List selection
             // initialiser is macOS-only, and this file compiles into the
@@ -54,16 +53,16 @@ struct SettingsView: View {
                     sidebarRow(.general)
                     sidebarRow(.notifications)
                 }
-                Section("Radio") {
+                Section("Radios") {
                     sidebarRow(.radios)
-                    sidebarRow(.transmission)
                 }
                 Section("Services") {
                     sidebarRow(.aprs)
-                    sidebarRow(.winlink)
+                    sidebarRow(.packetNode)
                     #if os(macOS)
                     sidebarRow(.bbs)
                     #endif
+                    sidebarRow(.winlink)
                 }
                 Section("Maintenance") {
                     sidebarRow(.advanced)
@@ -84,7 +83,7 @@ struct SettingsView: View {
             .navigationSplitViewColumnWidth(min: 185, ideal: 200, max: 240)
         } detail: {
             detail
-                .navigationTitle(router.selectedTab.settingsTitle(hasMultipleRadios: settings.hasMultipleRadios))
+                .navigationTitle(router.selectedTab.settingsTitle)
         }
         .onAppear {
             if sidebarSelection != router.selectedTab { sidebarSelection = router.selectedTab }
@@ -118,8 +117,8 @@ struct SettingsView: View {
             NotificationSettingsView(settings: settings, notificationManager: notificationManager)
         case .radios:
             RadiosSettingsView(settings: settings, client: client)
-        case .transmission:
-            TransmissionSettingsView(settings: settings, client: client)
+        case .packetNode:
+            PacketNodeSettingsView(settings: settings, client: client)
         case .winlink:
             WinlinkSettingsTab(settings: winlinkSettings, profile: stationProfile,
                                stationCallsign: settings.primaryCallsign,
@@ -129,7 +128,8 @@ struct SettingsView: View {
             #if os(macOS)
             BBSSettingsTab(settings: bbsSettings,
                            stationCallsign: settings.primaryCallsign,
-                           isWinlinkP2PArmed: winlinkSettings.p2pListenEnabled)
+                           isWinlinkP2PArmed: winlinkSettings.p2pListenEnabled,
+                           runsOn: ServiceRadios.mailbox(settings.activeRadios))
             #else
             EmptyView()
             #endif
@@ -153,41 +153,29 @@ struct SettingsView: View {
     /// eye can navigate by colour before it reads a word.
     private func sidebarRow(_ tab: SettingsTab) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: tab.settingsIcon(hasMultipleRadios: settings.hasMultipleRadios))
+            Image(systemName: tab.settingsIcon)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 22, height: 22)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(tab.settingsTint.gradient))
-            Text(tab.settingsTitle(hasMultipleRadios: settings.hasMultipleRadios))
+            Text(tab.settingsTitle)
         }
         .tag(tab)
     }
 }
 
 extension SettingsTab {
-    /// The pane's name. One radio and it is the Connection pane it always
-    /// was — the word "radios" appears nowhere until there are several.
-    func settingsTitle(hasMultipleRadios: Bool) -> String {
-        if self == .radios, !hasMultipleRadios { return "Connection" }
-        return settingsTitle
-    }
-
-    func settingsIcon(hasMultipleRadios: Bool) -> String {
-        if self == .radios, !hasMultipleRadios { return "cable.connector" }
-        return settingsIcon
-    }
-
     var settingsTitle: String {
         switch self {
         case .general: return "General"
         case .notifications: return "Notifications"
         case .radios: return "Radios"
-        case .transmission: return "Transmission"
-        case .winlink: return "Winlink"
-        case .bbs: return "BBS"
         case .aprs: return "APRS"
+        case .packetNode: return "Packet Node"
+        case .bbs: return "BBS"
+        case .winlink: return "Winlink"
         case .advanced: return "Advanced"
         case .linkDebug: return "Link Debug"
         }
@@ -198,10 +186,10 @@ extension SettingsTab {
         case .general: return "gearshape.fill"
         case .notifications: return "bell.badge.fill"
         case .radios: return "radio"
-        case .transmission: return "antenna.radiowaves.left.and.right"
-        case .winlink: return "envelope.fill"
-        case .bbs: return "tray.full.fill"
         case .aprs: return "mappin.and.ellipse"
+        case .packetNode: return "point.3.connected.trianglepath.dotted"
+        case .bbs: return "tray.full.fill"
+        case .winlink: return "envelope.fill"
         case .advanced: return "wrench.and.screwdriver.fill"
         case .linkDebug: return "ant.fill"
         }
@@ -212,12 +200,22 @@ extension SettingsTab {
         case .general: return .gray
         case .notifications: return .red
         case .radios: return .blue
-        case .transmission: return .orange
-        case .winlink: return .teal
-        case .bbs: return .indigo
         case .aprs: return .green
+        case .packetNode: return .orange
+        case .bbs: return .indigo
+        case .winlink: return .teal
         case .advanced: return .brown
         case .linkDebug: return .purple
         }
+    }
+
+    /// The pages in the order the sidebar lists them. The BBS page is the
+    /// Mac's; the mailbox settings on iOS have their own screen.
+    static var sidebarOrder: [SettingsTab] {
+        #if os(macOS)
+        return [.general, .notifications, .radios, .aprs, .packetNode, .bbs, .winlink, .advanced, .linkDebug]
+        #else
+        return [.general, .notifications, .radios, .aprs, .packetNode, .winlink, .advanced, .linkDebug]
+        #endif
     }
 }

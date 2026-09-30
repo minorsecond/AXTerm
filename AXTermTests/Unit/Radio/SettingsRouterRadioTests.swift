@@ -43,14 +43,10 @@ final class SettingsRouterRadioTests: XCTestCase {
         XCTAssertNil(SettingsRouter.shared.pendingRadio)
     }
 
-    /// Until there are several radios the pane is the Connection pane it
-    /// always was; the word "radios" appears nowhere.
-    func testThePaneIsCalledConnectionUntilThereAreSeveralRadios() {
-        XCTAssertEqual(SettingsTab.radios.settingsTitle(hasMultipleRadios: false), "Connection")
-        XCTAssertEqual(SettingsTab.radios.settingsIcon(hasMultipleRadios: false), "cable.connector")
-        XCTAssertEqual(SettingsTab.radios.settingsTitle(hasMultipleRadios: true), "Radios")
-        XCTAssertEqual(SettingsTab.radios.settingsIcon(hasMultipleRadios: true), "radio")
-        // Other panes do not care.
-        XCTAssertEqual(SettingsTab.general.settingsTitle(hasMultipleRadios: false), "General")
+    /// The pane is Radios with one radio or several: its home does not move
+    /// when a second radio is added.
+    func testThePaneIsRadiosWhateverTheCount() {
+        XCTAssertEqual(SettingsTab.radios.settingsTitle, "Radios")
+        XCTAssertEqual(SettingsTab.radios.settingsIcon, "radio")
     }
 }

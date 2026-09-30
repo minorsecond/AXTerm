@@ -107,6 +107,8 @@ struct AXTermiOSRootView: View {
     /// Where the More tab is pushed to, so "Open Settings" can land on the
     /// screen that holds the setting rather than on a menu.
     @State private var settingsPath: [SettingsDestination] = []
+    /// The Add Radio sheet's state while it is open.
+    @State private var addRadioFlow: AddRadioFlow?
 
     /// Puts the TNC link strip above the tab bar, on every tab.
     ///
@@ -160,7 +162,7 @@ struct AXTermiOSRootView: View {
     /// router speaks in `SettingsTab`, so the mapping lives here rather than
     /// asking every caller to know which shell it is talking to.
     fileprivate enum SettingsDestination: Hashable {
-        case identity, winlink, radios, transmission, diagnostics, mailbox, aprsSettings
+        case general, winlink, radios, packetNode, diagnostics, mailbox, aprsSettings
         /// One radio's form, pushed over the radios list.
         case radio(RadioID)
         /// The mailbox itself, pushed — the phone's home for it.
@@ -170,10 +172,10 @@ struct AXTermiOSRootView: View {
 
         init(_ tab: SettingsTab) {
             switch tab {
-            case .general, .advanced: self = .identity
+            case .general, .advanced: self = .general
             case .winlink: self = .winlink
             case .radios: self = .radios
-            case .transmission: self = .transmission
+            case .packetNode: self = .packetNode
             case .notifications, .linkDebug: self = .diagnostics
             case .bbs: self = .mailbox
             case .aprs: self = .aprsSettings
@@ -352,6 +354,10 @@ struct AXTermiOSRootView: View {
             tabs
         }
         .animation(.default, value: client.identityCollision)
+        .modifier(FirstRunSetupHost(router: SettingsRouter.shared, settings: settings,
+                                    winlinkSettings: context.settings,
+                                    locationService: context.locationService,
+                                    client: client))
         // Re-evaluated whenever anything that feeds the decision changes, so
         // the hold is taken and released as the station's state moves rather
         // than being set once and forgotten.
@@ -420,17 +426,20 @@ struct AXTermiOSRootView: View {
             SettingsRouter.shared.openAction = {
                 let router = SettingsRouter.shared
                 let destination = SettingsDestination(router.selectedTab)
-                selection = .analytics
-                // A link into the Radios pane lands on the radio it names —
-                // or on the only radio there is — with the list beneath it
-                // for the back button, not in front of it as a detour.
+                // A link into the Radios pane lands on the radio it names, or
+                // on the only radio there is, with the list beneath it for
+                // the back button.
+                var target = [destination]
                 if destination == .radios {
-                    let radio = settings.hasMultipleRadios ? router.pendingRadio : nil
+                    let radio = router.pendingRadio
+                        ?? (settings.hasMultipleRadios ? nil : settings.activeRadios.first?.id)
                     router.pendingRadio = nil
-                    settingsPath = [.radios] + (radio.map { [.radio($0)] } ?? [])
-                } else {
-                    settingsPath = [destination]
+                    if let radio { target.append(.radio(radio)) }
                 }
+                let showing = selection == .analytics
+                selection = .analytics
+                settingsPath = SettingsDeepLink.path(current: settingsPath, target: target,
+                                                     stackIsShowing: showing)
             }
         }
     }
@@ -889,38 +898,40 @@ struct AXTermiOSRootView: View {
                     // First, and present at all: without this the callsign
                     // could not be entered anywhere on iOS, so every transmit
                     // gate sent the operator to a screen that did not exist.
-                    NavigationLink(value: SettingsDestination.identity) {
-                        Label("Identity", systemImage: "person.text.rectangle")
+                    NavigationLink(value: SettingsDestination.general) {
+                        Label("General", systemImage: "person.text.rectangle")
                     }
-                    .accessibilityHint("Your callsign and the details forms ask for")
-
-                    NavigationLink(value: SettingsDestination.winlink) {
-                        Label("Winlink", systemImage: "envelope.badge.shield.half.filled")
-                    }
-
-                    NavigationLink(value: SettingsDestination.radios) {
-                        Label(SettingsTab.radios.settingsTitle(hasMultipleRadios: settings.hasMultipleRadios),
-                              systemImage: SettingsTab.radios.settingsIcon(hasMultipleRadios: settings.hasMultipleRadios))
-                    }
-                    .accessibilityHint(settings.hasMultipleRadios
-                                       ? "The TNCs this station talks to and how each is reached"
-                                       : "How the TNC is reached")
-
-                    NavigationLink(value: SettingsDestination.transmission) {
-                        Label("Transmission", systemImage: "antenna.radiowaves.left.and.right")
-                    }
-                    NavigationLink(value: SettingsDestination.aprsSettings) {
-                        Label("APRS", systemImage: "mappin.and.ellipse")
-                    }
-
-                    NavigationLink(value: SettingsDestination.mailbox) {
-                        Label("Mailbox", systemImage: "tray.full")
-                    }
-                    .accessibilityHint("What the BBS answers as, its greeting, and what it shares")
+                    .accessibilityHint("Your callsign, where the station is, and display settings")
                 } header: {
                     Text("Station")
                 } footer: {
                     Text(stationFooter)
+                }
+
+                Section {
+                    NavigationLink(value: SettingsDestination.radios) {
+                        Label("Radios", systemImage: SettingsTab.radios.settingsIcon)
+                    }
+                    .accessibilityHint("The TNCs and radios this station uses, and what each one does")
+                }
+
+                Section {
+                    NavigationLink(value: SettingsDestination.aprsSettings) {
+                        Label("APRS", systemImage: "mappin.and.ellipse")
+                    }
+                    NavigationLink(value: SettingsDestination.packetNode) {
+                        Label("Packet Node", systemImage: SettingsTab.packetNode.settingsIcon)
+                    }
+                    .accessibilityHint("The NET/ROM node, ping, the AX.25 link layer and AXDP")
+                    NavigationLink(value: SettingsDestination.mailbox) {
+                        Label("Mailbox", systemImage: "tray.full")
+                    }
+                    .accessibilityHint("What the BBS answers as, its greeting, and what it shares")
+                    NavigationLink(value: SettingsDestination.winlink) {
+                        Label("Winlink", systemImage: "envelope.badge.shield.half.filled")
+                    }
+                } header: {
+                    Text("Services")
                 }
 
                 Section {
@@ -956,6 +967,12 @@ struct AXTermiOSRootView: View {
             .navigationTitle(horizontalSizeClass == .regular ? "Settings" : "More")
             .navigationDestination(for: SettingsDestination.self, destination: settingsScreen)
         }
+        .sheet(item: $addRadioFlow) { flow in
+            AddRadioSheet(flow: flow, client: client) { added in
+                addRadioFlow = nil
+                if let added { settingsPath.append(.radio(added)) }
+            }
+        }
     }
 
     @ViewBuilder
@@ -983,11 +1000,12 @@ struct AXTermiOSRootView: View {
     @ViewBuilder
     private func settingsScreen(_ destination: SettingsDestination) -> some View {
         switch destination {
-        case .identity:
+        case .general:
             GeneralSettingsView(settings: settings, client: client,
                                 winlinkSettings: context.settings,
                                 locationService: context.locationService)
-                .navigationTitle("Identity")
+                .environmentObject(SettingsRouter.shared)
+                .navigationTitle("General")
                 .navigationBarTitleDisplayMode(.inline)
         case .winlink:
             WinlinkSettingsTab(settings: context.settings,
@@ -1020,10 +1038,10 @@ struct AXTermiOSRootView: View {
                 .environmentObject(SettingsRouter.shared)
                 .navigationTitle("APRS")
                 .navigationBarTitleDisplayMode(.inline)
-        case .transmission:
-            TransmissionSettingsView(settings: settings, client: client)
+        case .packetNode:
+            PacketNodeSettingsView(settings: settings, client: client)
                 .environmentObject(SettingsRouter.shared)
-                .navigationTitle("Transmission")
+                .navigationTitle("Packet Node")
                 .navigationBarTitleDisplayMode(.inline)
         case .diagnostics:
             DiagnosticsView(settings: settings, eventStore: nil)
@@ -1053,24 +1071,14 @@ struct AXTermiOSRootView: View {
         }
     }
 
-    /// One radio: its form, titled Connection, as it always was. Several:
-    /// the list, with each radio's form pushed over it.
-    @ViewBuilder
+    /// The radios, always as a list, with each radio's page pushed over it.
+    /// Add Radio opens the guided sheet; finishing it pushes the new radio.
     private var radiosScreen: some View {
-        if settings.hasMultipleRadios {
-            RadiosListView(settings: settings, client: client,
-                           destination: { SettingsDestination.radio($0) },
-                           onAdd: { settingsPath.append(.radio($0)) })
-                .navigationTitle("Radios")
-                .navigationBarTitleDisplayMode(.inline)
-        } else if let only = settings.activeRadios.first {
-            RadioDetailView(radioID: only.id, settings: settings, client: client,
-                            onAddSecondRadio: { settingsPath.append(.radio(settings.addRadio().id)) })
-                .environmentObject(SettingsRouter.shared)
-                .id(only.id)
-                .navigationTitle("Connection")
-                .navigationBarTitleDisplayMode(.inline)
-        }
+        RadiosListView(settings: settings, client: client,
+                       destination: { SettingsDestination.radio($0) },
+                       onAdd: { addRadioFlow = AddRadioFlow(settings: settings, mode: .new) })
+            .navigationTitle("Radios")
+            .navigationBarTitleDisplayMode(.inline)
     }
 
     // Lifted out of `settingsScreen`: two more arms in that switch pushed the
@@ -1078,7 +1086,8 @@ struct AXTermiOSRootView: View {
     private var mailboxSettingsScreen: some View {
         BBSSettingsScreen(settings: bbsSettings,
                           stationCallsign: settings.primaryCallsign,
-                          isWinlinkP2PArmed: context.settings.p2pListenEnabled)
+                          isWinlinkP2PArmed: context.settings.p2pListenEnabled,
+                          runsOn: ServiceRadios.mailbox(settings.activeRadios))
             .navigationTitle("Mailbox")
             .navigationBarTitleDisplayMode(.inline)
     }

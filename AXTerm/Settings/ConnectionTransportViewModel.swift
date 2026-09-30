@@ -122,7 +122,7 @@ enum RadioLinkChoice: String, CaseIterable, Identifiable {
 /// Writes go to the radio's `RadioProfile` in settings; the settings store
 /// mirrors the primary radio's profile into the single-connection scalars the
 /// engine still reads, so editing here still reconnects the TNC the way the
-/// Connection pane always did.
+/// Connection pane always did, and the radio page does now.
 @MainActor
 final class ConnectionTransportViewModel: ObservableObject {
     private let settings: AppSettingsStore
@@ -293,6 +293,7 @@ final class ConnectionTransportViewModel: ObservableObject {
         if txTailMs != profile.txTailMs { txTailMs = profile.txTailMs }
         if persistence != profile.persistence { persistence = profile.persistence }
         if slotTimeMs != profile.slotTimeMs { slotTimeMs = profile.slotTimeMs }
+        if sendsKISSTiming != profile.sendsKISSTiming { sendsKISSTiming = profile.sendsKISSTiming }
         if Int(txAudioLevel) != profile.txAudioLevel { txAudioLevel = Double(profile.txAudioLevel) }
         if followsRadioFrequency != profile.followsRadioFrequency { followsRadioFrequency = profile.followsRadioFrequency }
         if setsRadioModeOnConnect != profile.setsRadioModeOnConnect { setsRadioModeOnConnect = profile.setsRadioModeOnConnect }
@@ -583,7 +584,7 @@ final class ConnectionTransportViewModel: ObservableObject {
     }
 
     func disconnect() {
-        packetEngine.disconnect(reason: "operator disconnected from Connection settings")
+        packetEngine.disconnect(reason: "operator disconnected from the radio's settings")
     }
 
     /// Bring this radio's link up. Reconciles every enabled radio, which
@@ -737,6 +738,10 @@ final class ConnectionTransportViewModel: ObservableObject {
     }
     @Published var slotTimeMs: Int = 100 {
         didSet { update { $0.slotTimeMs = max(10, min(1000, slotTimeMs)) } }
+    }
+    /// Whether a network or plain serial TNC is sent the timing above.
+    @Published var sendsKISSTiming: Bool = false {
+        didSet { update { $0.sendsKISSTiming = sendsKISSTiming } }
     }
     /// 0…100; the profile keeps it whole.
     @Published var txAudioLevel: Double = 85 {

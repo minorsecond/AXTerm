@@ -156,7 +156,7 @@ final class StationCallsignRulesTests: XCTestCase {
         XCTAssertTrue(guidance.contains("Only K0EPI is kept"), guidance)
         XCTAssertTrue(guidance.contains("K0EPI-5"), guidance)
         XCTAssertTrue(guidance.contains("Identity"), guidance)
-        XCTAssertTrue(guidance.contains("Connection"), guidance)
+        XCTAssertTrue(guidance.contains("Radios"), guidance)
     }
 
     func testTheFieldSaysWhereTheSSIDGoesWithSeveralRadios() throws {
@@ -249,10 +249,11 @@ final class StationCallsignRulesTests: XCTestCase {
 
     // MARK: - The radio page
 
-    func testASingleRadioShowsItsIdentity() {
-        XCTAssertTrue(RadioDetailView.showsIdentity(hasMultipleRadios: false, page: .connection),
-                      "one radio has one page, and its SSID picker is on it")
-        XCTAssertTrue(RadioDetailView.showsIdentity(hasMultipleRadios: true, page: .onAir))
-        XCTAssertFalse(RadioDetailView.showsIdentity(hasMultipleRadios: true, page: .connection))
+    func testTheRadioPageIsTitledWithTheRadiosName() {
+        var named = radio("VHF", id: .primary, callsign: "K0EPI-5")
+        XCTAssertEqual(RadioDetailView.title(for: named), "VHF")
+        named.name = ""
+        XCTAssertEqual(RadioDetailView.title(for: named), RadioProfile.defaultName(for: named),
+                       "an unnamed radio is titled with the name the app gives it")
     }
 }

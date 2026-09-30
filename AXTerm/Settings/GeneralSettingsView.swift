@@ -29,12 +29,12 @@ struct GeneralSettingsView: View {
     @AppStorage(TimeDisplay.formatKey) private var timeFormatRaw = TimeDisplayFormat.system.rawValue
 
     var body: some View {
-        Form {
-            PreferencesSection("Identity") {
+        SettingsForm(landing: [.stationIdentity, .stationPosition, .display, .online, .system]) {
+            PreferencesSection("Identity", id: .stationIdentity) {
                 StationCallsignField(settings: settings)
 
                 Text("Your callsign without an SSID, such as K0EPI. Each radio adds its own "
-                     + "SSID, set under Identity on the radio's connection page.")
+                     + "SSID, set under Identity on the radio's page under Radios.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -47,7 +47,7 @@ struct GeneralSettingsView: View {
                                     winlinkSettings: winlinkSettings,
                                     locationService: locationService)
 
-            PreferencesSection("Display") {
+            PreferencesSection("Display", id: .display) {
                 Picker("Time format", selection: $timeFormatRaw) {
                     ForEach(TimeDisplayFormat.allCases) { format in
                         Text(format.label).tag(format.rawValue)
@@ -91,12 +91,12 @@ struct GeneralSettingsView: View {
             // Winlink's (field ask 2026-08-29: "winlink settings contained
             // settings that were more general").
             if let winlink = winlinkSettings {
-                PreferencesSection("Online") {
+                PreferencesSection("Online", id: .online) {
                     OnlineLookupToggle(settings: winlink)
                 }
             }
             
-            PreferencesSection("System") {
+            PreferencesSection("System", id: .system) {
                 Toggle("Connect automatically on launch", isOn: $settings.autoConnectOnLaunch)
 
                 // Menu bar and login items are macOS concepts. Shown on a
@@ -131,7 +131,6 @@ struct GeneralSettingsView: View {
                 #endif
             }
         }
-        .formStyle(.grouped)
         .padding(20)
         .onTapGesture {
             // Clear focus when clicking background. A touch platform
@@ -196,7 +195,7 @@ struct GeneralSettingsView: View {
 /// says where the SSID is set instead. What was typed stays in the field
 /// while it has focus, so the operator can see what they typed and why part
 /// of it was not kept; it settles to the stored value once focus leaves.
-private struct StationCallsignField: View {
+struct StationCallsignField: View {
     @ObservedObject var settings: AppSettingsStore
     @State private var draft = ""
     @FocusState private var focused: Bool

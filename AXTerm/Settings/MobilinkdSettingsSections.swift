@@ -274,27 +274,10 @@ struct MobilinkdSettingsSections: View {
                     }
                 }
             }
-            timing("TX delay", value: $viewModel.txDelayMs, unit: "ms", range: 0...2000, step: 10)
-            timing("Persistence", value: $viewModel.persistence, unit: "", range: 0...255, step: 1)
-            timing("Slot time", value: $viewModel.slotTimeMs, unit: "ms", range: 10...1000, step: 10)
         } header: {
             Text("Radio interface")
         } footer: {
-            Text("Most handhelds use multiplex PTT. TX delay has to cover the time the radio takes to get on the air; some handhelds need 400 to 500 ms. These timing values are sent every time the radio connects.")
-        }
-    }
-
-    private func timing(_ title: String, value: Binding<Int>, unit: String,
-                        range: ClosedRange<Int>, step: Int) -> some View {
-        LabeledContent(title) {
-            HStack(spacing: 6) {
-                TextField(title, value: value, format: .number)
-                    .labelsHidden()
-                    .frame(width: 60)
-                    .multilineTextAlignment(.trailing)
-                Stepper(title, value: value, in: range, step: step).labelsHidden()
-                if !unit.isEmpty { Text(unit).foregroundStyle(.secondary) }
-            }
+            Text("Most handhelds use multiplex PTT. TX delay and the rest of the timing are under Timing, further down this page.")
         }
     }
 

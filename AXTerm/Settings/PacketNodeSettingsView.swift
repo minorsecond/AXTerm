@@ -1,13 +1,17 @@
 //
-//  TransmissionSettingsView.swift
+//  PacketNodeSettingsView.swift
 //  AXTerm
 //
-//  Refactored by Settings Redesign on 2/8/26.
+//  Services › Packet Node: the station-wide half of the packet services.
+//  Whether the node runs and announces itself, how ping is paced, the AX.25
+//  link layer, adaptive transmission, AXDP and file transfers. Which radios
+//  each service uses is set on the radios' own pages; this page says which
+//  they are and does not repeat the switches.
 //
 
 import SwiftUI
 
-struct TransmissionSettingsView: View {
+struct PacketNodeSettingsView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var client: PacketEngine
     @EnvironmentObject var router: SettingsRouter
@@ -21,159 +25,107 @@ struct TransmissionSettingsView: View {
     @State private var prompt: TextEntryPrompt?
 
     var body: some View {
-        Form {
-            // Adaptive Transmission Section (Deep Link Target)
-            PreferencesSection("Adaptive Transmission", id: .adaptiveTransmission) {
-                Toggle("Enable Adaptive Transmission", isOn: Binding(
-                    get: { settings.adaptiveTransmissionEnabled },
-                    set: { newValue in
-                        settings.adaptiveTransmissionEnabled = newValue
-                        if let coordinator = SessionCoordinator.shared {
-                            coordinator.adaptiveTransmissionEnabled = newValue
-                            coordinator.syncSessionManagerConfigFromAdaptive()
-                            if newValue { TxLog.adaptiveEnabled() } else { TxLog.adaptiveDisabled() }
-                        }
-                    }
-                ))
-                
-                if settings.adaptiveTransmissionEnabled {
-                    LabeledContent("Status") {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chart.line.uptrend.xyaxis")
-                                .foregroundStyle(.green)
-                            Text("Learning from session and network")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    
-                    Text("Parameters update automatically based on link quality.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.bottom, 8)
-                    
-                    // Default Values Grid
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Default Values")
-                            .font(.subheadline)
+        SettingsForm(landing: [.netRomNode, .ping, .linkLayer, .adaptiveTransmission,
+                               .axdpProtocol, .fileTransfer]) {
+            PreferencesSection("NET/ROM Node", id: .netRomNode) {
+                if settings.allRadiosOnAPRS { aprsLockNote }
+                Toggle("Run the node — answer callers with the node shell",
+                       isOn: $settings.netRomAcceptInbound)
+                    .disabled(settings.allRadiosOnAPRS)
+                    .help("Accept NET/ROM circuits AND plain AX.25 connects "
+                          + "to the node alias. Callers land at an AXTerm "
+                          + "node prompt with NODES, ROUTES, MH, INFO; BBS "
+                          + "drops them into the mailbox when it is on the "
+                          + "air; C bridges them onward through this "
+                          + "station\u{2019}s own circuits. Off answers every "
+                          + "request with the standard refusal. Up to three "
+                          + "callers at once.\n\nIf you advertise this "
+                          + "station (below), turning this on is what makes "
+                          + "the advertisement honest.")
+
+                Stepper(value: $settings.autoRouteMaxChainLength, in: 1...6) {
+                    HStack {
+                        Text("Auto-routing may chain up to")
+                        Spacer()
+                        Text("\(settings.autoRouteMaxChainLength) node"
+                             + "\(settings.autoRouteMaxChainLength == 1 ? "" : "s")")
                             .foregroundStyle(.secondary)
-                        
-                        adaptiveSettingRow(
-                            title: "Packet Length",
-                            setting: txAdaptiveSettings.paclen,
-                            onToggle: {
-                                txAdaptiveSettings.paclen.mode = txAdaptiveSettings.paclen.mode == .auto ? .manual : .auto
-                            },
-                            onValueChange: { txAdaptiveSettings.paclen.manualValue = $0 }
-                        )
-
-                        adaptiveSettingRow(
-                            title: "Window Size (K)",
-                            setting: txAdaptiveSettings.windowSize,
-                            onToggle: {
-                                txAdaptiveSettings.windowSize.mode = txAdaptiveSettings.windowSize.mode == .auto ? .manual : .auto
-                                syncAdaptiveSettingsToSessionCoordinator()
-                            },
-                            onValueChange: {
-                                txAdaptiveSettings.windowSize.manualValue = $0
-                                syncAdaptiveSettingsToSessionCoordinator()
-                            }
-                        )
-
-                        adaptiveSettingRow(
-                            title: "Max Retries (N2)",
-                            setting: txAdaptiveSettings.maxRetries,
-                            onToggle: {
-                                txAdaptiveSettings.maxRetries.mode = txAdaptiveSettings.maxRetries.mode == .auto ? .manual : .auto
-                                syncAdaptiveSettingsToSessionCoordinator()
-                            },
-                            onValueChange: {
-                                txAdaptiveSettings.maxRetries.manualValue = $0
-                                syncAdaptiveSettingsToSessionCoordinator()
-                            }
-                        )
                     }
-                    .padding(.vertical, 4)
-                    
-
-                    
-                    LabeledContent("Overrides") {
-                        HStack {
-                            Button("Reset Specific Station…") {
-                                resetStationAlert()
-                            }
-                            
-                            Button("Clear All Learned Data") {
-                                if let coordinator = SessionCoordinator.shared {
-                                    coordinator.clearAllLearned()
-                                    txAdaptiveSettings = TxAdaptiveSettings()
-                                    syncAdaptiveSettingsToSessionCoordinator()
-                                }
-                            }
-                        }
-                    }
-                    .disabled(!settings.adaptiveTransmissionEnabled)
                 }
-            }
+                .help("The airtime budget for the Auto ladder\u{2019}s node-prompt "
+                      + "relays. Each hop is a full connected-mode leg the "
+                      + "whole channel shares; four hops can hold the "
+                      + "frequency for minutes. The pre-connect preview, the "
+                      + "profile page\u{2019}s planned path and the dial all obey "
+                      + "the same cap.")
 
-            // Link Layer Section (Deep Link Target from Adaptive Chip)
-            PreferencesSection("Link Layer (AX.25 Connected Mode)", id: .linkLayer) {
-                LinkLayerSettingsView(
-                    settings: settings,
-                    txAdaptiveSettings: $txAdaptiveSettings,
-                    syncToCoordinator: syncAdaptiveSettingsToSessionCoordinator
-                )
-            }
+                Text("AXTerm always listens to NET/ROM and learns routes from what it hears. "
+                     + "These switches decide whether it also speaks — both change what other "
+                     + "operators' nodes do, so both start off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            PreferencesSection("Digipeater") {
-                if settings.hasMultipleRadios {
-                    Text("Each radio has its own digipeater — a packet radio and an "
-                         + "APRS radio digipeat different things. Configure them under "
-                         + "Settings → Radios.")
+                LabeledContent("Node alias") {
+                    // Applied on commit, never per keystroke: this used to
+                    // push a NODES broadcast on every character typed.
+                    TextField("e.g. EPINOD", text: $settings.netRomNodeAlias)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 160)
+                        .onSubmit { applyNetRomSettings() }
+                }
+                .help("Six characters, the mnemonic other nodes show beside this station's "
+                      + "callsign. BPQ calls it NODEALIAS. When each radio is its own node, a "
+                      + "radio's page can give it an alias of its own.")
+
+                Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
+                    .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
+                    .disabled(settings.allRadiosOnAPRS)
+                    .help("Sends NODES broadcasts so neighbours learn this station exists and "
+                          + "can route to it. Every node that hears one writes this station "
+                          + "into its own routing table.")
+
+                NetRomNodeIdentityRows(settings: settings, onChange: applyNetRomSettings)
+
+                if settings.netRomAdvertiseSelf {
+                    RunsOnRow(names: ServiceRadios.names(settings.activeRadios) { $0.mayAnnounceNode },
+                              none: "No radio announces the node. Switch it on under a packet radio's services.")
+                        .help("The radios that carry the NODES broadcast. Each radio's frame "
+                              + "leaves under that radio's own callsign; several take turns two "
+                              + "seconds apart.")
+                    durationRow(
+                        "Announce every",
+                        value: $settings.netRomBroadcastMinutes,
+                        presets: [5, 10, 15, 20, 30, 45, 60, 90, 120, 240],
+                        label: Self.minutesLabel
+                    )
+                    .onChange(of: settings.netRomBroadcastMinutes) { _, _ in applyNetRomSettings() }
+                    .help("BPQ's default is 60 minutes. Shorter intervals spend more of a "
+                          + "shared channel on routing overhead.")
+
+                    if settings.netRomNodeAlias.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text("Set a node alias — announcing without one is legal but leaves "
+                             + "a blank name in every neighbour's node list.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Toggle("Carry other stations' traffic (transit routing)",
+                       isOn: $settings.netRomForwarding)
+                    .onChange(of: settings.netRomForwarding) { _, _ in applyNetRomSettings() }
+                    .disabled(settings.allRadiosOnAPRS)
+                    .help("Forwards NET/ROM datagrams addressed to other nodes. This spends "
+                          + "this station's airtime on other people's packets and makes it "
+                          + "answerable for delivering them.")
+
+                if settings.netRomForwarding && !settings.netRomAdvertiseSelf {
+                    Text("Forwarding without announcing has little effect: no other node knows "
+                         + "to route through this station.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Open Radios\u{2026}") { router.navigate(to: .radios, radio: nil) }
-                } else {
-                    Toggle("Repeat frames addressed via this station",
-                           isOn: digiField(\.enabled, default: false))
-                        .help("Digipeating: a frame whose via path names this station "
-                              + "(or a WIDEn-N the digi honours) is retransmitted on "
-                              + "this channel. Off by default \u{2014} it volunteers your "
-                              + "transmitter for other people\u{2019}s traffic.")
-                    if digiField(\.enabled, default: false).wrappedValue {
-                        Toggle("Fill-in (WIDE1-1)", isOn: digiField(\.fillIn, default: true))
-                        durationRow(
-                            "Wide-area hops",
-                            value: digiField(\.wideAreaMaxHops, default: 2),
-                            presets: [0, 1, 2, 3],
-                            label: { $0 == 0 ? "off" : "\($0)" }
-                        )
-                        TextField("Also answer to aliases",
-                                  text: digiAliases,
-                                  prompt: Text("optional \u{2014} e.g. DWARC, comma-separated"))
-                    }
-                }
-            }
-
-            PreferencesSection("Beacon", id: .beacon) {
-                Text("An unconnected announcement on a timer — what every other "
-                     + "node on the channel sends, and how a station that has never "
-                     + "heard this one learns it exists. Separate from the NET/ROM "
-                     + "announcement above: this one is words, that one is a routing table.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                // Each radio owns its beacon (text or an APRS position), so
-                // there is no station beacon to edit here, even with one radio.
-                Text(settings.hasMultipleRadios
-                     ? "Each radio has its own beacon: its text or APRS position, path and interval live with the radio."
-                     : "The radio's beacon (text or an APRS position with its symbol) is set on the radio's page.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button(settings.hasMultipleRadios ? "Open Radios\u{2026}" : "Open Connection\u{2026}") {
-                    router.navigate(to: .radios, radio: nil)
                 }
             }
 
@@ -192,11 +144,11 @@ struct TransmissionSettingsView: View {
                 if settings.allRadiosOnAPRS { aprsLockNote }
 
                 if settings.pingEnabled {
-                    RadioServiceRows(
-                        settings: settings, verb: "Ping on", keyPath: \.pings,
-                        help: "A station is pinged on the radio that heard it. A radio "
-                            + "switched off here asks nobody, and stations heard only "
-                            + "there are left alone. The hourly budget is the station's.")
+                    RunsOnRow(names: ServiceRadios.names(settings.activeRadios) { $0.mayPing },
+                              none: "No radio pings. Switch Ping stations on under a packet radio's services.")
+                        .help("A station is pinged on the radio that heard it. A radio with Ping "
+                              + "stations off asks nobody, and stations heard only there are left "
+                              + "alone. The hourly budget is the station's.")
                     LabeledContent("Only between") {
                         HStack(spacing: 6) {
                             Picker("", selection: $settings.pingWindowStartHour) {
@@ -291,105 +243,59 @@ struct TransmissionSettingsView: View {
                 }
             }
 
-            PreferencesSection("NET/ROM Node", id: .netRomNode) {
-                if settings.allRadiosOnAPRS { aprsLockNote }
-                Toggle("Run the node — answer callers with the node shell",
-                       isOn: $settings.netRomAcceptInbound)
-                    .disabled(settings.allRadiosOnAPRS)
-                    .help("Accept NET/ROM circuits AND plain AX.25 connects "
-                          + "to the node alias. Callers land at an AXTerm "
-                          + "node prompt with NODES, ROUTES, MH, INFO; BBS "
-                          + "drops them into the mailbox when it is on the "
-                          + "air; C bridges them onward through this "
-                          + "station\u{2019}s own circuits. Off answers every "
-                          + "request with the standard refusal. Up to three "
-                          + "callers at once.\n\nIf you advertise this "
-                          + "station (below), turning this on is what makes "
-                          + "the advertisement honest.")
+            PreferencesSection("Link Layer (AX.25 Connected Mode)", id: .linkLayer) {
+                LinkLayerSettingsView(
+                    settings: settings,
+                    txAdaptiveSettings: $txAdaptiveSettings,
+                    syncToCoordinator: syncAdaptiveSettingsToSessionCoordinator
+                )
+            }
 
-                Stepper(value: $settings.autoRouteMaxChainLength, in: 1...6) {
-                    HStack {
-                        Text("Auto-routing may chain up to")
-                        Spacer()
-                        Text("\(settings.autoRouteMaxChainLength) node"
-                             + "\(settings.autoRouteMaxChainLength == 1 ? "" : "s")")
-                            .foregroundStyle(.secondary)
+            PreferencesSection("Adaptive Transmission", id: .adaptiveTransmission) {
+                Toggle("Enable Adaptive Transmission", isOn: Binding(
+                    get: { settings.adaptiveTransmissionEnabled },
+                    set: { newValue in
+                        settings.adaptiveTransmissionEnabled = newValue
+                        if let coordinator = SessionCoordinator.shared {
+                            coordinator.adaptiveTransmissionEnabled = newValue
+                            coordinator.syncSessionManagerConfigFromAdaptive()
+                            if newValue { TxLog.adaptiveEnabled() } else { TxLog.adaptiveDisabled() }
+                        }
                     }
-                }
-                .help("The airtime budget for the Auto ladder\u{2019}s node-prompt "
-                      + "relays. Each hop is a full connected-mode leg the "
-                      + "whole channel shares — four hops can hold the "
-                      + "frequency for minutes. The pre-connect preview, the "
-                      + "profile page\u{2019}s planned path and the dial all obey "
-                      + "the same cap.")
-
-                Text("AXTerm always listens to NET/ROM and learns routes from what it hears. "
-                     + "These switches decide whether it also speaks — both change what other "
-                     + "operators' nodes do, so both start off.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                LabeledContent("Node alias") {
-                    // Applied on commit, never per keystroke: this used to
-                    // push a NODES broadcast on every character typed.
-                    TextField("e.g. EPINOD", text: $settings.netRomNodeAlias)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 160)
-                        .onSubmit { applyNetRomSettings() }
-                }
-                .help("Six characters, the mnemonic other nodes show beside this station's "
-                      + "callsign. BPQ calls it NODEALIAS.")
-
-                Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
-                    .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
-                    .disabled(settings.allRadiosOnAPRS)
-                    .help("Sends NODES broadcasts so neighbours learn this station exists and "
-                          + "can route to it. Every node that hears one writes this station "
-                          + "into its own routing table.")
-
-                NetRomNodeIdentityRows(settings: settings, onChange: applyNetRomSettings)
-
-                if settings.netRomAdvertiseSelf {
-                    RadioServiceRows(
-                        settings: settings, verb: "Announce on", keyPath: \.announcesNode,
-                        help: "Which radios carry the NODES broadcast. Each radio's frame "
-                            + "leaves under that radio's own callsign; several take turns "
-                            + "two seconds apart.",
-                        onChange: applyNetRomSettings)
-                    durationRow(
-                        "Announce every",
-                        value: $settings.netRomBroadcastMinutes,
-                        presets: [5, 10, 15, 20, 30, 45, 60, 90, 120, 240],
-                        label: Self.minutesLabel
-                    )
-                    .onChange(of: settings.netRomBroadcastMinutes) { _, _ in applyNetRomSettings() }
-                    .help("BPQ's default is 60 minutes. Shorter intervals spend more of a "
-                          + "shared channel on routing overhead.")
-
-                    if settings.netRomNodeAlias.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text("Set a node alias — announcing without one is legal but leaves "
-                             + "a blank name in every neighbour's node list.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
+                ))
+                
+                if settings.adaptiveTransmissionEnabled {
+                    LabeledContent("Status") {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chart.line.uptrend.xyaxis")
+                                .foregroundStyle(.green)
+                            Text("Learning from session and network")
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                }
-
-                Toggle("Carry other stations' traffic (transit routing)",
-                       isOn: $settings.netRomForwarding)
-                    .onChange(of: settings.netRomForwarding) { _, _ in applyNetRomSettings() }
-                    .disabled(settings.allRadiosOnAPRS)
-                    .help("Forwards NET/ROM datagrams addressed to other nodes. This spends "
-                          + "this station's airtime on other people's packets and makes it "
-                          + "answerable for delivering them.")
-
-                if settings.netRomForwarding && !settings.netRomAdvertiseSelf {
-                    Text("Forwarding without announcing has little effect: no other node knows "
-                         + "to route through this station.")
+                    
+                    Text("PACLEN, K and N2 set to Auto under Link Layer follow what each link "
+                         + "achieves.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 8)
+                    
+                    LabeledContent("Overrides") {
+                        HStack {
+                            Button("Reset Specific Station…") {
+                                resetStationAlert()
+                            }
+                            
+                            Button("Clear All Learned Data") {
+                                if let coordinator = SessionCoordinator.shared {
+                                    coordinator.clearAllLearned()
+                                    txAdaptiveSettings = TxAdaptiveSettings()
+                                    syncAdaptiveSettingsToSessionCoordinator()
+                                }
+                            }
+                        }
+                    }
+                    .disabled(!settings.adaptiveTransmissionEnabled)
                 }
             }
 
@@ -466,7 +372,6 @@ struct TransmissionSettingsView: View {
                 }
             }
         }
-        .formStyle(.grouped)
         .padding(20)
         .onAppear {
             seedAdaptiveSettings()
@@ -492,7 +397,7 @@ struct TransmissionSettingsView: View {
     // MARK: Duration menus
 
     /// A pop-up menu for a paced-transmission setting. These were Steppers,
-    /// which made wide ranges click-torture — 120 s → 900 s of probe spacing
+    /// which made wide ranges click-torture: 120 s to 900 s of probe spacing
     /// was twenty-six clicks on a control a few pixels tall. A menu shows
     /// every sensible choice at once, matching the hour-window pickers above.
     @ViewBuilder
@@ -568,10 +473,6 @@ struct TransmissionSettingsView: View {
         SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
     }
 
-    /// Bind a beacon field of the *first* radio. On a single-radio station
-    /// that is simply "the beacon"; the beacon now lives on the radio, so
-    /// this edits the same per-radio config the scheduler reads. Writing
-    /// re-applies so the change takes effect at the next beacon.
     /// Why a packet service's switch is greyed out. The services are also
     /// kept off APRS radios where they run (RadioProfile.runsPacketServices);
     /// this makes the settings say so instead of offering a switch that
@@ -580,50 +481,17 @@ struct TransmissionSettingsView: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: "mappin.and.ellipse").foregroundStyle(.green)
             Text(settings.hasMultipleRadios
-                 ? "Off: every radio is on an APRS channel. A shared beacon channel is no place for it. Change this under APRS."
-                 : "Off: this radio is on an APRS channel. A shared beacon channel is no place for it. Change this under APRS.")
+                 ? "Off: every radio is on an APRS channel, and a shared beacon channel is no place for it. A radio's channel is set on its page under Radios."
+                 : "Off: your radio is on an APRS channel, and a shared beacon channel is no place for it. Its channel is set on its page under Radios.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("APRS\u{2026}") { router.navigate(to: .aprs) }
-                .controlSize(.small)
+            Button("Radios\u{2026}") {
+                router.navigate(to: .radioChannel,
+                                radio: settings.hasMultipleRadios ? nil : settings.activeRadios.first?.id)
+            }
+            .controlSize(.small)
         }
-    }
-
-    private func beaconField<V>(_ keyPath: WritableKeyPath<BeaconConfig, V>,
-                               default def: V) -> Binding<V> {
-        Binding(
-            get: { settings.activeRadios.first?.beacon[keyPath: keyPath] ?? def },
-            set: { value in
-                guard let id = settings.activeRadios.first?.id else { return }
-                settings.updateRadio(id) { $0.beacon[keyPath: keyPath] = value }
-                applyNetRomSettings()
-            })
-    }
-
-    /// Bind a digipeater field of the first radio (the single-radio case).
-    private func digiField<V>(_ keyPath: WritableKeyPath<DigiConfig, V>,
-                             default def: V) -> Binding<V> {
-        Binding(
-            get: { settings.activeRadios.first?.digi[keyPath: keyPath] ?? def },
-            set: { value in
-                guard let id = settings.activeRadios.first?.id else { return }
-                settings.updateRadio(id) { $0.digi[keyPath: keyPath] = value }
-                applyNetRomSettings()
-            })
-    }
-
-    /// The first radio's digi aliases as one comma-separated field.
-    private var digiAliases: Binding<String> {
-        Binding(
-            get: { (settings.activeRadios.first?.digi.aliases ?? []).joined(separator: ", ") },
-            set: { text in
-                guard let id = settings.activeRadios.first?.id else { return }
-                let aliases = text.split(whereSeparator: { $0 == "," || $0.isWhitespace })
-                    .map { $0.uppercased() }
-                settings.updateRadio(id) { $0.digi.aliases = aliases }
-                applyNetRomSettings()
-            })
     }
 
     private func syncAdaptiveSettingsToSessionCoordinator() {

@@ -900,6 +900,12 @@ struct ContentView: View {
     /// Sheets and the state changes that open them.
     private var presentationLayer: some View {
         commandLayer
+        // First-run setup: its own sheet on its own view, so it never
+        // competes with the inspector and profile sheets below for one slot.
+        .modifier(FirstRunSetupHost(router: SettingsRouter.shared, settings: settings,
+                                    winlinkSettings: winlinkContext.settings,
+                                    locationService: winlinkContext.locationService,
+                                    client: client))
         .sheet(item: rootSheet) { sheet in
             switch sheet {
             case .inspector(let packetID):
@@ -1351,7 +1357,7 @@ struct ContentView: View {
                             }
                             Divider()
                             Button("Radio Settings\u{2026}") {
-                                SettingsRouter.shared.navigate(to: .radios, radio: radio.id)
+                                SettingsRouter.shared.navigate(to: .radioConnection, radio: radio.id)
                             }
                         }
 
@@ -2823,7 +2829,7 @@ struct ContentView: View {
                 Divider()
 
                 Button("TNC Settings\u{2026}") {
-                    SettingsRouter.shared.navigate(to: .radios, radio: settings.primaryRadio?.id)
+                    SettingsRouter.shared.navigate(to: .radioConnection, radio: settings.primaryRadio?.id)
                 }
             } label: {
                 Text(tncCapsuleLabel)
