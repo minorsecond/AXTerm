@@ -677,6 +677,52 @@ final class PacketEngine: ObservableObject {
         netRomSnapshotTimer?.invalidate()
     }
 
+    // MARK: - Receive level (TNC4)
+
+    /// Receive-level calibration and the drift watch for TNC4 radios (see
+    /// ReceiveLevelMonitor and Docs/MobilinkdTNC4.md).
+    private(set) lazy var receiveLevel: ReceiveLevelMonitor = makeReceiveLevelMonitor()
+
+    private func makeReceiveLevelMonitor() -> ReceiveLevelMonitor {
+        ReceiveLevelMonitor(dependencies: .init(
+            control: { [weak self] radio in self?.mobilinkdControl(for: radio) },
+            profile: { [weak self] radio in self?.radioManager.profiles.first { $0.id == radio } },
+            connectedRadios: { [weak self] in
+                guard let self else { return [] }
+                return self.radioManager.profiles.map(\.id).filter { self.radioManager.state(of: $0) == .connected }
+            },
+            lastActivity: { [weak self] radio in
+                guard let self else { return nil }
+                return [self.lastRxByRadio[radio], self.lastTxByRadio[radio]].compactMap { $0 }.max()
+            },
+            currentGain: { [weak self] radio in
+                guard let self else { return 0 }
+                let managed = self.radioManager.profiles.first { $0.id == radio }?.tnc4.inputGain
+                return managed ?? self.mobilinkdDevices[radio]?.inputGain ?? 0
+            },
+            gainRange: { [weak self] radio in
+                let device = self?.mobilinkdDevices[radio]
+                let low = device?.minInputGain ?? 0
+                let high = max(low, device?.maxInputGain ?? 4)
+                return low...high
+            },
+            setManagedGain: { [weak self] radio, gain in
+                self?.settings.updateRadio(radio) { $0.tnc4.inputGain = gain }
+            },
+            sendBeacon: { [weak self] radio in
+                guard let self else { return "AXTerm is shutting down." }
+                guard let coordinator = SessionCoordinator.shared else { return "the beacon service isn't running." }
+                return coordinator.sendBeacon(for: radio, settings: self.settings)
+            },
+            notify: { [weak self] text, radio in self?.appendSystemNotification(text, radio: radio) },
+            log: { [weak self] message, data in
+                Telemetry.breadcrumb(category: "tnc4.receiveLevel", message: message, data: data)
+                TxLog.debug(.transport, message, data)
+                self?.eventLogger?.log(level: .info, category: .connection, message: message, metadata: data)
+            },
+            store: ReceiveLevelStore(defaults: settings.defaults)))
+    }
+
     // MARK: - USB Device Path Resolution
 
     /// Resolve a serial device path, falling back to auto-detection if the configured path doesn't exist.
@@ -838,6 +884,10 @@ final class PacketEngine: ObservableObject {
             return
         }
         txSinceConnectByRadio[frame.radio, default: 0] += 1
+        // A UI frame through digipeaters is a chance to hear ourselves
+        // repeated (see DigipeatExpectation).
+        receiveLevel.noteTransmitted(radio: frame.radio, isUI: frame.frameType.lowercased() == "ui",
+                                     viaDigipeaters: !frame.path.digis.isEmpty, at: lastTxTime)
 
         // Encode the frame as AX.25
         let ax25Data = frame.encodeAX25()
@@ -1320,6 +1370,14 @@ final class PacketEngine: ObservableObject {
             linkDescription: linkDescription,
             isOwnEcho: isOwnEcho
         )
+
+        // One of our own UI frames, repeated back to us: the station whose
+        // transmission reached us is the last hop marked used.
+        if decoded.frameType == .ui,
+           let from = decoded.from?.display.uppercased(), ownCallsigns.contains(from),
+           let digipeater = decoded.via.last(where: { $0.repeated })?.display {
+            receiveLevel.noteEcho(radio: radio, digipeater: digipeater, at: packet.timestamp)
+        }
 
         SentryManager.shared.breadcrumbDecodeSuccessSampled(packet: packet)
         handleIncomingPacket(packet)
@@ -3211,6 +3269,10 @@ extension PacketEngine: RadioManagerDelegate {
                 connectedAtByRadio[radio] = now
                 txSinceConnectByRadio[radio] = 0
             }
+            // The half-hourly receive-level check for TNC4 radios. Started on
+            // the first connection, not at launch, so an engine that never
+            // connects (the tests, a station with no TNC4) runs no timer.
+            receiveLevel.start()
             addSystemLine("Connected to \(endpoint)", category: .connection,
                           radios: radioManager.radios(carriedBy: link))
             eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)
