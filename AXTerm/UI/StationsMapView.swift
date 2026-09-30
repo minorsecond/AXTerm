@@ -2698,7 +2698,7 @@ struct StationsMapView: View {
         unavailable(
             symbol: "location.slash",
             title: "No position for this station",
-            message: "Everything is plotted relative to where you are. Use \u{201C}Use My Current Position\u{201D} in Settings \u{2192} Winlink, or set a grid square.")
+            message: "Everything is plotted relative to where you are. Set your position in Settings \u{2192} General: this device\u{2019}s location, a latitude and longitude, or a grid square.")
     }
 
     private var noPlacedStations: some View {

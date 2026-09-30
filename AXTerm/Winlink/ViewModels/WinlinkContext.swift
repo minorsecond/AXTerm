@@ -16,6 +16,12 @@ final class WinlinkContext: ObservableObject {
     let profile: StationProfile
     /// App-wide position source (GPS with manual-grid fallback).
     let locationService: StationLocationService
+    /// Passes the location service's changes on to this context's
+    /// observers. Views read the station position through the context, and
+    /// without this a new fix reached them only when something else
+    /// redrew them: Settings showed the device location in use while the
+    /// toolbar chip and the map still said "No position".
+    private var locationChanges: AnyCancellable?
     /// Replicates the mailbox to the operator's other devices. Nil when the
     /// database failed to open — no mailbox, nothing to share.
     let sync: WinlinkSyncController?
@@ -163,6 +169,9 @@ final class WinlinkContext: ObservableObject {
                 }
                 return await locationService.currentLocation()
             }
+        }
+        locationChanges = locationService.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
         }
         refreshUnread()
     }

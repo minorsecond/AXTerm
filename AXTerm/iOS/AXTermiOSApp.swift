@@ -75,6 +75,7 @@ struct AXTermiOSApp: App {
             AXTermiOSRootView(context: winlinkContext, settings: settings, client: client,
                               bbsSettings: bbsSettings)
                 .environmentObject(winlinkContext)
+                .defaultAppStorage(AppEnvironment.defaults)
                 // Launch is not a scene-phase *change*: the phase is already
                 // .active by the time the observer below is attached, so
                 // onChange never fires for it. Without this, both of these

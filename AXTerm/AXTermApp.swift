@@ -219,10 +219,15 @@ struct AXTermApp: App {
                 winlinkSync: winlinkContext.sync,
                 bbsSettings: bbsSettings
             )
+            // Same suite as the main window. Without it, a --test-mode
+            // Settings window read and wrote the operator's real
+            // preferences while the main window read the test ones.
+            .defaultAppStorage(AppEnvironment.defaults)
         }
 
         Window("Diagnostics", id: "diagnostics") {
             DiagnosticsView(settings: settings, eventStore: eventStore)
+                .defaultAppStorage(AppEnvironment.defaults)
         }
 
         WindowGroup("New Winlink Message", id: "winlinkCompose", for: String.self) { $draftMID in
@@ -235,6 +240,7 @@ struct AXTermApp: App {
                     contactStore: winlinkContext.contactStore,
                     onChanged: { winlinkContext.refreshUnread() }
                 )
+                .defaultAppStorage(AppEnvironment.defaults)
             }
         }
 
@@ -245,6 +251,7 @@ struct AXTermApp: App {
                     mid: mid,
                     myCallsign: settings.myCallsign,
                     onDraftSaved: { winlinkContext.refreshUnread() })
+                    .defaultAppStorage(AppEnvironment.defaults)
             }
         }
 
@@ -255,6 +262,7 @@ struct AXTermApp: App {
                 stations: (try? winlinkContext.store?.stations()) ?? [],
                 linkQuality: winlinkContext.mapLinkQuality,
                 observerGrid: winlinkContext.settings.gridSquare)
+                .defaultAppStorage(AppEnvironment.defaults)
         }
         .defaultSize(width: 820, height: 700)
 
