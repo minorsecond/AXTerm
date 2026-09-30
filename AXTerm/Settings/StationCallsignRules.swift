@@ -2,7 +2,7 @@ import Foundation
 
 /// The station callsign and the radios' SSIDs, kept to one rule.
 ///
-/// The callsign under Settings › General is the licence call alone (K0EPI).
+/// The callsign under Settings › General is the license call alone (K0EPI).
 /// Each radio goes on the air as that call with its own SSID, or under a
 /// callsign of its own, and `RadioProfile.resolvedCallsign(station:)` is where
 /// that is decided. An SSID on the station callsign would be a second place to
@@ -13,7 +13,7 @@ import Foundation
 /// tested without a store.
 nonisolated enum StationCallsignRules {
 
-    /// The licence call in a typed callsign: "k0epi-5 " gives "K0EPI".
+    /// The license call in a typed callsign: "k0epi-5 " gives "K0EPI".
     static func base(of typed: String) -> String {
         let normalized = CallsignValidator.normalize(typed)
         return normalized.components(separatedBy: "-").first ?? ""

@@ -27,7 +27,7 @@ final class SequenceReorderBufferTests: XCTestCase {
     }
 
     func testAnOutOfOrderPacketWaitsThenIsReleasedInOrder() {
-        // 11 arrives before 10's neighbour; 12 then 11's slot fills.
+        // 11 arrives before 10's neighbor; 12 then 11's slot fills.
         let (released, retransmits) = run([(10, 0), (12, 10), (11, 20)])
         XCTAssertEqual(released, [10, 11, 12], "held 12 until 11 arrived")
         XCTAssertEqual(retransmits.first, [11], "asked for the gap")

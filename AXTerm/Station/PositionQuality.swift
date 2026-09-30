@@ -5,11 +5,11 @@ import Foundation
 /// Every distance, bearing, coverage ring and terrain verdict in this app
 /// starts from a position, and the positions come from sources that are not
 /// remotely equally good. Until now they were all just `latitude` and
-/// `longitude`, and a licence address printed to seven decimal places looked
+/// `longitude`, and a license address printed to seven decimal places looked
 /// exactly as authoritative as a surveyed antenna.
 ///
 /// Measured on this operator's own directory of 166 stations: 143 carry seven
-/// decimal places, which is centimetre precision, and three unrelated
+/// decimal places, which is centimeter precision, and three unrelated
 /// callsigns share one coordinate to the last digit. That is a town or ZIP
 /// centroid wearing a survey's clothes.
 nonisolated enum PositionQuality {
@@ -26,7 +26,7 @@ nonisolated enum PositionQuality {
         case geocodedAddress
         /// The station's own announced locator, from its beacon.
         case announcedLocator
-        /// A licence address. May be a post office.
+        /// A license address. May be a post office.
         case licenceAddress
         /// A Maidenhead square, coarse by construction and honest about it.
         case gridSquare
@@ -34,9 +34,9 @@ nonisolated enum PositionQuality {
         /// Roughly how far the antenna can be from the coordinate.
         ///
         /// The grid figure is the half-diagonal of a six-character subsquare
-        /// at mid latitudes, about 7 km by 4.6 km. The licence figure is a
-        /// judgement: a ZIP centroid in a rural county can be far worse, and
-        /// the number exists to stop the page implying metres.
+        /// at mid latitudes, about 7 km by 4.6 km. The license figure is a
+        /// judgment: a ZIP centroid in a rural county can be far worse, and
+        /// the number exists to stop the page implying meters.
         var accuracyMetres: Double {
             switch self {
             case .surveyed: return 10
@@ -49,14 +49,14 @@ nonisolated enum PositionQuality {
         }
 
         /// One word, for a toolbar chip where `label` is too long to sit
-        /// beside a distance without crowding its neighbours.
+        /// beside a distance without crowding its neighbors.
         var shortLabel: String {
             switch self {
             case .surveyed: return "Exact"
             case .deviceGPS: return "GPS"
             case .geocodedAddress: return "Address"
             case .announcedLocator: return "Locator"
-            case .licenceAddress: return "Licence"
+            case .licenceAddress: return "License"
             case .gridSquare: return "Grid"
             }
         }
@@ -67,8 +67,8 @@ nonisolated enum PositionQuality {
             case .deviceGPS: return "This device"
             case .geocodedAddress: return "Address"
             case .announcedLocator: return "Announced locator"
-            case .licenceAddress: return "Licence address"
-            case .gridSquare: return "Grid centre"
+            case .licenceAddress: return "License address"
+            case .gridSquare: return "Grid center"
             }
         }
 
@@ -81,7 +81,7 @@ nonisolated enum PositionQuality {
 
     /// Reasons a coordinate is worse than its source suggests.
     enum Doubt: Equatable, Sendable {
-        /// The licence address is a post office box, so the coordinate is a
+        /// The license address is a post office box, so the coordinate is a
         /// post office.
         case postOfficeBox
         /// Other callsigns resolve to this exact coordinate, so it belongs to
@@ -95,13 +95,13 @@ nonisolated enum PositionQuality {
                     + "than an antenna."
             case .sharedWithOthers(let count):
                 return "\(count) other station\(count == 1 ? "" : "s") resolve to this "
-                    + "exact coordinate, so it is a town or postcode centre rather "
+                    + "exact coordinate, so it is a town or ZIP code center rather "
                     + "than any one antenna."
             }
         }
     }
 
-    /// Whether a licence address line is a mailbox rather than a place.
+    /// Whether a license address line is a mailbox rather than a place.
     ///
     /// The street line is the only way to know. HamDB returns it and the app
     /// was discarding it, which is why a PO box was previously

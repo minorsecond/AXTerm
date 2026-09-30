@@ -39,7 +39,7 @@ final class MapPathLinkTests: XCTestCase {
     }
 
     func testTwoSSIDsAtOneCoordinateDrawNothing() {
-        // K0NTS-1 and K0NTS-10 resolve through the same licence record, so a
+        // K0NTS-1 and K0NTS-10 resolve through the same license record, so a
         // link between them would be a dot rather than a line.
         let links = MapPathLink.links(
             from: [path("K0NTS-1", "K0NTS-10")],
@@ -79,7 +79,7 @@ final class MapPathLinkTests: XCTestCase {
         XCTAssertTrue(link?.isSuspect ?? false)
     }
 
-    // MARK: - Colour is the legend
+    // MARK: - Color is the legend
 
     func testEvidenceLevelsAreVisuallyDistinct() {
         let positions = ["A": denver, "B": boulder]
@@ -89,7 +89,7 @@ final class MapPathLinkTests: XCTestCase {
                 positions: positions).first else { return nil }
             return OfflineBasemapMapView.linkColor(for: link).description
         }
-        // A map whose colours repeat cannot be read without the legend.
+        // A map whose colors repeat cannot be read without the legend.
         XCTAssertEqual(Set(colours).count, NetworkPath.Evidence.allCases.count)
     }
 
@@ -121,7 +121,7 @@ final class MapPathLinkTests: XCTestCase {
             positions: ["A": denver, "B": boulder])
         XCTAssertEqual(links.count, 1)
         XCTAssertTrue(links.first?.isPrediction == true)
-        // Weakest evidence on purpose: nothing has travelled it.
+        // Weakest evidence on purpose: nothing has traveled it.
         XCTAssertEqual(links.first?.evidence, .transitive)
         XCTAssertFalse(links.first?.isSuspect == true)
     }
@@ -166,7 +166,7 @@ final class MapPathLinkTests: XCTestCase {
         XCTAssertFalse(label.contains("assumed height"))
     }
 
-    /// A forecast must never borrow a colour that means a measurement.
+    /// A forecast must never borrow a color that means a measurement.
     func testForecastColourIsDistinctFromEveryEvidenceColour() {
         let positions = ["A": denver, "B": boulder]
         var colours = Set(NetworkPath.Evidence.allCases.compactMap { evidence -> String? in
@@ -174,7 +174,7 @@ final class MapPathLinkTests: XCTestCase {
                               positions: positions).first
                 .map { OfflineBasemapMapView.linkColor(for: $0).description }
         })
-        // The suspect colour is a measurement too — a path that was tried.
+        // The suspect color is a measurement too — a path that was tried.
         if let suspect = MapPathLink.links(
             from: [path("A", "B", evidence: .heardDirect, unanswered: 4)],
             positions: positions).first {

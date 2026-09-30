@@ -32,7 +32,7 @@ struct APRSReport: Equatable, Hashable, Sendable {
     var commentTelemetry: APRSCommentTelemetry? = nil
     /// Whether `latitude` and `longitude` carry the extra digits a `!DAO!`
     /// supplied. Worth knowing: it is the difference between a fix good to
-    /// about eighteen metres and one good to under one.
+    /// about eighteen meters and one good to under one.
     var hasRefinedPosition: Bool = false
 }
 
@@ -51,7 +51,7 @@ nonisolated enum APRSParser {
     /// returns it hands the map a dot at coordinates nobody transmitted, and a
     /// map that fits its stations then drags the whole view out to sea.
     ///
-    /// The test is for the exact point, not a neighbourhood of it: there is no
+    /// The test is for the exact point, not a neighborhood of it: there is no
     /// distance at which a real position quietly becomes a fiction, and a buoy
     /// really sitting near the origin is still a station.
     static func isNullIsland(latitude: Double, longitude: Double) -> Bool {
@@ -150,7 +150,7 @@ nonisolated enum APRSParser {
         if code == "_" {
             // A weather station reuses the course/speed slot for wind
             // direction and wind speed. Decoding it as course and speed would
-            // report a house as travelling at 4 knots, and would put a fixed
+            // report a house as traveling at 4 knots, and would put a fixed
             // station in the map's "moving" class — so the whole tail goes to
             // the weather parser instead, and motion stays nil.
             let scanned = APRSWeather.scan(rest, form: .withPosition)
@@ -478,7 +478,7 @@ nonisolated enum APRSParser {
     }
 
     /// Mic-E altitude: `cccc}` where the three chars before `}` are base-91
-    /// metres offset by −10000; returned as feet.
+    /// meters offset by −10000; returned as feet.
     static func micEAltitude(_ comment: String) -> Int? {
         guard let r = comment.range(of: "}") else { return nil }
         let before = comment[..<r.lowerBound]

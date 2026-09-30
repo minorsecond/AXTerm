@@ -13,7 +13,7 @@ final class NodeProfileCoordinator: ObservableObject {
     /// What is on screen, and how.
     ///
     /// One value drives one sheet. Two `.sheet` modifiers attached to the
-    /// same view do not both work — SwiftUI honours the last one — which is
+    /// same view do not both work — SwiftUI honors the last one — which is
     /// why a peek opened once and then silently stopped after the first time
     /// the full page was shown.
     // Nonisolated: it is the identity of a sheet, read by the nonisolated
@@ -82,7 +82,7 @@ struct NodeProfileResolver {
     var directory: [String: CallsignRecord] = [:]
     var linkQuality: [String: WinlinkLinkQuality] = [:]
     var observer: GreatCircle.Point?
-    /// Neighbour quality by callsign, straight from the NET/ROM table.
+    /// Neighbor quality by callsign, straight from the NET/ROM table.
     var neighbourQuality: [String: Int] = [:]
     /// Destination → next hop, with whether the hop *told* us about it.
     ///
@@ -106,7 +106,7 @@ struct NodeProfileResolver {
     var serviceStore: StationServiceStore?
     /// The time series behind them. Nil where no database is open.
     var historyStore: LinkQualityHistoryStore?
-    /// How far back the profile charts. A fortnight matches retention.
+    /// How far back the profile charts. Two weeks matches retention.
     var historyWindow: TimeInterval = 14 * 24 * 3600
     /// When this station transmitted, for the activity-by-hour chart. A
     /// closure so the packet scan happens only while a profile is open,
@@ -127,11 +127,11 @@ struct NodeProfileResolver {
             localCallsign: localCallsign,
             aliasDirectory: aliases,
             heard: heard,
-            // The directory is keyed by base callsign — one licence covers
+            // The directory is keyed by base callsign — one license covers
             // every SSID — so "N3HYM-15" must look up "N3HYM". Missing this
             // showed a full record's station as a bare city: name and
             // locality leaked in through the heard map, but state, country
-            // and licence class only live in the record itself.
+            // and license class only live in the record itself.
             directory: directory[resolved] ?? directory[key]
                 ?? directory[CallsignQuery.normalize(resolved)],
             neighbourQuality: neighbourQuality[resolved] ?? neighbourQuality[key],
@@ -157,7 +157,7 @@ struct NodeProfileResolver {
             profile.activity = activity
         }
         // The chain the prompt relay would walk, computed with the relay's
-        // own planner so the picture and the behaviour cannot drift apart.
+        // own planner so the picture and the behavior cannot drift apart.
         // Routes here are deliberately unfiltered by TTL: for planning, a
         // stale signpost beats none, and the teller fallback covers the
         // rest — same policy as the relay itself.
@@ -234,7 +234,7 @@ struct NodeProfileResolver {
 
     /// Whether this station has told us it is a NET/ROM node.
     ///
-    /// Membership of the neighbour table does not count — that table is built
+    /// Membership of the neighbor table does not count — that table is built
     /// by watching traffic, so it fills up with ordinary stations that merely
     /// transmitted nearby. Only two things are the station's own word: a
     /// routing broadcast it originated, and a node alias it announced.
@@ -322,7 +322,7 @@ struct NodeProfileResolver {
                     winlink: linkQuality[upper]))
         }
 
-        // SSIDs this licence has *announced* but never transmitted from.
+        // SSIDs this license has *announced* but never transmitted from.
         //
         // KD0SSP beacons "Node:KD0SSP-7; PBBS:KD0SSP-1" every ten minutes
         // and neither address has ever been on the air, so both were absent

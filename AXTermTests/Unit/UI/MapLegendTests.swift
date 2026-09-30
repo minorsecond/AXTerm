@@ -6,7 +6,7 @@ import XCTest
 final class MapLegendTests: XCTestCase {
 
     /// `ForEach` identifies the rows by label. Two entries sharing one would
-    /// silently drop a colour from the key — the swatch would vanish and the
+    /// silently drop a color from the key — the swatch would vanish and the
     /// map would keep drawing it.
     func testEntryLabelsAreUniqueWithinAKind() {
         for kind in [MapLegend.Kind.recency, .linkQuality] {
@@ -15,7 +15,7 @@ final class MapLegendTests: XCTestCase {
         }
     }
 
-    /// Every swatch is explained on hover. A colour with no detail is the
+    /// Every swatch is explained on hover. A color with no detail is the
     /// decoration this legend exists to avoid.
     func testEveryEntryCarriesADetail() {
         for kind in [MapLegend.Kind.recency, .linkQuality] {
@@ -34,7 +34,7 @@ final class MapLegendTests: XCTestCase {
         XCTAssertNotEqual(MapLegend.Kind.recency.footnote, MapLegend.Kind.linkQuality.footnote)
     }
 
-    /// The footnote is the caveat that makes the colours honest, so it is
+    /// The footnote is the caveat that makes the colors honest, so it is
     /// part of the key rather than an optional extra. It used to be the only
     /// thing the disclosure hid, which is why that control read as broken.
     func testEveryKindStatesWhatTheColourIsMeasuredFrom() {

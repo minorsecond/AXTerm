@@ -44,7 +44,7 @@ struct BBSComposeSheet: View {
 
     /// A callsign, typed by someone who knows it in capitals.
     ///
-    /// Autocapitalisation and autocorrection are both wrong here and both on
+    /// Autocapitalization and autocorrection are both wrong here and both on
     /// by default: a software keyboard will happily turn `K0EPI` into `K0epi`
     /// and `W0ARP` into a word, and the message would then be filed under a
     /// callsign that does not exist. Harmless-looking defaults, and the

@@ -105,7 +105,7 @@ final class SSIDConventionTests: XCTestCase {
                                                     entry("N0BN-7", .node)])
         XCTAssertEqual(SSIDConvention.detail(ssid: 7, family: nil, usage: usage),
                        "Here: net/rom node (2)")
-        // Nothing heard for -9, so the published meaning is offered, labelled.
+        // Nothing heard for -9, so the published meaning is offered, labeled.
         XCTAssertEqual(SSIDConvention.detail(ssid: 9, family: nil, usage: usage),
                        "APRS: Mobile, in a vehicle")
     }

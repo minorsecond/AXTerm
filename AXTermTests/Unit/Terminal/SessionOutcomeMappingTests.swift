@@ -30,7 +30,7 @@ final class SessionOutcomeMappingTests: XCTestCase {
     }
 
     /// A busy signal is the far end answering, so it proves the station heard
-    /// us. Silence proves nothing at all, and the two must not be coloured or
+    /// us. Silence proves nothing at all, and the two must not be colored or
     /// counted the same.
     func testRefusalAndSilenceAreDifferentEvidence() {
         XCTAssertTrue(TerminalSession.Outcome(statusText: "Busy")?

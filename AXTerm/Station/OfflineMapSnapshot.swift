@@ -14,7 +14,7 @@ import MapKit
 ///
 /// The projection is exact rather than approximate. `MKMapPoint` **is**
 /// the Mercator projection MapKit used to render the snapshot, so
-/// storing the `MKMapRect` and normalising against it puts a marker
+/// storing the `MKMapRect` and normalizing against it puts a marker
 /// exactly where MapKit would have.
 nonisolated struct OfflineMapSnapshot: Codable, Equatable, Sendable, Identifiable {
 
@@ -30,7 +30,7 @@ nonisolated struct OfflineMapSnapshot: Codable, Equatable, Sendable, Identifiabl
     var pixelWidth: Double
     var pixelHeight: Double
     /// Which basemap this was rendered with, so the stored image is
-    /// labelled with what it actually shows.
+    /// labeled with what it actually shows.
     var basemap: String = MapBasemap.standard.rawValue
 
     var id: String { name }

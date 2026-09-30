@@ -87,7 +87,7 @@ final class NetRomAPRSPollutionTests: XCTestCase {
 
         let neighbours = router.currentNeighbors().map(\.call)
         XCTAssertFalse(neighbours.contains("WIDE1"),
-                       "an alias is not a station and can never be a neighbour")
+                       "an alias is not a station and can never be a neighbor")
         let routes = router.currentRoutes()
         XCTAssertFalse(routes.contains { $0.origin == "WIDE1" },
                        "nothing may be routed through an alias")
@@ -193,7 +193,7 @@ final class NetRomAPRSPollutionTests: XCTestCase {
                        "another antenna's reach is not this channel's to promise")
     }
 
-    /// A neighbour on one radio cannot vouch for a route on another.
+    /// A neighbor on one radio cannot vouch for a route on another.
     func testANeighbourOnAnotherRadioCannotVouchForARoute() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let packet = RadioID(rawValue: "packet")

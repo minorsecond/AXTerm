@@ -170,7 +170,7 @@ final class CIVFrameTests: XCTestCase {
         XCTAssertEqual(CIVKnownRadios.describe(0x12), "radio 12")
     }
 
-    /// A dropped UDP packet truncates a scope frame; the acknowledgement that
+    /// A dropped UDP packet truncates a scope frame; the acknowledgment that
     /// follows must still be found. Framing on the FIRST preamble pair and the
     /// FIRST terminator makes the half scope frame swallow the ack whole.
     func testATruncatedScopeFrameDoesNotSwallowTheNextAck() {

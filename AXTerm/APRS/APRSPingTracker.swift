@@ -161,7 +161,7 @@ final class APRSPingTracker: ObservableObject {
     func noteDirectedReply(from callsign: String) {
         let call = callsign.uppercased()
         guard let index = pings.firstIndex(where: { $0.callsign == call }) else { return }
-        // An unrecognised query token is treated as message-answered: every
+        // An unrecognized query token is treated as message-answered: every
         // query AXTerm sends is in the table, so a token that is not can only
         // be one typed by hand, and inventing a reason to disbelieve the
         // answer would be worse than taking it at face value.

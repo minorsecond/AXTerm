@@ -15,7 +15,7 @@ nonisolated enum HeardStationMap {
     /// How much a position can be trusted, and about *what*.
     ///
     /// Precision and accuracy are different axes and conflating them is
-    /// how a map lies confidently. A licence address is exact to seven
+    /// how a map lies confidently. A license address is exact to seven
     /// decimals and describes *the licensee's mailing address*; a grid
     /// square is coarse and describes *the thing that registered it*.
     /// The precise one is not automatically the better one.
@@ -25,7 +25,7 @@ nonisolated enum HeardStationMap {
         /// hilltop or a repeater site, not at the operator's house, so
         /// this is a lead, not a location.
         case inferredFromOperator
-        /// Centre of a registered grid square: coarse, but it describes
+        /// Center of a registered grid square: coarse, but it describes
         /// the station itself.
         case gridSquare
         /// An exact coordinate consistent with everything else known.
@@ -68,11 +68,11 @@ nonisolated enum HeardStationMap {
         /// A NET/ROM alias (`DRLNOD`) rather than a station callsign.
         var isNodeAlias: Bool = false
         /// The callsign behind a node alias, when the directory knows it —
-        /// the licence the network's tactical name resolves to.
+        /// the license the network's tactical name resolves to.
         var nodeCallsign: String?
 
         /// Which kind of point `position` is: the station's own transmitted
-        /// APRS fix, or a licence/registry/locator lookup about the callsign.
+        /// APRS fix, or a license/registry/locator lookup about the callsign.
         /// Drives the map symbology — only a transmitted fix wears the
         /// station's APRS symbol.
         var origin: PositionOrigin = .unplaced
@@ -117,7 +117,7 @@ nonisolated enum HeardStationMap {
     nonisolated enum PositionOrigin: Sendable, Equatable {
         /// The station's own APRS position, beaconed over the air.
         case transmittedAPRS
-        /// A lookup about the callsign — licence address, RMS grid, or a
+        /// A lookup about the callsign — license address, RMS grid, or a
         /// locator the station announced. Not a live fix.
         case licenceOrGrid
         /// No position at all.
@@ -125,12 +125,12 @@ nonisolated enum HeardStationMap {
     }
 
     /// Which point to show when a station has both a transmitted fix and a
-    /// licence/registry lookup. The operator chooses on the Map page.
+    /// license/registry lookup. The operator chooses on the Map page.
     nonisolated enum PositionPreference: String, Sendable, CaseIterable {
         /// The station's own transmitted APRS fix wins (the default): it is
         /// about this station and it is exact.
         case transmitted
-        /// The licence/registry point wins — where the callsign is licensed,
+        /// The license/registry point wins — where the callsign is licensed,
         /// rather than where it last beaconed from.
         case licence
     }
@@ -150,14 +150,14 @@ nonisolated enum HeardStationMap {
     ///     when its licensee has never been looked up.
     ///   - excluding: the addresses **this station transmits as**, with their
     ///     SSIDs. A station hears its own transmissions come back digipeated,
-    ///     so without this the operator appears twice — once as the centre
-    ///     marker and again as a heard station a few metres away.
+    ///     so without this the operator appears twice — once as the center
+    ///     marker and again as a heard station a few meters away.
     ///
     ///     Full addresses, not base callsigns. Matching on the base swallowed
-    ///     every SSID on the licence, and those are other radios: K0EPI-4 is
+    ///     every SSID on the license, and those are other radios: K0EPI-4 is
     ///     an HT in the operator's pocket with its own position and its own
     ///     symbol, ninety yards from the desk and moving. It was heard,
-    ///     parsed, and then dropped from the map for sharing a licence —
+    ///     parsed, and then dropped from the map for sharing a license —
     ///     invisible, unpingable, and unselectable from the traffic strip.
     ///     Everyone else's sibling SSIDs were always drawn separately, which
     ///     is what APRS means by a station.
@@ -201,13 +201,13 @@ nonisolated enum HeardStationMap {
                     telemetryHeard: station.telemetryHeard,
                     supportsConnect: supportsConnect(station))
             }
-            // The licence/registry/locator lookups — a point about the callsign.
+            // The license/registry/locator lookups — a point about the callsign.
             let derived = derivedEntry(
                 call: call, station: station, record: record,
                 grid: grid, announcedGrid: announcedGrids[call])
 
             // Choose which to show. Transmitted wins by default; the operator
-            // can prefer the licence point, which falls back to the
+            // can prefer the license point, which falls back to the
             // transmitted fix only when no lookup placed the station.
             switch preference {
             case .transmitted:
@@ -223,7 +223,7 @@ nonisolated enum HeardStationMap {
         }
     }
 
-    /// The best licence/registry/locator placement for a station — everything
+    /// The best license/registry/locator placement for a station — everything
     /// except its own transmitted APRS fix. Returns an unplaced entry when
     /// nothing locates the callsign.
     private static func derivedEntry(call: String, station: Station,
@@ -247,7 +247,7 @@ nonisolated enum HeardStationMap {
                 supportsConnect: supportsConnect(station))
         }
         do {
-            // Precision and identity are different questions. A licence
+            // Precision and identity are different questions. A license
             // address is exact but describes the *licensee*; an RMS grid
             // describes the *gateway* that registered it. So an exact
             // coordinate is used as a refinement only when it agrees
@@ -265,7 +265,7 @@ nonisolated enum HeardStationMap {
                 // The two sources put this station in different places.
                 return entry(
                     position: Maidenhead.center(of: grid).map(GreatCircle.Point.init),
-                    positionSource: "RMS directory grid square (disagrees with \(record?.source ?? "the licence address"), which is elsewhere)",
+                    positionSource: "RMS directory grid square (disagrees with \(record?.source ?? "the license address"), which is elsewhere)",
                     confidence: .gridSquare,
                     gridSquare: grid.uppercased())
             }
@@ -273,8 +273,8 @@ nonisolated enum HeardStationMap {
                 return entry(
                     position: exact,
                     positionSource: grid == nil
-                        ? "\(record.source) licence address"
-                        : "\(record.source) licence address, inside the registered grid \(grid!.uppercased())",
+                        ? "\(record.source) license address"
+                        : "\(record.source) license address, inside the registered grid \(grid!.uppercased())",
                     confidence: .exact,
                     gridSquare: (grid ?? record.gridSquare)?.uppercased())
             }
@@ -331,13 +331,13 @@ nonisolated enum HeardStationMap {
     /// record, so `K0NTS-1`, `-7`, `-10` and `-14` all land on one point
     /// — four markers stacked exactly on top of each other, which reads
     /// as one marker and hides three stations. One marker per position,
-    /// labelled with what is actually there, is the honest rendering.
+    /// labeled with what is actually there, is the honest rendering.
     static func clusters(_ entries: [Entry]) -> [[Entry]] {
         var order: [String] = []
         var groups: [String: [Entry]] = [:]
         for entry in entries {
             guard let position = entry.position else { continue }
-            // Five decimals is about a metre — far finer than any source
+            // Five decimals is about a meter — far finer than any source
             // here, so this groups co-located stations without merging
             // genuinely distinct ones.
             let key = String(format: "%.5f,%.5f", position.latitude, position.longitude)
@@ -361,11 +361,11 @@ nonisolated enum HeardStationMap {
         return "\(principal.callsign) +\(cluster.count - 1)"
     }
 
-    /// How far apart to fan co-located stations, in metres.
+    /// How far apart to fan co-located stations, in meters.
     ///
     /// A six-character grid square is about 8 × 4.6 km, so every station
-    /// in it resolves to the *same* centre point — identical to the
-    /// metre. Stacked markers can never be separated by zooming, because
+    /// in it resolves to the *same* center point — identical to the
+    /// meter. Stacked markers can never be separated by zooming, because
     /// they are genuinely at one coordinate.
     ///
     /// Spreading them by 500 m stays well inside the square the position
@@ -373,7 +373,7 @@ nonisolated enum HeardStationMap {
     /// this square", which is exactly what a grid reference means. A
     /// station with an exact position is never offset.
     /// Grid-square positions share a box up to 8 km across, so a
-    /// several-hundred-metre spread stays well inside what the position
+    /// several-hundred-meter spread stays well inside what the position
     /// actually claims.
     static let gridFanRadiusMetres = 400.0
     /// Exact positions are a real point — usually one licensee's several
@@ -411,10 +411,10 @@ nonisolated enum HeardStationMap {
     /// The one point a cluster fans around, whoever is in it.
     ///
     /// `clusters` groups on coordinates rounded to five decimals, so members
-    /// agree to about a metre without being identical. Taking any member's
-    /// raw position as the centre therefore moved the whole cluster whenever
+    /// agree to about a meter without being identical. Taking any member's
+    /// raw position as the center therefore moved the whole cluster whenever
     /// its membership changed. Re-deriving the grouping key instead — via the
-    /// same formatting, so the two can never disagree — gives a centre that
+    /// same formatting, so the two can never disagree — gives a center that
     /// depends on the square, not on who is standing in it.
     static func clusterCentre(_ point: GreatCircle.Point) -> GreatCircle.Point {
         GreatCircle.Point(
@@ -422,7 +422,7 @@ nonisolated enum HeardStationMap {
             longitude: Double(String(format: "%.5f", point.longitude)) ?? point.longitude)
     }
 
-    /// Where one station sits in its cluster's fan, in metres north and east.
+    /// Where one station sits in its cluster's fan, in meters north and east.
     ///
     /// Derived from the callsign alone, which is the whole point. The fan
     /// used to space stations evenly — `2pi * index / count` — and the
@@ -543,7 +543,7 @@ nonisolated enum HeardStationMap {
 
     /// How close a sibling SSID has to be to our own position to count as
     /// this station rather than another radio. Our own beacon heard back
-    /// carries the fix we sent, a few metres from the observer at most; the
+    /// carries the fix we sent, a few meters from the observer at most; the
     /// operator's HT (K0EPI-4, below) was ninety yards from the desk and is
     /// a separate station.
     static let ownStationRadiusMetres = 50.0
@@ -563,7 +563,7 @@ nonisolated enum HeardStationMap {
     ///   within `ownStationRadiusMetres` of us, because a marker there is
     ///   our own marker a second time whatever SSID it wears;
     /// - a node alias operated under one of our callsigns goes, since it is
-    ///   our own node placed at our own licence address.
+    ///   our own node placed at our own license address.
     ///
     /// A sibling farther away (a mobile K0EPI-9 across town) stays: it is
     /// another radio, and APRS treats it as another station.
@@ -578,7 +578,7 @@ nonisolated enum HeardStationMap {
             let call = entry.callsign.uppercased()
             if own.contains(call) { return false }
             // Our own node alias in somebody's via path is this station too,
-            // placed at our own licence address.
+            // placed at our own license address.
             if entry.isNodeAlias {
                 guard let operatorCall = entry.nodeCallsign else { return true }
                 return !ownBases.contains(CallsignQuery.normalize(operatorCall))
@@ -733,12 +733,12 @@ nonisolated enum HeardStationMap {
     }
 
     /// Callsigns worth asking a directory about: unplaced, and plausibly
-    /// a licence rather than a tactical alias.
+    /// a license rather than a tactical alias.
     static func lookupCandidates(_ entries: [Entry],
                                  aliases: NodeAliasDirectory = NodeAliasDirectory()) -> [String] {
         entries
             .filter { !$0.isPlaced }
-            // A node alias is not a licence; what needs looking up is
+            // A node alias is not a license; what needs looking up is
             // the operator that announced it.
             .map { $0.isNodeAlias ? (aliases.callsign(for: $0.callsign) ?? "") : $0.callsign }
             .filter(CallsignQuery.isPlausible)
@@ -838,7 +838,7 @@ nonisolated enum HeardStationMap {
                                      stations: [Station],
                                      excluding ownCallsign: String = "",
                                      excludingAll ownCallsigns: Set<String> = []) -> [Entry] {
-        // Every licence this station operates under, not just the beacon
+        // Every license this station operates under, not just the beacon
         // callsign: a radio can run under a club call of its own.
         let own = Set(([ownCallsign] + Array(ownCallsigns)).map(CallsignQuery.normalize))
             .subtracting([""])
@@ -856,7 +856,7 @@ nonisolated enum HeardStationMap {
             if let call = aliases.callsign(for: name),
                shownBases.contains(CallsignQuery.normalize(call)) { return false }
             guard !own.isEmpty else { return true }
-            // Our own node alias resolves to our own callsign — the centre
+            // Our own node alias resolves to our own callsign — the center
             // marker already is this station.
             if own.contains(CallsignQuery.normalize(name)) { return false }
             if let call = aliases.callsign(for: name),
@@ -918,7 +918,7 @@ nonisolated enum HeardStationMap {
     /// pulse turned out to be (field log 2026-09-01: the same fifteen BBS
     /// aliases arriving and departing together).
     ///
-    /// A locator the station announced beats its operator's licence
+    /// A locator the station announced beats its operator's license
     /// address, so this is a genuine refinement rather than a fallback.
     static func placingFromAnnouncedGrid(_ entry: Entry,
                                          aliases: NodeAliasDirectory,

@@ -125,7 +125,7 @@ nonisolated struct WinlinkContactSyncSource: WinlinkSyncSource {
         for contact in contacts {
             guard let id = Self.recordID(for: contact) else { continue }
             // Two local rows can share a key — the same person entered twice
-            // with different capitalisation. Publishing both would make the
+            // with different capitalization. Publishing both would make the
             // pair fight over one record every pass, so the most recently
             // edited one represents them.
             if seen.contains(id) { continue }

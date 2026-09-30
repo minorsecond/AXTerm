@@ -1,7 +1,7 @@
 import Foundation
 
 /// Maps an APRS symbol (table + code) to an SF Symbol name, so the UI can draw
-/// a recognisable glyph for every station on the air.
+/// a recognizable glyph for every station on the air.
 ///
 /// Both tables are covered end to end - 94 codes each, `!`(0x21)...`~`(0x7E) -
 /// because a partial map is indistinguishable, on screen, from a wrong one: an

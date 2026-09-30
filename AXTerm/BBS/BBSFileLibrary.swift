@@ -8,12 +8,12 @@
 import Foundation
 import Combine
 
-/// The bridge between the operator's disk and the catalogue callers see.
+/// The bridge between the operator's disk and the catalog callers see.
 ///
 /// Everything filesystem-shaped lives here. `BBSShell` has no file access at
 /// all and resolves names by lookup in the index this produces, so no command
 /// the shell implements can reach a file that was not scanned — traversal is
-/// impossible by construction rather than by sanitising caller input.
+/// impossible by construction rather than by sanitizing caller input.
 @MainActor
 final class BBSFileLibrary: ObservableObject {
 
@@ -252,7 +252,7 @@ final class BBSFileLibrary: ObservableObject {
         let final = BBSUploadPolicy.uniqueName(name, taken: existing)
         let url = base.appendingPathComponent(final)
 
-        // The name is already a sanitised leaf, but a write outside the inbox
+        // The name is already a sanitized leaf, but a write outside the inbox
         // must be impossible even if that ever stops being true.
         guard url.deletingLastPathComponent().standardizedFileURL
                 == base.standardizedFileURL else { return nil }

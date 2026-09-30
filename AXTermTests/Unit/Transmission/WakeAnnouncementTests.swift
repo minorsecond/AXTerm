@@ -1,7 +1,7 @@
 import XCTest
 @testable import AXTerm
 
-/// Telling the neighbours we are back.
+/// Telling the neighbors we are back.
 ///
 /// A station that sleeps disappears from the network without saying so, and
 /// NET/ROM routes to it age out on their own. The steady announcement cadence

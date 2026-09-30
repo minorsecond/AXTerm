@@ -31,7 +31,7 @@
 //      then N × 21 bytes:
 //        bytes 0..6   destination callsign  (AX.25-shifted)
 //        bytes 7..12  destination alias     (6 bytes plain ASCII)
-//        bytes 13..19 best-neighbour call   (AX.25-shifted)
+//        bytes 13..19 best-neighbor call   (AX.25-shifted)
 //        byte  20     quality 0…255
 //
 //  Carried in an AX.25 **UI** frame to "NODES" with PID 0xCF.

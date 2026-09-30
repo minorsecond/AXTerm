@@ -74,7 +74,7 @@ final class MapLayerCatalogTests: XCTestCase {
 
     /// The switch and the map read the same key from two different files, and
     /// the collapsed summary reads it from a third. A layer whose key is not
-    /// in the defaults would be summarised as off however the switch is set.
+    /// in the defaults would be summarized as off however the switch is set.
     func testEveryCatalogedLayerHasAKnownDefault() {
         for layer in MapLayerCatalog.all {
             XCTAssertNotNil(

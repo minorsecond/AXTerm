@@ -530,7 +530,7 @@ final class SQLiteWinlinkStoreTests: XCTestCase {
                        ["SERVICENEW01"])
     }
 
-    // MARK: - Catalog favourites
+    // MARK: - Catalog favorites
 
     func testCatalogFavoritesPersistIndependentlyOfTheCatalogCache() throws {
         let store = try makeStore()
@@ -627,7 +627,7 @@ final class SQLiteWinlinkStoreTests: XCTestCase {
         XCTAssertEqual(loaded, record)
     }
 
-    /// Lookups are by licence, so the SSID must not partition the cache —
+    /// Lookups are by license, so the SSID must not partition the cache —
     /// W0ARP-10 and W0ARP-7 are the same licensee.
     func testCacheIsKeyedByBaseCallsign() throws {
         let store = try makeStore()

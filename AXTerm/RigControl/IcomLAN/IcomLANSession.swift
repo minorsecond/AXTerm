@@ -225,7 +225,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         // than fail a good password because the slot has not yet timed out,
         // resend the login a few times over several seconds; the slot frees
         // on its own and the next attempt is accepted. This is the same
-        // stale-session behaviour every Icom LAN client has to absorb.
+        // stale-session behavior every Icom LAN client has to absorb.
         var login: IcomLAN.LoginReply?
         loggingIn = true
         defer { loggingIn = false }
@@ -267,7 +267,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         IcomLANSlotRelease.remember(host: c.host, streams: slotEndpoints(includeMedia: false))
 
         // From here the control exchange is event-driven: the radio sends
-        // its capabilities, an auth acknowledgement and the connection
+        // its capabilities, an auth acknowledgment and the connection
         // reply in an order we cannot assume, so `handleControl` drives it
         // and resolves `finishConnect`.
         control.startKeepalive(pingSequence: 2, idlePackets: true)
@@ -322,9 +322,9 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         renewTimer?.cancel(); renewTimer = nil
         reorderTimer?.cancel(); reorderTimer = nil
         livenessTimer?.cancel(); livenessTimer = nil
-        // A cancelled watch and a watch that never noticed anything produce
+        // A canceled watch and a watch that never noticed anything produce
         // exactly the same log — nothing. Say which one this was.
-        TxLog.debug(.modem, "IcomLAN liveness: watch cancelled by close()",
+        TxLog.debug(.modem, "IcomLAN liveness: watch canceled by close()",
                     ["state": String(describing: state)])
         let teardown = { [self] in
             // Say goodbye whenever there is something to say goodbye with,
@@ -518,7 +518,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
             return
         }
         if let action = IcomLAN.parseTokenReply(d) {
-            // Any token acknowledgement means the auth took.
+            // Any token acknowledgment means the auth took.
             if action == .renew || action == .confirm { authOK = true; renewOutstanding = false }
             trySendConnectionRequest()
             return

@@ -193,7 +193,7 @@ nonisolated struct WinlinkRMSStationRecord: Codable, FetchableRecord, Persistabl
     /// nothing else, so offering to download "Colorado" would mean inventing
     /// a boundary the data cannot support. A field is about 10 degrees of
     /// longitude by 10 of latitude — coarse, but honest and exactly what a
-    /// travelling operator reasons in.
+    /// traveling operator reasons in.
     var gridField: String {
         String(gridSquare.uppercased().prefix(2))
     }
@@ -270,7 +270,7 @@ nonisolated struct WinlinkSessionLogRecord: Codable, FetchableRecord, MutablePer
 /// Deliberately its own table rather than a flag on
 /// `WinlinkCatalogItemRecord`: `replaceCatalogCache` deletes every row in
 /// that table on each refresh, so a flag there would be wiped by the next
-/// LIST reply. Favourites outlive the cache — and may name a product the
+/// LIST reply. Favorites outlive the cache — and may name a product the
 /// current index no longer carries, which is information, not corruption.
 nonisolated struct WinlinkCatalogFavoriteRecord: Codable, FetchableRecord, PersistableRecord, Hashable, Sendable {
     static let databaseTableName = "winlinkCatalogFavorite"
@@ -281,7 +281,7 @@ nonisolated struct WinlinkCatalogFavoriteRecord: Codable, FetchableRecord, Persi
 
 /// A cached callsign-directory answer.
 ///
-/// Cached aggressively and **never expired automatically**: a licence
+/// Cached aggressively and **never expired automatically**: a license
 /// address changes rarely, and a stale answer is enormously better than
 /// no answer when the network that would refresh it is gone. Age is
 /// recorded so the UI can say how old it is; nothing deletes on age.

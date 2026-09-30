@@ -28,7 +28,7 @@ final class KISSInitCancellationTests: XCTestCase {
         // even though the link never connected (the work items are scheduled on open)
         link.close()
 
-        // Wait long enough for POLL+RESET sequence to have fired if not cancelled (>4.5s)
+        // Wait long enough for POLL+RESET sequence to have fired if not canceled (>4.5s)
         try await Task.sleep(nanoseconds: 500_000_000)  // 0.5s — enough to verify no crash
 
         // If we get here without a crash, the cancellation logic is working.

@@ -7,8 +7,8 @@ import Foundation
 /// then never leave the machine, so a second device asks for everything from
 /// scratch.
 ///
-/// What travels is **the operator**, not the station. The licence callsign,
-/// their name, organisation, phone and address — the things an ICS form wants
+/// What travels is **the operator**, not the station. The license callsign,
+/// their name, organization, phone and address — the things an ICS form wants
 /// and that are identical on every radio they own. The SSID is excluded on
 /// purpose (see `WinlinkSyncPolicy.callsignSSID`), and so is the grid square,
 /// because a handheld is not where the home rig is.
@@ -97,7 +97,7 @@ nonisolated struct WinlinkIdentitySyncSource: WinlinkSyncSource {
 /// The operator's details as they travel.
 nonisolated struct WinlinkIdentityPayload: Codable, Equatable, Sendable {
 
-    /// Licence callsign with **no SSID**.
+    /// License callsign with **no SSID**.
     var callsignBase: String
     var realName: String
     var positionTitle: String
@@ -188,7 +188,7 @@ nonisolated struct WinlinkIdentityPayload: Codable, Equatable, Sendable {
         switch kind {
         case .callsignBase:
             // Stored without an SSID even if one arrives: this field is the
-            // licence, and the station address is chosen per device.
+            // license, and the station address is chosen per device.
             let base = CallsignParser.parse(remote.callsignBase).base
             result.callsignBase = take(base, local.callsignBase)
 
@@ -242,7 +242,7 @@ final class LiveIdentityStore: WinlinkIdentitySyncSource.Store {
 
     func read() -> WinlinkIdentityPayload {
         WinlinkIdentityPayload(
-            // The licence only — the SSID is this device's own.
+            // The license only — the SSID is this device's own.
             callsignBase: CallsignParser.parse(settings.myCallsign).base,
             realName: profile.realName,
             positionTitle: profile.positionTitle,

@@ -19,7 +19,7 @@
 //  have found out by asking again.
 //
 //  Kept apart from the controller because "should this be retried" is a
-//  judgement about somebody else's service, and the cases are worth naming
+//  judgment about somebody else's service, and the cases are worth naming
 //  one at a time rather than hiding behind a `catch`.
 //
 
@@ -42,7 +42,7 @@ nonisolated enum WinlinkSyncRetry {
     static let maxRetries = 2
 
     /// Base wait. CloudKit's own `retryAfterSeconds` wins whenever it is
-    /// offered, which is how rate limiting is meant to be honoured.
+    /// offered, which is how rate limiting is meant to be honored.
     static let baseDelay: TimeInterval = 2
 
     /// Whether an error deserves another attempt, and how long to wait.

@@ -12,7 +12,7 @@ nonisolated enum APRSObjectMove {
     /// Below this the drop is a slipped hand rather than an intention.
     ///
     /// Reported rather than refused: an operator may well mean to nudge an
-    /// object twenty metres, and refusing that would be inventing a rule the
+    /// object twenty meters, and refusing that would be inventing a rule the
     /// protocol does not have. But "0.0 mi N" reads as a bug, and being told
     /// the thing barely moved is exactly the hint someone needs when the drag
     /// was an accident.

@@ -15,7 +15,7 @@ import Network
 @MainActor
 final class WinlinkTelnetTransport: WinlinkTransport {
 
-    // Two constants, used as default arguments to this type's initialiser.
+    // Two constants, used as default arguments to this type's initializer.
     // A default argument is evaluated in the caller's context, so leaving
     // these on the main actor — which the project's default isolation does
     // — made every nonisolated caller a warning.

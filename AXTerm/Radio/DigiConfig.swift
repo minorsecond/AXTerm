@@ -5,7 +5,7 @@ import Foundation
 /// on, and only on that radio's channel. Decoded defensively so it can grow.
 nonisolated struct DigiConfig: Codable, Equatable, Sendable {
     var enabled: Bool = false
-    /// Repeat a `WIDE1-1` fill-in hop (home/fill-in digi behaviour).
+    /// Repeat a `WIDE1-1` fill-in hop (home/fill-in digi behavior).
     var fillIn: Bool = true
     /// The largest remaining `WIDEn-N` hop count this digi will still repeat;
     /// 0 disables wide-area digipeating. Default 2 is a responsible fill-in +

@@ -247,7 +247,7 @@ final class TxSchedulerIntegrationTests: XCTestCase {
         // Should not be dequeueable
         XCTAssertNil(scheduler.dequeueNext(now: 0))
 
-        // State should be cancelled
+        // State should be canceled
         let entry = scheduler.getEntry(for: frame.id)
         XCTAssertEqual(entry?.state.status, .cancelled)
     }

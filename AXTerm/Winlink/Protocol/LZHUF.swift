@@ -504,7 +504,7 @@ private nonisolated final class Decoder {
     /// giving 1422 instead of 1988 — disagreeing with both the encoder and
     /// this decoder's own pre-fill loop.
     ///
-    /// Corrected for consistency, not for observable behaviour: a
+    /// Corrected for consistency, not for observable behavior: a
     /// differential run over 4000 space-heavy bodies found zero outputs
     /// where the two values disagree. All reads are relative to `r`, so a
     /// different starting offset shifts writes and reads together, and the

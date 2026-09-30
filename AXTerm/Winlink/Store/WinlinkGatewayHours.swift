@@ -3,7 +3,7 @@ import Foundation
 /// When a gateway actually answers, derived from this station's own
 /// session log.
 ///
-/// A gateway's advertised hours are 24/7; its real behaviour is not.
+/// A gateway's advertised hours are 24/7; its real behavior is not.
 /// Terrain, band conditions, local noise, and the operator's own
 /// schedule combine into a pattern that only shows up in history — and
 /// it is exactly what you want when planning a portable activation

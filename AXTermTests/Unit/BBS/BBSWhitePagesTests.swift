@@ -93,7 +93,7 @@ final class BBSWhitePagesTests: XCTestCase {
         XCTAssertEqual(entry.lastUpdated, t(500))
     }
 
-    // MARK: - Licence records
+    // MARK: - License records
 
     private func licence(name: String? = nil,
                          locality: String? = nil,
@@ -102,8 +102,8 @@ final class BBSWhitePagesTests: XCTestCase {
                        state: state, source: "test", fetchedAt: t(0))
     }
 
-    /// Only the two fields a licence actually answers. Filling a home BBS or a
-    /// postcode from here would put something weakly related in a field people
+    /// Only the two fields a license actually answers. Filling a home BBS or a
+    /// ZIP code from here would put something weakly related in a field people
     /// read as fact.
     func testLicenceContributesNameAndLocationOnly() {
         let fields = WhitePagesEntry.fields(
@@ -131,7 +131,7 @@ final class BBSWhitePagesTests: XCTestCase {
     }
 
     /// The point of ranking it below testimony: someone who said to call them
-    /// Bob is not renamed to their licence name at the next lookup.
+    /// Bob is not renamed to their license name at the next lookup.
     func testLicenceNeverOverwritesWhatTheOperatorWasTold() {
         var entry = WhitePagesEntry(callsign: "W0ARP")
         entry.learn(.name, value: "Bob", source: .selfReported, at: t(0))

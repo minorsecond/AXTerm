@@ -16,7 +16,7 @@ final class APRSWeatherFieldTests: XCTestCase {
 
     // MARK: - Building
 
-    /// One reading is a reading, not a field. Colouring a map from it would
+    /// One reading is a reading, not a field. Coloring a map from it would
     /// paint one station's thermometer across a county.
     func testASingleStationIsNotAField() {
         XCTAssertNil(APRSWeatherField.build(observations: [
@@ -114,7 +114,7 @@ final class APRSWeatherFieldTests: XCTestCase {
 
     // MARK: - Refusing to answer
 
-    /// Past the coverage radius there is no evidence, so there is no colour.
+    /// Past the coverage radius there is no evidence, so there is no color.
     /// The alternative — extrapolating — draws the global mean wearing a
     /// gradient, which looks exactly like data.
     func testFarFromEveryStationTheFieldSaysNothing() throws {
@@ -154,7 +154,7 @@ final class APRSWeatherFieldTests: XCTestCase {
     }
 
     /// The caption has to name the station count: two stations and twelve are
-    /// very different maps and they look identical once coloured.
+    /// very different maps and they look identical once colored.
     func testSummaryNamesTheStationCountAndWhereTheLapseCameFrom() throws {
         let assumed = try XCTUnwrap(APRSWeatherField.build(observations: [
             observation("A", lat: 39.70, lon: -104.90, temperature: 70),
@@ -189,7 +189,7 @@ final class APRSWeatherFieldTests: XCTestCase {
     // MARK: - Which readings can honestly be interpolated
 
     /// Pressure is the best-behaved thing a surface network measures — smooth
-    /// over hundreds of kilometres — and it arrives already reduced to sea
+    /// over hundreds of kilometers — and it arrives already reduced to sea
     /// level, so it must NOT be height-corrected a second time.
     func testPressureIsNotElevationCorrected() throws {
         var low = APRSWeather(); low.pressureTenthsMillibars = 10130
@@ -235,8 +235,8 @@ final class APRSWeatherFieldTests: XCTestCase {
                        1013.2, accuracy: 0.01)
     }
 
-    /// Rainfall is deliberately not a field. Rain cells are kilometres across
-    /// and gauges are tens of kilometres apart, so a smooth surface through a
+    /// Rainfall is deliberately not a field. Rain cells are kilometers across
+    /// and gauges are tens of kilometers apart, so a smooth surface through a
     /// few of them invents storms between the gauges.
     func testRainfallIsNotOfferedAsAField() {
         XCTAssertFalse(APRSWeatherField.Parameter.allCases.contains { $0.label.lowercased().contains("rain") })

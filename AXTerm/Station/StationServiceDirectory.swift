@@ -42,7 +42,7 @@ nonisolated protocol StationServiceStore: Sendable {
     func services(for callsign: String) throws -> [StationServiceEntry]
     func allServices() throws -> [StationServiceEntry]
     /// Everything known, grouped by the grid field it was heard in — the unit
-    /// a travelling operator reasons in.
+    /// a traveling operator reasons in.
     func stationsRunningServices() throws -> [String: [StationServiceEntry]]
 }
 

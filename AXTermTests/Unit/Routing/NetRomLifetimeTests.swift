@@ -5,7 +5,7 @@ import GRDB
 /// The routing objects have to be able to go away.
 ///
 /// Each of these carried a `private static var retainedForTests` that the
-/// initialiser appended `self` to. Nothing ever read it and nothing ever
+/// initializer appended `self` to. Nothing ever read it and nothing ever
 /// cleared it, so in any DEBUG build — the test bundle, and the app running
 /// under Xcode — every router, inference engine, persistence handle and
 /// integration ever constructed was kept alive for the life of the process.

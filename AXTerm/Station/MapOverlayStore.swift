@@ -13,7 +13,7 @@ import CoreLocation
 ///    anything.
 /// 2. GeoJSON is the same format the operator exports and sends. One writer,
 ///    one reader, and the file on disk is already the file to attach — no
-///    separate serialisation to keep in step with the one that goes over the
+///    separate serialization to keep in step with the one that goes over the
 ///    air.
 /// 3. A layer is a file the operator brought. Keeping it as a file means they
 ///    can take it away again, and means a corrupt layer costs one file rather
@@ -110,7 +110,7 @@ final class MapOverlayStore: ObservableObject {
         }
     }
 
-    /// Colour and visibility, kept beside the GeoJSON rather than inside it.
+    /// Color and visibility, kept beside the GeoJSON rather than inside it.
     ///
     /// The `.geojson` stays a clean, standard file that any other tool can
     /// open — putting AXTerm's display preferences in its properties would

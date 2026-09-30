@@ -1,6 +1,6 @@
 import Foundation
 
-/// Recognises one transmission heard by two radios.
+/// Recognizes one transmission heard by two radios.
 ///
 /// Two radios on one frequency hear the same frame. Without this, the second
 /// copy reached the retry tracker inside its two-second window and was scored

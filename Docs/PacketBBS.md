@@ -21,7 +21,7 @@ and announcing forwarding this does not do is an invitation to schedule
 against it.
 
 It is not a NET/ROM node offering transit either, for the same reason with
-worse consequences — neighbours would propagate routes through an address that
+worse consequences — neighbors would propagate routes through an address that
 stops existing.
 
 ## 2. The ephemerality question, answered
@@ -206,7 +206,7 @@ does not trust it.
 
 ## 8. White Pages
 
-A directory of operators: name, location, home BBS, postcode.
+A directory of operators: name, location, home BBS, ZIP code.
 
 White Pages is the oldest piece of shared infrastructure in packet radio and
 the easiest to get wrong, because it mixes two very different kinds of fact:
@@ -243,7 +243,7 @@ can key a radio.
 |---|---|
 | Name | `N` |
 | Location | `NQ` |
-| Postcode | `NZ` |
+| ZIP code | `NZ` |
 | Home BBS | `NH` |
 
 This is the classic White Pages record every FBB mailbox has published for
@@ -270,7 +270,7 @@ before reaching the prompt, the way FBB does:
 I have not met you before. Press Return to skip anything.
 Your name: Bob
 Your town and state: Denver, CO
-Your postcode: 80202
+Your ZIP code: 80202
 Your home BBS (if you have one):
 Thank you.
 ```
@@ -281,21 +281,21 @@ escape.
 
 ### Where entries come from without anybody typing
 
-**The licence record.** AXTerm already keeps a callsign directory
+**The license record.** AXTerm already keeps a callsign directory
 (`CallsignLookupService`, off by default for its own privacy reasons), and a
-licence answers exactly two of the four fields: a name, and a town and state.
+license answers exactly two of the four fields: a name, and a town and state.
 Those merge in as `licenceRecord` — above anything guessed from traffic,
 below anything the operator was told. So a caller who says to call them Bob
 stays Bob, and a location guessed from nothing gets replaced by a real one.
 
-Only those two fields are taken. A home BBS is a packet fact and a postcode is
-a mailing detail; filling either from a licence would put something weakly
+Only those two fields are taken. A home BBS is a packet fact and a ZIP code is
+a mailing detail; filling either from a license would put something weakly
 related into a field people read as fact.
 
 **Looked up from cache only, never over the network.** The mailbox answers
 calls unattended, and resolving a caller the moment they connect would tell a
 third party who is talking to this station. The operator can fill the
-directory deliberately — *Fill From Licence Records* in the Directory pane —
+directory deliberately — *Fill From License Records* in the Directory pane —
 which covers everyone who has ever called, not just whoever is on now.
 
 **From BBS sessions the operator has anyway.** When the operator connects to
@@ -320,7 +320,7 @@ output will be wrong somewhere, and wrong here means a false fact about a real
 person.
 
 The distinction that makes this reasonable: **nothing asks another system for
-anything.** Querying a neighbouring BBS to harvest its database would spend
+anything.** Querying a neighboring BBS to harvest its database would spend
 their channel on our convenience. Reading structure out of bytes that arrived
 because the operator went there themselves costs nobody anything, and throwing
 it away is waste.
@@ -334,7 +334,7 @@ They are **offered, not applied** — they appear in the Directory pane with
 the line each was parsed from, because an operator judging a guess about
 another system's format needs to see what was actually read. Accepted ones
 land as `observed`, the weakest provenance, so they can never overwrite
-testimony or a licence record. Nothing already held with better provenance is
+testimony or a license record. Nothing already held with better provenance is
 even offered.
 
 **Node tables, from the same sessions.** A node's `N` reply is a table of
@@ -351,7 +351,7 @@ parser that trusted the order would record every node's prompt as an alias
 pointing at the wrong station. A pair where both halves look like callsigns is
 skipped rather than guessed.
 
-**What a route table is not.** A node's `R` reply carries *its* neighbours with
+**What a route table is not.** A node's `R` reply carries *its* neighbors with
 *its* quality figures — measured from that antenna, in that place, by that
 software. Merging those into AXTerm's own link metrics would assert that
 somebody else's measurement is ours, which is the exact thing
@@ -363,7 +363,7 @@ and bad *quality* evidence, and the two must not be folded together.
 between forwarding partners. This mailbox does not forward (§1), so nobody
 will send it those updates.
 
-Between registration and the licence directory, most entries fill themselves.
+Between registration and the license directory, most entries fill themselves.
 
 > I do not have your name — tell me with  N Your Name
 
@@ -592,8 +592,8 @@ because a caller plans around it.
 
 **`FN` is the listing a regular caller actually wants** — what is new or
 changed since they were last here, taken from their previous row in the call
-log. Sending the whole catalogue every visit spends airtime telling somebody
-what they already know, and the catalogue is the part they stop reading.
+log. Sending the whole catalog every visit spends airtime telling somebody
+what they already know, and the catalog is the part they stop reading.
 
 Descriptions are the operator's, held in the database rather than beside the
 files: the shared folder belongs to them and nothing here writes into it. A
@@ -624,7 +624,7 @@ gets it back when the protocol finishes.
 
 ### Uploads
 
-`U` arms the receiver; the protocol is recognised from the caller's own first
+`U` arms the receiver; the protocol is recognized from the caller's own first
 bytes, so they use whatever their software speaks.
 
 **Off by default, separately from downloads.** Sharing files out and accepting
@@ -646,7 +646,7 @@ written:
 | the file is empty, or larger than the limit | 100 KB — twenty minutes of channel |
 | the inbox is already full | 20 MB |
 | this call has uploaded too many already | 3 |
-| the filename survives sanitising to nothing | — |
+| the filename survives sanitizing to nothing | — |
 
 The filename is the dangerous part, so `sanitize` is a **whitelist**: strip to
 a leaf, refuse `.`/`..`, strip leading dots so no dotfile can be created, map
@@ -672,7 +672,7 @@ guarantee is structural rather than defensive:
 shared folders into an index of basenames, and `D`/`V` resolve what the caller
 typed **by lookup in that index** — never by joining their input onto a path.
 `../../etc/passwd` is a name that matches nothing, rather than a string that
-has to be sanitised correctly. `BBSFileIndexTests` asserts this for a spread of
+has to be sanitized correctly. `BBSFileIndexTests` asserts this for a spread of
 escape attempts.
 
 Scanning is one level deep, files only. Symlinks are not followed — a link

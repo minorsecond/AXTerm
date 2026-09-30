@@ -205,7 +205,7 @@ struct AXTermiOSRootView: View {
         // The coordinator's wiring and the mailbox services are built once,
         // when SwiftUI first installs this view; see MainWindowServicesBox.
         // The app's body runs again on every settings change, and so does
-        // this initialiser, but its box is never opened after the first.
+        // this initializer, but its box is never opened after the first.
         let setup = MainWindowServicesBox {
             Self.makeServices(context: context, settings: settings, client: client,
                               bbsSettings: bbsSettings)
@@ -442,7 +442,7 @@ struct AXTermiOSRootView: View {
             //
             // Switching to the More tab alone is barely better than nothing —
             // it drops the operator on a menu, and does visibly nothing at all
-            // if they are already there. So the requested tab is honoured and
+            // if they are already there. So the requested tab is honored and
             // the matching screen is pushed.
             SettingsRouter.shared.openAction = {
                 let router = SettingsRouter.shared
@@ -1161,7 +1161,7 @@ struct AXTermiOSRootView: View {
     }
 
     /// Every address this station transmits as. Other SSIDs on the same
-    /// licence are other radios — see `HeardStationMap.entries`.
+    /// license are other radios — see `HeardStationMap.entries`.
     private var ownAddresses: Set<String> {
         let answered = Set(sessionCoordinator.sessionManager.answeredAddresses
             .map { $0.display.uppercased() })

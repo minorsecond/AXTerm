@@ -2,7 +2,7 @@ import XCTest
 import GRDB
 @testable import AXTerm
 
-/// Link quality, neighbours and routes are kept per radio.
+/// Link quality, neighbors and routes are kept per radio.
 ///
 /// A delivery probability is a property of a path between two antennas on
 /// one band. Two of our radios hearing the same station are two links; a

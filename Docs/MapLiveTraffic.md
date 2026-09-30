@@ -24,8 +24,8 @@ and `StationClusterAnnotationView`). An animated pulse would spend that
 stillness on decoration, and on a channel carrying a frame every few seconds it
 would leave the map blinking continuously.
 
-Why the station's own tint and not one alarm colour: the ring says *when*; the
-dot's colour already says *what*. A second hue would claim a meaning it has not
+Why the station's own tint and not one alarm color: the ring says *when*; the
+dot's color already says *what*. A second hue would claim a meaning it has not
 got.
 
 ### Expiry
@@ -97,7 +97,7 @@ own lines carry a `TX` mark and the accent tint.
 
 ### Addressed to us
 
-A row tinted with the accent colour is a frame this station should answer.
+A row tinted with the accent color is a frame this station should answer.
 `TrafficAddressing.isForUs` asks two different questions because packet radio
 puts the addressee in two different places: the AX.25 destination (answered by
 `AX25SessionManager.answers`, which covers our callsign, other radios' and
@@ -116,7 +116,7 @@ lurched for the length of the drag.
 
 Only digipeaters with the has-been-repeated bit set are named. An unused entry
 is a request, not a path taken, and printing it would claim a route the frame
-never travelled.
+never traveled.
 
 The feed starts with `.task` on the map, not at launch, so it costs nothing
 until the map is opened; `absorb` fills it from the engine's log immediately.

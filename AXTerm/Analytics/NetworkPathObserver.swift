@@ -19,7 +19,7 @@ nonisolated struct NetworkPath: Equatable, Sendable, Identifiable {
         /// A and B each have a working link to D, so A may reach B through D.
         /// Never actually attempted.
         case transitive
-        /// A frame from A to B was overheard travelling directly.
+        /// A frame from A to B was overheard traveling directly.
         case heardDirect
         /// A frame from A to B was overheard after a digipeater repeated it,
         /// so every hop in the path did its job at least once.
@@ -44,7 +44,7 @@ nonisolated struct NetworkPath: Equatable, Sendable, Identifiable {
         var explanation: String {
             switch self {
             case .transitive:
-                return "Both ends have a working link to the same digipeater, so this path is plausible — but nothing has been observed travelling it."
+                return "Both ends have a working link to the same digipeater, so this path is plausible — but nothing has been observed traveling it."
             case .heardDirect:
                 return "A frame was overheard passing directly between these stations."
             case .heardDigipeated:
@@ -128,8 +128,8 @@ nonisolated struct NetworkPathObserver {
     ///
     /// AX.25 T1 starts around 4s and backs off; a node that is going to answer
     /// usually does so within a couple of retries. Two minutes is generous
-    /// enough that a slow but working path is not libelled, and short enough
-    /// that a genuinely dead path is recognised while the operator still cares.
+    /// enough that a slow but working path is not libeled, and short enough
+    /// that a genuinely dead path is recognized while the operator still cares.
     static let answerWindow: TimeInterval = 120
 
     /// Derives paths from a window of traffic.
@@ -171,7 +171,7 @@ nonisolated struct NetworkPathObserver {
             guard from != to else { continue }
 
             // Only hops that actually repeated count as part of the path an
-            // observed frame travelled. An unrepeated hop is a request.
+            // observed frame traveled. An unrepeated hop is a request.
             let repeatedHops = packet.via.filter(\.repeated).map { $0.display.uppercased() }
             let evidence: NetworkPath.Evidence =
                 repeatedHops.isEmpty ? .heardDirect : .heardDigipeated
@@ -243,7 +243,7 @@ nonisolated struct NetworkPathObserver {
         }
     }
 
-    /// Paths nobody has travelled, but which both ends could plausibly use.
+    /// Paths nobody has traveled, but which both ends could plausibly use.
     ///
     /// If A reaches digipeater D and B reaches D, then A may reach B through
     /// D. Kept at the weakest evidence level on purpose: this has never been

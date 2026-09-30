@@ -163,7 +163,7 @@ final class IcomLANSettleTests: XCTestCase {
         XCTAssertEqual(IcomLANSocketOutcome.of(.ready, denial: .localNetworkDenied), .ready,
                        "a socket that came up is up, whatever the path said on the way")
         XCTAssertEqual(IcomLANSocketOutcome.of(.cancelled, denial: nil),
-                       .fail(.network("cancelled")))
+                       .fail(.network("canceled")))
         XCTAssertEqual(IcomLANSocketOutcome.of(.setup, denial: nil), .keepWaiting)
     }
 

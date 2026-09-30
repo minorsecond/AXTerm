@@ -3,13 +3,13 @@ import Foundation
 /// Altitude in the operator's units.
 ///
 /// APRS always transmits feet — `/A=DDDDDD` and the Mic-E base-91 form are
-/// both feet by definition — so feet is what is stored and metres is the
+/// both feet by definition — so feet is what is stored and meters is the
 /// conversion, never the other way round.
 nonisolated enum AltitudeDisplay {
 
     /// - Parameter inFeet: the operator's distance preference. Someone reading
-    ///   kilometres wants metres, and mixing the two in one card is how a
-    ///   terrain judgement gets made against the wrong number.
+    ///   kilometers wants meters, and mixing the two in one card is how a
+    ///   terrain judgment gets made against the wrong number.
     static func string(feet: Int, inFeet: Bool) -> String {
         if inFeet { return "\(formatted(feet)) ft" }
         return "\(formatted(Int((Double(feet) * 0.3048).rounded()))) m"

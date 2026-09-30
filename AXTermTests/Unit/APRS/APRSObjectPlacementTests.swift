@@ -48,7 +48,7 @@ final class APRSObjectPlacementTests: XCTestCase {
             name: "AID", liveObjects: [placed("AID", by: "K0EPI-7")], ourAddresses: ours))
     }
 
-    /// Any SSID on the licence that this station answers to is us.
+    /// Any SSID on the license that this station answers to is us.
     func testAnySSIDWeAnswerToCountsAsOurs() {
         XCTAssertNil(APRSObjectPlacement.problem(
             name: "AID", liveObjects: [placed("AID", by: "k0epi-1")], ourAddresses: ours))
@@ -75,7 +75,7 @@ final class APRSObjectPlacementTests: XCTestCase {
                                                     ourAddresses: ours))
     }
 
-    /// APRS honours a kill from anyone. The button is withheld anyway: an
+    /// APRS honors a kill from anyone. The button is withheld anyway: an
     /// operator who can stand down another agency's road closure with one
     /// click will eventually do it by accident.
     func testWeDoNotOfferToRemoveSomebodyElses() {

@@ -99,7 +99,7 @@ nonisolated struct CIVFrameParser: Sendable {
             // the first preamble then runs that wreck all the way to the *next*
             // frame's terminator and swallows it whole. What it swallows is
             // whatever we were waiting on, and over the WLAN that is usually
-            // the PTT acknowledgement: the transmitter never keys and the radio
+            // the PTT acknowledgment: the transmitter never keys and the radio
             // looks, from here, like it is ignoring CI-V.
             //
             // The frame that owns this terminator begins at the last preamble

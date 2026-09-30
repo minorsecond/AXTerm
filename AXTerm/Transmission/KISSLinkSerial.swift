@@ -532,7 +532,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         let stillConnecting = isConnecting
         lock.unlock()
         guard stillConnecting else {
-            KISSLinkLog.info(endpointDescription, message: "Open completed but connection was cancelled, closing fd")
+            KISSLinkLog.info(endpointDescription, message: "Open completed but connection was canceled, closing fd")
             Darwin.close(fd)
             cleanupOpenAttempt(success: false)
             return
@@ -569,7 +569,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             self?.pollSerialPort()
         }
 
-        // CLEANUP when timer is cancelled
+        // CLEANUP when timer is canceled
         let timerFD = fd
         let timerIsBluetoothSerial = isBluetoothSerial
         let timerOriginalTermios = originalTermios
@@ -1028,7 +1028,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                     _ = writeBytes(frame)
                     Thread.sleep(forTimeInterval: 0.05)
                 }
-                // An input gain change makes the TNC4 re-centre its input for a
+                // An input gain change makes the TNC4 re-center its input for a
                 // second; closing inside that has left it unresponsive.
                 Thread.sleep(forTimeInterval: MobilinkdSessionDriver.restoreSettleSeconds)
             }

@@ -3,7 +3,7 @@ import XCTest
 
 final class CallsignQueryTests: XCTestCase {
 
-    /// Directories index licences, and a licence has no SSID. Querying
+    /// Directories index licenses, and a license has no SSID. Querying
     /// "W0ARP-10" returns nothing, which looks exactly like "no such
     /// station" — so this is the difference between the feature working
     /// and appearing to have no data.

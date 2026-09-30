@@ -60,7 +60,7 @@ struct WinlinkContactsView: View {
     /// The same contacts as a touch list.
     ///
     /// `Table` renders only its **first** column on iOS, and this table's
-    /// first column is a 24pt favourite star — so the address book drew a
+    /// first column is a 24pt favorite star — so the address book drew a
     /// row of stars and nothing else, which reads as data loss rather than a
     /// layout bug. Exactly the trap `WinlinkMessageList` documents; this
     /// table was missed when that one was fixed.

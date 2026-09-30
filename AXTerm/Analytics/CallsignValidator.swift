@@ -193,7 +193,7 @@ nonisolated enum CallsignValidator {
     /// True when a name is a destination rather than a station.
     ///
     /// `BEACON`, `ID`, `NODES`, `QST` and friends are addresses that frames
-    /// are sent *to*; nobody holds a licence for them and nobody answers a
+    /// are sent *to*; nobody holds a license for them and nobody answers a
     /// connect request at one. Exposed so the UI can decline to offer actions
     /// that cannot work, instead of showing an empty profile with a Connect
     /// button that would key the radio at nothing.

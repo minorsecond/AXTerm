@@ -84,7 +84,7 @@ nonisolated struct RelayLegWitness {
         let source = from.trimmingCharacters(in: .whitespaces).uppercased()
         let destination = to.trimmingCharacters(in: .whitespaces).uppercased()
 
-        // Outbound: the node dialling the hop under our borrowed callsign.
+        // Outbound: the node dialing the hop under our borrowed callsign.
         // Learning the SSID is the whole reason to watch SABM — without it
         // the answer coming back is addressed to a station we have never
         // heard of and reads as somebody else's traffic.

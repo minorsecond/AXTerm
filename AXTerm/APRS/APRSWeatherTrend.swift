@@ -5,7 +5,7 @@ import Foundation
 /// This is the part of a surface observation that forecasts anything. A
 /// barometer reading of 1008 mb says almost nothing on its own; 1008 and
 /// falling four millibars in three hours says a system is arriving, and that
-/// is a judgement an operator can act on with no forecast service, no
+/// is a judgment an operator can act on with no forecast service, no
 /// internet, and no model. It is the oldest working piece of weather science
 /// there is and it survives the grid going down, which is exactly when it
 /// matters.
@@ -30,7 +30,7 @@ nonisolated enum APRSWeatherTrend {
         /// the one from the readings that exist.
         var span: TimeInterval
 
-        /// Normalised to the standard three hours so the wording below can be
+        /// Normalized to the standard three hours so the wording below can be
         /// compared against published thresholds.
         var perThreeHours: Double {
             guard span > 0 else { return 0 }
@@ -79,8 +79,8 @@ nonisolated enum APRSWeatherTrend {
             }
         }
 
-        /// Only the two extremes earn a colour. A map where every station
-        /// wears a coloured arrow is a map nobody reads.
+        /// Only the two extremes earn a color. A map where every station
+        /// wears a colored arrow is a map nobody reads.
         var isNotable: Bool { self == .rapidFall || self == .rapidRise }
     }
 

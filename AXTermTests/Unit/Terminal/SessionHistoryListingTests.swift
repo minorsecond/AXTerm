@@ -4,7 +4,7 @@ import XCTest
 /// What the History screen lists, and how it labels what is not this
 /// device's own.
 ///
-/// The labelling is the safety feature. A transcript from the home rig
+/// The labeling is the safety feature. A transcript from the home rig
 /// sitting unmarked in the iPad's list would read as something the iPad
 /// did, and an operator planning a connect from it would be planning from
 /// another antenna's result. So every remote row carries its origin, remote

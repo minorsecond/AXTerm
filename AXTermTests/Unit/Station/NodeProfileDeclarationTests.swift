@@ -2,9 +2,9 @@
 //  NodeProfileDeclarationTests.swift
 //  AXTermTests
 //
-//  The neighbour table is built by watching traffic — `observePacket` records
+//  The neighbor table is built by watching traffic — `observePacket` records
 //  any direct frame, and "classic" versus "inferred" distinguishes two
-//  inference paths, not declared versus guessed. Calling every neighbour a
+//  inference paths, not declared versus guessed. Calling every neighbor a
 //  NET/ROM node put that label on ordinary stations that merely transmitted
 //  nearby.
 //

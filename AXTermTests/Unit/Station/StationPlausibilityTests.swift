@@ -1,7 +1,7 @@
 import XCTest
 @testable import AXTerm
 
-/// Telling a neighbour from a station that arrived down a wire.
+/// Telling a neighbor from a station that arrived down a wire.
 final class StationPlausibilityTests: XCTestCase {
 
     private let denver = GreatCircle.Point(latitude: 39.74, longitude: -104.98)
@@ -63,7 +63,7 @@ final class StationPlausibilityTests: XCTestCase {
     }
 
     /// The threshold is generous on purpose — real packet links run to a
-    /// couple of hundred kilometres from good sites.
+    /// couple of hundred kilometers from good sites.
     func testALongButRealPathIsNotFiltered() {
         // Roughly 250 km north of Denver.
         let wyoming = GreatCircle.Point(latitude: 42.0, longitude: -104.98)

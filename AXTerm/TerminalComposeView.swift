@@ -334,7 +334,7 @@ private struct RoutingCapsuleButton: View {
     #else
     /// SwiftUI's own popover is used on iOS. The AppKit workaround above
     /// exists because a `TextField` taking first responder inside a SwiftUI
-    /// popover dismisses it on macOS; UIKit has no such behaviour, so the
+    /// popover dismisses it on macOS; UIKit has no such behavior, so the
     /// plain modifier is correct here — and on iPhone it adapts to a sheet,
     /// which is the right shape for a form that narrow.
     @State private var isShowingRouting = false
@@ -1486,7 +1486,7 @@ struct TerminalComposeView: View {
                 // One line on a Mac window or an iPad; two on a phone. These
                 // controls want about 700 points and an iPhone offers 402,
                 // and an HStack that cannot fit does not shrink — it
-                // overflows, and SwiftUI centres the overflow. That widened
+                // overflows, and SwiftUI centers the overflow. That widened
                 // the whole terminal VStack past the screen, so the tab
                 // strip, the connection line and the message field were all
                 // clipped at both edges by a bar three views away. Splitting
@@ -1672,7 +1672,7 @@ struct TerminalComposeView: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         .controlSize(.small)
-        // Intrinsic width beside its neighbours on a wide bar; the full row
+        // Intrinsic width beside its neighbors on a wide bar; the full row
         // on a phone, where it has the row to itself.
         .modifier(SegmentedWidth(fillsRow: isCompactWidth))
         .disabled(sessionState == .connected)

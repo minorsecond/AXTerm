@@ -86,7 +86,7 @@ nonisolated enum APRSSymbolArtwork {
 
     // `\#` is spec-named "Number (overlay)" but is, in practice, the
     // digipeater symbol: the New n-N Paradigm tells digis to beacon `#` with
-    // a letter on it. `S` says the digi honours the state alias, `1` a
+    // a letter on it. `S` says the digi honors the state alias, `1` a
     // WIDE1-1 fill-in, `I` an igate. Drawing it as a plain plate was
     // spec-literal and practice-wrong — the most common infrastructure on the
     // map got the one shape that says nothing about being infrastructure.

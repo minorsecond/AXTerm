@@ -79,7 +79,7 @@ final class MapTrackTests: XCTestCase {
     // MARK: - Following the selection
 
     /// The default. One trail belonging to the station whose card is open
-    /// identifies itself; a map full of unlabelled trails cannot be matched to
+    /// identifies itself; a map full of unlabeled trails cannot be matched to
     /// anything and buries the terrain.
     func testWithoutShowsAllOnlyTheSelectedStationGetsATrail() {
         let stations = [station("K0RV0", minutesAgo: [40, 20, 5]),

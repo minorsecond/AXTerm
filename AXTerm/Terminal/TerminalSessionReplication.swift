@@ -44,7 +44,7 @@ nonisolated struct TerminalSessionPayload: Codable, Equatable, Sendable, Identif
     var transcriptTruncated: Bool
     /// Which station, which installation, where, and when it was recorded.
     var provenance: WinlinkSyncProvenance
-    /// The name a person would recognise — "Ross's Mac", "iPad". Optional
+    /// The name a person would recognize — "Ross's Mac", "iPad". Optional
     /// because not every platform will say; the installation ID in the
     /// provenance still identifies the device when it does not.
     var deviceName: String?
@@ -80,7 +80,7 @@ nonisolated struct TerminalSessionPayload: Codable, Equatable, Sendable, Identif
 
     /// The session as the History screen renders it, so remote rows use the
     /// same row view as local ones. No tags and no note: those never
-    /// travelled (see `init`).
+    /// traveled (see `init`).
     var session: TerminalSession {
         TerminalSession(id: id, remote: remote, via: via,
                         relayDestination: relayDestination, transport: transport,

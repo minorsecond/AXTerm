@@ -164,7 +164,7 @@ final class ModemRadioLinkTests: XCTestCase {
         link.open()
         await waitUntil("the link to connect") { link.state == .connected }
         XCTAssertFalse(transport.written.map(hex).contains { $0.hasPrefix("FE FE A4 E0 06") },
-                       "this radio already answers FM/FIL1; setting it again is the old behaviour")
+                       "this radio already answers FM/FIL1; setting it again is the old behavior")
         link.close()
     }
 

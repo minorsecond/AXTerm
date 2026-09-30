@@ -126,7 +126,7 @@ final class NWSTabularForecastTests: XCTestCase {
         XCTAssertEqual(known.weatherName, "Partly Cloudy")
         XCTAssertEqual(known.symbolName, "cloud.sun")
 
-        // Never guessed at: an unrecognised code is shown as written.
+        // Never guessed at: an unrecognized code is shown as written.
         let unknown = NWSTabularForecast.Cell(
             weatherCode: "Zzzzzz", low: 1, high: 2, popNight: 0, popDay: 0)
         XCTAssertEqual(unknown.weatherName, "Zzzzzz")

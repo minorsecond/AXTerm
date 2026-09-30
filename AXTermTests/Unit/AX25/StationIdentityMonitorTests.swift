@@ -76,7 +76,7 @@ final class StationIdentityMonitorTests: XCTestCase {
 
     /// The case that makes byte comparison useless: a digipeater sets the
     /// has-been-repeated bit, so the frame that returns is not the frame that
-    /// left. Fingerprinting the invariant part still recognises it as ours.
+    /// left. Fingerprinting the invariant part still recognizes it as ours.
     ///
     /// Getting this wrong would fire a collision warning on every single
     /// transmission through DRLNOD, and the operator would learn to ignore

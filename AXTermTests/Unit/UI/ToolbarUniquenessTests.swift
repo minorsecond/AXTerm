@@ -13,7 +13,7 @@ import XCTest
 /// since the universal search was built; the history browser added another
 /// without knowing.
 ///
-/// A source check because the failure is structural rather than behavioural:
+/// A source check because the failure is structural rather than behavioral:
 /// no unit test can construct a window, and the UI tests that could are not
 /// currently runnable.
 final class ToolbarUniquenessTests: XCTestCase {

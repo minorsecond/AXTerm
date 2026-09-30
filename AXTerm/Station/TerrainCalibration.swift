@@ -4,7 +4,7 @@ import Foundation
 ///
 /// The physics is verified against the Fresnel integral, so the arithmetic is
 /// not in doubt. The inputs are: the far antenna height is a global default
-/// until the operator records one, and the far position is a licence address
+/// until the operator records one, and the far position is a license address
 /// rather than an antenna.
 ///
 /// One thing in the log can settle it. A completed connection over a path

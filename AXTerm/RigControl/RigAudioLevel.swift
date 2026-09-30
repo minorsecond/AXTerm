@@ -5,7 +5,7 @@ import Foundation
 /// The demodulator is level-independent by construction — it compares the two
 /// tones' powers, so a quiet signal decodes as well as a loud one. What it
 /// cannot survive is either end: clipping distorts the tones, and a level low
-/// enough for the quantiser's own noise to matter costs real margin. The loop
+/// enough for the quantizer's own noise to matter costs real margin. The loop
 /// exists for those two ends and deliberately does nothing in between.
 ///
 /// It also checks its own actuator. The IC-705's WLAN audio does not

@@ -11,8 +11,8 @@ struct DestinationPickerControl: View {
     var compactLabel: Bool = true
     /// Reserve a row beneath the field for the inline validation error. Off in
     /// the compact connect bar, where that always-present (even if invisible)
-    /// row made the control taller than its neighbours and pushed the field
-    /// above their vertical centre — the red border already flags an invalid
+    /// row made the control taller than its neighbors and pushed the field
+    /// above their vertical center — the red border already flags an invalid
     /// callsign there.
     var showsInlineError: Bool = true
     let onDestinationChanged: (String) -> Void

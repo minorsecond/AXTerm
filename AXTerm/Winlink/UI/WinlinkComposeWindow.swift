@@ -64,7 +64,7 @@ struct WinlinkComposeWindow: View {
             Form {
                 // A `TextField` title is drawn beside the field on macOS and
                 // *replaced* by the prompt on iOS, so on a handheld these
-                // three rows arrived as unlabelled boxes. `LabeledContent`
+                // three rows arrived as unlabeled boxes. `LabeledContent`
                 // puts the name back without changing the Mac.
                 labelled("To:") {
                     TextField("To:", text: $viewModel.toText,

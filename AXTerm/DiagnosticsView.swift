@@ -170,7 +170,7 @@ struct DiagnosticsView: View {
         }
     }
 
-    /// Severity has to survive the loss of the colour-coded column.
+    /// Severity has to survive the loss of the color-coded column.
     private func tint(for level: AppEventRecord.Level) -> Color {
         switch level {
         case .error: return .red

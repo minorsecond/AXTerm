@@ -24,7 +24,7 @@ nonisolated enum KaNodeOutput {
     /// A KA-Node has no layer 3: no routing table, no circuits, nothing to
     /// carry a NET/ROM connection. Its lists are evidence about what can be
     /// reached *through* it with a `C` command — a prompt relay — and never
-    /// a route. Synthesising NET/ROM routes from them is precisely how the
+    /// a route. Synthesizing NET/ROM routes from them is precisely how the
     /// app would fabricate paths through stations that cannot route, which
     /// `NodeCapability` exists to prevent.
     static let yieldsNetRomRoutes = false
@@ -59,7 +59,7 @@ nonisolated enum KaNodeOutput {
             alias = alias.trimmingCharacters(in: .whitespaces)
             // One token, or this is not a list row. The KA-Node's own
             // connect banner — `###CONNECTED TO NODE DRLNOD(KE0NCQ)
-            // CHANNEL A` — is a parenthesised callsign preceded by prose,
+            // CHANNEL A` — is a parenthesized callsign preceded by prose,
             // and without this it files KE0NCQ as a directory entry.
             guard !alias.contains(" ") else { return nil }
 
@@ -102,7 +102,7 @@ nonisolated enum KaNodeOutput {
 
         static func parse(_ line: String) -> HeardEntry? {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            // A node-list row carries a parenthesised callsign; a heard row
+            // A node-list row carries a parenthesized callsign; a heard row
             // never does. Without this check the two lists mix, and a
             // node's second-hand directory gets filed as RF this node
             // actually heard.

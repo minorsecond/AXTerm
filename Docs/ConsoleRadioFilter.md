@@ -58,7 +58,7 @@ They were, and it put this view at odds with the Packets table, which has
 always hidden them with their radio. It also produced half a conversation: hide
 a radio and you saw what you sent on it but not the answer that came back.
 
-The safety argument for the old behaviour — that an operator should always see
+The safety argument for the old behavior — that an operator should always see
 their station transmit — is answered by rule 1 instead. Failures are never
 hidden, and nothing is destroyed either way: the Packets table, the session
 history and the database still hold everything.
@@ -95,5 +95,5 @@ already lost on reload.
 ## Tests
 
 `AXTermTests/Unit/UI/ConsoleLineRadioFilterTests.swift` — each rule, the shared
-link, the badge, the round trip, and the two behaviours this deliberately
+link, the badge, the round trip, and the two behaviors this deliberately
 changed (own transmissions, radio-scoped notices).

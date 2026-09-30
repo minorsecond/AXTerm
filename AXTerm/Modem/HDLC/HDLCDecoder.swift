@@ -41,7 +41,7 @@ nonisolated struct HDLCDecoder: Sendable {
     }
 
     /// What the slicer is hearing, for carrier detect: flags are a station
-    /// keyed up, in-frame is data, idle is nothing recognisable.
+    /// keyed up, in-frame is data, idle is nothing recognizable.
     enum Activity: Equatable, Sendable { case idle, flags, inFrame }
 
     let limits: Limits

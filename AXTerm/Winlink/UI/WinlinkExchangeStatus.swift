@@ -10,7 +10,7 @@ import SwiftUI
 /// working?". This type is that answer.
 nonisolated struct WinlinkExchangeStatus: Equatable {
 
-    /// Drives the icon and its colour. Kept separate from the text so a
+    /// Drives the icon and its color. Kept separate from the text so a
     /// glance is enough when the wording is too long to read.
     enum Kind: Equatable {
         case idle

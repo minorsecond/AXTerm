@@ -240,9 +240,9 @@ callers:
 1. **Never advertise what we will not carry.** With forwarding off, the
    only entry is this station itself, at quality 255. Advertising a
    learned route we would not forward makes this station a black hole:
-   neighbours route traffic at it and the traffic dies.
+   neighbors route traffic at it and the traffic dies.
 2. **Split horizon** — never advertise a destination back toward the
-   neighbour we reach it through.
+   neighbor we reach it through.
 
 Plus two guards the field data demanded: zero-quality routes are not
 offered, and **alias-shaped destinations are skipped**. The route table
@@ -262,13 +262,13 @@ the next hop's frame. The origin is never rewritten — we are transit.
 ### Auto-try (`NetRomAutoTryPolicy`, `NetRomAutoTryCampaign`)
 
 Walks candidate hops best-first (`NetRomRouter.candidateRoutes`, dedup
-by neighbour, deterministic tie-break). The distinction that matters:
+by neighbor, deterministic tie-break). The distinction that matters:
 
 - **the path failed** (`timedOut`, `transportFailure`) → try the next hop
 - **the station answered** (`refused`, `reset`, closed) → stop
 
 A node that refuses has been reached; asking again through a different
-neighbour is not persistence, it is nagging a station that already
+neighbor is not persistence, it is nagging a station that already
 replied. Auto-try is not a retry *loop* over one hop either — T1/N2
 inside the circuit already does that, and doubling it would key the
 transmitter far more than the network deserves.
@@ -280,7 +280,7 @@ live in Settings › Packet Node › NET/ROM Node. Announcing writes this
 station into other operators' routing tables; forwarding commits this
 transmitter to other people's packets. Neither should arrive as a side
 effect of an app update. Auto-try is an explicit operator action on the
-Routes page, not a background behaviour.
+Routes page, not a background behavior.
 
 ## Several radios
 
@@ -301,7 +301,7 @@ the difference (`Docs/MultiRadio.md`):
   `localNode = datagram.destination`, so the CONACK, the data and the
   refusal all originate from the node that was actually called.
 
-Datagrams to a neighbour leave on the radio that neighbour is best heard
+Datagrams to a neighbor leave on the radio that neighbor is best heard
 on (`NetRomRouter.radio(forNeighbor:)`).
 
 ## Names vs addresses
@@ -327,7 +327,7 @@ BPQ resolves the alias before building the header, and
 - Applies everywhere an address is chosen: opening a circuit, auto-try,
   transit forwarding, and the NODES advertisement — which now
   *resolves* alias-shaped destinations instead of skipping them, with
-  the tactical name still travelling in the entry's own alias field.
+  the tactical name still traveling in the entry's own alias field.
   Split horizon is compared after resolution, so an alias and its
   callsign cannot slip past each other.
 

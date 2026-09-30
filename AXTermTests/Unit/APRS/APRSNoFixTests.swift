@@ -33,7 +33,7 @@ final class APRSNoFixTests: XCTestCase {
     }
 
     /// And a station that really is near the origin is still a station. The
-    /// rule is for the exact sentinel, not for a neighbourhood of it — there
+    /// rule is for the exact sentinel, not for a neighborhood of it — there
     /// is no threshold at which a real position becomes a fiction.
     func testAPositionNearButNotAtTheOriginSurvives() throws {
         let report = try XCTUnwrap(

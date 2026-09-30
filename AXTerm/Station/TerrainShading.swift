@@ -17,7 +17,7 @@ nonisolated enum TerrainShading {
         /// Relief shading. Reads as landscape rather than as data, and shows
         /// ridge lines, which is the feature that actually blocks paths.
         case hillshade
-        /// Absolute height as colour, for judging whether a site is high.
+        /// Absolute height as color, for judging whether a site is high.
         case elevation
 
         var id: String { rawValue }
@@ -42,7 +42,7 @@ nonisolated enum TerrainShading {
         /// only ever blended against that layer's transparent backing, never
         /// the basemap. What reached the screen was a 75%-opaque near-white
         /// sheet: invisible over a light map, and over a dark-mode map it
-        /// turned the whole city light grey while MapKit's dark-mode road
+        /// turned the whole city light gray while MapKit's dark-mode road
         /// shields and labels stayed dark on top of it — the "dark blocks over
         /// the highway symbols". The darkening now lives in the pixels
         /// themselves (`rgba`): flat ground is transparent and slopes are
@@ -77,13 +77,13 @@ nonisolated enum TerrainShading {
     /// Vertical exaggeration.
     ///
     /// At ~100 m sample spacing, true-scale shading of anything short of a
-    /// cliff is nearly flat grey. Ordinary relief needs a nudge to be legible.
+    /// cliff is nearly flat gray. Ordinary relief needs a nudge to be legible.
     static let verticalExaggeration: Double = 2.0
 
-    /// The range the elevation ramp spans, in metres.
+    /// The range the elevation ramp spans, in meters.
     ///
-    /// Fixed rather than per-tile. Normalising each tile against its own
-    /// extremes would make neighbouring tiles disagree about what a colour
+    /// Fixed rather than per-tile. Normalizing each tile against its own
+    /// extremes would make neighboring tiles disagree about what a color
     /// means, and a seam would appear across the map wherever a tile boundary
     /// fell — worse, a flat tile would light up as if it were mountainous.
     static let elevationRange: ClosedRange<Double> = 0...4500
@@ -92,7 +92,7 @@ nonisolated enum TerrainShading {
     /// is stored in and the order an image wants.
     ///
     /// - Parameters:
-    ///   - grid: `samples` × `samples` metres above sea level, NaN for gaps.
+    ///   - grid: `samples` × `samples` meters above sea level, NaN for gaps.
     ///   - metresPerSampleX/Y: ground distance between samples. They differ:
     ///     a degree of longitude is shorter than a degree of latitude
     ///     everywhere but the equator, and using one for both tilts every
@@ -163,7 +163,7 @@ nonisolated enum TerrainShading {
                                 let h = Double(input[south])
                                 let i = Double(input[south + 1])
 
-                                // A fabricated neighbour makes a fabricated
+                                // A fabricated neighbor makes a fabricated
                                 // slope, and the edge of a coverage hole is
                                 // where that renders a convincing cliff.
                                 guard a.isFinite, b.isFinite, c.isFinite, d.isFinite,
@@ -209,7 +209,7 @@ nonisolated enum TerrainShading {
 
     /// Rescales a hillshade so flat ground is white.
     ///
-    /// Raw hillshade puts level ground at cos(zenith) — mid-grey — and
+    /// Raw hillshade puts level ground at cos(zenith) — mid-gray — and
     /// multiplying that over the map darkens *everything* uniformly, which is
     /// how the first version turned Denver brown and buried the streets.
     /// Dividing through by the flat-ground value makes level terrain 1.0,
@@ -264,10 +264,10 @@ nonisolated enum TerrainShading {
         return min(max(numerator / denominator, 0), 1)
     }
 
-    /// Horn's method: slope and aspect from the eight neighbours.
+    /// Horn's method: slope and aspect from the eight neighbors.
     ///
-    /// Returns nil where any neighbour is missing, rather than substituting a
-    /// value — a fabricated neighbour produces a fabricated slope, and the
+    /// Returns nil where any neighbor is missing, rather than substituting a
+    /// value — a fabricated neighbor produces a fabricated slope, and the
     /// edge of a coverage hole is exactly where that would show up as a
     /// convincing cliff that is not there.
     static func hillshade(grid: [Float], samples: Int, row: Int, column: Int,

@@ -1,7 +1,7 @@
 import XCTest
 @testable import AXTerm
 
-/// The directed-query catalogue and the query an operator builds from it.
+/// The directed-query catalog and the query an operator builds from it.
 final class APRSDirectedQueryTests: XCTestCase {
 
     /// The distinction the whole Ask sheet is built around, pinned so a new
@@ -47,7 +47,7 @@ final class APRSDirectedQueryTests: XCTestCase {
 
     /// The spec writes query tokens uppercase with a leading `?`, and a
     /// station that follows it — Xastir does — refuses any other case as an
-    /// illegal query rather than guessing. A typed query is normalised so a
+    /// illegal query rather than guessing. A typed query is normalized so a
     /// lowercase one does not silently go nowhere.
     func testATypedQueryIsNormalisedTheWayTheSpecWritesThem() {
         XCTAssertEqual(APRSStationQuery(callsign: "AD1CT", custom: "aprsh k0epi").token,
@@ -55,7 +55,7 @@ final class APRSDirectedQueryTests: XCTestCase {
         XCTAssertEqual(APRSStationQuery(callsign: "AD1CT", custom: "  ?ver  ").token, "?VER")
     }
 
-    /// A typed query that happens to be one of ours is recognised, so the
+    /// A typed query that happens to be one of ours is recognized, so the
     /// result reads with the same wording as the picked one.
     func testATypedQueryThatMatchesTheCatalogueIsIdentified() {
         XCTAssertEqual(APRSStationQuery(callsign: "AD1CT", custom: "?aprst").kind, .trace)

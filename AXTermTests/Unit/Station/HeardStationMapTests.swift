@@ -26,7 +26,7 @@ final class HeardStationMapTests: XCTestCase {
 
     /// Exact coordinates beat a grid square. A grid is a box up to 8 km
     /// across, and every station in it collapses onto one identical
-    /// centre point — which is exactly why co-located gateways could not
+    /// center point — which is exactly why co-located gateways could not
     /// be told apart at any zoom level.
     func testExactCoordinatesBeatAGridSquare() throws {
         let entries = HeardStationMap.entries(
@@ -37,14 +37,14 @@ final class HeardStationMapTests: XCTestCase {
         let entry = try XCTUnwrap(entries.first)
         XCTAssertTrue(entry.isExactPosition)
         XCTAssertEqual(entry.position?.latitude ?? 0, 39.4918279, accuracy: 0.000001)
-        XCTAssertTrue(entry.positionSource?.contains("licence address") == true,
+        XCTAssertTrue(entry.positionSource?.contains("license address") == true,
                       entry.positionSource ?? "")
         // The gateway's own grid is still shown as the label.
         XCTAssertEqual(entry.gridSquare, "DM79QL")
     }
 
     /// Two gateways sharing a grid square must end up at *different*
-    /// coordinates once their licence addresses are known — otherwise no
+    /// coordinates once their license addresses are known — otherwise no
     /// amount of zooming separates them.
     func testCoLocatedGatewaysSeparateOnceExactPositionsAreKnown() {
         let entries = HeardStationMap.entries(
@@ -57,7 +57,7 @@ final class HeardStationMapTests: XCTestCase {
         XCTAssertEqual(HeardStationMap.clusters(entries).count, 2)
     }
 
-    /// With no exact coordinate anywhere, the grid centre is still used
+    /// With no exact coordinate anywhere, the grid center is still used
     /// — a coarse position beats none.
     func testGridSquareIsUsedWhenNoExactCoordinateExists() throws {
         let entries = HeardStationMap.entries(
@@ -226,7 +226,7 @@ final class HeardStationMapTests: XCTestCase {
     }
 
     /// Different licensees that happen to share a position are counted,
-    /// not mislabelled as one of them.
+    /// not mislabeled as one of them.
     /// The busy station names the cluster, not whichever sorts first:
     /// W0ARP-10 at 2,657 packets shares DM79QL with N0HI-10 at one, and
     /// W0ARP-10 is what the operator is looking for.
@@ -242,7 +242,7 @@ final class HeardStationMapTests: XCTestCase {
         XCTAssertEqual(HeardStationMap.clusterLabel(clusters[0]), "W0ARP-10 +1")
     }
 
-    /// A stale SSID must not grey out a station heard a minute ago at
+    /// A stale SSID must not gray out a station heard a minute ago at
     /// the same site.
     func testClusterTakesTheLiveliestSignal() {
         let entries = HeardStationMap.entries(
@@ -266,7 +266,7 @@ final class HeardStationMapTests: XCTestCase {
 
     /// A station hears its own transmissions come back digipeated, so
     /// without excluding it the operator appears twice — once as the
-    /// centre marker and again as a heard station metres away.
+    /// center marker and again as a heard station meters away.
     func testOwnCallsignIsExcluded() {
         let entries = HeardStationMap.entries(
             stations: [station("K0EPI-7"), station("W0ARP-10")],
@@ -279,10 +279,10 @@ final class HeardStationMapTests: XCTestCase {
     /// position, so all of them are excluded — and matching is
     /// case-insensitive.
     ///
-    /// This used to be written as "any SSID of the operator's own licence is
+    /// This used to be written as "any SSID of the operator's own license is
     /// still the operator", matching on the base callsign. That is a
     /// different claim and a wrong one: the operator's HT is another radio
-    /// on the same licence, and it was dropped from the map, could not be
+    /// on the same license, and it was dropped from the map, could not be
     /// pinged, and could not be selected from the traffic strip. See
     /// `OwnSSIDsOnTheMapTests`.
     func testEveryAddressThisStationAnswersToIsExcluded() {
@@ -330,7 +330,7 @@ final class HeardStationMapTests: XCTestCase {
     }
 
     /// The spread must stay inside what the position actually claims:
-    /// tens of metres for an exact point, hundreds for a grid square.
+    /// tens of meters for an exact point, hundreds for a grid square.
     func testFanStaysWithinThePositionsOwnUncertainty() throws {
         let exact = HeardStationMap.entries(
             stations: [station("K0NTS-1"), station("K0NTS-7")],
@@ -400,11 +400,11 @@ final class HeardStationMapTests: XCTestCase {
 
     // MARK: - What a position is *of*
 
-    /// Precision is not accuracy. A licence address is exact but
+    /// Precision is not accuracy. A license address is exact but
     /// describes the licensee; an RMS grid describes the gateway. The
     /// exact value is a refinement only when the two agree.
     func testExactPositionIsUsedWhenItAgreesWithTheRegisteredGrid() throws {
-        // W0ARP's licence address really does fall inside DM79QL.
+        // W0ARP's license address really does fall inside DM79QL.
         let entries = HeardStationMap.entries(
             stations: [station("W0ARP-10")],
             directory: ["W0ARP": record("W0ARP", grid: "DM79ql",
@@ -460,7 +460,7 @@ final class HeardStationMapTests: XCTestCase {
     }
 
     /// A name already on the map belongs to the layer that knows more
-    /// about it; the operator's own callsign is the centre marker.
+    /// about it; the operator's own callsign is the center marker.
     func testDirectoryLayerYieldsToExistingMarkersAndSelf() {
         var aliases = NodeAliasDirectory()
         aliases.record(.init(alias: "DRLNOD", callsign: "KE0NCQ", service: "N"), at: now)
@@ -641,7 +641,7 @@ final class HeardStationMapTests: XCTestCase {
 
     // MARK: - Node aliases
 
-    /// The whole point: DRLNOD is not a licence, so no directory has it,
+    /// The whole point: DRLNOD is not a license, so no directory has it,
     /// but its operator announces it and the operator can be placed.
     func testAliasIsPlacedViaItsOperator() throws {
         var aliases = NodeAliasDirectory()
@@ -716,7 +716,7 @@ final class HeardStationMapTests: XCTestCase {
         XCTAssertTrue(entry.isNodeAlias)
     }
 
-    /// Looking up "DRLNOD" would fail — it is not a licence. The
+    /// Looking up "DRLNOD" would fail — it is not a license. The
     /// operator that announced it is what the directory can answer.
     func testLookupCandidatesUseTheOperatorNotTheAlias() {
         var aliases = NodeAliasDirectory()

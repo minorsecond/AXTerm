@@ -22,7 +22,7 @@ typealias PlatformGestureRecognizerDelegate = UIGestureRecognizerDelegate
 /// online styles, where it is the better tool.
 ///
 /// The markers are drawn by the same `StationScope` model as everywhere else,
-/// so a station's colour and shape mean the same thing offline as online: a
+/// so a station's color and shape mean the same thing offline as online: a
 /// hollow marker is still a lead rather than a fix.
 struct OfflineBasemapMapView {
 
@@ -40,7 +40,7 @@ struct OfflineBasemapMapView {
     /// Boundaries and other vector data drawn over the basemap.
     var overlays: [MapOverlayLayer] = []
     /// Observed paths between stations, drawn as great-circle lines so the
-    /// geometry matches how the signal actually travelled.
+    /// geometry matches how the signal actually traveled.
     var pathLinks: [MapPathLink] = []
     /// APRS symbols to draw over station dots, keyed by the same id the
     /// scope's sites carry. Empty leaves every dot plain, so a scope with no
@@ -176,7 +176,7 @@ struct OfflineBasemapMapView {
         /// map exists to show. Three things never may — the operator's own
         /// station, anything a person placed as a hazard or an object, and the
         /// current selection — because those are the reasons the page is open,
-        /// and a hazard folded into a grey number is a hazard nobody sees.
+        /// and a hazard folded into a gray number is a hazard nobody sees.
         var mayCluster: Bool { !isObserver && !isPlacedObject }
         /// True for a site that came from an APRS object or item rather than
         /// from a heard station.
@@ -356,7 +356,7 @@ struct OfflineBasemapMapView {
         var coverageCircles: [MKCircle] = []
         var dashedCoverageIDs: Set<ObjectIdentifier> = []
         /// What each coverage circle was measured from, so the renderer can
-        /// colour the rings apart when several are drawn at once.
+        /// color the rings apart when several are drawn at once.
         var coverageEvidence: [ObjectIdentifier: CoverageEstimate.Evidence] = [:]
         var installedCoverage: [CoverageEstimate.Ring] = []
         /// The clustering setting the markers on screen were built with, so a
@@ -433,19 +433,19 @@ struct OfflineBasemapMapView {
         }
         #endif
 
-        /// Runs alongside MapKit's own recognisers rather than replacing them,
+        /// Runs alongside MapKit's own recognizers rather than replacing them,
         /// so panning and pinch-zoom keep working while drawing.
         func gestureRecognizer(_ gestureRecognizer: PlatformGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith other: PlatformGestureRecognizer) -> Bool {
             true
         }
 
-        /// Colour for each vector overlay, by the object MapKit hands back.
+        /// Color for each vector overlay, by the object MapKit hands back.
         /// Keyed on identity because MapKit gives no other way to tell which
         /// layer an overlay came from at render time.
         var overlayColors: [ObjectIdentifier: PlatformColor] = [:]
         /// Links keep their evidence so the renderer can dash the ones that
-        /// have never actually been travelled.
+        /// have never actually been traveled.
         var linkStyles: [ObjectIdentifier: MapPathLink] = [:]
         /// Installed path lines by link id, with the signature of what each
         /// was built from. A line whose signature is unchanged is left
@@ -454,7 +454,7 @@ struct OfflineBasemapMapView {
         /// because one path was heard again.
         var linkLines: [String: MKPolyline] = [:]
         /// Where each line runs, and how it is painted, tracked apart. A
-        /// path whose evidence improves is the same line in a new colour;
+        /// path whose evidence improves is the same line in a new color;
         /// replacing the overlay for that made MapKit re-resolve its label
         /// layer, and evidence improves constantly on a busy channel.
         var linkGeometry: [String: String] = [:]
@@ -518,7 +518,7 @@ struct OfflineBasemapMapView {
             case let line as MKPolyline:
                 let renderer = MKPolylineRenderer(polyline: line)
                 // A movement trail: the road a rover drove, drawn thin and
-                // quiet under its dot. Its colour is the same recency tint the
+                // quiet under its dot. Its color is the same recency tint the
                 // marker carries, so the trail and the station read as one.
                 if trailLineIDs.contains(ObjectIdentifier(line)) {
                     renderer.strokeColor = color.withAlphaComponent(0.7)
@@ -531,7 +531,7 @@ struct OfflineBasemapMapView {
                     renderer.strokeColor = color.withAlphaComponent(
                         link.isPrediction ? 0.5
                             : (link.evidence == .transitive ? 0.45 : 0.85))
-                    // Dashed where nothing has been observed travelling it.
+                    // Dashed where nothing has been observed traveling it.
                     // A solid line for a guess would read as a route.
                     if link.isPrediction {
                         renderer.lineDashPattern = [2, 6]
@@ -557,7 +557,7 @@ struct OfflineBasemapMapView {
                     let renderer = MKCircleRenderer(circle: circle)
                     let dashed = dashedCoverageIDs.contains(ObjectIdentifier(circle))
                     // Several rings can be on the map at once, measuring
-                    // different things in different directions, so the colour
+                    // different things in different directions, so the color
                     // has to come from the evidence rather than a default.
                     let tint = (coverageEvidence[ObjectIdentifier(circle)] ?? .answered)
                         .ringPlatformColor
@@ -717,13 +717,13 @@ struct OfflineBasemapMapView {
 
         static func tint(for site: SiteAnnotation) -> PlatformColor {
             if site.isObserver { return .systemBlue }
-            // Infrastructure wears one colour so it reads apart from
+            // Infrastructure wears one color so it reads apart from
             // traffic; recency still shows through the label and callout.
             if site.isNode { return .systemPurple }
             // In APRS mode a station is placed at the symbol it beaconed, and
-            // colour keys the *type* the way Xastir does — recency has moved
+            // color keys the *type* the way Xastir does — recency has moved
             // to opacity (see emphasisAlpha). A looked-up address has no
-            // symbol and no type, so it keeps the recency colour.
+            // symbol and no type, so it keeps the recency color.
             if let code = site.aprsSymbol?.code { return typeColour(forCode: code) }
             return tint(forSignal: site.signal)
         }
@@ -782,7 +782,7 @@ struct OfflineBasemapMapView {
         /// a map somewhere beneath it — the reported complaint, and a fair
         /// one. These are the same four hues pulled toward the paper: still
         /// four obviously different classes, but sitting *on* the basemap
-        /// rather than shouting over it. Colour that means "look here" is
+        /// rather than shouting over it. Color that means "look here" is
         /// spent on hazards and the selection, where it earns its keep.
         static func muted(red: CGFloat, green: CGFloat, blue: CGFloat) -> PlatformColor {
             #if os(macOS)
@@ -833,7 +833,7 @@ struct OfflineBasemapMapView {
             }
         }
 
-        /// The recency colour for a signal level — the shared vocabulary a
+        /// The recency color for a signal level — the shared vocabulary a
         /// dot and its movement trail both draw from.
         static func tint(forSignal signal: StationScope.Signal) -> PlatformColor {
             switch signal {
@@ -852,7 +852,7 @@ struct OfflineBasemapMapView {
         /// deliberate change can be told from arriving traffic.
         var lastLayerSignature: String = ""
         /// Mirrors the view's clustering preference so the annotation factory,
-        /// which only has the coordinator, can honour it.
+        /// which only has the coordinator, can honor it.
         var clustersStations = true
 
         /// Set while the map is being driven to match `selection` rather than
@@ -882,7 +882,7 @@ struct OfflineBasemapMapView {
                 // Both axes, or an east-west drift reads as no movement.
                 let metres = (dLat + dLon * cos(region.center.latitude * .pi / 180)) * 111_320
                 if metres > 0 || dSpan > 0 {
-                    print(String(format: "[MAPDIAG] region %@ centre %.1f m  span %.8f",
+                    print(String(format: "[MAPDIAG] region %@ center %.1f m  span %.8f",
                                  animated ? "anim" : "still", metres, dSpan))
                 }
             }
@@ -1082,7 +1082,7 @@ struct OfflineBasemapMapView {
     /// How long a press has to hold still before MapKit starts dragging a
     /// marker rather than panning the map.
     ///
-    /// MapKit drives `isDraggable` from a press recogniser of its own with
+    /// MapKit drives `isDraggable` from a press recognizer of its own with
     /// the system default half-second hold. On a trackpad that reads as a
     /// broken feature: the operator grabs their object, the map slides
     /// instead, and it takes several goes to discover that the trick is to
@@ -1091,9 +1091,9 @@ struct OfflineBasemapMapView {
     /// that is already exactly on the thing it means to move.
     ///
     /// Applied by walking `gestureRecognizers`, which is ordinary public API
-    /// on the view \u{2014} the only guess is *which* recogniser, and being
-    /// wrong costs nothing: not finding one leaves today's behaviour, which
-    /// is the behaviour we are improving on.
+    /// on the view \u{2014} the only guess is *which* recognizer, and being
+    /// wrong costs nothing: not finding one leaves today's behavior, which
+    /// is the behavior we are improving on.
     ///
     /// Only while something on this map is actually draggable, so a map with
     /// no objects of ours keeps stock press timing.
@@ -1133,7 +1133,7 @@ struct OfflineBasemapMapView {
         applyTrails(to: mapView, coordinator: context.coordinator)
         applyCoverage(to: mapView, coordinator: context.coordinator)
 
-        // A tap recogniser rather than MapKit's own selection handling: in a
+        // A tap recognizer rather than MapKit's own selection handling: in a
         // drawing mode the tap must become a vertex, and MapKit gives no way
         // to intercept that. Set not to cancel other touches, so panning and
         // zooming still work while drawing.
@@ -1188,15 +1188,15 @@ struct OfflineBasemapMapView {
             mapView.addOverlay(overlay, level: .aboveLabels)
         } else {
             // The modern configuration rather than mapType: muted emphasis
-            // pulls Apple's palette back to greys, so the recency colours,
-            // node diamonds and coverage rings own the map's colour.
+            // pulls Apple's palette back to grays, so the recency colors,
+            // node diamonds and coverage rings own the map's color.
             mapView.preferredConfiguration = basemap.mkConfiguration
         }
     }
 
     /// Draws the shape being tapped out, replaced on every vertex.
     ///
-    /// Dashed and in the accent colour so it never reads as a finished
+    /// Dashed and in the accent color so it never reads as a finished
     /// boundary — an operator glancing at a half-drawn zone must be able to
     /// tell it is not one.
     private func applyDrawingPreview(to mapView: MKMapView, coordinator: Coordinator) {
@@ -1357,7 +1357,7 @@ struct OfflineBasemapMapView {
                let line = coordinator.linkLines[id] {
                 // The line already runs where it should. Its label may carry
                 // new numbers — that feeds the tap card, which should not
-                // read stale — and its colour may have changed, which is a
+                // read stale — and its color may have changed, which is a
                 // repaint of the overlay already on the map. Neither adds or
                 // removes anything, so neither disturbs MapKit's labels and
                 // neither waits on the batching clock.
@@ -1423,7 +1423,7 @@ struct OfflineBasemapMapView {
 
             if coordinator.trailGeometry[id] == geometry,
                let line = coordinator.trailLines[id] {
-                // Same path; the recency colour may have shifted as the
+                // Same path; the recency color may have shifted as the
                 // station aged. Repaint the existing overlay in place — no
                 // insert, so the label layer is not disturbed.
                 if coordinator.overlayColors[ObjectIdentifier(line)] != color {
@@ -1450,7 +1450,7 @@ struct OfflineBasemapMapView {
     }
 
     /// The recency tint for a station id, so its trail matches its dot. Falls
-    /// back to a neutral colour when the station is not in the scope.
+    /// back to a neutral color when the station is not in the scope.
     static func tint(forSignalOfStation id: String, in scope: StationScope) -> PlatformColor {
         guard let site = scope.sites.first(where: { $0.id == id }) else {
             return .systemGray
@@ -1459,7 +1459,7 @@ struct OfflineBasemapMapView {
     }
 
     /// Where a link runs. Only a change here needs a new polyline; the
-    /// endpoints are rounded to about a decimetre, far under what any zoom
+    /// endpoints are rounded to about a decimeter, far under what any zoom
     /// resolves, so floating-point drift cannot pass for a move.
     static func linkGeometrySignature(_ link: MapPathLink) -> String {
         String(format: "%.6f,%.6f|%.6f,%.6f", link.from.latitude, link.from.longitude,
@@ -1469,7 +1469,7 @@ struct OfflineBasemapMapView {
     /// How a link is painted. A change here repaints the line already on
     /// the map rather than replacing it. Evidence improves whenever a path
     /// is proven, which on a busy channel is constant, and tearing the
-    /// overlay out for a colour change made MapKit re-resolve its labels
+    /// overlay out for a color change made MapKit re-resolve its labels
     /// every time. The label is deliberately absent — it feeds the tap
     /// card, not the pixels, and `linkStyles` is refreshed either way.
     static func linkStyleSignature(_ link: MapPathLink) -> String {
@@ -1541,7 +1541,7 @@ struct OfflineBasemapMapView {
             coordinator.dashedCoverageIDs.insert(ObjectIdentifier(outer))
             // Evidence has to travel with the circle: the renderer is handed
             // an overlay and nothing else, so without this every pair after
-            // the first would be drawn in the first pair's colour.
+            // the first would be drawn in the first pair's color.
             coordinator.coverageEvidence[ObjectIdentifier(inner)] = ring.evidence
             coordinator.coverageEvidence[ObjectIdentifier(outer)] = ring.evidence
             mapView.addOverlay(inner, level: .aboveRoads)
@@ -1549,10 +1549,10 @@ struct OfflineBasemapMapView {
         }
     }
 
-    /// Evidence decides the colour, so the map reads at a glance: green has
-    /// been proven end to end, grey has only been inferred.
+    /// Evidence decides the color, so the map reads at a glance: green has
+    /// been proven end to end, gray has only been inferred.
     static func linkColor(for link: MapPathLink) -> PlatformColor {
-        // A forecast is not a measurement, so it never borrows a colour that
+        // A forecast is not a measurement, so it never borrows a color that
         // means one.
         if link.isPrediction { return .systemPurple }
         if link.isSuspect { return .systemRed }
@@ -1749,7 +1749,7 @@ struct OfflineBasemapMapView {
             // Not inline. `selectAnnotation` deselects whatever was selected
             // first, and MapKit delivers `didDeselect` synchronously — which
             // writes `parent.selection`, and this runs inside the SwiftUI
-            // view update. Writing state mid-update is undefined behaviour
+            // view update. Writing state mid-update is undefined behavior
             // and the runtime says as much in the log; it also fed the write
             // straight back in as another update.
             //

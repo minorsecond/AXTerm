@@ -3,7 +3,7 @@ import XCTest
 
 /// Each radio operates as its own address.
 ///
-/// Two radios on one licence are two stations on the air; a remote station
+/// Two radios on one license are two stations on the air; a remote station
 /// dials one of them. The session layer keeps one address per radio, opens
 /// outbound links under it, answers calls to it, and — when a call to an
 /// address only one radio uses is heard by another radio on the same

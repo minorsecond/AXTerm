@@ -6,7 +6,7 @@ import MapKit
 nonisolated enum MapDrawingMode: String, CaseIterable, Identifiable, Sendable {
     /// Taps select stations, as usual.
     case off
-    /// Each tap drops a labelled mark.
+    /// Each tap drops a labeled mark.
     case point
     /// Taps add vertices to a line.
     case line
@@ -243,10 +243,10 @@ nonisolated enum MapFeatureLabel {
 
     /// A representative point to hang the label on.
     ///
-    /// For an area this is the **area-weighted centroid**, not the centre of
+    /// For an area this is the **area-weighted centroid**, not the center of
     /// the bounding box. They differ a lot for a real boundary — an L-shaped
-    /// county puts its bounding-box centre outside itself, which would float
-    /// the label over the neighbouring county.
+    /// county puts its bounding-box center outside itself, which would float
+    /// the label over the neighboring county.
     static func anchor(for geometry: ShapefileReader.Geometry) -> CLLocationCoordinate2D? {
         switch geometry {
         case .point(let coordinate):

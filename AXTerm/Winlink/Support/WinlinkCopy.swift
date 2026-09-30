@@ -82,7 +82,7 @@ nonisolated enum WinlinkCopy {
 
     static let antennaHeightTooltip = "How far your antenna is above the ground beneath it \u{2014} not above sea level, which the terrain data already supplies. This is the single number that most often decides whether a path is workable: 60% Fresnel clearance over 13 km at 145 MHz needs roughly 49 m, and the same path from 10 m clears about 9% of the zone. Height, not gain, is what terrain analysis uses."
 
-    static let assumedHeightTooltip = "Used for any station whose height nobody has recorded \u{2014} which is most of them, since neither the licence directory nor the Winlink CMS carries antenna height. Record a real one on a station's page when you know it. Forecasts built on this assumption say so."
+    static let assumedHeightTooltip = "Used for any station whose height nobody has recorded \u{2014} which is most of them, since neither the license directory nor the Winlink CMS carries antenna height. Record a real one on a station's page when you know it. Forecasts built on this assumption say so."
 
     static let passwordTooltip = """
     Your Winlink account password, used for secure login (;PQ/;PR

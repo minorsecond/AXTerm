@@ -35,7 +35,7 @@ final class StationPositionTests: XCTestCase {
         }))
         XCTAssertEqual(resolved.source, .gridSquare)
         XCTAssertGreaterThan(resolved.accuracyMetres, 4_000)
-        XCTAssertTrue(resolved.summary.contains("Grid centre"))
+        XCTAssertTrue(resolved.summary.contains("Grid center"))
         XCTAssertTrue(resolved.summary.contains("km"))
     }
 
@@ -45,7 +45,7 @@ final class StationPositionTests: XCTestCase {
 
     // MARK: - Doubts
 
-    /// A PO box makes the licence coordinate a post office, and the position
+    /// A PO box makes the license coordinate a post office, and the position
     /// has to carry that where it is relied on.
     func testAMailboxDemotesTheLicenceCoordinate() throws {
         let resolved = try XCTUnwrap(StationPositionResolver.resolve(candidates {
@@ -65,7 +65,7 @@ final class StationPositionTests: XCTestCase {
         XCTAssertEqual(resolved.doubts, [.sharedWithOthers(count: 2)])
     }
 
-    /// A surveyed position is not a post office because the licence happens
+    /// A surveyed position is not a post office because the license happens
     /// to be one. The doubt belongs to the coordinate it is about.
     func testDoubtsDoNotFollowABetterSource() throws {
         let resolved = try XCTUnwrap(StationPositionResolver.resolve(candidates {
@@ -81,7 +81,7 @@ final class StationPositionTests: XCTestCase {
 
     // MARK: - Whether a path is worth profiling
 
-    /// The measurement that started this: a grid centre is good to 4.3 km,
+    /// The measurement that started this: a grid center is good to 4.3 km,
     /// and the operator's shortest working paths are 6 to 11 km. Terrain
     /// under an origin that uncertain is not the terrain being flown over.
     func testAShortPathFromAGridCentreIsNotWorthProfiling() throws {

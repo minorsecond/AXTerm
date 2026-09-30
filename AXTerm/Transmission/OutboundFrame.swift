@@ -410,7 +410,7 @@ nonisolated struct TxFrameState: Identifiable, Codable {
         errorMessage = reason
     }
 
-    /// Mark frame as cancelled
+    /// Mark frame as canceled
     mutating func markCancelled() {
         status = .cancelled
     }

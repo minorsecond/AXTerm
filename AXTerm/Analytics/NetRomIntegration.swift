@@ -33,7 +33,7 @@ final class NetRomIntegration {
     /// One retry/duplicate tracker per radio. Two radios on one frequency
     /// each hear the same frame; the copy folded onto the second radio must
     /// not be judged against the first radio's sighting, or it is dropped as
-    /// an ingestion artefact before it can count as that radio's evidence.
+    /// an ingestion artifact before it can count as that radio's evidence.
     private var duplicateTrackers: [RadioID: PacketDuplicateTracker] = [:]
 
     private let routerConfig: NetRomConfig
@@ -231,10 +231,10 @@ final class NetRomIntegration {
 
         // First, ensure the broadcast sender is registered as a neighbor
         // NET/ROM broadcasts are always direct (no digipeating), so the sender is a neighbor.
-        // Stamped with the radio that heard it, so the neighbour lands on the
-        // right radio — and so `broadcastRoutes`' neighbour lookup, keyed by
+        // Stamped with the radio that heard it, so the neighbor lands on the
+        // right radio — and so `broadcastRoutes`' neighbor lookup, keyed by
         // (radio, origin), finds it and does not drop every route as "origin
-        // is not a neighbour".
+        // is not a neighbor".
         let syntheticPacket = Packet(
             timestamp: result.timestamp,
             from: AX25Address(call: normalizedOrigin),
@@ -614,7 +614,7 @@ final class NetRomIntegration {
     ) {
         let refreshNeighbor = shouldRefreshNeighbor(for: classification)
         let refreshRoutes = shouldRefreshRoute(for: classification)
-        // The radio that heard this frame — its neighbours and routes are its
+        // The radio that heard this frame — its neighbors and routes are its
         // own. `router.observePacket` reads it from the packet; the route
         // refresh must be told, or it targets the primary radio's routes and
         // silently no-ops on the radio that actually heard the origin.

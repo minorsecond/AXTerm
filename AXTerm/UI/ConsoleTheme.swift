@@ -25,7 +25,7 @@ struct ConsoleTheme {
     /// loud red: these lines are frequent and mostly transient (a radio dropped,
     /// a reconnect), so they should be findable at a glance without turning the
     /// log into a wall of alarm. The row text itself stays neutral; only this
-    /// thin cue carries the colour.
+    /// thin cue carries the color.
     static let errorAccent: Color = Color.orange.opacity(0.85)
 
     /// Background opacity for error messages. Kept level with system lines so an

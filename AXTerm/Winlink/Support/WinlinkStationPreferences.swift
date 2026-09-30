@@ -44,7 +44,7 @@ nonisolated struct WinlinkStationPreferences: Codable, Equatable, Sendable {
         paths[Self.linkKey(station)] ?? ""
     }
 
-    /// Stores a path, normalising it. An empty or blank path is removed
+    /// Stores a path, normalizing it. An empty or blank path is removed
     /// rather than stored as an empty string, so "direct" has exactly one
     /// representation.
     mutating func setPath(_ raw: String, for station: WinlinkRMSStationRecord) {

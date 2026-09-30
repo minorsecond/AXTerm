@@ -14,10 +14,10 @@ nonisolated struct NodeProfile: Equatable, Sendable {
 
     /// How a station told us it is a NET/ROM node.
     ///
-    /// Appearing in the neighbour table is **not** one of these. That table is
+    /// Appearing in the neighbor table is **not** one of these. That table is
     /// built by watching traffic — `observePacket` records any direct frame,
     /// and the "classic" versus "inferred" labels distinguish two inference
-    /// paths, not declared versus guessed. Calling every neighbour a NET/ROM
+    /// paths, not declared versus guessed. Calling every neighbor a NET/ROM
     /// node put the label on ordinary stations that merely transmitted nearby.
     enum NetRomDeclaration: Equatable, Sendable {
         /// It originated a NET/ROM routing broadcast — PID 0xCF to NODES.
@@ -98,7 +98,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
             case .digipeater:
                 return "Its callsign has been seen in the digipeater path of frames from "
                     + "other stations. A digipeater repeats frames addressed via it — no "
-                    + "session, no acknowledgement of its own — so the sender's retries "
+                    + "session, no acknowledgment of its own — so the sender's retries "
                     + "still span the whole path."
             case .bulletinBoard:
                 return "It identified itself as running a bulletin board."
@@ -121,7 +121,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         var gridSquare: String?
         var source: String?
         /// Distance and bearing from the operator, when their own position
-        /// is known. Kilometres, because that is the unit the rest of the
+        /// is known. Kilometers, because that is the unit the rest of the
         /// station's geometry already speaks.
         var distanceKilometres: Double?
         var bearingDegrees: Double?
@@ -182,7 +182,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         }
     }
 
-    /// Another SSID under the same licence.
+    /// Another SSID under the same license.
     ///
     /// `K0NTS-1`, `-7` and `-10` are one operator running three services, and
     /// an operator looking at a node wants to know the mailbox next door
@@ -202,7 +202,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         var neighbourQuality: Int?
         /// Destinations reachable *through* this node.
         var routesVia: [String] = []
-        /// How this node is reached, when it is not a direct neighbour.
+        /// How this node is reached, when it is not a direct neighbor.
         var reachedVia: String?
     }
 
@@ -270,7 +270,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
     /// True when this name is a destination, not a station.
     ///
     /// `BEACON`, `ID`, `NODES`, `QST`, `WIDE1-1` and the rest are addresses
-    /// frames are sent *to*. Nobody holds a licence for them, no directory
+    /// frames are sent *to*. Nobody holds a license for them, no directory
     /// will ever have a record, and nothing answers a connect request at one
     /// — so the page must not offer Connect, and "nothing known yet" is the
     /// wrong story: there is nothing to know.
@@ -293,9 +293,9 @@ nonisolated struct NodeProfile: Equatable, Sendable {
     ///
     /// The sheet is a peek — tiles, roles, one warning — and every detail
     /// section renders on the page only. So anything that produces a detail
-    /// section counts as depth, licence records included: the sheet's
+    /// section counts as depth, license records included: the sheet's
     /// subtitle shows the name, but the class and full address live in the
-    /// Licence section, and without this the link to reach them never
+    /// License section, and without this the link to reach them never
     /// appeared for a directory-only station.
     var hasDepth: Bool {
         placement != nil || activity != nil || netrom != nil || winlink != nil
@@ -425,7 +425,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
             reachVia: aliasDirectory?.tellers(forCallsign: effective) ?? [],
             resolvedFromAlias: resolvedFromAlias)
 
-        // Licence details. The heard entry may already carry a name from an
+        // License details. The heard entry may already carry a name from an
         // earlier lookup, so it is the fallback rather than the loser.
         profile.name = directory?.name ?? heard?.name
         profile.locality = directory?.locality ?? heard?.locality
@@ -527,7 +527,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         if isAlias || heard?.isNodeAlias == true {
             roles.append(.nodeAlias)
         }
-        // Only on the station's own word. Neighbour-table membership is an
+        // Only on the station's own word. Neighbor-table membership is an
         // observation about traffic, not a claim about what the station is.
         // A KA-Node fingerprint overrides both paths in: DRLNOD's ID beacon
         // declares `/N`, and it is still a KA-Node — the observed menu is

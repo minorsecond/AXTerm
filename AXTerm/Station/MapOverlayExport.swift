@@ -13,7 +13,7 @@ import Foundation
 /// GeoJSON and cross in under a minute. That is the case worth supporting, and
 /// the difference between the two is four orders of magnitude — so the size is
 /// stated in airtime, not bytes, and the format that is wrong for the radio is
-/// labelled as such rather than merely offered.
+/// labeled as such rather than merely offered.
 nonisolated enum MapOverlayExport {
 
     enum Format: String, CaseIterable, Identifiable, Sendable {
@@ -64,7 +64,7 @@ nonisolated enum MapOverlayExport {
         }
     }
 
-    /// Beyond this, sending over packet stops being a judgement call and
+    /// Beyond this, sending over packet stops being a judgment call and
     /// becomes a mistake. Roughly forty minutes at this station's measured
     /// rate — long enough that the operator should be handing over a memory
     /// card instead.

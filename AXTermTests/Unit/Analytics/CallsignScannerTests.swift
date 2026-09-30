@@ -72,7 +72,7 @@ final class CallsignScannerTests: XCTestCase {
 
     func testAHeardStationMatchesWhateverItsSSID() {
         XCTAssertEqual(linked("thanks WA0DE-7"), ["WA0DE-7"],
-                       "heard on one SSID is heard: the licence is the same person")
+                       "heard on one SSID is heard: the license is the same person")
     }
 
     func testACommentNamingAHeardStationLinksOnlyThat() {

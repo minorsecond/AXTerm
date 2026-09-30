@@ -16,7 +16,7 @@
 //  has never received a broadcast (2026-08-27: zero PID-0xCF frames in
 //  the retained window), so every route in its table is *inferred* —
 //  assembled from overheard traffic. Publishing those unchanged announced
-//  `KN6VV-1 via HORSE`, where HORSE is not a neighbour, has never carried
+//  `KN6VV-1 via HORSE`, where HORSE is not a neighbor, has never carried
 //  a packet for us, and could not be asked to.
 //
 //  So the test is not "do we believe this route" but "could we act on it
@@ -62,7 +62,7 @@ nonisolated enum NetRomAdvertisableRoutes {
 
     /// Filter the route table down to promises this station can keep.
     /// - Parameter radio: the radio the broadcast will go out on. Routes and
-    ///   neighbours belonging to any other radio are dropped before anything
+    ///   neighbors belonging to any other radio are dropped before anything
     ///   else is considered, because a destination reachable on one antenna is
     ///   not reachable through another and a NODES entry is a promise that it
     ///   is. Nil considers every radio, which is only correct for a station

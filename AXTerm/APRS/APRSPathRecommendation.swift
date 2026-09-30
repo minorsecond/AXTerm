@@ -25,7 +25,7 @@ nonisolated struct APRSPathRecommendation: Equatable, Sendable {
 
     let verdict: Verdict
     /// The measured facts behind it, in the order they were weighed. Shown
-    /// rather than summarised: the operator knows things this does not, and
+    /// rather than summarized: the operator knows things this does not, and
     /// can only overrule it if they can see what it used.
     let reasons: [String]
 
@@ -102,7 +102,7 @@ nonisolated struct APRSPathRecommendation: Equatable, Sendable {
 
         if load.isEchoHeavy {
             reasons.append("More than a third of what you hear is the network repeating "
-                + "itself, which is what a neighbourhood of over-long paths sounds like.")
+                + "itself, which is what a neighborhood of over-long paths sounds like.")
         }
         reasons.append("You have coverage to spare and the channel is busy enough for the "
             + "spare copies to cost something. Note this only covers digipeaters inside your "

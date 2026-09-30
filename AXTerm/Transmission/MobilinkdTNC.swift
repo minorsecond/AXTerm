@@ -65,7 +65,7 @@ enum MobilinkdTNC {
     /// Generates a frame to set the Input Gain (RX Volume).
     /// - Parameter level: gain step 0-4 (0 to 24 dB in 6 dB steps).
     ///
-    /// The TNC4 answers with its input gain, then re-measures its input centre
+    /// The TNC4 answers with its input gain, then re-measures its input center
     /// for about a second and starts streaming input levels. Send `reset()`
     /// afterwards to get back to decoding packets.
     static func setInputGain(_ level: UInt16) -> [UInt8] {
@@ -312,7 +312,7 @@ struct MobilinkdInputLevel: Equatable, Sendable {
 
 /// What a link needs to know to treat its TNC as a Mobilinkd.
 ///
-/// On Bluetooth LE the link recognises a Mobilinkd by its service UUID; on
+/// On Bluetooth LE the link recognizes a Mobilinkd by its service UUID; on
 /// serial the operator says so, and this being non-nil is how.
 struct MobilinkdConfig: Hashable, Sendable {
     /// The TNC4 settings this radio's profile manages.

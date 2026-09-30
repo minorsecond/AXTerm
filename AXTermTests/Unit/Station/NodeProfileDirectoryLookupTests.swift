@@ -3,7 +3,7 @@
 //  AXTermTests
 //
 //  Field find 2026-08-28 ("where is Brunswick?"): the directory is keyed
-//  by base callsign — one licence covers every SSID — but the resolver
+//  by base callsign — one license covers every SSID — but the resolver
 //  looked records up under the SSID'd name. N3HYM-15 showed "Brunswick"
 //  with no state even though the store held the complete Maryland record;
 //  the name and city leaked in through the heard map, which carries only

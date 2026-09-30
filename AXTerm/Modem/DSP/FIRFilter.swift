@@ -97,13 +97,13 @@ nonisolated struct FIRFilter: Sendable {
         return h.map(Float.init)
     }
 
-    /// Windowed-sinc bandpass, unity gain at the band centre.
+    /// Windowed-sinc bandpass, unity gain at the band center.
     static func bandPass(sampleRate: Double, lowHz: Double, highHz: Double, transitionHz: Double) -> [Float] {
         let n = tapCount(sampleRate: sampleRate, transitionHz: transitionHz)
         let high = lowPass(sampleRate: sampleRate, cutoffHz: highHz, taps: n).map(Double.init)
         let low = lowPass(sampleRate: sampleRate, cutoffHz: lowHz, taps: n).map(Double.init)
         var h = zip(high, low).map { $0 - $1 }
-        // Normalise to the response at the band centre.
+        // Normalize to the response at the band center.
         let centre = (lowHz + highHz) / 2 / sampleRate
         var re = 0.0, im = 0.0
         for (i, v) in h.enumerated() {

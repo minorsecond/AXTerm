@@ -4,7 +4,7 @@
 //
 //  When the app decides a link is over, what — if anything — goes on the air?
 //
-//  The judgement is small but it burned a whole morning (2026-08-28): the
+//  The judgment is small but it burned a whole morning (2026-08-28): the
 //  relay's "dropping the link so the next attempt starts clean" path used
 //  forceDisconnect, which transmits nothing, so BPQ at the far end kept the
 //  session and answered the next SABM as a *reset* — already past its

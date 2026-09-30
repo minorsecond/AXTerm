@@ -52,7 +52,7 @@ final class WinlinkMessageRowModelTests: XCTestCase {
     func testSMTPTransportPrefixIsStripped() {
         let model = WinlinkMessageRowModel.make(
             summary(from: "SMTP:query-reply@winlink.org"))
-        // "SMTP:" says how it travelled, not who sent it, and it pushed the
+        // "SMTP:" says how it traveled, not who sent it, and it pushed the
         // readable half of the address off the end of a one-line row.
         XCTAssertEqual(model.correspondent, "query-reply@winlink.org")
     }
@@ -175,7 +175,7 @@ final class WinlinkMessageRowModelTests: XCTestCase {
         let model = WinlinkMessageRowModel.make(summary(subject: ""))
         XCTAssertEqual(model.subject, "(no subject)")
         XCTAssertTrue(model.subjectIsPlaceholder,
-                      "The view greys the placeholder, so it has to be distinguishable")
+                      "The view grays the placeholder, so it has to be distinguishable")
     }
 
     func testRealSubjectIsNotAPlaceholder() {

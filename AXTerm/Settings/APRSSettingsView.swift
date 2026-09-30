@@ -17,7 +17,7 @@ struct APRSSettingsView: View {
             Section {
                 RunsOnRow(names: ServiceRadios.aprs(settings.activeRadios),
                           none: "No radio is on an APRS channel, so no APRS goes out. Set a radio's channel to APRS on its page under Radios.")
-                    .help("Where APRS messages, their acknowledgements and the \u{201C}who can "
+                    .help("Where APRS messages, their acknowledgments and the \u{201C}who can "
                           + "hear me\u{201D} query go out: the radios whose channel is APRS, or "
                           + "your one radio when you have only one.")
                 Picker("Auto-reply", selection: Binding(

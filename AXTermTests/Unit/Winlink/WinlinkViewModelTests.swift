@@ -116,7 +116,7 @@ final class WinlinkViewModelTests: XCTestCase {
 
     /// Inside the Trash, Delete has to mean delete. Before this the key was
     /// simply disabled there, which looked exactly like a broken key.
-    /// Backspace moving mail to the Trash is Mail.app behaviour and needs
+    /// Backspace moving mail to the Trash is Mail.app behavior and needs
     /// no dialog — but only because it can be taken back. Undo restores
     /// each message to the folder it actually came from.
     func testUndoingATrashPutsMessagesBackWhereTheyCameFrom() async throws {
@@ -468,7 +468,7 @@ final class WinlinkViewModelTests: XCTestCase {
         XCTAssertEqual(vm.matchingItems.map(\.inquiryId), ["WY1"])
     }
 
-    // MARK: - Favourites
+    // MARK: - Favorites
 
     func testCatalogFavouritesRoundTripAndToggleOff() async throws {
         let store = try makeStore()
@@ -510,7 +510,7 @@ final class WinlinkViewModelTests: XCTestCase {
 
     /// A starred product can vanish from a later index. That is worth
     /// knowing, so the star is kept rather than silently dropped — but
-    /// it must not conjure a phantom row into the favourites list.
+    /// it must not conjure a phantom row into the favorites list.
     func testFavouriteMissingFromTheIndexIsKeptButNotListed() async throws {
         let store = try makeStore()
         let client = FakeCMSClient()
@@ -542,7 +542,7 @@ final class WinlinkViewModelTests: XCTestCase {
         XCTAssertEqual(vm.favoriteItems.map(\.inquiryId), ["WY1"])
     }
 
-    /// Favourites narrow with the search; the selection basket must
+    /// Favorites narrow with the search; the selection basket must
     /// not, or typing would look like selections vanishing.
     func testSelectionIgnoresTheSearchWhileFavoritesFollowIt() async throws {
         let store = try makeStore()

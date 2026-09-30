@@ -13,7 +13,7 @@ rather than after twenty failed ones.
 
 A straight line drawn between two stations on a map is not a radio path.
 
-**Earth curvature.** Two 10-metre antennas 100 km apart cannot see each other
+**Earth curvature.** Two 10-meter antennas 100 km apart cannot see each other
 over flat ground; the planet is in the way. The bulge is applied with the
 standard **k = 4/3** effective-radius factor, which accounts for the
 atmosphere refracting VHF slightly downward. It is zero at the ends and
@@ -23,7 +23,7 @@ the middle matters most.
 The familiar radio horizon `4.12 × √h` km falls out of the same factor, and is
 asserted against the textbook value so the constant cannot drift.
 
-**The Fresnel zone.** A path that clears the ground by a metre is not a clear
+**The Fresnel zone.** A path that clears the ground by a meter is not a clear
 path. Radio needs an ellipsoidal volume around the line unobstructed, and
 intruding into it costs signal well before anything physically blocks the way.
 The threshold is **60% of the first Fresnel zone** — the long-standing
@@ -32,7 +32,7 @@ engineering rule, below which diffraction loss becomes significant.
 ### A finding worth stating plainly
 
 At 145 MHz the first Fresnel zone at the middle of a 20 km path is **over 100
-metres across**. Two 10-metre antennas over flat ground clear about **4%** of
+meters across**. Two 10-meter antennas over flat ground clear about **4%** of
 it.
 
 | Path | F1 at mid-path | Earth bulge | Clearance with 10 m antennas |
@@ -108,7 +108,7 @@ synthetic fixture — a reader written against a hand-made stripped TIFF passes
 its own tests and then skews live terrain.
 
 `ImageIO` is deliberately not used: 32-bit float samples are not pixels, and
-going through a `CGImage` would quantise elevations to whatever colour space
+going through a `CGImage` would quantize elevations to whatever color space
 it picked.
 
 ---
@@ -117,11 +117,11 @@ it picked.
 
 Points along the path are interpolated **spherically**, not linearly in
 latitude and longitude. Over a 100 km path the two differ by hundreds of
-metres, and a profile sampled along the wrong line is a profile of the wrong
+meters, and a profile sampled along the wrong line is a profile of the wrong
 ridge.
 
 Elevation lookups are **bilinear** between grid samples. At ~100 m spacing,
-nearest-neighbour puts visible steps in a profile and can miss a ridge crest by
+nearest-neighbor puts visible steps in a profile and can miss a ridge crest by
 half a sample. The interpolation is between real measurements, so it smooths
 without inventing terrain — and refuses to interpolate across a no-data gap.
 

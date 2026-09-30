@@ -166,7 +166,7 @@ final class RigReceiveAuditTests: XCTestCase {
         }
     }
 
-    /// The preamp is the exception, deliberately: it is a judgement about the
+    /// The preamp is the exception, deliberately: it is a judgment about the
     /// band, not a fault, and turning it on unasked is a decision that is not
     /// ours to make.
     func testASuggestionIsNotCorrectedAutomatically() {

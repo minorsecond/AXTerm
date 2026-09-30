@@ -10,7 +10,7 @@ import SwiftUI
 struct AddRadioSheet: View {
     @ObservedObject var flow: AddRadioFlow
     let client: PacketEngine
-    /// Called once, with the radio when finished and nil when cancelled.
+    /// Called once, with the radio when finished and nil when canceled.
     let onClose: (RadioID?) -> Void
 
     @StateObject private var viewModel: ConnectionTransportViewModel

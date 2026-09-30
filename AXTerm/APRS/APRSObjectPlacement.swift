@@ -60,7 +60,7 @@ nonisolated enum APRSObjectPlacement {
     /// Whether this station may offer to remove an object.
     ///
     /// APRS lets anyone kill anything — the protocol has no notion of
-    /// ownership and a kill from a stranger is honoured by every receiver.
+    /// ownership and a kill from a stranger is honored by every receiver.
     /// That is exactly why the button is not offered: an operator who can
     /// stand down another agency's road closure with one click will
     /// eventually do it by accident. Removing someone else's object is a

@@ -8,8 +8,8 @@ import Foundation
 /// misread elevation grid produces terrain that looks real and is not.
 ///
 /// `ImageIO` could open the file, but it would hand back an image: 32-bit
-/// float samples are not pixels, and going through a `CGImage` would quantise
-/// elevations to whatever colour space it picked. The bytes are what matter,
+/// float samples are not pixels, and going through a `CGImage` would quantize
+/// elevations to whatever color space it picked. The bytes are what matter,
 /// so the bytes are what this reads.
 nonisolated enum GeoTIFFReader {
 

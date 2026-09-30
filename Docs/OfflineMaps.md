@@ -79,7 +79,7 @@ browses**. `OfflineTileOverlay` writes every fetched tile back to the store,
 so a source that forbids bulk download still ends up usable offline for the
 area actually worked.
 
-Attribution is required by the licence and is drawn on every map that uses
+Attribution is required by the license and is drawn on every map that uses
 these tiles. Offline tiles are still someone's work.
 
 ---
@@ -237,7 +237,7 @@ accepted because most agency downloads have none and are lat/lon.
 - **Null shapes are skipped** — a legal record meaning "no geometry here".
 - **Polygon holes are kept.** Dropping them draws a solid county over a lake.
 - **The palette avoids green/yellow/orange**, which the station markers use
-  for link quality. A boundary sharing that colour invites reading it as a
+  for link quality. A boundary sharing that color invites reading it as a
   measurement.
 - **Overlays are device-local and not synced.** An overlay is a working file
   for one activation, often large; pushing a county shapefile through the

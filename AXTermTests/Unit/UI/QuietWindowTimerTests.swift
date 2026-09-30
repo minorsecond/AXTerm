@@ -13,7 +13,7 @@ import XCTest
 @MainActor
 final class QuietWindowTimerTests: XCTestCase {
 
-    /// A hand-cranked scheduler and clock, so the tests assert on behaviour
+    /// A hand-cranked scheduler and clock, so the tests assert on behavior
     /// rather than on how long a real queue happened to take.
     private final class Harness {
         var now = Date(timeIntervalSince1970: 1_000)
@@ -109,7 +109,7 @@ final class QuietWindowTimerTests: XCTestCase {
         XCTAssertEqual(harness.totalScheduled, 6, "one per window plus the first")
     }
 
-    /// The most recent action wins, matching the cancel-and-replace behaviour
+    /// The most recent action wins, matching the cancel-and-replace behavior
     /// this type replaced.
     func testLastPokeWins() {
         let harness = Harness()

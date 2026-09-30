@@ -21,7 +21,7 @@ final class APRSTelemetryTests: XCTestCase {
     }
 
     /// The digital byte is optional in practice and its absence must not throw
-    /// away five good analogue readings.
+    /// away five good analog readings.
     func testFrameWithoutTheDigitalByte() throws {
         let parsed = try XCTUnwrap(frame("T#012,010,020,030,040,050"))
         XCTAssertEqual(parsed.analogue, [10, 20, 30, 40, 50])

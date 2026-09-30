@@ -3,7 +3,7 @@
 //  AXTermTests
 //
 //  Regression tests for duplicate transmission bugs:
-//  - T1 grace-period retransmit not cancelled on T1 restart
+//  - T1 grace-period retransmit not canceled on T1 restart
 //  - T1 not restarted on partial ack (AX.25 §6.4.6)
 //  - onRetransmitFrame removal (merged into onSendFrame)
 //
@@ -56,10 +56,10 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
         XCTAssertNil(session.t1PendingRetransmitTask,
                      "startT1Timer must nil out t1PendingRetransmitTask")
 
-        // Give a moment for any uncancelled task to run
+        // Give a moment for any uncanceled task to run
         try await Task.sleep(nanoseconds: 50_000_000) // 50ms
         XCTAssertFalse(taskRan,
-                       "Pending retransmit task should have been cancelled by startT1Timer")
+                       "Pending retransmit task should have been canceled by startT1Timer")
     }
 
     // MARK: - Bug 1 (state machine): REJ during grace period doesn't duplicate

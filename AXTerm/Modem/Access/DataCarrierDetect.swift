@@ -23,7 +23,7 @@ import Foundation
 ///   busy 99.7% of the time.
 ///
 /// **What noise cannot fake** is the thing the demodulator was already
-/// computing and throwing away: the normalised difference between the two tone
+/// computing and throwing away: the normalized difference between the two tone
 /// powers. One tone present drives it to ±1; two equal powers, which is what
 /// noise is, leave it near zero. Averaged over a couple of dozen bits it
 /// separates cleanly — measured over 60 s of noise and frames down to 6 dB

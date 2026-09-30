@@ -39,7 +39,7 @@ final class MapStartRegionTests: XCTestCase {
     }
 
     /// Only when there is no saved view and no position of our own does the
-    /// old behaviour apply — it is a last resort, not the default.
+    /// old behavior apply — it is a last resort, not the default.
     func testFitEverythingIsTheLastResort() {
         let fit = MapStartRegion(latitude: 39, longitude: -103,
                                  latitudeDelta: 8, longitudeDelta: 9)
@@ -50,7 +50,7 @@ final class MapStartRegionTests: XCTestCase {
     }
 
     /// A stored region that would open the map off the globe, inside-out, or
-    /// zoomed past anything renderable must not be honoured — it would look
+    /// zoomed past anything renderable must not be honored — it would look
     /// exactly like the app failing to open.
     func testAnInsaneSavedRegionIsIgnored() {
         for bad in [MapStartRegion(latitude: 999, longitude: 0, latitudeDelta: 1, longitudeDelta: 1),

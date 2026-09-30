@@ -449,7 +449,7 @@ final class IFrameReorderingTests: XCTestCase {
         XCTAssertEqual(sm.sequenceState.vr, 2)
     }
 
-    // MARK: - RR Acknowledgement Tests
+    // MARK: - RR Acknowledgment Tests
 
     /// Test that RR is sent with correct N(R) after buffered frames are delivered
     func testRRSentWithCorrectNR() {

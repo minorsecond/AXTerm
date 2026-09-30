@@ -125,7 +125,7 @@ final class PingPolicyTests: XCTestCase {
             .probe("K0NTS-10"))
     }
 
-    /// K0EPI-6 is DRLNOD's transmitter wearing this station's licence — a
+    /// K0EPI-6 is DRLNOD's transmitter wearing this station's license — a
     /// node's borrowed dial-out leg. A ping to any SSID of our own base
     /// callsign teaches nothing about anyone's coverage (field capture
     /// 2026-08-29 05:05: XID sent to K0EPI-6).

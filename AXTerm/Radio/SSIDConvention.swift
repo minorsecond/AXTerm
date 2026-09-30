@@ -13,7 +13,7 @@ import Foundation
 /// somewhere else. A hardcoded table would be a guess presented as a fact, so
 /// the packet answer comes from the channel instead: AXTerm is already
 /// harvesting service declarations into `station_services`, and what the
-/// neighbours use an SSID for is the only honest local meaning available.
+/// neighbors use an SSID for is the only honest local meaning available.
 ///
 /// Evidence beats the table where there is any, because a convention the
 /// operator's own network does not follow is worse than no advice.

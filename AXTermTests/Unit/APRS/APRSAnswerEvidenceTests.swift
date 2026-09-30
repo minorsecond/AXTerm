@@ -136,7 +136,7 @@ final class APRSPingTrackerTests: XCTestCase {
     }
 
     /// Every query AXTerm can send is classified, so no ping can land in the
-    /// unrecognised-token fallback by accident.
+    /// unrecognized-token fallback by accident.
     func testEveryQueryWeCanSendIsClassified() async throws {
         for query in APRSDirectedQuery.allCases {
             let t = tracker()

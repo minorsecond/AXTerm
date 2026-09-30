@@ -130,7 +130,7 @@ struct BBSDirectoryPane: View {
                     .controlSize(.small)
                     .disabled(isLookingUp || knownCallsigns.isEmpty)
                     .help("Looks up everyone here and everyone who has called, and fills "
-                          + "empty names and locations from the licence record. Anything a "
+                          + "empty names and locations from the license record. Anything a "
                           + "caller told you is left alone.\n\nNeeds \"Look up callsigns "
                           + "online\" in Settings → Winlink.")
                     if isLookingUp {
@@ -223,7 +223,7 @@ struct BBSDirectoryPane: View {
         VStack(alignment: .leading, spacing: 3) {
             // A draft shadows the stored value only while this field is being
             // edited. Letting it shadow always meant a value fetched after the
-            // drafts were seeded — a licence lookup, a caller telling us their
+            // drafts were seeded — a license lookup, a caller telling us their
             // name — showed as "not on file" while the list row beside it
             // showed the truth.
             TextField(key.label,

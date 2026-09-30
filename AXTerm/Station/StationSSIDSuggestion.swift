@@ -5,7 +5,7 @@ import Foundation
 /// This is why setting up a second device is not simply "copy the settings
 /// across". A callsign has two halves and they belong to different things:
 ///
-/// - **The base is a licence.** `K0EPI` identifies a person and is the same
+/// - **The base is a license.** `K0EPI` identifies a person and is the same
 ///   on every radio they own. Making them retype it on each device is
 ///   pointless friction, so it syncs.
 /// - **The SSID identifies a station.** `-7` and `-1` are what let two of the

@@ -35,7 +35,7 @@ final class StationAltitudeTests: XCTestCase {
     }
 
     /// APRS transmits feet by definition, so metric is the conversion. Mixing
-    /// the two on one card is how a terrain judgement gets made against the
+    /// the two on one card is how a terrain judgment gets made against the
     /// wrong number.
     func testMetresForAnOperatorReadingKilometres() {
         XCTAssertEqual(AltitudeDisplay.string(feet: 12349, inFeet: false), "3,764 m")

@@ -15,7 +15,7 @@
 //  station can reach a destination, earned from traffic it observed. An
 //  alias is hearsay: a name a node published, usually about somebody
 //  else. Mixing them would put destinations in the routing table that
-//  nothing here has ever reached — so they are neighbours in the sidebar
+//  nothing here has ever reached — so they are neighbors in the sidebar
 //  and nothing more.
 //
 
@@ -36,7 +36,7 @@ struct NodeDirectoryView: View {
     /// whichever node listed it most recently — so clicking "KB5YZB-7 · 88"
     /// landed on a page headed "Via COSCO · 87", because COSCO had announced
     /// the same stations more recently. A route the operator asked for has to
-    /// be a filter in its own right, or the page cannot honour it.
+    /// be a filter in its own right, or the page cannot honor it.
     @Binding var routeFilter: String?
 
     /// Opens the station behind a row. Nil leaves the list read-only.
@@ -406,7 +406,7 @@ struct NodeDirectoryView: View {
         // Filtering to KB5YZB-7 left a "Via COSCO · 516" header sitting
         // twenty rows down a list that was, from top to bottom, one unbroken
         // run of KB5YZB-7's table — a heading for a section no longer on the
-        // page. The lazy stack had materialised COSCO's section while the
+        // page. The lazy stack had materialized COSCO's section while the
         // page was unfiltered and kept the header cell alive when the set of
         // sections shrank to one; nothing in the group list said so, which is
         // why the count on it (516) belonged to no section on screen

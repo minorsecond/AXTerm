@@ -2,7 +2,7 @@
 
 AXTerm is growing from one TNC to several: a Direwolf base today, an IC-705
 next, TNCs reached over the internet after that. This document is the
-contract for how that is modelled and what an operator with one radio must
+contract for how that is modeled and what an operator with one radio must
 never notice. It is written against the code as it stands; sections are
 added as each layer lands.
 
@@ -147,7 +147,7 @@ compile. One peer heard on two radios is two sessions.
 ## Station callsign and SSIDs
 
 The callsign under Settings › General (`AppSettingsStore.myCallsign`) is the
-licence call alone: K0EPI, never K0EPI-5. The SSID belongs to a radio. With
+license call alone: K0EPI, never K0EPI-5. The SSID belongs to a radio. With
 several radios an SSID on the station callsign could only be right for one of
 them, and with one radio it was a second place to set the same thing.
 
@@ -200,14 +200,14 @@ them, and with one radio it was a second place to set the same thing.
   us", digipeated echoes, the map's own-station set, a ROUTES table listing
   us. The bare base is in it only when a radio actually operates under it.
 - `myCallsign`, the base, is for identity: highlighting our own node in the
-  graph, mail and mention notifications, the licence region, Winlink
+  graph, mail and mention notifications, the license region, Winlink
   accounts and message addresses, and the "set your callsign" gate.
 
 ## Per-radio callsigns
 
 Each radio operates as an address: its own callsign+SSID if the operator gave
 it one (`RadioProfile.callsign`), else the station's base call. Two radios on
-one licence are two stations on the air — an HF and a VHF station, say —
+one license are two stations on the air — an HF and a VHF station, say —
 and a remote station may need to reach one in particular.
 
 - `AX25SessionManager.localCallsign` is the primary radio's address, and
@@ -289,12 +289,12 @@ figure that misroutes both (CLAUDE.md §8: evidence-based; `WinlinkSyncPolicy
   to:radio:)` defaults to the primary so callers that predate radios keep
   their meaning; `radios(from:to:)` lists the radios that have measured a
   link. `LinkStatRecord.radioID` rides through export and import.
-- `NetRomRouter` keys neighbours by `NeighborKey {radio, call}` and routes
+- `NetRomRouter` keys neighbors by `NeighborKey {radio, call}` and routes
   by (destination, next hop, radio). The same next hop on two radios is two
   ways in; `candidateRoutes` lists both and `bestRouteTo`'s hysteresis
   holds (next hop, radio). Hearing an origin on one radio refreshes only the
   routes learned through it on that radio. `radio(forNeighbor:)` names the
-  radio a neighbour is best heard on, and NET/ROM datagrams to it leave by
+  radio a neighbor is best heard on, and NET/ROM datagrams to it leave by
   that radio.
 - **Deterministic tie-breaks** (CLAUDE.md §9) gained the radio as their last
   term: `RadioID.deterministicOrder` puts the primary radio first, then
@@ -391,14 +391,14 @@ gain.
 
 `packets.kissHost`/`kissPort` stay as they were, but a serial or Bluetooth
 frame now stores an empty host and port 0, which `KISSEndpoint`'s failable
-initialiser reads back as "no TCP endpoint". Until this migration such a
+initializer reads back as "no TCP endpoint". Until this migration such a
 frame was stamped with the settings' TCP address — a lie kept only because
-the columns were NOT NULL and the record initialiser threw on anything
+the columns were NOT NULL and the record initializer threw on anything
 else. `PacketRecord.init(packet:)` no longer throws and
 `SQLitePacketStore.save` no longer requires an endpoint.
 
 Tables nothing reads by radio yet — link-quality history, the NET/ROM
-neighbour and route tables — are left alone until the phase that keys them
+neighbor and route tables — are left alone until the phase that keys them
 by radio, so schema and code land together.
 
 ## Services across radios
@@ -620,7 +620,7 @@ one-radio string by test:
 - Packets: a Radio column after Time ("which radio decoded this frame, not
   which the sender used"); on iOS the row's footer says "· IC-705".
 - Stations rows: "12 pkts | 14:02 | IC-705, Base", most recent first.
-- Routes: the radio's name under the neighbour's callsign and the route's
+- Routes: the radio's name under the neighbor's callsign and the route's
   next hop, because evidence on another radio is a separate entry.
 - BBS callers: "on IC-705" beside the time.
 - Terminal tabs and history: " · on IC-705".
@@ -666,7 +666,7 @@ These are pinned literally in `RadioPresentationTests`,
 6. Two radios on one frequency: one transmission is one packet, and our
    own echo is nobody's evidence.
 
-7. Per-radio link metrics: link quality, neighbours and routes keyed by
+7. Per-radio link metrics: link quality, neighbors and routes keyed by
    radio, with the radio as the last deterministic tie-break; storage keyed
    to match.
 

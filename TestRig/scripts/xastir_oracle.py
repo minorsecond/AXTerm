@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ask the real Xastir a question and write down exactly what it says.
 
-AXTerm's APRS behaviour was matched to Xastir by *reading* `src/db.c`. That is
+AXTerm's APRS behavior was matched to Xastir by *reading* `src/db.c`. That is
 unfalsifiable. This drives the real thing over the rig's shared channel and
 captures its replies as byte-exact fixtures, so `XastirOracleTests` can assert
 against what Xastir actually transmits instead of against my reading of it.

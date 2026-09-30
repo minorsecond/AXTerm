@@ -25,7 +25,7 @@ DISABLE_OBJECT_TX:0
 POSIT_RATE:@POSIT_RATE@
 SMART_BEACONING:0
 
-# Answer queries and auto-reply to messages — the behaviour under test.
+# Answer queries and auto-reply to messages — the behavior under test.
 AUTO_MSG_REPLY:AXTerm rig oracle
 
 # No maps: nothing ever looks at the display, and map loading is slow and

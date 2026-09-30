@@ -228,7 +228,7 @@ Starred products live in their own table, `winlinkCatalogFavorite`
 `replaceCatalogCache` deletes every product row on each refresh, so a
 flag there would be erased by the next LIST reply.
 
-A consequence worth stating: a favourite can name a product the current
+A consequence worth stating: a favorite can name a product the current
 index no longer carries. `WinlinkCatalogViewModel.favorites` keeps the
 star regardless — the product disappearing is information, not
 corruption — while `favoriteItems` lists only what the index actually
@@ -236,7 +236,7 @@ has, and the empty state distinguishes "nothing starred yet" from "your
 starred products are not in this index". Re-starring is idempotent and
 does not reset `addedAt`.
 
-**Two scopes, two behaviours.** Favorites is a browsing scope and
+**Two scopes, two behaviors.** Favorites is a browsing scope and
 narrows with the search, like All Products. Selected is the request
 basket and deliberately ignores the search (`selectedItems`): narrowing
 it as the operator types would look exactly like selections being lost.
@@ -296,8 +296,8 @@ evidence of a cap; every session is short when there is nothing to send.
 ### Rendering received products
 
 `WinlinkMessageDetail` renders a received body natively when it
-recognises the format, and falls back to monospaced raw text otherwise.
-Two recognisers exist today, both following the same rule: **parse
+recognizes the format, and falls back to monospaced raw text otherwise.
+Two recognizers exist today, both following the same rule: **parse
 structurally, never semantically, and refuse rather than half-render.**
 
 - **Winlink forms** — `WinlinkReceivedForm` parses the
@@ -327,11 +327,11 @@ For the tabular forecast the structural rules are:
 - Weather abbreviations expand only when present in
   `NWSTabularForecast.weatherNames`; `SUNNY`, `PTCLDY`, `TSTRMS` and
   `VRYHOT` are confirmed against the 2026-08-24 SFTCO capture and the
-  rest follow the same six-character convention. Anything unrecognised
+  rest follow the same six-character convention. Anything unrecognized
   renders **verbatim** with a neutral icon.
 
 Cell tooltips give the value and its provenance — product ID, issuing
-office, and issuance time — so a stale forecast is recognisable as
+office, and issuance time — so a stale forecast is recognizable as
 stale. The raw product stays one disclosure away and is never
 discarded: it is what crossed the air, and if it and the table ever
 disagree, the table is wrong.
@@ -354,7 +354,7 @@ is what still works.
 
 The roles are far less different than they look. Everything after the
 handshake is already symmetric — the second half of an initiator session
-*is* answering behaviour — so only the opening differs. The answering
+*is* answering behavior — so only the opening differs. The answering
 side sends no `;PQ:` challenge and expects no `;PR:`: P2P carries no CMS
 account to authenticate against, and demanding a password nobody can
 verify would just break the exchange. A caller whose SID lacks `B2F` is
@@ -433,7 +433,7 @@ wants to go looking for them.
 `WinlinkReadiness` is a pure function of a snapshot — no store, no
 Keychain, no clock — so it is testable without a radio. Nothing it
 reports is new capability; the value is having it answered before
-departure. Two judgements worth stating:
+departure. Two judgments worth stating:
 
 - Missing gateway **and** P2P off is `blocked`: the station can compose
   mail and never move it. P2P alone is only a `warning` — that is a
@@ -507,7 +507,7 @@ what leaves the station is what Winlink expects.
 
 Station Tools → **Station Map** opens a real window — resizable, zoomable
 and full-screenable, which a sheet is not — plotting every cached RMS
-gateway around this station, coloured by *measured* link quality.
+gateway around this station, colored by *measured* link quality.
 
 There is a second map at the app level: the **Map** navigation area shows
 every station this receiver has *heard*, which is a different and larger
@@ -537,9 +537,9 @@ Three layers, and the split is what makes it reusable:
 - `GreatCircle` — distance and initial true bearing. One implementation
   for everything that asks "how far, which way".
 - `StationScope` — a view-free model: sites with range, bearing, a
-  semantic `Signal`, and `unitPoint(maxRange:)` for plotting. No colours,
+  semantic `Signal`, and `unitPoint(maxRange:)` for plotting. No colors,
   no fonts, no view types, so **anything** with positions can build one.
-  NET/ROM neighbours and heard stations get this rendering for free.
+  NET/ROM neighbors and heard stations get this rendering for free.
 - `StationScopeView` / `StationMapView` — the renderers, neither of which
   knows anything about Winlink.
 - `MapRegionFit` — framing arithmetic, kept out of MapKit and out of any
@@ -551,8 +551,8 @@ Rules worth keeping:
 
 - A station whose position is unknown is **dropped, never guessed at**.
   Plotting it in the wrong place is worse than not plotting it.
-- Colour is measured behaviour, not advertised capability. A gateway
-  never worked is `unknown` (faded, grey) — different from one that
+- Color is measured behavior, not advertised capability. A gateway
+  never worked is `unknown` (faded, gray) — different from one that
   answers badly, and it must not draw the same.
 - One dot per **callsign**, not per frequency: the same gateway on three
   frequencies is one place, and the frequencies belong in its label.
@@ -621,12 +621,12 @@ station".
 
 Other rules that cost a round trip or a wrong answer if missed:
 
-- Queries use the **base callsign**. A licence has no SSID: `W0ARP-10` is
+- Queries use the **base callsign**. A license has no SSID: `W0ARP-10` is
   the gateway, `W0ARP` is the licensee, and querying the former returns
   nothing — indistinguishable from "no such station".
 - Tactical aliases (`MAIL`, `BEACON`, `ID`, `NODE`) fail the plausibility
   check and never reach the network. They are destinations, not licensees.
-- Answers are **cached permanently and never expired on age**. A licence
+- Answers are **cached permanently and never expired on age**. A license
   address changes rarely, and a stale answer beats no answer when the
   network that would refresh it is gone. Age is recorded so the UI can
   say how old it is; nothing deletes on age.
@@ -635,7 +635,7 @@ Other rules that cost a round trip or a wrong answer if missed:
 
 **Opt-in** (`WinlinkSettings.callsignLookupEnabled`, off by default): a
 lookup tells a third party which stations this operator is hearing.
-Public licence data, a small disclosure — but a disclosure, and not one
+Public license data, a small disclosure — but a disclosure, and not one
 to make silently.
 
 ### Stations heard (the Map area)
@@ -667,7 +667,7 @@ gateways never cost a round trip.
 ### Node aliases, and what a position is *of*
 
 Via paths are full of tactical names — `DRLNOD`, `HORSE`, `EATON`,
-`YZBBPQ`. None is a licence, so no callsign directory will ever hold
+`YZBBPQ`. None is a license, so no callsign directory will ever hold
 one. But stations **announce** their aliases in ID beacons this receiver
 already stores:
 
@@ -679,22 +679,22 @@ NODE: YZBBPQ:KB5YZB-7, Aurora, CO      → YZBBPQ is KB5YZB-7
 
 `NodeAliasParser` reads both forms; `NodeAliasStore` accumulates and
 persists them, fed from ID/beacon frames. `KB5YZB-1/B` is deliberately
-*not* an alias — it is an SSID of the same licence, and recording it
+*not* an alias — it is an SSID of the same license, and recording it
 would make a callsign resolve to itself.
 
 **But an alias is not co-located with its operator.** A NET/ROM node
-lives on a hilltop or a repeater site; the licence address is a mailing
+lives on a hilltop or a repeater site; the license address is a mailing
 address. So `PositionConfidence` distinguishes three things that a
 boolean used to conflate:
 
 | Confidence | Means | Drawn |
 |---|---|---|
 | `exact` | A coordinate consistent with everything else known | Solid |
-| `gridSquare` | Centre of a square the station itself registered | Solid |
+| `gridSquare` | Center of a square the station itself registered | Solid |
 | `inferredFromOperator` | Position of a *different entity* — a node placed at its operator's address | **Hollow, dashed** |
 
 **Precision is not accuracy**, and treating the precise value as
-automatically better is how a map lies confidently. A licence address is
+automatically better is how a map lies confidently. A license address is
 exact to seven decimals and describes the licensee; an RMS grid is coarse
 and describes the gateway that registered it. So an exact coordinate is
 used as a *refinement only when it agrees* with the coarser claim —
@@ -703,7 +703,7 @@ they disagree, the source about the right entity wins and the tooltip
 says they disagree rather than silently resolving it.
 
 For W0ARP that check passes: hamdb says `DM79ql`, the CMS says `DM79QL`,
-and the licence address falls inside it — two independent sources
+and the license address falls inside it — two independent sources
 agreeing, so the refinement is legitimate.
 
 Aliases whose operator is not yet located are listed **unplaced rather
@@ -861,10 +861,10 @@ result rather than assuming it:
 
 | Distance from the nearest sample | Placement | Shown as |
 | --- | --- | --- |
-| ≤ 2 km | `.here` | Full colour; "describes this path" |
-| ≤ 15 km | `.nearby(km)` | Full colour, distance named, ridge caveat |
-| > 15 km | `.elsewhere(grid, km)` | Grey, explicitly "not a prediction" |
-| no position on the samples | `.unknown` | Grey; says it cannot tell |
+| ≤ 2 km | `.here` | Full color; "describes this path" |
+| ≤ 15 km | `.nearby(km)` | Full color, distance named, ridge caveat |
+| > 15 km | `.elsewhere(grid, km)` | Gray, explicitly "not a prediction" |
+| no position on the samples | `.unknown` | Gray; says it cannot tell |
 
 Two rules keep this honest. The **nearest** sample decides placement — if
 you have ever worked the gateway from here, that is the relevant evidence

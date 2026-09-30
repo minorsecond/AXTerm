@@ -9,7 +9,7 @@ nonisolated struct SolarConditions: Equatable, Sendable, Codable {
 
     /// Midnight UTC of the day these describe.
     var day: Date
-    /// 10.7 cm solar flux. The usual proxy for ionisation.
+    /// 10.7 cm solar flux. The usual proxy for ionization.
     var solarFlux: Double?
     /// Planetary K, the day's maximum. Kp is the number operators quote.
     var kIndex: Double?

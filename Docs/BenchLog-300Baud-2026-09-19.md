@@ -16,7 +16,7 @@ the chain was eliminated by measurement.
 | AXTerm modulator -> IC-705 -> FT-710 -> Warbler | ~11 units over noise, level 26 | 1 | 1 (100%) |
 | Direwolf audio -> Warbler's `/api/tx` -> FT-710 -> IC-705 -> AXTerm | — | 3 | 3 (100%) |
 
-The third row is the one that localises it. Direwolf's audio was streamed into
+The third row is the one that localizes it. Direwolf's audio was streamed into
 Warbler's push-to-talk WebSocket, so it went out over the same SCU-LAN10
 session, the same radio, the same air path and into the same receiver — and
 decoded completely. The only thing swapped out was who generated the samples.
@@ -119,7 +119,7 @@ Open:
   recording. This is what disproved the filter-length theory.
 - `TestRig/scripts/warbler_tx_bypass.py` — streams Direwolf-generated audio
   through Warbler's `/api/tx`, putting somebody else's modulator on Warbler's
-  radio link. This is what localised the fault.
+  radio link. This is what localized the fault.
 - `TestRig/scripts/direwolf_tx_bench.sh` — swaps the Direwolf service to another
   baud rate on its own sound card and restores it afterwards. Unused in the end,
   because that DigiRig is on the 2 m node radio rather than the FT-710.

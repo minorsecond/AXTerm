@@ -1,8 +1,8 @@
 import XCTest
 @testable import AXTerm
 
-/// The Neighbors/Routes page honours the radio filter, like the map, the
-/// packets table and the analytics dashboard: a hidden radio's neighbours are
+/// The Neighbors/Routes page honors the radio filter, like the map, the
+/// packets table and the analytics dashboard: a hidden radio's neighbors are
 /// not shown, while a station heard on a visible radio stays.
 @MainActor
 final class NetRomRoutesHiddenRadioTests: XCTestCase {
@@ -52,6 +52,6 @@ final class NetRomRoutesHiddenRadioTests: XCTestCase {
         viewModel.refresh()
         let shown = Set(viewModel.neighbors.map(\.callsign))
         XCTAssertTrue(shown.contains("W0ABC"))
-        XCTAssertFalse(shown.contains("W0UHF"), "hidden radio's neighbour is excluded")
+        XCTAssertFalse(shown.contains("W0UHF"), "hidden radio's neighbor is excluded")
     }
 }

@@ -10,7 +10,7 @@ import Combine
 /// Everything else lives behind the tooltip.
 ///
 /// Hidden entirely when sync is off. An indicator for a feature nobody turned
-/// on is clutter, and a greyed-out cloud invites the question "is it broken?"
+/// on is clutter, and a grayed-out cloud invites the question "is it broken?"
 /// about something that is simply not enabled.
 struct SyncStatusIndicator: View {
 

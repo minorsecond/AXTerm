@@ -307,7 +307,7 @@ struct AnalyticsDashboardView: View {
                     .controlSize(.small)
                     .help("Scope analytics to one frequency. Radios on the same "
                           + "frequency roll up into one channel; different "
-                          + "frequencies stay separate, so their neighbours, "
+                          + "frequencies stay separate, so their neighbors, "
                           + "routes and link quality are never averaged together.")
                 }
 

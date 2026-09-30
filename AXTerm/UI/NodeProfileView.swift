@@ -64,7 +64,7 @@ struct NodeProfileView: View {
     /// False when no elevation source covers this path at all.
     var terrainSourceHasCoverage: Bool = true
     /// Set when the station is too far away for a terrain profile to mean
-    /// anything, in kilometres.
+    /// anything, in kilometers.
     var terrainBeyondRadioRange: Double?
     /// Where this station's own position came from.
     var terrainOriginPosition: StationPosition?
@@ -204,7 +204,7 @@ struct NodeProfileView: View {
                             .foregroundStyle(.secondary)
                     }
                     // The prefix speaks when the directory has not: for a
-                    // callsign with no licence record (most non-US calls —
+                    // callsign with no license record (most non-US calls —
                     // the directory covers few), where it is licensed is
                     // still printed in the callsign itself.
                     if profile.country == nil, !profile.isServiceEndpoint,
@@ -234,9 +234,9 @@ struct NodeProfileView: View {
     }
 
     /// The avatar: a quiet tinted disc carrying a glyph for what the station
-    /// *is*. One accent colour, matching the alias chip and role icons — a
+    /// *is*. One accent color, matching the alias chip and role icons — a
     /// first cut hashed the callsign into a hue, and a page of saturated
-    /// party-balloon discs read as a toy, not a terminal. Grey for a
+    /// party-balloon discs read as a toy, not a terminal. Gray for a
     /// destination address (not anyone) and for a station nothing is known
     /// about (no false vitality).
     private var monogram: some View {
@@ -379,7 +379,7 @@ struct NodeProfileView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("That is why there is no licence record, no position and no link quality here: there is nothing to know, rather than nothing known yet.")
+            Text("That is why there is no license record, no position and no link quality here: there is nothing to know, rather than nothing known yet.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -421,7 +421,7 @@ struct NodeProfileView: View {
 
     private var bareExplanation: String {
         if isLookingUp {
-            return "Asking the callsign directory about \(profile.baseCallsign). Nothing has been heard from this station directly, so a licence record is all there is to find."
+            return "Asking the callsign directory about \(profile.baseCallsign). Nothing has been heard from this station directly, so a license record is all there is to find."
         }
         if lookupEnabled {
             return "This callsign has been seen on the air but nothing else is known. The directory had no record for \(profile.baseCallsign) \u{2014} unlicensed, unlisted, or a tactical alias \u{2014} and nothing has been heard from the station itself, only addressed to it."
@@ -522,7 +522,7 @@ struct NodeProfileView: View {
         // most of why the tiles seemed to move every time the page opened.
         //
         // No path from a station to itself, though. Left in, the card measured
-        // the ground between our grid square's centre and our own licence
+        // the ground between our grid square's center and our own license
         // address and reported "K0EPI-7 to K0EPI-7, 2.3 km, marginal".
         if profile.placement != nil, !isOurOwnStation {
             items.append((260, AnyView(terrainSection(terrain ?? .pending))))
@@ -579,7 +579,7 @@ struct NodeProfileView: View {
         //
         // Packing the tallest card first balances columns slightly better and
         // makes the page rearrange itself under the operator. Cards arrive
-        // late: terrain is computed off the main thread, a licence lookup
+        // late: terrain is computed off the main thread, a license lookup
         // lands seconds after the page opens, and an activity chart grows a
         // row. Each of those changes one estimate, largest-first re-sorts
         // every card against it, and a page reopened a minute later deals
@@ -644,8 +644,8 @@ struct NodeProfileView: View {
     ///
     /// The distance is a great-circle from *our* position to the station, so
     /// it inherits our position's error whole. From a device fix that is
-    /// twenty metres and not worth a word. From a grid centre it is over
-    /// four kilometres, which on a short path is most of the answer — and
+    /// twenty meters and not worth a word. From a grid center it is over
+    /// four kilometers, which on a short path is most of the answer — and
     /// the tile was quoting one decimal place either way.
     ///
     /// A line rather than a suffix in the tile: at about 110 points the tile
@@ -735,7 +735,7 @@ struct NodeProfileView: View {
         return tiles
     }
 
-    /// The best measured direction, falling back to NET/ROM's neighbour
+    /// The best measured direction, falling back to NET/ROM's neighbor
     /// figure. "Best" rather than an average because the tile answers "can I
     /// work this station", and the better direction is the ceiling on that.
     private var headlineQuality: Int? {
@@ -804,7 +804,7 @@ struct NodeProfileView: View {
         return VStack(alignment: .leading, spacing: 3) {
             // The peak, because the bars are drawn against it.
             //
-            // Normalising to the tallest bar means a station sending one
+            // Normalizing to the tallest bar means a station sending one
             // frame an hour and one sending fifty draw exactly the same
             // chart: a row of full-height bars. Reported as "are those
             // correct? they're all the same value" for KF0HEG, which turned
@@ -860,7 +860,7 @@ struct NodeProfileView: View {
     /// an operator to stop trusting all of them.
     ///
     /// Below everything AXTerm itself knows, deliberately. What this station
-    /// has been heard doing is more use mid-session than a licence address,
+    /// has been heard doing is more use mid-session than a license address,
     /// and the page should answer that first.
     @ViewBuilder
     private var qrzSection: some View {
@@ -967,9 +967,9 @@ struct NodeProfileView: View {
         case .exact:
             return "An exact coordinate, consistent with everything else known about this station."
         case .gridSquare:
-            return "The centre of a registered grid square — about 8 km across, so the pin describes the square rather than the antenna."
+            return "The center of a registered grid square — about 8 km across, so the pin describes the square rather than the antenna."
         case .inferredFromOperator:
-            return "Inferred from the operator's licence address, not from the node itself. Nodes usually sit on a hilltop or repeater site rather than at the operator's house, so treat this as a lead."
+            return "Inferred from the operator's license address, not from the node itself. Nodes usually sit on a hilltop or repeater site rather than at the operator's house, so treat this as a lead."
         }
     }
 
@@ -1095,7 +1095,7 @@ struct NodeProfileView: View {
             : "How well this station receives \(link.from).")
         if let df = link.df, let dr = link.dr {
             lines.append(String(
-                format: "df=%.2f is the share of frames that arrive; dr=%.2f is the share whose acknowledgement comes back.", df, dr))
+                format: "df=%.2f is the share of frames that arrive; dr=%.2f is the share whose acknowledgment comes back.", df, dr))
             if let etx = link.etx {
                 lines.append(String(
                     format: "ETX=%.2f follows from them: 1 / (df \u{00D7} dr), so about %.1f transmissions per delivered frame.", etx, etx))
@@ -1104,13 +1104,13 @@ struct NodeProfileView: View {
             lines.append("Delivery probabilities are not known yet — they need frames in both directions to estimate.")
         }
         if link.duplicates > 0 {
-            lines.append("\(link.duplicates) duplicate frame(s) seen, which usually means acknowledgements are being lost rather than data.")
+            lines.append("\(link.duplicates) duplicate frame(s) seen, which usually means acknowledgments are being lost rather than data.")
         }
         lines.append("Quality \(link.quality)/255 is NET/ROM's own scale, and it is what routing decisions use.")
         return lines.joined(separator: " ")
     }
 
-    /// The rest of the licence.
+    /// The rest of the license.
     /// Where this station sits in the shape of the network.
     ///
     /// Deliberately worded as consequences rather than graph theory. The
@@ -1190,7 +1190,7 @@ struct NodeProfileView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                Text("Same licence, different service. An SSID is how one operator runs a node, a mailbox and a personal station on one callsign.")
+                Text("Same license, different service. An SSID is how one operator runs a node, a mailbox and a personal station on one callsign.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1202,9 +1202,9 @@ struct NodeProfileView: View {
         section("NET/ROM", systemImage: "point.3.connected.trianglepath.dotted") {
             VStack(alignment: .leading, spacing: 6) {
                 if let quality = netrom.neighbourQuality {
-                    row("Neighbour quality", "\(quality) / 255")
+                    row("Neighbor quality", "\(quality) / 255")
                     // The same read-it-at-a-glance bar the link section uses,
-                    // on the same 0–255 scale and colour thresholds.
+                    // on the same 0–255 scale and color thresholds.
                     ProgressView(value: Double(quality), total: 255)
                         .tint(qualityTint(quality))
                     // The table is built by watching traffic, so being in it
@@ -1246,7 +1246,7 @@ struct NodeProfileView: View {
     }
 
     private var licenceSection: some View {
-        section("Licence", systemImage: "person.text.rectangle") {
+        section("License", systemImage: "person.text.rectangle") {
             VStack(alignment: .leading, spacing: 6) {
                 if let name = profile.name { row("Name", name) }
                 if let licenseClass = profile.licenseClass { row("Class", licenseClass) }
@@ -1321,7 +1321,7 @@ struct NodeProfileView: View {
                     .buttonStyle(.bordered)
                 }
             }
-            // A footer, not a third stacked button. Centred under two
+            // A footer, not a third stacked button. Centered under two
             // full-width buttons the link read as a caption belonging to
             // them; on its own row, leading, it reads as the way onward it
             // is. Forgetting the station sits opposite because it is the
@@ -1342,7 +1342,7 @@ struct NodeProfileView: View {
                             .foregroundStyle(.tint)
                         }
                         .buttonStyle(.plain)
-                        .help("Measurements, history and neighbours, with room to read them.")
+                        .help("Measurements, history and neighbors, with room to read them.")
                     }
                     Spacer(minLength: 8)
                     if onForgetStation != nil {
@@ -1381,7 +1381,7 @@ struct NodeProfileView: View {
                                         @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             // Deliberately quiet: a tinted-square-per-section variant was
-            // tried and a page of them read as a carnival. Colour in this
+            // tried and a page of them read as a carnival. Color in this
             // view is reserved for meaning — freshness, quality, warnings.
             Label(title, systemImage: systemImage)
                 .font(.subheadline.weight(.semibold))

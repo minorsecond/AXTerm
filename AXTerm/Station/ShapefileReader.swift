@@ -255,7 +255,7 @@ nonisolated enum ShapefileReader {
     /// numbers are just numbers. If the `.prj` says the file is in State
     /// Plane feet, reading it as latitude/longitude puts every feature in the
     /// Gulf of Guinea, and it does so *without any error*. So the projection
-    /// is checked, and an unrecognised one is refused.
+    /// is checked, and an unrecognized one is refused.
     ///
     /// - Parameter wkt: contents of the `.prj` file, or nil when there is none.
     static func validateProjection(_ wkt: String?) throws {
@@ -269,7 +269,7 @@ nonisolated enum ShapefileReader {
         let upper = wkt.uppercased()
         // A geographic (unprojected) coordinate system on the WGS 84 or NAD 83
         // datum reads directly as latitude/longitude. NAD 83 differs from
-        // WGS 84 by about a metre, which does not matter for a boundary drawn
+        // WGS 84 by about a meter, which does not matter for a boundary drawn
         // on a map of a county.
         let isGeographic = upper.hasPrefix("GEOGCS")
         let isKnownDatum = upper.contains("WGS_1984") || upper.contains("WGS 84")
@@ -283,7 +283,7 @@ nonisolated enum ShapefileReader {
     static func projectionName(_ wkt: String) -> String {
         guard let open = wkt.firstIndex(of: "\""),
               let close = wkt[wkt.index(after: open)...].firstIndex(of: "\"")
-        else { return "an unrecognised coordinate system" }
+        else { return "an unrecognized coordinate system" }
         return String(wkt[wkt.index(after: open)..<close])
     }
 }

@@ -59,7 +59,7 @@ struct PacketTableView: View {
         appKitTable
         #else
         // AppKit's NSTableView is what keeps a live packet stream smooth on
-        // macOS; `List` gives the same virtualisation on iOS, so the touch
+        // macOS; `List` gives the same virtualization on iOS, so the touch
         // build gets a view written for a narrow screen rather than a wrapped
         // table with six columns nobody can read.
         PacketTableTouchView(

@@ -76,7 +76,7 @@ struct RMSStationsView: View {
     }
 
     /// Measured link quality from our own sessions, as distinct from the
-    /// CMS's advertised distance and baud. Greyed out when the samples
+    /// CMS's advertised distance and baud. Grayed out when the samples
     /// were taken somewhere else — see `placementExplanation`.
     @ViewBuilder
     private func linkCell(for station: WinlinkRMSStationRecord) -> some View {

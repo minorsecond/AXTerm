@@ -8,7 +8,7 @@
 //  It hosts the REAL `ConsoleView` — not a copy — so whatever fixes the hang
 //  here fixes it in the product, and recreates the conditions the hang needed:
 //
-//    1. An AppKit `NSPopover` with `.applicationDefined` behaviour hosting a
+//    1. An AppKit `NSPopover` with `.applicationDefined` behavior hosting a
 //       SwiftUI form, presented over the console — the routing/protocol popover.
 //       Two SwiftUI hosting views then share one run loop's update pass.
 //    2. Content sized near the viewport edge, so the bottom sentinel sits at its

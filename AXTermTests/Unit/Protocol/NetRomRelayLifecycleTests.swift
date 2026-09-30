@@ -50,7 +50,7 @@ final class NetRomRelayLifecycleTests: XCTestCase {
     // MARK: - Reading the node's answer
 
     /// The exact bytes DRLNOD sent back after `C KB5YZB-7` (2026-08-26).
-    /// Recognising this is what completes the handshake; without it the relay
+    /// Recognizing this is what completes the handshake; without it the relay
     /// waits forever, one step from done.
     func testBPQLinkMadeIsSuccess() {
         XCTAssertTrue(NetRomRelayResponseParser.isSuccess("###LINK MADE\r"))
@@ -72,7 +72,7 @@ final class NetRomRelayLifecycleTests: XCTestCase {
         XCTAssertFalse(NetRomRelayResponseParser.isSuccess("Disconnected from node"))
     }
 
-    /// BPQ's refusals are recognised as refusals, not left to time out.
+    /// BPQ's refusals are recognized as refusals, not left to time out.
     func testNodeRefusalsAreFailures() {
         for reply in ["Failure with KB5YZB-7", "No route to KB5YZB-7",
                       "Downlink denied", "Invalid command", "Busy from KB5YZB-7"] {
@@ -82,7 +82,7 @@ final class NetRomRelayLifecycleTests: XCTestCase {
     }
 
     /// A KA-Node whose own connect attempt exhausted retries says so
-    /// plainly (field capture 2026-08-28 18:40). Unrecognised, the relay
+    /// plainly (field capture 2026-08-28 18:40). Unrecognized, the relay
     /// sat through the answer for another 40 s of watchdog grace.
     func testRetriedOutIsAFailure() {
         let reply = "###RETRIED OUT AT NODE DRLNOD"
@@ -154,7 +154,7 @@ final class NetRomRelayLifecycleTests: XCTestCase {
 
     /// The composer read "Sending…" forever while KB5YZB-7's reply was already
     /// on screen (2026-08-26): the progress was keyed to the destination, and
-    /// every acknowledgement came from DRLNOD.
+    /// every acknowledgment came from DRLNOD.
     func testAckPeerIsTheCarrierNotTheDestination() {
         let prog = OutboundMessageProgress(
             id: UUID(), text: "nodes", totalBytes: 6, bytesSent: 0, bytesAcked: 0,
@@ -207,7 +207,7 @@ final class NetRomRelayLifecycleTests: XCTestCase {
             "KB5YZB-7")
     }
 
-    /// No relay, no rewriting: an ordinary link is named by what was dialled.
+    /// No relay, no rewriting: an ordinary link is named by what was dialed.
     func testDirectLinkKeepsTheTypedDestination() {
         XCTAssertEqual(
             NetRomRelayLifecycle.displayedDestination(
@@ -330,7 +330,7 @@ final class NetRomRelayLifecycleTests: XCTestCase {
             "the node greets once per connection; waiting is waiting forever")
     }
 
-    /// The ordinary path: the link is about to be dialled, so the banner is
+    /// The ordinary path: the link is about to be dialed, so the banner is
     /// still to come and `.connected` will start the watchdog.
     func testArmingBeforeTheLinkExistsWaitsForTheBanner() {
         XCTAssertEqual(
@@ -347,7 +347,7 @@ final class NetRomRelayLifecycleTests: XCTestCase {
     }
 
     /// A banner seen on some earlier link says nothing about one not yet
-    /// dialled; the new connection will greet on its own.
+    /// dialed; the new connection will greet on its own.
     func testASpentBannerOnNoLinkStillWaits() {
         XCTAssertEqual(
             NetRomRelayLifecycle.armingAction(linkAlreadyUp: false, bannerAlreadySeen: true),

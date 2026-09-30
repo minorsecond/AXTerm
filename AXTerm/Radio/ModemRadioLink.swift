@@ -68,7 +68,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
 
     #if DEBUG
     /// Test seam: read or seed the reconnect backoff counter, so the "clear
-    /// only when the connection holds" behaviour can be exercised directly.
+    /// only when the connection holds" behavior can be exercised directly.
     var testReconnectAttempt: Int {
         get { reconnectAttempt }
         set { reconnectAttempt = newValue }
@@ -519,7 +519,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
 
     /// Advance the reconnect counter, clamped at the cap so the backoff stops
     /// growing there but the link never stops trying. This is the change from
-    /// the old behaviour, which gave up once the count passed the cap and left
+    /// the old behavior, which gave up once the count passed the cap and left
     /// the operator with a dead radio that would have recovered on its own.
     static func nextReconnectAttempt(_ current: Int) -> Int {
         min(current + 1, maxReconnectAttempts)
@@ -734,7 +734,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// RF gain, squelch, the noise processing and the FM filter. The mode and
     /// the preamp are named by the audit and deliberately left alone — the
     /// operator may be in USB on purpose, and whether a preamp helps is a
-    /// judgement about the band.
+    /// judgment about the band.
     func applyReceiveCorrections(_ findings: [RigReceiveAudit.Finding]) async -> [String] {
         guard let rig, rig.isOpen else { return [] }
         let mode = rigStatus.mode ?? .fm

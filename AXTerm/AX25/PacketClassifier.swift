@@ -29,7 +29,7 @@ nonisolated enum PacketClassification: String, Codable, Hashable, Sendable {
     case retryOrDuplicate
 
     /// UI frame used for beacons, position reports, etc.
-    /// Weak evidence for routing (one-way, no acknowledgement).
+    /// Weak evidence for routing (one-way, no acknowledgment).
     case uiBeacon
 
     /// NET/ROM routing broadcast (PID 0xCF to NODES).
@@ -64,7 +64,7 @@ nonisolated enum PacketClassification: String, Codable, Hashable, Sendable {
         case .dataProgress:
             return "DATA — A data frame carrying information between stations."
         case .ackOnly:
-            return "ACK — An acknowledgement frame confirming reception. Does not carry new data."
+            return "ACK — An acknowledgment frame confirming reception. Does not carry new data."
         case .retryOrDuplicate:
             return "RETRY — A retransmission or duplicate frame, indicating possible link issues."
         case .uiBeacon:
@@ -204,7 +204,7 @@ nonisolated enum PacketClassifier {
 
         switch sType {
         case .RR, .RNR:
-            // Receive Ready / Receive Not Ready - acknowledgement only
+            // Receive Ready / Receive Not Ready - acknowledgment only
             return .ackOnly
 
         case .REJ, .SREJ:

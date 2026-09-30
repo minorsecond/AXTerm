@@ -239,7 +239,7 @@ struct SetupTile: View {
 }
 
 /// A small, fixed map of where the station is, with its accuracy drawn as
-/// a circle so a grid-square centre looks as vague as it is.
+/// a circle so a grid-square center looks as vague as it is.
 struct SetupPositionMap: View {
     let position: StationPosition
     let callsign: String

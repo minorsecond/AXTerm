@@ -30,9 +30,9 @@ nonisolated enum MapBasemap: String, CaseIterable, Identifiable, Sendable {
 
     /// Terrain is what matters for RF, so elevation is kept flat but
     /// points of interest are dropped — a coffee shop is noise here.
-    /// Emphasis is muted: Apple's palette pulled back to greys is the
+    /// Emphasis is muted: Apple's palette pulled back to grays is the
     /// difference between a street map with dots on it and a purpose-built
-    /// RF map whose colour all belongs to the data.
+    /// RF map whose color all belongs to the data.
     var mapStyle: MapStyle {
         switch self {
         case .standard: .standard(elevation: .flat, emphasis: .muted,
@@ -97,14 +97,14 @@ nonisolated enum MapBasemap: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// What the colours on a station map mean.
+/// What the colors on a station map mean.
 ///
-/// Every map carries one. A coloured dot with no key is decoration; the
-/// colour here encodes measured behaviour, and the reader has no way to
+/// Every map carries one. A colored dot with no key is decoration; the
+/// color here encodes measured behavior, and the reader has no way to
 /// know that without being told.
 struct MapLegend: View {
 
-    /// Legends differ by what the colour actually measures.
+    /// Legends differ by what the color actually measures.
     enum Kind: Equatable {
         /// Winlink gateways: how often the gateway answered *us*.
         case linkQuality
@@ -136,7 +136,7 @@ struct MapLegend: View {
         var footnote: String {
             switch self {
             case .linkQuality:
-                "Colour is measured from this station's own session log, not from what the directory advertises."
+                "Color is measured from this station's own session log, not from what the directory advertises."
             case .recency:
                 "Recency is the only thing the receiver actually measured about a heard station."
             }
@@ -145,16 +145,16 @@ struct MapLegend: View {
 
     let kind: Kind
 
-    /// APRS mode: symbols are on the map, so colour keys the station *type*
+    /// APRS mode: symbols are on the map, so color keys the station *type*
     /// (see the marker renderer) and recency has moved to opacity. The
     /// legend follows — type swatches instead of recency swatches, and a
     /// fade row for recency.
     private var aprsMode: Bool { showsPositionSource && kind == .recency }
-    /// What the dot colour means right now, for the header and the a11y label.
+    /// What the dot color means right now, for the header and the a11y label.
     private var keyedDimension: String { aprsMode ? "Station type" : kind.title }
     private var effectiveFootnote: String {
         aprsMode
-        ? "In APRS mode colour is the station type; recency is opacity \u{2014} fresh is solid, older fades, nothing is hidden."
+        ? "In APRS mode color is the station type; recency is opacity \u{2014} fresh is solid, older fades, nothing is hidden."
         : kind.footnote
     }
     /// Drawn over imagery needs a stronger backing than over a light map.
@@ -172,7 +172,7 @@ struct MapLegend: View {
     /// what each ring means without the operator having to find the chip.
     var showsCoverage = false
     /// Which coverage rings are on the map. With several drawn the legend has
-    /// to name each one's evidence, family and colour, or the circles are
+    /// to name each one's evidence, family and color, or the circles are
     /// unexplained. Rings rather than bare evidence, because two receive
     /// rings share an evidence kind and only their family tells them apart.
     var coverageRings: [CoverageEstimate.Ring] = []
@@ -189,7 +189,7 @@ struct MapLegend: View {
         }
     }
     /// True when the node directory layer is drawn, so the diamond shape
-    /// is explained where the colours are.
+    /// is explained where the colors are.
     var showsNodes = false
     /// True when at least one station is placed at its own transmitted APRS
     /// fix, so the key explains that a symbol marks a beaconed position and a
@@ -200,18 +200,18 @@ struct MapLegend: View {
     /// The disclosure used to hide only the footnote — every swatch stayed
     /// put — so the chevron promised more than it delivered and read as
     /// broken. The legend is a permanent box over the map, and an operator
-    /// who knows the colours has a real reason to want it gone; that is what
+    /// who knows the colors has a real reason to want it gone; that is what
     /// a disclosure is for.
     ///
-    /// Stored, so it stays how it was left. Open by default: a coloured dot
+    /// Stored, so it stays how it was left. Open by default: a colored dot
     /// with no key is decoration.
     @AppStorage("map.legendExpanded") private var isExpanded = true
 
-    /// The station-type key shown in APRS mode. Colour keys the class exactly
+    /// The station-type key shown in APRS mode. Color keys the class exactly
     /// as the map paints it (digi blue, weather teal, vehicle orange, home
     /// gray); the white SF Symbol inside reads as the class at legend size —
     /// not the exact APRS glyph, the same meaning. Recency is no longer a
-    /// colour here: it is opacity, keyed by the fade row below.
+    /// color here: it is opacity, keyed by the fade row below.
     /// The same four hues the map paints, pulled toward the paper. See
     /// `OfflineBasemapMapView.Coordinator.typeColour`.
     static let digipeaterTint = Color(red: 0.36, green: 0.36, blue: 0.62)
@@ -245,10 +245,10 @@ struct MapLegend: View {
                     // "Last heard" beside a chevron reads as a filter or a
                     // sort order — something that picks stations by when they
                     // were last heard — rather than as the key to the dot
-                    // colours. Naming the dimension still earns its place:
+                    // colors. Naming the dimension still earns its place:
                     // the Winlink scope keys the same dots by measured link
                     // quality instead, and which is in force cannot be
-                    // guessed from the colours.
+                    // guessed from the colors.
                     Text("Legend")
                         .font(.caption2.weight(.semibold))
                     Text("\u{b7} \(keyedDimension)")
@@ -258,16 +258,16 @@ struct MapLegend: View {
             }
             .buttonStyle(.plain)
             .help(isExpanded
-                  ? "Hide the key and give the map back the space. Dot colour means \(keyedDimension.lowercased())."
-                  : "Show what the dot colours mean.")
+                  ? "Hide the key and give the map back the space. Dot color means \(keyedDimension.lowercased())."
+                  : "Show what the dot colors mean.")
             .accessibilityLabel(isExpanded
                                 ? "Legend, \(keyedDimension), expanded"
                                 : "Legend, \(keyedDimension), collapsed")
 
             if isExpanded {
             if aprsMode {
-                // Colour = type. Each swatch is the exact disc the map paints
-                // — the class colour with the white class glyph inside.
+                // Color = type. Each swatch is the exact disc the map paints
+                // — the class color with the white class glyph inside.
                 ForEach(Self.typeSwatches, id: \.label) { item in
                     HStack(spacing: 6) {
                         Circle()
@@ -284,7 +284,7 @@ struct MapLegend: View {
                     }
                     .help(item.help)
                 }
-                // Recency, now that colour is spoken for: opacity.
+                // Recency, now that color is spoken for: opacity.
                 HStack(spacing: 6) {
                     HStack(spacing: 2) {
                         Circle().fill(.secondary).frame(width: 11, height: 11)
@@ -294,7 +294,7 @@ struct MapLegend: View {
                         .font(.caption)
                     Spacer(minLength: 0)
                 }
-                .help("With colour keying type, recency is shown by opacity instead: a station heard within the hour is solid and fades as it ages, down to long-silent. Faded, never hidden.")
+                .help("With color keying type, recency is shown by opacity instead: a station heard within the hour is solid and fades as it ages, down to long-silent. Faded, never hidden.")
             } else {
                 ForEach(kind.entries, id: \.label) { entry in
                     HStack(spacing: 6) {
@@ -319,7 +319,7 @@ struct MapLegend: View {
                     .font(.caption2)
                 Spacer(minLength: 0)
             }
-            .help("A hollow marker is a lead, not a fix: the position comes from a different entity than the thing shown \u{2014} typically a NET/ROM node placed at its operator's licence address. Nodes usually sit on a hilltop or a repeater site, not at the operator's house.")
+            .help("A hollow marker is a lead, not a fix: the position comes from a different entity than the thing shown \u{2014} typically a NET/ROM node placed at its operator's license address. Nodes usually sit on a hilltop or a repeater site, not at the operator's house.")
 
             if showsPositionSource {
                 HStack(spacing: 6) {
@@ -333,7 +333,7 @@ struct MapLegend: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                 }
-                .help("A station drawn with its APRS symbol is at the position it beaconed over the air \u{2014} a live fix. A plain coloured dot is placed from a lookup about the callsign (licence address, registry grid), not from a transmitted position. Toggle which one is shown under Layers \u{2192} Transmitted Positions.")
+                .help("A station drawn with its APRS symbol is at the position it beaconed over the air \u{2014} a live fix. A plain colored dot is placed from a lookup about the callsign (license address, registry grid), not from a transmitted position. Toggle which one is shown under Layers \u{2192} Transmitted Positions.")
             }
 
             if showsNodes {

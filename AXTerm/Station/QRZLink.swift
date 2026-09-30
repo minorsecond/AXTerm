@@ -17,7 +17,7 @@ nonisolated enum QRZLink {
 
     /// The page for a callsign, or nil when the callsign is not one.
     ///
-    /// The SSID goes: QRZ knows licences, and `KF0YKI-9` is one operator's
+    /// The SSID goes: QRZ knows licenses, and `KF0YKI-9` is one operator's
     /// ninth station, not a ninth licensee. `WIDE1-1` and the other service
     /// endpoints get nil rather than a page that will not exist.
     static func url(for callsign: String) -> URL? {

@@ -31,8 +31,8 @@ final class DraftCommitRuleTests: XCTestCase {
         XCTAssertEqual(waited, DraftCommitRule.quietPeriod)
     }
 
-    /// Every keystroke restarts the wait, which SwiftUI does by cancelling
-    /// the task. A cancelled wait must not write a half-typed address.
+    /// Every keystroke restarts the wait, which SwiftUI does by canceling
+    /// the task. A canceled wait must not write a half-typed address.
     func testAKeystrokeDuringTheWaitAbandonsTheWrite() async {
         let started = expectation(description: "sleeping")
         let task = Task {
@@ -45,7 +45,7 @@ final class DraftCommitRuleTests: XCTestCase {
         await fulfillment(of: [started], timeout: 2)
         task.cancel()
         let commit = await task.value
-        XCTAssertFalse(commit, "a cancelled wait writes nothing")
+        XCTAssertFalse(commit, "a canceled wait writes nothing")
     }
 
     /// The shipped delay has to clear a burst of typing without outlasting

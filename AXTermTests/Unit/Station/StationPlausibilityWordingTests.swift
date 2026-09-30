@@ -70,22 +70,22 @@ final class StationPlausibilityWordingTests: XCTestCase {
         }
     }
 
-    // MARK: - No position, no judgement
+    // MARK: - No position, no judgment
 
     func testAStationWithNoPositionKeepsItsPlainWording() {
         let line = StationPlausibility.positionSourceLine(
-            source: "licence address", verdict: verdict(for: nil))
-        XCTAssertEqual(line, "Position from licence address (heard over the air).")
+            source: "license address", verdict: verdict(for: nil))
+        XCTAssertEqual(line, "Position from license address (heard over the air).")
     }
 
-    /// A position inferred from the operator's licence is about the person,
+    /// A position inferred from the operator's license is about the person,
     /// not the radio, so distance says nothing and nothing is claimed against
     /// it — the existing rule, restated here because the wording depends on it.
     func testAnOperatorInferredPositionIsNeverCalledOutOfRange() {
         let v = StationPlausibility.verdict(observer: home, station: dodgeCity,
                                             confidence: .inferredFromOperator)
         XCTAssertFalse(v.isImplausible)
-        XCTAssertTrue(StationPlausibility.positionSourceLine(source: "licence address", verdict: v)
+        XCTAssertTrue(StationPlausibility.positionSourceLine(source: "license address", verdict: v)
             .contains("heard over the air"))
     }
 }

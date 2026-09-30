@@ -228,7 +228,7 @@ nonisolated final class AXDPTransferProtocol: FileTransferProtocol {
     func cancel() {
         state = .cancelled
         delegate?.transferProtocol(self, stateChanged: state)
-        delegate?.transferProtocol(self, didComplete: false, error: "Cancelled by user")
+        delegate?.transferProtocol(self, didComplete: false, error: "Canceled by user")
     }
 
     func handleIncomingData(_ data: Data) -> Bool {

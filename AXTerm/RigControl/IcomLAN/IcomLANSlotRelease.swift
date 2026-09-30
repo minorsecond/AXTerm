@@ -153,7 +153,7 @@ nonisolated enum IcomLANSlotRelease {
 
         // Reuse the old source port when we can; it is almost certainly free
         // (the process that held it has exited), and a match on source helps the
-        // radio recognise the session. If the bind fails, macOS picks an
+        // radio recognize the session. If the bind fails, macOS picks an
         // ephemeral port and the packet's own IDs still name the session.
         var reuse: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))

@@ -19,7 +19,7 @@ struct StationRowView: View {
     ///
     /// A row holds whatever the AX.25 address field carried, which for a node
     /// is often the tactical alias. `DRLNOD` alone is unplaceable — it is not a
-    /// licence and no directory has it — and `N0HI-7` alone is unrecognisable
+    /// license and no directory has it — and `N0HI-7` alone is unrecognizable
     /// to an operator who only ever sees SOLBPQ in node tables. Showing both
     /// costs one dim word and removes the need to go and look it up.
     var alsoKnownAs: String?
@@ -28,7 +28,7 @@ struct StationRowView: View {
     ///
     /// A node asked to connect onward dials as the *operator*, under a free
     /// SSID of their own callsign — so `K0EPI-6` appears in this list looking
-    /// like a stranger transmitting under the operator's licence, when it is
+    /// like a stranger transmitting under the operator's license, when it is
     /// DRLNOD carrying their own session (field question 2026-08-28 18:53).
     var relayLegOf: String?
 
@@ -59,7 +59,7 @@ struct StationRowView: View {
                             .lineLimit(1)
                             .help("\(station.call) is also known as \(alsoKnownAs) — "
                                   + "one of the two is a tactical node alias, the other the "
-                                  + "licence behind it. Learned from node tables and beacons; "
+                                  + "license behind it. Learned from node tables and beacons; "
                                   + "see Nodes for who announced it.")
                     }
 

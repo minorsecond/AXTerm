@@ -14,12 +14,12 @@
 //    - RR arriving in grace period cancels retransmission (no duplicate TX)
 //    - T1 backoff doubles RTO on each retry
 //    - T3 idle polling fires at the correct virtual time
-//    - T3 cancelled when I-frame is sent (T1 takes over)
+//    - T3 canceled when I-frame is sent (T1 takes over)
 //    - T1 takes over from T3 when data is sent
 //    - N2 retries → link error at exactly the right virtual time
-//    - Simultaneous T1 + T3 expiry: T1 wins (T3 should be cancelled by data TX)
+//    - Simultaneous T1 + T3 expiry: T1 wins (T3 should be canceled by data TX)
 //    - T1 cancels pending grace-period retransmit when RR arrives mid-grace
-//    - SABM → T1 → UA → T1 cancelled, T3 started
+//    - SABM → T1 → UA → T1 canceled, T3 started
 //
 
 import XCTest
@@ -264,7 +264,7 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertTrue(isRR, "T3 keepalive should be an S-frame (RR)")
     }
 
-    /// T3 is cancelled when I-frame is sent; T1 takes over timing.
+    /// T3 is canceled when I-frame is sent; T1 takes over timing.
     func testT3CancelledWhenDataSent() {
         let (manager, _) = makeManager()
         let session = connect(manager)
@@ -276,8 +276,8 @@ final class AX25TimerRaceTests: XCTestCase {
         // Send data — T1 should start, T3 should stop
         _ = manager.sendData(Data("KillT3".utf8), to: peer, path: path, radio: .primary)
 
-        // T3 should be cancelled (T1 is active for the outstanding frame)
-        XCTAssertNil(session.t3TimerTask, "T3 should be cancelled once I-frame is outstanding")
+        // T3 should be canceled (T1 is active for the outstanding frame)
+        XCTAssertNil(session.t3TimerTask, "T3 should be canceled once I-frame is outstanding")
         XCTAssertNotNil(session.t1TimerTask, "T1 should be active for unacked I-frame")
     }
 

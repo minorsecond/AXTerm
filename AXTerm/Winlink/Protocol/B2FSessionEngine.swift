@@ -27,7 +27,7 @@ nonisolated final class B2FSessionEngine {
     ///
     /// The roles are far less different than they look: everything after
     /// the handshake is already symmetric, and the second half of an
-    /// initiator session *is* answering behaviour. Only the opening
+    /// initiator session *is* answering behavior. Only the opening
     /// differs.
     enum Role: Sendable, Equatable {
         /// Calls an RMS gateway. Requires infrastructure.

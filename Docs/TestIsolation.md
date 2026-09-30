@@ -9,7 +9,7 @@ outlives a test, and a name that suggests otherwise.
 `NetRomRealisticWiringTests.testIngestion_UpdatesIntegrationState` and four
 tests in `NetRomIntegrationWiringTests` failed together in occasional
 full-suite runs and never on a rerun. The reported failure was always a missing
-neighbour:
+neighbor:
 
 ```
 K2BBB should be a neighbor (from third-party via path).
@@ -62,7 +62,7 @@ the beginning.
 ### Proving it
 
 Poisoning the list by hand reproduces the failure byte for byte — same
-neighbours, same counts — and removing the poison passes. A flake is not
+neighbors, same counts — and removing the poison passes. A flake is not
 diagnosed until it has a switch.
 
 ### The fix
@@ -83,7 +83,7 @@ access**, erasing what its siblings had written, from another process, at
 whatever moment it happened to start.
 
 Two places built that name: `AppEnvironment.defaults` and `AXTermApp.init`.
-The second is the scene's own initialiser, which runs in every worker. The
+The second is the scene's own initializer, which runs in every worker. The
 ephemeral database three lines below it already isolated per worker with
 `unit-<pid>`; the defaults suite had been missed.
 
@@ -110,5 +110,5 @@ state puts it back. A test that depends on global state sets it first.
 the test host — duplicate status, base classification, classification used, and
 mode — and `NetRomPassiveInference.debugEvidenceSummary` reports the evidence
 behind every inferred route with its quality against the publish floor. Both
-are what turned "the neighbour is missing" into "the hop was filtered before
+are what turned "the neighbor is missing" into "the hop was filtered before
 inference ran", and both cost nothing until an assertion fails.

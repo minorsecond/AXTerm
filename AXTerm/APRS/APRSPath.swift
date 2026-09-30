@@ -85,7 +85,7 @@ nonisolated enum APRSPath {
     /// as enforced by Xastir's `check_unproto_path` (`src/util.c`).
     ///
     /// These are not arbitrary: a fill-in entry anywhere but the front asks
-    /// home digis to repeat a frame that has already travelled, and two
+    /// home digis to repeat a frame that has already traveled, and two
     /// `WIDEn-N` entries multiply rather than add — which is how the pre-New-N
     /// network was flooded in the first place.
     static func unsociable(_ tokens: [String]) -> String? {
@@ -96,7 +96,7 @@ nonisolated enum APRSPath {
             if isFillIn, index > 0 {
                 return "\(token) is a fill-in hop and only belongs first in the path: "
                     + "after the first slot it asks home digipeaters to repeat a frame "
-                    + "that has already travelled."
+                    + "that has already traveled."
             }
             guard call.hasPrefix("WIDE") || call.hasPrefix("TRACE") else { continue }
             let parts = token.split(separator: "-", maxSplits: 1)

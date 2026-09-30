@@ -39,7 +39,7 @@ objects and bulletins, attributed to whoever sent them.
 
 **NWS watches and warnings.** Distributed on APRS by `WXSVR` as addressed
 bulletins with zone codes. Genuinely valuable, and genuinely internet-fed: the
-feed stops when the gateway's link does. Worth parsing, worth labelling with
+feed stops when the gateway's link does. Worth parsing, worth labeling with
 its source so nobody trusts a warning that stopped updating six hours ago.
 
 **Radar, satellite, model output.** All internet. Out of scope for RF.
@@ -68,7 +68,7 @@ space and time to resolve them, whatever is done with the numbers.
 
 1. **Objects and items** (`;` and `)`) — fire, hazards, road closures,
    shelters, incident markers. Pure RF. See `Docs/APRSObjects.md`.
-2. **NWS bulletins** (`WXSVR`), labelled with last-heard time and their
+2. **NWS bulletins** (`WXSVR`), labeled with last-heard time and their
    internet origin so a stale warning cannot pass for a current one.
 3. **Telemetry** (`T#` with `PARM`/`UNIT`/`EQNS`) — river gauges, solar,
    battery banks. Uncalibrated counts are shown as counts.

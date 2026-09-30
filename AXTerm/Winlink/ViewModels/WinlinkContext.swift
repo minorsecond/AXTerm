@@ -57,7 +57,7 @@ final class WinlinkContext: ObservableObject {
                 from: directory,
                 station: callsign,
                 // The same per-install identity the transport publishes
-                // under, so this station recognises its own echo and does
+                // under, so this station recognizes its own echo and does
                 // not re-import its own counts.
                 deviceID: WinlinkSyncDevice.identifier(),
                 gridSquare: settings.gridSquare,
@@ -95,7 +95,7 @@ final class WinlinkContext: ObservableObject {
         let locationService = StationLocationService(
             manualGridProvider: { [weak settings] in settings?.gridSquare ?? "" })
         self.locationService = locationService
-        // The operator's licence callsign and their ICS details live in
+        // The operator's license callsign and their ICS details live in
         // AppSettingsStore and StationProfile, not the mailbox — so the sync
         // engine is handed a way to reach them. Without it a second device
         // asks for a callsign it could have inherited.

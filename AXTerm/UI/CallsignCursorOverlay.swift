@@ -6,7 +6,7 @@
 //
 //  A transparent `NSView` laid over the text whose only job is to own cursor
 //  rects. It is the AppKit mechanism for exactly this, which is why the
-//  behaviour comes out right: the hand appears over the link, the I-beam
+//  behavior comes out right: the hand appears over the link, the I-beam
 //  returns over the rest of the selectable line, and the system handles the
 //  transitions rather than this pushing and popping cursors on hover events.
 //

@@ -13,7 +13,7 @@ import AudioToolbox
 /// decoder, the routing inference, the Winlink protocol stack and the store
 /// are all plain Swift with no idea what a window is. What is *not* portable
 /// is the handful of places that reach for AppKit to copy a string, pick a
-/// file, or name a colour.
+/// file, or name a color.
 ///
 /// Rather than scatter `#if os(macOS)` through those call sites, the
 /// platform differences are named once here. Call sites then read the same on
@@ -21,7 +21,7 @@ import AudioToolbox
 /// enough to see in one file.
 ///
 /// Deliberately thin. This is a translation layer, not a UI framework: where
-/// the two platforms disagree about behaviour rather than spelling — a Mac
+/// the two platforms disagree about behavior rather than spelling — a Mac
 /// has windows and a phone does not — the difference belongs in the view,
 /// not hidden behind a shim that pretends it is absent.
 
@@ -42,7 +42,7 @@ typealias PlatformImage = UIImage
 #endif
 
 extension Color {
-    /// Builds a SwiftUI colour from whichever native colour this platform
+    /// Builds a SwiftUI color from whichever native color this platform
     /// uses, so call sites do not name either one.
     init(platform color: PlatformColor) {
         #if os(macOS)
@@ -64,7 +64,7 @@ extension Image {
 }
 
 extension PlatformColor {
-    /// The system accent colour under its two different names.
+    /// The system accent color under its two different names.
     static var platformAccent: PlatformColor {
         #if os(macOS)
         return .controlAccentColor
@@ -74,7 +74,7 @@ extension PlatformColor {
     }
 
     /// `withAlphaComponent` exists on both, but only NSColor guarantees the
-    /// result in the same colour space; naming it here keeps the intent
+    /// result in the same color space; naming it here keeps the intent
     /// visible where analytics styling mixes alpha into an accent.
     func platformAlpha(_ alpha: CGFloat) -> PlatformColor {
         withAlphaComponent(alpha)
@@ -82,11 +82,11 @@ extension PlatformColor {
 }
 
 
-/// Semantic colours, which the two platforms spell differently.
+/// Semantic colors, which the two platforms spell differently.
 ///
-/// These are the system's own answers to "what colour is a separator here",
+/// These are the system's own answers to "what color is a separator here",
 /// so they follow appearance, accessibility contrast settings and dark mode
-/// on both platforms. Hard-coding a grey instead would look right in exactly
+/// on both platforms. Hard-coding a gray instead would look right in exactly
 /// one configuration.
 extension PlatformColor {
 
@@ -213,7 +213,7 @@ enum PlatformScreen {
 
 // MARK: - Idioms
 
-/// What kind of machine this is, where that genuinely changes behaviour.
+/// What kind of machine this is, where that genuinely changes behavior.
 ///
 /// Used sparingly. Most layout differences are better expressed as size
 /// classes, which adapt to a Mac window being dragged narrow as well as to a
@@ -347,7 +347,7 @@ extension View {
     /// A text-only button that reads as a link.
     ///
     /// `.buttonStyle(.link)` is macOS-only. On iOS the same affordance is a
-    /// plain button tinted with the accent colour — the platform's own way of
+    /// plain button tinted with the accent color — the platform's own way of
     /// saying "this text is tappable".
     @ViewBuilder
     func platformLinkButton() -> some View {
@@ -360,11 +360,11 @@ extension View {
 }
 
 extension PlatformColor {
-    /// sRGB components, for handing a colour to Metal or a shader.
+    /// sRGB components, for handing a color to Metal or a shader.
     ///
-    /// Both platforms can refuse to convert — a pattern or catalog colour has
-    /// no single set of components — so this falls back to a mid grey rather
-    /// than trapping. A graph drawn in grey is a cosmetic problem; a crash
+    /// Both platforms can refuse to convert — a pattern or catalog color has
+    /// no single set of components — so this falls back to a mid gray rather
+    /// than trapping. A graph drawn in gray is a cosmetic problem; a crash
     /// while rendering it is not.
     var sRGBComponents: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) {
         #if os(macOS)
@@ -413,7 +413,7 @@ extension PlatformColor {
     /// The fill for every other row in a striped list.
     ///
     /// macOS has a system answer (`alternatingContentBackgroundColors`); iOS
-    /// does not stripe lists at all, so a faint tint of the label colour
+    /// does not stripe lists at all, so a faint tint of the label color
     /// stands in — visible enough to group a row, quiet enough not to look
     /// like a Mac list on a phone.
     static var platformAlternatingRow: PlatformColor {
@@ -428,7 +428,7 @@ extension PlatformColor {
 
     /// Highlight behind a search match.
     ///
-    /// Nonisolated: a fixed colour with a fixed alpha, not one that resolves
+    /// Nonisolated: a fixed color with a fixed alpha, not one that resolves
     /// against the trait collection, and it is read while building an
     /// attributed string rather than while drawing.
     nonisolated static var platformSearchHighlight: PlatformColor {

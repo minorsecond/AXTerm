@@ -5,9 +5,9 @@ import XCTest
 /// they happened to arrive in.
 final class HeardStationMapFanTests: XCTestCase {
 
-    /// Two stations a few centimetres apart round to the same cluster key but
+    /// Two stations a few centimeters apart round to the same cluster key but
     /// are not the same point, so whichever one the cluster listed first
-    /// became the centre everything else fanned around — and the map rebuilds
+    /// became the center everything else fanned around — and the map rebuilds
     /// that list as packets arrive.
     func testFanningDoesNotDependOnInputOrder() throws {
         let a = entry("K0EPI-1", latitude: 39.600001, longitude: -104.700001)
@@ -87,7 +87,7 @@ final class HeardStationMapFanTests: XCTestCase {
                        "K0EPI-7 swung round when AB0VZ dropped out")
     }
 
-    /// Members of a cluster differ by a fraction of a metre, so the centre
+    /// Members of a cluster differ by a fraction of a meter, so the center
     /// cannot be any one of their raw positions or it moves with the
     /// membership. All three coordinates below round to one cluster key —
     /// they have to, or they would not be a cluster — but they are not the
@@ -104,9 +104,9 @@ final class HeardStationMapFanTests: XCTestCase {
         let one = try XCTUnwrap(ledByAB["K0EPI-7"])
         let other = try XCTUnwrap(ledByK0["K0EPI-7"])
         XCTAssertEqual(one.latitude, other.latitude, accuracy: 1e-12,
-                       "the centre followed whichever member sorted first")
+                       "the center followed whichever member sorted first")
         XCTAssertEqual(one.longitude, other.longitude, accuracy: 1e-12,
-                       "the centre followed whichever member sorted first")
+                       "the center followed whichever member sorted first")
     }
 
     /// Swift's `hashValue` is seeded per process. Placing markers with it

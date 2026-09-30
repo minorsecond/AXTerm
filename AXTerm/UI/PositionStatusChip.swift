@@ -4,14 +4,14 @@ import SwiftUI
 ///
 /// Position is load-bearing in the way the TNC link is: every distance,
 /// bearing, coverage ring and terrain profile starts from it, and a station
-/// working from a grid centre is quietly answering short-path questions it
+/// working from a grid center is quietly answering short-path questions it
 /// cannot answer. That earns a permanent place beside the other "is this
 /// station working" indicators.
 ///
 /// Graded rather than uniform, which is the same bargain `TNCStatusStrip`
-/// makes: the normal case is a quiet secondary-coloured line naming the
+/// makes: the normal case is a quiet secondary-colored line naming the
 /// source and its accuracy — "GPS ±20 m" — and only a real problem takes
-/// colour. Nothing here shouts while everything is fine, but the operator
+/// color. Nothing here shouts while everything is fine, but the operator
 /// can always see which of three position sources the whole app is running
 /// on, which is the question a settings page three clicks away was the only
 /// thing answering.
@@ -41,7 +41,7 @@ struct PositionStatusChip: View {
             SettingsRouter.shared.navigate(to: .stationPosition)
         } label: {
             HStack(spacing: 5) {
-                // The symbol carries the warning colour; orange text as well
+                // The symbol carries the warning color; orange text as well
                 // was louder than anything else in the toolbar.
                 Image(systemName: symbol)
                     .font(.system(size: 11, weight: .medium))

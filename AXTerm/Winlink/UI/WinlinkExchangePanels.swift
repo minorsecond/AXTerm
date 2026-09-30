@@ -35,7 +35,7 @@ struct DirectionalHealthView: View {
                             = \(Self.percent(snapshot.df)).
 
                             A retransmit means either our frame or the gateway's \
-                            acknowledgement was lost, so this figure blames the \
+                            acknowledgment was lost, so this figure blames the \
                             round trip, not just the outbound leg.
                             """)
 

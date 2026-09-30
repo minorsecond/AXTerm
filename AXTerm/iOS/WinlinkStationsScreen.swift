@@ -54,7 +54,7 @@ struct WinlinkStationsScreen: View {
             .swipeActions(edge: .leading) {
                 // A downloaded gateway is a legitimate rung — carrying one is
                 // the reason for downloading it. The row shows its distance,
-                // so a rung added for a trip is recognisable as such later.
+                // so a rung added for a trip is recognizable as such later.
                 if viewModel.isInLadder(station) {
                     Button {
                         viewModel.removeFromLadder(station)
@@ -210,7 +210,7 @@ struct WinlinkStationsScreen: View {
         String(format: "%.3f MHz", Double(hz) / 1_000_000)
     }
 
-    /// Grey means unknown, and unknown is not bad. A gateway never worked
+    /// Gray means unknown, and unknown is not bad. A gateway never worked
     /// from here has no measurement, which says nothing about whether it
     /// would answer.
     private func colour(for quality: WinlinkLinkQuality?) -> Color {
@@ -238,7 +238,7 @@ struct WinlinkStationsScreen: View {
         var lines = ["\(station.callsign) on \(frequency(station.frequencyHz)), grid \(station.gridSquare)."]
 
         guard let quality else {
-            lines.append("This station has never worked this gateway, so there is no measurement. Grey means unknown, which is not the same as bad — an unworked gateway may answer perfectly.")
+            lines.append("This station has never worked this gateway, so there is no measurement. Gray means unknown, which is not the same as bad — an unworked gateway may answer perfectly.")
             return lines.joined(separator: "\n\n")
         }
 

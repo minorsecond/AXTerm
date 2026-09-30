@@ -356,7 +356,7 @@ final class KISSLinkNetwork: KISSLink, @unchecked Sendable {
 
     /// Drop a connection for good.
     ///
-    /// Clearing the handler before cancelling matters: `cancel()` delivers a
+    /// Clearing the handler before canceling matters: `cancel()` delivers a
     /// `.cancelled` state asynchronously, and if the link has been reopened in
     /// the meantime that late report from a dead connection lands on the live
     /// one and puts it back to `.disconnected`. Which is how a resume after

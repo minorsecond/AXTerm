@@ -133,7 +133,7 @@ final class LiveDirewolfTests: XCTestCase {
 
                     print("LISTEN TEST: I-frame N(S)=\(ns), P/F=\(pf): '\(text.prefix(60).replacingOccurrences(of: "\r", with: "\\r").replacingOccurrences(of: "\n", with: "\\n"))'")
 
-                    // Send RR acknowledgement
+                    // Send RR acknowledgment
                     let rr = buildRR(from: myCall, to: testStation1, via: testPath1, nr: ourVR, pf: pf == 1)
                     print("LISTEN TEST: -> Sending RR N(R)=\(ourVR)")
                     try await sendFrame(transport: transport, frame: rr)
@@ -261,7 +261,7 @@ final class LiveDirewolfTests: XCTestCase {
                     print("TEST [P]: Text: \(t.prefix(80).replacingOccurrences(of: "\r", with: "\\r"))")
                 }
 
-                // After each I-frame, send RR acknowledgement
+                // After each I-frame, send RR acknowledgment
                 if frameType.starts(with: "I-frame") {
                     let rr = buildRR(from: myCall, to: testStation1, via: testPath1,
                                     nr: ourVR, pf: false)
@@ -455,7 +455,7 @@ final class LiveDirewolfTests: XCTestCase {
         print("TEST: Received \(welcomeFrames) welcome frames, V(R)=\(ourVR)")
         XCTAssertGreaterThan(welcomeFrames, 0, "Should receive welcome message")
 
-        // Step 4: Send RR acknowledgement
+        // Step 4: Send RR acknowledgment
         let rr = buildRR(from: myCall, to: testStation1, via: testPath1,
                         nr: ourVR, pf: false)
         print("TEST: Sending RR N(R)=\(ourVR)")

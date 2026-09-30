@@ -3,7 +3,7 @@
 //  AXTermTests
 //
 //  Most networks have no NET/ROM NODES broadcast to listen for, but nodes,
-//  BBSs and digipeaters identify themselves anyway — the ID frame is a licence
+//  BBSs and digipeaters identify themselves anyway — the ID frame is a license
 //  requirement and operators fill it with a service list. Every example below
 //  is a real frame from the Denver-area network.
 //

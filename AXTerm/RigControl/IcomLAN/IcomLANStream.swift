@@ -105,7 +105,7 @@ nonisolated enum IcomLANSocketOutcome: Equatable {
         switch state {
         case .ready: return .ready
         case .failed(let error): return .fail(denial ?? .network(error.localizedDescription))
-        case .cancelled: return .fail(.network("cancelled"))
+        case .cancelled: return .fail(.network("canceled"))
         case .waiting: return denial.map(IcomLANSocketOutcome.fail) ?? .keepWaiting
         default: return .keepWaiting
         }

@@ -27,7 +27,7 @@ nonisolated struct WinlinkLinkQuality: Equatable, Sendable {
     /// How far the operator is now from where these samples were taken.
     ///
     /// The thresholds are about RF, not precision: within a couple of
-    /// kilometres the path is effectively the same, out to ~15 km it is
+    /// kilometers the path is effectively the same, out to ~15 km it is
     /// usually similar over open terrain but can change completely across
     /// a ridge, and beyond that the sample describes another link.
     enum Placement: Equatable, Sendable {
@@ -275,7 +275,7 @@ nonisolated extension WinlinkLinkQuality {
     }
 
     /// Half the diagonal of the square a grid-derived position sits in —
-    /// the worst-case error of calling its centre "where we were". GPS
+    /// the worst-case error of calling its center "where we were". GPS
     /// fixes carry no such penalty.
     private static func gridPrecisionKm(_ source: String?, _ grid: String?) -> Double {
         guard source == StationLocation.Source.manualGrid.rawValue else { return 0 }
@@ -286,7 +286,7 @@ nonisolated extension WinlinkLinkQuality {
         }
     }
 
-    /// Haversine distance in kilometres.
+    /// Haversine distance in kilometers.
     static func greatCircleKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double) -> Double {
         let radius = 6371.0
         let dLat = (lat2 - lat1) * .pi / 180

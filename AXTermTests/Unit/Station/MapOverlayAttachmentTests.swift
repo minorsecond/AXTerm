@@ -186,7 +186,7 @@ final class MapOverlayAttachmentTests: XCTestCase {
 
     // MARK: - Refusing
 
-    /// The projection inside the archive is honoured. A zipped shapefile in
+    /// The projection inside the archive is honored. A zipped shapefile in
     /// State Plane feet read as degrees would put the zone thousands of miles
     /// away, with no error — so it is refused by name instead.
     func testAProjectedShapefileInAnArchiveIsRefused() throws {

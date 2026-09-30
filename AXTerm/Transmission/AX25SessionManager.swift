@@ -118,7 +118,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// T1 retransmit timer task
     var t1TimerTask: AnyCancellableTask?
 
-    /// Pending retransmit task (grace period after T1 fires); cancelled if RR arrives
+    /// Pending retransmit task (grace period after T1 fires); canceled if RR arrives
     var t1PendingRetransmitTask: AnyCancellableTask?
 
     /// Statistics watermarks from the previous link-quality sample, so each
@@ -252,7 +252,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
     }
 
     deinit {
-        // Ensure timers are cancelled to avoid background tasks outliving the session.
+        // Ensure timers are canceled to avoid background tasks outliving the session.
         t1TimerTask?.cancel()
         t1PendingRetransmitTask?.cancel()
         t3TimerTask?.cancel()
@@ -487,7 +487,7 @@ final class AX25SessionManager: ObservableObject {
     /// The address each radio operates as, where it differs from the primary
     /// radio's. A radio absent here answers as `localCallsign`.
     ///
-    /// Two radios on one licence are two stations on the air — an HF and a
+    /// Two radios on one license are two stations on the air — an HF and a
     /// VHF station, say — and each may carry its own SSID so a remote
     /// station can reach one in particular. Set through
     /// `setLocalAddresses`, which tears down the sessions of a radio whose
@@ -1883,7 +1883,7 @@ final class AX25SessionManager: ObservableObject {
 
         // Calculate RTT if we were connecting (Bug F fix: use clock.currentTime not Date())
         //
-        // Karn's algorithm, which the I-frame path already honours via
+        // Karn's algorithm, which the I-frame path already honors via
         // `rttSendTime(ackedBy:)`: a UA answering a retransmitted SABM is
         // ambiguous, so it yields no sample at all. The timers keep whatever
         // they had, which is a better estimate than one built from backoff.
@@ -1911,7 +1911,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         // Execute the state machine's actions BEFORE draining. The UA actions
-        // include .stopT1 (cancelling the SABM timer) — computed when nothing was
+        // include .stopT1 (canceling the SABM timer) — computed when nothing was
         // outstanding. The drain below can put fresh I-frames on the air and start
         // T1 for them; running the stale stopT1 afterwards would cancel that timer
         // and leave unacknowledged frames with no retransmit protection (field
@@ -2297,7 +2297,7 @@ final class AX25SessionManager: ObservableObject {
         debugDumpSessionState(session, context: "inbound-I")
         checkInvariants(session: session)
 
-        // The piggybacked N(R) is an acknowledgement like any other — without
+        // The piggybacked N(R) is an acknowledgment like any other — without
         // this, a peer that never sends standalone RRs (the BBS pattern)
         // starves the adaptive controller of evidence entirely.
         emitLinkQualitySampleIfNeeded(for: session)
@@ -2440,7 +2440,7 @@ final class AX25SessionManager: ObservableObject {
         // Execute the state machine's actions BEFORE draining. The RR actions can
         // carry .stopT1 (all frames acked at handle time); the drain below may put a
         // fresh I-frame on the air and start T1 for it. Running the stale stopT1
-        // afterwards cancelled that timer and left the new frame with no retransmit
+        // afterwards canceled that timer and left the new frame with no retransmit
         // protection until the T3 enquiry — observed live on 2026-08-22 when "bbs"
         // was drained by an RR(F=1) and immediately stripped of its T1.
         let actionFrames = processActions(actions, for: session)
@@ -2632,7 +2632,7 @@ final class AX25SessionManager: ObservableObject {
     /// Handle an inbound RNR (receiver not ready — peer buffer full).
     ///
     /// RNR was previously dropped at both S-frame dispatch sites, which meant the
-    /// acknowledgement carried in its N(R) field was never applied. V(A) stalled, T1
+    /// acknowledgment carried in its N(R) field was never applied. V(A) stalled, T1
     /// kept retransmitting frames the peer had already taken, and the retry counter
     /// climbed until the link failed with "retries exceeded" — even though the peer
     /// was healthy and merely busy.
@@ -2670,7 +2670,7 @@ final class AX25SessionManager: ObservableObject {
             return []
         }
 
-        // The N(R) in an RNR is a real acknowledgement, so it yields a valid RTT
+        // The N(R) in an RNR is a real acknowledgment, so it yields a valid RTT
         // sample under the same Karn's-algorithm rules used for RR.
         if let sentAt = session.rttSendTime(ackedBy: nr) {
             let rtt = clock.currentTime - sentAt
@@ -2876,7 +2876,7 @@ final class AX25SessionManager: ObservableObject {
         // It then requests retransmission starting from nr.
         session.acknowledgeUpTo(from: vaBefore, to: nr)
 
-        // REJ carries a valid N(R) acknowledgement just like RR/RNR do, so the
+        // REJ carries a valid N(R) acknowledgment just like RR/RNR do, so the
         // outbound-progress UI must hear about it. Without this, a message whose
         // final ack arrives via REJ (e.g. the peer REJs a duplicate retransmission
         // that crossed its ack in flight) stays stuck at "Sending…" forever.
@@ -3171,7 +3171,7 @@ final class AX25SessionManager: ObservableObject {
             return
         }
 
-        // The peer has signalled RNR: its receive buffer is full. Hold queued data until
+        // The peer has signaled RNR: its receive buffer is full. Hold queued data until
         // it clears the condition with RR/REJ, otherwise we simply generate drops.
         guard !session.stateMachine.peerBusy else {
             TxLog.debug(.session, "Drain suppressed (peer busy)", [

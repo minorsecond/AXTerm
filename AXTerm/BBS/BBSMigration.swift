@@ -101,7 +101,7 @@ extension DatabaseManager {
     /// Those three were briefly collectable and should not have been: packet
     /// is unencrypted broadcast, and a mailbox that offers to store a home
     /// address is inviting people to put one on the air. The reader already
-    /// skips fields it does not recognise, so this changes nothing anyone can
+    /// skips fields it does not recognize, so this changes nothing anyone can
     /// see — but leaving the rows would mean the data outlived the decision to
     /// stop holding it, which is the whole problem in miniature.
     nonisolated static func dropBBSPersonalContactFields(_ db: Database) throws {

@@ -27,7 +27,7 @@ nonisolated struct MapPathLink: Identifiable, Sendable {
     ///
     /// Over a few hundred miles the difference is small but real, and the
     /// terrain profile already samples the same curve — a link drawn one way
-    /// and analysed another would disagree about which ridge is in the way.
+    /// and analyzed another would disagree about which ridge is in the way.
     var polyline: MKPolyline {
         let points = GreatCircle.samplePath(from: from, to: to, count: 24)
             .map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
@@ -42,7 +42,7 @@ nonisolated struct MapPathLink: Identifiable, Sendable {
                   let to = positions[prediction.to.uppercased()] else { return nil }
             return MapPathLink(
                 id: prediction.id, from: from, to: to,
-                // Weakest evidence on purpose: nothing has travelled it.
+                // Weakest evidence on purpose: nothing has traveled it.
                 evidence: .transitive,
                 isSuspect: false,
                 isPrediction: true,
@@ -66,7 +66,7 @@ nonisolated struct MapPathLink: Identifiable, Sendable {
             guard let from = positions[path.from.uppercased()],
                   let to = positions[path.to.uppercased()] else { return nil }
             // A path between two stations at the same coordinate — different
-            // SSIDs of one licence — would draw a dot, not a line.
+            // SSIDs of one license — would draw a dot, not a line.
             guard from != to else { return nil }
 
             let hops = path.via.isEmpty ? "direct" : "via \(path.via.joined(separator: ", "))"

@@ -25,7 +25,7 @@
 //  first pushed it over, that backlog is why it never came back.
 //
 //  Re-arming from the timer instead of from the poke keeps the quiet-window
-//  behaviour — the action still runs only once the pokes stop — at one timer and
+//  behavior — the action still runs only once the pokes stop — at one timer and
 //  one retained capture, however fast the pokes arrive.
 //
 
@@ -33,7 +33,7 @@ import Foundation
 
 /// Runs an action once a quiet window has passed with no further pokes.
 ///
-/// Main-thread only: nothing here is synchronised, and both callers poke from
+/// Main-thread only: nothing here is synchronized, and both callers poke from
 /// SwiftUI view updates.
 final class QuietWindowTimer {
 
@@ -63,7 +63,7 @@ final class QuietWindowTimer {
     }
 
     /// Ask for `action` to run once the pokes stop. The most recent action wins,
-    /// matching the cancel-and-replace behaviour this replaced.
+    /// matching the cancel-and-replace behavior this replaced.
     func poke(_ action: @escaping () -> Void) {
         self.action = action
         pokedAt = now()

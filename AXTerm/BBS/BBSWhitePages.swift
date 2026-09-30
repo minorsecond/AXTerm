@@ -28,9 +28,9 @@ nonisolated struct WhitePagesEntry: Equatable, Sendable, Identifiable {
         case observed
         /// Carried in a message this station handled.
         case fromMessage
-        /// The licence record, via the callsign directory AXTerm already
+        /// The license record, via the callsign directory AXTerm already
         /// keeps. More reliable than anything inferred from traffic and less
-        /// reliable than the operator: a licence carries a legal name and a
+        /// reliable than the operator: a license carries a legal name and a
         /// mailing address, and people go by something shorter and transmit
         /// from somewhere else.
         case licenceRecord
@@ -51,7 +51,7 @@ nonisolated struct WhitePagesEntry: Equatable, Sendable, Identifiable {
             switch self {
             case .observed: "worked out from traffic"
             case .fromMessage: "taken from a message"
-            case .licenceRecord: "from the licence record"
+            case .licenceRecord: "from the license record"
             case .selfReported: "told to this station"
             }
         }
@@ -100,7 +100,7 @@ nonisolated struct WhitePagesEntry: Equatable, Sendable, Identifiable {
             case .name: "Name"
             case .qth: "Location"
             case .homeBBS: "Home BBS"
-            case .zip: "Postcode"
+            case .zip: "ZIP code"
             }
         }
 
@@ -112,7 +112,7 @@ nonisolated struct WhitePagesEntry: Equatable, Sendable, Identifiable {
             switch self {
             case .name: "Your name"
             case .qth: "Your town and state"
-            case .zip: "Your postcode"
+            case .zip: "Your ZIP code"
             case .homeBBS: "Your home BBS (if you have one)"
             }
         }
@@ -192,10 +192,10 @@ nonisolated extension WhitePagesEntry {
 
 nonisolated extension WhitePagesEntry {
 
-    /// What a licence record can contribute to a directory entry.
+    /// What a license record can contribute to a directory entry.
     ///
-    /// Only the two fields a licence actually answers. A home BBS is a packet
-    /// fact and a postcode is a mailing detail the operator may not want on
+    /// Only the two fields a license actually answers. A home BBS is a packet
+    /// fact and a ZIP code is a mailing detail the operator may not want on
     /// the air, so neither is taken from here — filling a field with something
     /// weakly related is how a directory stops being worth reading.
     static func fields(from record: CallsignRecord) -> [(Key, String)] {
@@ -217,7 +217,7 @@ nonisolated extension WhitePagesEntry {
         return fields
     }
 
-    /// Merges a licence record under the usual rule — so anything the operator
+    /// Merges a license record under the usual rule — so anything the operator
     /// has told us survives, and anything guessed from traffic is improved.
     @discardableResult
     mutating func learn(from record: CallsignRecord, at date: Date) -> Bool {

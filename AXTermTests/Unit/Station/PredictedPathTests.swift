@@ -95,7 +95,7 @@ final class PredictedPathTests: XCTestCase {
     }
 
     func testAGrazingRidgeIsMarginalRatherThanClear() {
-        // A path that clears the ground by a metre is not a clear path — the
+        // A path that clears the ground by a meter is not a clear path — the
         // Fresnel zone has to be open too, and this is exactly the "answers
         // but struggles" signature.
         let sampler = RidgeInTheMiddle(base: 1600, peak: 1650,

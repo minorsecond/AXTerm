@@ -1,7 +1,7 @@
 import XCTest
 @testable import AXTerm
 
-/// Neighbours and routes learned through `NetRomIntegration` are attributed to
+/// Neighbors and routes learned through `NetRomIntegration` are attributed to
 /// the radio that heard them, not silently collapsed onto the primary — the
 /// prerequisite for the Neighbors/Routes page to scope by radio.
 @MainActor
@@ -52,7 +52,7 @@ final class NetRomIntegrationRadioTests: XCTestCase {
 
         let dual = integration.currentNeighbors().filter { $0.call == "W0DUAL" }
         XCTAssertEqual(Set(dual.map(\.radioID)), [.primary, uhf],
-                       "a station on two radios is a neighbour on each — different antenna, different path")
+                       "a station on two radios is a neighbor on each — different antenna, different path")
     }
 
     /// An inferred route from a digipeated frame carries the radio that heard

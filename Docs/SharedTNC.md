@@ -12,7 +12,7 @@ the thing that breaks, and per-radio callsigns are the same remedy.
 
 ## 1. What is already safe
 
-Direwolf accepts multiple KISS clients and serialises their transmissions
+Direwolf accepts multiple KISS clients and serializes their transmissions
 through its own TX queue and channel access. **The radio layer is fine.**
 Nothing here is about two stations keying at once.
 
@@ -43,7 +43,7 @@ it worth detecting rather than documenting.
 `StationIdentityMonitor`. The signature is exact: **a frame arrives whose
 source is this station's own address, and this station did not send it.**
 
-The subtlety is recognising our own frames coming back. A digipeater sets the
+The subtlety is recognizing our own frames coming back. A digipeater sets the
 has-been-repeated bit on the hop it serviced, so the frame that returns is
 *not* byte-identical to the one that left. Comparing bytes would fire a
 collision warning on every single transmission through DRLNOD — and an
@@ -144,7 +144,7 @@ counts; the warning returns after the quiet period.
 
 Not crying wolf: a different SSID is a different station; another station
 entirely is ignored; our own frame coming back is ignored; **a digipeated echo
-is recognised as ours**; no callsign means no detection; repeated collisions
+is recognized as ours**; no callsign means no detection; repeated collisions
 report once.
 
 Plus: comparison ignores case and whitespace, reset clears the echo memory,

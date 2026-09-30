@@ -115,7 +115,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     /// Which channel analytics is scoped to. `.all` pools every visible radio
     /// (same-frequency copies already folded at ingest); a specific channel
-    /// keeps neighbours, routes, quality, coverage and the graph to one
+    /// keeps neighbors, routes, quality, coverage and the graph to one
     /// frequency so different-frequency populations are never averaged.
     @Published var selectedRadioScope: AnalyticsRadioScope = .all {
         didSet {
@@ -1352,7 +1352,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let range = currentDateRange(now: now)
         if let providerPackets = await timeframePacketsProvider?(range) {
             // The database provider does not know the radio scope; apply it to
-            // its result so both packet sources honour the same filter.
+            // its result so both packet sources honor the same filter.
             return scoped(providerPackets)
         }
         return filteredPackets(now: now)

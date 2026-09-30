@@ -90,7 +90,7 @@ nonisolated final class AFSKDemodulator {
 
     /// How cleanly the two tones are separated, 0…1 — the carrier-detect input.
     ///
-    /// The slicer's decision variable is already normalised: `(mark - space) /
+    /// The slicer's decision variable is already normalized: `(mark - space) /
     /// (mark + space)` swings to ±1 when one tone is present and sits near 0
     /// when the two powers are equal, which is what band noise looks like.
     /// Its smoothed magnitude is therefore signal presence, measured, and it
@@ -240,7 +240,7 @@ nonisolated final class AFSKDemodulator {
     /// Slicer-outer rather than sample-outer: each slicer walks the block
     /// with its state in a local, written back once, instead of nine array
     /// elements being reached into on every sample. The element is moved out
-    /// for the walk and initialised back in, which keeps the HDLC decoder's
+    /// for the walk and initialized back in, which keeps the HDLC decoder's
     /// byte buffer uniquely owned — a copy would share it and the first byte
     /// appended would copy the whole thing.
     ///
@@ -255,7 +255,7 @@ nonisolated final class AFSKDemodulator {
     /// whole run in one block and caught precisely that.
     ///
     /// The level is the sign of `(mark − gain·space)·(mark + gain·space + ε)`,
-    /// which is the sign of the old normalised quotient in every case that
+    /// which is the sign of the old normalized quotient in every case that
     /// arises, for a multiply instead of nine divisions a sample. The
     /// quotient itself is still taken once per sample, untwisted, for tone
     /// discrimination, which needs the magnitude.
@@ -271,7 +271,7 @@ nonisolated final class AFSKDemodulator {
                 // Signal presence, from the untwisted comparison: a real tone
                 // pushes |decision| toward 1, equal powers leave it near 0.
                 // `while` rather than `for k in 0..<n` in the two kernels
-                // below: on an unoptimised build a range loop steps through
+                // below: on an unoptimized build a range loop steps through
                 // the Collection protocol witnesses on every iteration, and
                 // a sample of the DSP thread showed those witnesses as its
                 // top two self-time frames.

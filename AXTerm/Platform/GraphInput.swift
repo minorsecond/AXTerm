@@ -13,7 +13,7 @@ import UIKit
 /// *kind* rather than in spelling. A Mac has a pointer that hovers, a
 /// scroll wheel, a right-click and modifier keys; a touch screen has none of
 /// those and has direct manipulation instead. Both must reach the same
-/// behaviour — select, multi-select, pan, zoom, act on a node — so the
+/// behavior — select, multi-select, pan, zoom, act on a node — so the
 /// difference is confined to how the intent arrives, not to what it means.
 
 // MARK: - Modifiers
@@ -64,7 +64,7 @@ nonisolated struct GraphInputModifiers: OptionSet, Sendable {
 
 /// One entry in the graph's node menu.
 ///
-/// Modelled rather than built, so the same list becomes an `NSMenu` on macOS
+/// Modeled rather than built, so the same list becomes an `NSMenu` on macOS
 /// and a SwiftUI context menu on iOS. Building AppKit menus inside the
 /// coordinator would have made the menu macOS-only for no reason — the
 /// *actions* are identical, only the presentation differs.

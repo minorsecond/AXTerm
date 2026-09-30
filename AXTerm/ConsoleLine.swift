@@ -250,7 +250,7 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
 
     /// Hashed on identity alone.
     ///
-    /// The synthesised conformance would need every member to be `Hashable`,
+    /// The synthesized conformance would need every member to be `Hashable`,
     /// and `APRSDigest` is not — `APRSObjectReport` is only `Equatable`. A
     /// UUID is a better hash for this type anyway: two lines with the same
     /// text a second apart are different lines, and hashing the whole struct
@@ -320,7 +320,7 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
             to: to,
             text: text,
             via: normalizedVia,
-            // Left to the initialiser, which classifies from the decoded frame
+            // Left to the initializer, which classifies from the decoded frame
             // when there is one and falls back to the text when there is not.
             messageType: messageType,
             isDuplicate: isDuplicate,

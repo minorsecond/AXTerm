@@ -5,7 +5,7 @@ import Foundation
 /// Two AXTerm instances pointed at one Direwolf is a normal thing to end up
 /// with — a desktop and a laptop on the same LAN, or a Mac and an iPad both
 /// reaching the same TNC over the network. Direwolf happily accepts both KISS
-/// clients and serialises their transmissions, so the *radio* is fine.
+/// clients and serializes their transmissions, so the *radio* is fine.
 ///
 /// What is not fine is both of them using the same callsign-SSID. AX.25
 /// connected mode keeps per-link state — send and receive sequence numbers, a
@@ -32,7 +32,7 @@ nonisolated final class StationIdentityMonitor: @unchecked Sendable {
     struct Collision: Equatable, Sendable {
         /// The address being used by more than one station.
         let callsign: String
-        /// Where the offending frame was going, for the operator to recognise.
+        /// Where the offending frame was going, for the operator to recognize.
         let destination: String
         let frameType: String
         let at: Date
@@ -63,7 +63,7 @@ nonisolated final class StationIdentityMonitor: @unchecked Sendable {
         case collision(Collision)
     }
 
-    /// How long a transmitted frame stays recognisable as our own echo.
+    /// How long a transmitted frame stays recognizable as our own echo.
     ///
     /// Generous on purpose: a digipeated frame comes back after the
     /// digipeater's own channel access, which on a busy channel is seconds,
@@ -90,7 +90,7 @@ nonisolated final class StationIdentityMonitor: @unchecked Sendable {
     /// change in flight: a digipeater sets the has-been-repeated bit on the
     /// hop it serviced, so the frame that comes back is not byte-identical to
     /// the one that went out. Fingerprinting the invariant part — who, to
-    /// whom, which control field, what payload — recognises our own echo
+    /// whom, which control field, what payload — recognizes our own echo
     /// through a digipeater, which byte comparison would not.
     func recordTransmitted(source: String, destination: String,
                            control: UInt8, info: Data, at now: Date = Date()) {
@@ -126,7 +126,7 @@ nonisolated final class StationIdentityMonitor: @unchecked Sendable {
         return nil
     }
 
-    /// The same judgement over every address this station operates as — the
+    /// The same judgment over every address this station operates as — the
     /// station callsign and each radio's own — and saying which kind of
     /// "ours" a frame is, because a station with two radios on one frequency
     /// hears its own transmissions and must not count them as anyone's.

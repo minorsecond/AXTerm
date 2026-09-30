@@ -18,7 +18,7 @@
 //    • AIMD cwnd stays in [1.0, maxWindow], never NaN/Inf
 //    • effectiveWindow stays >= 1 at all times
 //    • Session count never grows unboundedly
-//    • Timer count stabilises after session teardown
+//    • Timer count stabilizes after session teardown
 //
 //  All seeds are documented; any failure emits the seed needed to replay.
 //
@@ -1505,7 +1505,7 @@ extension AX25SessionFuzzTests {
             "T1 must still be running to drive SABM retries after the DISC")
 
         // Bounded termination: with the peer silent, T1 exhausts N2 and the
-        // session reaches a terminal state with every timer cancelled.
+        // session reaches a terminal state with every timer canceled.
         for _ in 0...(config.maxRetries + 1) {
             clock.advance(by: config.rtoMax ?? 16.0)
         }

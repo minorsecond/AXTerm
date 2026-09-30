@@ -275,9 +275,9 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertNil(session.t1TimerTask,
-            "T1 must be cancelled after DISC received (Bug B — ghost timer)")
+            "T1 must be canceled after DISC received (Bug B — ghost timer)")
         XCTAssertNil(session.t1PendingRetransmitTask,
-            "T1 grace-period task must also be cancelled on DISC")
+            "T1 grace-period task must also be canceled on DISC")
         XCTAssertNil(session.t3TimerTask,
             "T3 must also be stopped on DISC")
 
@@ -415,7 +415,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
     // MARK: ──────────────────────────────────────────────────────────────
 
     /// Duplicate SABM received while connected must reset the session (§4.3.3.1).
-    /// V(S), V(R), V(A) all return to 0; send buffer flushed; T1 cancelled; T3 running.
+    /// V(S), V(R), V(A) all return to 0; send buffer flushed; T1 canceled; T3 running.
     func testDuplicateSABM_WhileConnected_ResetsSession() {
         let (manager, _) = makeManager(windowSize: 4)
         let session = connect(manager)
@@ -714,7 +714,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         // If T3 incorrectly rescheduled itself, t3TimerTask would be non-nil here.
         clock.advance(by: 31.0)
 
-        // T3 must remain nil: it was cancelled when data was sent and must NOT
+        // T3 must remain nil: it was canceled when data was sent and must NOT
         // reschedule while T1 has outstanding frames.
         XCTAssertNil(session.t3TimerTask,
             "T3 must not reschedule while T1 has outstanding frames")

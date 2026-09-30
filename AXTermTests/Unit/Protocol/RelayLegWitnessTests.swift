@@ -4,7 +4,7 @@ import XCTest
 /// Reading a relay hop's outcome from the node's outward link.
 ///
 /// Replays the shapes seen on air on 2026-08-27, when DRLNOD was asked for
-/// KB5YZB-7 and dialled it as `K0EPI-6` — our callsign, an SSID we had never
+/// KB5YZB-7 and dialed it as `K0EPI-6` — our callsign, an SSID we had never
 /// used. The UA came back four seconds before DRLNOD said `###LINK MADE`, and
 /// on the next hop that announcement was lost entirely.
 final class RelayLegWitnessTests: XCTestCase {

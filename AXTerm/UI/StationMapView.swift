@@ -20,7 +20,7 @@ struct StationMapView: View {
     /// bearing, but a map wants coordinates.
     let observer: GreatCircle.Point
     let coordinates: [String: GreatCircle.Point]
-    /// The operator's own callsign, for the centre marker. A grid
+    /// The operator's own callsign, for the center marker. A grid
     /// reference is not what someone looking for themselves scans for.
     var observerCallsign: String = ""
     var basemap: MapBasemap = .standard
@@ -144,7 +144,7 @@ struct StationMapView: View {
                 .padding(.vertical, 3)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 4))
                 .padding(6)
-                .help("Required by the map data licence. Offline tiles are still someone's work.")
+                .help("Required by the map data license. Offline tiles are still someone's work.")
         }
     }
 
@@ -377,7 +377,7 @@ struct StationMapView: View {
 
     /// A marker's footprint is **constant**, selected or not.
     ///
-    /// An annotation is positioned by the centre of its content, so
+    /// An annotation is positioned by the center of its content, so
     /// anything that changes the content's size moves the marker: growing
     /// the dot on selection shifted the whole thing under the cursor, and
     /// clicking around a cluster made them all appear to bounce. Only
@@ -390,7 +390,7 @@ struct StationMapView: View {
 
     private func marker(for site: StationScope.Site) -> some View {
         let isSelected = site.id == selection
-        // A node is infrastructure, not traffic: one colour for all of
+        // A node is infrastructure, not traffic: one color for all of
         // them, so the eye separates the network's fixtures from the
         // stations moving through it. Recency still shows through the
         // stale fade.
@@ -432,7 +432,7 @@ struct StationMapView: View {
                     // The APRS glyph the station beaconed, over its dot — a
                     // car, a digipeater, a weather station. Sized to fill the
                     // dot and given a dark edge so it reads white on any
-                    // recency colour, because the symbol is the whole point of
+                    // recency color, because the symbol is the whole point of
                     // an APRS marker.
                     APRSSymbolView(table: symbol.table, code: symbol.code,
                                    size: diameter * 0.78)
@@ -479,8 +479,8 @@ struct StationMapView: View {
         }
     }
 
-    /// A trail's colour matches its station's dot, so the line and the marker
-    /// read as one. Falls back to grey when the station is not in the scope.
+    /// A trail's color matches its station's dot, so the line and the marker
+    /// read as one. Falls back to gray when the station is not in the scope.
     private func trailColor(for id: String) -> Color {
         guard let site = scope.sites.first(where: { $0.id == id }) else { return .secondary }
         return site.isNode ? .purple : color(for: site.signal)

@@ -184,7 +184,7 @@ final class WinlinkSyncEngineTests: XCTestCase {
             tokenStore: WinlinkMemoryTokenStore())
     }
 
-    // MARK: The headline behaviour
+    // MARK: The headline behavior
 
     /// Mail received on the home rig appears on the handheld.
     func testMailCrossesBetweenDevices() async throws {

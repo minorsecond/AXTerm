@@ -3,7 +3,7 @@ import XCTest
 
 /// What an obstruction actually costs.
 ///
-/// Metres above the line answer "is something in the way". They do not answer
+/// Meters above the line answer "is something in the way". They do not answer
 /// "does it matter", and the two come apart badly — a ridge 4 m above the
 /// line 1 km out costs about 7 dB, which a packet link shrugs off, and the
 /// app was calling that "Blocked ... a direct contact is unlikely regardless
@@ -78,7 +78,7 @@ final class TerrainDiffractionTests: XCTestCase {
 
     /// The same 4 m at the midpoint of the same path is a different fact —
     /// the Fresnel zone is widest there, so the intrusion is a smaller
-    /// fraction of it and costs less. Metres alone cannot express that, which
+    /// fraction of it and costs less. Meters alone cannot express that, which
     /// is the whole argument for reporting decibels.
     func testTheSameHeightCostsDifferentlyDependingOnWhereItIs() {
         let lambda = TerrainProfile.speedOfLight / 145_000_000
@@ -166,7 +166,7 @@ final class KnifeEdgeApproximationTests: XCTestCase {
     /// Past that crossing the exact solution goes *negative* — a clearance of
     /// 0.6 F1 shows about 0.4 dB of enhancement, and 0.7 F1 about 1 dB,
     /// because the diffracted and direct fields add. Real, and deliberately
-    /// not modelled: the app clamps to zero, so it never credits a ridge with
+    /// not modeled: the app clamps to zero, so it never credits a ridge with
     /// improving a path. Overstating loss costs an operator a contact they
     /// might have made; claiming gain from an obstruction costs them trust in
     /// everything else the page says.

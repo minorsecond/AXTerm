@@ -1,7 +1,7 @@
 """Contact sheet for review: 4x grid, then the 26px size the map draws."""
 import glob, io
 
-SKIP = {"mac-apple-colour.svg"}   # a colour variant, not a set member
+SKIP = {"mac-apple-colour.svg"}   # a color variant, not a set member
 files = sorted(f for f in glob.glob("*.svg")
                if not f.startswith("_") and f not in SKIP)
 cols, cell = 6, 110

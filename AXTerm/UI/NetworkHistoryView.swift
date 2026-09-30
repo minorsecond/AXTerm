@@ -2,7 +2,7 @@ import SwiftUI
 
 /// How one remote observation reads on screen.
 ///
-/// Split out so the wording is testable. The labelling is the safety
+/// Split out so the wording is testable. The labeling is the safety
 /// feature here, not decoration: an operator who mistakes another station's
 /// observations for their own will draw wrong conclusions about what their
 /// own radio can reach, and the screen is the last place that can prevent

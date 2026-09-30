@@ -42,7 +42,7 @@ nonisolated struct CoverageEvidence: Equatable, Sendable {
     /// Folds one received frame in.
     ///
     /// - Parameter isOurs: whether the sender is one of this station's own
-    ///   addresses. Matched on the licence rather than the SSID by the
+    ///   addresses. Matched on the license rather than the SSID by the
     ///   caller: a digipeater repeats whichever of our addresses transmitted.
     @discardableResult
     mutating func absorb(_ packet: Packet, isOurs: Bool) -> Bool {

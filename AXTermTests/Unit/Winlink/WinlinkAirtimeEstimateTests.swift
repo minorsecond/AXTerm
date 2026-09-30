@@ -105,7 +105,7 @@ final class WinlinkAirtimeEstimateTests: XCTestCase {
     }
 
     /// `WinlinkLinkQuality` refuses to let a sample taken elsewhere pass
-    /// as a prediction, and the estimate must honour that rather than
+    /// as a prediction, and the estimate must honor that rather than
     /// quietly using the number.
     func testSamplesFromElsewhereDoNotBecomeTheEstimate() {
         // Same gateway, but every sample was taken ~1500 km away.

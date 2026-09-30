@@ -30,7 +30,7 @@ nonisolated enum WinlinkSyncPolicy {
         /// on a handheld — but it is a measurement by a different antenna in
         /// a different place, so merging it into local routing metrics would
         /// produce numbers describing neither station. Attributed data is
-        /// stored apart, labelled with its origin, and never feeds inference.
+        /// stored apart, labeled with its origin, and never feeds inference.
         case attributed(String)
     }
 
@@ -54,17 +54,17 @@ nonisolated enum WinlinkSyncPolicy {
         case .catalogFavorite:
             .synced("A starred product is an operator preference and travels with them.")
         case .callsignDirectory:
-            .synced("A licence address is the same fact everywhere, and a device with no network benefits most from another device's lookups.")
+            .synced("A license address is the same fact everywhere, and a device with no network benefits most from another device's lookups.")
         case .nodeAlias:
             .synced("DRLNOD is KE0NCQ regardless of which radio heard the beacon.")
         case .callsignBase:
-            // The licence, not the station. `K0EPI` identifies a person and
+            // The license, not the station. `K0EPI` identifies a person and
             // is the same on every radio they own; retyping it per device is
             // pointless friction. The **SSID** is deliberately excluded —
             // see `callsignSSID` below.
-            .synced("A licence callsign identifies the operator, not the radio, so it is the same on every device they own.")
+            .synced("A license callsign identifies the operator, not the radio, so it is the same on every device they own.")
         case .operatorProfile:
-            .synced("Name, organisation, phone, address — the operator, not the equipment. ICS forms want these and retyping them per device is friction with no upside.")
+            .synced("Name, organization, phone, address — the operator, not the equipment. ICS forms want these and retyping them per device is friction with no upside.")
 
         case .callsignSSID:
             // The one piece of the callsign that must not travel. Two devices
@@ -96,7 +96,7 @@ nonisolated enum WinlinkSyncPolicy {
             // measurement of the link and stays home; a terminal transcript
             // is what was said over it. What was said is worth reading from
             // any device — but it was said by a different radio in a
-            // different place, so it arrives labelled with that device and
+            // different place, so it arrives labeled with that device and
             // sits in its own table, never among this device's own history.
             .attributed("A transcript is what was said over the air, not a measurement of the air — that is why it may travel where a session log may not. It was still said from a different radio in a different place, so it is shown under that device's name and kept apart from this device's own history. Frame counts in it are that link's, never folded into this one's metrics.")
         case .bbsMessage:

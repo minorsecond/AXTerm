@@ -7,7 +7,7 @@
 
 import Foundation
 
-/// Runs a single enqueued async action after the configured delay, always cancelling
+/// Runs a single enqueued async action after the configured delay, always canceling
 /// any pending work before scheduling a new task. Canceling/weak captures ensure the
 /// scheduler can be deallocated immediately without leaving a running `Task`.
 /// CoalescingScheduler keeps exactly one pending task, cancels it before scheduling

@@ -255,13 +255,13 @@ final class NetRomRealisticWiringTests: XCTestCase {
         // assertion failed once in a full-suite run on 2026-09-18 and could
         // not be reproduced afterwards — not in forty in-process repetitions,
         // sixteen fresh processes, or six further full runs — so the next
-        // occurrence has to carry its own evidence: whether the neighbour was
+        // occurrence has to carry its own evidence: whether the neighbor was
         // absent, misnamed, or the whole ingest came up short.
         let heard = neighbors.map(\.call).sorted().joined(separator: ", ")
         XCTAssertTrue(neighbors.contains { $0.call == "K0NTS" },
                       "K0NTS should be a neighbor (direct packets). Heard: [\(heard)]")
         // Every decision the engine made about the third-party path, so a
-        // failure says which gate closed rather than only that the neighbour
+        // failure says which gate closed rather than only that the neighbor
         // is missing.
         let thirdParty = integration.observationTrace.filter { $0.contains("K2BBB") }
         XCTAssertTrue(neighbors.contains { $0.call == "K2BBB" },

@@ -24,7 +24,7 @@ nonisolated struct StationTracker {
     /// environment, switch the radio to 144.390, and watch the console: one
     /// line per UI frame showing the destination, the info bytes, and whether
     /// the position parser accepted it — so we can see WHY a station falls back
-    /// to a licence address instead of its beaconed fix.
+    /// to a license address instead of its beaconed fix.
     private static let aprsTraceEnabled =
         ProcessInfo.processInfo.environment["AXTERM_APRS_TRACE"] == "1"
 
@@ -347,7 +347,7 @@ nonisolated struct StationTracker {
         // rebuild keeps the transmitted fixes and movement tracks that
         // update(with:) accrues live. Without this, any bulk rebuild — a radio
         // reconnecting, a replay, a lifetime-count refresh — silently dropped
-        // every station back to its licence/registry placement and erased its
+        // every station back to its license/registry placement and erased its
         // symbol. Filtered to UI frames with a payload first, so only the few
         // frames that could carry a position are sorted and parsed.
         let positionPackets = packets

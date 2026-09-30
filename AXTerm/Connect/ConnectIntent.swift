@@ -118,7 +118,7 @@ nonisolated struct ConnectRequest: Equatable {
     /// A dozen views build these already and a thirteenth is always about
     /// to be written, so the rule lives here where every one of them passes
     /// through. A selection that asks to execute is a bug at the call site;
-    /// honouring it would put a radio on the air, so it is downgraded to a
+    /// honoring it would put a radio on the air, so it is downgraded to a
     /// prefill rather than obeyed.
     ///
     /// `origin` defaults to `.selection` on purpose: a call site that has

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Everything this station has connected to, kept — and, when asked, what
-/// the operator's other devices connected to, kept apart and labelled.
+/// the operator's other devices connected to, kept apart and labeled.
 ///
 /// The terminal's session strip is a row of live tabs, capped at twenty and
 /// gone on relaunch. This is the record: what was said, when, over which

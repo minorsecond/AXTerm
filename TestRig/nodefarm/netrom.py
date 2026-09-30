@@ -9,7 +9,7 @@ Swift exactly:
     N x 21:
         7  destination callsign  (AX.25-shifted, ssid byte 0x60|ssid<<1)
         6  destination alias     (plain ASCII)
-        7  best-neighbour call   (AX.25-shifted)
+        7  best-neighbor call   (AX.25-shifted)
         1  quality
 """
 
@@ -48,7 +48,7 @@ def nodes_payload(origin_alias, entries):
 
 def decode_nodes(payload):
     """Round-trip decoder, for the validator. Returns (origin_alias,
-    [(dest, dest_alias, neighbour, quality)]) or None."""
+    [(dest, dest_alias, neighbor, quality)]) or None."""
     if len(payload) < 7 or payload[0] != SIGNATURE:
         return None
     origin = payload[1:7].decode("ascii", "replace").strip()

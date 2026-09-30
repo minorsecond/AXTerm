@@ -81,15 +81,15 @@ still works.
 
 `AttributedString` rather than a row of separate `Text` views, because the line
 has to stay one selectable, wrapping paragraph and splitting it into views
-would break both. Underlined rather than recoloured: the console already uses
-colour to say what class of line this is, and a second meaning for colour in
+would break both. Underlined rather than recolored: the console already uses
+color to say what class of line this is, and a second meaning for color in
 the same row would fight the first.
 
 ## QRZ
 
 `QRZLink.url(for:)` builds `https://www.qrz.com/db/<CALL>` — no API key, no
 subscription, no network call, because QRZ's public profile URLs are just the
-callsign. The SSID is dropped: QRZ knows licences, and `KF0YKI-9` is one
+callsign. The SSID is dropped: QRZ knows licenses, and `KF0YKI-9` is one
 operator's ninth station rather than a ninth licensee.
 
 It is a guess, and is offered as one. Service endpoints and tactical aliases
@@ -97,7 +97,7 @@ get no link at all rather than one to a page that will not exist.
 
 Two ways to it: right-click a callsign in the console, or the row at the bottom
 of the station page. Below everything AXTerm itself knows, deliberately — what
-a station has been heard doing is more use mid-session than a licence address.
+a station has been heard doing is more use mid-session than a license address.
 
 A real directory lookup is a different thing with a seam of its own:
 `CallsignDirectory` and `CallsignDirectoryChain` take HamDB today and would
@@ -112,4 +112,4 @@ URLs that must not be linked; the addressed and heard calls that must be; the
 pattern-only match that is found but not offered; and the link round trip.
 
 `AXTermTests/Unit/Station/QRZLinkTests.swift` — the URL, the dropped SSID,
-normalisation, and the callsigns that get nothing.
+normalization, and the callsigns that get nothing.

@@ -297,7 +297,7 @@ struct NWSTabularForecastView: View {
         return "\(night)/\(day)%"
     }
 
-    /// Only a genuinely wet forecast earns colour; 20% everywhere would
+    /// Only a genuinely wet forecast earns color; 20% everywhere would
     /// make the table read as alarming when it is ordinary.
     private func popTint(_ cell: NWSTabularForecast.Cell) -> Color {
         guard let peak = cell.peakPop else { return .secondary }
@@ -308,7 +308,7 @@ struct NWSTabularForecastView: View {
 
     /// Says what the value is *and* where it came from — the product,
     /// the office, and the issuance time, so a stale forecast is
-    /// recognisable as stale.
+    /// recognizable as stale.
     private func tooltip(_ cell: NWSTabularForecast.Cell,
                          day: NWSTabularForecast.Day?,
                          place: String) -> String {

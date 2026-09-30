@@ -9,7 +9,7 @@ final class QRZLinkTests: XCTestCase {
         XCTAssertEqual(QRZLink.url(for: "W1AW")?.absoluteString, "https://www.qrz.com/db/W1AW")
     }
 
-    /// QRZ knows licences. `KF0YKI-9` is one operator's ninth station, not a
+    /// QRZ knows licenses. `KF0YKI-9` is one operator's ninth station, not a
     /// ninth licensee, so the SSID goes.
     func testTheSSIDIsDropped() {
         XCTAssertEqual(QRZLink.url(for: "KF0YKI-9")?.absoluteString, "https://www.qrz.com/db/KF0YKI")

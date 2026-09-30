@@ -310,7 +310,7 @@ final class WinlinkSessionRunner: ObservableObject {
             timerTasks[kind]?.cancel()
             timerTasks[kind] = nil
             // The selection timer exists only while a question is
-            // outstanding, so cancelling it means the question is answered.
+            // outstanding, so canceling it means the question is answered.
             // `resolveInboundSelection` clears the request before it
             // dispatches, so anything still set here was answered by the
             // deadline on the operator's behalf — and the sheet has to go
@@ -441,7 +441,7 @@ final class WinlinkSessionRunner: ObservableObject {
     }
 
     /// Writes an undecodable compressed body to `~/Downloads/AXTerm
-    /// Diagnostics/` so it can be analysed without waiting for the failure
+    /// Diagnostics/` so it can be analyzed without waiting for the failure
     /// to recur — which, at 25 B/s on a capped session, means several
     /// attempts across many minutes.
     ///

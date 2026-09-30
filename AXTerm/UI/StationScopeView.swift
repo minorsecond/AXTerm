@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// Renders a `StationScope`: this station at the centre, everything else
+/// Renders a `StationScope`: this station at the center, everything else
 /// plotted by true bearing and range.
 ///
 /// Reusable by construction — it knows nothing about Winlink, gateways or
 /// mail. Anything that can produce a `StationScope` (RMS gateways,
-/// NET/ROM neighbours, heard stations) gets this rendering for free.
+/// NET/ROM neighbors, heard stations) gets this rendering for free.
 struct StationScopeView: View {
 
     let scope: StationScope
@@ -129,7 +129,7 @@ struct StationScopeView: View {
     }
 
     /// Fixed footprint, for the same reason as the map: the marker is
-    /// centred on its offset, so any size change shifts it. Selection
+    /// centered on its offset, so any size change shifts it. Selection
     /// changes only what is drawn inside.
     private func marker(for site: StationScope.Site, radius: CGFloat) -> some View {
         let point = site.unitPoint(maxRange: scope.maxRange)

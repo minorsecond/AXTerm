@@ -30,7 +30,7 @@ final class NetworkInsightSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.drawablePredictions.first?.from, "C")
     }
 
-    /// The near miss is the actionable one — four metres of mast, not a
+    /// The near miss is the actionable one — four meters of mast, not a
     /// hundred and seventy.
     func testClosestBlockedIsTheSmallestObstruction() {
         var snapshot = NetworkInsightModel.Snapshot()

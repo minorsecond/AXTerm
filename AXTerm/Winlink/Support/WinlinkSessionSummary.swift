@@ -28,7 +28,7 @@ nonisolated struct WinlinkSessionSummary: Equatable, Sendable, Identifiable {
 
     /// Bytes both ways over the whole session — the figure that says whether
     /// the airtime was worth spending. Nil when there was no time to measure
-    /// over, because a rate there would be an artefact rather than a fact.
+    /// over, because a rate there would be an artifact rather than a fact.
     var bytesPerSecond: Double? {
         let seconds = log.duration
         guard seconds > 0 else { return nil }

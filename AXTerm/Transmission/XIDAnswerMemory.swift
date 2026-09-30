@@ -36,7 +36,7 @@ nonisolated struct XIDAnswerMemory {
 
     /// Base lifetime of a remembered rejection.
     static let revalidateAfter: TimeInterval = 30 * 24 * 3600
-    /// Each station's expiry lands somewhere in the fortnight after the
+    /// Each station's expiry lands somewhere in the two weeks after the
     /// base lifetime, spread by its callsign.
     static let revalidateJitterSpan: TimeInterval = 14 * 24 * 3600
 

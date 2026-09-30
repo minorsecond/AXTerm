@@ -19,7 +19,7 @@ confident-looking map, not a more accurate one.
 
 The error here is not dominated by the choice of distance kernel anyway. Over
 ground like Colorado's it is dominated by **elevation**: Denver sits near
-1600 m and the foothills twenty kilometres west are past 2500 m, which is
+1600 m and the foothills twenty kilometers west are past 2500 m, which is
 roughly 9 °F from lapse rate alone. Any purely horizontal interpolator, kriging
 included, smears that into nonsense.
 
@@ -30,15 +30,15 @@ So the useful idea is not a better kernel, it is removing the trend first.
 `APRSWeatherField.Parameter` — the difference is physical, not taste.
 
 - **Pressure** is the best-behaved thing a surface network measures. It varies
-  smoothly over hundreds of kilometres, which is why hand-drawn isobars from
+  smoothly over hundreds of kilometers, which is why hand-drawn isobars from
   sparse stations worked for a century. It arrives already reduced to sea
   level, so it is **not** height-corrected a second time; a station sending
   raw station pressure from altitude reads ~100 mb low and is rejected as a
   broken sensor rather than allowed to drag the field.
 - **Temperature** needs the elevation trend removed first — see below.
 - **Humidity** gets plain distance weighting and no trend.
-- **Rainfall is deliberately not offered.** Rain cells are kilometres across
-  and gauges are tens of kilometres apart, so a smooth surface drawn through a
+- **Rainfall is deliberately not offered.** Rain cells are kilometers across
+  and gauges are tens of kilometers apart, so a smooth surface drawn through a
   handful of them invents storms between the gauges and erases the ones that
   fell between them. Rain stays on the stations that measured it, as numbers.
 
@@ -67,7 +67,7 @@ kriging to be fittable.
 
 ## What it refuses to do
 
-- **Two stations minimum.** One reading is a reading, not a field; colouring
+- **Two stations minimum.** One reading is a reading, not a field; coloring
   from it paints one thermometer across a county.
 - **Nothing past 40 km from every station** (`coverageRadiusKm`). Beyond that,
   extrapolation draws the global mean wearing a gradient, which looks exactly
@@ -87,10 +87,10 @@ The **Weather Field** switch, filed under the APRS traffic family, so on a
 multi-radio station it appears under the radio that carries APRS. Its caption
 names the station count and whether the lapse rate was fitted or assumed —
 two stations and twelve are very different maps and they look identical once
-coloured. The switch is disabled with an explanation when too few stations
+colored. The switch is disabled with an explanation when too few stations
 have been heard to infer anything.
 
-Stations placed at a licence address still contribute. Their thermometer is
+Stations placed at a license address still contribute. Their thermometer is
 real even when their dot is a lookup, and excluding them would throw away half
 the readings on a channel where few stations beacon a position.
 
@@ -99,4 +99,4 @@ the readings on a channel where few stations beacon a position.
 `AXTermTests/Unit/APRS/APRSWeatherFieldTests.swift` — the two-station floor,
 the lapse-rate fit and its three fallbacks, interpolation between stations,
 the height correction making a cell colder, refusing to answer past the
-coverage radius, the confidence fade, and the colour ramp staying in gamut.
+coverage radius, the confidence fade, and the color ramp staying in gamut.

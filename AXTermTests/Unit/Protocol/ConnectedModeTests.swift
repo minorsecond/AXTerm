@@ -5,7 +5,7 @@
 //  Tests for AX.25 connected-mode session handling including:
 //  - CR terminator for BBS compatibility
 //  - I-frame control byte encoding (single byte modulo-8)
-//  - Session acknowledgement with correct N(R)
+//  - Session acknowledgment with correct N(R)
 //  - V(R)/V(S) sequence number tracking
 //
 
@@ -167,9 +167,9 @@ final class ConnectedModeTests: XCTestCase {
         }
     }
 
-    // MARK: - Sequence Number Acknowledgement Tests
+    // MARK: - Sequence Number Acknowledgment Tests
 
-    /// Test that receiving I-frame N(S)=0 should result in acknowledgement N(R)=1
+    /// Test that receiving I-frame N(S)=0 should result in acknowledgment N(R)=1
     func testAcknowledgementAfterSingleIFrame() {
         // Simulate receiving I-frame with N(S)=0
         // Our V(R) should increment to 1
@@ -190,7 +190,7 @@ final class ConnectedModeTests: XCTestCase {
         XCTAssertEqual(decoded.nr, 1, "RR should have N(R)=1")
     }
 
-    /// Test acknowledgement after multiple I-frames
+    /// Test acknowledgment after multiple I-frames
     func testAcknowledgementAfterMultipleIFrames() {
         var vr = 0
 

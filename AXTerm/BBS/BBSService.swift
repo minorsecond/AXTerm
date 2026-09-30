@@ -38,7 +38,7 @@ final class BBSService: ObservableObject {
     @Published private(set) var calls: [BBSCall] = []
     /// The white pages directory, sorted by callsign.
     @Published private(set) var directory: [WhitePagesEntry] = []
-    /// Facts recognised in BBS sessions the operator had, waiting to be
+    /// Facts recognized in BBS sessions the operator had, waiting to be
     /// accepted. Offered rather than applied — see `BBSDirectoryHarvester`.
     @Published private(set) var suggestions: [BBSDirectoryHarvester.Candidate] = []
     /// The caller being served right now, if any.
@@ -69,7 +69,7 @@ final class BBSService: ObservableObject {
     /// What this station has heard, for `J`. Injected rather than reached for:
     /// the mailbox has no business holding a packet engine.
     private let heardStations: () -> [BBSShell.HeardStation]
-    /// The catalogue and the bytes behind it. Nil when there is no database.
+    /// The catalog and the bytes behind it. Nil when there is no database.
     private let library: BBSFileLibrary?
     /// Whether a peer has answered a capability probe, which is what decides
     /// between AXDP and YAPP for a download.
@@ -81,7 +81,7 @@ final class BBSService: ObservableObject {
     /// delivered rate is nearer two thirds of that. An estimate that flatters
     /// itself is worse than none, because a caller plans around it.
     private let linkBytesPerSecond: () -> Double
-    /// The licence record for a callsign, from the directory AXTerm already
+    /// The license record for a callsign, from the directory AXTerm already
     /// caches. **Cached only** — a mailbox answering a call must not make an
     /// internet request about whoever just called it.
     private let licenceRecord: (String) -> CallsignRecord?
@@ -109,7 +109,7 @@ final class BBSService: ObservableObject {
     private var lastActivity: Date = .distantPast
     private var idleTask: Task<Void, Never>?
     private var activeTransfer: FileTransferProtocol?
-    /// Armed by `U`, until the caller's first recognisable protocol frame.
+    /// Armed by `U`, until the caller's first recognizable protocol frame.
     private var awaitingUpload = false
     private var uploadsThisCall = 0
     private var transferBridge: BBSTransferBridge?
@@ -310,7 +310,7 @@ final class BBSService: ObservableObject {
             try? $0.lastVisit(callsign: caller, excluding: callId)
         }
 
-        // Fill what the licence already answers before the greeting is
+        // Fill what the license already answers before the greeting is
         // composed, so a first-time caller can be greeted by name rather than
         // asked for one this station could have looked up.
         learnFromLicence(caller: caller, at: at)
@@ -544,7 +544,7 @@ final class BBSService: ObservableObject {
         do { try work(store) } catch { storeError = "\(error)" }
     }
 
-    /// Merges the cached licence record for a callsign into the directory.
+    /// Merges the cached license record for a callsign into the directory.
     ///
     /// Under the usual rule, so anything the operator was told outranks it and
     /// anything guessed from traffic is improved by it.
@@ -777,7 +777,7 @@ final class BBSService: ObservableObject {
     /// Picks the protocol from the caller's own first bytes.
     ///
     /// The mailbox cannot know in advance what the caller's software speaks,
-    /// and the registry already recognises each protocol's opening frame.
+    /// and the registry already recognizes each protocol's opening frame.
     private func startReceiving(_ data: Data) -> Bool {
         guard let driver = TransferProtocolRegistry.shared.detectAndCreate(from: data) else {
             return false
@@ -893,7 +893,7 @@ extension BBSService {
         private var shell: BBSShell
         // weak, not unowned: an unowned stored property in a FAILABLE
         // init corrupts the heap when the guard returns nil (the
-        // partially-initialised object's teardown double-releases it) —
+        // partially-initialized object's teardown double-releases it) —
         // found the hard way by this class's own tests.
         private weak var service: BBSService?
 

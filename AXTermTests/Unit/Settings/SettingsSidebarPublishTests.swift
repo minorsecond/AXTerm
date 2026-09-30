@@ -211,7 +211,7 @@ final class SettingsSidebarPublishTests: XCTestCase {
             window.close()
             spin(0.2)
         }
-        XCTAssertEqual(station.settings.activeRadios.count, 1, "cancelled sheets leave nothing behind")
+        XCTAssertEqual(station.settings.activeRadios.count, 1, "canceled sheets leave nothing behind")
     }
 
     func testEachFirstRunStepRenders() throws {

@@ -432,7 +432,7 @@ final class ConnectBarViewModel: ObservableObject {
     ///
     /// Field capture 2026-08-28 19:20: AA3RG-7 chosen from "Reachable via
     /// nodes", the status strip drew the full DRLNOD → KB5YZB-7 → COSCO
-    /// relay path — and the bar, still set to AX.25 Direct, dialled
+    /// relay path — and the bar, still set to AX.25 Direct, dialed
     /// AA3RG-7 into fifteen retries of silence. The picture and the dial
     /// must come from the same knowledge: a station with a NET/ROM route
     /// or a directory claim, never heard on the air, switches the bar to

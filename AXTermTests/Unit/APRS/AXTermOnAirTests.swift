@@ -34,7 +34,7 @@ final class AXTermOnAirTests: XCTestCase {
         ).onRadio(RadioID(rawValue: "rig")).encodeAX25()
     }
 
-    /// The catalogue of what we put on the air, in one place, so the fixture
+    /// The catalog of what we put on the air, in one place, so the fixture
     /// and the rig script cannot drift from it.
     struct OnAir {
         let name: String

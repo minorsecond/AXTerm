@@ -22,7 +22,7 @@ for n in names:
     os.makedirs(d)
     shutil.copy(os.path.join(SRC, n + ".svg"), d)
     props = {"preserves-vector-representation": True}
-    # The colour apple is artwork, not a mask: tinting it white would throw
+    # The color apple is artwork, not a mask: tinting it white would throw
     # away the only reason it exists.
     if not n.endswith("-colour"):
         props["template-rendering-intent"] = "template"

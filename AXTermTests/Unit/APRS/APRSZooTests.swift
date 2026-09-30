@@ -12,7 +12,7 @@ import XCTest
 /// heard. This suite asserts AXTerm reaches Direwolf's conclusions.
 ///
 /// Most frames are real transmissions off the operator's own channel
-/// (2026-09-09); the rest are synthesised to APRS 1.01, and Direwolf decoding
+/// (2026-09-09); the rest are synthesized to APRS 1.01, and Direwolf decoding
 /// them at all is what validates the synthesis, since it simply fails to
 /// decode a malformed frame.
 ///
@@ -188,7 +188,7 @@ final class APRSZooTests: XCTestCase {
         XCTAssertNil(ours.speedKnots, "zero speed is absence, not a reading")
         XCTAssertEqual(Double(try XCTUnwrap(ours.altitudeFeet)),
                        try XCTUnwrap(number(#"alt (\d+) ft"#, in: f.said)),
-                       accuracy: 1, "Mic-E altitude (base-91 metres, −10000)")
+                       accuracy: 1, "Mic-E altitude (base-91 meters, −10000)")
     }
 
     /// `/A=` in a compressed report's comment, which our parser has to strip
@@ -282,7 +282,7 @@ final class APRSZooTests: XCTestCase {
         for channel in 1...5 {
             XCTAssertEqual(ours.analogue[channel - 1],
                            try XCTUnwrap(number(#"A\#(channel)=(\d+)"#, in: f.said)),
-                           "analogue channel \(channel)")
+                           "analog channel \(channel)")
         }
         XCTAssertEqual(ours.bits.count, 8)
         for bit in 1...8 {
@@ -293,7 +293,7 @@ final class APRSZooTests: XCTestCase {
 
     // MARK: - Weather
 
-    /// APRS 1.01 ch.12. Direwolf reports every field it recognised, which is
+    /// APRS 1.01 ch.12. Direwolf reports every field it recognized, which is
     /// the closest thing to an independent reading of a weather beacon we can
     /// get — and the place a filler-versus-zero mistake would show up, since
     /// `r000` is a real zero and `r...` is no sensor.

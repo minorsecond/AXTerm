@@ -625,7 +625,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     ///
     /// `then` runs once the link is fully down, which is later than usual when
     /// there is something to restore: the writes need a moment to leave before
-    /// the connection is cancelled, or CoreBluetooth may drop them.
+    /// the connection is canceled, or CoreBluetooth may drop them.
     private func closeInternal(reason: String, then completion: (() -> Void)? = nil) {
         lock.lock()
         let connected = _state == .connected
@@ -643,7 +643,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         cancelStartupRecoveryWatchdog()
         sendInitFrames(restore, index: 0) { [weak self] _ in
             // Long enough for the writes to leave, and for an input gain
-            // change to finish: the TNC4 re-centres its input for a second
+            // change to finish: the TNC4 re-centers its input for a second
             // afterwards, and dropping the link inside that left it
             // unresponsive until it rebooted.
             self?.bleQueue.asyncAfter(deadline: .now() + MobilinkdSessionDriver.restoreSettleSeconds) { [weak self] in

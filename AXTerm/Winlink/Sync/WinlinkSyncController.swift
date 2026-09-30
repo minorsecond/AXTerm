@@ -392,7 +392,7 @@ extension WinlinkSyncController.Status {
             if report.wasReset {
                 lines.append("The server discarded this device's position, so the pass re-read everything rather than risk missing changes in between.")
             }
-            lines.append("Messages, read flags, folders, contacts and callsign lookups sync. What your other stations heard and connected to arrives labelled with the station that did it. Digipeater paths, the gateway ladder, session logs and grid square do not \u{2014} they describe this antenna at this location.")
+            lines.append("Messages, read flags, folders, contacts and callsign lookups sync. What your other stations heard and connected to arrives labeled with the station that did it. Digipeater paths, the gateway ladder, session logs and grid square do not \u{2014} they describe this antenna at this location.")
             return lines.joined(separator: "\n\n")
         }
     }

@@ -29,7 +29,7 @@ final class NodeAliasParserTests: XCTestCase {
                 .first { $0.alias == "EATON" }?.callsign, "W2CRS")
     }
 
-    /// `KB5YZB-1/B` is an SSID of the same licence, not a tactical
+    /// `KB5YZB-1/B` is an SSID of the same license, not a tactical
     /// alias. Recording it would make a callsign resolve to itself.
     func testSSIDsAreNotTreatedAsAliases() {
         let found = NodeAliasParser.parse(

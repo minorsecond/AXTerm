@@ -6,7 +6,7 @@
 import XCTest
 @testable import AXTerm
 
-/// Telling a neighbour from a station piped in over the internet.
+/// Telling a neighbor from a station piped in over the internet.
 ///
 /// Every frame below is verbatim from the prod database, 2026-09-09/10 — the
 /// 129 third-party frames on that channel, and the one station whose distance

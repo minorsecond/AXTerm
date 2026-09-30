@@ -38,9 +38,9 @@ nonisolated final class SQLiteLinkQualityHistoryStore: LinkQualityHistoryStore, 
 
     /// How long history is kept.
     ///
-    /// A fortnight covers "has this got worse since last weekend" — the span
+    /// Two weeks covers "has this got worse since last weekend" — the span
     /// an operator reasons over — while keeping the table small: one row per
-    /// link per minute is about 20k rows per link per fortnight, and a station
+    /// link per minute is about 20k rows per link over two weeks, and a station
     /// tracks a handful of links.
     static let retention: TimeInterval = 14 * 24 * 3600
 

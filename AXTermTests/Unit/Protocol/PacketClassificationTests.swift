@@ -224,7 +224,7 @@ final class PacketClassificationTests: XCTestCase {
     }
 
     func testTooltipMapping() {
-        XCTAssertEqual(PacketClassification.ackOnly.tooltip, "ACK — An acknowledgement frame confirming reception. Does not carry new data.")
+        XCTAssertEqual(PacketClassification.ackOnly.tooltip, "ACK — An acknowledgment frame confirming reception. Does not carry new data.")
         XCTAssertTrue(PacketClassification.dataProgress.tooltip.hasPrefix("DATA —"))
         XCTAssertTrue(PacketClassification.uiBeacon.tooltip.hasPrefix("BEACON —"))
     }

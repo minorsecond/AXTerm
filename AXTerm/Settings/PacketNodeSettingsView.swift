@@ -81,7 +81,7 @@ struct PacketNodeSettingsView: View {
                 Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
                     .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
                     .disabled(settings.allRadiosOnAPRS)
-                    .help("Sends NODES broadcasts so neighbours learn this station exists and "
+                    .help("Sends NODES broadcasts so neighbors learn this station exists and "
                           + "can route to it. Every node that hears one writes this station "
                           + "into its own routing table.")
 
@@ -105,7 +105,7 @@ struct PacketNodeSettingsView: View {
 
                     if settings.netRomNodeAlias.trimmingCharacters(in: .whitespaces).isEmpty {
                         Text("Set a node alias — announcing without one is legal but leaves "
-                             + "a blank name in every neighbour's node list.")
+                             + "a blank name in every neighbor's node list.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
@@ -209,8 +209,8 @@ struct PacketNodeSettingsView: View {
                            isOn: $settings.pingProbeStationsOthersCall)
                         .onChange(of: settings.pingProbeStationsOthersCall) { _, _ in applyNetRomSettings() }
                         .help("Stations this receiver has never heard, but that a "
-                              + "neighbour was heard calling. Asks whether this station "
-                              + "can reach what its neighbours reach — a longer shot, "
+                              + "neighbor was heard calling. Asks whether this station "
+                              + "can reach what its neighbors reach — a longer shot, "
                               + "and a transmission either way.")
 
                     Text("Never while a session is running, never within 10 s of other "
@@ -477,7 +477,7 @@ struct PacketNodeSettingsView: View {
         SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
     }
 
-    /// Why a packet service's switch is greyed out. The services are also
+    /// Why a packet service's switch is grayed out. The services are also
     /// kept off APRS radios where they run (RadioProfile.runsPacketServices);
     /// this makes the settings say so instead of offering a switch that
     /// would do nothing.

@@ -56,7 +56,7 @@ nonisolated enum RigReceiveAudit {
     ///
     /// Only settings whose right value for packet is not a matter of taste.
     /// The mode and the preamp deliberately have none: the operator may be in
-    /// USB on purpose, and whether a preamp helps is a judgement about the
+    /// USB on purpose, and whether a preamp helps is a judgment about the
     /// band rather than a fault to be repaired.
     enum Correction: Equatable, Sendable {
         case attenuatorOff
@@ -76,13 +76,13 @@ nonisolated enum RigReceiveAudit {
         var fix: String
         var severity: Severity
         /// The same change, for us to make over CI-V. Nil where the right
-        /// value is the operator's judgement rather than a fact.
+        /// value is the operator's judgment rather than a fact.
         var correction: Correction?
     }
 
     /// Everything worth saying about these settings, worst first.
     ///
-    /// `modemMode` is what the modem is set to, and every judgement about the
+    /// `modemMode` is what the modem is set to, and every judgment about the
     /// radio's mode and filter depends on it. Without it this judged every
     /// station as though it were 1200 bd FM on 2 m: a 300 bd HF station was
     /// told, at blocking severity, to switch to FM — and the filter check sat

@@ -342,7 +342,7 @@ final class ObservabilityTests: XCTestCase {
 
     @MainActor
     func testConnectionSanitizersClampAndDefault() {
-        // The host and port live on the radio profile now; the sanitisers the
+        // The host and port live on the radio profile now; the sanitizers the
         // old setters deferred to are still the rule for what a profile may hold.
         XCTAssertEqual(AppSettingsStore.sanitizePort(999999), 65535)
         XCTAssertEqual(AppSettingsStore.sanitizePort(0), 1)

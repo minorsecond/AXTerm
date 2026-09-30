@@ -11,7 +11,7 @@ nonisolated struct WinlinkMessageRowModel: Equatable {
 
     var correspondent: String
     var subject: String
-    /// True when `subject` is the placeholder, so the view can grey it.
+    /// True when `subject` is the placeholder, so the view can gray it.
     var subjectIsPlaceholder: Bool
     /// Mail-client date: time today, "Yesterday", "Aug 24", "8/24/25".
     var dateLabel: String

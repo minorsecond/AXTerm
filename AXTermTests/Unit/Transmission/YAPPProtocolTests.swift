@@ -419,6 +419,20 @@ final class YAPPProtocolTests: XCTestCase {
         }
     }
 
+    /// The state case names keep the old `cancelled` spelling in code; the
+    /// text a user reads in an error or a log must say "canceled".
+    func testTransferTextASomeoneReadsSaysCanceled() {
+        XCTAssertEqual(FileTransferError.cancelled.errorDescription, "Transfer canceled")
+        XCTAssertEqual(FileTransferError.peerCancelled.errorDescription, "Transfer canceled by peer")
+        XCTAssertEqual(
+            FileTransferError.invalidState(expected: "idle",
+                                           actual: String(describing: YAPPSenderState.cancelled))
+                .errorDescription,
+            "Invalid state: expected idle, got canceled")
+        XCTAssertEqual(String(describing: BulkTransferStatus.cancelled), "canceled")
+        XCTAssertEqual(String(describing: BulkTransferStatus.failed(reason: "x")), "failed(reason: x)")
+    }
+
     func testCancelChangesState() {
         let yapp = YAPPProtocol()
         let delegate = MockYAPPDelegate()

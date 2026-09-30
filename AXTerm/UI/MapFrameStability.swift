@@ -39,7 +39,7 @@ nonisolated enum MapFrameStability {
     /// A separate, larger tolerance for the *other* way the same jitter
     /// reaches the markers: not the map's frame wobbling, but MapKit
     /// re-anchoring every annotation to pixels on each presented frame while
-    /// the camera is perfectly still — a ~1.3pt flip between two neighbouring
+    /// the camera is perfectly still — a ~1.3pt flip between two neighboring
     /// pixels, ~200 times a second. The discriminator there is the visible
     /// map rect: a real pan or zoom changes it every frame and steps far
     /// larger than this, so a sub-threshold re-anchor while the rect is

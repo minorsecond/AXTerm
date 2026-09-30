@@ -387,7 +387,7 @@ struct ChannelAirtimeLanesView: View {
 /// Charts' built-in legend keys off a foreground-style *scale*, and these
 /// plots deliberately don't use one: goodput is a filled area under a solid
 /// line, retransmit overhead is a translucent area above it, and RTO is a
-/// dashed line. Flattening all that into scale colours would lose the
+/// dashed line. Flattening all that into scale colors would lose the
 /// distinctions the panels exist to show, so the swatches are drawn to
 /// match the marks exactly.
 struct ChartLegend: View {

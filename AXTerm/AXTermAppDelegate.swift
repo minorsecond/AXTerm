@@ -91,7 +91,7 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Back. Reopen everything that was up, say how long we were gone, and tell
-    /// the neighbours — their routes to this station aged while it was away and
+    /// the neighbors — their routes to this station aged while it was away and
     /// the steady NODES cadence can be an hour.
     @MainActor
     private func resumeAfterSleep(outage: TimeInterval?) {

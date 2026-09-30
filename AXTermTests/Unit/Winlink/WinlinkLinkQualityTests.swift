@@ -75,7 +75,7 @@ final class WinlinkLinkQualityTests: XCTestCase {
     }
 
     /// Telnet reaches the CMS over the internet. It proves nothing about
-    /// any RF gateway and must never colour a station row.
+    /// any RF gateway and must never color a station row.
     func testTelnetSessionsAreExcluded() {
         let result = summarize([
             log(transport: "telnet", bytesReceived: 500_000, at: here)
@@ -115,7 +115,7 @@ final class WinlinkLinkQualityTests: XCTestCase {
             [log(durationSeconds: 1_000, bytesReceived: 20_000)], observer: here))
         let presentation = quality?.presentation(now: now)
 
-        XCTAssertEqual(presentation?.tint, .neutral, "no colour-coded verdict without provenance")
+        XCTAssertEqual(presentation?.tint, .neutral, "no color-coded verdict without provenance")
         XCTAssertNotEqual(presentation?.systemImage, "location.slash",
                           "a location-slash icon claims the samples came from elsewhere")
         XCTAssertTrue(presentation?.text.contains("B/s") ?? false,
@@ -257,7 +257,7 @@ final class WinlinkLinkQualityTests: XCTestCase {
 
         let presentation = quality?.presentation(now: now)
         XCTAssertEqual(presentation?.tint, .neutral,
-                       "a measurement from elsewhere must not be coloured as a verdict")
+                       "a measurement from elsewhere must not be colored as a verdict")
         XCTAssertTrue(presentation?.tooltip.contains("different link") ?? false)
     }
 

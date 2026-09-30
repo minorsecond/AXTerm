@@ -17,7 +17,7 @@ nonisolated struct OutboundMessageProgress: Identifiable, Equatable {
     var bytesSent: Int
     var bytesAcked: Int
     let destination: String
-    /// The peer whose acknowledgements advance this progress.
+    /// The peer whose acknowledgments advance this progress.
     ///
     /// Normally the destination itself. Through a NET/ROM circuit the two are
     /// different stations: the operator is sending to KB5YZB-7, but the frames

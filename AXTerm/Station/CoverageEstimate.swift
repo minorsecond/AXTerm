@@ -57,7 +57,7 @@ nonisolated enum CoverageEstimate {
         /// range of the home station listening to it.
         case heardDirect
 
-        /// Which way the signal travelled. The two directions are different
+        /// Which way the signal traveled. The two directions are different
         /// distances and a ring that did not say which it measured would be
         /// read as the other one.
         var isTransmit: Bool { self != .heardDirect }
@@ -140,7 +140,7 @@ nonisolated enum CoverageEstimate {
     /// A path counts when it touches one of our own addresses (full
     /// callsign match — a base-callsign match would count a node's
     /// borrowed relay leg, whose transmitter is the node's, not ours),
-    /// travelled direct (a digipeated answer proves the digipeater's
+    /// traveled direct (a digipeated answer proves the digipeater's
     /// coverage, not ours), is fresh, and reached `.sessionEstablished` —
     /// a connect request answered, so frames crossed in both directions.
     /// That last is the only level that proves the far end decoded us
@@ -270,10 +270,10 @@ nonisolated enum CoverageEstimate {
 nonisolated enum CoverageRingSelection {
 
     /// The rings to draw, answered first so the connected-mode ring keeps the
-    /// colour it has always had when it is the only one on the map.
+    /// color it has always had when it is the only one on the map.
     ///
     /// Order is fixed rather than following which is larger: a ring that
-    /// changed colour when the other one grew past it would be unreadable.
+    /// changed color when the other one grew past it would be unreadable.
     static func rings(answered: CoverageEstimate.Ring?,
                       showsAnswered: Bool,
                       digipeated: CoverageEstimate.Ring?,
@@ -283,7 +283,7 @@ nonisolated enum CoverageRingSelection {
         var rings: [CoverageEstimate.Ring] = []
         if showsAnswered, let answered { rings.append(answered) }
         if showsDigipeated, let digipeated { rings.append(digipeated) }
-        // The receive rings last, so a transmit ring keeps its colour and its
+        // The receive rings last, so a transmit ring keeps its color and its
         // place whatever the other direction is doing.
         if showsReceived { rings.append(contentsOf: deduplicated(received)) }
         return rings

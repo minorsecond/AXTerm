@@ -2,7 +2,7 @@
 //  BBSDirectoryHarvester.swift
 //  AXTerm
 //
-//  Recognising white pages facts in another station's output.
+//  Recognizing white pages facts in another station's output.
 //
 
 import Foundation
@@ -10,7 +10,7 @@ import Foundation
 /// Pulls directory facts out of a BBS session the operator is already having.
 ///
 /// The distinction that makes this reasonable: nothing here *asks* another
-/// system for anything. Querying a neighbouring BBS to harvest its database
+/// system for anything. Querying a neighboring BBS to harvest its database
 /// would spend their channel on our convenience. Reading structure out of
 /// bytes that arrived because the operator went there themselves costs nobody
 /// anything, and throwing that away is just waste.
@@ -82,7 +82,7 @@ nonisolated struct BBSDirectoryHarvester {
     // MARK: - CALL @ BBS
 
     private static func homeBBSMentions(in line: String) -> [Candidate] {
-        // Normalised so "K0EPI @ K0NTS", "K0EPI @K0NTS" and "K0EPI@K0NTS" are
+        // Normalized so "K0EPI @ K0NTS", "K0EPI @K0NTS" and "K0EPI@K0NTS" are
         // one case rather than three.
         let tokens = line
             .replacingOccurrences(of: "@", with: " @ ")
@@ -159,7 +159,7 @@ nonisolated struct BBSDirectoryHarvester {
         return value
     }
 
-    // MARK: - Labelled records
+    // MARK: - Labeled records
 
     /// A line that names whose record follows.
     ///
@@ -201,7 +201,7 @@ nonisolated struct BBSDirectoryHarvester {
                          evidence: line.trimmingCharacters(in: .whitespaces))
     }
 
-    // MARK: - Recognising a callsign
+    // MARK: - Recognizing a callsign
 
     private static func clean(_ token: String) -> String {
         token.trimmingCharacters(in: CharacterSet(charactersIn: " \t.,;()[]<>\"'"))

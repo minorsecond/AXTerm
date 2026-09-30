@@ -10,7 +10,7 @@ import SwiftUI
 /// a thumbnail.
 ///
 /// It is honest about what the pin means. Most station coordinates in this
-/// app come from a grid square, and the centre of a six-character locator is
+/// app come from a grid square, and the center of a six-character locator is
 /// about 8 km across — the pin describes the square, not the antenna. The
 /// caption says which, because a map is exactly the place someone would
 /// otherwise assume precision it does not have.
@@ -31,7 +31,7 @@ struct NodeProfileMiniMap: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Map(position: $camera, interactionModes: [.pan, .zoom]) {
-                // The circle is the claim; the pin is only where its centre
+                // The circle is the claim; the pin is only where its center
                 // happens to fall. Drawn first so the marker sits above it.
                 if let radius = uncertaintyRadiusMetres {
                     MapCircle(center: coordinate, radius: radius)
@@ -65,9 +65,9 @@ struct NodeProfileMiniMap: View {
         case .exact: return nil
         // Half the diagonal of a six-character locator at mid latitudes:
         // the square is about 5 km by 9 km, so nothing inside ~5 km of the
-        // centre is excluded.
+        // center is excluded.
         case .gridSquare: return 5_000
-        // A node placed at its operator's licence address is a lead about a
+        // A node placed at its operator's license address is a lead about a
         // different entity — nodes live on hilltops, not at the house — so
         // the circle is wide enough to say "somewhere around here".
         case .inferredFromOperator: return 15_000
@@ -83,10 +83,10 @@ struct NodeProfileMiniMap: View {
         case .exact:
             return "A position this station reported."
         case .gridSquare:
-            return "The centre of a grid square, about 8 km across — the shaded area "
+            return "The center of a grid square, about 8 km across — the shaded area "
                 + "is where the antenna could be, not a margin of error on the pin."
         case .inferredFromOperator:
-            return "The operator's licence address, not the node. Nodes usually sit on "
+            return "The operator's license address, not the node. Nodes usually sit on "
                 + "a hilltop or a repeater site, so treat this as a lead."
         }
     }

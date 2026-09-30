@@ -129,7 +129,7 @@ nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocat
 
     func requestOneShotFix(timeout: TimeInterval) async throws -> (latitude: Double, longitude: Double) {
         // The timeout must resume the continuation itself. A task-group race
-        // can't: cancelling a task suspended on a checked continuation leaves
+        // can't: canceling a task suspended on a checked continuation leaves
         // it suspended, and CoreLocation can go permanently silent (locationd
         // "registration timer expired") without ever calling the delegate —
         // which left callers awaiting forever.

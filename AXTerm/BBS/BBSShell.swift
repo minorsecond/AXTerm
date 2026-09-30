@@ -386,7 +386,7 @@ nonisolated struct BBSShell {
             "WP         everyone in the directory",
             "J          stations heard here recently",
             "N name     your name            NQ  your town and state",
-            "NH bbs     your home BBS        NZ  your postcode",
+            "NH bbs     your home BBS        NZ  your ZIP code",
             "V          version",
             "B          disconnect",
             "",
@@ -689,7 +689,7 @@ nonisolated struct BBSShell {
 
     /// End-of-message markers. `/EX` is the convention every packet mailbox
     /// uses; Ctrl-Z is what terminal software of the era sent for the same
-    /// thing, and costs one comparison to honour.
+    /// thing, and costs one comparison to honor.
     private static let endOfMessage = "/EX"
     private static let ctrlZ: Character = "\u{1A}"
 
@@ -797,8 +797,8 @@ nonisolated struct BBSShell {
     /// What changed since this caller was last here.
     ///
     /// The question a regular caller actually has. Sending them the whole
-    /// catalogue every visit costs airtime to tell them things they already
-    /// know, and the catalogue is the part they stop reading.
+    /// catalog every visit costs airtime to tell them things they already
+    /// know, and the catalog is the part they stop reading.
     private func newFiles(mailbox: Mailbox) -> [String] {
         guard !mailbox.files.isEmpty else { return ["No files are shared here."] }
         guard let since = mailbox.lastVisit else {

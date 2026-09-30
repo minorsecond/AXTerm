@@ -11,7 +11,7 @@ a run reproduces, and RANDOMLY across seeds so coverage broadens.
 
 Personalities (each a real AX.25 station on the wire):
   bpq       NET/ROM node: NODES broadcast (PID 0xCF), NODES/ROUTES/MH shell
-  thenet    NET/ROM node, TheNet-flavour banner + NODES broadcast
+  thenet    NET/ROM node, TheNet-flavor banner + NODES broadcast
   kanode    Kantronics KA-Node: ###CONNECTED / ENTER COMMAND, NO NODES
   digi      pure digipeater: repeats via-addressed frames, ID beacon
   bbs       W0RLI/FBB mailbox answered directly, no node level

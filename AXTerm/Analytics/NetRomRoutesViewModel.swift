@@ -47,7 +47,7 @@ nonisolated struct NeighborDisplayInfo: Identifiable, Hashable {
     let sourceType: String
     let lastSeen: Date
     let lastSeenRelative: String
-    /// The radio this neighbour is heard on. Evidence on another radio is
+    /// The radio this neighbor is heard on. Evidence on another radio is
     /// another entry: a different antenna and path.
     let radioID: RadioID
 
@@ -460,7 +460,7 @@ final class NetRomRoutesViewModel: ObservableObject {
     /// engine. With one channel there is nothing to choose and no picker.
     @Published private(set) var radioChannels: [AnalyticsRadioChannel] = []
     /// Which channel the page is scoped to. `.all` shows every visible radio;
-    /// a channel keeps neighbours/routes/link-quality to one frequency.
+    /// a channel keeps neighbors/routes/link-quality to one frequency.
     @Published var selectedRadioScope: AnalyticsRadioScope = .all {
         didSet {
             guard selectedRadioScope != oldValue else { return }
@@ -754,7 +754,7 @@ final class NetRomRoutesViewModel: ObservableObject {
         let rawLinkStats = integration.exportLinkStats(forMode: routingMode)
         // Radio scope: drop a hidden radio's rows (as the map, packets table
         // and analytics dashboard do), and, when a frequency channel is
-        // selected, keep only its radios. Now that neighbours/routes carry the
+        // selected, keep only its radios. Now that neighbors/routes carry the
         // radio that heard them, this actually distinguishes them.
         let filteredNeighbors = rawNeighbors.filter {
             isDisplayableNode($0.call) && passesRadioScope($0.radioID)

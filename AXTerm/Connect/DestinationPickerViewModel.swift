@@ -157,7 +157,7 @@ final class DestinationPickerViewModel: ObservableObject {
         baseFavorites = Set(favorites.map(Self.normalizeCandidate).filter { !$0.isEmpty })
         recentValues = dedupeNormalized(recents)
         neighborValues = dedupeNormalized(neighbors)
-        // Anything already offered as heard, favourited or a neighbour is left
+        // Anything already offered as heard, favorited or a neighbor is left
         // out: the operator has a better-evidenced way to it than hearsay.
         let alreadyOffered = Set(recentValues + neighborValues + Array(baseFavorites))
         reachableValues = dedupeNormalized(reachable).filter { !alreadyOffered.contains($0) }

@@ -96,7 +96,7 @@ nonisolated enum CallsignScanner {
         scan(text, heard: heard).filter { $0.confidence > .possible }
     }
 
-    // MARK: - Tokenising
+    // MARK: - Tokenizing
 
     /// Runs that could be a callsign, with the things that disqualify a run
     /// taken out first.
@@ -206,7 +206,7 @@ nonisolated enum CallsignScanner {
         c.isLetter || c.isNumber || c == "-"
     }
 
-    /// Characters that make a neighbouring token part of a larger field:
+    /// Characters that make a neighboring token part of a larger field:
     /// `V:7.32`, `U=12.4V`, `PHG5370/WA0DE`, `145.130MHz`.
     private static func isGlue(_ c: Character) -> Bool {
         c == "=" || c == ":" || c == "/" || c == "." || c == "#"

@@ -5,7 +5,7 @@ import XCTest
 ///
 /// "Drop after" and the APRS layer switches filtered the markers and left the
 /// sidebar alone, so "On the map" listed stations that had gone quiet a day
-/// ago, and licence-address dots that Transmitted Positions had taken off the
+/// ago, and license-address dots that Transmitted Positions had taken off the
 /// map. The list and the markers now go through one filter.
 final class MapEntryVisibilityTests: XCTestCase {
 
@@ -100,7 +100,7 @@ final class MapEntryVisibilityTests: XCTestCase {
         }
     }
 
-    /// Transmitted Positions takes a licence-address dot off the map when the
+    /// Transmitted Positions takes a license-address dot off the map when the
     /// station was heard on APRS; the list follows.
     func testTransmittedPositionsDropsAddressDotsOnAPRSChannels() {
         let visibility = MapEntryVisibility(

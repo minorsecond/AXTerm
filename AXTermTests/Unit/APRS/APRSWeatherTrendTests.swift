@@ -56,7 +56,7 @@ final class APRSWeatherTrendTests: XCTestCase {
     }
 
     /// A station that has only been heard for ninety minutes still gets an
-    /// answer, normalised so the wording can be compared against the standard
+    /// answer, normalized so the wording can be compared against the standard
     /// three-hour thresholds — but the span it was actually measured over is
     /// kept, because that is what the operator is told.
     func testAShorterSpanIsNormalisedButReportedHonestly() throws {

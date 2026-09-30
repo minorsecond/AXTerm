@@ -1,6 +1,6 @@
 # A real Xastir, on the rig's shared channel, as an APRS station.
 #
-# Why this exists: AXTerm's APRS behaviour was matched to Xastir by *reading*
+# Why this exists: AXTerm's APRS behavior was matched to Xastir by *reading*
 # `src/db.c` and writing prose comments. That is unfalsifiable — nothing fails
 # if the reading was wrong. This container makes the reference implementation
 # an executable oracle: AXTerm asks it a question over a simulated radio

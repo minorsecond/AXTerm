@@ -16,7 +16,7 @@ import SwiftUI
 /// - **Connecting** is muted, and says so, because a pause needs explaining
 ///   before it needs fixing.
 /// - **Not connected** and **failed** are the ones worth interrupting for, so
-///   they carry words and colour, and offer the fix.
+///   they carry words and color, and offer the fix.
 ///
 /// Tapping anywhere on it opens the radio's settings — the strip states a
 /// problem, so it also has to lead somewhere.
@@ -121,7 +121,7 @@ struct TNCStatusStrip: View {
     nonisolated enum Presentation {
 
         /// Whether this state is worth the operator's attention. Drives how
-        /// much room and colour the strip takes.
+        /// much room and color the strip takes.
         static func needsAttention(_ status: ConnectionStatus) -> Bool {
             switch status {
             case .disconnected, .failed: true

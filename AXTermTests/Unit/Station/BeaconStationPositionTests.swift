@@ -5,7 +5,7 @@
 //  An APRS position beacon that follows the station goes out from the
 //  position the map draws, through the one resolver: the exact coordinate
 //  when set, else this device's fix when that is switched on, else the grid
-//  centre. It used to read the device's last location or the grid centre
+//  center. It used to read the device's last location or the grid center
 //  and ignore the exact coordinate, and on iOS nothing was wired at all.
 //
 

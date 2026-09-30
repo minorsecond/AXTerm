@@ -40,7 +40,7 @@ nonisolated extension DatabaseManager {
     /// Lets a queued message exist outside a connected session.
     ///
     /// `sessionId` was NOT NULL, which confined the queue to AX.25 sessions.
-    /// Unconnected AXDP transfers have app-level acknowledgement and retries
+    /// Unconnected AXDP transfers have app-level acknowledgment and retries
     /// with no session underneath (transmission spec 6.4), so they need the
     /// queue's semantics and have no session to name.
     ///

@@ -71,7 +71,7 @@ struct APRSPlaceObjectSheet: View {
     /// first set were wrong — `/-` is a *House*, `/h` is a *Hospital* and not
     /// a shelter, and `\0` is the IRLP/Echolink circle — which is exactly the
     /// failure this picker exists to prevent: a symbol is the only thing most
-    /// receiving stations will ever see, so a mislabelled one puts a house
+    /// receiving stations will ever see, so a mislabeled one puts a house
     /// where the operator marked a road closure.
     enum Choice: String, CaseIterable, Identifiable {
         case incident, obstruction, aidStation, fire, water, hospital, shelter, portable
@@ -93,7 +93,7 @@ struct APRSPlaceObjectSheet: View {
 
         /// Table and code. Changing one of these changes what every other
         /// station on the channel sees; `APRSObjectSymbolTests` pins each
-        /// against the catalogue, and the rig capture against Direwolf.
+        /// against the catalog, and the rig capture against Direwolf.
         var symbol: (Character, Character) {
             switch self {
             case .incident:    return ("\\", "!")   // Emergency
@@ -211,7 +211,7 @@ struct APRSPlaceObjectSheet: View {
                 Label("Moves " + movedSummary, systemImage: "arrow.turn.down.right")
                     .font(.callout)
             } else {
-                // Not refused \u{2014} an operator may well mean a twenty-metre
+                // Not refused \u{2014} an operator may well mean a twenty-meter
                 // nudge \u{2014} but said out loud, because an accidental drag
                 // looks exactly like this and nothing else would tell them.
                 Label("Less than \(Int(APRSObjectMove.restingMetres)) m from where it is now.",

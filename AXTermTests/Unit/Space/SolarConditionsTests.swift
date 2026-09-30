@@ -24,13 +24,13 @@ final class SolarConditionsTests: XCTestCase {
         XCTAssertEqual(SolarBandRelevance.relevance(frequencyHz: 28_120_000, transport: "ax25"), .dominant)
     }
 
-    /// Six metres opens and closes on sporadic-E and aurora, so the indices
+    /// Six meters opens and closes on sporadic-E and aurora, so the indices
     /// genuinely matter — just not every day.
     func testSixMetresIsGenuinelyAffected() {
         XCTAssertEqual(SolarBandRelevance.relevance(frequencyHz: 50_313_000, transport: "ax25"), .significant)
     }
 
-    /// Two metres is the case that matters here, and the honest answer is
+    /// Two meters is the case that matters here, and the honest answer is
     /// "hardly ever" — a disturbed field can bring auroral effects, but a
     /// local packet link is dominated by things on the ground.
     func testTwoMetresIsMarginal() {
@@ -97,7 +97,7 @@ final class SolarConditionsTests: XCTestCase {
 
     // MARK: - Reading the indices
 
-    /// Kp is the number an operator recognises, so the wording is the
+    /// Kp is the number an operator recognizes, so the wording is the
     /// standard one rather than an invention.
     func testKIndexIsDescribedInTheUsualTerms() {
         XCTAssertEqual(SolarConditions.geomagneticDescription(kIndex: 0), "quiet")

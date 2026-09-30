@@ -43,7 +43,7 @@ nonisolated enum PingPolicy {
         /// path works the other way too, which is the useful unknown.
         case heardDirect
         /// Never heard here, but somebody nearby was calling it. Probing
-        /// asks "can I reach what my neighbours reach" — more speculative,
+        /// asks "can I reach what my neighbors reach" — more speculative,
         /// and off by default for that reason.
         case calledByOthers
     }
@@ -127,14 +127,14 @@ nonisolated enum PingPolicy {
         /// never probed: a station transmitting under your own callsign
         /// is either you, or a node dialing out *as* you under a borrowed
         /// SSID — K0EPI-6 is DRLNOD's transmitter wearing this station's
-        /// licence (field capture 2026-08-29 05:05, a ping sent to it).
+        /// license (field capture 2026-08-29 05:05, a ping sent to it).
         /// Either way the answer teaches nothing about anyone's coverage.
         var localCallsign: String = ""
         /// 0…1, supplied by the caller per tick. Stretches the spacing
         /// between probes by up to half again, so the prober never becomes
         /// a metronome the whole channel can hear ticking — and never
         /// falls into lockstep with somebody's beacon interval. Timing is
-        /// the only thing randomised: *which* station is probed stays the
+        /// the only thing randomized: *which* station is probed stays the
         /// deterministic longest-unprobed rotation, because a prober whose
         /// target varies with a dice roll is one nobody can reason about
         /// from a log, and the rotation is already fair.

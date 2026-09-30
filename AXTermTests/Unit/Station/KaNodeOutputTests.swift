@@ -66,7 +66,7 @@ final class KaNodeOutputTests: XCTestCase {
                        ["AF0AJ-7", "W1VAN", "KD0SSP", "KF0HEG"])
     }
 
-    /// A heard line has no parenthesised callsign; a node line does. Confusing
+    /// A heard line has no parenthesized callsign; a node line does. Confusing
     /// the two would file a node's peers as stations it heard directly.
     func testHeardAndNodeLinesAreNotConfusedForEachOther() {
         let nodeLine = "IVAN            (W1VAN-2)   06/04/2026 07:36:16"
@@ -108,7 +108,7 @@ final class KaNodeOutputTests: XCTestCase {
     // MARK: - What may be believed
 
     /// A KA-Node has no L3. Its lists are evidence about *reachability
-    /// through it*, never NET/ROM routes — synthesising a route through a
+    /// through it*, never NET/ROM routes — synthesizing a route through a
     /// station that cannot route is how the app would fabricate paths.
     func testNothingHereIsANetRomRoute() {
         XCTAssertFalse(KaNodeOutput.yieldsNetRomRoutes)

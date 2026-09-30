@@ -1,6 +1,6 @@
 # AXTerm APRS symbol set
 
-Original artwork. Drawn for AXTerm, owned by AXTerm, no third-party licence
+Original artwork. Drawn for AXTerm, owned by AXTerm, no third-party license
 attached — see `axterm-symbol-artwork-licensing` for why that mattered.
 
 ## The system
@@ -24,17 +24,17 @@ the size the map actually draws them.
 
 | family | shared line |
 |---|---|
-| vehicles | wheel centres at y=17.6, ground at 20.5, all face right |
+| vehicles | wheel centers at y=17.6, ground at 20.5, all face right |
 | buildings | body 5..19, eave line, 45° roof |
 | infrastructure | mast on x=12, 1.4 wide |
-| plates | 12×12 clear centre for an overlay character |
+| plates | 12×12 clear center for an overlay character |
 
 Variants are systemic, not separate drawings: `house-hf` **is** `house` with a
 wire; the whole point is that they read as related.
 
 ## Coverage
 
-30 icons (plus one colour variant). Measured against the 2026-09-10 capture, with phantom parses
+30 icons (plus one color variant). Measured against the 2026-09-10 capture, with phantom parses
 excluded (see below): **99.3% of real position reports**, and the remaining
 0.7% is on the fallback layer deliberately.
 
@@ -44,7 +44,7 @@ excluded (see below): **99.3% of real position reports**, and the remaining
 | house-hf | `\-` | House (HF) |
 | box-plate | `\A` | Box (overlay) |
 | circle-plate | `/0`..`/9` | Circle 0-9 |
-| digipeater | `/#` `\#` | Digipeater — a star with a hollow centre |
+| digipeater | `/#` `\#` | Digipeater — a star with a hollow center |
 | hf-gateway | `/&` `\&` | HF gateway |
 | antenna | `/r` | Antenna |
 | dish-antenna | `` /` `` | Dish antenna |
@@ -81,9 +81,9 @@ deliberately short of the mark itself.
   of Apple's mark; without it this is fruit. Stem and leaf are ours.
 
 `mac-apple-colour.svg` is a six-stripe variant, the classic order reversed.
-**It needs a colour-capable render path** — the map tints every glyph white
+**It needs a color-capable render path** — the map tints every glyph white
 through `APRSGlyphRasterizer`, so on a marker it would come out solid. Use it
-where colour survives: the station card, the symbol picker. The mono
+where color survives: the station card, the symbol picker. The mono
 `mac-apple.svg` is the one the map draws.
 
 ### `/J` is reserved, and in use anyway
@@ -107,18 +107,18 @@ AXTerm's own.
 
 The alternate `#` is named "Number (overlay)", so it was first drawn as a
 generic plate. That is spec-literal and practice-wrong: the New n-N Paradigm
-tells digipeaters to beacon `#` with a letter on it — `S` for a digi honouring
+tells digipeaters to beacon `#` with a letter on it — `S` for a digi honoring
 the state alias, `1` for a WIDE1-1 fill-in, `I` for an igate — so `\#` **is**
 the digi symbol, and it had the one shape in the set that said nothing about
 being infrastructure.
 
 Both tables now draw the star the primary table has always documented:
-"DIGI (white center)". The hollow centre is where the overlay letter lands,
+"DIGI (white center)". The hollow center is where the overlay letter lands,
 so one drawing serves the bare digi and the overlaid one.
 
 A lattice tower was tried first and failed for a measurable reason: the letter
 is knocked out of the glyph, and thin splayed legs give it nothing to bite
-into. Rendered through the real rasteriser, `S` on a tower was mud and `S` on
+into. Rendered through the real rasterizer, `S` on a tower was mud and `S` on
 a star was crisp.
 
 ## Measuring a change
@@ -126,7 +126,7 @@ a star was crisp.
     python3 Design/aprs-symbols/measure.py
 
 Legibility at 18px — the size the map actually draws — is not an opinion.
-`measure.py` rasterises the set at that size and reports two numbers:
+`measure.py` rasterizes the set at that size and reports two numbers:
 
 - **ink coverage.** Median is ~26%. Anything under ~15% disappears against a
   tinted dot; anything over ~40% is a blob. The original APRS icons were
@@ -172,7 +172,7 @@ draws nothing, silently.
 - The 158 codes of the 188 that never appeared on this channel. SF Symbols
   answers for them.
 - `mac-apple-colour` is in the catalog but unused: the map tints every glyph
-  white, so it needs a colour-capable surface (the station card, the picker).
+  white, so it needs a color-capable surface (the station card, the picker).
 - The SwiftUI call sites — the sidebar row and the own-station marker — still
   draw `Image(systemName:)` straight from `APRSSymbolGlyph`, so they show SF
   Symbols and no overlay. Only the map markers go through the rasterizer.

@@ -183,7 +183,7 @@ final class APRSDigestTests: XCTestCase {
         XCTAssertEqual(line.aprsInfo, info, "the bytes are kept so a reload decodes the same way")
     }
 
-    /// A frame that is not APRS keeps the old behaviour and stores no bytes.
+    /// A frame that is not APRS keeps the old behavior and stores no bytes.
     func testConsoleLineKeepsNothingForNonAPRS() {
         let line = ConsoleLine.packet(from: "K0EPI-7", to: "NODES", text: "NET/ROM broadcast",
                                       aprsInfo: Data("NET/ROM broadcast".utf8))

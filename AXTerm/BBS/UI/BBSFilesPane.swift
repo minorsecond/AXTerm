@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 
 /// What callers can download, and what it costs them.
 ///
-/// The operator's view of the same catalogue callers see, with the column that
+/// The operator's view of the same catalog callers see, with the column that
 /// decides everything — time on the air — shown the same way here as it is at
 /// the prompt. A 2 MB file looks harmless in a Finder window and is four hours
 /// of a shared frequency.

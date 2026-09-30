@@ -50,8 +50,8 @@ final class NetRomPassiveInference {
         #endif
 
         let isRetry = duplicateStatus == .retryDuplicate || classification == .retryOrDuplicate
-        // The radio that heard this frame. Inferred neighbours and routes are
-        // its own — a station heard only on one radio is a neighbour on that
+        // The radio that heard this frame. Inferred neighbors and routes are
+        // its own — a station heard only on one radio is a neighbor on that
         // radio, not on the primary.
         let radio = packet.radioID ?? .primary
 
@@ -87,7 +87,7 @@ final class NetRomPassiveInference {
         // consumes the alias it answered and sets the H bit on it, so a frame
         // repeated by WQ8M-9 for WIDE1-1 arrives as `WQ8M-9*,WIDE1*,WIDE2-1`
         // and the last repeated entry is the alias, not the station. Taking it
-        // literally made WIDE1 a neighbour and hung every station heard
+        // literally made WIDE1 a neighbor and hung every station heard
         // through any fill-in digi off it (2026-09-17). The station that
         // actually keyed up is the last repeated entry that is a real node.
         let repeatedViaNormalized = packet.via

@@ -6,7 +6,7 @@ import XCTest
 ///
 /// Built against the table AXTerm was actually advertising on 2026-08-27:
 /// ten routes, every one inferred from overheard traffic, including
-/// `KN6VV-1 via HORSE` where HORSE was not a neighbour at all.
+/// `KN6VV-1 via HORSE` where HORSE was not a neighbor at all.
 final class NetRomAdvertisableRoutesTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_787_880_000)
@@ -41,7 +41,7 @@ final class NetRomAdvertisableRoutesTests: XCTestCase {
     /// A harvested route was read out of another node's ROUTES table.
     /// Advertising it would let one operator's scrape propagate through the
     /// network as if it were that node's own broadcast — withheld outright,
-    /// even through a live neighbour, even at full quality.
+    /// even through a live neighbor, even at full quality.
     func testAHarvestedRouteIsNeverAdvertised() {
         let decision = NetRomAdvertisableRoutes.decide(
             routes: [route("COSCO", via: "KB5YZB-7", quality: 192, source: "harvested")],
@@ -71,7 +71,7 @@ final class NetRomAdvertisableRoutesTests: XCTestCase {
         XCTAssertTrue(decision.advertisable.isEmpty)
     }
 
-    /// A neighbour we have not heard in an hour is not somewhere we can
+    /// A neighbor we have not heard in an hour is not somewhere we can
     /// promise to deliver, whatever the table says.
     func testASilentNeighbourStopsBeingAWayThrough() {
         let decision = NetRomAdvertisableRoutes.decide(

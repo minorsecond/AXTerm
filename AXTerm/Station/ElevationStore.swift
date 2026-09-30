@@ -175,8 +175,8 @@ nonisolated final class ElevationStore: @unchecked Sendable {
 
 /// Reads elevation out of the store, interpolating between samples.
 ///
-/// Bilinear rather than nearest-neighbour: at ~100 m spacing, nearest
-/// neighbour puts visible steps in a path profile and can miss a ridge crest
+/// Bilinear rather than nearest-neighbor: at ~100 m spacing, nearest
+/// neighbor puts visible steps in a path profile and can miss a ridge crest
 /// by half a sample. The interpolation is between real measurements, so it
 /// smooths without inventing terrain that is not there.
 nonisolated struct StoredElevationSampler: ElevationSampling {

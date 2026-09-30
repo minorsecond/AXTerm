@@ -5,7 +5,7 @@ import Foundation
 /// Pure, so the rules are testable without a view: local sessions first,
 /// then one section per other device, never interleaved; every remote row
 /// says where it came from; nothing remote unless the operator asked. The
-/// labelling is the safety feature — a transcript from the home rig sitting
+/// labeling is the safety feature — a transcript from the home rig sitting
 /// unmarked in the iPad's list would read as something the iPad did.
 nonisolated enum SessionHistoryListing {
 

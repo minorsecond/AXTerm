@@ -85,8 +85,8 @@ nonisolated final class CoreAudioModemIO: ModemAudioIO, @unchecked Sendable {
             inputUnit = try makeUnit(device: inID, isInput: true, sampleRate: inRate, channels: inputChannels)
             outputUnit = try makeUnit(device: outID, isInput: false, sampleRate: outRate, channels: outputChannels)
             allocateInputBuffers()
-            try check(AudioUnitInitialize(inputUnit!), "initialising input")
-            try check(AudioUnitInitialize(outputUnit!), "initialising output")
+            try check(AudioUnitInitialize(inputUnit!), "initializing input")
+            try check(AudioUnitInitialize(outputUnit!), "initializing output")
         } catch {
             tearDownUnits()
             throw error

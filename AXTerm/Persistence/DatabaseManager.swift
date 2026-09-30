@@ -424,7 +424,7 @@ nonisolated enum DatabaseManager {
     ///
     /// Most networks never broadcast NET/ROM `NODES`, so there is nothing to
     /// listen for on that channel — but nodes, BBSs and digipeaters identify
-    /// themselves anyway, because ID is a licence requirement and operators
+    /// themselves anyway, because ID is a license requirement and operators
     /// fill it with a service list. Collected passively, it needs no internet
     /// and no registry.
     ///

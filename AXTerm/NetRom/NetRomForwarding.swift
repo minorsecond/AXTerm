@@ -26,7 +26,7 @@ nonisolated enum NetRomForwarding {
         case forward(NetRomDatagram, neighbor: AX25Address)
         /// Forwarding is switched off; this station is an endpoint.
         case notARouter
-        /// TTL reached zero. The packet has travelled far enough; if it
+        /// TTL reached zero. The packet has traveled far enough; if it
         /// has not arrived by now it is looping.
         case ttlExpired
         /// Nothing in the routing table reaches the destination.

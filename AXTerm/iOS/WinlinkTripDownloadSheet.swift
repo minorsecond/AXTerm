@@ -31,7 +31,7 @@ struct WinlinkTripDownloadSheet: View {
     var body: some View {
         List {
             Section {
-                Text("Gateways for a region you are travelling to, kept separately from the ones near home. An ordinary refresh will not delete them.")
+                Text("Gateways for a region you are traveling to, kept separately from the ones near home. An ordinary refresh will not delete them.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Text("Do this while you still have a path to the internet — there is no way to fetch it from the field.")

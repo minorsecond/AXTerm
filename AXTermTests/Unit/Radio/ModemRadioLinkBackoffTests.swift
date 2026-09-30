@@ -11,7 +11,7 @@ import XCTest
 /// fixed number of attempts it gave up entirely, stranding a radio that would
 /// have recovered on its own.
 ///
-/// These pin the two behaviours that fix that: the delay grows and caps, and
+/// These pin the two behaviors that fix that: the delay grows and caps, and
 /// the attempt counter never terminates.
 final class ModemRadioLinkBackoffTests: XCTestCase {
 

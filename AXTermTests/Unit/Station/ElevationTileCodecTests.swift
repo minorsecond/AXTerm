@@ -23,7 +23,7 @@ final class ElevationTileCodecTests: XCTestCase {
 
     // MARK: - What comes back
 
-    /// Every sample, to the metre. The source is quantised to a metre long
+    /// Every sample, to the meter. The source is quantized to a meter long
     /// before it reaches here, so this is lossless for the data that exists.
     func testEverySampleSurvivesToTheMetre() throws {
         let samples = 128

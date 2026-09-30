@@ -391,16 +391,16 @@ struct StabilityScorer {
         let retxRatio = Double(lastSnap.retransmissions) / Double(totalSent)
         let retransmitPenalty = min(0.4, retxRatio * 2.0)
 
-        // RTO headroom: penalise if RTO is near rtoMax
+        // RTO headroom: penalize if RTO is near rtoMax
         let rtoRange = max(0.001, rtoMax - rtoMin)
         let rtoFrac = (lastSnap.rto - rtoMin) / rtoRange
         let rtoHeadroomScore = 1.0 - rtoFrac.clamped(to: 0...1)
 
         let composite = max(0, min(1,
             0.4 * rtoHeadroomScore +
-            0.3 * convergenceBonus * (1.0 / 0.3) +  // normalise bonus
-            0.2 * (1 - retransmitPenalty / 0.4) +    // normalise penalty
-            0.1 * (1 - oscillationPenalty / 0.4)     // normalise penalty
+            0.3 * convergenceBonus * (1.0 / 0.3) +  // normalize bonus
+            0.2 * (1 - retransmitPenalty / 0.4) +    // normalize penalty
+            0.1 * (1 - oscillationPenalty / 0.4)     // normalize penalty
         ))
 
         return StabilityScore(

@@ -81,7 +81,7 @@ nonisolated struct WinlinkMessageStatePayload: Codable, Equatable, Sendable {
 ///
 /// Deliberately not a field on `WinlinkMessageStatePayload`. State describes
 /// a message that exists; once one is deleted there is no state row left to
-/// carry the flag, and a receiving device may need to honour the deletion
+/// carry the flag, and a receiving device may need to honor the deletion
 /// for a message it has never held — so this must apply with no content to
 /// attach it to.
 nonisolated struct WinlinkMessageDeletionPayload: Codable, Equatable, Sendable {
@@ -111,11 +111,11 @@ nonisolated protocol WinlinkSyncStore: Sendable {
     /// Writes merged state onto an existing message.
     func syncUpdateState(_ state: WinlinkMessageStateRecord) throws
 
-    /// Messages deleted on this device, to be published so others honour it.
+    /// Messages deleted on this device, to be published so others honor it.
     func syncTombstones() throws -> [WinlinkMessageTombstoneRecord]
     /// Whether this MID was deleted here. Guards content coming back in.
     func syncIsDeleted(mid: String) throws -> Bool
-    /// Honours another device's deletion: removes the message if it is
+    /// Honors another device's deletion: removes the message if it is
     /// here, and records the tombstone either way. Returns whether anything
     /// changed locally.
     @discardableResult
@@ -291,7 +291,7 @@ nonisolated struct WinlinkMessageSyncSource: WinlinkSyncSource {
         return true
     }
 
-    /// Honours a deletion from another device.
+    /// Honors a deletion from another device.
     ///
     /// Applied whether or not the message is here. A device that never
     /// received the message still has to record the tombstone, or the

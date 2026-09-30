@@ -1,7 +1,7 @@
 import XCTest
 @testable import AXTerm
 
-/// The catalogue, and the one property that has to hold: a caller cannot name
+/// The catalog, and the one property that has to hold: a caller cannot name
 /// a file that was not scanned.
 final class BBSFileIndexTests: XCTestCase {
 

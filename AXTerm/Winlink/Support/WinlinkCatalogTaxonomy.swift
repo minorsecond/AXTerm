@@ -8,7 +8,7 @@ import Foundation
 /// it is a two-level browser.
 ///
 /// Grouping is **mechanical** — a prefix decomposition of the code, never
-/// a judgement about the product — so a catalog refresh that adds new
+/// a judgment about the product — so a catalog refresh that adds new
 /// codes slots them in without a code change. Token expansions come from
 /// two sources only: the standard USPS state abbreviations, and codes
 /// whose meaning was read off their own items' subjects in the 2026-08-24

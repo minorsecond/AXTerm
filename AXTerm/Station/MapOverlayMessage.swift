@@ -89,7 +89,7 @@ nonisolated enum MapOverlayMessage {
 
     /// How many features are listed in the body before it is truncated.
     ///
-    /// The body is airtime too. Twenty lines is enough to recognise what
+    /// The body is airtime too. Twenty lines is enough to recognize what
     /// arrived; a hundred would double the message for a list the attachment
     /// already contains.
     static let listedFeatureLimit = 20

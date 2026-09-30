@@ -4,7 +4,7 @@
 //
 //  Tests for AX.25 connected-mode session handling including:
 //  - Connection establishment (SABM/UA)
-//  - I-frame acknowledgement (RR with correct N(R))
+//  - I-frame acknowledgment (RR with correct N(R))
 //  - Poll/Final response handling
 //  - Session state transitions
 //
@@ -16,7 +16,7 @@ import XCTest
 ///
 /// These tests verify that:
 /// 1. V(R) is properly incremented when receiving I-frames
-/// 2. RR acknowledgements include the correct N(R)
+/// 2. RR acknowledgments include the correct N(R)
 /// 3. Poll (P=1) requests receive Final (F=1) responses
 /// 4. Session state transitions work correctly
 final class ConnectedModeSessionTests: XCTestCase {
@@ -90,7 +90,7 @@ final class ConnectedModeSessionTests: XCTestCase {
 
     // MARK: - I-Frame Sequence Number Tests
 
-    /// Test that receiving I-frames properly increments N(R) in acknowledgements
+    /// Test that receiving I-frames properly increments N(R) in acknowledgments
     /// This is the core test for the bug where N(R) was always 0
     func testIFrameAcknowledgement_NR_Increments() async throws {
         // Establish connection first
@@ -119,7 +119,7 @@ final class ConnectedModeSessionTests: XCTestCase {
         )
         try await clientB.sendAX25Frame(iFrame1)
 
-        // Wait for acknowledgements
+        // Wait for acknowledgments
         try await Task.sleep(nanoseconds: 1_000_000_000)
 
         // Station B sends RR poll (P=1) to ask for status
@@ -147,7 +147,7 @@ final class ConnectedModeSessionTests: XCTestCase {
                     print("Found response with N(R)=\(nr)")
 
                     // After receiving I-frames with N(S)=0 and N(S)=1,
-                    // the acknowledgement should have N(R)=2
+                    // the acknowledgment should have N(R)=2
                     if nr == 2 {
                         foundCorrectNR = true
                     }

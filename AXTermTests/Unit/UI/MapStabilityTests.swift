@@ -72,14 +72,14 @@ final class MapStabilityTests: XCTestCase {
     /// does not move. The discriminator there is the visible map rect.
     func testAnAnchorShiverWithAStillCameraIsSwallowed() {
         // rectUnchanged == true means the camera has not moved since the last
-        // honoured move; a ~1.3pt hop then is the shiver.
+        // honored move; a ~1.3pt hop then is the shiver.
         XCTAssertTrue(MapFrameStability.isAnnotationShiver(distance: 1.3, rectUnchanged: true))
         XCTAssertTrue(MapFrameStability.isAnnotationShiver(distance: 0.0, rectUnchanged: true))
         XCTAssertTrue(MapFrameStability.isAnnotationShiver(distance: 1.99, rectUnchanged: true))
     }
 
     func testARealPanReanchorsTheMarker() {
-        // The rect moved: even a small step must be honoured, or the marker
+        // The rect moved: even a small step must be honored, or the marker
         // lags the map.
         XCTAssertFalse(MapFrameStability.isAnnotationShiver(distance: 1.3, rectUnchanged: false))
         XCTAssertFalse(MapFrameStability.isAnnotationShiver(distance: 0.0, rectUnchanged: false))

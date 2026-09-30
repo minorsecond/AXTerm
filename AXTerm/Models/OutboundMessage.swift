@@ -94,7 +94,7 @@ struct OutboundMessage: Codable, FetchableRecord, PersistableRecord, Identifiabl
     func canTransition(to newState: State) -> Bool {
         switch (self.state, newState) {
         case (.queued, .sending): return true
-        case (.queued, .failed): return true // Failed before sending (e.g. queue full/cancelled)
+        case (.queued, .failed): return true // Failed before sending (e.g. queue full/canceled)
 
         case (.sending, .sent): return true
         case (.sending, .retrying): return true

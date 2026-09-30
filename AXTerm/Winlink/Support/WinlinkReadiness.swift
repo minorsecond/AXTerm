@@ -75,7 +75,7 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
     var warnings: [Check] { checks.filter { $0.status == .warning } }
 
     /// A catalog older than this is stale enough to mention. Gateways and
-    /// products change slowly; a fortnight is generous.
+    /// products change slowly; two weeks is generous.
     static let catalogStaleAfter: TimeInterval = 14 * 24 * 3600
     /// No successful session in this long means the path is unproven,
     /// whatever the settings say.
@@ -99,7 +99,7 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
     private static func callsignCheck(_ input: Inputs) -> Check {
         let call = input.callsign.trimmingCharacters(in: .whitespaces).uppercased()
         // NOCALL is the placeholder the app falls back to; it is not a
-        // licence and nothing will accept it.
+        // license and nothing will accept it.
         guard !call.isEmpty, call != "NOCALL" else {
             return Check(id: "callsign", title: "Callsign", status: .blocked,
                          detail: "Not set",

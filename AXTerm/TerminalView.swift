@@ -94,7 +94,7 @@ nonisolated enum NetRomRelayLifecycle {
 
     /// What to do when a prompt relay is armed.
     ///
-    /// The ordinary case arms *before* dialling: the banner is still to
+    /// The ordinary case arms *before* dialing: the banner is still to
     /// come, and the `.connected` transition that follows starts the banner
     /// watchdog. Arming on a link that is already up gets neither. A node
     /// greets once per connection, so a greeting already delivered will not
@@ -106,7 +106,7 @@ nonisolated enum NetRomRelayLifecycle {
     /// the DRLNOD link up, the fallback armed behind DRLNOD's spent prompt,
     /// and nothing was transmitted for fifty-two seconds.
     enum RelayArmingAction: Equatable {
-        /// Dialling next; the banner is still to come.
+        /// Dialing next; the banner is still to come.
         case awaitBanner
         /// Link is live but nothing has greeted on it yet — start the
         /// watchdog, but do not prod into a banner still being composed.
@@ -214,7 +214,7 @@ nonisolated struct NetRomRelayResponseParser {
         "no connection",
         // KA-Node, when its own connect attempt exhausted retries:
         // "###RETRIED OUT AT NODE DRLNOD" (field capture 2026-08-28
-        // 18:40). Unrecognised, the relay sat through the node's clear
+        // 18:40). Unrecognized, the relay sat through the node's clear
         // answer until the stall watchdog gave up 40 s later.
         "retried out"
     ]
@@ -458,7 +458,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// A node was witnessed dialing outward under a borrowed SSID of our own
     /// callsign: (leg, node, hop). The view records the identity so the
     /// station list can name the leg for what it is instead of listing an
-    /// apparent stranger transmitting under the operator's licence.
+    /// apparent stranger transmitting under the operator's license.
     var onRelayLegIdentified: ((String, String, String) -> Void)?
 
     /// A relay hop demonstrably worked: (station, teller) — `teller`
@@ -474,7 +474,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     ///
     /// The inverse of `wireDestination`. Frames on a NET/ROM circuit genuinely
     /// come from the next hop — that is honest at layer 2 — but their *content*
-    /// is the far end talking, and labelling KB5YZB-7's BBS banner "DRLNOD"
+    /// is the far end talking, and labeling KB5YZB-7's BBS banner "DRLNOD"
     /// tells the operator something that isn't so. Once the circuit is up, BPQ
     /// forwards transparently, so everything on that link belongs to the far
     /// end until the circuit ends.
@@ -1415,12 +1415,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
         // A CR is the standard prod for a node that owes us its prompt — every
         // node reprints one for a bare line. But while a `C` command is out
-        // the node is not at its prompt: it is dialling on our behalf. BPQ
+        // the node is not at its prompt: it is dialing on our behalf. BPQ
         // queues the byte and forwards it to the destination as an empty
         // first command; a KA-Node aborts a pending connect on any input.
         // Either way the CR cannot produce the answer being waited for, so
         // mid-connect the only correct nudge is patience (field capture
-        // 2026-08-28 18:27: the CR went out while COSCO was still dialling).
+        // 2026-08-28 18:27: the CR went out while COSCO was still dialing).
         if case .awaitingConnected = netRomRelayPhase { return .nothingToTry }
 
         let cr = Data("\r".utf8)
@@ -1488,7 +1488,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// A U-frame between two stations this one is not party to.
     ///
     /// Handed to the witness, which cares about exactly one conversation: the
-    /// node's outward connect for the hop we just asked for, dialled under our
+    /// node's outward connect for the hop we just asked for, dialed under our
     /// own callsign with an SSID the node chose.
     fileprivate func noteForeignUFrame(from: String, to: String, uType: AX25UType?) {
         guard case let .awaitingConnected(destination, nextHop, remaining) = netRomRelayPhase
@@ -1859,7 +1859,7 @@ struct TerminalView: View {
     @State private var autoAttemptTask: Task<Void, Never>?
     @State private var pendingRoutingReconnect = false
     /// Debounces the connect-bar rebuild. A `QuietWindowTimer` rather than a
-    /// cancelled-and-replaced `DispatchWorkItem`: this is poked once per packet
+    /// canceled-and-replaced `DispatchWorkItem`: this is poked once per packet
     /// heard, so a debounce that allocates per poke piles up behind a main
     /// thread that is already behind. See `QuietWindowTimer`.
     @State private var connectBarRefreshTimer = QuietWindowTimer(window: 0.3)
@@ -2016,7 +2016,7 @@ struct TerminalView: View {
                     // NET/ROM connect the moment its own session appeared: the
                     // link to the next hop came up with nothing left to answer
                     // the node's banner, and the operator was parked at
-                    // "ENTER COMMAND:" with a session labelled for a station it
+                    // "ENTER COMMAND:" with a session labeled for a station it
                     // had never asked for.
                     if NetRomRelayLifecycle.abandonsRelay(onDisconnectFrom: oldState) {
                         txViewModel.netRomRelayPhase = nil
@@ -2900,7 +2900,7 @@ struct TerminalView: View {
                 showDaySeparators: settings.showConsoleDaySeparators,
                 clearedAt: $settings.terminalClearedAt,
                 // The base call for "mine", which matches every SSID of it;
-                // the radios' own addresses for recognising our echoes.
+                // the radios' own addresses for recognizing our echoes.
                 localCallsign: settings.myCallsign,
                 ownCallsigns: settings.onAirCallsigns,
                 onIdentity: onIdentity,
@@ -3453,7 +3453,7 @@ struct TerminalView: View {
             }
         case .cancelled:
             connectBarViewModel.endAutoAttempting()
-            updateActiveSessionRecordState("Cancelled")
+            updateActiveSessionRecordState("Canceled")
         }
     }
 
@@ -3506,7 +3506,7 @@ struct TerminalView: View {
         return connectBarViewModel.viaDigipeaters
     }
 
-    /// A live circuit is NET/ROM however the L2 link beneath it was dialled.
+    /// A live circuit is NET/ROM however the L2 link beneath it was dialed.
     private var displayedConnectionMode: ConnectBarMode {
         if txViewModel.relayConversation != nil || txViewModel.relayIsHandshaking {
             return .netrom
@@ -3778,7 +3778,7 @@ struct TerminalView: View {
                 "destination": intent.normalizedTo, "detail": detail
             ])
             // Name the most likely cause when it applies. A circuit's
-            // acknowledgement has to be *routed home*, and no node routes
+            // acknowledgment has to be *routed home*, and no node routes
             // to a station it has never heard advertise itself — so with
             // advertising off the reply has nowhere to go, however well the
             // outbound half worked. That is a setting, not a fault, and the
@@ -3920,7 +3920,7 @@ struct TerminalView: View {
 
         // The station that lists the destination may not be one this
         // station can reach directly. The route table knows who reaches
-        // it; chain through them rather than dialling a node that never
+        // it; chain through them rather than dialing a node that never
         // answers (field capture 2026-08-27: KB5YZB-7 direct came up and
         // stayed silent three times, while DRLNOD → KB5YZB-7 → COSCO
         // worked by hand).
@@ -4089,7 +4089,7 @@ struct TerminalView: View {
 
     /// Poll txViewModel.netRomRelayPhase until the relay is established or fails.
     /// Returns .success when .established, .failed when phase goes nil (failure detected),
-    /// .timeout when deadline is reached, or .cancelled if the Task is cancelled.
+    /// .timeout when deadline is reached, or .cancelled if the Task is canceled.
     private func waitForNetRomRelayOutcome(timeoutSeconds: TimeInterval) async -> AX25AutoWaitResult {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
@@ -4170,7 +4170,7 @@ struct TerminalView: View {
         // Every connect starts from a clean relay state. A relay armed by an
         // earlier attempt that died before its link ever reached `.connecting`
         // is not cleared by the session-state transition, and would otherwise
-        // fire its `C <dest>` at the next node the operator dialled by hand.
+        // fire its `C <dest>` at the next node the operator dialed by hand.
         txViewModel.netRomRelayPhase = nil
 
         // Say out loud which route this connect took. Without it a NET/ROM
@@ -4248,7 +4248,7 @@ struct TerminalView: View {
     /// stays silent through the nudge is abandoned.
     /// Starts whatever recovery arming a relay needs on *this* link.
     ///
-    /// Arming before dialling needs nothing here: the `.connected`
+    /// Arming before dialing needs nothing here: the `.connected`
     /// transition that follows starts the watchdog, and the banner is still
     /// to come. Arming on a link that is already up gets no such
     /// transition, so this is the only chance to start it — and if the node

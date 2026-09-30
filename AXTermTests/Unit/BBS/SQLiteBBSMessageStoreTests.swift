@@ -30,7 +30,7 @@ final class SQLiteBBSMessageStoreTests: XCTestCase {
     }
 
     /// The shell tells the caller the number before the row exists; the store
-    /// has to honour it rather than assigning its own.
+    /// has to honor it rather than assigning its own.
     func testStoreHonoursTheNumberTheShellPromised() throws {
         let store = try makeStore()
         try store.store(message(12))

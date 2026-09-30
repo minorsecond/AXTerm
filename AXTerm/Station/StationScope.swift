@@ -10,12 +10,12 @@ import Foundation
 /// not. So this is a radar scope, computed from coordinates the station
 /// already holds, and it works with everything else down.
 ///
-/// The model carries no colours, no fonts and no view types, so anything
-/// with positions can build one — RMS gateways today, NET/ROM neighbours
+/// The model carries no colors, no fonts and no view types, so anything
+/// with positions can build one — RMS gateways today, NET/ROM neighbors
 /// or heard stations tomorrow — and get the same rendering for free.
 nonisolated struct StationScope: Equatable, Sendable {
 
-    /// How well a site works, in the abstract. The view picks colours;
+    /// How well a site works, in the abstract. The view picks colors;
     /// the model stays presentation-free.
     enum Signal: Int, Comparable, Sendable {
         case unknown
@@ -29,7 +29,7 @@ nonisolated struct StationScope: Equatable, Sendable {
     struct Site: Equatable, Sendable, Identifiable {
         var id: String
         var label: String
-        /// Kilometres from the observer.
+        /// Kilometers from the observer.
         var kilometres: Double
         /// True bearing from the observer, 0 = north, clockwise.
         var bearingDegrees: Double
@@ -48,7 +48,7 @@ nonisolated struct StationScope: Equatable, Sendable {
         /// so it can never be mistaken for a fix.
         var isApproximate: Bool = false
         /// A NET/ROM node or directory entry rather than a heard station —
-        /// drawn in its own colour and glyph so infrastructure reads apart
+        /// drawn in its own color and glyph so infrastructure reads apart
         /// from traffic.
         var isNode: Bool = false
         /// The APRS symbol the station beaconed, when it is placed at its own
@@ -66,7 +66,7 @@ nonisolated struct StationScope: Equatable, Sendable {
         var weatherHeard: Date? = nil
         /// This station's readings over time, for the barometric tendency.
         var weatherHistory: [Station.WeatherSample] = []
-        /// Non-weather sensors this station reports, already labelled and
+        /// Non-weather sensors this station reports, already labeled and
         /// calibrated as far as the station has said how.
         var telemetry: [APRSTelemetry.Reading] = []
         var telemetryTitle: String?
@@ -110,10 +110,10 @@ nonisolated struct StationScope: Equatable, Sendable {
         }
     }
 
-    /// Where the observer is, for the centre label.
+    /// Where the observer is, for the center label.
     var observerLabel: String
     var sites: [Site]
-    /// Outer edge of the scope, in kilometres.
+    /// Outer edge of the scope, in kilometers.
     var maxRange: Double
     /// Ring distances to draw, inside `maxRange`.
     var rings: [Double]
@@ -142,7 +142,7 @@ nonisolated struct StationScope: Equatable, Sendable {
     static func rings(forRange range: Double) -> [Double] {
         let candidates = ringSteps.filter { $0 < range && $0 >= range / 10 }
         guard candidates.count > 3 else { return candidates }
-        // Keep the largest few — the near rings crowd the centre.
+        // Keep the largest few — the near rings crowd the center.
         return Array(candidates.suffix(3))
     }
 

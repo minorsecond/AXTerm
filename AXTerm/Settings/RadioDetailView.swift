@@ -326,7 +326,7 @@ struct RadioDetailView: View {
 
     /// Which SSID convention to quote. What the radio has been heard carrying
     /// wins; before that an APRS channel has its published convention, and a
-    /// packet channel has only what the neighbours turn out to use.
+    /// packet channel has only what the neighbors turn out to use.
     private var adviceFamily: RadioTrafficFamily? {
         trafficFamily ?? (channel == .aprs ? .aprs : nil)
     }
@@ -393,9 +393,9 @@ struct RadioDetailView: View {
                 + "people's software reads whatever you meant by it."
         case .ax25:
             text += " Packet has no standard for SSIDs, so the meanings shown are what "
-                + "this station has heard its own neighbours use them for."
+                + "this station has heard its own neighbors use them for."
         case nil:
-            text += " Packet has no standard for SSIDs. Meanings from your neighbours appear "
+            text += " Packet has no standard for SSIDs. Meanings from your neighbors appear "
                 + "here once this radio has heard enough of them."
         }
         return text
@@ -547,7 +547,7 @@ struct RadioDetailView: View {
         }
         .help("Station position is the one under General \u{203A} Station position, the same one "
               + "the map uses: the exact coordinate when one is set, else this device's location "
-              + "when that is switched on, else the centre of the grid square. A fixed position "
+              + "when that is switched on, else the center of the grid square. A fixed position "
               + "suits a radio that stays put while the station moves.")
         if aprsBinding(\.useGPS, default: true).wrappedValue {
             Text(stationPositionLine)
@@ -804,7 +804,7 @@ struct RadioDetailView: View {
         Section {
             Toggle("Digipeat on this radio", isOn: digiBinding(\.enabled))
                 .help("Retransmit frames whose via path names this station or an alias below, "
-                      + "or a WIDEn-N this digipeater honours. Off by default: it volunteers "
+                      + "or a WIDEn-N this digipeater honors. Off by default: it volunteers "
                       + "your transmitter for other people's traffic.")
             if digiBinding(\.enabled).wrappedValue {
                 Toggle("Fill-in (WIDE1-1)", isOn: digiBinding(\.fillIn))

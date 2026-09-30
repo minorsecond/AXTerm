@@ -283,7 +283,7 @@ struct WinlinkCatalogSheet: View {
     }
 
     /// How many products a sidebar row would show if clicked, so no
-    /// count contradicts the list that opens. Browsing scopes honour the
+    /// count contradicts the list that opens. Browsing scopes honor the
     /// search; Selected does not — see `selectedItems`.
     private func count(for target: Scope) -> Int {
         switch target {

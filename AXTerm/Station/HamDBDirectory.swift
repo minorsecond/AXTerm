@@ -95,7 +95,7 @@ nonisolated struct HamDBDirectory: CallsignDirectory {
         guard let call = clean(entry.call), !call.isEmpty else { return nil }
 
         // hamdb prints the name in two fields and neither is reliably
-        // capitalised — "WAYNE" and "Robert" both occur.
+        // capitalized — "WAYNE" and "Robert" both occur.
         let name = [clean(entry.fname), clean(entry.name)]
             .compactMap { $0 }
             .joined(separator: " ")

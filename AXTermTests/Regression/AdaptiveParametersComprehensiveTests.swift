@@ -921,7 +921,7 @@ final class TxAdaptiveSettingsComprehensiveTests: XCTestCase {
         XCTAssertEqual(settings.forwardLossEWMA ?? 1, 0.0, accuracy: 0.0001)
     }
 
-    /// Callers with no directional evidence keep the old behaviour.
+    /// Callers with no directional evidence keep the old behavior.
     func testMissingForwardLossFallsBackToTheComposite() {
         var settings = TxAdaptiveSettings()
         settings.updateFromLinkQuality(lossRate: 0.3, etx: 2.5, srtt: nil)

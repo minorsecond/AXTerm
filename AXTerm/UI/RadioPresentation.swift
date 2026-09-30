@@ -34,7 +34,7 @@ nonisolated struct RadioStatusSummary: Hashable, Sendable {
 /// the same functions say how many, and which.
 nonisolated enum RadioPresentation {
 
-    /// A status colour, named rather than a `Color` so it can be tested.
+    /// A status color, named rather than a `Color` so it can be tested.
     enum Tint: Equatable, Sendable {
         case connected, connecting, failed, idle
     }

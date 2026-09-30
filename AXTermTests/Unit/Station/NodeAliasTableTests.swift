@@ -113,7 +113,7 @@ final class NodeAliasTableTests: XCTestCase {
 
         let entry = directory.entry(for: "agnode")
         XCTAssertEqual(entry?.callsign, "K1AJD-4")
-        XCTAssertEqual(entry?.learnedFrom, "KB5YZB-7", "normalised, like every other callsign")
+        XCTAssertEqual(entry?.learnedFrom, "KB5YZB-7", "normalized, like every other callsign")
     }
 
     /// Re-hearing the same claim without a named source keeps the attribution
@@ -178,12 +178,12 @@ final class NodeAliasTableTests: XCTestCase {
         XCTAssertEqual(directory.preferredAlias(for: "KE0NCQ-7"), "DRLNOD")
         XCTAssertEqual(directory.preferredAlias(for: "KE0NCQ-1"), "DRLBBS")
         XCTAssertNil(directory.preferredAlias(for: "KE0NCQ"),
-                     "the bare licence was never announced under a name")
+                     "the bare license was never announced under a name")
     }
 
     /// A station that runs several services names each one. KE0NCQ is the only
     /// such case in the operator's 193 stored aliases, and it is real: a BBS, a
-    /// digipeater and a node on one licence. All three come back, node first —
+    /// digipeater and a node on one license. All three come back, node first —
     /// that is the name that turns up in via paths and connect targets.
     func testAllServiceNamesComeBackNodeFirst() {
         var directory = NodeAliasDirectory()
@@ -206,7 +206,7 @@ final class NodeAliasTableTests: XCTestCase {
 
     // MARK: - The other name, whichever one the caller holds
 
-    /// A sidebar row keyed by the alias wants the licence; a row keyed by the
+    /// A sidebar row keyed by the alias wants the license; a row keyed by the
     /// callsign wants the alias. One question, asked from both directions.
     func testOtherNameWorksBothWays() {
         let directory = directoryFromNodeList()
@@ -459,7 +459,7 @@ final class NodeAliasTableTests: XCTestCase {
     }
 
     /// Hearing one SSID is reason enough to keep a name for another: they are
-    /// the same licence, and the operator plainly deals with that station.
+    /// the same license, and the operator plainly deals with that station.
     func testKnowingOneSSIDKeepsTheOthers() {
         var directory = NodeAliasDirectory()
         directory.record(
@@ -549,7 +549,7 @@ final class NodeAliasTableTests: XCTestCase {
     // MARK: - Routes to a station, across all its names
 
     /// A station listed under several aliases is reachable by every node that
-    /// named any of them: `DRLBBS` and `DRLNOD` are one licence.
+    /// named any of them: `DRLBBS` and `DRLNOD` are one license.
     func testTellersAreUnionedAcrossAliases() {
         var directory = NodeAliasDirectory()
         let now = Date()

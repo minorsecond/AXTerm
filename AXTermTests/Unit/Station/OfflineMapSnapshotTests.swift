@@ -19,7 +19,7 @@ final class OfflineMapSnapshotTests: XCTestCase {
 
     // MARK: - Projection
 
-    /// The centre of the captured region lands at the centre of the
+    /// The center of the captured region lands at the center of the
     /// image. This is the property that makes markers land where MapKit
     /// would have drawn them.
     func testRegionCentreMapsToImageCentre() {

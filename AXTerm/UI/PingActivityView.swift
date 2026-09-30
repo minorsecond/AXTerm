@@ -139,7 +139,7 @@ struct PingActivityView: View {
     /// Twenty-four hours of probing, answered against silent.
     ///
     /// A bar chart of two numbers per hour would be a chart library and a
-    /// legend; this is the same information as height and colour, which is
+    /// legend; this is the same information as height and color, which is
     /// all the question needs — when did this station transmit, and did
     /// anyone answer.
     private var activityStrip: some View {

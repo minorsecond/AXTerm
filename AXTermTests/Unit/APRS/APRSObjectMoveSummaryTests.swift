@@ -18,7 +18,7 @@ final class APRSObjectMoveSummaryTests: XCTestCase {
     }
 
     func testAShortMoveKeepsOneDecimal() {
-        // Roughly a kilometre north.
+        // Roughly a kilometer north.
         let out = APRSObjectMove.summary(
             from: denver,
             to: GreatCircle.Point(latitude: 39.6207, longitude: -104.7317),
@@ -33,11 +33,11 @@ final class APRSObjectMoveSummaryTests: XCTestCase {
             from: denver,
             to: GreatCircle.Point(latitude: 39.6207, longitude: -104.7317),
             inMiles: false)
-        XCTAssertNotNil(out, "a kilometre is well past the resting threshold")
+        XCTAssertNotNil(out, "a kilometer is well past the resting threshold")
         XCTAssertTrue(out!.hasSuffix(" km N"), out!)
     }
 
-    /// A drop a few metres from where the object already sits is a slipped
+    /// A drop a few meters from where the object already sits is a slipped
     /// hand, and saying "0.0 mi N" would read as a bug rather than a warning.
     func testABarelyMovedObjectHasNoSummary() {
         let nudged = GreatCircle.Point(latitude: denver.latitude + 0.0001,

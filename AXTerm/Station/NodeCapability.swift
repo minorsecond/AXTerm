@@ -422,7 +422,7 @@ final class NodeCapabilityStore: ObservableObject {
     /// When a node is asked to connect onward it dials as the *operator*,
     /// under a free SSID of their callsign — so the station list grows an
     /// entry that looks like a stranger transmitting under the operator's
-    /// licence (field question 2026-08-28 18:53). RelayLegWitness identifies
+    /// license (field question 2026-08-28 18:53). RelayLegWitness identifies
     /// the borrower off the SABM; this map remembers it so the UI can say
     /// "that station is DRLNOD dialing out as you" for as long as the entry
     /// lingers in the sidebar.

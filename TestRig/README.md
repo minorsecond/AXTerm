@@ -47,7 +47,7 @@ one connection.
 | **Our node service** | Telnet to the sysop console (`telnet 127.0.0.1 8011`, user `sysop` pw `sysop`) and: `C 1 EPINOD` — BPQ dials *our* L2 node door. Walk `NODES`, `ROUTES`, `MH`, `BBS`, `C BPQTST-7` (bridge back!), `BYE`. |
 | Digipeating | Enable the digipeater, then from the sysop console connect somewhere `VIA K0EPI-7` — the hub log shows the repeated frame with the H bit set. |
 | XID / DM answers | AXTerm's XID probe against BPQ answers exactly as the real network does. |
-| Rough channel | `LOSS=0.15 DELAY_MS=150 JITTER_MS=100 docker compose up -d kisshub` — retries, REJ recovery, adaptive paclen, T1 behaviour, all under honest loss. |
+| Rough channel | `LOSS=0.15 DELAY_MS=150 JITTER_MS=100 docker compose up -d kisshub` — retries, REJ recovery, adaptive paclen, T1 behavior, all under honest loss. |
 
 The hub log (`docker compose logs -f kisshub`) shows every frame on
 the channel as `src>dst (n bytes)` — the rig's own monitor.
@@ -75,7 +75,7 @@ The hub logs `## COLLISION`, `* N bit error(s)`, and a rolling channel
 tally every 30s. Collisions are the hidden-node problem by construction:
 TCP-KISS carries no carrier sense back to the stations, so they cannot
 hear each other and must recover from the wreck — which is exactly the
-retry/backoff behaviour worth testing.
+retry/backoff behavior worth testing.
 
 ## The multi-node network (`multi` profile)
 
@@ -100,7 +100,7 @@ Adds two more stations to the frequency:
 
 `scripts/ka_node.py` and `scripts/ax25station.py` (a minimal AX.25
 connected-mode station) also run standalone against the hub if you want
-to script your own node behaviours.
+to script your own node behaviors.
 
 ## Two frequencies (`dual` profile)
 
@@ -145,7 +145,7 @@ own-echo detection, and staggered beacons.
 
 ## The node farm — many nodes, seed-driven (`farm` / `multi` profile)
 
-`scripts/nodefarm.py` puts a whole mixed neighbourhood on the channel:
+`scripts/nodefarm.py` puts a whole mixed neighborhood on the channel:
 5-10 stations of DIFFERENT packet-OS families, chosen deterministically
 from a seed so a run reproduces, and differently across seeds so
 coverage broadens. Every family AXTerm must cope with in the wild:
@@ -153,7 +153,7 @@ coverage broadens. Every family AXTerm must cope with in the wild:
 | Personality | What it is |
 |---|---|
 | `bpq` | NET/ROM node — real NODES broadcasts (PID 0xCF), NODES/ROUTES/MH shell |
-| `thenet` | NET/ROM node, TheNet-flavour banner |
+| `thenet` | NET/ROM node, TheNet-flavor banner |
 | `kanode` | Kantronics KA-Node — `###CONNECTED` / `ENTER COMMAND`, **never** NODES |
 | `digi` | pure digipeater — repeats via-addressed frames, refuses connects (DM) |
 | `bbs` | a mailbox answered directly, no node level |
@@ -208,7 +208,7 @@ everything above the modem, which is everything AXTerm implements.
 ## Notes
 
 - LinBPQ is downloaded from G8BPQ's official site at image build (the
-  licence permits use, not redistribution — the binary is never
+  license permits use, not redistribution — the binary is never
   committed). It is the ARM build, run via Docker Desktop's arm/v7
   support.
 - `NODESINTERVAL=1` and other timers are deliberately fast; this rig
@@ -220,7 +220,7 @@ everything above the modem, which is everything AXTerm implements.
 ## Chaos tools
 
 The rig can be turned hostile — for testing how AXTerm behaves when the
-channel, the neighbours, and the digipeaters are all against it.
+channel, the neighbors, and the digipeaters are all against it.
 
 ```bash
 # Hostile frames: malformed, truncated, oversized, wrong-PID, digi-path

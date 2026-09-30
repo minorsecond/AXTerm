@@ -86,7 +86,7 @@ final class WinlinkSettings: ObservableObject {
     }
 
     /// Height of this station's antenna above the ground beneath it, in
-    /// metres.
+    /// meters.
     ///
     /// Not decoration: this is the single input that most often decides a
     /// terrain verdict. Sixty percent Fresnel clearance over 13 km at 145 MHz
@@ -104,15 +104,15 @@ final class WinlinkSettings: ObservableObject {
     ///
     /// Kept separate from the operator's own height and shown wherever a
     /// forecast is, because it is an assumption rather than a measurement and
-    /// a forecast built on it should say so. Ten metres is a modest mast, not
+    /// a forecast built on it should say so. Ten meters is a modest mast, not
     /// a repeater site.
     @Published var assumedRemoteHeightMetres: Double {
         didSet { defaults.set(assumedRemoteHeightMetres, forKey: Self.assumedRemoteHeightMetresKey) }
     }
 
-    /// Feet in the field, metres in the maths.
+    /// Feet in the field, meters in the maths.
     ///
-    /// Heights are stored in metres because the propagation formulas are
+    /// Heights are stored in meters because the propagation formulas are
     /// metric, but a US operator knows their tower in feet and converting in
     /// their head is how a 40 ft mast gets entered as 40 m.
     @Published var heightUnitIsFeet: Bool {
@@ -121,7 +121,7 @@ final class WinlinkSettings: ObservableObject {
 
     /// Distances on maps, cards and coverage rings. Miles by default —
     /// the app grew up on a US channel — but the directory reaches
-    /// operators who think in kilometres, and a unit is a preference,
+    /// operators who think in kilometers, and a unit is a preference,
     /// not an assumption.
     @Published var distanceUnitIsMiles: Bool {
         didSet { defaults.set(distanceUnitIsMiles, forKey: Self.distanceUnitIsMilesKey) }
@@ -139,7 +139,7 @@ final class WinlinkSettings: ObservableObject {
     }
 
     /// Whether finished terminal sessions travel to the operator's other
-    /// devices, labelled as this one's.
+    /// devices, labeled as this one's.
     ///
     /// Off by default for the same reason as station activity: a transcript
     /// says who this station talked to and what was said, and sending that
@@ -152,7 +152,7 @@ final class WinlinkSettings: ObservableObject {
     }
 
     /// Whether this device's packet mailbox — its messages and callers log —
-    /// travels to the operator's other devices, labelled as this mailbox's.
+    /// travels to the operator's other devices, labeled as this mailbox's.
     /// Off by default: callers' mail is theirs, and sending it to iCloud is
     /// a decision. See `WinlinkSyncPolicy.disposition(for: .bbsMessage)`.
     @Published var shareBBSMailbox: Bool {
@@ -220,7 +220,7 @@ final class WinlinkSettings: ObservableObject {
     /// stations on the map.
     ///
     /// Off by default: a lookup tells a third party which stations this
-    /// operator is hearing. Public licence data, a small disclosure — but
+    /// operator is hearing. Public license data, a small disclosure — but
     /// a disclosure, and not one to make silently. Answers are cached
     /// permanently, so this is a "fill it while you have a path" feature.
     @Published var callsignLookupEnabled: Bool {
@@ -304,7 +304,7 @@ final class WinlinkSettings: ObservableObject {
     }
 
     /// Show the picker when a remote offers mail, instead of taking
-    /// everything it has. Off means the old behaviour: download the lot.
+    /// everything it has. Off means the old behavior: download the lot.
     @Published var askBeforeDownloading: Bool {
         didSet { defaults.set(askBeforeDownloading, forKey: Self.askBeforeDownloadingKey) }
     }

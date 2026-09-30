@@ -191,15 +191,15 @@ struct MapLayerToggles: View {
                   isOn: $prefersTransmittedPosition,
                   caption: prefersTransmittedPosition
                       ? "APRS fix where a station beacons one"
-                      : "Licence / registry address",
+                      : "License / registry address",
                   help: "On: place a station at the position it beaconed over the air, and draw "
-                      + "its APRS symbol on the marker. Off: place it at its licence or registry "
+                      + "its APRS symbol on the marker. Off: place it at its license or registry "
                       + "address instead, as a plain dot. Only stations heard on a radio that "
                       + "carries APRS are affected \u{2014} a packet channel's stations never "
                       + "beacon a position and are always drawn at whatever point they have.")
 
             // APRS mode: choose which classes of transmitted station to draw.
-            // Colour already keys the class on the map; these say whether to
+            // Color already keys the class on the map; these say whether to
             // show it at all. Indented under the mode that turns symbols on.
             if prefersTransmittedPosition {
                 optionsChevron("Station types", isExpanded: $expandedTypes,
@@ -239,7 +239,7 @@ struct MapLayerToggles: View {
                 .help("On: every rover's trail at once, which is the default and what "
                       + "other APRS clients show. Off: only the selected station's, so one "
                       + "trail belongs unmistakably to the station whose card is open. Worth "
-                      + "turning off on a busy channel, where a map of unlabelled trails "
+                      + "turning off on a busy channel, where a map of unlabeled trails "
                       + "cannot be matched to anything and buries the terrain under it.")
 
                 Picker("", selection: $trackWindowMinutes) {
@@ -297,7 +297,7 @@ struct MapLayerToggles: View {
                   help: (status.weatherFieldUnavailableReason.map {
                       "Unavailable: \($0.lowercased()). A field is built only from readings "
                           + "under an hour old, and needs two of them \u{2014} one station is "
-                          + "a reading, not a field, and colouring a map from it would paint "
+                          + "a reading, not a field, and coloring a map from it would paint "
                           + "one thermometer across a county. Stations whose readings have "
                           + "aged out are still drawn; it is the interpolation that stops. "
                   } ?? "")
@@ -324,11 +324,11 @@ struct MapLayerToggles: View {
                 .controlSize(.mini)
                 .padding(.leading, 22)
                 .help("Pressure is the one that interpolates honestly over a sparse network "
-                      + "\u{2014} it varies smoothly over hundreds of kilometres, which is why "
+                      + "\u{2014} it varies smoothly over hundreds of kilometers, which is why "
                       + "hand-drawn isobars worked for a century, and a falling barometer is a "
                       + "forecast you can act on with nothing else working. Rainfall is "
-                      + "deliberately not offered: rain cells are kilometres across and gauges "
-                      + "are tens of kilometres apart, so a smooth surface through a few of them "
+                      + "deliberately not offered: rain cells are kilometers across and gauges "
+                      + "are tens of kilometers apart, so a smooth surface through a few of them "
                       + "invents storms between the gauges. Rain stays on the stations that "
                       + "measured it.")
             }
@@ -374,9 +374,9 @@ struct MapLayerToggles: View {
 
             layer("Observed Paths", "point.topleft.down.to.point.bottomright.curvepath",
                   isOn: $showsPaths,
-                  help: "Paths observed between stations. Colour is evidence: green completed a "
+                  help: "Paths observed between stations. Color is evidence: green completed a "
                       + "connect end to end, blue arrived through a digipeater, teal was heard "
-                      + "direct, grey dashed is inferred from a shared digipeater, and red means "
+                      + "direct, gray dashed is inferred from a shared digipeater, and red means "
                       + "connect attempts went unanswered.")
 
             layer("Predicted Paths", "point.topleft.down.to.point.bottomright.curvepath.fill",

@@ -9,10 +9,10 @@ import AppKit
 /// When callsign labels are worth their ink.
 ///
 /// At metro zoom every marker's label is legible and wanted; zoomed out
-/// to a state, thirty labels pile onto a few square centimetres and bury
+/// to a state, thirty labels pile onto a few square centimeters and bury
 /// both each other and the place names under them (field capture
 /// 2026-08-29: "the cartography is pretty rough"). Below the threshold
-/// the dots alone carry the picture — colour and shape still read — and
+/// the dots alone carry the picture — color and shape still read — and
 /// the labels return as the operator zooms in.
 nonisolated enum MapLabelPolicy {
     /// Roughly a 20-mile-tall viewport — district zoom. Wider than that,
@@ -35,7 +35,7 @@ nonisolated enum MapLabelPolicy {
 /// not its body — is the real position, which is easy to misread.
 ///
 /// A dot sits *on* its coordinate, takes about a third of the area, and reuses
-/// the colour vocabulary of the legend beside the map so the two read as one
+/// the color vocabulary of the legend beside the map so the two read as one
 /// thing. Size still carries meaning: this station is drawn larger, because
 /// "where am I" is the question every other position is answered relative to.
 final class StationDotAnnotationView: MKAnnotationView {
@@ -81,7 +81,7 @@ final class StationDotAnnotationView: MKAnnotationView {
     private let ring = CAShapeLayer()
     /// An accent halo shown only while this station is the selection. Sits
     /// behind the dot so it reads as a ring around it, and carries a soft
-    /// glow of the same colour so a selected marker is obvious even in a
+    /// glow of the same color so a selected marker is obvious even in a
     /// dense cluster.
     private let selectionHalo = CAShapeLayer()
     /// The dot's rect from the last configure, so the halo can be sized
@@ -110,9 +110,9 @@ final class StationDotAnnotationView: MKAnnotationView {
 
     /// Implicit animation is the default for a bare `CALayer`, and it is
     /// never wanted here. These layers are not view-backed, so setting a
-    /// path or a colour on one starts a quarter-second animation of its
+    /// path or a color on one starts a quarter-second animation of its
     /// own accord — a marker whose recency tint changes should snap to the
-    /// new colour, and one MapKit repositions should arrive where it was
+    /// new color, and one MapKit repositions should arrive where it was
     /// put rather than easing toward it.
     private static let noImplicitAnimations: [String: CAAction] = [
         "position": NSNull(), "bounds": NSNull(), "path": NSNull(),
@@ -237,7 +237,7 @@ final class StationDotAnnotationView: MKAnnotationView {
         // Connect. The built-in bubble showed beside it as a second,
         // poorer popup (field capture 2026-08-29 06:48).
         canShowCallout = false
-        // A dot is centred on its coordinate; a pin is anchored at its tip.
+        // A dot is centered on its coordinate; a pin is anchored at its tip.
         centerOffset = .zero
         // Two stations close together should both stay tappable rather than
         // one being suppressed for overlapping the other's padding.
@@ -249,7 +249,7 @@ final class StationDotAnnotationView: MKAnnotationView {
         ring.actions = Self.noImplicitAnimations
         glyph.actions = Self.noImplicitAnimations
         glyph.contentsGravity = .resizeAspect
-        // A dark halo so the white glyph reads on any recency colour.
+        // A dark halo so the white glyph reads on any recency color.
         glyph.shadowColor = PlatformColor.black.cgColor
         glyph.shadowOpacity = 0.45
         glyph.shadowRadius = 1
@@ -294,8 +294,8 @@ final class StationDotAnnotationView: MKAnnotationView {
     /// Draw (or clear) the "just transmitted" ring around the dot.
     ///
     /// It sits a little outside the marker so it never covers the APRS glyph
-    /// or the recency tint, both of which carry their own meaning. The colour
-    /// is the station's own tint rather than one alarm colour for everybody:
+    /// or the recency tint, both of which carry their own meaning. The color
+    /// is the station's own tint rather than one alarm color for everybody:
     /// the ring says *when*, and the map already says *what* — a second hue
     /// here would claim a meaning it does not have.
     private func setActivity(_ isActive: Bool, tint: PlatformColor, around dotRect: CGRect) {
@@ -341,7 +341,7 @@ final class StationDotAnnotationView: MKAnnotationView {
     ///
     /// This used to be white with a black glow on every basemap, on the
     /// theory that one halo would carry both. It does not: a blurred shadow
-    /// is not an outline, so white-on-light-grey left the callsigns — the
+    /// is not an outline, so white-on-light-gray left the callsigns — the
     /// operator's own among them — barely legible on the standard map. Ink
     /// takes the basemap's contrast and the halo takes the opposite, which
     /// is how a paper map has always done it.
@@ -357,10 +357,10 @@ final class StationDotAnnotationView: MKAnnotationView {
     ///
     /// Over imagery the ink is white and the halo black, whatever the
     /// system appearance. Over the standard map the ink is the system label
-    /// colour — black in light mode, white in dark — and the halo has to be
+    /// color — black in light mode, white in dark — and the halo has to be
     /// the system *background*, not a fixed white: in dark mode a white halo
     /// around white ink was a glow with no edge, and the callsigns were
-    /// barely legible over the dark map. A shadow colour is a plain CGColor,
+    /// barely legible over the dark map. A shadow color is a plain CGColor,
     /// resolved once, so it is re-applied on every appearance change.
     private func applyLabelColours() {
         #if os(iOS)
@@ -401,7 +401,7 @@ final class StationDotAnnotationView: MKAnnotationView {
     }
 
     /// Sizes and shows/hides the selection halo from the current `isSelected`.
-    /// A selected marker also rises above its neighbours so its halo is never
+    /// A selected marker also rises above its neighbors so its halo is never
     /// clipped by a dot drawn later.
     private func updateSelectionHalo() {
         let expanded = lastDotRect.insetBy(dx: -4, dy: -4)
@@ -484,7 +484,7 @@ final class StationDotAnnotationView: MKAnnotationView {
         layer?.masksToBounds = false
         #endif
 
-        // The dot is centred in the view, and the view is centred on the
+        // The dot is centered in the view, and the view is centered on the
         // coordinate, so the dot lands exactly on the position.
         let dotRect = CGRect(x: Self.hitPadding, y: Self.hitPadding,
                              width: diameter, height: diameter)
@@ -501,7 +501,7 @@ final class StationDotAnnotationView: MKAnnotationView {
 
         setLabel(callsign, badge: weatherBadge, below: dotRect)
 
-        // The APRS glyph, centred on the dot. Only for a heard station that
+        // The APRS glyph, centered on the dot. Only for a heard station that
         // beaconed a symbol — never the observer, never a node (its diamond
         // and connector glyph already say what it is), never an inferred
         // lead (a symbol would assert a precision the position does not have).
@@ -535,8 +535,8 @@ final class StationDotAnnotationView: MKAnnotationView {
         // Never let MapKit declutter a station away.
         //
         // `.defaultHigh` permits hiding a marker whose collision frame
-        // overlaps a neighbour's, and this view's frame is 96×56 to give a
-        // finger something to hit — so two stations a few hundred metres
+        // overlaps a neighbor's, and this view's frame is 96×56 to give a
+        // finger something to hit — so two stations a few hundred meters
         // apart could collide at city zoom and one would silently vanish.
         // Field report 2026-08-25: N0HI-7 sits close to W0ARP-10 and was
         // simply absent from the map, while the header still counted it as
@@ -552,7 +552,7 @@ final class StationDotAnnotationView: MKAnnotationView {
     // The bouncing, finally pinned by the diagnostics above: with the camera
     // and the map's window position stone still, MapKit still re-runs
     // `_updateAnnotationViews` on every `mapLayerDidDraw` and re-snaps each
-    // dot ~1.3pt between two neighbouring pixels — its own pixel-alignment
+    // dot ~1.3pt between two neighboring pixels — its own pixel-alignment
     // wobble, ~200 times a second. Nothing we draw causes it and nothing we
     // draw can stop it upstream, so we refuse it here: a re-position smaller
     // than a couple of points is dropped *unless the visible rect actually
@@ -575,7 +575,7 @@ final class StationDotAnnotationView: MKAnnotationView {
 
     /// True when this re-position is MapKit's idle pixel shiver, not motion:
     /// a sub-threshold hop while the camera has not moved since the last one
-    /// we honoured. The threshold and the rule live in `MapFrameStability`
+    /// we honored. The threshold and the rule live in `MapFrameStability`
     /// beside the map-frame gate, and are pinned by `MapStabilityTests`.
     private func isIdleShiver(distance: CGFloat) -> Bool {
         guard let rect = enclosingMap?.visibleMapRect else { return false }
@@ -586,7 +586,7 @@ final class StationDotAnnotationView: MKAnnotationView {
         if MapFrameStability.isAnnotationShiver(distance: distance, rectUnchanged: rectUnchanged) {
             return true
         }
-        // The camera moved (or we have no reference yet): honour this move and
+        // The camera moved (or we have no reference yet): honor this move and
         // remember where the camera was when we did.
         lastAppliedRect = rect
         return false
@@ -638,7 +638,7 @@ final class StationDotAnnotationView: MKAnnotationView {
     }
 
     /// The callsign, plus one current reading after it when there is one.
-    /// Kept as plain text rather than an attributed string: the label's colour
+    /// Kept as plain text rather than an attributed string: the label's color
     /// is re-applied on every basemap change, and attributed runs would either
     /// fight that or have to duplicate it.
     private func setLabel(_ callsign: String?, badge: String?, below dot: CGRect) {

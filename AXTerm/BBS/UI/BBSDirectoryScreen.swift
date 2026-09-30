@@ -111,7 +111,7 @@ struct BBSDirectoryListScreen: View {
             // nothing on iOS, and an explanation hung on a toolbar button
             // would take the tap that runs it — so it is said here, where it
             // can simply be read.
-            Text("Look Up Callsigns fills empty names and locations from the licence "
+            Text("Look Up Callsigns fills empty names and locations from the license "
                  + "record, for everyone here and everyone who has called. Anything a "
                  + "caller told you is left alone. Needs \u{201C}Look up callsigns "
                  + "online\u{201D} in Settings \u{203A} Winlink.")
@@ -248,7 +248,7 @@ struct BBSDirectoryDetailScreen: View {
                     systemImage: "person.crop.circle",
                     title: "Select a callsign",
                     detail: "White pages hold a name, a location, a home BBS and a "
-                        + "postcode — the four fields every FBB mailbox has published "
+                        + "ZIP code — the four fields every FBB mailbox has published "
                         + "for decades, and deliberately no more.")
             }
         }
@@ -322,7 +322,7 @@ struct BBSDirectoryDetailScreen: View {
         VStack(alignment: .leading, spacing: 4) {
             // A draft shadows the stored value only while this field is being
             // edited. Letting it shadow always meant a value fetched after the
-            // drafts were seeded — a licence lookup, a caller telling us their
+            // drafts were seeded — a license lookup, a caller telling us their
             // name — showed as "not on file" while the row beside it showed
             // the truth.
             TextField(key.label,

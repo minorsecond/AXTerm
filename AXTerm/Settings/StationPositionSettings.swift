@@ -58,7 +58,7 @@ struct StationPositionSettings: View {
                       + "on the map start here.")
                 if resolved.accuracyMetres > 1_000 {
                     Text("A grid square is about 7 km across, so a path shorter than "
-                         + "roughly 9 km cannot be analysed from one. An exact "
+                         + "roughly 9 km cannot be analyzed from one. An exact "
                          + "coordinate fixes that.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -82,7 +82,7 @@ struct StationPositionSettings: View {
         }
         // Turning the switch on has to go and fetch a fix. It used to set a
         // flag and nothing else, so the row sat on "No fix yet" forever
-        // while the summary above kept saying grid centre — from this
+        // while the summary above kept saying grid center — from this
         // screen the setting did nothing at all.
         .task(id: useDeviceLocation) {
             guard useDeviceLocation else { return }
@@ -192,7 +192,7 @@ struct StationPositionSettings: View {
         }
         .help("Where the antenna actually is. This is the only source that describes "
               + "the aerial rather than the operator, and it is what makes a short "
-              + "path worth analysing.")
+              + "path worth analyzing.")
     }
 
     /// Subordinate to the coordinate above, because it fills that field
@@ -277,8 +277,8 @@ struct StationPositionSettings: View {
     /// The last fix, and only when it really is one.
     ///
     /// `currentLocation()` falls back to the grid square when GPS fails and
-    /// stores that in `lastLocation`, so taking it at face value labelled a
-    /// grid centre as "Device GPS ±20 m" — a claim of 20-metre accuracy for
+    /// stores that in `lastLocation`, so taking it at face value labeled a
+    /// grid center as "Device GPS ±20 m" — a claim of 20-meter accuracy for
     /// a square 7 km across.
     private var deviceFix: StationLocation? {
         guard let last = locationService?.lastLocation, last.source == .gps else { return nil }

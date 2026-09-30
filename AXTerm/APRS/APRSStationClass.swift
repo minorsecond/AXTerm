@@ -41,11 +41,11 @@ nonisolated enum APRSStationClass: String, Sendable, CaseIterable {
 ///
 /// Only a transmitted fix carries a symbol, so this only answers for stations
 /// placed where they beaconed from; a looked-up address has no type to give.
-/// The four buckets the map colours, filters and keys by — one place so the
-/// marker colour, the layer show/hide toggles and the legend can never
+/// The four buckets the map colors, filters and keys by — one place so the
+/// marker color, the layer show/hide toggles and the legend can never
 /// disagree about which class a symbol falls in. Weather is split out from
 /// the coarse `APRSStationClass.fixed` because it is common and worth its own
-/// colour and toggle.
+/// color and toggle.
 nonisolated enum APRSTypeBucket: String, CaseIterable, Sendable {
     case digipeater   // fixed relay infrastructure
     case weather

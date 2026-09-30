@@ -109,7 +109,7 @@ struct FirstRunSetupView: View {
     var body: some View {
         Group {
             if let radioFlow {
-                // Finishing or cancelling a radio comes back to the list, so
+                // Finishing or canceling a radio comes back to the list, so
                 // a station with several radios sets them all up here.
                 AddRadioSheet(flow: radioFlow, client: client) { radio in
                     self.radioFlow = nil

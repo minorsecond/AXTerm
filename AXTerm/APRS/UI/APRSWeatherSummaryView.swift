@@ -1,12 +1,12 @@
 import SwiftUI
 
 /// A station's current weather, laid out the way a weather report is normally
-/// read: the temperature first and large, the rest as small labelled readings
+/// read: the temperature first and large, the rest as small labeled readings
 /// beside it, and a wind arrow pointing the way the wind is blowing.
 ///
 /// Deliberately restrained. This sits inside a station card that also carries
 /// identity, distance and packet counts, so it earns one block and no more —
-/// no panel chrome of its own, no colour except the one the map already uses
+/// no panel chrome of its own, no color except the one the map already uses
 /// for weather stations, and nothing drawn for a reading the station did not
 /// send. The arrow is a glance cue only; the text beside it always spells the
 /// direction out, because an arrow alone cannot say whether it means the wind's
@@ -21,7 +21,7 @@ struct APRSWeatherSummaryView: View {
     /// the only forecast a single surface station can give, and it is the one
     /// that keeps working with no service, no internet and no model.
     var history: [Station.WeatherSample] = []
-    /// Fahrenheit, mph and inches when true; Celsius, km/h and millimetres
+    /// Fahrenheit, mph and inches when true; Celsius, km/h and millimeters
     /// when false. The map's existing distance preference decides.
     var inImperial: Bool = true
     var now: Date = Date()

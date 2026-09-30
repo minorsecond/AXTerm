@@ -4,16 +4,16 @@ import XCTest
 /// An operator's other radios are other stations.
 ///
 /// The map excludes "the operator's own callsign" so this station does not
-/// appear twice — once as the centre marker and again as a heard station a few
-/// metres away, which is what happens when our own beacon comes back off a
+/// appear twice — once as the center marker and again as a heard station a few
+/// meters away, which is what happens when our own beacon comes back off a
 /// digipeater. That is right. But the comparison was made on the *base*
 /// callsign, and `CallsignQuery.normalize` strips the SSID, so it swallowed
-/// every SSID on the licence.
+/// every SSID on the license.
 ///
 /// K0EPI-4 is an HT in the operator's pocket running the aprs.fi app: its own
 /// radio, its own position, its own symbol, ninety yards away and moving. It
 /// was heard, parsed and turned into a station — and then dropped from the map
-/// for sharing a licence with the desk. There was no way to see it, no way to
+/// for sharing a license with the desk. There was no way to see it, no way to
 /// ping it, and clicking its line in the traffic strip did nothing, because
 /// selecting a station the map does not have is a no-op.
 final class OwnSSIDsOnTheMapTests: XCTestCase {
@@ -66,7 +66,7 @@ final class OwnSSIDsOnTheMapTests: XCTestCase {
     }
 
     /// Somebody else's sibling SSIDs were never in question, and still are
-    /// not: two SSIDs of one licence are two APRS stations to everyone else.
+    /// not: two SSIDs of one license are two APRS stations to everyone else.
     func testOtherOperatorsSiblingSSIDsAreUnaffected() {
         let drawn = mapped([beaconing("KB5YZB-1", at: 39.7),
                             beaconing("KB5YZB-7", at: 39.7)],

@@ -20,7 +20,7 @@ nonisolated enum AdaptiveScopeLabel {
             // No destination: this is a whole channel, or the operator's
             // baseline, which belongs to no radio at all.
             //
-            // The baseline used to be labelled "All channels", which reads as
+            // The baseline used to be labeled "All channels", which reads as
             // a figure aggregated across every radio. It is the opposite: the
             // configured settings, shown precisely because no channel has
             // measured anything. Naming it as a measurement while ETX, loss

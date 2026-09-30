@@ -16,7 +16,7 @@ struct GeneralSettingsView: View {
     @ObservedObject var client: PacketEngine
     /// Unit and online-lookup choices live on the Winlink store for
     /// historical reasons (same keys, no migration) but they are
-    /// app-wide behaviour, so their controls live here. Nil hides them —
+    /// app-wide behavior, so their controls live here. Nil hides them —
     /// the caller that cannot supply the store keeps the old page.
     var winlinkSettings: WinlinkSettings?
     /// Offered so the position section can use a GPS fix when the
@@ -85,7 +85,7 @@ struct GeneralSettingsView: View {
                       + "size you are choosing.")
             }
 
-            // App-wide network behaviour, surfaced where a non-Winlink
+            // App-wide network behavior, surfaced where a non-Winlink
             // operator will actually find it — this one toggle gates the
             // map's position lookups and the node directory's, not just
             // Winlink's (field ask 2026-08-29: "winlink settings contained
@@ -153,20 +153,20 @@ struct GeneralSettingsView: View {
             get: { winlink.distanceUnitIsMiles },
             set: { winlink.distanceUnitIsMiles = $0 })) {
             Text("Miles").tag(true)
-            Text("Kilometres").tag(false)
+            Text("Kilometers").tag(false)
         }
         .help("Coverage rings, map cards, profiles and range labels. "
-              + "Values are measured in kilometres and converted for "
+              + "Values are measured in kilometers and converted for "
               + "display, so switching loses nothing.")
 
         Picker("Heights", selection: Binding(
             get: { winlink.heightUnitIsFeet },
             set: { winlink.heightUnitIsFeet = $0 })) {
             Text("Feet").tag(true)
-            Text("Metres").tag(false)
+            Text("Meters").tag(false)
         }
         .help("Antenna heights on station pages and in terrain forecasts. "
-              + "Stored in metres; entered and read back in your unit.")
+              + "Stored in meters; entered and read back in your unit.")
     }
 
     private func updateLaunchAtLogin(enabled: Bool) {
@@ -252,7 +252,7 @@ private struct OnlineLookupToggle: View {
                   + "the node directory's, not just Winlink. Answers are "
                   + "cached permanently and stay usable offline.\n\nOff by "
                   + "default: a lookup tells a third party which stations "
-                  + "you are hearing. Public licence data, but still a "
+                  + "you are hearing. Public license data, but still a "
                   + "disclosure.")
         Text("Gates every automatic position lookup in the app \u{2014} the "
              + "map, the node directory and Winlink alike.")

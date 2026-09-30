@@ -2,7 +2,7 @@ import Foundation
 
 /// Which of the root window's two sheets is showing.
 ///
-/// SwiftUI honours a single `.sheet` per view: attach two and the second
+/// SwiftUI honors a single `.sheet` per view: attach two and the second
 /// silently shadows the first. The main window has two independent sources
 /// that each want to present — a tapped packet and a tapped callsign — and
 /// wiring them as two modifiers is why the identity page opened once and then

@@ -109,7 +109,7 @@ final class APRSReachabilityProbe: ObservableObject {
 
     // MARK: - Control
 
-    /// Send the general query and start listening. Any prior run is cancelled.
+    /// Send the general query and start listening. Any prior run is canceled.
     /// `scope` sets the initial result filter.
     func start(query: APRSGeneralQuery = .all, scope: APRSProbeScope = .all,
                reach: APRSProbeReach = .direct) {

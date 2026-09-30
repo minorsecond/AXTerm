@@ -40,12 +40,12 @@ final class WinlinkSyncPolicyTests: XCTestCase {
     }
 
     /// The callsign splits across the boundary, and that split is the whole
-    /// reason a second device sets itself up correctly: the licence travels,
+    /// reason a second device sets itself up correctly: the license travels,
     /// the station address does not. Asserted together so nobody can later
     /// "simplify" them into one setting.
     func testTheCallsignBaseSyncsButTheSSIDDoesNot() {
         guard case .synced = WinlinkSyncPolicy.disposition(for: .callsignBase) else {
-            return XCTFail("a licence callsign is the same on every radio")
+            return XCTFail("a license callsign is the same on every radio")
         }
         guard case .deviceLocal(let why) = WinlinkSyncPolicy.disposition(for: .callsignSSID) else {
             return XCTFail("copying an SSID puts two stations on one address")

@@ -3,7 +3,7 @@ import MapKit
 
 /// An APRS symbol (table + code) carried to the map so a heard station is
 /// drawn as what it *is* — a car, a digipeater, a weather station — over the
-/// recency-coloured dot, instead of an anonymous point. The glyph is chosen
+/// recency-colored dot, instead of an anonymous point. The glyph is chosen
 /// by `APRSSymbolGlyph`; this type is just the identity that survives being
 /// threaded down through the two map paths.
 nonisolated struct APRSMapSymbol: Equatable, Sendable {

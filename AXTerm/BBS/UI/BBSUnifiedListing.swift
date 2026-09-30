@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Pure, so the rules are testable: this mailbox first, then one section per
 /// other mailbox, never interleaved; nothing from elsewhere unless asked;
-/// every remote row labelled with whose mailbox it is. The filter applies to
+/// every remote row labeled with whose mailbox it is. The filter applies to
 /// both sides with *this* operator as the sysop — mail left for them on the
 /// iPad's mailbox is still theirs.
 nonisolated enum BBSUnifiedListing {

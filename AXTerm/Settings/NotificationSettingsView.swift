@@ -174,7 +174,7 @@ struct NotificationSettingsView: View {
         prompt = TextEntryPrompt(
             id: "watchCallsign",
             title: "Add Watch Callsign",
-            message: "Enter a callsign (e.g. K0EPI) or a wildcard (K0EPI-*). Wildcards are allowed because a watch list matches SSIDs, not licences.",
+            message: "Enter a callsign (e.g. K0EPI) or a wildcard (K0EPI-*). Wildcards are allowed because a watch list matches SSIDs, not licenses.",
             placeholder: "N0CALL-*",
             uppercases: true) { call in
                 settings.watchCallsigns.append(call)

@@ -46,7 +46,7 @@ final class SessionCoordinatorIdentityWiringTests: XCTestCase {
                        AX25Address(call: "K0EPI", ssid: 7))
     }
 
-    // MARK: - SSID and normalisation
+    // MARK: - SSID and normalization
 
     func testCallsignWithoutSSIDLandsAsSSIDZero() {
         let coordinator = SessionCoordinator()
@@ -75,11 +75,11 @@ final class SessionCoordinatorIdentityWiringTests: XCTestCase {
         coordinator.applyLocalCallsign("")
 
         // An empty address would encode as spaces and be undiagnosable on a
-        // capture; the placeholder is at least recognisable as unconfigured.
+        // capture; the placeholder is at least recognizable as unconfigured.
         XCTAssertEqual(coordinator.sessionManager.localCallsign, placeholder)
     }
 
-    // MARK: - Repeated view initialisation
+    // MARK: - Repeated view initialization
 
     func testReapplyingTheSameCallsignIsANoOp() {
         let coordinator = SessionCoordinator()

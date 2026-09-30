@@ -150,7 +150,7 @@ final class NetworkPathStoreTests: XCTestCase {
         XCTAssertEqual(recent.first?.from, "A")
     }
 
-    /// A station that moved away should stop being drawn as a neighbour.
+    /// A station that moved away should stop being drawn as a neighbor.
     func testPruningDropsStalePaths() throws {
         let store = try makeStore()
         let old = t0.addingTimeInterval(-30 * 24 * 3600)

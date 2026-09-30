@@ -51,7 +51,7 @@ def build(args):
             body = "\r".join(HEARD)
             return f"HEARD:\r{body}\rENTER COMMAND: B,C,J,N,?\r"
         if verb in ("N", "NODES"):
-            # A KA-node's N is a flat neighbour list, NOT a NET/ROM
+            # A KA-node's N is a flat neighbor list, NOT a NET/ROM
             # routing table — no aliases, no quality, no next-hop.
             return ("NODES: KA0TST-1 W0ARP-1 KD0SSP\r"
                     "ENTER COMMAND: B,C,J,N,?\r")

@@ -176,7 +176,7 @@ struct StationNotesSection: View {
                     .buttonStyle(.borderless)
                     .help("Forget this height. Terrain forecasts go back to the assumption in settings.")
                 }
-                .help("Metres above the ground beneath the antenna, used by terrain forecasts for every path this station appears in. Height decides Fresnel clearance; gain and antenna type do not enter this calculation.")
+                .help("Meters above the ground beneath the antenna, used by terrain forecasts for every path this station appears in. Height decides Fresnel clearance; gain and antenna type do not enter this calculation.")
             } else {
                 Button {
                     setHeight(10)

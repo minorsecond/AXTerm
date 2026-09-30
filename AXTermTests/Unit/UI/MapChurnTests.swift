@@ -60,7 +60,7 @@ final class MapChurnTests: XCTestCase {
     }
 
     /// The fix this file was written for: a path being proven is the same
-    /// line in a different colour. Replacing the overlay for that ripples
+    /// line in a different color. Replacing the overlay for that ripples
     /// MapKit's labels, and evidence improves constantly on a live channel.
     func testProvingAPathChangesItsStyleButNotItsGeometry() throws {
         let before = MapPathLink.links(
@@ -78,7 +78,7 @@ final class MapChurnTests: XCTestCase {
                        "the stations did not move, so the line must not be replaced")
         XCTAssertNotEqual(OfflineBasemapMapView.linkStyleSignature(one),
                           OfflineBasemapMapView.linkStyleSignature(other),
-                          "but it must repaint, or a proven path keeps the unproven colour")
+                          "but it must repaint, or a proven path keeps the unproven color")
     }
 
     /// A path going from plausible to suspect is likewise a repaint.

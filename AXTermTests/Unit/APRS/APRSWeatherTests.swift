@@ -32,7 +32,7 @@ final class APRSWeatherTests: XCTestCase {
 
     /// The bug this guards: the `ddd/sss` slot means wind for a weather
     /// station and course/speed for everyone else. Read as course/speed it
-    /// puts a house on the map travelling at four knots.
+    /// puts a house on the map traveling at four knots.
     func testWindIsNotReportedAsCourseAndSpeed() {
         let r = report("!3959.13N/10515.42W_220/004g009t047")
         XCTAssertNil(r?.courseDegrees)

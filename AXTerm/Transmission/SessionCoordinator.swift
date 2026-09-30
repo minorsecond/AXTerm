@@ -171,7 +171,7 @@ final class SessionCoordinator: ObservableObject {
 
     /// Stations overheard being called by somebody else, and when.
     ///
-    /// A destination nobody here has heard, that a neighbour is talking to,
+    /// A destination nobody here has heard, that a neighbor is talking to,
     /// is the one candidate worth probing that passive listening can never
     /// produce on its own.
     private var overheardCallees: [String: Date] = [:]
@@ -204,7 +204,7 @@ final class SessionCoordinator: ObservableObject {
 
     /// Assigns the callsign only when it actually differs.
     ///
-    /// View initialisers run repeatedly, and on iOS the root view re-inits
+    /// View initializers run repeatedly, and on iOS the root view re-inits
     /// often enough that an unconditional assignment would publish a change
     /// on every pass — from inside a view update, which SwiftUI warns about.
     func applyLocalCallsign(_ callsign: String) {
@@ -474,10 +474,10 @@ final class SessionCoordinator: ObservableObject {
         return globalAdaptiveSettings
     }
 
-    /// A scope with its destination canonicalised the way every other lookup
+    /// A scope with its destination canonicalized the way every other lookup
     /// in this file does it, so `PEER-0` and `PEER` are one route rather than
     /// two that each learn half as fast. `AdaptiveScope` case-folds and trims;
-    /// SSID canonicalisation lives here because that is where the rule lives.
+    /// SSID canonicalization lives here because that is where the rule lives.
     private func canonicalScope(_ scope: AdaptiveScope) -> AdaptiveScope {
         guard let route = scope.route else { return scope }
         return .route(radio: scope.radio,
@@ -971,7 +971,7 @@ final class SessionCoordinator: ObservableObject {
         objectWillChange.send()
     }
 
-    /// Explicit deinit to ensure any background tasks are cancelled cleanly.
+    /// Explicit deinit to ensure any background tasks are canceled cleanly.
     /// Marked nonisolated to avoid actor deallocation bookkeeping that has
     /// been triggering a Swift concurrency runtime bug in unit tests.
     nonisolated deinit {
@@ -1024,13 +1024,13 @@ final class SessionCoordinator: ObservableObject {
             guard let self, let integration = self.packetEngine?.netRomIntegration else { return [] }
             // Only what this radio can actually reach.
             //
-            // The broadcast goes out on one radio, and routes and neighbours
+            // The broadcast goes out on one radio, and routes and neighbors
             // have been per-radio for a while, but this provider asked for all
             // of them. A station with an APRS radio alongside a packet radio
             // therefore advertised its 144.390 traffic to the packet network,
             // over the air, every few minutes (2026-09-17). A route reachable
             // on another antenna is not reachable through this one, and
-            // promising it to the channel is a claim we cannot honour.
+            // promising it to the channel is a claim we cannot honor.
             let decision = NetRomAdvertisableRoutes.decide(
                 routes: integration.currentRoutes(),
                 neighbors: integration.currentNeighbors(),
@@ -1175,8 +1175,8 @@ final class SessionCoordinator: ObservableObject {
         netRomDriver.forwardingEnabled = settings.netRomForwarding
         netRomNodeHost.isEnabled = settings.netRomAcceptInbound
         // Six characters, uppercase, alphanumeric — the shape BPQ shows
-        // beside a callsign. Sanitised at the boundary because whatever
-        // is here goes into every neighbour's node list.
+        // beside a callsign. Sanitized at the boundary because whatever
+        // is here goes into every neighbor's node list.
         netRomDriver.localAlias = Self.nodeAlias(settings.netRomNodeAlias)
         netRomDriver.announcementsProvider = { [weak self] in self?.announcements() ?? [] }
         applyNodeIdentities()
@@ -1384,7 +1384,7 @@ final class SessionCoordinator: ObservableObject {
     /// Transmission settings screen (now Packet Node) called it on change, so typing a
     /// six-character node alias put six NODES broadcasts on the air, each
     /// carrying a different prefix of the word (field capture 2026-08-27,
-    /// eight frames in two seconds). Every neighbour that heard them wrote
+    /// eight frames in two seconds). Every neighbor that heard them wrote
     /// a different name for this station into its routing table. Settings
     /// changes configure; only the transition transmits.
     private func scheduleNetRomBroadcasts(everyMinutes minutes: Int, enabled: Bool) {
@@ -1441,7 +1441,7 @@ final class SessionCoordinator: ObservableObject {
     /// interval.
     ///
     /// The same warm-up shot the launch path above uses, and for the same
-    /// reason. This station was away; our neighbours' routes to us aged while
+    /// reason. This station was away; our neighbors' routes to us aged while
     /// we were gone, and the steady cadence can be an hour. Thirty seconds
     /// rather than the launch path's ninety because a resumed link reopens
     /// immediately, with no backoff to serve — but still a delay, because a
@@ -4137,7 +4137,7 @@ final class SessionCoordinator: ObservableObject {
                 }
             } else {
                 // Completion NACK with SACK but no matching transfer/file data - log and return.
-                // This can happen if the transfer was already completed/cancelled or session ID is unknown.
+                // This can happen if the transfer was already completed/canceled or session ID is unknown.
                 TxLog.debug(.axdp, "Completion NACK with SACK bitmap but no matching transfer/file data", [
                     "session": axdpSessionId
                 ])

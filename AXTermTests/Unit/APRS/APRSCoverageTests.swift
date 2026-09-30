@@ -4,7 +4,7 @@ import XCTest
 /// PHG, RNG and DFS: what a station says about its own reach, from the seven
 /// bytes that follow the symbol.
 ///
-/// Every beacon here but the two synthesised ones was heard on the operator's
+/// Every beacon here but the two synthesized ones was heard on the operator's
 /// 144.390 channel, where the stations sending this are the digipeaters —
 /// which makes it the one field on the line that answers "can I get into that
 /// one".

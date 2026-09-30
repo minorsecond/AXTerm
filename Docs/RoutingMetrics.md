@@ -7,7 +7,7 @@ in [NetworkHealth.md](NetworkHealth.md).
 ## df / dr — directional delivery probabilities
 
 - **df**: probability a frame you send across the link is delivered (forward).
-- **dr**: probability the acknowledgement path works (reverse).
+- **dr**: probability the acknowledgment path works (reverse).
 - Estimated by a time-based EWMA over observed evidence (I-frame progress,
   routing broadcasts, beacons, N(R) advancement, ACK-only frames; retries count
   as failures). `α = max(1 − exp(−Δt/H), 1/(n+1))` with H = 30 min — the

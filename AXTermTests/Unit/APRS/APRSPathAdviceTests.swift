@@ -66,8 +66,8 @@ final class APRSPathAdviceTests: XCTestCase {
     }
 
     /// Never the other way. Hearing nothing back through a second hop is what
-    /// a station with no second-hop neighbours looks like, and also what a
-    /// station whose neighbours are all switched off looks like.
+    /// a station with no second-hop neighbors looks like, and also what a
+    /// station whose neighbors are all switched off looks like.
     func testAShortPathIsNeverRecommendedToGrow() {
         let advice = APRSPathAdvice.from(
             repeatHops: ["AD1CT": [0]],

@@ -59,8 +59,8 @@ struct OfflineMapsView: View {
         }
         // One alert, not two.
         //
-        // SwiftUI honours a single `.alert` per view for the same reason it
-        // honours a single `.sheet`: the last one wins and the earlier one
+        // SwiftUI honors a single `.alert` per view for the same reason it
+        // honors a single `.sheet`: the last one wins and the earlier one
         // silently never presents. Adding a terrain confirmation below the
         // basemap one is why "Download this area" stopped doing anything at
         // all — the button set its state and no alert ever appeared.
@@ -391,7 +391,7 @@ struct OfflineMapsView: View {
     }
 
     /// `.mbtiles` has no registered UTI, so it is matched by filename
-    /// extension with a data fallback — otherwise the picker greys out the
+    /// extension with a data fallback — otherwise the picker grays out the
     /// only files it is meant to accept.
     private static var mbtilesTypes: [UTType] {
         [UTType(filenameExtension: "mbtiles") ?? .database, .data]

@@ -38,7 +38,7 @@ nonisolated struct APRSChannelLoad: Equatable, Sendable {
 
     /// Busy enough that extra copies cost something.
     ///
-    /// A judgement, not physics. On a shared channel with no coordination,
+    /// A judgment, not physics. On a shared channel with no coordination,
     /// throughput peaks somewhere near a fifth of capacity and collisions
     /// climb steeply before that; a tenth is where the cost of an avoidable
     /// extra transmission stops being theoretical.
@@ -86,7 +86,7 @@ nonisolated enum APRSChannelLoadMeter {
     /// PID, frame check, and the flags that bracket it.
     private static let framingOctets = 14 + 1 + 1 + 2 + 2
     /// Bit stuffing inserts a zero after five ones, which on typical traffic
-    /// adds a low single-digit percentage. Rounded up rather than modelled.
+    /// adds a low single-digit percentage. Rounded up rather than modeled.
     private static let bitStuffingFactor = 1.03
 
     /// Airtime one frame occupied, in seconds, from its own size.

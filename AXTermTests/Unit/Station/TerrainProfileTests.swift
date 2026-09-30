@@ -36,7 +36,7 @@ final class TerrainProfileTests: XCTestCase {
             let along = GreatCircle.kilometres(from: origin, to: point) / total
             let distance = abs(along - atFraction)
             guard distance < halfWidthFraction else { return base }
-            // Triangular ridge, so the peak is exactly `peak` at the centre.
+            // Triangular ridge, so the peak is exactly `peak` at the center.
             return base + (peak - base) * (1 - distance / halfWidthFraction)
         }
     }
@@ -123,7 +123,7 @@ final class TerrainProfileTests: XCTestCase {
     /// A finding worth pinning, because it is counter-intuitive and it is why
     /// so many "line of sight" VHF paths disappoint: at 145 MHz the first
     /// Fresnel zone at the middle of a 20 km path is over 100 m across, so
-    /// two 10-metre antennas over flat ground clear only about 4% of it.
+    /// two 10-meter antennas over flat ground clear only about 4% of it.
     ///
     /// Geometrically there is line of sight. In practice the path is
     /// diffraction-limited — which is exactly the "answers but struggles"
@@ -248,7 +248,7 @@ final class TerrainProfileTests: XCTestCase {
 
         XCTAssertGreaterThan(vhf, uhf)
         // λ ≈ 2.0668 m; √(2.0668 × 10000 × 10000 / 20000) = √10334 ≈ 101.7 m.
-        // Over a hundred metres across at mid-path — which is why so many
+        // Over a hundred meters across at mid-path — which is why so many
         // "line of sight" VHF paths are marginal in practice.
         XCTAssertEqual(vhf, 101.7, accuracy: 0.5)
     }
@@ -318,7 +318,7 @@ final class TerrainProfileTests: XCTestCase {
     }
 
     /// Sampled along the great circle, not a straight line in latitude and
-    /// longitude. Over 100 km the two differ by hundreds of metres, and a
+    /// longitude. Over 100 km the two differ by hundreds of meters, and a
     /// profile of the wrong line is a profile of the wrong ridge.
     func testThePathIsSampledAlongTheGreatCircle() {
         // A long east–west path at high latitude, where the difference is

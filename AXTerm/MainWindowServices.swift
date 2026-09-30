@@ -24,18 +24,18 @@ struct MainWindowServices {
 /// Builds `MainWindowServices` the first time they are asked for, and never
 /// again.
 ///
-/// The main window's initialiser runs every time its parent's body does,
+/// The main window's initializer runs every time its parent's body does,
 /// and the app's body is evaluated again whenever any setting publishes.
 /// Building the services there directly made a new library, lookup service
 /// and mailbox on every settings edit, and re-wired the coordinator each
 /// time: the packet subscription was torn down and remade, the APRS retry
 /// timer restarted, and the NET/ROM broadcast timer re-armed, which also
-/// cancelled the warm-up broadcast. `@StateObject` kept only the first set,
+/// canceled the warm-up broadcast. `@StateObject` kept only the first set,
 /// so the rest was thrown away.
 ///
 /// Each `StateObject(wrappedValue:)` autoclosure reads from the same box.
 /// SwiftUI evaluates those autoclosures once, when it first installs the
-/// view, so the services are built then; every later initialiser makes a
+/// view, so the services are built then; every later initializer makes a
 /// box that nothing ever opens.
 final class MainWindowServicesBox {
 

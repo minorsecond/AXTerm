@@ -24,7 +24,7 @@ nonisolated final class SQLiteNetworkPathStore: NetworkPathStore, @unchecked Sen
     ///
     /// Two weeks matches packet retention elsewhere in the app. Long enough
     /// that a node heard only on weekends stays on the graph, short enough
-    /// that a station that moved away stops being drawn as a neighbour.
+    /// that a station that moved away stops being drawn as a neighbor.
     static let retention: TimeInterval = 14 * 24 * 3600
 
     private let dbQueue: DatabaseQueue

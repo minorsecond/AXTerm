@@ -2,16 +2,16 @@ import Combine
 import Foundation
 
 /// The state behind the Add Radio sheet: which step it is on, the radio it
-/// is setting up, and how to leave nothing behind when it is cancelled.
+/// is setting up, and how to leave nothing behind when it is canceled.
 ///
 /// The radio is real from the first step. The connection views write to a
 /// `RadioProfile` in settings, and testing the link needs a radio the engine
 /// can open, so a draft kept anywhere else would mean a second copy of every
 /// transport form. Instead a new radio is added switched off, so nothing
-/// connects while the operator is still choosing, and cancelling takes it
+/// connects while the operator is still choosing, and canceling takes it
 /// away again (`AppSettingsStore.discardRadio`). Setting up a radio that
 /// already exists (first-run setup, on a fresh install's one radio) keeps a
-/// copy of it, and cancelling puts the copy back.
+/// copy of it, and canceling puts the copy back.
 @MainActor
 final class AddRadioFlow: ObservableObject, Identifiable {
 
@@ -52,7 +52,7 @@ final class AddRadioFlow: ObservableObject, Identifiable {
     @Published var step: Step = .connect
     /// Whether this radio's link came up while the sheet was open.
     @Published private(set) var linkWasUp = false
-    /// Set once the sheet has been finished or cancelled, so the other of
+    /// Set once the sheet has been finished or canceled, so the other of
     /// the two cannot run as well (the sheet also cancels on disappear).
     private(set) var isClosed = false
     private let original: RadioProfile?

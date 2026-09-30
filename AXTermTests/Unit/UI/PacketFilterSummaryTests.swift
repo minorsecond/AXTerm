@@ -8,7 +8,7 @@ import XCTest
 /// from these frames. So "I looked at the packets and it wasn't there" has
 /// to be trustworthy, which means a filter must never drop rows quietly.
 ///
-/// These controls existed and were honoured by `PacketFilter` the whole
+/// These controls existed and were honored by `PacketFilter` the whole
 /// time; nothing presented the popover, so `showS` was permanently true and
 /// two thirds of the table was link-layer chatter with no payload.
 final class PacketFilterSummaryTests: XCTestCase {

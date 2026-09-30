@@ -17,7 +17,7 @@ import AppKit
 /// also dropped in with MapKit's bounce, on a map whose markers are
 /// deliberately animation-free so that a moving marker means the station moved.
 ///
-/// The second version fixed all that and was dull: a flat grey disc with a
+/// The second version fixed all that and was dull: a flat gray disc with a
 /// number, carrying strictly less information than the markers it replaced. A
 /// cluster hides between two and fifty stations, and which *kind* they are is
 /// exactly what an operator loses when they fold together.
@@ -25,11 +25,11 @@ import AppKit
 /// So the ring is a donut segmented by what is inside — digipeaters, weather,
 /// vehicles, fixed stations — in the same four hues the dots and the legend
 /// use. A cluster over a ridge full of digipeaters reads indigo; one over a
-/// highway reads amber. The body is the colour of paper with the count in
+/// highway reads amber. The body is the color of paper with the count in
 /// ordinary text, so the marker reads as a container of things rather than as
 /// a thing, and the number stays legible at every size. That is proportional
 /// symbology with a class breakdown, which is how this has been done on paper
-/// for a century, and it happens to look considerably better than a grey blob.
+/// for a century, and it happens to look considerably better than a gray blob.
 final class StationClusterAnnotationView: MKAnnotationView {
 
     static let reuseIdentifier = "station-cluster"
@@ -49,7 +49,7 @@ final class StationClusterAnnotationView: MKAnnotationView {
 
     /// Soft aura, so a group reads as a group without adding weight.
     private let halo = CAShapeLayer()
-    /// Paper-coloured body the count sits on.
+    /// Paper-colored body the count sits on.
     private let body = CAShapeLayer()
     /// One arc per class present. Reused across configures.
     private var segments: [CAShapeLayer] = []
@@ -133,7 +133,7 @@ final class StationClusterAnnotationView: MKAnnotationView {
         let circle = CGRect(x: inset, y: inset, width: diameter, height: diameter)
         hitRect = circle.insetBy(dx: -Self.hitSlop, dy: -Self.hitSlop)
 
-        // Aura in the dominant class's colour, very faint.
+        // Aura in the dominant class's color, very faint.
         let dominant = slices.max { $0.count < $1.count }?.color
             ?? PlatformColor.platformTertiaryLabel
         halo.frame = bounds
@@ -162,7 +162,7 @@ final class StationClusterAnnotationView: MKAnnotationView {
         count.textColor = .label
         count.font = .monospacedDigitSystemFont(ofSize: pointSize, weight: .semibold)
         #endif
-        // Optical centring: a text baseline sits low in its own box.
+        // Optical centering: a text baseline sits low in its own box.
         count.frame = CGRect(x: circle.minX, y: circle.midY - pointSize * 0.78,
                              width: circle.width, height: pointSize * 1.6)
 
@@ -214,7 +214,7 @@ final class StationClusterAnnotationView: MKAnnotationView {
         }
     }
 
-    /// The colour of paper. Semantic, so it follows light and dark mode
+    /// The color of paper. Semantic, so it follows light and dark mode
     /// without this view knowing which it is in.
     private static var bodyColor: PlatformColor {
         #if os(macOS)

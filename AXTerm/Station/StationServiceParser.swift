@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Most networks have no NET/ROM `NODES` broadcast to listen for, but almost
 /// every node, BBS and digipeater identifies itself anyway — the ID frame is
-/// a licence requirement and operators fill it with a service list. That list
+/// a license requirement and operators fill it with a service list. That list
 /// is a directory the network publishes about itself, over the air, needing
 /// no internet and no central registry.
 ///

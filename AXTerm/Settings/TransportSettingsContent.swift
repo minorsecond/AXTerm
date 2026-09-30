@@ -21,7 +21,7 @@ struct NetworkSettingsContent: View {
                     // operator cannot tell the host is editable. That is true
                     // on both platforms — inside this Grid the Mac does not
                     // supply one either. The keyboard hints are iOS-only, but
-                    // they matter as much: autocapitalising the first letter
+                    // they matter as much: autocapitalizing the first letter
                     // of a hostname, or offering letters for an IP, turns a
                     // working address into a failed connection.
                     .textFieldStyle(.roundedBorder)

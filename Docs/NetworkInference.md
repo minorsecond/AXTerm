@@ -64,12 +64,12 @@ exists — only that none has been observed. The tooltip says so.
 
 ### Clusters (label propagation)
 
-Each vertex repeatedly takes the most common label among its neighbours;
+Each vertex repeatedly takes the most common label among its neighbors;
 ties break alphabetically so a rerun on the same data gives the same answer.
 Converges in a handful of rounds at this scale, capped at 20.
 
 This answers the question a network with no NODES broadcasts cannot answer
-for itself: *which stations form a local network?* The answer is behavioural
+for itself: *which stations form a local network?* The answer is behavioral
 — stations that talk to each other more than they talk outward — rather than
 declared.
 
@@ -141,12 +141,12 @@ a busy map is a mesh of noise. They read as text on the profile instead.
 
 ### Antenna height — the input that decides the answer
 
-Height is asked for in three places and stored in metres everywhere:
+Height is asked for in three places and stored in meters everywhere:
 
 | Where | What it means |
 | --- | --- |
 | Settings → Antenna height above ground | This station. The operator always knows it. |
-| Settings → Assume for other stations | Every station with no recorded height. An assumption, labelled as one. |
+| Settings → Assume for other stations | Every station with no recorded height. An assumption, labeled as one. |
 | A station's identity page → Record antenna height | A real height for one remote station. |
 
 Above **ground**, not above sea level — the elevation data supplies the
@@ -197,7 +197,7 @@ always says which it was:
 
 > None clear — closest is AURORA–DENVER, terrain 13 ft above the line
 
-`blockedByMetres` is the actionable number: four metres of obstruction is not
+`blockedByMetres` is the actionable number: four meters of obstruction is not
 a dead path, it is a path that wants a taller mast. Blocked paths still are
 not *drawn* — every blocked pair on a busy map is a mesh saying "no" — but
 they are counted and the nearest miss is named.
@@ -222,7 +222,7 @@ that runs a few hundred times per profile would be absurd.
   ridges that decide a path, coarse enough that a tile is a few megabytes.
   3DEP's native 1 m data would be four orders of magnitude larger for no
   benefit to this question.
-- Bilinear interpolation between samples. Nearest-neighbour puts visible steps
+- Bilinear interpolation between samples. Nearest-neighbor puts visible steps
   in a profile and can miss a crest by half a sample.
 
 Downloaded from **Offline Data → Terrain**, next to the basemap, because the
@@ -255,7 +255,7 @@ disabled and says why. They never guess.
 
 | Finding | Surface | Why there |
 | --- | --- | --- |
-| Observed paths | Map, "Observed Paths" | Colour is evidence, dashes are inference |
+| Observed paths | Map, "Observed Paths" | Color is evidence, dashes are inference |
 | Predicted paths | Map, "Predicted Paths" | Purple, dotted, off by default. A forecast is a different kind of claim and must not arrive uninvited alongside a measurement. |
 | Forecast outcome | Map, paths menu | Says what the terrain pass found, including "none clear" and the nearest miss — so an empty map is never mistaken for a broken one. |
 | Antenna heights | Settings, and each identity page | Own height is a setting because it is always known; a remote height is a note because it usually is not. |
@@ -297,8 +297,8 @@ Only *observed* paths are stored. Transitive inferences are re-derived on
 demand from whatever the graph holds; storing one would let it harden into a
 fact that outlives its evidence.
 
-Retention is a fortnight, pruned when the database opens. A station that moved
-away should stop being drawn as a neighbour.
+Retention is two weeks, pruned when the database opens. A station that moved
+away should stop being drawn as a neighbor.
 
 ## 7. The station directory
 
@@ -329,11 +329,11 @@ forecaster reads, in two styles.
 **Hillshade** lights the ground from the north-west at 45°, the cartographic
 convention. Not an arbitrary one: lit from the south-east the image inverts
 perceptually and valleys read as hills. Slope and aspect come from Horn's
-method over the eight neighbours, with 2× vertical exaggeration because
-true-scale shading at ~100 m sampling is nearly flat grey.
+method over the eight neighbors, with 2× vertical exaggeration because
+true-scale shading at ~100 m sampling is nearly flat gray.
 
-**Elevation** colours absolute height on a **fixed** 0–4500 m ramp. Fixed
-rather than per-tile: normalising each tile against its own extremes would put
+**Elevation** colors absolute height on a **fixed** 0–4500 m ramp. Fixed
+rather than per-tile: normalizing each tile against its own extremes would put
 a seam at every tile boundary and make a flat tile glow like a mountain range.
 
 Three details that would each look plausible while being wrong, and are
@@ -341,9 +341,9 @@ pinned by tests:
 
 - A no-data sample stays fully transparent. Painting it as ground would draw a
   flat plain over unknown terrain.
-- A sample with any missing neighbour gets no shade at all rather than a
+- A sample with any missing neighbor gets no shade at all rather than a
   guessed slope — the edge of a coverage hole is exactly where a fabricated
-  neighbour would render a convincing cliff that is not there.
+  neighbor would render a convincing cliff that is not there.
 - Longitude spacing shrinks with latitude. Using the latitude spacing for both
   axes tilts every slope on the map.
 
@@ -362,7 +362,7 @@ were in the inner loop:
   aspect identities collapses it to one square root and four hoisted
   constants. `TerrainShadingTests` checks the fast form against the readable
   one across a spread of gradients rather than trusting the algebra.
-- Gathering the eight neighbours through a temporary array allocated once per
+- Gathering the eight neighbors through a temporary array allocated once per
   sample — a million heap allocations per tile, costing more than all the
   arithmetic. They are read straight into locals.
 - Rows are independent, so the work splits across cores with
@@ -385,7 +385,7 @@ cartographic relief does: it darkens what is already there rather than
 replacing it.
 
 Multiplying only works because the shade is rescaled so **level ground is
-white**. Raw hillshade puts flat terrain at cos(zenith) — mid-grey — and
+white**. Raw hillshade puts flat terrain at cos(zenith) — mid-gray — and
 multiplying that darkens the entire map uniformly. Dividing through by the
 flat-ground value makes level terrain 1.0, which multiplies to no change, so
 only real slopes darken.
@@ -396,16 +396,16 @@ otherwise cover it.
 
 Packet networks are bridged. A local node linked to the internet — LinBPQ, a
 CMS gateway, an APRS-IS feed — puts frames from stations thousands of
-kilometres away onto the same stream as the neighbour down the road, and
+kilometers away onto the same stream as the neighbor down the road, and
 nothing in a frame distinguishes them.
 
 `StationPlausibility` marks anything further than **300 km** as impossible to
 have arrived by radio. The threshold is deliberately generous: real packet
-links run to a couple of hundred kilometres from good sites and tropospheric
+links run to a couple of hundred kilometers from good sites and tropospheric
 ducting can carry further, so this catches the obvious cases without ever
 quietly hiding a genuine long haul.
 
-A position **inferred from an operator's licence address is never filtered**. A
+A position **inferred from an operator's license address is never filtered**. A
 node on a Colorado hilltop whose licensee lives in Virginia is real and
 common, and that distance measures a mailing address rather than a radio path.
 Unplaced stations are never filtered either — an unplaced station is usually

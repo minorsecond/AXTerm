@@ -79,7 +79,7 @@ final class WinlinkIdentitySyncTests: XCTestCase {
 
     /// The SSID is the station, not the operator. If it crossed, both devices
     /// would answer to one address — the collision `StationIdentityMonitor`
-    /// exists to detect. The record carries the licence only.
+    /// exists to detect. The record carries the license only.
     func testTheSSIDIsStrippedFromWhatIsPublished() async throws {
         // Seeded *with* an SSID on purpose. Stripping happens in the live
         // store too, but relying on that alone would mean the guarantee
@@ -258,7 +258,7 @@ final class WinlinkIdentitySyncTests: XCTestCase {
         XCTAssertEqual(settings.primaryCallsign, "K0EPI")
     }
 
-    /// A corrected licence still lands; only the SSID half is protected.
+    /// A corrected license still lands; only the SSID half is protected.
     @MainActor
     func testACorrectedCallsignIsAdoptedUnderTheSameSSID() async {
         let (store, settings, _, _) = await liveStore(callsign: "K0OLD-9")

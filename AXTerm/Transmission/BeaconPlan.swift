@@ -51,7 +51,7 @@ nonisolated enum BeaconPlan {
                 return "A beacon needs something to say."
             case let .textTooLong(bytes):
                 return "Beacon text is \(bytes) bytes; the limit is \(maxTextBytes). "
-                    + "A beacon that fills the channel stops being neighbourly."
+                    + "A beacon that fills the channel stops being neighborly."
             case let .tooManyDigis(count):
                 return "\(count) digipeaters; AX.25 allows \(maxDigis). "
                     + "Past two the frame is mostly addresses anyway."
@@ -104,7 +104,7 @@ nonisolated enum BeaconPlan {
     }
 
     /// Loose on purpose. `WIDE1-1` and `DRL` are both legitimate here and
-    /// neither is a licence, so the licence-shaped test used elsewhere
+    /// neither is a license, so the license-shaped test used elsewhere
     /// would reject the two most common entries an operator types.
     private static func isCallsignShaped(_ token: String) -> Bool {
         let parts = token.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)

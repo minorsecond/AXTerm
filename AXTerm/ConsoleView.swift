@@ -179,7 +179,7 @@ nonisolated enum ConsoleVisibilityFilter {
         localCallsign: String = "",
         ownCallsigns: Set<String> = []
     ) -> [ConsoleLine] {
-        // Echoes are recognised by every address our radios transmit as;
+        // Echoes are recognized by every address our radios transmit as;
         // without that set, by the one callsign given.
         let echoCallsigns = ownCallsigns.isEmpty ? [localCallsign] : ownCallsigns
         let timeFiltered: [ConsoleLine]
@@ -324,7 +324,7 @@ struct ConsoleView: View {
     @State private var scrollToBottomToken = 0
     /// Debounced write of `isUserNearBottom` from the bottom sentinel, and the
     /// deferred re-pin after a rebuild. Both are `QuietWindowTimer` rather than
-    /// a cancelled-and-replaced `DispatchWorkItem`: see that type for the
+    /// a canceled-and-replaced `DispatchWorkItem`: see that type for the
     /// frozen build that distinction came out of.
     @State private var nearBottomTimer = QuietWindowTimer(window: 0.12)
     @State private var repinTimer = QuietWindowTimer(window: 0.2)
@@ -377,7 +377,7 @@ struct ConsoleView: View {
     /// and the app stopped responding. CLAUDE.md §12: no unbounded view-driven
     /// loops.
     ///
-    /// `LazyVStack` does not save this: the array has to be fully materialised
+    /// `LazyVStack` does not save this: the array has to be fully materialized
     /// before it can be lazy about drawing it.
     @State private var groupedLines: [ConsoleLineGroup] = []
     @State private var dayGroupedLines: [DayGroupedSection<ConsoleLineGroup>] = []
@@ -558,11 +558,11 @@ struct ConsoleView: View {
                                 //
                                 // The write is coalesced through `scheduleNearBottom`,
                                 // which cancels-and-reschedules: during a flip storm
-                                // every scheduled write is cancelled by the next flip,
+                                // every scheduled write is canceled by the next flip,
                                 // so ZERO writes land until the scrolling settles, when
                                 // one final write applies the real value. (A naive
                                 // deferred write — schedule on every flip without
-                                // cancelling — is the opposite trap: it re-fires every
+                                // canceling — is the opposite trap: it re-fires every
                                 // turn into a 100% async loop. Cancel-and-reschedule is
                                 // the difference.)
                                 .onAppear { scheduleNearBottom(true) }
@@ -907,7 +907,7 @@ nonisolated struct ConsoleLineGroup: Identifiable {
 ///
 /// A private scheme, never registered with the system and never opened by it:
 /// `ConsoleView` intercepts these before they can leave, and anything it does
-/// not recognise is passed through to the normal handler. A tap therefore
+/// not recognize is passed through to the normal handler. A tap therefore
 /// opens the station AXTerm already knows about rather than jumping the
 /// operator out to a browser mid-session — QRZ is one click further on, from
 /// the station page or the right-click menu.
@@ -1285,9 +1285,9 @@ struct ConsoleLineView: View {
                   let upper = AttributedString.Index(range.upperBound, within: result)
             else { continue }
             result[lower..<upper].link = url
-            // Underlined rather than recoloured: the console already uses
-            // colour to say what class of line this is, and a second meaning
-            // for colour in the same row would fight it.
+            // Underlined rather than recolored: the console already uses
+            // color to say what class of line this is, and a second meaning
+            // for color in the same row would fight it.
             result[lower..<upper].underlineStyle = .single
         }
         return result
@@ -1338,7 +1338,7 @@ struct ConsoleLineView: View {
 
         if let onIdentity {
             // `.onTapGesture` beside `.onLongPressGesture` is unreliable: the
-            // long-press recogniser can consume the tap, so a callsign opened
+            // long-press recognizer can consume the tap, so a callsign opened
             // its profile sometimes and did nothing other times. A
             // simultaneous gesture lets both live, and the Mac gets a
             // right-click menu instead of a press-and-hold it has no idiom for.

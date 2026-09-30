@@ -37,17 +37,17 @@ struct StationsMapView: View {
     /// square is known. The grid string stays for the label and the cache
     /// key; this is what gets plotted and measured from.
     var observerPosition: StationPosition?
-    /// Excluded from the heard list and used to label the centre marker.
+    /// Excluded from the heard list and used to label the center marker.
     let myCallsign: String
     /// Every address this station transmits as — the beacon callsign plus
-    /// whatever else it answers to. These are the markers the centre already
-    /// is; any *other* SSID on the same licence is a different radio and
+    /// whatever else it answers to. These are the markers the center already
+    /// is; any *other* SSID on the same license is a different radio and
     /// belongs on the map like anyone else's.
     var ownCallsigns: Set<String> = []
     /// Every address this station has actually transmitted as, including
     /// SSIDs it no longer uses. Our own old beacon heard back off a
     /// digipeater is still us, and without this it drew a second marker on
-    /// top of the centre one.
+    /// top of the center one.
     var ownTransmittedAddresses: Set<String> = []
     /// Radios the operator has marked as on an APRS channel. They count as
     /// APRS for the map whatever else they have heard; see
@@ -84,7 +84,7 @@ struct StationsMapView: View {
     var onMessage: ((String) -> Void)?
     /// Send this station one directed query. Nil hides the action.
     ///
-    /// One closure for the whole catalogue rather than a `ping` and a
+    /// One closure for the whole catalog rather than a `ping` and a
     /// `version` and a `trace`: which question is asked is the operator's
     /// choice, and the transmit side does the same thing with all of them.
     var onQuery: ((APRSStationQuery) -> Void)?
@@ -156,7 +156,7 @@ struct StationsMapView: View {
 
     @State private var selection: String?
     /// Set by another screen to bring a station into view — "Show on Map"
-    /// from an identity page. Cleared once honoured so the same request
+    /// from an identity page. Cleared once honored so the same request
     /// does not re-select on every redraw.
     @Binding var focusCallsign: String?
 
@@ -199,7 +199,7 @@ struct StationsMapView: View {
     @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = MapLayerDefaults.showsCoverageRing
     @AppStorage("stations.showsAPRSCoverageRing") private var showsAPRSCoverageRing = MapLayerDefaults.showsAPRSCoverageRing
     /// Whether to place a station at its own transmitted APRS fix (on) or at
-    /// its licence/registry point (off). Only matters for stations that have
+    /// its license/registry point (off). Only matters for stations that have
     /// both; the default prefers the station's own beacon.
     @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = MapLayerDefaults.preferTransmittedPosition
 
@@ -483,7 +483,7 @@ struct StationsMapView: View {
     /// The band terrain is judged against.
     ///
     /// Fresnel geometry depends on wavelength, so a forecast needs a
-    /// frequency. Two metres is where packet lives; a path clear at 145 MHz
+    /// frequency. Two meters is where packet lives; a path clear at 145 MHz
     /// is clear at 440 MHz too, since the zone only narrows as frequency
     /// rises. Judging the wider zone is the conservative direction.
     static let vhfCalculationFrequency: Double = 145_000_000
@@ -596,7 +596,7 @@ struct StationsMapView: View {
     @State private var terrainCache = TerrainCache()
 
     /// Our own coordinate: the resolved position when there is one, the
-    /// grid centre otherwise.
+    /// grid center otherwise.
     ///
     /// This drives our pin, the coverage rings, the plausibility partition
     /// and the framing, so taking the grid square when a GPS fix existed put
@@ -610,11 +610,11 @@ struct StationsMapView: View {
             observerAnchor.point = nil
             return nil
         }
-        // Anchored against GPS noise. Successive fixes land a few metres
+        // Anchored against GPS noise. Successive fixes land a few meters
         // apart (the toolbar chip reports ±20 m), and every one of them used
         // to become a new observer coordinate — which slid our pin, moved
         // the endpoint of every path line radiating from this station, and
-        // re-centred the coverage rings, roughly once a second. On screen
+        // re-centered the coverage rings, roughly once a second. On screen
         // that was the whole network around our dot twitching in place. The
         // drawn position only follows the fix once it has moved further
         // than the noise floor; a base station holds still, and a rover
@@ -644,7 +644,7 @@ struct StationsMapView: View {
     /// Every address that is this station. Falls back to the beacon callsign
     /// alone when the caller has not said what else this station answers to.
     /// Everything we have transmitted as is included too, so a beacon sent
-    /// under an old SSID is recognised when it comes back.
+    /// under an old SSID is recognized when it comes back.
     private var ownAddresses: Set<String> {
         let current = ownCallsigns.isEmpty ? [myCallsign.uppercased()] : ownCallsigns
         return current.union(ownTransmittedAddresses.map { $0.uppercased() })
@@ -656,7 +656,7 @@ struct StationsMapView: View {
     ///
     /// This station is taken out: a sibling SSID sitting on our own
     /// position, or our own node alias, would draw a second marker on top of
-    /// the centre one. See `HeardStationMap.withoutOwnStation`.
+    /// the center one. See `HeardStationMap.withoutOwnStation`.
     private var coreEntries: [HeardStationMap.Entry] {
         HeardStationMap.withoutOwnStation(
             heardAndAliasEntries, ownAddresses: ownAddresses, observer: observer)
@@ -803,7 +803,7 @@ struct StationsMapView: View {
             : (hazards > 0
                ? "\(hazards) hazard\(hazards == 1 ? "" : "s") \u{b7} \(live.count) placed"
                : "\(live.count) placed")
-        // Say why it cannot be drawn, rather than greying out a switch and
+        // Say why it cannot be drawn, rather than graying out a switch and
         // leaving the operator to guess. Two stations reporting the chosen
         // reading is the floor: one is a reading, not a field.
         // Barometric tendency, which is the one predictive thing RF carries.
@@ -842,7 +842,7 @@ struct StationsMapView: View {
                 return "Needs 2 current readings \u{b7} 1 so far"
             }()
         }
-        // Which parameters could be drawn right now, so the picker can grey
+        // Which parameters could be drawn right now, so the picker can gray
         // out the ones no station is reporting rather than offering an empty
         // map. A humidity field needs two stations with hygrometers, which is
         // a different question from whether any weather station was heard.
@@ -857,7 +857,7 @@ struct StationsMapView: View {
     /// The weather stations that can contribute to the field: heard, placed,
     /// currently reporting a temperature, and recent enough to still mean it.
     ///
-    /// A station placed at a licence address is deliberately allowed in. Its
+    /// A station placed at a license address is deliberately allowed in. Its
     /// thermometer is real even when its dot is a lookup, and excluding it
     /// would throw away half the readings on a channel where few stations
     /// beacon a position.
@@ -1015,9 +1015,9 @@ struct StationsMapView: View {
     /// Positions for everything the graph might mention, us included.
     ///
     /// Built from `coreEntries`, never the directory layer: a directory
-    /// placement is an operator's licence address, not a station at a
+    /// placement is an operator's license address, not a station at a
     /// radio, so terrain forecasts and path links over it would be
-    /// analysing a mailing address (the same reason camera framing skips
+    /// analyzing a mailing address (the same reason camera framing skips
     /// node sites). This is also what keeps the map responsive — these
     /// keys feed `insightKey`, and when every trickled-in directory
     /// position changed it, each one re-fired the full graph-and-terrain
@@ -1076,7 +1076,7 @@ struct StationsMapView: View {
     private var scope: StationScope {
         guard let observer else { return StationScope.build(observerLabel: "", sites: []) }
         // Showing transmitted positions means showing *only* stations at their
-        // own beaconed fix — a licence/registry guess is not a transmitted
+        // own beaconed fix — a license/registry guess is not a transmitted
         // position, so those heard stations are dropped from the map (nodes and
         // still-unplaced entries are left alone). Off, every placeable station
         // shows at whatever point it has. "Drop after" applies either way.
@@ -1180,7 +1180,7 @@ struct StationsMapView: View {
     /// is nothing to draw.
     private var aprsSymbols: [String: APRSMapSymbol] {
         // Only stations actually placed at their transmitted APRS fix wear
-        // their symbol. When the operator is showing licence points, or a
+        // their symbol. When the operator is showing license points, or a
         // station happens to be placed by a lookup, it is a plain dot — the
         // symbol must not imply a live position the marker is not showing.
         let aprsPlaced = Set(placed.filter { $0.origin == .transmittedAPRS }.map(\.id))
@@ -1326,7 +1326,7 @@ struct StationsMapView: View {
         //
         // The key is the *set* of callsigns, sorted, so it changes when a new
         // station is heard and not on every packet from one already known.
-        // Honoured once, then cleared: a request that stayed set would
+        // Honored once, then cleared: a request that stayed set would
         // re-select the same station on every redraw and fight the operator
         // panning away from it.
         // Graph analysis and terrain forecasts, recomputed only when the
@@ -1601,7 +1601,7 @@ struct StationsMapView: View {
     /// Deliberately **not** disabled while a previous query is still
     /// listening. Asking a second question during the reply window is a normal
     /// thing to want, the results fold into the same list either way, and a
-    /// control that greys out for two minutes after every use reads as broken.
+    /// control that grays out for two minutes after every use reads as broken.
     /// Starting a new query supersedes the old one, and there is an explicit
     /// way to stop.
     ///
@@ -1833,7 +1833,7 @@ struct StationsMapView: View {
         #if os(iOS)
         // The Mac places by secondary-clicking a spot. A touch screen has no
         // such gesture — a long press already means something else — and this
-        // view does not track the map's centre, so inventing a crosshair here
+        // view does not track the map's center, so inventing a crosshair here
         // would be guessing at where the operator meant. Our own position is
         // the one point on the map this screen knows exactly, and it is also
         // the field case: you are standing at the aid station when you mark it.
@@ -2064,7 +2064,7 @@ struct StationsMapView: View {
 
     /// Twenty stations with no position is the map's most important
     /// fact, so it is stated on the map rather than left to a tooltip on
-    /// a greyed-out button.
+    /// a grayed-out button.
     @ViewBuilder
     private var unplacedBanner: some View {
         let candidates = HeardStationMap.lookupCandidates(unplaced, aliases: aliases.directory).count
@@ -2357,7 +2357,7 @@ struct StationsMapView: View {
                         .help("Send \(site.label) an APRS text message.")
                     }
                     // Standing down an object we placed. Offered only for
-                    // our own: APRS honours a kill from anyone, which is
+                    // our own: APRS honors a kill from anyone, which is
                     // exactly why the button is withheld — an operator who
                     // can stand down another agency's road closure with one
                     // click will eventually do it by accident.

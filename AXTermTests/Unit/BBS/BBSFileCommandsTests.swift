@@ -90,7 +90,7 @@ final class BBSFileCommandsTests: XCTestCase {
 
     // MARK: - What is new
 
-    /// The question a regular caller actually has. Sending the whole catalogue
+    /// The question a regular caller actually has. Sending the whole catalog
     /// every visit spends airtime telling them what they already know.
     func testNewListsOnlyWhatChangedSinceTheLastCall() {
         var sut = shell()

@@ -18,7 +18,7 @@ for protocol details and setup wording; no code was copied from them.
 
 ## Connecting
 
-Over Bluetooth LE AXTerm recognises a TNC4 by its service UUID
+Over Bluetooth LE AXTerm recognizes a TNC4 by its service UUID
 (`00000001-ba2a-46c9-ae49-01b0961f68bb`). A serial port can't say what's on it,
 so a TNC4 on USB is marked as one in the radio's settings.
 
@@ -140,7 +140,7 @@ them.
 When the IC-V8 unkeys, its audio output shifts enough to pin the TNC4's input at
 full scale. Polling the input level every 0.4 s after a transmission gave:
 
-| Input gain | Pinned at full scale | Back inside the range | Centred again |
+| Input gain | Pinned at full scale | Back inside the range | Centered again |
 |---|---|---|---|
 | 4 (+24 dB) | +1.4 to +2.7 s | about +3.0 s | about +5 s |
 | 1 (+6 dB) | +1.5 to +1.8 s | about +2.3 s | about +3.4 s |
@@ -166,8 +166,8 @@ gain 0.
 ### Compared with an ID-50
 
 The same TNC4 on an Icom ID-50 (volume 10, input gain 0), with the same
-test: while transmitting, the input sat quiet near centre, and by +1.5 s it
-was back to normal noise, centred, with nothing pinned and no drift. Two node
+test: while transmitting, the input sat quiet near center, and by +1.5 s it
+was back to normal noise, centered, with nothing pinned and no drift. Two node
 handshakes in a row caught every reply, including the UA that comes straight
 after AXTerm's own transmission: SABM and UA, the welcome, the RR, then DISC
 and UA. So the jolt comes from the IC-V8 or its cable, not from the TNC4.

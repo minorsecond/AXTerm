@@ -270,7 +270,7 @@ final class MapTrafficFeed: ObservableObject {
 
     /// The digipeaters a frame actually came through — the ones marked used.
     /// An unused entry is a request, not a path taken, and printing it would
-    /// claim a route the frame never travelled.
+    /// claim a route the frame never traveled.
     static func via(_ packet: Packet) -> String {
         let used = packet.via.filter(\.repeated).map(\.display)
         return used.joined(separator: ",")

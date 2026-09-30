@@ -21,7 +21,7 @@ struct SessionHistoryRow: View {
                 Text(session.correspondent)
                     .font(.system(.subheadline, design: .monospaced).weight(.medium))
                 // Only when the two differ, which is what a relay looks like:
-                // dialled DRLNOD, talked to BBSCBH.
+                // dialed DRLNOD, talked to BBSCBH.
                 if session.relayDestination != nil {
                     Text("via \(session.remote)")
                         .font(.caption2)
@@ -70,7 +70,7 @@ struct SessionHistoryRow: View {
     }
 }
 
-/// How a session ended, coloured by what it says about the path.
+/// How a session ended, colored by what it says about the path.
 ///
 /// A refusal is the far end answering and took a decoded frame to produce, so
 /// it is not drawn in the same red as nothing answering at all.

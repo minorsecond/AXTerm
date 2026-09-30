@@ -173,7 +173,7 @@ final class AX25RetryTests: XCTestCase {
 
     /// Regression: an inbound RNR must retire the frames its N(R) acknowledges.
     ///
-    /// Both S-frame dispatch sites used to `break` on RNR, so the acknowledgement it
+    /// Both S-frame dispatch sites used to `break` on RNR, so the acknowledgment it
     /// carries was thrown away. V(A) stayed put, the send buffer kept frames the peer
     /// had already taken, and T1 retransmitted them until the retry counter tripped
     /// "Link failure (retries exceeded)" against a peer that was merely busy.
@@ -493,7 +493,7 @@ final class AX25RetryTests: XCTestCase {
     ///
     /// The state machine's [stopT1, startT3] is computed while nothing is
     /// outstanding, but the handler drained the queue (transmitting "bbs" and
-    /// starting T1) BEFORE executing those actions — so the stale stopT1 cancelled
+    /// starting T1) BEFORE executing those actions — so the stale stopT1 canceled
     /// the fresh frame's timer. Had the peer's ack been lost, the frame would have
     /// hung unprotected until the 30 s T3 enquiry.
     func testRRDrainedFrameKeepsItsT1Timer() {

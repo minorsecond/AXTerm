@@ -172,7 +172,7 @@ final class APRSSymbolArtworkTests: XCTestCase {
         XCTAssertNil(APRSSymbolArtwork.inscription(table: "\\", code: "#"))
     }
 
-    /// Every surface goes through the rasteriser now, so a symbol asked for at
+    /// Every surface goes through the rasterizer now, so a symbol asked for at
     /// a point size must render — the sidebar and the picker used to draw a
     /// bare SF Symbol and the map an overlaid one, and the same station looked
     /// like two different things.

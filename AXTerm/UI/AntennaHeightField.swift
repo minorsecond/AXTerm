@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Antenna height above ground, entered in whichever unit the operator thinks
-/// in and stored in metres.
+/// in and stored in meters.
 ///
 /// A separate view because height is asked for in three places — the
 /// operator's own station in settings, the assumption used for everyone else,
@@ -13,7 +13,7 @@ import SwiftUI
 struct AntennaHeightField: View {
 
     let title: String
-    /// Metres above ground. Zero is a real answer — a handheld at street
+    /// Meters above ground. Zero is a real answer — a handheld at street
     /// level — so there is no "unset" state here; the caller decides what
     /// absence means.
     @Binding var metres: Double
@@ -23,7 +23,7 @@ struct AntennaHeightField: View {
     private static let metresPerFoot = 0.3048
 
     /// Rounded to whole units, because nobody knows their antenna height to
-    /// the centimetre and a field showing 12.192 m invites the belief that
+    /// the centimeter and a field showing 12.192 m invites the belief that
     /// they do.
     private var displayed: Double {
         get { (isFeet ? metres / Self.metresPerFoot : metres).rounded() }

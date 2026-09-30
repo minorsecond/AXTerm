@@ -1,6 +1,6 @@
 import Foundation
 
-/// APRS telemetry: five analogue channels and eight bits, plus the messages a
+/// APRS telemetry: five analog channels and eight bits, plus the messages a
 /// station sends to say what they mean.
 ///
 /// This is how anything that is not weather gets onto APRS. River and creek
@@ -14,7 +14,7 @@ import Foundation
 /// integers between 0 and 255. What they *are* comes from three definition
 /// messages the station sends occasionally — `PARM` (names), `UNIT` (units)
 /// and `EQNS` (the coefficients that turn a count back into a real value).
-/// Until those arrive a reading is an unlabelled number, and AXTerm says so
+/// Until those arrive a reading is an unlabeled number, and AXTerm says so
 /// rather than inventing a name for it.
 nonisolated struct APRSTelemetry: Equatable, Sendable {
 
@@ -24,7 +24,7 @@ nonisolated struct APRSTelemetry: Equatable, Sendable {
         /// characters and some stations send a timestamp-like string, so it is
         /// kept verbatim rather than parsed into an Int and lost.
         var sequence: String
-        /// Five analogue channels, 0…255 as transmitted.
+        /// Five analog channels, 0…255 as transmitted.
         var analogue: [Double]
         /// Eight digital bits, most significant first as sent.
         var bits: [Bool]
@@ -33,11 +33,11 @@ nonisolated struct APRSTelemetry: Equatable, Sendable {
     /// What a station says its channels mean. Every field is optional because
     /// the three defining messages arrive separately and often not at all.
     struct Definition: Hashable, Sendable {
-        /// Channel names: five analogue then eight digital, as far as sent.
+        /// Channel names: five analog then eight digital, as far as sent.
         var names: [String] = []
         /// Units, same ordering.
         var units: [String] = []
-        /// `a`, `b`, `c` per analogue channel for `a·v² + b·v + c`.
+        /// `a`, `b`, `c` per analog channel for `a·v² + b·v + c`.
         var coefficients: [(a: Double, b: Double, c: Double)] = []
         /// Project or station title, from the `BITS` message's tail.
         var title: String?
@@ -72,7 +72,7 @@ nonisolated struct APRSTelemetry: Equatable, Sendable {
         var isCalibrated: Bool
 
         /// What to print. An uncalibrated count is shown as a count and
-        /// labelled as one — a raw 137 displayed as "137 feet" would be a
+        /// labeled as one — a raw 137 displayed as "137 feet" would be a
         /// fabrication, and a flood gauge is the worst place to make one.
         var text: String {
             let number = value == value.rounded()
@@ -97,7 +97,7 @@ nonisolated struct APRSTelemetry: Equatable, Sendable {
         text = String(text.dropFirst(2))
         let fields = text.split(separator: ",", omittingEmptySubsequences: false)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-        // Sequence plus five analogue channels is the minimum worth keeping;
+        // Sequence plus five analog channels is the minimum worth keeping;
         // the digital byte is optional in practice.
         guard fields.count >= 6 else { return nil }
 
@@ -136,7 +136,7 @@ nonisolated struct APRSTelemetry: Equatable, Sendable {
             return true
         }
         if let parts = values(after: "EQNS.") {
-            // Three coefficients per analogue channel, in order. A short or
+            // Three coefficients per analog channel, in order. A short or
             // ragged list defines only the channels it covers rather than
             // being rejected outright — a partial calibration is still better
             // than none, and stations do send them.
@@ -164,7 +164,7 @@ nonisolated struct APRSTelemetry: Equatable, Sendable {
 
     // MARK: - Applying the definition
 
-    /// Turns a frame's raw counts into labelled readings using whatever the
+    /// Turns a frame's raw counts into labeled readings using whatever the
     /// station has defined so far.
     static func readings(_ frame: Frame, definition: Definition?) -> [Reading] {
         frame.analogue.enumerated().map { index, raw in
@@ -184,7 +184,7 @@ nonisolated struct APRSTelemetry: Equatable, Sendable {
     }
 
     /// The eight bits, named where the station named them. Digital names
-    /// follow the five analogue ones in `PARM`.
+    /// follow the five analog ones in `PARM`.
     static func bitReadings(_ frame: Frame, definition: Definition?)
         -> [(name: String?, isOn: Bool)] {
         frame.bits.enumerated().map { index, isOn in

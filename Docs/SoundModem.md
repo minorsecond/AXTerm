@@ -33,7 +33,7 @@ IC-705 ──USB──┬─ USB Audio CODEC ──▶ CoreAudioModemIO ─▶ �
   KISS-framed AX.25 exactly as it would a TCP TNC; decoded frames come back
   KISS-framed on the radio's port. `LinkSession`, `RadioManager` and
   `PacketEngine` do not know the modem exists. KISS command frames 1–5
-  (TXDELAY, P, SlotTime, TXtail, FullDuplex) are honoured and update the
+  (TXDELAY, P, SlotTime, TXtail, FullDuplex) are honored and update the
   running configuration.
 - **`ModemRadioLink`** (macOS) composes the modem, a `CIVClient` on the
   configured port and the chosen `PTTController`. Opening goes CI-V first:
@@ -157,7 +157,7 @@ the hardest bench condition from 15 frames of 40 to 24: a power detector in
 noise gains a positive bias on *both* tones, so the best threshold sits away
 from the arithmetic answer and a finer comb lands nearer it.
 
-It used to ship `[0]` — a single centre slicer, assuming a flat path.
+It used to ship `[0]` — a single center slicer, assuming a flat path.
 `AFSKSensitivityBenchTests` measures what that costs, in frames decoded of 40,
 at 1200 baud and 16 kHz:
 
@@ -218,7 +218,7 @@ shares.
 ### Against Direwolf, on identical audio
 
 The bench writes each condition out as PCM so Direwolf's `atest` can decode the
-very same samples — comparing two decoders on two noise realisations would
+very same samples — comparing two decoders on two noise realizations would
 measure the noise. Run `testEmitHeadToHeadMaterial`, wrap the `.pcm` files as
 16 kHz mono WAV and pass them to `atest -B 1200`:
 
@@ -385,7 +385,7 @@ On the Mac, the Transport picker gains **Sound Modem**. The form:
 
 - **Transport**: audio in and out (the Mac's devices, live), receive channel
   (left / right / both), mode with its radio note, the receive-level meter
-  (grey silent, green in range, amber above −6 dBFS, red clipping).
+  (gray silent, green in range, amber above −6 dBFS, red clipping).
 - **Rig control (CI-V)**: port (the serial list; the lower-numbered
   usbmodem is Port A), address in hex, keying method with its note,
   **Identify** → "IC-705 (A4) · 144.390 MHz FM-D" on the live link, or on a
@@ -423,7 +423,7 @@ the Mac's Keychain via `RadioSecrets`, never in the radio list or its JSON).
   codec. `IcomLANPacket` is the wire format, pinned byte-for-byte against
   real IC-705 datagrams in `IcomLANPacketTests`.
 - **The handshake after login is event-driven.** The radio sends its
-  capabilities, a token acknowledgement and the connection reply in an
+  capabilities, a token acknowledgment and the connection reply in an
   order that cannot be assumed, so the session drives them in one handler
   and completes on the connection reply, rather than waiting for each in
   turn.
@@ -564,7 +564,7 @@ nothing was copied. Accelerate is the only DSP dependency.
   macOS-gated today. Enabling it is a UI job, not a protocol one.
 - **9600 bd G3RUH** over the 12 kHz IF (receive only on this radio).
 - **Several slicers** at once (twist hypotheses ±3/±6 dB) and 300 bd
-  frequency-offset detectors; the single centre slicer already meets the
+  frequency-offset detectors; the single center slicer already meets the
   Direwolf single-slicer baseline on the noisy fixtures.
 - **Hardware verification** of every step of the checklist above on a real
   IC-705; the timing defaults (TXDELAY 300 ms, TXTAIL 100 ms) are

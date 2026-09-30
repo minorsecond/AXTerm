@@ -3,7 +3,7 @@ import SwiftUI
 /// How busy the channel is, and whether the beacon path suits it.
 ///
 /// Presented together and with the workings shown. The recommendation is a
-/// judgement made from four measurements and two thresholds, and an operator
+/// judgment made from four measurements and two thresholds, and an operator
 /// who can see all six can overrule it on local knowledge this has no way of
 /// holding — that a digipeater is about to go off the air for a repair, that
 /// tonight is a net, that the path is set for an event next week.

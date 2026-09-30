@@ -2,7 +2,7 @@
 //  DistanceDisplay.swift
 //  AXTerm
 //
-//  One place that turns kilometres into what the operator reads.
+//  One place that turns kilometers into what the operator reads.
 //  Distances were hardcoded to miles on every surface while heights
 //  already had a unit choice — the map's reach into VK and ZL made
 //  "miles only" a US assumption worth retiring (field ask 2026-08-29).

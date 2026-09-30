@@ -111,7 +111,7 @@ nonisolated struct APRSComposeModel: Equatable, Sendable {
     ///
     /// Trimmed of surrounding whitespace and never longer than the limit. The
     /// view refuses to send an over-length message rather than relying on
-    /// this, so this only ever has to be the last line of defence.
+    /// this, so this only ever has to be the last line of defense.
     var outgoingText: String {
         String(text.trimmingCharacters(in: .whitespaces).prefix(APRSMessage.maxTextLength))
     }

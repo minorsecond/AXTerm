@@ -4,8 +4,8 @@ import GRDB
 
 /// Sharing a folder, end to end.
 ///
-/// `BBSFileIndexTests` pins what the index does with a catalogue; this pins
-/// how the catalogue comes to exist, which is the half the Files screen drives
+/// `BBSFileIndexTests` pins what the index does with a catalog; this pins
+/// how the catalog comes to exist, which is the half the Files screen drives
 /// on both platforms. Everything here runs against a real folder on disk and a
 /// real store, because the failures worth catching — a folder shared and then
 /// listing nothing, a description that does not survive a rescan — are exactly
@@ -56,7 +56,7 @@ final class BBSFileLibraryTests: XCTestCase {
 
         XCTAssertNil(library.lastScanError, "a folder that exists shares without complaint")
         XCTAssertEqual(library.index.areas.map(\.name), ["OPS"],
-                       "area names are normalised: callers type them blind on a radio link")
+                       "area names are normalized: callers type them blind on a radio link")
         XCTAssertEqual(library.index.files(in: "OPS").map(\.name),
                        ["netscript.txt", "roster.csv"])
     }

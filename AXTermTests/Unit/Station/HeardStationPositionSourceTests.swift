@@ -1,8 +1,8 @@
 import XCTest
 @testable import AXTerm
 
-/// The map's transmitted-vs-licence position toggle: a station carries both a
-/// beaconed APRS fix and a licence address, and the operator chooses which the
+/// The map's transmitted-vs-license position toggle: a station carries both a
+/// beaconed APRS fix and a license address, and the operator chooses which the
 /// map shows — with the origin tagged so only a transmitted fix wears the
 /// station's APRS symbol.
 final class HeardStationPositionSourceTests: XCTestCase {
@@ -27,7 +27,7 @@ final class HeardStationPositionSourceTests: XCTestCase {
                        source: "HamDB", fetchedAt: now)
     }
 
-    /// Beaconed fix ≠ licence address; the two placements are genuinely apart.
+    /// Beaconed fix ≠ license address; the two placements are genuinely apart.
     private let beacon = (lat: 39.65, lon: -104.95)
     private let licence = (lat: 39.62, lon: -104.90)
 
@@ -61,12 +61,12 @@ final class HeardStationPositionSourceTests: XCTestCase {
         let e = try XCTUnwrap(entries.first)
         XCTAssertEqual(e.origin, .licenceOrGrid)
         XCTAssertEqual(e.position?.latitude ?? 0, licence.lat, accuracy: 1e-6)
-        XCTAssertTrue(e.positionSource?.contains("licence address") == true, e.positionSource ?? "")
+        XCTAssertTrue(e.positionSource?.contains("license address") == true, e.positionSource ?? "")
     }
 
     func testLicencePreferenceFallsBackToTheBeaconWhenNoLookupExists() throws {
-        // No directory record: the licence point does not exist, so even with
-        // the licence preference the station is placed at its transmitted fix.
+        // No directory record: the license point does not exist, so even with
+        // the license preference the station is placed at its transmitted fix.
         let entries = HeardStationMap.entries(
             stations: [station("W3OO-1", aprs: aprsReport(lat: beacon.lat, lon: beacon.lon))],
             directory: [:], gatewayGrids: [:],
@@ -77,7 +77,7 @@ final class HeardStationPositionSourceTests: XCTestCase {
     }
 
     func testTransmittedPreferenceFallsBackToLicenceWhenNoBeaconExists() throws {
-        // No APRS fix: even preferring transmitted, the licence point is used.
+        // No APRS fix: even preferring transmitted, the license point is used.
         let entries = HeardStationMap.entries(
             stations: [station("W3OO-1", aprs: nil)],
             directory: ["W3OO": record("W3OO", lat: licence.lat, lon: licence.lon)],

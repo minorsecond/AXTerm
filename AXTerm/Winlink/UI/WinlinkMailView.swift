@@ -408,7 +408,7 @@ struct WinlinkMailView: View {
             .help(WinlinkCopy.connectExchangeTooltip)
             // A Menu is the last thing in this row and takes every point
             // left over, so the one control that starts an over-the-air
-            // session was stretched to about 400 points beside neighbours
+            // session was stretched to about 400 points beside neighbors
             // half that. Intrinsic width; the Spacer earlier in the row
             // keeps it against the trailing edge.
             .fixedSize()

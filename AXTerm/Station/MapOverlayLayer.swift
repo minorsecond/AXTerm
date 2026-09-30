@@ -65,7 +65,7 @@ nonisolated struct MapOverlayLayer: Identifiable, Equatable, Sendable {
     /// The palette offered for layers, in the order it is handed out.
     ///
     /// Deliberately avoids the greens, yellows and oranges the station markers
-    /// use: an overlay sharing a colour with "answers / patchy / rarely"
+    /// use: an overlay sharing a color with "answers / patchy / rarely"
     /// invites reading a boundary as a link quality.
     static let palette = ["blue", "purple", "teal", "indigo", "brown", "pink"]
 

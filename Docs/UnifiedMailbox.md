@@ -46,7 +46,7 @@ Winlink subsystem persists. Each carries its reason in the source, and
 | `messageState` | synced | Read flags and folders are the point of a unified mailbox. Merged by rule (§3). |
 | `contact` | synced | An address book is about people, not equipment. |
 | `catalogFavorite` | synced | An operator preference; travels with the operator. |
-| `callsignDirectory` | synced | A licence address is the same fact everywhere. A device with no network benefits most from another's lookups. |
+| `callsignDirectory` | synced | A license address is the same fact everywhere. A device with no network benefits most from another's lookups. |
 | `nodeAlias` | synced | `DRLNOD` is `KE0NCQ` regardless of which radio heard the beacon. |
 | `stationActivity` | **attributed** | What another station heard is evidence worth reading, measured by a different antenna. Shown as that station's observations under "Other Stations"; never merged into routing metrics. |
 | `terminalSession` | **attributed** | A finished terminal transcript is what was *said* over the air, not a measurement of it — so it may travel where `sessionLog` may not. It arrives in its own table (`remote_terminal_sessions`), is listed in the Terminal's History only behind the "Other devices" switch, in a section per device, with "From K0EPI-7 on Ross's Mac" on every row, and cannot be tagged or annotated. Only sessions ended in the last week are published; transcripts are cut at 200 KB and say so. Tags and notes never travel. |
@@ -161,7 +161,7 @@ The same file compiles unchanged on macOS, iOS and iPadOS — it contains no
 
 Not via iCloud Drive, iCloud Documents, or any file-level sync. Those
 replicate whole files with last-writer-wins and no awareness of WAL
-journalling; two devices writing one database produce a corrupted store, not a
+journaling; two devices writing one database produce a corrupted store, not a
 merged mailbox. Everything in §3 exists so merging happens per record.
 
 ---
@@ -222,18 +222,18 @@ restarting the app does not re-upload everything.
 
 ### The operator crosses; the station does not
 
-`callsignBase` and `operatorProfile` carry the operator's licence callsign and
-their name, organisation, phone and address — the ICS fields that are the same
+`callsignBase` and `operatorProfile` carry the operator's license callsign and
+their name, organization, phone and address — the ICS fields that are the same
 on every radio they own, so a second device is usable without retyping any of
 it. `WinlinkIdentitySyncSource` implements both.
 
 What deliberately does **not** cross is the **SSID**. `K0EPI` is the operator;
-`K0EPI-9` is a station. If the SSID travelled, two devices would answer to one
+`K0EPI-9` is a station. If the SSID traveled, two devices would answer to one
 address — the collision `StationIdentityMonitor` detects and
 `StationIdentityLease` prevents. So the SSID is stripped when publishing
 (`narrowed(to: .callsignBase)`), discarded if one arrives anyway (`merge`), and
 preserved on apply: `LiveIdentityStore` keeps this device's SSID and swaps only
-the licence half, so an iPad running as `K0EPI-9` that adopts the Mac's callsign
+the license half, so an iPad running as `K0EPI-9` that adopts the Mac's callsign
 stays `-9`. The grid square is excluded for the same class of reason — a
 handheld is not where the home rig is.
 
@@ -280,7 +280,7 @@ and resend. Failing toward silence on the air is the right way round.
 
 ---
 
-## 8. Failure behaviour
+## 8. Failure behavior
 
 - **No account** — reported as `skippedNoAccount`, not thrown. An operator in
   the field with no signal should find the app working alone, not an alert
@@ -308,7 +308,7 @@ it.
 
 Two AXTerms pointed at one Direwolf is a normal arrangement — a desktop and a
 laptop on the same LAN, or a Mac and an iPad reaching the same TNC over the
-network. Direwolf accepts both KISS clients and serialises their
+network. Direwolf accepts both KISS clients and serializes their
 transmissions, so the *radio* is fine. Three things are not automatic:
 
 **Same callsign-SSID breaks AX.25.** Connected mode keeps per-link state —

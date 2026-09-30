@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// The colour each coverage ring is drawn in.
+/// The color each coverage ring is drawn in.
 ///
 /// Four rings can be on the map at once — two directions for each of two
-/// radios — so the colour is the only thing telling them apart, and it is
+/// radios — so the color is the only thing telling them apart, and it is
 /// defined once here rather than at each of the three places that draw them:
 /// the MapKit renderer, the SwiftUI map, and the legend that explains both.
 ///
 /// Blue and purple are the two ways of proving somebody decoded us; teal is
-/// the other direction, and it borrows the colour the path layer already uses
+/// the other direction, and it borrows the color the path layer already uses
 /// for a frame heard direct, which is the same evidence.
 nonisolated extension CoverageEstimate.Evidence {
 

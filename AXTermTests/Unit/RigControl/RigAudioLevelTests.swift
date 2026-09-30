@@ -6,7 +6,7 @@ import XCTest
 /// The demodulator decides from a *ratio* of tone powers, so it is
 /// level-independent by design and a quiet signal decodes as well as a loud
 /// one — right up until the ends. Too hot and the tones clip, which is
-/// distortion no ratio survives; too quiet and the quantiser's own noise
+/// distortion no ratio survives; too quiet and the quantizer's own noise
 /// becomes a share of the signal. The loop exists for those two ends, not to
 /// chase a number in the middle.
 final class RigAudioLevelTests: XCTestCase {

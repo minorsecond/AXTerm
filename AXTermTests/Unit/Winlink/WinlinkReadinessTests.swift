@@ -67,7 +67,7 @@ final class WinlinkReadinessTests: XCTestCase {
         XCTAssertEqual(try check(WinlinkReadiness.evaluate(input), "callsign").status, .blocked)
     }
 
-    /// NOCALL is the app's placeholder, not a licence — nothing accepts it.
+    /// NOCALL is the app's placeholder, not a license — nothing accepts it.
     func testNOCALLPlaceholderBlocks() throws {
         var input = goodInputs()
         input.callsign = "nocall"

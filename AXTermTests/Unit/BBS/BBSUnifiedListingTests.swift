@@ -5,7 +5,7 @@ import XCTest
 /// instance, and how each row says which mailbox it belongs to.
 ///
 /// One mailbox per device, one section per mailbox, this device's first;
-/// nothing from elsewhere unless asked; every remote row labelled. The
+/// nothing from elsewhere unless asked; every remote row labeled. The
 /// same shape as the terminal's History, because the reason is the same:
 /// a message from the home rig's mailbox unmarked in the iPad's list would
 /// read as mail the iPad's mailbox received.

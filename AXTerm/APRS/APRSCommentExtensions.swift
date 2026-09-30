@@ -16,7 +16,7 @@ import Foundation
 /// `!DAO!` — the datum/precision extension (APRS 1.2, chapter 6).
 ///
 /// A standard position carries hundredths of a minute. DAO adds the next
-/// digits, taking a fix from about 18 m of quantisation to under a metre, and
+/// digits, taking a fix from about 18 m of quantization to under a meter, and
 /// trackers that send it send it on every beacon. Left in the comment it reads
 /// as `!w6c!`; read properly it moves the dot to where the station said it is.
 ///
@@ -109,7 +109,7 @@ nonisolated enum APRSDAO {
 nonisolated struct APRSCommentTelemetry: Equatable, Hashable, Sendable {
     /// As sent. Wraps at 8280 rather than at 999 like the `T#` form.
     var sequence: Int
-    /// Up to five analogue channels, raw. The station's own `EQNS` turns these
+    /// Up to five analog channels, raw. The station's own `EQNS` turns these
     /// into units, exactly as for a `T#` frame — these are not percentages and
     /// not volts until it says so.
     var values: [Int]

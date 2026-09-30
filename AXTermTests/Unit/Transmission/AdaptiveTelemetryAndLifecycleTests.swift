@@ -101,7 +101,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         _ = manager.sendData(Data("A".utf8), to: remote, path: path, radio: .primary)
         _ = manager.handleInboundRNR(from: remote, path: path, radio: .primary,
                                      nr: 1, pf: false, isCommand: false)
-        XCTAssertEqual(samples.count, 1, "an RNR's N(R) is an acknowledgement like any other")
+        XCTAssertEqual(samples.count, 1, "an RNR's N(R) is an acknowledgment like any other")
         XCTAssertEqual(samples.first?.newFrames, 1)
     }
 

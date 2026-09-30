@@ -112,7 +112,7 @@ nonisolated enum AnalyticsStyle {
         static let topLimit: Int = 6
     }
 
-    /// Main-actor, because the colours underneath it are.
+    /// Main-actor, because the colors underneath it are.
     ///
     /// `UIColor.systemPurple` and friends are dynamic: they resolve against
     /// the current trait collection, which is main-actor state. Reading them

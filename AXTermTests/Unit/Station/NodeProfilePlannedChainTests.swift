@@ -3,7 +3,7 @@
 //  AXTermTests
 //
 //  The profile shows the chain a prompt-relay connect would walk, computed
-//  with the relay's own planner so the picture and the behaviour cannot
+//  with the relay's own planner so the picture and the behavior cannot
 //  drift. Field topology of 2026-08-28: ASHCHT is listed by COSCO, COSCO
 //  (KE0GB-7) is routed via KB5YZB-7, KB5YZB-7 via DRLNOD — the picture
 //  must read You → DRLNOD → KB5YZB-7 → COSCO → ASHCHT.

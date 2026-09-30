@@ -51,7 +51,7 @@ final class CallsignValidatorPerformanceTests: XCTestCase {
         }
     }
 
-    // Correctness guard: the optimisation must not break existing validation results.
+    // Correctness guard: the optimization must not break existing validation results.
     func testCallsignValidationCorrectnessUnchanged() {
         XCTAssertTrue(CallsignValidator.isValidCallsign("W5ABC"))
         XCTAssertTrue(CallsignValidator.isValidCallsign("N0CALL"))

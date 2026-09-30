@@ -1,6 +1,6 @@
 import Foundation
 
-/// Recognising and importing spatial data that arrived over the air.
+/// Recognizing and importing spatial data that arrived over the air.
 ///
 /// A message attachment is data from a third party, delivered by radio, and
 /// opened by an operator who is usually busy. Two things follow from that:

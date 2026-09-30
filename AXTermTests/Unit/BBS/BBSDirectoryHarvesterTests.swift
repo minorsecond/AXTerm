@@ -92,7 +92,7 @@ final class BBSDirectoryHarvesterTests: XCTestCase {
         XCTAssertTrue(candidates(["forwarded via KB5YZB.#NCO.CO.USA.NOAM"]).isEmpty)
     }
 
-    // MARK: - Labelled records
+    // MARK: - Labeled records
 
     func testLabelledRecordUnderASubject() {
         let found = candidates([

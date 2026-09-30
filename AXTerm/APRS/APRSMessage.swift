@@ -1,7 +1,7 @@
 import Foundation
 
 /// Parses and formats the APRS *message* class of packets — text messages,
-/// their acknowledgements and rejects, bulletins/announcements, and the
+/// their acknowledgments and rejects, bulletins/announcements, and the
 /// message-style directed queries — plus the general (broadcast) query.
 ///
 /// Positions are handled by `APRSParser`; this covers the `:` message data
@@ -18,7 +18,7 @@ nonisolated enum APRSMessage {
         /// A text message *to* `addressee`, with an optional message number
         /// (the sender wants an ack when a number is present).
         case message(addressee: String, text: String, number: String?)
-        /// An acknowledgement of message `number`, addressed to `addressee`.
+        /// An acknowledgment of message `number`, addressed to `addressee`.
         case ack(addressee: String, number: String)
         /// A rejection of message `number`, addressed to `addressee`.
         case reject(addressee: String, number: String)
@@ -153,7 +153,7 @@ nonisolated enum APRSMessage {
         return s
     }
 
-    /// An acknowledgement info field: `:AAAAAAAAA:ack{NNN`.
+    /// An acknowledgment info field: `:AAAAAAAAA:ack{NNN`.
     static func ackInfo(to addressee: String, number: String) -> String {
         ":" + addresseeField(addressee) + ":ack" + String(number.prefix(maxNumberLength))
     }
@@ -188,7 +188,7 @@ nonisolated enum APRSMessage {
 /// AX.25 nodes are not listening for these, so they are never bothered.
 ///
 /// Query strings are from the APRS specification, chapter 15. They are not
-/// invented and must not be: a station only answers a string it recognises.
+/// invented and must not be: a station only answers a string it recognizes.
 nonisolated enum APRSGeneralQuery: String, CaseIterable, Identifiable, Sendable {
     /// Everything a station is willing to say: position, status, capabilities.
     case all = "?APRS?"

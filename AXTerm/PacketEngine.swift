@@ -228,7 +228,7 @@ final class PacketEngine: ObservableObject {
     /// BBS directory listing begins with `)` — the APRS *item* DTI — and the
     /// log holds 368 such I-frames (`)  18536 free  (A,B,H,J,K,L,R,S,V,`).
     /// Every one of them is currently rejected by the name rules, measured
-    /// against the real payloads, so this changes no present behaviour. It is
+    /// against the real payloads, so this changes no present behavior. It is
     /// here because the failure mode if one ever did parse is a fabricated
     /// hazard on an emergency map, and because the replay path already
     /// filtered this way while the live path did not — two paths disagreeing
@@ -261,7 +261,7 @@ final class PacketEngine: ObservableObject {
     /// tell the store about them: an operator would place a road closure, see
     /// the sheet dismiss, and watch nothing appear — the same silence the
     /// pending-transmission work exists to remove. It lands here under our own
-    /// callsign, which is also what makes `mayRemove` recognise it as ours.
+    /// callsign, which is also what makes `mayRemove` recognize it as ours.
     @MainActor
     func recordOwnAPRSObject(_ info: String, from station: String, at when: Date = Date()) {
         guard let report = APRSObjectReport.parse(info: Data(info.utf8)) else { return }
@@ -614,8 +614,8 @@ final class PacketEngine: ObservableObject {
                 self.bbsMessages = SQLiteBBSMessageStore(dbQueue: queue)
                 self.aprsMessaging = APRSMessagingService(
                     store: SQLiteAPRSMessageStore(dbQueue: queue))
-                // A path nobody has seen for a fortnight is not evidence any
-                // more; leaving it in would draw a neighbour that moved away.
+                // A path nobody has seen for two weeks is not evidence any
+                // more; leaving it in would draw a neighbor that moved away.
                 // Discarded deliberately: pruning is housekeeping, and a
                 // failure here must not take down the packet path.
                 _ = try? self.networkPaths?.prune(
@@ -1118,7 +1118,7 @@ final class PacketEngine: ObservableObject {
             debugTrace("TNC identified itself", ["identity": identity])
         } else {
             // A hardware frame nothing here understands.
-            debugTrace("Unrecognised KISS hardware frame", ["hex": hexPrefix(telemetryData)])
+            debugTrace("Unrecognized KISS hardware frame", ["hex": hexPrefix(telemetryData)])
         }
         LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
             timestamp: Date(), direction: .rx, rawBytes: telemetryData,

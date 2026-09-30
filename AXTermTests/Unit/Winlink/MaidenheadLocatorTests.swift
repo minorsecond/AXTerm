@@ -4,7 +4,7 @@ import XCTest
 /// Encoding tests. The decoder (`center(of:)`) is the reference: a
 /// round trip through both must land back in the same square, which
 /// catches sign errors and off-by-one boundaries that a handful of
-/// memorised locators would not.
+/// memorized locators would not.
 final class MaidenheadLocatorTests: XCTestCase {
 
     // MARK: - Known values
@@ -62,7 +62,7 @@ final class MaidenheadLocatorTests: XCTestCase {
         }
     }
 
-    /// The decoded centre must be within half a subsquare of the input —
+    /// The decoded center must be within half a subsquare of the input —
     /// about 4 km east–west and 2.3 km north–south at the equator.
     func testDecodedCentreIsCloseToTheInput() throws {
         let latitude = 39.7392

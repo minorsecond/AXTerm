@@ -22,6 +22,23 @@ nonisolated enum BulkTransferStatus: Equatable, Sendable {
     case failed(reason: String)
 }
 
+/// Text for logs and diagnostics. The `cancelled` case name keeps its old
+/// spelling in code, so the text anyone reads is spelled out here.
+nonisolated extension BulkTransferStatus: CustomStringConvertible {
+    var description: String {
+        switch self {
+        case .pending: return "pending"
+        case .awaitingAcceptance: return "awaitingAcceptance"
+        case .sending: return "sending"
+        case .paused: return "paused"
+        case .awaitingCompletion: return "awaitingCompletion"
+        case .completed: return "completed"
+        case .cancelled: return "canceled"
+        case .failed(let reason): return "failed(reason: \(reason))"
+        }
+    }
+}
+
 // MARK: - Transfer Direction
 
 /// Direction of file transfer
@@ -471,7 +488,7 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
         status == .paused
     }
 
-    /// Whether transfer can be cancelled
+    /// Whether transfer can be canceled
     var canCancel: Bool {
         switch status {
         case .pending, .awaitingAcceptance, .sending, .paused, .awaitingCompletion:
@@ -836,7 +853,7 @@ nonisolated struct BulkTransferManager: Sendable {
         }
     }
 
-    /// Completed transfers (success, cancelled, or failed)
+    /// Completed transfers (success, canceled, or failed)
     var completedTransfers: [BulkTransfer] {
         transfers.filter { transfer in
             switch transfer.status {

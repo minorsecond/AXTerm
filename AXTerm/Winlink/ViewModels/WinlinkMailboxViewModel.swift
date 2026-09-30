@@ -159,7 +159,7 @@ final class WinlinkMailboxViewModel: ObservableObject {
         }
     }
 
-    /// Moving mail to the Trash is Mail.app's ⌫ behaviour, and it asks no
+    /// Moving mail to the Trash is Mail.app's ⌫ behavior, and it asks no
     /// question because it can be taken back. Recording where each message
     /// came from is what makes that true — see `undoLastTrash`.
     func trash(mids: Set<String>) {

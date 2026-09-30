@@ -408,7 +408,7 @@ final class OwnAddressMatchingTests: XCTestCase {
         XCTAssertTrue(line.isDigipeatEcho(localCallsigns: ["K0EPI-5", "K0EPI-7"]))
         XCTAssertFalse(line.isDigipeatEcho(localCallsigns: ["K0EPI-5"]))
         XCTAssertFalse(line.isDigipeatEcho(localCallsigns: ["K0EPI"]),
-                       "another SSID on the licence is another station")
+                       "another SSID on the license is another station")
     }
 
     func testANodeListingAnyOfOurAddressesIsNotARouteToUs() {

@@ -46,7 +46,7 @@ final class APRSSpecVectorTests: XCTestCase {
         XCTAssertEqual(number, "003")
     }
 
-    /// An acknowledgement is the literal `ack` followed by the message number,
+    /// An acknowledgment is the literal `ack` followed by the message number,
     /// addressed back to the sender (ch.14).
     ///
     /// Corroborated: Xastir answered `Testing{003` with `:ORACLE-1 :ack003`.
@@ -81,7 +81,7 @@ final class APRSSpecVectorTests: XCTestCase {
         XCTAssertEqual(APRSMessage.maxTextLength, 67)
     }
 
-    /// A message with no `{number` solicits no acknowledgement — it is a
+    /// A message with no `{number` solicits no acknowledgment — it is a
     /// statement, not a request (ch.14).
     ///
     /// Corroborated: `no-number-here` drew no ack from Xastir.
@@ -129,7 +129,7 @@ final class APRSSpecVectorTests: XCTestCase {
 
     /// Query tokens are written in upper case with a leading `?` (ch.15), and
     /// implementations that follow the document refuse other cases rather than
-    /// guessing. Xastir ignored `?aprsp` on the rig; our own normaliser fixes
+    /// guessing. Xastir ignored `?aprsp` on the rig; our own normalizer fixes
     /// what an operator types rather than transmitting it as typed.
     func testQueryTokensAreUppercaseWithALeadingQuestionMark() {
         for token in APRSDirectedQuery.allCases.map(\.token) + [APRSMessage.generalQueryAllInfo] {

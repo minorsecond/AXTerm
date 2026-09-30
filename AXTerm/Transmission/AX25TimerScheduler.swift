@@ -6,8 +6,8 @@
 import Foundation
 
 public protocol AnyCancellableTask: Sendable {
-    // Nonisolated: these are cancelled from `deinit`, which belongs to no
-    // actor. Cancelling a timer is also the one thing that must always be
+    // Nonisolated: these are canceled from `deinit`, which belongs to no
+    // actor. Canceling a timer is also the one thing that must always be
     // possible, from wherever the object is being torn down.
     nonisolated func cancel()
 }
@@ -56,7 +56,7 @@ nonisolated public struct AX25SystemTimerScheduler: AX25TimerScheduler {
                     action()
                 }
             } catch {
-                // Task cancelled
+                // Task canceled
             }
         }
         return SwiftTaskCancellable(task: task)

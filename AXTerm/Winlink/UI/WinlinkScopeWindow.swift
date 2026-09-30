@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The Winlink station map: every cached RMS gateway plotted around this
-/// station, coloured by *measured* link quality rather than by what the
+/// station, colored by *measured* link quality rather than by what the
 /// directory claims.
 ///
 /// This is the question the winlink.org map cannot answer. That map knows
@@ -165,7 +165,7 @@ struct WinlinkScopeWindow: View {
         .max { $0.measuredSeconds < $1.measuredSeconds }
     }
 
-    /// Measured behaviour, not advertised capability. A gateway never
+    /// Measured behavior, not advertised capability. A gateway never
     /// worked is `unknown` — which is different from one that answers
     /// badly, and must not be drawn as though it were the same.
     private func signal(for quality: WinlinkLinkQuality?) -> StationScope.Signal {
@@ -249,7 +249,7 @@ struct WinlinkScopeWindow: View {
             .help("Map draws real geography and needs tiles, which need the network. Scope plots bearing and range from the grid squares already cached, and keeps working with everything else down.")
             Toggle("Show unworked", isOn: $showsUnworked)
                 .platformCheckboxToggle()
-                .help("Include gateways this station has never worked. They are positioned from the directory, so their place is known but their quality is not — they draw faded and grey.")
+                .help("Include gateways this station has never worked. They are positioned from the directory, so their place is known but their quality is not — they draw faded and gray.")
         }
         .padding(12)
     }
@@ -263,7 +263,7 @@ struct WinlinkScopeWindow: View {
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
-        .help("Colour is measured from this station's own session log — how often the gateway actually answered — not what the directory advertises.")
+        .help("Color is measured from this station's own session log — how often the gateway actually answered — not what the directory advertises.")
     }
 
     private func legendDot(_ color: Color, _ label: String) -> some View {

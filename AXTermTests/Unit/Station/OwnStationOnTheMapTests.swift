@@ -32,7 +32,7 @@ final class OwnStationOnTheMapTests: XCTestCase {
     }
 
     /// The case from 2026-09-29: K0EPI (SSID 0) decoded at 39.6125,-104.7331,
-    /// about twenty metres from where K0EPI-5 now says it is.
+    /// about twenty meters from where K0EPI-5 now says it is.
     func testOurOldSSIDOnTopOfUsIsDropped() {
         let echo = placed("K0EPI", latitude: 39.6125, longitude: -104.7331)
         XCTAssertEqual(kept([echo], own: ["K0EPI-5"], observer: home), [])
@@ -78,7 +78,7 @@ final class OwnStationOnTheMapTests: XCTestCase {
         XCTAssertEqual(kept([entry], own: [], observer: home), ["K0EPI"])
     }
 
-    /// The directory layer excludes every licence we operate under, not only
+    /// The directory layer excludes every license we operate under, not only
     /// the beacon callsign.
     func testDirectoryLayerExcludesEveryOwnLicence() {
         var directory = NodeAliasDirectory()

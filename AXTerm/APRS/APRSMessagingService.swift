@@ -16,7 +16,7 @@ struct APRSOutbound: Equatable, Sendable {
 }
 
 /// The live state of APRS messaging: the persisted message log, the auto-ACK
-/// and auto-query-response behaviour, and the outgoing ACK/retry ladder. Pure
+/// and auto-query-response behavior, and the outgoing ACK/retry ladder. Pure
 /// of any transmit or radio detail — it emits `APRSOutbound` values through an
 /// injected `send` closure and takes inbound facts as a plain `InboundContext`,
 /// so the whole thing is driven deterministically in tests.
@@ -367,7 +367,7 @@ final class APRSMessagingService: ObservableObject {
         return nil
     }
 
-    /// The answer to `?APRST` / `?PING?`: the path the query travelled to
+    /// The answer to `?APRST` / `?PING?`: the path the query traveled to
     /// reach us.
     ///
     /// `PATH= <sender>><destination>[,<every via, in order>]`, which is what a

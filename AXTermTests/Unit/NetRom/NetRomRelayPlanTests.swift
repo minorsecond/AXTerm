@@ -161,7 +161,7 @@ final class NetRomRelayPlanTests: XCTestCase {
     /// before the route table is consulted. ASHCHT's teller is COSCO; the
     /// route lives under KE0GB-7 (harvested, via KB5YZB-7), and KB5YZB-7
     /// itself is filed via DRLNOD. Without the resolution the walk ended
-    /// at COSCO and the relay dialled a node it cannot hear.
+    /// at COSCO and the relay dialed a node it cannot hear.
     func testAnAliasTellerResolvesThroughItsCallsign() {
         let routes = ["KE0GB-7": "KB5YZB-7", "KB5YZB-7": "DRLNOD"]
         let aliases = ["COSCO": "KE0GB-7"]
@@ -178,7 +178,7 @@ final class NetRomRelayPlanTests: XCTestCase {
     }
 
     /// The default resolver resolves nothing, so existing callers keep
-    /// exactly the old behaviour.
+    /// exactly the old behavior.
     func testWithoutAResolverTheAliasEndsTheWalk() {
         let routes = ["KE0GB-7": "KB5YZB-7"]
         let result = NetRomRelayPlan.plan(
@@ -195,7 +195,7 @@ final class NetRomRelayPlanTests: XCTestCase {
     /// and — being freshest — that claim shortened the next chain to
     /// DRLNOD→COSCO. DRLNOD is a KA-Node: it prints no node table, so a
     /// claim with it as teller is a mis-attribution and must be skipped in
-    /// favour of the node that genuinely lists the station.
+    /// favor of the node that genuinely lists the station.
     func testAKaNodeTellerClaimIsMisattributionAndSkipped() {
         let claims: [(teller: String, claimedAt: Date)] = [
             (teller: "DRLNOD", claimedAt: Date()),

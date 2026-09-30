@@ -326,7 +326,7 @@ final class BBSMailboxModelsTests: XCTestCase {
         XCTAssertEqual(row.size, BBSFileIndex.size(143 * 1024))
         XCTAssertEqual(row.airtime, BBSFileIndex.duration(bytes: 143 * 1024,
                                                           bytesPerSecond: 90),
-                       "the operator's catalogue and the caller's listing must not disagree")
+                       "the operator's catalog and the caller's listing must not disagree")
         XCTAssertTrue(row.isText, "a .txt is typed out rather than transferred")
     }
 
@@ -416,7 +416,7 @@ final class BBSMailboxModelsTests: XCTestCase {
         let looked = WhitePagesEntry.Field(value: "Denver, CO", source: .licenceRecord,
                                            updatedAt: epoch)
         XCTAssertFalse(BBSDirectoryProvenance.caption(key: .qth, field: looked).contains("NQ"),
-                       "\"set by NQ\" beside a licence lookup names a command nobody ran")
+                       "\"set by NQ\" beside a license lookup names a command nobody ran")
     }
 
     func testOnlyTestimonyGetsTheQuoteGlyph() {

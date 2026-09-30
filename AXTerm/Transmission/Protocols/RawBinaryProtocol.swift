@@ -157,7 +157,7 @@ nonisolated final class RawBinaryProtocol: FileTransferProtocol, @unchecked Send
         rawState = .cancelled
         state = .cancelled
         delegate?.transferProtocol(self, stateChanged: state)
-        delegate?.transferProtocol(self, didComplete: false, error: "Cancelled")
+        delegate?.transferProtocol(self, didComplete: false, error: "Canceled")
     }
 
     // MARK: - Receiver Side

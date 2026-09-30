@@ -235,7 +235,7 @@ final class MapOverlayStoreTests: XCTestCase {
         XCTAssertEqual(reopened.layers[0].features[0].name, "Zone C")
     }
 
-    /// Colour and visibility are display state, kept in a sidecar so the
+    /// Color and visibility are display state, kept in a sidecar so the
     /// `.geojson` stays a clean standard file. They must still come back.
     func testVisibilitySurvivesAReopen() async throws {
         let store = makeStore()

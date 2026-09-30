@@ -55,7 +55,7 @@ final class StationTrackerRadioTests: XCTestCase {
     }
 
     /// A rebuild keeps the transmitted APRS fix and track — it must not drop a
-    /// station back to its licence address (the modem-reconnect bug).
+    /// station back to its license address (the modem-reconnect bug).
     func testRebuildKeepsAPRSPositionsAndTracks() {
         func pos(_ info: String, at: TimeInterval) -> Packet {
             Packet(timestamp: Date(timeIntervalSince1970: at),
@@ -114,7 +114,7 @@ final class StationTrackerRadioTests: XCTestCase {
         XCTAssertNotNil(station.telemetryDefinition, "rebuild must keep PARM/UNIT/EQNS")
 
         let readings = station.telemetryReadings
-        XCTAssertEqual(readings.count, 5, "five analogue channels were replayed")
+        XCTAssertEqual(readings.count, 5, "five analog channels were replayed")
         XCTAssertEqual(readings[0].name, "Vin")
         XCTAssertEqual(readings[0].unit, "Volt")
         XCTAssertTrue(readings[0].isCalibrated, "EQNS was in the history; nothing may read raw")

@@ -4,7 +4,7 @@ import Combine
 /// Resolves NET/ROM-style node aliases — `DRLNOD`, `HORSE`, `EATON` — to
 /// the callsign that operates them.
 ///
-/// An alias is a tactical name, not a licence, so no callsign directory
+/// An alias is a tactical name, not a license, so no callsign directory
 /// will ever have one. But stations *announce* their aliases in plain
 /// text, in ID beacons this receiver is already storing:
 ///
@@ -121,7 +121,7 @@ nonisolated enum NodeAliasParser {
     /// token per service it offers.
     ///
     /// Tokens whose name is itself a callsign (`KB5YZB-1/B`) are skipped:
-    /// those are SSIDs of the same licence, not aliases, and recording
+    /// those are SSIDs of the same license, not aliases, and recording
     /// them as aliases would make a callsign resolve to itself.
     private static func parseServiceList(_ text: String, source: String) -> [Announcement] {
         let owner = CallsignQuery.normalize(source)
@@ -377,10 +377,10 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
     ///
     /// Usually one. A station that runs several services announces one name
     /// per service — `KE0NCQ/R DRL/D DRLBBS/B DRLNOD/N` is a digipeater, a BBS
-    /// and a node on the same licence — so the answer is a list, not a name.
+    /// and a node on the same license — so the answer is a list, not a name.
     func aliases(for callsign: String) -> [Entry] {
         // Deliberately not CallsignQuery.normalize: that strips the SSID, and
-        // here the SSID is the whole distinction. One licence runs several
+        // here the SSID is the whole distinction. One license runs several
         // services on separate SSIDs and names each of them — KE0NCQ answers
         // to DRLNOD on -7 and DRLBBS on -1. Folding the SSID away would hand
         // back every service a station runs when asked about one of them.
@@ -429,7 +429,7 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
     /// first — the order to try them in.
     ///
     /// Union across aliases because a station can be listed under several
-    /// (`DRLBBS` and `DRLNOD` are one licence), and a node that named any of
+    /// (`DRLBBS` and `DRLNOD` are one license), and a node that named any of
     /// them knows how to get there.
     /// Dated teller claims for a destination named by alias or callsign,
     /// newest first. The connect planner ranks a relay by how recently a
@@ -630,7 +630,7 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
             let callsign = entry.callsign.uppercased()
             guard alias != callsign else { continue }
             result[alias] = entry.callsign
-            // A licence running several services keeps the node name, matching
+            // A license running several services keeps the node name, matching
             // `preferredAlias`. First writer wins otherwise, so the comparison
             // is against what is already there rather than unconditional.
             if entry.service.uppercased() == "N" || result[callsign] == nil {

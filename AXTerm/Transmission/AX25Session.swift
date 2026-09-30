@@ -890,7 +890,7 @@ nonisolated struct AX25StateMachine: Sendable {
 
         case (.connected, .receivedRNR(let nr, let pf, let isCommand)):
             // Peer receiver busy (§4.3.2.3). The N(R) field still carries a valid
-            // acknowledgement, so process it before entering the busy condition.
+            // acknowledgment, so process it before entering the busy condition.
             let vaBeforeRNR = sequenceState.va
             if sequenceState.isValidNR(nr: nr) {
                 sequenceState.ackUpTo(nr: nr)
@@ -1096,7 +1096,7 @@ nonisolated struct AX25StateMachine: Sendable {
             // §4.4.5.2: "When T3 times out, an RR or RNR frame is transmitted as a
             // command with the P bit set, and then T1 is started. When a response to
             // this command is received, T1 is stopped and T3 is started. If T1
-            // expires before a response is received, then the waiting acknowledgement
+            // expires before a response is received, then the waiting acknowledgment
             // procedure (Section 6.4.11) is executed."
             //
             // This previously sent a response-mode RR(F=0) and passively restarted T3
@@ -1435,7 +1435,7 @@ nonisolated struct AX25StateMachine: Sendable {
             // Stopping it unconditionally disarmed REJ recovery on every
             // inbound RR. During a download `outstandingCount` is always 0, so
             // the peer's own keepalive polls (W0ARP-10 polls every ~15 s, well
-            // inside an 18.7 s RTO) cancelled T1 before it could ever fire: one
+            // inside an 18.7 s RTO) canceled T1 before it could ever fire: one
             // lost REJ stranded the gap permanently and the gateway eventually
             // disconnected (field capture 2026-08-24). Emitting neither
             // start nor stop leaves the running timer undisturbed — restarting

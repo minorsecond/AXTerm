@@ -90,7 +90,7 @@ struct APRSAskStationSheet: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             // A monogram rather than the station's APRS symbol: the symbol is
-            // rasterised for the map at map sizes, and a blurry 40-point copy
+            // rasterized for the map at map sizes, and a blurry 40-point copy
             // of it would look worse than the callsign it stands for.
             Text(String(callsign.prefix(2)))
                 .font(.system(.title3, design: .rounded).weight(.semibold))

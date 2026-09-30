@@ -55,14 +55,14 @@ final class APRSStationClassTests: XCTestCase {
     }
 
     func testEveryVehicleReadsAsOneHonestWord() {
-        // The vehicle set spans cars, boats, aircraft; none is mislabelled.
+        // The vehicle set spans cars, boats, aircraft; none is mislabeled.
         for code in [">", "<", "s", "Y", "^", "g"] {
             XCTAssertEqual(APRSSymbolType.label(code: Character(code)), "Vehicle", code)
         }
     }
 
 
-    // MARK: - The four map buckets (colour / filter / legend agree)
+    // MARK: - The four map buckets (color / filter / legend agree)
 
     func testTypeBucketMapping() {
         XCTAssertEqual(APRSTypeBucket.of(code: "#"), .digipeater)
@@ -78,7 +78,7 @@ final class APRSStationClassTests: XCTestCase {
 
     func testWeatherOutranksItsFixedClass() {
         // "_" classifies .fixed but must bucket as weather so it gets its own
-        // colour and toggle.
+        // color and toggle.
         XCTAssertEqual(APRSStationClass.classify(code: "_", hasMotion: false), .fixed)
         XCTAssertEqual(APRSTypeBucket.of(code: "_"), .weather)
     }

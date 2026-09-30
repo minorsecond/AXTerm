@@ -4,7 +4,7 @@ import XCTest
 /// Splitting a callsign into the operator's part and the radio's part.
 ///
 /// The split is what makes a second device set itself up without colliding
-/// with the first: the base is a licence and travels, the SSID is a station
+/// with the first: the base is a license and travels, the SSID is a station
 /// and must not.
 /// The half of a callsign that identifies a station rather than a person.
 ///
@@ -44,7 +44,7 @@ final class StationSSIDSuggestionTests: XCTestCase {
 
     // MARK: - Picking a free one
 
-    /// The whole point: a new device inherits the licence and takes an SSID
+    /// The whole point: a new device inherits the license and takes an SSID
     /// nobody else is on.
     func testANewDeviceGetsTheCallsignAndAFreeSSID() throws {
         let suggestion = try XCTUnwrap(StationSSIDSuggestion.suggestion(

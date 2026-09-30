@@ -11,8 +11,8 @@ import Foundation
 /// The rule: explain the letters *this* node offered, and only those. A
 /// canned Kantronics list would describe commands a particular node may not
 /// have, and the operator would find out by keying up and getting an error
-/// on the air for a command AXTerm invented. A letter we do not recognise is
-/// reported as unrecognised rather than guessed at.
+/// on the air for a command AXTerm invented. A letter we do not recognize is
+/// reported as unrecognized rather than guessed at.
 nonisolated enum KaNodeCommandHelp {
 
     struct Command: Equatable, Sendable {

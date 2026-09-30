@@ -12,7 +12,7 @@
 //  the table held two other ways to the same station.
 //
 //  The policy is kept separate from the driver, and pure where it can
-//  be, because "should we try again, and with what" is a judgement worth
+//  be, because "should we try again, and with what" is a judgment worth
 //  testing on its own — and because retrying on the air is not free.
 //  a refusal from the far node is an *answer*, not a path failure, and
 //  is treated differently from silence.

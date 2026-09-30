@@ -6,7 +6,7 @@ import Foundation
 /// A rule, not a service: it reads two values and returns a Bool, so the map,
 /// the station list and the tests can all ask the same question without
 /// standing up a `PacketEngine` to ask it. That matters beyond tidiness — the
-/// engine's initialiser opens a database and reads the defaults domain, and a
+/// engine's initializer opens a database and reads the defaults domain, and a
 /// test that only wants to know whether a dot is drawn should not be sharing
 /// state with every other test that happens to build one.
 nonisolated enum RadioVisibility {

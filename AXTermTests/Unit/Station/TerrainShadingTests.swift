@@ -5,7 +5,7 @@ import XCTest
 ///
 /// Every mistake available here looks plausible on screen: shading lit from
 /// the wrong side inverts ridges into valleys, a no-data gap painted as sea
-/// level draws a flat plain over unknown ground, and per-tile normalisation
+/// level draws a flat plain over unknown ground, and per-tile normalization
 /// makes a flat tile glow like a mountain range. None of them look like bugs.
 final class TerrainShadingTests: XCTestCase {
 
@@ -70,7 +70,7 @@ final class TerrainShadingTests: XCTestCase {
         }
     }
 
-    /// A fabricated neighbour produces a fabricated slope, and the edge of a
+    /// A fabricated neighbor produces a fabricated slope, and the edge of a
     /// coverage hole is exactly where it would look like a convincing cliff.
     func testAMissingNeighbourYieldsNoShadeRatherThanAGuess() {
         var grid = slopedGrid(risingToward: "east")
@@ -108,10 +108,10 @@ final class TerrainShadingTests: XCTestCase {
     /// Relief is a shadow, not a coat of paint: flat ground is transparent
     /// and a slope facing away from the light is translucent black.
     ///
-    /// An opaque grey tile composited over the map was a whitewash — an
+    /// An opaque gray tile composited over the map was a whitewash — an
     /// overlay renderer cannot multiply against the basemap, so "flat = white"
     /// lightened everything under it. In dark mode that turned Denver light
-    /// grey under MapKit's dark-mode shields and labels.
+    /// gray under MapKit's dark-mode shields and labels.
     func testFlatGroundIsTransparentAndSlopesAreShadow() {
         let flat = [Float](repeating: 1600, count: samples * samples)
         let flatPixels = TerrainShading.rgba(from: flat, samples: samples,
@@ -138,7 +138,7 @@ final class TerrainShadingTests: XCTestCase {
 
     // MARK: - Elevation ramp
 
-    /// Fixed scale, not per-tile. Normalising each tile against its own
+    /// Fixed scale, not per-tile. Normalizing each tile against its own
     /// extremes puts a seam at every tile boundary and makes a flat tile look
     /// mountainous.
     func testTheRampIsAbsoluteSoTilesAgree() {
@@ -182,14 +182,14 @@ final class TerrainShadingTests: XCTestCase {
     // MARK: - Blending
 
     /// The fix for terrain burying the map: level ground must multiply to no
-    /// change at all. Raw hillshade puts flat terrain at mid-grey, and
+    /// change at all. Raw hillshade puts flat terrain at mid-gray, and
     /// multiplying that over the basemap darkened Denver uniformly and hid
     /// the street grid.
     func testFlatGroundReliefIsWhiteSoItMultipliesToNothing() {
         let flat = [Float](repeating: 1600, count: samples * samples)
         let raw = try? XCTUnwrap(shade(flat, row: 4, column: 4))
         XCTAssertEqual(TerrainShading.relief(from: raw ?? 0), 1.0, accuracy: 0.001)
-        // And the raw value really is mid-grey, which is what made it a bug.
+        // And the raw value really is mid-gray, which is what made it a bug.
         XCTAssertLessThan(raw ?? 1, 0.8)
     }
 
@@ -224,7 +224,7 @@ final class TerrainShadingTests: XCTestCase {
 
     // MARK: - The fast path
 
-    /// The optimisation is only safe if it is the same function. Rather than
+    /// The optimization is only safe if it is the same function. Rather than
     /// trust the algebra that removed four transcendental calls per sample,
     /// check it against the readable version over a wide spread of gradients.
     func testTheFastShadeMatchesTheReadableOne() {
@@ -264,7 +264,7 @@ final class TerrainShadingTests: XCTestCase {
     }
 
     /// The whole-grid path must agree with the per-sample one, since the
-    /// render loop inlines the neighbour gathering rather than calling it.
+    /// render loop inlines the neighbor gathering rather than calling it.
     func testTheRenderedGridAgreesWithPerSampleShading() throws {
         let grid = slopedGrid(risingToward: "east")
         let pixels = TerrainShading.rgba(from: grid, samples: samples,
@@ -287,7 +287,7 @@ final class TerrainShadingTests: XCTestCase {
                                          metresPerSampleX: 100, metresPerSampleY: 100)
         XCTAssertEqual(pixels[(0 * samples + 3) * 4 + 3], 0, "north edge")
         XCTAssertEqual(pixels[(4 * samples + 4) * 4 + 3], 0, "the gap itself")
-        XCTAssertEqual(pixels[(4 * samples + 5) * 4 + 3], 0, "neighbour of a gap")
+        XCTAssertEqual(pixels[(4 * samples + 5) * 4 + 3], 0, "neighbor of a gap")
     }
 
     /// Guards the thing the operator actually noticed: a full tile taking

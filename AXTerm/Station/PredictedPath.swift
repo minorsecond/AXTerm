@@ -62,7 +62,7 @@ nonisolated struct PredictedPath: Equatable, Sendable, Identifiable {
     /// How much height would open this path, where terrain is in the way.
     ///
     /// The most actionable number the terrain model produces. A path blocked
-    /// by four metres is not a dead path — it is a path that wants a taller
+    /// by four meters is not a dead path — it is a path that wants a taller
     /// mast, and saying so is worth more than hiding the line.
     var blockedByMetres: Double? {
         if case .blocked(let metres, _) = outlook { return metres }
@@ -89,16 +89,16 @@ nonisolated struct PredictedPath: Equatable, Sendable, Identifiable {
     /// - Parameters:
     ///   - alreadyObserved: paths with real evidence, which need no
     ///     prediction — a path that has carried a frame is not a forecast.
-    ///   - heights: metres above ground per station, where somebody has
+    ///   - heights: meters above ground per station, where somebody has
     ///     recorded it. Height is the input that most often decides the
     ///     verdict, so a real one is worth far more here than any refinement
     ///     to the sampling.
     ///   - defaultHeightMetres: used for every station not in `heights`. A
-    ///     guess, and named as one: neither the CMS nor the licence directory
+    ///     guess, and named as one: neither the CMS nor the license directory
     ///     records antenna height, so this is a stated assumption rather than
     ///     a measurement.
     ///   - maximumKilometres: paths beyond this are not evaluated. Terrain
-    ///     analysis over hundreds of kilometres is dominated by the earth's
+    ///     analysis over hundreds of kilometers is dominated by the earth's
     ///     curvature rather than by the ground, and the answer would be "no"
     ///     without needing the elevation data to say so.
     static func predictions(
@@ -139,8 +139,8 @@ nonisolated struct PredictedPath: Equatable, Sendable, Identifiable {
                 let a = names[i], b = names[j]
                 guard let from = positions[a], let to = positions[b] else { continue }
 
-                // Same point — different SSIDs of one licence resolved through
-                // one address. There is no path to analyse.
+                // Same point — different SSIDs of one license resolved through
+                // one address. There is no path to analyze.
                 guard from != to else { continue }
 
                 let distance = GreatCircle.kilometres(from: from, to: to)

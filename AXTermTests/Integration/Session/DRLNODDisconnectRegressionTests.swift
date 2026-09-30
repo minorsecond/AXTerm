@@ -103,7 +103,7 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
         XCTAssertEqual(retransmits.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
 
         clock.advance(by: 1.21)
-        XCTAssertTrue(timerDrivenFrames.isEmpty, "The original T1 should be cancelled/restarted by the poll recovery")
+        XCTAssertTrue(timerDrivenFrames.isEmpty, "The original T1 should be canceled/restarted by the poll recovery")
         XCTAssertEqual(session.state, .connected)
         XCTAssertEqual(session.outstandingCount, 1)
     }

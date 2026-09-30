@@ -14,7 +14,7 @@ import Foundation
 ///
 /// Keyed on **callsign *and* endpoint**. The same callsign on two different
 /// TNCs is two stations on two channels, which is legitimate and common — an
-/// HF station and a VHF station under one licence. Only the same address on
+/// HF station and a VHF station under one license. Only the same address on
 /// the same channel is a collision.
 ///
 /// This does not replace the monitor. A lease only exists between devices that
@@ -28,9 +28,9 @@ nonisolated struct StationIdentityLease: Codable, Equatable, Sendable, Identifia
     var deviceID: String
     /// What to call the other device when telling the operator about it.
     var deviceName: String
-    /// Callsign with SSID, normalised.
+    /// Callsign with SSID, normalized.
     var callsign: String
-    /// `host:port` of the TNC, normalised. Two AXTerms are only on the same
+    /// `host:port` of the TNC, normalized. Two AXTerms are only on the same
     /// channel if they are talking to the same TNC.
     var endpoint: String
     var heartbeatAt: Date

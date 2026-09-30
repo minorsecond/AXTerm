@@ -7,7 +7,7 @@ import Foundation
 /// timestamp and a retry cursor, the way BBS tracks read/kill.
 nonisolated struct APRSMessageRecord: Identifiable, Equatable, Sendable {
 
-    /// Which way the message travelled.
+    /// Which way the message traveled.
     enum Direction: String, Codable, Sendable { case incoming, outgoing }
 
     /// What kind of message-class frame this is.

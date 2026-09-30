@@ -46,7 +46,7 @@ struct SettingsView: View {
         // the homes do not move when a second radio is added.
         NavigationSplitView {
             // Optional selection: the non-optional List selection
-            // initialiser is macOS-only, and this file compiles into the
+            // initializer is macOS-only, and this file compiles into the
             // iOS target even though the iOS shell composes pages directly.
             List(selection: $sidebarSelection) {
                 Section("Station") {
@@ -150,7 +150,7 @@ struct SettingsView: View {
     }
 
     /// One sidebar row, System Settings style: a tinted icon tile so the
-    /// eye can navigate by colour before it reads a word.
+    /// eye can navigate by color before it reads a word.
     private func sidebarRow(_ tab: SettingsTab) -> some View {
         HStack(spacing: 8) {
             Image(systemName: tab.settingsIcon)

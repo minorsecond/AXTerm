@@ -33,7 +33,7 @@ nonisolated struct APRSWeather: Equatable, Hashable, Sendable {
     var pressureTenthsMillibars: Int?
     /// Snowfall in the last 24 hours, inches.
     var snowfallInches: Int?
-    /// Luminosity, watts per square metre.
+    /// Luminosity, watts per square meter.
     var luminosityWattsPerSquareMetre: Int?
 
     /// True when the station reported nothing at all — every field absent.

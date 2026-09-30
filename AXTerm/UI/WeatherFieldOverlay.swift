@@ -191,7 +191,7 @@ nonisolated final class WeatherFieldOverlay: NSObject, MKOverlay, @unchecked Sen
                        shouldInterpolate: true, intent: .defaultIntent)
     }
 
-    /// Cold to warm, the way a weather map is normally coloured: blue through
+    /// Cold to warm, the way a weather map is normally colored: blue through
     /// a neutral middle to red. Kept muted — this is a background wash under
     /// the station markers, not the subject of the page.
     static func colour(_ unit: Double) -> (Double, Double, Double) {

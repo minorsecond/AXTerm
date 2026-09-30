@@ -38,7 +38,7 @@ struct BBSScreen: View {
     var presentation: BBSScreenPresentation = .tab
 
     /// Optional because that is the only shape iOS offers: a `List` selection
-    /// binding to a non-optional is a macOS-only initialiser. Nil is also the
+    /// binding to a non-optional is a macOS-only initializer. Nil is also the
     /// honest state on an iPad whose sidebar has nothing chosen yet.
     /// All three columns from the first frame.
     ///
@@ -396,7 +396,7 @@ struct BBSScreen: View {
     }
 
     /// The third column. Looked up from the service by id rather than held as
-    /// a copy, so a message killed or a licence lookup landing while the
+    /// a copy, so a message killed or a license lookup landing while the
     /// detail is open changes what is on screen.
     @ViewBuilder
     private var paneDetail: some View {

@@ -343,7 +343,7 @@ final class CIVClientTests: XCTestCase {
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 05 01 31 00 FD"), "transceive off")
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 05 00 41 00 FD"), "144 MHz TX delay off")
         // The recipe reads data mode back after writing it. This radio answers
-        // every frame with a bare acknowledgement, which is not a valid reply
+        // every frame with a bare acknowledgment, which is not a valid reply
         // to a read, so the readback tells us nothing and the setup proceeds on
         // the acknowledged write — see `setDataModeChecked`.
         XCTAssertTrue(commands.contains("FE FE A4 E0 1A 06 FD"), "data mode read back")

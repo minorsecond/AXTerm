@@ -105,7 +105,7 @@ nonisolated struct NWSTabularForecast: Equatable, Sendable {
     /// any, and the picker is one tap away.
     ///
     /// Matching is loose on purpose: the product writes "COLORADO SPRINGS"
-    /// and a licence record writes "Colorado Springs".
+    /// and a license record writes "Colorado Springs".
     func defaultPlace(preferring locality: String?) -> Place? {
         let places = allPlaces
         guard !places.isEmpty else { return nil }
@@ -116,7 +116,7 @@ nonisolated struct NWSTabularForecast: Equatable, Sendable {
         if let exact = places.first(where: { $0.name.uppercased() == wanted }) {
             return exact
         }
-        // "Denver Intl" should still find "DENVER", and a licence saying
+        // "Denver Intl" should still find "DENVER", and a license saying
         // "Aurora" should find it inside a longer product name.
         if let partial = places.first(where: {
             let name = $0.name.uppercased()

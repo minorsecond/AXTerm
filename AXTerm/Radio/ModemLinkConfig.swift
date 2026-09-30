@@ -121,7 +121,7 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
     /// response and the IC-705's WLAN codec all leave one AFSK tone louder
     /// than the other, and a single slicer at 0 dB assumes they arrive equal.
     /// Measured on the bench (`AFSKSensitivityBenchTests`) at 12 dB SNR with
-    /// 6 dB of tilt, spreading the hypotheses recovers frames a centre slicer
+    /// 6 dB of tilt, spreading the hypotheses recovers frames a center slicer
     /// loses outright, and costs nothing when the path happens to be flat.
     ///
     /// This is not a theoretical improvement. Comparing K0EPI-7's reception

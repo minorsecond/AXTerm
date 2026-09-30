@@ -10,7 +10,7 @@ nonisolated enum BeaconKind: String, Codable, Sendable, CaseIterable, Identifiab
 
     var id: String { rawValue }
 
-    /// Tolerant decode: anything unrecognised is a plain text beacon.
+    /// Tolerant decode: anything unrecognized is a plain text beacon.
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = BeaconKind(rawValue: raw) ?? .text

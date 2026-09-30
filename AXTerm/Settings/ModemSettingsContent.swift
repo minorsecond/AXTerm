@@ -152,8 +152,8 @@ struct ModemSettingsContent: View {
     }
 }
 
-/// The receive level as a bar, coloured the way the Mobilinkd meter is:
-/// grey with no audio, green in range, amber hot, red clipping.
+/// The receive level as a bar, colored the way the Mobilinkd meter is:
+/// gray with no audio, green in range, amber hot, red clipping.
 struct ModemLevelMeter: View {
     let telemetry: ModemTelemetry?
 

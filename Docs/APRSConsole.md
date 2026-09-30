@@ -61,7 +61,7 @@ reads exactly as a live one, and an improvement to the decoder reaches old
 lines instead of leaving the history rendered by whichever version was running
 that day. Roughly eighty bytes per APRS line, on a bounded buffer.
 
-`ConsoleLine` hashes on its id: the synthesised conformance would need every
+`ConsoleLine` hashes on its id: the synthesized conformance would need every
 member to be `Hashable` and `APRSObjectReport` is not, and a UUID is the better
 hash regardless — two lines with the same text a second apart are different
 lines.
@@ -173,7 +173,7 @@ countable after it is still not an altitude.
 
 ## Telemetry
 
-`T#217,137,140,41,0,0,00010011` is thirteen channels: five analogue counts and
+`T#217,137,140,41,0,0,00010011` is thirteen channels: five analog counts and
 eight digital lines the operator wired up. What they mean lives in four
 messages the station sends every few hours, addressed to itself:
 
@@ -205,7 +205,7 @@ refinement applied with the wrong scale or sign puts a station in the wrong
 place.
 
 **`!DAO!`** (APRS 1.2 ch. 6) carries the digits past hundredths of a minute,
-taking a fix from about 18 m of quantisation to under a metre:
+taking a fix from about 18 m of quantization to under a meter:
 
 ```
 !3933.48N/10447.63W … !w+K!  →  N 39 33.4811, W 104 47.6346   (base-91)
@@ -276,4 +276,4 @@ without hiding its messages.
 `AXTermTests/Unit/APRS/APRSCoverageTests.swift` — PHG, the PHGR rate digit, RNG
 and DFS; the slot rule, with QUAIL's voltage and a moving station's course and
 speed as the two ways not to read one; and the short `/A=`. Every beacon in it
-but the two synthesised ones was heard on the operator's own channel.
+but the two synthesized ones was heard on the operator's own channel.

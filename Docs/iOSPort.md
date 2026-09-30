@@ -35,7 +35,7 @@ both platforms and the list of genuine differences stays short enough to see.
 ### `Platform.swift`
 
 Type aliases (`PlatformColor`, `PlatformFont`, `PlatformImage`), semantic
-colours whose names differ (`platformSeparator`, `platformCardBackground`,
+colors whose names differ (`platformSeparator`, `platformCardBackground`,
 `platformTertiaryLabel`, …), `PlatformPasteboard`, `PlatformScreen.scale`,
 `PlatformSound`, and control idioms — `platformCheckboxToggle()` renders a
 checkbox on macOS and a switch on iOS, because a checkbox on a touch screen
@@ -100,7 +100,7 @@ models the node actions as data, so macOS renders them as an `NSMenu` and iOS
 as a SwiftUI popover from a long press — the touch equivalent of a right-click.
 
 One finger drags the camera, pinch zooms, tap selects, long press opens the
-node's actions. All of the graph's actual behaviour — hit testing, selection,
+node's actions. All of the graph's actual behavior — hit testing, selection,
 camera — stays in one coordinator that neither platform reimplements.
 
 ### Transport on iOS
@@ -128,9 +128,9 @@ There is no remaining porting backlog.
   `RowSelectionCaptureView`
 
 `NSTableView` is what keeps a live packet stream smooth on macOS; `List` gives
-the same virtualisation on iOS for free. Wrapping the AppKit table would have
+the same virtualization on iOS for free. Wrapping the AppKit table would have
 bought nothing and cost a second implementation. What *is* preserved exactly
-is the behaviour a naive list lacks: follow the newest packet while the
+is the behavior a naive list lacks: follow the newest packet while the
 operator is at the bottom, stop the moment they scroll away to read
 something, and offer a way back.
 
@@ -187,7 +187,7 @@ special-cased:
   state told the operator to "refresh the station list on the Stations tab",
   a tab that did not exist on this platform. Both Stations and Contacts now
   hang off a Directory section in the mailbox sidebar, which is the split-view
-  analogue of the tabs the Mac puts beside Mail. Grep for unreferenced views
+  analog of the tabs the Mac puts beside Mail. Grep for unreferenced views
   when checking parity; a compiled file is not a reachable one.
 - **Report Position and the Station Map are handheld features first.** Posting
   a position to the Winlink map is the self-spotting path when there is no
@@ -212,7 +212,7 @@ special-cased:
   task switch is in Drafts rather than lost.
 - **A `TextField` title vanishes on iOS when a prompt is set.** `To:` and
   `Cc:` are drawn beside the field on macOS and replaced by the placeholder on
-  iOS, so compose arrived as unlabelled boxes. `LabeledContent` puts the names
+  iOS, so compose arrived as unlabeled boxes. `LabeledContent` puts the names
   back on iOS without touching the Mac. The recipients field also lost its
   derivation tooltip to `.help()`; it is `.explain()` now.
 - **`ByteCountFormatter` says "Zero KB".** Three words where a number belongs,
@@ -272,7 +272,7 @@ special-cased:
   and the marker looked functional while doing nothing. And
   `MKMarkerAnnotationView` had been drawing the callsign for free; a plain
   annotation view draws nothing, so the dots were anonymous. The view is now
-  96×56 with the dot centred in it and the callsign beneath, and
+  96×56 with the dot centered in it and the callsign beneath, and
   `collisionMode = .circle` keeps two nearby stations both tappable.
 - **Overlays on a full-bleed map must restore the safe area.** The map ignores
   it deliberately so terrain runs to the edges, which left the legend sitting
@@ -280,7 +280,7 @@ special-cased:
 - **Stations were drawn as pins.** `MKMarkerAnnotationView` is a ~40pt balloon
   whose *tip* is the position; a few of them over a city read as pushpins in a
   paper map, covering the terrain being judged. `StationDotAnnotationView`
-  draws a dot centred on the coordinate, reusing the legend's colours, with
+  draws a dot centered on the coordinate, reusing the legend's colors, with
   the scope's hollow-and-dashed convention for an inferred position and a
   larger dot for this station.
 - **`Table` collapses to one column only in *compact* width.** The blank
@@ -301,7 +301,7 @@ special-cased:
 - **Nine columns do not fit a handheld.** Even rendering correctly, the Routes
   and Link Quality tabs truncated the destination callsign to `KB5YZB…` while
   `Hops` kept a column to itself, and `df`/`dr`/`ETX` sat at 50pt each. Both
-  get stacked rows on iOS via `NetRomTouchRow`. Neighbours keeps its table:
+  get stacked rows on iOS via `NetRomTouchRow`. Neighbors keeps its table:
   five columns fit, and converting it would be churn. The tooltips moved to
   `.explain()` in the process — the columns used `.help()`, which renders
   nothing on iOS, so every derivation CLAUDE.md requires was already silently
@@ -323,7 +323,7 @@ special-cased:
   and stayed that way until the operator happened to switch away and back.
   macOS avoids this by pairing the observer with a `.task`; iOS now does the
   same.
-- **Auto-connect was macOS-only.** `autoConnectOnLaunch` was honoured in
+- **Auto-connect was macOS-only.** `autoConnectOnLaunch` was honored in
   `AXTermApp` and nowhere else. On iOS it also has to mean *and after every
   suspension*, because iOS suspends the app and drops the socket to the TNC —
   a launch-only reconnect would work exactly once and look broken thereafter.
@@ -334,7 +334,7 @@ special-cased:
   nothing. macOS carries this in the toolbar permanently; iOS showed it on one
   tab. `TNCStatusStrip` now rides the TabView itself. It is graded rather than
   uniform — connected is a bare green dot with no text, connecting is muted
-  and explains the pause, and only disconnected/failed take words, colour and
+  and explains the pause, and only disconnected/failed take words, color and
   a link to Connection settings. It sits on the **bottom** edge because
   iPadOS floats the tab bar over the top of the content, so a top inset hides
   the tabs.
@@ -397,7 +397,7 @@ taken, which is exactly why `stationPreferences`, `gatewayLadder`,
 xcodebuild build -scheme AXTerm-iOS -destination 'generic/platform=iOS Simulator'
 ```
 
-The macOS scheme, tests and behaviour are unchanged. See `Docs/OfflineMaps.md`
+The macOS scheme, tests and behavior are unchanged. See `Docs/OfflineMaps.md`
 for the stored basemap both platforms share.
 
 ## The iOS shell never wired the coordinator (fixed 2026-08-25)
@@ -435,12 +435,12 @@ the state machine believes it transmitted when nothing reached the air, which
 is precisely the fault that is undiagnosable from its symptoms.
 
 `applyLocalCallsign(_:)` was added alongside, because the iOS root view
-re-initialises freely and an unconditional assignment would both publish from
+re-initializes freely and an unconditional assignment would both publish from
 inside a view update and — since a callsign change purges sessions — silently
 drop a live link on every re-init.
 
 The lesson is the same one `WinlinkStationsScreen` taught: **parity audits that
-compare views miss wiring that lives in an initialiser.** The two shells are
+compare views miss wiring that lives in an initializer.** The two shells are
 written twice on purpose, and everything the Mac's `init` does to a shared
 object has to be done by the iOS one too.
 
@@ -505,7 +505,7 @@ testable:
   "Aug 23" this year, "7/21/25" older. The old full stamp ("Aug 24, 2026 at
   10:52 AM") was wide enough to truncate the sender beside it.
 - **`SMTP:` is stripped** from correspondent addresses. It records how a
-  message travelled, not who sent it, and it pushed the readable half of an
+  message traveled, not who sent it, and it pushed the readable half of an
   address off the end of a one-line row.
 - **The delivery badge is suppressed** for `received` and `sent`. Every row of
   an Inbox is received; a badge that appears on all of them is furniture. It
@@ -545,8 +545,8 @@ through one `setUnreadCount` that fires `onUnreadCountChanged`, wired to
 
 **Stations vanishing from the map.** `StationDotAnnotationView` set
 `displayPriority = .defaultHigh`, which lets MapKit hide a marker whose
-collision frame overlaps a neighbour's — and the frame is 96×56 so a finger can
-hit it. Two stations a few hundred metres apart collided at city zoom and one
+collision frame overlaps a neighbor's — and the frame is 96×56 so a finger can
+hit it. Two stations a few hundred meters apart collided at city zoom and one
 disappeared while the header still counted it as placed. Now `.required`.
 Overlapping labels are a legibility problem the operator can solve by zooming;
 a silently hidden station is not.
@@ -570,7 +570,7 @@ path and a gateway ladder, and each place answered "who is this?" with the
 fragment it happened to hold. `NodeProfile` assembles the fragments once.
 
 - **`NodeProfile`** (`Station/NodeProfile.swift`) — a pure value built from
-  snapshots. Alias resolution, licence details, placement with confidence,
+  snapshots. Alias resolution, license details, placement with confidence,
   activity, NET/ROM facts, Winlink history, and inferred roles.
 - **`NodeProfileResolver`** (`UI/NodeProfileCoordinator.swift`) — gathers the
   scattered sources so the view never learns where any of it comes from.
@@ -581,14 +581,14 @@ fragment it happened to hold. `NodeProfile` assembles the fragments once.
 **Roles are evidence, not configuration.** Each role states what it was
 inferred from, because every one of them is a guess made from observed
 traffic: a digipeater is a callsign seen in someone else's via path, a NET/ROM
-node is one in the neighbour table. A station with no evidence claims no roles.
+node is one in the neighbor table. A station with no evidence claims no roles.
 
 **Alias taps keep their provenance.** Tapping `DRLNOD` opens `KE0NCQ-7`, and
 the header says it was reached by tapping the alias — otherwise a tap silently
 becomes a different callsign.
 
 **Position confidence is carried through and explained.** A node placed at its
-operator's licence address is a lead, not a location, and the page says so.
+operator's license address is a lead, not a location, and the page says so.
 
 ### Deliberately not built yet
 
@@ -598,7 +598,7 @@ guessing at what goes on the air. `NodeProfileView` already takes an
 `onConnect`; iOS passes nil until the request can be constructed correctly.
 See AXTERM-TRANSMISSION-SPEC.md.
 
-**Map focus.** "Show on Map" switches to the Map tab but cannot yet centre on
+**Map focus.** "Show on Map" switches to the Map tab but cannot yet center on
 the station — there is no focus channel into `StationsMapView`.
 
 **macOS entry points.** `ConsoleView` takes the handlers and macOS passes nil,
@@ -623,7 +623,7 @@ disclosure. Verified on the Mac against a live SFTCO product.
   68/255 outbound, 247/255 inbound — df 0.73/dr 0.37 out, df 0.98 in. One
   averaged number would read as a mediocre path and send the operator looking
   at the wrong end. ETX follows the spec formula and is clamped to [1, 20].
-- **Siblings** group other SSIDs of the same licence. `K0NTS-1/-7/-10` is one
+- **Siblings** group other SSIDs of the same license. `K0NTS-1/-7/-10` is one
   operator running three services.
 
 Connect from a profile builds a real `ConnectRequest` with
@@ -700,7 +700,7 @@ before driving the console.
 
 ## NET/ROM is a declaration, not an inference (2026-08-25)
 
-`NodeProfile` labelled any station in the NET/ROM neighbour table a "NET/ROM
+`NodeProfile` labeled any station in the NET/ROM neighbor table a "NET/ROM
 node". That table is built by watching traffic — `NetRomRouter.observePacket`
 records **any** direct frame — and its "classic" versus "inferred" labels
 distinguish two *inference paths*, not declared versus guessed. `isOfficial`
@@ -716,7 +716,7 @@ requires one of them:
 - **`.aliasAnnouncement(alias)`** — its ID or beacon announced a node alias,
   e.g. `KE0NCQ/R DRL/D DRLBBS/B DRLNOD/N`.
 
-The neighbour quality is still shown, because it is a real measurement — the
+The neighbor quality is still shown, because it is a real measurement — the
 section now says explicitly that appearing there means "nearby and audible",
 not "runs NET/ROM".
 
@@ -769,7 +769,7 @@ from where the operator actually is.
 `WinlinkRMSStationRecord` carries a grid square and no other geography. Offering
 to download "Colorado" would mean inventing a boundary the data cannot support
 and then getting it wrong at the edges. A two-character field (`DM`, `DN`) is
-roughly 10° by 20° — coarse, but honest, and it is what a travelling operator
+roughly 10° by 20° — coarse, but honest, and it is what a traveling operator
 reasons in anyway.
 
 The sheet lists the fields that actually have gateways, with counts, and marks
@@ -780,7 +780,7 @@ to the internet still exists, because there is no way to fetch it from the field
 
 Most networks — including the Denver one — never broadcast NET/ROM `NODES`, so
 the routing-broadcast path finds nothing. But nodes, BBSs and digipeaters
-identify themselves anyway: the ID frame is a licence requirement and operators
+identify themselves anyway: the ID frame is a license requirement and operators
 fill it with a service list. That list *is* the directory the network publishes
 about itself, arriving over the air with no internet and no registry.
 
@@ -885,14 +885,14 @@ called every six seconds, never answered.
 
 ### On the map
 
-Great-circle polylines between placed stations, coloured by evidence and dashed
-where nothing has actually travelled the path. Below the labels, because the
+Great-circle polylines between placed stations, colored by evidence and dashed
+where nothing has actually traveled the path. Below the labels, because the
 network is context for the stations and a web of lines over the place names
 would bury what they connect. Off by default — an operator opening the map
 usually wants to know where stations are before how they connect.
 
 Paths with an unplaced end are dropped rather than guessed at, and two SSIDs
-sharing one coordinate draw nothing: a licence-address link would be a dot.
+sharing one coordinate draw nothing: a license-address link would be a dot.
 
 ### Two bugs the tests caught
 
@@ -929,7 +929,7 @@ is not one.
 
 ### Antenna height, and the download that ate a continent
 
-Heights are now collected (metres stored, feet entered by default): own
+Heights are now collected (meters stored, feet entered by default): own
 station and an assumed-remote default in settings, a real per-station height
 on each identity page (`station_notes.antennaHeightMetres`, migration v16).
 Gain and antenna type are deliberately not collected — they do not enter

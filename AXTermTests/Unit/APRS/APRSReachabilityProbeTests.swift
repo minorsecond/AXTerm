@@ -144,7 +144,7 @@ final class APRSReachabilityProbeTests: XCTestCase {
 
     /// The flood is one transmission whatever is asked, and the string that
     /// goes out has to be the one the specification defines — a station only
-    /// answers a query it recognises.
+    /// answers a query it recognizes.
     func testTheChosenQueryIsTheOneTransmitted() async throws {
         let p = makeProbe()
         p.start(query: .weather)
@@ -264,7 +264,7 @@ final class APRSReachabilityProbeTests: XCTestCase {
         XCTAssertEqual(p.reach, .direct)
     }
 
-    /// Asking wide is Xastir's behaviour — it transmits general queries on the
+    /// Asking wide is Xastir's behavior — it transmits general queries on the
     /// interface's own UNPROTO path — and the results have to record it, or
     /// they claim earshot they did not measure.
     func testAWideQuestionIsRecordedAsSuch() async throws {

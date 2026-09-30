@@ -27,7 +27,7 @@ final class NWSForecastPlaceTests: XCTestCase {
     }
 
     func testMatchingIgnoresCase() {
-        // The product shouts; a licence record does not.
+        // The product shouts; a license record does not.
         let f = forecast(["COLORADO SPRINGS"])
         XCTAssertEqual(f.defaultPlace(preferring: "Colorado Springs")?.name,
                        "COLORADO SPRINGS")

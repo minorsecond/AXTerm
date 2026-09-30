@@ -100,7 +100,7 @@ final class AFSKSensitivityBenchTests: XCTestCase {
 
     /// One buffer holding `count` frames separated by silence, so the very
     /// same audio can be fed to our demodulator and written out for Direwolf's
-    /// `atest`. Comparing two decoders on two different noise realisations
+    /// `atest`. Comparing two decoders on two different noise realizations
     /// would measure the noise.
     static func run(count: Int, snrDB: Double, twistDB: Double) -> [Float] {
         var out: [Float] = []
@@ -184,7 +184,7 @@ final class AFSKSensitivityBenchTests: XCTestCase {
     ///
     /// The comb exists because we do not know the audio path's tilt. If we
     /// could measure it — and owning the radio, we nearly can — the question
-    /// is whether a correctly centred slicer beats a comb that merely brackets
+    /// is whether a correctly centered slicer beats a comb that merely brackets
     /// it. This says how much is on the table before any of it is built.
     func testWriteTheOptimumSweep() {
         var out = "single-slicer score at 6 dB SNR, 6 dB twist (of 40)\n"
@@ -225,7 +225,7 @@ final class AFSKSensitivityBenchTests: XCTestCase {
 
     /// Before adopting a long integration window, check what it costs.
     ///
-    /// A longer window averages noise away and smears neighbouring bits into
+    /// A longer window averages noise away and smears neighboring bits into
     /// the decision. The hard, noisy condition likes long windows; the place
     /// they should hurt is a clean signal with a long frame, where
     /// inter-symbol interference accumulates and there is no noise to trade it
@@ -365,7 +365,7 @@ final class AFSKSensitivityBenchTests: XCTestCase {
         var config = ModemLinkConfig()
         config.mode = .afsk1200
         XCTAssertGreaterThan(config.softModemConfiguration.slicerTwistsDB.count, 1,
-                             "the live modem is running a single centre slicer")
+                             "the live modem is running a single center slicer")
     }
 }
 #endif

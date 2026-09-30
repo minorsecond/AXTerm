@@ -188,7 +188,7 @@ nonisolated struct TxScheduler {
         if var entry = entriesById[frameId] {
             entry.state.markCancelled()
             entriesById[frameId] = entry
-            TxLog.queueCancel(frameId: frameId, reason: "User cancelled")
+            TxLog.queueCancel(frameId: frameId, reason: "User canceled")
         }
     }
 
@@ -224,7 +224,7 @@ nonisolated struct TxScheduler {
 
     // MARK: - Cleanup
 
-    /// Remove old completed entries (acked, failed, cancelled) to free memory.
+    /// Remove old completed entries (acked, failed, canceled) to free memory.
     /// - Parameter olderThan: Remove entries completed before this date
     mutating func pruneCompleted(olderThan: Date) {
         let cutoff = olderThan

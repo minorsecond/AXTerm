@@ -60,7 +60,7 @@ final class BeaconPlanTests: XCTestCase {
     }
 
     /// `WIDE1-1` and a bare alias like `DRL` are both ordinary path
-    /// entries. A licence-shaped test would reject both.
+    /// entries. A license-shaped test would reject both.
     func testAliasesAndWidePathsAreCallsignShaped() {
         for path in ["WIDE1-1", "WIDE2-2", "DRL", "K0EPI-15", "N0CALL-0"] {
             guard case .success = BeaconPlan.plan(text: "hi", path: path) else {

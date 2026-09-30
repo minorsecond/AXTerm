@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Packet networks are bridged. A local node linked to the internet — LinBPQ,
 /// a Winlink CMS gateway, an APRS-IS feed — puts frames from stations
-/// thousands of kilometres away onto the same stream as the neighbour down
+/// thousands of kilometers away onto the same stream as the neighbor down
 /// the road, and nothing in a frame distinguishes them. The result is a
 /// station list where a Maryland node sits between two Denver ones.
 ///
@@ -33,8 +33,8 @@ nonisolated enum StationPlausibility {
     /// Beyond this, a VHF/UHF packet path is not a path.
     ///
     /// Deliberately generous. Real terrestrial packet links run to a couple
-    /// hundred kilometres from good sites, and tropospheric ducting can carry
-    /// a signal further on a lucky evening. Three hundred kilometres is well
+    /// hundred kilometers from good sites, and tropospheric ducting can carry
+    /// a signal further on a lucky evening. Three hundred kilometers is well
     /// past anything routine and nowhere near the two thousand that says
     /// "this came down a wire" — the point is to catch the obvious cases
     /// without ever quietly hiding a genuine long haul.
@@ -45,7 +45,7 @@ nonisolated enum StationPlausibility {
     /// - Parameters:
     ///   - confidence: what the position actually describes. A position
     ///     inferred from a *different* entity — a node alias placed at its
-    ///     operator's licence address — is never called implausible. A node
+    ///     operator's license address — is never called implausible. A node
     ///     sitting on a Colorado hilltop whose licensee lives in Virginia is
     ///     a real and common thing, and hiding it would remove a station that
     ///     is genuinely on the air here. The distance would be measuring the

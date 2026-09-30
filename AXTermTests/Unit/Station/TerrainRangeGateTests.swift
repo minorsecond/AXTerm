@@ -65,7 +65,7 @@ final class TerrainRangeGateTests: XCTestCase {
                                         confidence: .exact).isImplausible)
     }
 
-    /// A node placed at its operator's licence address is never called
+    /// A node placed at its operator's license address is never called
     /// implausible: a Colorado hilltop node licensed to someone in Virginia is
     /// a real and common thing. The distance would be measuring the mailing
     /// address, not the radio.

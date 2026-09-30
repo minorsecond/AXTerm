@@ -35,7 +35,7 @@ final class StationIdentityLeaseTests: XCTestCase {
     }
 
     /// One callsign on two different TNCs is two stations on two channels —
-    /// an HF rig and a VHF rig under one licence. Legitimate, and blocking it
+    /// an HF rig and a VHF rig under one license. Legitimate, and blocking it
     /// would be wrong.
     func testSameCallsignOnADifferentTNCIsClear() {
         let own = lease("laptop", endpoint: "100.77.243.13:8001")

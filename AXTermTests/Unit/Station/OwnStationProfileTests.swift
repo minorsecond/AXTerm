@@ -45,8 +45,8 @@ final class OwnStationProfileTests: XCTestCase {
             .contains(NodeProfile.Role.ourStation))
     }
 
-    /// The terrain card measured the ground between our grid square's centre
-    /// and our own licence address, which are 2.3 km apart and both us. There
+    /// The terrain card measured the ground between our grid square's center
+    /// and our own license address, which are 2.3 km apart and both us. There
     /// is no path from a station to itself, whatever the two coordinates say.
     func testOurGridCentreAndOurLicenceAddressAreNotAPath() {
         let gridCentre = GreatCircle.Point(latitude: 39.6042, longitude: -104.7083)

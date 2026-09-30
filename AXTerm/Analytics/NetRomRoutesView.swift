@@ -121,7 +121,7 @@ struct NetRomRoutesView: View {
                 }
                 .pickerStyle(.menu)
                 .frame(width: 150)
-                .help("Scope neighbours, routes and link quality to one "
+                .help("Scope neighbors, routes and link quality to one "
                       + "frequency. Radios on the same frequency roll up into "
                       + "one channel; different frequencies stay separate.")
             }
@@ -830,7 +830,7 @@ struct QualityBadge: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
-        .help(detailTooltip ?? "Quality estimates how reliably packets travel in each direction. Lower values indicate retries or weak acknowledgement evidence.")
+        .help(detailTooltip ?? "Quality estimates how reliably packets travel in each direction. Lower values indicate retries or weak acknowledgment evidence.")
         .accessibilityLabel("Quality \(quality) of 255, \(roundedPercent) percent.")
     }
 }

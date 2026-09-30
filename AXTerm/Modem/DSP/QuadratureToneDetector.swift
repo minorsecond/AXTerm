@@ -14,7 +14,7 @@ import Foundation
 /// two tables fixed and only φ₀ moving between chunks: two vector
 /// multiply-adds per chunk and one sin/cos pair, instead of a scalar loop
 /// writing every phase and a transcendental per sample. This ran as the
-/// hottest code in the demodulator on an unoptimised build, and most of
+/// hottest code in the demodulator on an unoptimized build, and most of
 /// that was eight arrays allocated per block per tone plus the phase loop,
 /// not the arithmetic. Every buffer here is now kept and reused.
 ///

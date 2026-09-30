@@ -599,7 +599,7 @@ private struct GraphMetalViewRepresentable: GraphViewRepresentable {
     #else
     func makeUIView(context: Context) -> GraphMetalView {
         let view = makeGraphView(context: context)
-        // UIKit has no view-raised menu, so the long press hands the modelled
+        // UIKit has no view-raised menu, so the long press hands the modeled
         // actions back to SwiftUI to present.
         view.onContextMenu = { menu, location in onContextMenu(menu, location) }
         return view
@@ -698,7 +698,7 @@ private struct GraphTooltipView: View {
 /// spelled differently: a Mac has a hovering pointer, a scroll wheel, a
 /// right-click and modifier keys; a touch screen has direct manipulation and
 /// none of those. Both subclasses drive the same
-/// `GraphMetalInteractionDelegate`, so all of the graph's actual behaviour —
+/// `GraphMetalInteractionDelegate`, so all of the graph's actual behavior —
 /// hit testing, selection, camera — stays in one place and neither platform
 /// gets a second implementation of it to keep in step.
 // Main-actor, like the MTKView it inherits from. Marking a view
@@ -867,7 +867,7 @@ private final class GraphMetalView: GraphMetalViewBase {
         addGestureRecognizer(longPress)
 
         // A pan must not wait on the tap: dragging the camera should start
-        // immediately rather than after the tap recogniser gives up.
+        // immediately rather than after the tap recognizer gives up.
         tap.require(toFail: longPress)
     }
 
@@ -1420,7 +1420,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         contextMenuNodeCallsign = normalized
         contextMenuNodeID = hit.id
 
-        // Modelled rather than built: macOS turns this into an NSMenu and
+        // Modeled rather than built: macOS turns this into an NSMenu and
         // iOS into a SwiftUI context menu, so the actions exist once.
         var actions: [GraphContextAction] = [
             GraphContextAction(id: "drawPath", title: "Draw Path to Here") { [weak self] in

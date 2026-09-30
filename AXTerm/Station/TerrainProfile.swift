@@ -6,7 +6,7 @@ import Foundation
 /// a flat plain, a single ridge, a known summit — rather than against
 /// whatever a download happened to return.
 nonisolated protocol ElevationSampling: Sendable {
-    /// Metres above sea level, or nil where this sampler has no data.
+    /// Meters above sea level, or nil where this sampler has no data.
     ///
     /// Nil is not zero. A gap in coverage read as sea level would turn an
     /// unknown ridge into a clear path, which is the most dangerous possible
@@ -22,12 +22,12 @@ nonisolated protocol ElevationSampling: Sendable {
 ///
 /// Two corrections separate a real answer from a straight line drawn on a map:
 ///
-/// **Earth curvature.** Two 10-metre antennas 100 km apart cannot see each
+/// **Earth curvature.** Two 10-meter antennas 100 km apart cannot see each
 /// other over flat ground; the planet is in the way. The bulge is applied with
 /// the standard k = 4/3 effective-radius factor, which accounts for the way
 /// the atmosphere refracts VHF slightly downward.
 ///
-/// **The Fresnel zone.** A path that clears the ground by a metre is not a
+/// **The Fresnel zone.** A path that clears the ground by a meter is not a
 /// clear path. Radio needs an ellipsoidal volume around the line to be
 /// unobstructed, and intruding into it costs signal well before anything
 /// physically blocks the way. This is exactly the "answers but struggles"
@@ -45,7 +45,7 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
         var effectiveElevation: Double
         /// Height of the straight line between the two antennas here.
         var lineHeight: Double
-        /// First Fresnel zone radius at this point, in metres.
+        /// First Fresnel zone radius at this point, in meters.
         var fresnelRadius: Double
 
         /// How far the line passes above the effective terrain. Negative
@@ -75,7 +75,7 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
     var verdict: Verdict
     var totalMetres: Double
     var frequencyHz: Double
-    /// Antenna heights above ground, in metres, at each end.
+    /// Antenna heights above ground, in meters, at each end.
     var originHeight: Double
     var destinationHeight: Double
 
@@ -116,7 +116,7 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
     /// Computes the profile between two stations.
     ///
     /// - Parameters:
-    ///   - originHeight: antenna height above ground, metres.
+    ///   - originHeight: antenna height above ground, meters.
     ///   - frequencyHz: used for the Fresnel zone. A path that is clear at
     ///     440 MHz may be marginal at 145 MHz, because the zone is wider at
     ///     lower frequencies.
@@ -211,7 +211,7 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
 
     /// How much signal the terrain actually takes, in decibels.
     ///
-    /// Metres above the line answer "is there something in the way". They do
+    /// Meters above the line answer "is there something in the way". They do
     /// not answer "does it matter", and the two come apart badly: 4 m above
     /// the line 1 km out costs about 7 dB, which a packet link shrugs off,
     /// while 4 m above the line at the midpoint of a 100 km path is a
@@ -414,14 +414,14 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
         return (d1 * d2) / (2 * refractionFactor * GreatCircle.earthRadiusMetres)
     }
 
-    /// First Fresnel zone radius, metres.
+    /// First Fresnel zone radius, meters.
     static func fresnelRadius(wavelength: Double, d1: Double, d2: Double) -> Double {
         let total = d1 + d2
         guard total > 0, d1 > 0, d2 > 0 else { return 0 }
         return sqrt(wavelength * d1 * d2 / total)
     }
 
-    /// Radio horizon distance in kilometres for an antenna at `heightMetres`,
+    /// Radio horizon distance in kilometers for an antenna at `heightMetres`,
     /// with the 4/3 refraction factor. The familiar 4.12 × √h.
     static func radioHorizonKilometres(heightMetres: Double) -> Double {
         guard heightMetres > 0 else { return 0 }
@@ -448,7 +448,7 @@ nonisolated extension TerrainProfile.Verdict {
             "Marginal — Fresnel zone obstructed"
         case .obstructed(let by, let at):
             // Where, not only how much. "Blocked by 4 m" on a 43 km path
-            // reads as a wall; the same 4 m a kilometre from the operator's
+            // reads as a wall; the same 4 m a kilometer from the operator's
             // own mast is an afternoon with a ladder, and the distance is
             // what tells those apart.
             "Blocked by \(Int(by.rounded())) m \(Self.distanceText(at)) out"

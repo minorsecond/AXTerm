@@ -58,7 +58,7 @@ final class CallsignCachePreloadTests: XCTestCase {
 
     /// The directory names operators with SSIDs — `KE0NCQ-2` — and the
     /// cache is keyed by base callsign. A bulk read that skipped the
-    /// normalisation the single read does would silently place nothing.
+    /// normalization the single read does would silently place nothing.
     func testBulkReadNormalisesSSIDsTheWayTheSingleReadDoes() throws {
         let store = try makeStore()
         try cache(store, ["KE0NCQ"])

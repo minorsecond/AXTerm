@@ -350,7 +350,7 @@ nonisolated struct BBSCallRowModel: Equatable, Sendable {
 
 // MARK: - Files
 
-/// One row of the file catalogue, in the operator's view.
+/// One row of the file catalog, in the operator's view.
 ///
 /// The same two figures the shell quotes callers, computed the same way, so
 /// what the operator reads and what goes out on the air cannot disagree.
@@ -371,7 +371,7 @@ nonisolated struct BBSFileRowModel: Equatable, Sendable {
 
     /// Fifteen minutes. `BBSShell.longTransferSeconds` defaults to five, which
     /// is the point at which a *caller* is asked to confirm; this is the point
-    /// at which the operator's own catalogue starts warning them, and it is
+    /// at which the operator's own catalog starts warning them, and it is
     /// deliberately looser — every row past five minutes painted orange would
     /// mark most of a real file area and stop meaning anything.
     static let longTransferSeconds: Double = 900
@@ -485,7 +485,7 @@ nonisolated enum BBSDirectoryProvenance {
     /// command for anything nobody typed.
     ///
     /// The command is named only for `selfReported`. "Set by NQ" beside a
-    /// licence lookup names a command nobody ran.
+    /// license lookup names a command nobody ran.
     static func caption(key: WhitePagesEntry.Key,
                         field: WhitePagesEntry.Field) -> String {
         let when = field.updatedAt.formatted(date: .abbreviated, time: .omitted)

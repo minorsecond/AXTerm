@@ -4,8 +4,8 @@ import XCTest
 /// What a coordinate actually describes.
 ///
 /// Measured on this operator's directory of 166 stations: 143 carry seven
-/// decimal places, which is centimetre precision, and three unrelated
-/// callsigns share one coordinate to the last digit. A licence address
+/// decimal places, which is centimeter precision, and three unrelated
+/// callsigns share one coordinate to the last digit. A license address
 /// printed that way looked exactly as authoritative as a surveyed antenna,
 /// and the whole app builds distances, bearings, coverage rings and terrain
 /// verdicts on top of it.
@@ -13,7 +13,7 @@ final class PositionQualityTests: XCTestCase {
 
     private typealias Source = PositionQuality.Source
 
-    /// A grid square is coarse and says so. A licence coordinate is
+    /// A grid square is coarse and says so. A license coordinate is
     /// confidently wrong by an unknown amount, which is worse, so nothing
     /// should rank it above a position the operator actually gave.
     func testSourcesRankByHowWellTheyDescribeAnAntenna() {
@@ -30,8 +30,8 @@ final class PositionQualityTests: XCTestCase {
         XCTAssertEqual([Source.gridSquare, .licenceAddress].min(), .licenceAddress)
     }
 
-    /// A six-character subsquare is about 7 km by 4.6 km, so its centre can
-    /// be four kilometres from the antenna. That has to be the number, since
+    /// A six-character subsquare is about 7 km by 4.6 km, so its center can
+    /// be four kilometers from the antenna. That has to be the number, since
     /// it is what decides whether a short path is worth profiling at all.
     func testAGridSquareAdmitsHowCoarseItIs() {
         XCTAssertGreaterThan(Source.gridSquare.accuracyMetres, 4_000)
@@ -67,8 +67,8 @@ final class PositionQualityTests: XCTestCase {
     // MARK: - Shared coordinates
 
     /// The case found in this operator's own data. Three unrelated callsigns
-    /// at one coordinate to seven decimal places is a town or postcode
-    /// centre, and it is nobody's antenna.
+    /// at one coordinate to seven decimal places is a town or ZIP code
+    /// center, and it is nobody's antenna.
     func testACoordinateSharedBySeveralStationsBelongsToNoneOfThem() {
         let shared = PositionQuality.sharedCoordinates([
             ("N9LYA", 38.740297, -86.4723061),
@@ -82,7 +82,7 @@ final class PositionQualityTests: XCTestCase {
         XCTAssertNil(shared["K0EPI"], "a coordinate of its own is not suspect")
     }
 
-    /// Two operators genuinely on one street are metres apart, not identical.
+    /// Two operators genuinely on one street are meters apart, not identical.
     /// Comparing as printed rather than by distance is what keeps them out.
     func testNeighboursAreNotTreatedAsACentroid() {
         let shared = PositionQuality.sharedCoordinates([

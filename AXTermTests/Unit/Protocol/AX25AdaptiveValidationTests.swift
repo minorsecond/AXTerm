@@ -4,7 +4,7 @@
 //
 //  Adaptive AX.25 Validation Framework — complete test suite.
 //
-//  Organisation: 15 parts matching the specification.
+//  Organization: 15 parts matching the specification.
 //    Part  1 — Adaptive Observability
 //    Part  2 — Adaptive Invariants
 //    Part  3 — RF Impairment Simulation
@@ -267,7 +267,7 @@ final class AdaptiveInvariantTests: XCTestCase {
         var timers = AX25SessionTimers(rtoMin: 1.0, rtoMax: 30.0, initialRto: 2.0)
         timers.updateRTT(sample: 0.0)
 
-        XCTAssertNil(timers.srtt, "Zero RTT sample must not initialise SRTT")
+        XCTAssertNil(timers.srtt, "Zero RTT sample must not initialize SRTT")
     }
 }
 
@@ -461,7 +461,7 @@ final class AdaptiveConvergenceTests: XCTestCase {
             "seed: \(cfg.seed)")
     }
 
-    // C-2: RTO converges (stabilises) after many frames on a stable channel.
+    // C-2: RTO converges (stabilizes) after many frames on a stable channel.
     func testRTOConvergesOnStableChannel() {
         var cfg = HarnessConfig()
         cfg.seed = 41
@@ -472,7 +472,7 @@ final class AdaptiveConvergenceTests: XCTestCase {
 
         // Delayed acks (T2) batch each window into a single cumulative RR,
         // so one snapshot now covers ~K frames where it used to cover one.
-        // More traffic, same claim: RTO stabilises on a stable channel.
+        // More traffic, same claim: RTO stabilizes on a stable channel.
         for _ in 0..<45 {
             h.queueFrames(count: 1)
             h.advance(seconds: 0.8)
@@ -487,7 +487,7 @@ final class AdaptiveConvergenceTests: XCTestCase {
         let detector = ConvergenceDetector(windowSize: 6, toleranceFraction: 0.15)
         let result = detector.analyze(rtoHistory)
         XCTAssertTrue(result.hasConverged,
-            "RTO should stabilise after 45 I-frame exchanges. " +
+            "RTO should stabilize after 45 I-frame exchanges. " +
             "maxDeviation: \(result.maxDeviation.map { String(format:"%.3f", $0) } ?? "nil")")
     }
 
@@ -1057,7 +1057,7 @@ final class WindowAdaptationTests: XCTestCase {
             "T1 timeout must trigger AIMD multiplicative decrease: cwnd \(session.aimdWindow.cwnd) should be < \(cwndBefore)")
     }
 
-    // W-8: RR acknowledgement grows the AIMD congestion window.
+    // W-8: RR acknowledgment grows the AIMD congestion window.
     // Each time an RR acks one or more frames, onAck() must be called and cwnd must grow.
     // Strategy: first reduce cwnd below maxWindow via a T1 timeout loss event, then
     // verify a subsequent RR ACK causes the window to grow back.
@@ -1693,7 +1693,7 @@ final class ArchitecturalDeterminismTests: XCTestCase {
             "VirtualClock must fire tasks in ascending fire-time order")
     }
 
-    // A-2: VirtualClock cancelled tasks never fire.
+    // A-2: VirtualClock canceled tasks never fire.
     func testCancelledTasksNeverFire() {
         let clock = AX25VirtualClock()
         var fired = false
@@ -1702,7 +1702,7 @@ final class ArchitecturalDeterminismTests: XCTestCase {
         task.cancel()
         clock.advance(by: 5.0)
 
-        XCTAssertFalse(fired, "Cancelled task must never fire")
+        XCTAssertFalse(fired, "Canceled task must never fire")
     }
 
     // A-3: VirtualClock `currentTime` only advances (never regresses).
@@ -1991,7 +1991,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
     //
     // Key design point: calling handleInboundRR triggers onAck(), which immediately grows
     // cwnd (e.g. 1→2 on the first post-loss ack).  To hold effectiveWindow=1 and test
-    // queuing behaviour against a fully-occupied single slot, the test purposely leaves
+    // queuing behavior against a fully-occupied single slot, the test purposely leaves
     // one frame outstanding (no RR sent) after driving cwnd to minWindow=1.
     func testDirectPathQueuesExcessWhenAIMDReducedBelowK() {
         let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)

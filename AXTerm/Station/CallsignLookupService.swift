@@ -10,7 +10,7 @@ import Combine
 /// worth having in a grid-down app at all.
 ///
 /// **Opt-in.** Looking up a callsign tells a third party which stations
-/// this operator is hearing. That is public licence data and a small
+/// this operator is hearing. That is public license data and a small
 /// disclosure, but it is a disclosure, and it is not made silently.
 @MainActor
 final class CallsignLookupService: ObservableObject {
@@ -159,7 +159,7 @@ final class CallsignLookupService: ObservableObject {
 
     /// Resolves several callsigns, skipping anything already known.
     /// Sequential on purpose: this is a courtesy query against someone
-    /// else's free service, not a workload to parallelise.
+    /// else's free service, not a workload to parallelize.
     func resolveAll(_ callsigns: [String]) async {
         for callsign in callsigns {
             if isCoolingDown { return }

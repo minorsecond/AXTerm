@@ -3,7 +3,7 @@
 //  AXTermTests
 //
 //  The main window's services are built once per window. ContentView's
-//  initialiser runs every time AXTermApp's body does, which is every time a
+//  initializer runs every time AXTermApp's body does, which is every time a
 //  setting publishes, and it used to build a new BBS file library, callsign
 //  lookup service and mailbox each time and re-wire the session coordinator:
 //  new packet subscription, restarted APRS retry timer, re-armed NET/ROM
@@ -182,7 +182,7 @@ final class MainWindowServicesTests: XCTestCase {
         XCTAssertGreaterThan(counter.count, initsAtInstall,
                              "the stand-in re-ran its body, so ContentView.init ran again")
         XCTAssertEqual(MainWindowServicesBox.buildCount - before, 1,
-                       "later initialisers must not build the services again")
+                       "later initializers must not build the services again")
         XCTAssertTrue(SessionCoordinator.shared === coordinator, "still the same coordinator")
         XCTAssertEqual(coordinator.localCallsign, station.settings.primaryCallsign,
                        "the coordinator follows a callsign change")

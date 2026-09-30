@@ -332,7 +332,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
 
     /// THIS ONE TRANSMITS (one short UI frame). Measure the TNC4's input
     /// level before and in the seconds after a transmission, to see whether
-    /// the input is knocked off centre by the unkey and how long it takes to
+    /// the input is knocked off center by the unkey and how long it takes to
     /// come back. Nothing is saved; the level poll takes the demodulator off
     /// packets, so RESET is sent at the end.
     func testInputAfterTransmitOverBLE() throws {
@@ -612,7 +612,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
         link.saveSettingsToTNC()
         let saved = waitFor(seconds: 4) { recorder.snapshot().frames.dropFirst(mark).contains { MobilinkdReply.parse($0) == .saved } }
         let after = settings()
-        note("TNC4 save: \(saved ? "acknowledged" : "no acknowledgement"); settings before \(before.map { "\($0)" } ?? "?") after \(after.map { "\($0)" } ?? "?")")
+        note("TNC4 save: \(saved ? "acknowledged" : "no acknowledgment"); settings before \(before.map { "\($0)" } ?? "?") after \(after.map { "\($0)" } ?? "?")")
         XCTAssertTrue(saved, "the TNC4 did not acknowledge SAVE")
         XCTAssertEqual(before, after, "saving changed a setting")
     }
@@ -669,7 +669,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
             for gain in gains {
                 config.mobilinkdConfig = MobilinkdConfig(settings: MobilinkdSettings(inputGain: gain))
                 link.updateConfig(config)
-                _ = waitFor(seconds: 2.5) { false }   // re-centre after the change
+                _ = waitFor(seconds: 2.5) { false }   // re-center after the change
                 let mark = recorder.snapshot().frames.count
                 _ = waitFor(seconds: window) { false }
                 let n = recorder.snapshot().frames.dropFirst(mark).filter { ($0.first ?? 0xFF) & 0x0F == 0 }.count
@@ -711,7 +711,7 @@ final class TNC4BLEReceiveLiveTests: XCTestCase {
                 }
                 if let gain = env["AXTERM_TNC4_INPUT_GAIN"].flatMap(UInt8.init) {
                     // Working memory only (no SAVE). The TNC4 re-measures its
-                    // input centre for a second and starts streaming levels,
+                    // input center for a second and starts streaming levels,
                     // so RESET afterwards to get back to packets.
                     link.send(Data(MobilinkdTNC.setInputGain(UInt16(gain)))) { _ in }
                     _ = waitFor(seconds: 2.5) { false }

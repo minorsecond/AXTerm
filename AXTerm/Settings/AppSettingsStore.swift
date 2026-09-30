@@ -85,7 +85,7 @@ final class AppSettingsStore: ObservableObject {
     /// is the operator's deliberate decision, not an app upgrade's.
     static let defaultNetRomAdvertise = false
     static let defaultNetRomForwarding = false
-    /// BPQ's NODESINTERVAL is 60 minutes; that is the neighbourly rate.
+    /// BPQ's NODESINTERVAL is 60 minutes; that is the neighborly rate.
     static let defaultNetRomBroadcastMinutes = 60
 
     // Beacon: what this station says about itself, unprompted.
@@ -113,7 +113,7 @@ final class AppSettingsStore: ObservableObject {
     static let aprsSeededFromBeaconKey = "radio.aprsEnabled.seededFromBeacon.v1"
 
     /// Off, and empty. A beacon is the operator's own words going out
-    /// over their licence; there is no default worth putting on the air
+    /// over their license; there is no default worth putting on the air
     /// on their behalf.
     static let defaultBeaconEnabled = false
     /// Thirty minutes. Node beacons on a shared channel run anywhere from
@@ -128,7 +128,7 @@ final class AppSettingsStore: ObservableObject {
     static let pingCooldownKey = "pingStationCooldownMinutes"
     /// Added 2026-09-03. Absent storage means an install from before the
     /// box rule existed, and it takes the default like a new one would:
-    /// the old behaviour it would otherwise preserve is the bug.
+    /// the old behavior it would otherwise preserve is the bug.
     static let pingBoxCooldownKey = "pingBoxCooldownMinutes"
     static let pingMaxPerHourKey = "pingMaxProbesPerHour"
     static let pingProbeCalledKey = "pingProbeStationsOthersCall"
@@ -483,7 +483,7 @@ final class AppSettingsStore: ObservableObject {
 
     @Published private var myCallsignStorage: String
 
-    /// The station's base callsign: the licence call, with no SSID (K0EPI).
+    /// The station's base callsign: the license call, with no SSID (K0EPI).
     ///
     /// SSIDs belong to radios. Each radio goes on the air as this call with
     /// its own SSID, or under a callsign of its own; ask `onAirCallsign(for:)`
@@ -741,7 +741,7 @@ final class AppSettingsStore: ObservableObject {
     @Published var pingMaxProbesPerHour: Int {
         didSet { defaults.set(pingMaxProbesPerHour, forKey: Self.pingMaxPerHourKey) }
     }
-    /// Probe stations this receiver has never heard, but that neighbours
+    /// Probe stations this receiver has never heard, but that neighbors
     /// were heard calling. Off by default: a blind call to a station that
     /// may be a hundred miles away is a transmission for a low chance of
     /// an answer.
@@ -1357,7 +1357,7 @@ final class AppSettingsStore: ObservableObject {
         }
 
         // A radio already beaconing an APRS position is on an APRS channel, so
-        // it keeps the behaviour it had when `handlesAPRS` inferred that on
+        // it keeps the behavior it had when `handlesAPRS` inferred that on
         // every read. Once, then the switch is the operator's.
         let seededAPRS = Self.seedAPRSFromBeacon(&self.radios, defaults: defaults)
 
@@ -1436,7 +1436,7 @@ final class AppSettingsStore: ObservableObject {
     /// Takes back a radio the Add Radio sheet added, when the operator
     /// cancels it.
     ///
-    /// Removed outright when its link never came up, so a cancelled sheet
+    /// Removed outright when its link never came up, so a canceled sheet
     /// leaves nothing behind. Archived instead when it did: frames heard
     /// during the test may already be stored against its id, and an archived
     /// radio keeps those rows resolving to a name while staying out of every

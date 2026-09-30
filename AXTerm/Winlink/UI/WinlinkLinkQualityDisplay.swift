@@ -14,7 +14,7 @@ extension WinlinkLinkQuality {
     nonisolated struct Presentation: Equatable, Sendable {
         var text: String
         var systemImage: String
-        /// Nil renders in the secondary label colour (no claim being made).
+        /// Nil renders in the secondary label color (no claim being made).
         var tint: LinkTint
         var tooltip: String
     }
@@ -63,7 +63,7 @@ extension WinlinkLinkQuality {
 
         // `.unknown` is not `.elsewhere`: these samples may well have been
         // taken right here, we simply cannot prove it. Report what was
-        // measured, but withhold the colour-coded verdict.
+        // measured, but withhold the color-coded verdict.
         let unverifiedPlace = placement == .unknown
 
         if lastAttemptWasSilent {

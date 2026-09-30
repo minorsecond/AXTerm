@@ -7,7 +7,7 @@
 //  carrier goes up, and nothing modulates it.
 //
 //  Every case compares against the byte-at-a-time loop that shipped before
-//  the vDSP rewrite, because "behaviour is unchanged" was the claim made for
+//  the vDSP rewrite, because "behavior is unchanged" was the claim made for
 //  that change and this is the part of it that reaches the air.
 //
 

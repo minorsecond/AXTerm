@@ -32,10 +32,10 @@ struct TerrainProfileView: View {
     /// rather than offering a download that would return nothing.
     var sourceHasCoverage: Bool = true
     /// Set when the station is too far away for a terrain profile to mean
-    /// anything, in kilometres.
+    /// anything, in kilometers.
     var beyondRadioRange: Double?
     /// Where this station's own position came from, and what it is worth.
-    /// Shown because a profile from a grid centre good to 4.3 km is a
+    /// Shown because a profile from a grid center good to 4.3 km is a
     /// different claim from one from a surveyed antenna, and the chart looks
     /// identical either way.
     var originPosition: StationPosition?
@@ -60,8 +60,8 @@ struct TerrainProfileView: View {
                 chart
                     .frame(minHeight: 180)
                 endpoints
-                // Said plainly and quietly. A coloured banner on a chart
-                // that is already coloured reads as an error the operator
+                // Said plainly and quietly. A colored banner on a chart
+                // that is already colored reads as an error the operator
                 // caused, and shouting that our own forecast is wrong is a
                 // strange way to be trusted.
                 if TerrainCalibration.outcome(
@@ -119,7 +119,7 @@ struct TerrainProfileView: View {
         }
     }
 
-    /// Coloured by what the terrain costs, not by whether anything is
+    /// Colored by what the terrain costs, not by whether anything is
     /// geometrically in the way. A ridge 4 m above the line was drawn in the
     /// same red as one that ends the path, and they are not the same news.
     private var tint: Color {
@@ -141,9 +141,9 @@ struct TerrainProfileView: View {
 
     // MARK: - Too far for the question to mean anything
 
-    /// A profile over a thousand kilometres draws the planet, not the ground.
+    /// A profile over a thousand kilometers draws the planet, not the ground.
     ///
-    /// The earth's own curvature puts tens of kilometres between two stations
+    /// The earth's own curvature puts tens of kilometers between two stations
     /// that far apart, so the chart is a smooth parabola and the verdict is
     /// "blocked by 78 km of terrain" — arithmetically true, and no use to
     /// anybody. Worse, it buries the thing actually worth saying: a station
@@ -157,9 +157,9 @@ struct TerrainProfileView: View {
             Text("Too far for a terrain profile")
                 .font(.headline)
             Text("This position puts \(destinationLabel) \(Int(kilometres.rounded())) km away. "
-                 + "At that range the earth's curvature alone stands tens of kilometres above "
+                 + "At that range the earth's curvature alone stands tens of kilometers above "
                  + "the line, so a profile would only tell you the planet is in the way. "
-                 + "If you are hearing this station on VHF, the position is likely a licence "
+                 + "If you are hearing this station on VHF, the position is likely a license "
                  + "address rather than where the radio is.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -356,7 +356,7 @@ struct TerrainProfileView: View {
 
                 if isGoverning {
                     // The intrusion drawn as the measurement it is. At this
-                    // scale a few metres of terrain and the line simply touch,
+                    // scale a few meters of terrain and the line simply touch,
                     // and the whole story is in those pixels.
                     let onLine = CGPoint(x: px, y: y(obstruction.lineHeight))
                     var gap = Path()
@@ -407,7 +407,7 @@ struct TerrainProfileView: View {
     /// The origin's source, and a way to change it.
     ///
     /// A terrain profile is only as good as where it starts from, and until
-    /// now every one of them began at a grid square's centre without saying
+    /// now every one of them began at a grid square's center without saying
     /// so. The device's GPS is offered rather than taken: the radio is not
     /// necessarily with the device, and a network TNC means the transmitter
     /// can be somewhere else entirely.
@@ -428,7 +428,7 @@ struct TerrainProfileView: View {
             }
         }
         .help(coarse
-              ? "This profile starts from a grid square's centre, which can be kilometres "
+              ? "This profile starts from a grid square's center, which can be kilometers "
                 + "from the antenna. On a short path that is a larger error than the "
                 + "terrain it is measuring."
               : "Where this profile starts from.")
@@ -503,7 +503,7 @@ struct TerrainProfileView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 14) {
                 // Each key draws the way the chart draws it. Three identical
-                // bars in three colours told you nothing about which mark on
+                // bars in three colors told you nothing about which mark on
                 // the chart was which, and after the Fresnel band became a
                 // dashed outline the solid bar was simply wrong.
                 key(.filled(.secondary.opacity(0.6)), "Terrain")

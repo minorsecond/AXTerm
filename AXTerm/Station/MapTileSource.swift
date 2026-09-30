@@ -23,7 +23,7 @@ nonisolated struct MapTileSource: Identifiable, Hashable, Sendable {
     /// `{z}`, `{x}`, `{y}` template. Nil for an imported file, which has no
     /// server behind it.
     let urlTemplate: String?
-    /// Required by the licence and shown on every map that draws these tiles.
+    /// Required by the license and shown on every map that draws these tiles.
     let attribution: String
     /// Beyond this the provider has no tiles; asking anyway wastes the
     /// request and returns an error the operator would have to interpret.

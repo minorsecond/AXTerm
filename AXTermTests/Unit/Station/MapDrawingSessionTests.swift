@@ -225,8 +225,8 @@ final class MapFeatureLabelTests: XCTestCase {
     }
 
     /// The case that makes an area-weighted centroid worth computing. An
-    /// L-shape's bounding-box centre falls in the notch — outside the polygon
-    /// — which would float the label over the neighbouring zone. The centroid
+    /// L-shape's bounding-box center falls in the notch — outside the polygon
+    /// — which would float the label over the neighboring zone. The centroid
     /// is pulled toward the mass of the shape instead.
     func testAnLShapeCentroidIsNotTheBoundingBoxCentre() throws {
         let lShape = [
@@ -256,7 +256,7 @@ final class MapFeatureLabelTests: XCTestCase {
     }
 
     /// Three collinear points enclose no area, and the formula divides by it.
-    /// Falls back to the bounding centre rather than producing infinity.
+    /// Falls back to the bounding center rather than producing infinity.
     func testADegenerateRingFallsBackRatherThanDividingByZero() throws {
         let collinear = [at(39, -105), at(39, -104), at(39, -103)]
         XCTAssertNil(MapFeatureLabel.centroid(of: collinear))

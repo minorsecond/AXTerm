@@ -2,7 +2,7 @@
 """A minimal AX.25 connected-mode station for the rig's Python nodes.
 
 Enough of AX.25 v2.0 mod-8 to hold a session: answer SABM with UA,
-exchange numbered I-frames with RR acknowledgement, honour DISC. Not a
+exchange numbered I-frames with RR acknowledgment, honor DISC. Not a
 full stack — no REJ/SREJ, no timers beyond a crude retransmit — but
 correct on the wire, which is what a node emulator and AXTerm need from
 each other. The KA-node and any future Python node build on this.

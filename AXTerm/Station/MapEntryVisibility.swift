@@ -5,7 +5,7 @@ import Foundation
 /// The markers and the list beside them used to be filtered in two places.
 /// The markers went through "Drop after", Transmitted Positions and the four
 /// station-type switches; the list went through none of them, so a station
-/// that had gone quiet for a day, or a licence-address dot hidden by
+/// that had gone quiet for a day, or a license-address dot hidden by
 /// Transmitted Positions, stayed in "On the map" with nothing drawn for it.
 /// Both now ask this one value.
 nonisolated struct MapEntryVisibility: Sendable {

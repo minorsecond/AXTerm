@@ -49,7 +49,7 @@ public final class AX25VirtualClock: AX25TimerScheduler {
             // Advance time to when the task fires
             currentTime = task.fireTime
             
-            // Execute if not cancelled
+            // Execute if not canceled
             if !task.cancelled {
                 task.action()
             }
@@ -59,7 +59,7 @@ public final class AX25VirtualClock: AX25TimerScheduler {
         currentTime = targetTime
     }
     
-    /// Count of active (not fired, not cancelled) tasks
+    /// Count of active (not fired, not canceled) tasks
     public var activeTaskCount: Int {
         tasks.filter { !$0.cancelled }.count
     }
@@ -72,7 +72,7 @@ private struct VirtualTaskCancellable: AnyCancellableTask {
     func cancel() {
         // Must be synchronous: VirtualClock.advance() is synchronous and checks the `cancelled`
         // flag immediately. Using Task { @MainActor in } here defers cancellation to the next
-        // runloop iteration, allowing already-cancelled tasks to fire during advance().
+        // runloop iteration, allowing already-canceled tasks to fire during advance().
         // Since all callers are @MainActor, we can safely call cancel(id:) directly.
         // Note: MainActor.assumeIsolated is used because AnyCancellableTask.cancel() is
         // nonisolated but callers always invoke from the main actor during tests.

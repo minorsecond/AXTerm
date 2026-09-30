@@ -60,7 +60,7 @@ struct SetupCallsignStep: View {
         }
 
         SetupCard(title: "SSIDs",
-                  note: "Enter your licence callsign without an SSID. You pick each radio's SSID "
+                  note: "Enter your license callsign without an SSID. You pick each radio's SSID "
                     + "when you set that radio up, so two radios never answer to the same address.") {
             Text("Each radio goes on the air as this callsign plus its own SSID, 0 to 15. What "
                  + "the SSID means depends on the radio's channel:")

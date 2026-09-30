@@ -182,7 +182,7 @@ struct ContentView: View {
     private var rememberedNetworkPaths: [NetworkPath] { rememberedPaths }
 
     /// Every address this station transmits as, SSIDs included. Any *other*
-    /// SSID on the same licence is a different radio — the operator's HT is
+    /// SSID on the same license is a different radio — the operator's HT is
     /// K0EPI-4 — and belongs on the map like any other station.
     private var ownAddresses: Set<String> {
         let answered = Set(sessionCoordinator.sessionManager.answeredAddresses
@@ -333,7 +333,7 @@ struct ContentView: View {
         _bbsSettings = ObservedObject(wrappedValue: bbsSettings)
         // The coordinator's wiring and the mailbox services are built once,
         // when SwiftUI first installs this view; see MainWindowServicesBox.
-        // Every later pass through this initialiser leaves its box unopened.
+        // Every later pass through this initializer leaves its box unopened.
         let setup = MainWindowServicesBox {
             Self.makeServices(client: client, settings: settings,
                               winlinkContext: winlinkContext, bbsSettings: bbsSettings)
@@ -357,7 +357,7 @@ struct ContentView: View {
             coordinator = existing
             // This runs while SwiftUI installs the window, inside a view
             // update. It used to run on every settings edit as well, from
-            // the initialiser, and assigning the callsign unconditionally
+            // the initializer, and assigning the callsign unconditionally
             // there published `localCallsign` from inside the update: 36 of
             // the 61 warnings logged with the Settings window open on
             // 2026-09-29. With a window up, the onChange in
@@ -524,7 +524,7 @@ struct ContentView: View {
     /// each is a small problem solved on its own.
     ///
     /// The stages are contiguous slices in their original order, because
-    /// modifier order is behaviour: a `.searchable` above an `.overlay` is not
+    /// modifier order is behavior: a `.searchable` above an `.overlay` is not
     /// the same view as one below it.
     var body: some View {
         presentationLayer
@@ -677,9 +677,9 @@ struct ContentView: View {
             //
             // Requesting one was wired on the Settings page and nowhere
             // else, so an operator who had switched device location on got a
-            // grid centre until they happened to open that page — and the
+            // grid center until they happened to open that page — and the
             // toolbar, correctly, reported "No GPS fix" the whole time. The
-            // switch is a station-level setting; honouring it is the shell's
+            // switch is a station-level setting; honoring it is the shell's
             // job, not a side effect of visiting a preferences pane.
             guard useDeviceLocation else { return }
             _ = await winlinkContext.locationService.currentLocation()
@@ -910,7 +910,7 @@ struct ContentView: View {
         })
         // One sheet, not two.
         //
-        // SwiftUI honours a single `.sheet` per view: attach two and the
+        // SwiftUI honors a single `.sheet` per view: attach two and the
         // second silently shadows the first. That is why the identity page
         // opened once and then refused to reappear after being dismissed —
         // the packet inspector's sheet was fighting it for the same slot.
@@ -940,7 +940,7 @@ struct ContentView: View {
         // Warm the in-memory directory from the on-disk cache the moment a
         // profile is requested. Without this, a station looked up weeks ago
         // still rendered its first frame nameless — the async task then hit
-        // the store a beat later and the licence fields popped in.
+        // the store a beat later and the license fields popped in.
         .onChange(of: profiles.presented) { _, presented in
             guard let presented else { return }
             // Through the alias, when one was tapped: the cache is keyed by
@@ -1011,7 +1011,7 @@ struct ContentView: View {
     /// Every callsign this station knows of, from any source.
     ///
     /// Deliberately wider than the heard list: a station named only in a route
-    /// or a neighbour record is still one this station knows about, and the
+    /// or a neighbor record is still one this station knows about, and the
     /// set is used to decide what may be forgotten. Erring wide keeps entries
     /// that might still be resolving a name.
     private var knownCallsigns: Set<String> {
@@ -2131,7 +2131,7 @@ struct ContentView: View {
             mapTraffic.follow(client.$packets) { packet in
                 let answered = packet.to.map { sessions.answers($0) } ?? false
                 return MapTrafficFeed.Attribution(
-                    // "Ours" is the licence, not the SSID: a station's beacon,
+                    // "Ours" is the license, not the SSID: a station's beacon,
                     // its node and its BBS are all the operator's own traffic.
                     isOurs: packet.from?.call.uppercased() == mine,
                     isForUs: TrafficAddressing.isForUs(
@@ -2149,7 +2149,7 @@ struct ContentView: View {
             }
             // Our own frames come back off the air when a digipeater repeats
             // them, and they are the only proof of reception a silent station
-            // ever gives us. Matched on the licence rather than the SSID: the
+            // ever gives us. Matched on the license rather than the SSID: the
             // digi repeats whichever of our addresses transmitted.
             aprsPings.isOurs = { call in
                 call.uppercased().split(separator: "-").first.map(String.init) == mine
@@ -2505,7 +2505,7 @@ struct ContentView: View {
         let path = terrainPath(to: profile)
 
         // Judged before anything is computed or offered. A profile over a
-        // thousand kilometres draws the earth's curvature and calls it
+        // thousand kilometers draws the earth's curvature and calls it
         // terrain, and downloading thirty tiles to produce that answer is
         // worse than not answering. The map already hides these stations for
         // the same reason; the card was simply never asked.
@@ -2805,7 +2805,7 @@ struct ContentView: View {
 
     private var singleRadioToolbarMenu: some View {
         HStack(spacing: 8) {
-            // TX / RX Blinkenlights, only while connected. Idle, two grey
+            // TX / RX Blinkenlights, only while connected. Idle, two gray
             // dots beside the status dot read as a loading indicator.
             if client.status == .connected {
                 HStack(spacing: 2) {
@@ -2833,7 +2833,7 @@ struct ContentView: View {
                     }
                 case .connecting:
                     Button("Cancel") {
-                        client.disconnect(reason: "user cancelled connect")
+                        client.disconnect(reason: "user canceled connect")
                     }
                 case .disconnected, .failed:
                     Button("Connect TNC") {
@@ -3128,7 +3128,7 @@ struct ContentView: View {
     /// evidence from one radio says nothing about another's channel. This used
     /// to be a single blended figure applied to every transmission on every
     /// radio: a station with a clean UHF link and a marginal VHF one got one
-    /// answer that libelled the good channel and flattered the bad one.
+    /// answer that libeled the good channel and flattered the bad one.
     ///
     /// A radio with too little evidence is simply absent — it must never
     /// borrow another's.

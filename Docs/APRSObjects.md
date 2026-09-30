@@ -55,7 +55,7 @@ position) is an alternate-table symbol and classifies as one.
 
 The list is deliberately short. A list that flags everything flags nothing, and
 the actual meaning lives in the name and comment the operator wrote, which are
-shown in full and never summarised.
+shown in full and never summarized.
 
 ## Telemetry (`AXTerm/APRS/APRSTelemetry.swift`)
 
@@ -115,10 +115,10 @@ Cartography rules that came out of using it:
 - **A cluster is a composition dial.** Its ring is a donut segmented by what
   is inside — digipeaters, weather, vehicles, fixed — in the four hues the dots
   and legend already use, so a cluster over a ridge of digipeaters reads indigo
-  and one over a highway reads amber. The body is paper-coloured with the count
+  and one over a highway reads amber. The body is paper-colored with the count
   in ordinary text, so it reads as a container of things rather than a thing.
   That is proportional symbology with a class breakdown, which is how this has
-  been done on paper for a century; the flat grey disc that preceded it carried
+  been done on paper for a century; the flat gray disc that preceded it carried
   less information than the markers it replaced.
 - **Clusters are dots, not balloons.** The first version used
   `MKMarkerAnnotationView`, which is exactly what `StationDotAnnotationView`
@@ -126,7 +126,7 @@ Cartography rules that came out of using it:
   ground north of the point, puts the true position at the tip rather than the
   body, and drops in with a bounce animation on a map where a moving marker is
   supposed to mean the station moved. A cluster is now a circle in the same
-  vocabulary, neutral rather than coloured (the stations inside may be of any
+  vocabulary, neutral rather than colored (the stations inside may be of any
   class and picking one to represent them would invent a fact), sized on a log
   scale, and fading with its freshest member. Clicking one zooms to its
   contents, which is the only useful thing a count can do.
@@ -140,7 +140,7 @@ Cartography rules that came out of using it:
 - **Trails follow the selection.** One trail belonging to the station whose
   card is open needs no legend to identify it. All trails is a switch away, and
   either way the trail is cut to a window the operator sets.
-- **The palette is muted.** The system colours are built to be noticed on a
+- **The palette is muted.** The system colors are built to be noticed on a
   white sheet; fifty of them over terrain is a field of fluorescent orange with
   a map underneath. Saturation is spent on hazards and the selection.
 - **A deliberate layer change bypasses the annotation throttle.** The throttle
@@ -175,7 +175,7 @@ shared with every other station on the channel, so the affordance is built
 around the two things that can go wrong socially rather than technically.
 
 **Input, on iOS.** No gesture, because there isn't a good one: a long press
-already means something else, and this view does not track the map's centre, so
+already means something else, and this view does not track the map's center, so
 a crosshair would be guessing at where the operator meant. Placing and moving
 both use **our own position** — the one point on this screen known exactly, and
 the field case anyway: you are standing at the aid station when you mark it, and
@@ -223,15 +223,15 @@ would be showing the operator something untrue of every other station. Only our
 own live objects are draggable; a station's marker is its own report of where it
 said it was, and dragging that would be editing somebody else's claim.
 
-MapKit drives `isDraggable` from a press recogniser with the system's
+MapKit drives `isDraggable` from a press recognizer with the system's
 half-second hold, and on a trackpad that reads as a broken feature: you grab
 your object, the map slides, and it takes several goes to discover the trick is
 to hold still first. `tuneDragPress` walks `mapView.gestureRecognizers` and
 drops the hold to 0.15 s while anything on the map is draggable, restoring the
 default when nothing is. Half a second is right for a touch screen, where a
 long press is a deliberate idiom; it is far too long for a pointer already
-sitting on the thing it means to move. The only guess is *which* recogniser,
-and being wrong costs nothing — not finding one leaves the old behaviour.
+sitting on the thing it means to move. The only guess is *which* recognizer,
+and being wrong costs nothing — not finding one leaves the old behavior.
 
 **The drop shows a move, not a placement.** The full form asks what the object
 *is* — name, kind, comment — and that decision was already made when it was
@@ -240,7 +240,7 @@ edits nobody came to make. So a move states the identity read-only and leads
 with the change: from, to, and `APRSObjectMove.summary` — "Moves 1.4 mi WNW".
 A drop within `restingMetres` (30 m) says so rather than claiming "0.0 mi N",
 because an accidental drag looks exactly like that and nothing else on screen
-would tell the operator. It is reported, not refused: a twenty-metre nudge is a
+would tell the operator. It is reported, not refused: a twenty-meter nudge is a
 legitimate thing to mean. *Edit details…* reopens the full form for the times
 the comment needs fixing too.
 
@@ -262,7 +262,7 @@ offered symbol round-trips; one that did not would come back as the fallback and
 silently change what the channel sees, which is the failure the symbol table
 exists to prevent.
 
-**Whose object may be stood down.** APRS honours a kill from anyone. The
+**Whose object may be stood down.** APRS honors a kill from anyone. The
 button is offered only for our own anyway, because an operator who can stand
 down another agency's road closure with one click will eventually do it by
 accident. The help text says a kill is a transmission and not a local delete,

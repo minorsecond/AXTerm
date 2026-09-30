@@ -62,7 +62,7 @@ final class ConnectCoordinator: ObservableObject {
 
     /// The path to transmit along, given how a station was last heard.
     ///
-    /// Reversed: `heardVia` is ordered as the frame travelled *to* us, and the
+    /// Reversed: `heardVia` is ordered as the frame traveled *to* us, and the
     /// way back out is the same hops in the opposite order. It makes no
     /// difference through a single digipeater and every difference through two.
     nonisolated static func returnPath(heardVia: [String]) -> [String] {

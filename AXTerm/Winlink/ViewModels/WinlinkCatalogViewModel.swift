@@ -88,8 +88,8 @@ final class WinlinkCatalogViewModel: ObservableObject {
         return nil
     }
 
-    /// The starred products present in the current index, honouring the
-    /// active search. Favourites the index no longer carries are absent
+    /// The starred products present in the current index, honoring the
+    /// active search. Favorites the index no longer carries are absent
     /// here but still remembered in `favorites`.
     var favoriteItems: [WinlinkCatalogItemRecord] {
         matchingItems

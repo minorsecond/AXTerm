@@ -111,7 +111,7 @@ final class ElevationStoreTests: XCTestCase {
         XCTAssertLessThan(west, east)
     }
 
-    /// Bilinear, not nearest neighbour: at ~100 m spacing nearest neighbour
+    /// Bilinear, not nearest neighbor: at ~100 m spacing nearest neighbor
     /// puts visible steps in a profile and can miss a ridge crest by half a
     /// sample.
     func testSamplingInterpolatesBetweenGridPoints() throws {
@@ -145,7 +145,7 @@ final class ElevationStoreTests: XCTestCase {
     /// smoothed over somewhere in between.
     func testAGapInTheStoreProducesNoPathVerdict() throws {
         try store.store(lat: 39, lon: -105, samples: 2, grid: [1600, 1600, 1600, 1600])
-        // The neighbouring tile is absent, so a path crossing into it has a
+        // The neighboring tile is absent, so a path crossing into it has a
         // hole in the middle.
         let sampler = StoredElevationSampler(store: store)
 

@@ -65,7 +65,7 @@ struct AXTermApp: App {
             // works" without touching Settings in each instance.
             //
             // This ONLY affects the ephemeral per-test UserDefaults suite
-            // created above, so it does not change behaviour for normal
+            // created above, so it does not change behavior for normal
             // installs.
             settingsStore.axdpExtensionsEnabled = true
             settingsStore.axdpAutoNegotiateCapabilities = true

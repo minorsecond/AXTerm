@@ -6,10 +6,10 @@ import SwiftUI
 /// Not the Mac's table transplanted. `PacketNSTableView` exists because
 /// AppKit's `NSTableView` is the only thing on macOS that stays smooth with a
 /// live stream tens of thousands of rows long; `List` gives the same
-/// virtualisation on iOS for free, so wrapping the AppKit table would buy
+/// virtualization on iOS for free, so wrapping the AppKit table would buy
 /// nothing and cost a second implementation.
 ///
-/// What is preserved exactly is the *behaviour* the Mac table has and a naive
+/// What is preserved exactly is the *behavior* the Mac table has and a naive
 /// list does not: it follows the newest packet while the operator is at the
 /// bottom, stops following the moment they scroll away to read something, and
 /// says so with a button back. A monitor that yanks the view out from under

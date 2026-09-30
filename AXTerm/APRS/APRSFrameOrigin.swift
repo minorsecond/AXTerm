@@ -5,7 +5,7 @@ import Foundation
 ///
 /// The two are indistinguishable on the map unless something says so. A
 /// station whose traffic is piped in from APRS-IS looks exactly like a
-/// neighbour — same symbol, same list, same "heard" count — while telling you
+/// neighbor — same symbol, same list, same "heard" count — while telling you
 /// nothing about what your radio can actually reach. In a grid-down week the
 /// difference is the whole point: the internet-fed half of the map is the half
 /// that disappears.
@@ -20,7 +20,7 @@ nonisolated enum APRSFrameOrigin: Hashable, Sendable {
     /// to the contrary.
     case radio
 
-    /// A third-party frame (`}`): `originator` sent it, it travelled over the
+    /// A third-party frame (`}`): `originator` sent it, it traveled over the
     /// internet, and `gateway` transmitted it here. Both names come from the
     /// frame's own header.
     case gatedOntoRF(originator: String, gateway: String)
@@ -36,7 +36,7 @@ nonisolated enum APRSFrameOrigin: Hashable, Sendable {
         return nil
     }
 
-    /// Path elements that mean "this travelled over the internet". `TCPIP`
+    /// Path elements that mean "this traveled over the internet". `TCPIP`
     /// and `TCPXX` are APRS-IS's own markers; `qA*` is the q-construct an
     /// igate stamps on, and it can only be applied by a server.
     static func marksInternet(_ element: String) -> Bool {
@@ -56,7 +56,7 @@ nonisolated enum APRSFrameOrigin: Hashable, Sendable {
             // Only claim the internet when the inner path says so. A third
             // party frame can also be an RF-to-RF relay, and calling that
             // "from the internet" would be a lie in the safer direction's
-            // favour — the operator would discount a station they can reach.
+            // favor — the operator would discount a station they can reach.
             if inner.path.contains(where: marksInternet) {
                 return .gatedOntoRF(originator: inner.originator,
                                     gateway: inner.gateway ?? "unknown")

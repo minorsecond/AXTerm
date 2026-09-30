@@ -40,7 +40,7 @@ nonisolated protocol StationNoteStore: Sendable {
                        name: String, data: Data, now: Date) throws -> StationAttachment
     func attachmentData(id: Int64) throws -> Data?
     func deleteAttachment(id: Int64) throws
-    /// Metres above ground, or nil where nobody has recorded it.
+    /// Meters above ground, or nil where nobody has recorded it.
     func antennaHeight(for callsign: String) throws -> Double?
     /// Nil clears it back to unknown. Terrain forecasts fall back to the
     /// stated assumption rather than to a stale guess.

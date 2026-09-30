@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Everything here is a pure function of the observed topology. None of it
 /// transmits, and none of it needs the network to cooperate — which is the
-/// point, because the networks that most need analysing are the ones with no
+/// point, because the networks that most need analyzing are the ones with no
 /// routing protocol running on them.
 nonisolated enum NetworkTopology {
 
@@ -73,7 +73,7 @@ nonisolated enum NetworkTopology {
 
         for root in graph.keys.sorted() where discovery[root] == nil {
             var rootChildren = 0
-            // (vertex, iterator over its neighbours)
+            // (vertex, iterator over its neighbors)
             var stack: [(String, Array<String>.Index)] = []
             let neighbours = { (v: String) in graph[v]?.sorted() ?? [] }
 
@@ -150,8 +150,8 @@ nonisolated enum NetworkTopology {
     /// Sub-networks discovered from who talks to whom.
     ///
     /// Label propagation: every vertex repeatedly adopts the commonest label
-    /// among its neighbours until nothing changes. Chosen over modularity
-    /// optimisation because it needs no parameters and no target count — on a
+    /// among its neighbors until nothing changes. Chosen over modularity
+    /// optimization because it needs no parameters and no target count — on a
     /// packet channel nobody knows in advance how many club networks share the
     /// frequency, and a method that has to be told would be answering its own
     /// question.
@@ -192,7 +192,7 @@ nonisolated enum NetworkTopology {
     /// Communities as sets, largest first, singletons dropped.
     ///
     /// A station that talks to nobody is not a network of one — presenting it
-    /// as a community would fill the map with colours that mean nothing.
+    /// as a community would fill the map with colors that mean nothing.
     static func communityGroups(in graph: [String: Set<String>]) -> [Set<String>] {
         Dictionary(grouping: communities(in: graph), by: \.value)
             .values

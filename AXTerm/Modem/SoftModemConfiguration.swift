@@ -28,7 +28,7 @@ nonisolated struct SoftModemConfiguration: Equatable, Sendable {
     var txLevelDBFS: Float = -6
     /// Space-tone gain relative to mark (pre-emphasis).
     var txSpaceGainDB: Float = 0
-    /// Tilt hypotheses, one slicer each; `[0]` is a single centre slicer.
+    /// Tilt hypotheses, one slicer each; `[0]` is a single center slicer.
     var slicerTwistsDB: [Float] = [0]
     /// Below this RMS level nothing counts as carrier.
     var rxSquelchDBFS: Float = -50

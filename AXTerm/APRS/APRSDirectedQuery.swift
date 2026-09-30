@@ -116,7 +116,7 @@ nonisolated enum APRSDirectedQuery: String, CaseIterable, Identifiable, Sendable
                 + "answer \u{2014} only its timing can suggest that."
         case .trace:
             return "Sends \(token) (also written ?PING?). The station replies with the path "
-                + "your query travelled to reach it, which is the one query that tells you how "
+                + "your query traveled to reach it, which is the one query that tells you how "
                 + "the network got you there rather than only that it did."
         case .version:
             return "Sends \(token). The station names its software. Answered with a message "
@@ -161,7 +161,7 @@ nonisolated struct APRSStationQuery: Equatable, Sendable {
         self.kind = kind
     }
 
-    /// A query the operator typed. Normalised the way the spec writes them —
+    /// A query the operator typed. Normalized the way the spec writes them —
     /// uppercase, leading `?` — because a station that follows the spec (as
     /// Xastir does) rejects any other case as an illegal query rather than
     /// guessing what was meant.

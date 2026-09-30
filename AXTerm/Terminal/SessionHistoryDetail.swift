@@ -5,7 +5,7 @@ import SwiftUI
 /// A session from one of the operator's other devices is read-only here:
 /// the banner says whose it is, and the tag and note editors are absent
 /// rather than disabled, because there is nothing on this device to edit —
-/// annotations never travelled (see `TerminalSessionPayload`).
+/// annotations never traveled (see `TerminalSessionPayload`).
 struct SessionHistoryDetail: View {
 
     let session: TerminalSession

@@ -3,7 +3,7 @@
 //  AXTerm
 //
 //  Walks a ConnectStrategyLadder rung by rung: explain, try, and either
-//  stop (connected, refused, cancelled) or fall through to the next family.
+//  stop (connected, refused, canceled) or fall through to the next family.
 //
 //  Deliberately a sibling of ConnectAttemptRunner rather than a
 //  generalization of it — that runner's contract ("rank within one mode,

@@ -3,7 +3,7 @@ import XCTest
 
 /// These assert physical invariants rather than published almanac times.
 /// An invariant that must hold everywhere catches a wrong formula; a
-/// single memorised sunrise time mostly catches typos.
+/// single memorized sunrise time mostly catches typos.
 final class SolarEventsTests: XCTestCase {
 
     private func date(_ iso: String) -> Date {

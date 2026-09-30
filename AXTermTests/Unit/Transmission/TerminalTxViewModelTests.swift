@@ -215,7 +215,7 @@ final class TerminalTxViewModelTests: XCTestCase {
 
         vm.cancelFrame(frameId)
 
-        // Should be marked cancelled, not removed (for history)
+        // Should be marked canceled, not removed (for history)
         XCTAssertEqual(vm.queueEntries.first?.state.status, .cancelled)
     }
 

@@ -302,7 +302,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
     /// would keep being advertised until they aged out. So they go now:
     ///
     /// - anything routed through a path alias, which is never a station;
-    /// - every inferred route and neighbour, because the good ones cannot be
+    /// - every inferred route and neighbor, because the good ones cannot be
     ///   told from the bad ones after the fact and they re-learn within
     ///   minutes from live traffic.
     ///

@@ -152,7 +152,7 @@ extension APRSObjectReport {
     /// person in a hurry. So this sorts objects into "look at this now" and
     /// "this is a marker", and leaves the actual meaning to the name and
     /// comment the operator wrote — which are shown in full and never
-    /// summarised.
+    /// summarized.
     nonisolated enum Urgency: Int, Comparable, Sendable {
         case marker
         case notable

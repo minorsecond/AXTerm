@@ -9,7 +9,7 @@ different implementation has to agree about what they mean.
 That is what this does. Each frame is transmitted through a real modem, and
 Direwolf's own APRS parser — a mature implementation that is neither AXTerm nor
 Xastir — describes it in its log. `APRSZooTests` then asserts AXTerm's parsers
-reach the same conclusion. Where a frame is synthesised rather than captured,
+reach the same conclusion. Where a frame is synthesized rather than captured,
 Direwolf accepting it is what validates the synthesis: a malformed frame is
 simply not decoded, so the test cannot pass on garbage.
 
@@ -55,7 +55,7 @@ ZOO = [
 
     ("item", "K0EPI-7", "APZAXT",
      b")AID!3934.15N/10455.05W-incident marker",
-     "synthesised to APRS 1.01 ch.11; Direwolf accepting it validates the shape", ")AID!"),
+     "synthesized to APRS 1.01 ch.11; Direwolf accepting it validates the shape", ")AID!"),
 
     ("telemetry", "SIMLA", "APMI06",
      b"T#212,185,047,012,075,000,00000000",

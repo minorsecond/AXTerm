@@ -75,8 +75,8 @@ final class HDLCEncoderDecoderTests: XCTestCase {
         let (events, _) = decode(levels(for: [frame]))
         let frameIndex = events.firstIndex { if case .frame = $0 { return true } else { return false } }!
         // 45 preamble flags are sent; the very first level has no predecessor
-        // for NRZI, so the first flag is unrecognisable and 44 are seen.
-        XCTAssertEqual(frameIndex, 44, "44 recognised preamble flags, then the frame closes on the next")
+        // for NRZI, so the first flag is unrecognizable and 44 are seen.
+        XCTAssertEqual(frameIndex, 44, "44 recognized preamble flags, then the frame closes on the next")
         // 15 tail flags are sent; the first of them closes the frame.
         XCTAssertEqual(events.suffix(from: frameIndex + 1).count, 14, "14 tail flags after the closing one")
         XCTAssertTrue(events.suffix(from: frameIndex + 1).allSatisfy { $0 == .flag })

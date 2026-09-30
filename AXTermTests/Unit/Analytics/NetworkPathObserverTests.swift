@@ -85,7 +85,7 @@ final class NetworkPathObserverTests: XCTestCase {
 
     func testAnUnrepeatedHopIsNotPartOfThePathTravelled() {
         // H=0 is the frame on its way *to* the digi. Recording it as a hop
-        // would claim a path that has not yet been travelled.
+        // would claim a path that has not yet been traveled.
         let paths = NetworkPathObserver.paths(in: [
             packet("KB5YZB-7", "K0NTS-1", via: [address("DRLNOD", repeated: false)]),
         ])

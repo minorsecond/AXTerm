@@ -14,7 +14,7 @@ nonisolated struct CallsignRecord: Codable, Equatable, Sendable {
     var gridSquare: String?
     var latitude: Double?
     var longitude: Double?
-    /// The street line from the licence, when the source gives one.
+    /// The street line from the license, when the source gives one.
     ///
     /// Kept for one reason: a PO box means the coordinate is a post office
     /// rather than an antenna, and nothing else in the record can tell those
@@ -34,7 +34,7 @@ nonisolated struct CallsignRecord: Codable, Equatable, Sendable {
     var fetchedAt: Date
 
     /// Coordinates, preferring the source's own lat/lon and falling back
-    /// to the centre of its grid square.
+    /// to the center of its grid square.
     var position: GreatCircle.Point? {
         if let latitude, let longitude {
             return GreatCircle.Point(latitude: latitude, longitude: longitude)
@@ -49,12 +49,12 @@ nonisolated struct CallsignRecord: Codable, Equatable, Sendable {
     }
 }
 
-/// Normalising a callsign before it goes to a directory.
+/// Normalizing a callsign before it goes to a directory.
 nonisolated enum CallsignQuery {
 
     /// Strips the SSID and uppercases.
     ///
-    /// Directories index licences, and a licence has no SSID: `W0ARP-10`
+    /// Directories index licenses, and a license has no SSID: `W0ARP-10`
     /// is the gateway, `W0ARP` is the licensee. Querying the former
     /// returns nothing, which looks exactly like "no such station".
     static func normalize(_ raw: String) -> String {

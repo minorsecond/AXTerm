@@ -216,7 +216,7 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
             senderState = .cancelled
             state = .cancelled
             delegate?.transferProtocol(self, stateChanged: state)
-            delegate?.transferProtocol(self, didComplete: false, error: "Cancelled by peer")
+            delegate?.transferProtocol(self, didComplete: false, error: "Canceled by peer")
 
         default:
             break
@@ -255,7 +255,7 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
         senderState = .cancelled
         state = .cancelled
         delegate?.transferProtocol(self, stateChanged: state)
-        delegate?.transferProtocol(self, didComplete: false, error: "Cancelled")
+        delegate?.transferProtocol(self, didComplete: false, error: "Canceled")
     }
 
     // MARK: - Receiver Side
@@ -335,11 +335,11 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
             return true
 
         case (_, .cancel):
-            // Peer cancelled
+            // Peer canceled
             receiverState = .cancelled
             state = .cancelled
             delegate?.transferProtocol(self, stateChanged: state)
-            delegate?.transferProtocol(self, didComplete: false, error: "Cancelled by peer")
+            delegate?.transferProtocol(self, didComplete: false, error: "Canceled by peer")
             return true
 
         default:

@@ -536,7 +536,7 @@ struct BulkTransferRow: View {
                 .font(.caption)
                 .foregroundStyle(.green)
         case .cancelled:
-            Label("Cancelled", systemImage: "minus.circle")
+            Label("Canceled", systemImage: "minus.circle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .failed:

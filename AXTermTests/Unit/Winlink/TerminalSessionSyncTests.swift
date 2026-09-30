@@ -4,7 +4,7 @@ import XCTest
 /// Seeing what the operator's other stations connected to.
 ///
 /// A transcript is what was said over the air, not a measurement of the
-/// air — so unlike a Winlink session log it may travel. But it travelled
+/// air — so unlike a Winlink session log it may travel. But it traveled
 /// from a different radio in a different place, and nothing about it may be
 /// mistaken for this device's own history. These tests are that rule: what
 /// crosses, what stays, and how the origin is stamped on every record.
@@ -119,7 +119,7 @@ final class TerminalSessionSyncTests: XCTestCase {
     }
 
     /// Where a session came from — station, installation, and the name a
-    /// person would recognise — survives the wire intact. The name is what
+    /// person would recognize — survives the wire intact. The name is what
     /// the History screen shows, so losing it would leave a row that says
     /// only "somewhere else".
     func testProvenanceAndDeviceNameSurviveTheRoundTrip() throws {

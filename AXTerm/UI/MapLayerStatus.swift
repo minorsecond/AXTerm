@@ -57,7 +57,7 @@ final class MapLayerStatus: ObservableObject {
     /// are counted separately because they are the reason to look.
     @Published var objectCaption: String?
 
-    /// Why the weather field cannot be drawn, when it cannot. A greyed-out
+    /// Why the weather field cannot be drawn, when it cannot. A grayed-out
     /// switch with no explanation is indistinguishable from a broken one.
     @Published var weatherFieldUnavailableReason: String?
 

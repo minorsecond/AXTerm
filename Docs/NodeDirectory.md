@@ -5,7 +5,7 @@ sidebar **Nodes**.
 
 ## What it holds
 
-An alias is a tactical name (`DRLNOD`, `AGNODE`, `YZBBPQ`) with no licence
+An alias is a tactical name (`DRLNOD`, `AGNODE`, `YZBBPQ`) with no license
 behind it, so no callsign directory can resolve one. Stations announce them
 about themselves and about each other, and AXTerm reads those announcements
 where they already arrive:
@@ -24,7 +24,7 @@ station and only when it happens to transmit.
 
 - **alias → callsign** — the pairing, as announced.
 - **service** — `node`, `BBS`, `digipeater`, `gateway`, `relay`. Codes travel
-  as single letters and conventions vary between stacks, so an unrecognised
+  as single letters and conventions vary between stacks, so an unrecognized
   one is shown verbatim rather than guessed at.
 - **via `<station>`** — who told us. An alias is hearsay: `AGNODE` came out of
   KB5YZB-7's table, not from K1AJD-4 itself, and an operator judging whether
@@ -58,13 +58,13 @@ a table; a station's own ID is not a teller, so declared services survive.
 
 The directory answers in both directions.
 
-`callsign(for:)` takes an alias and returns the licence behind it. That is the
+`callsign(for:)` takes an alias and returns the license behind it. That is the
 older direction and it is what puts node traffic on the map: `DRLNOD` is not a
-licence and no callsign directory will ever place it, but `KE0NCQ` has a grid
+license and no callsign directory will ever place it, but `KE0NCQ` has a grid
 square.
 
 `preferredAlias(for:)` and `aliases(for:)` go the other way. A callsign can hold
-several names — one licence running a BBS, a digipeater and a node announces one
+several names — one license running a BBS, a digipeater and a node announces one
 name per service — so the plural form returns all of them, node role first,
 because the node name is what turns up in via paths and connect targets. The
 SSID is **not** stripped in this direction: `KE0NCQ-7` is DRLNOD and `KE0NCQ-1`
@@ -119,7 +119,7 @@ Favorites, Recent Heard and Neighbors, each row naming its route — `AGCHAT ·
 via KB5YZB-7`. It is offered in every mode, not only NET/ROM: an operator typing
 a name is asking "what can I connect to", and answering only once they have
 already picked the right mode makes them solve the problem first. Anything
-already offered as heard, favourited or a neighbour is left out, since a
+already offered as heard, favorited or a neighbor is left out, since a
 better-evidenced route to it exists.
 
 The **Terminal sidebar** carries a matching section above Stations: one line per
@@ -221,7 +221,7 @@ The station profile carries the same fact as a line under the callsign —
 that is the only thing the profile knows, and it previously showed a page of
 empty sections instead.
 
-The profile's Connect button performs it, and is labelled with the route —
+The profile's Connect button performs it, and is labeled with the route —
 **Connect via KB5YZB-7** — because for a station nothing here has heard, which
 node it goes through is the interesting half of the action. One button covers
 two different connections: a heard station is called directly, while one that
@@ -235,7 +235,7 @@ The Nodes page can forget entries meeting **both** conditions:
 - no teller — nothing has offered a way to reach the station, so there is
   nowhere to connect to get to it; and
 - the callsign is unknown to this station — it appears in no packet, no
-  neighbour record and no route, at any SSID.
+  neighbor record and no route, at any SSID.
 
 Neither condition alone is a valid criterion. Unroutable entries still earn
 their keep resolving names for map pins and via-path labels (`EATON → W2CRS`),

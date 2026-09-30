@@ -47,7 +47,7 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     var blePeripheralName: String = ""
     var bleAutoReconnect: Bool = true
 
-    /// Treat a serial TNC as a Mobilinkd. A Bluetooth LE one is recognised
+    /// Treat a serial TNC as a Mobilinkd. A Bluetooth LE one is recognized
     /// by its service UUID and needs no switch.
     var mobilinkdEnabled: Bool = false
     /// The TNC4 settings this radio manages; unset fields are left as the
@@ -477,7 +477,7 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     }
 
 
-    /// A name the operator will recognise before they have typed one. With
+    /// A name the operator will recognize before they have typed one. With
     /// one radio the name is never shown, so this only matters the moment a
     /// second is added — and then the operator is already in the pane that
     /// renames it.

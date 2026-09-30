@@ -14,7 +14,7 @@ type identifier selects the form:
 
 - **Message** — `:AAAAAAAAA:text{NNN` — nine-character space-padded addressee,
   up to 67 chars of text, optional 1–5 char message number. A number present
-  means the sender wants an acknowledgement.
+  means the sender wants an acknowledgment.
 - **Ack / Reject** — `:AAAAAAAAA:ack{NNN` / `:…:rej{NNN`.
 - **Bulletin / announcement** — addressee `BLN…`, stored read-only.
 - **Directed query** — a message whose text is a query token, e.g. `?APRSP`.
@@ -55,7 +55,7 @@ the `aprs_messages` table (`APRSMessageStore`, migrations v32 + v33).
 
 ### Auto-reply modes (Settings › APRS › Messaging)
 
-Because replies transmit **under your callsign**, the behaviour is an
+Because replies transmit **under your callsign**, the behavior is an
 operator-owned, persisted choice, read live:
 
 - **Full** — auto-ACK messages *and* answer directed queries. (default)
@@ -176,7 +176,7 @@ sends *"8 of 12 objects sent"* alongside. Owning none still answers, with *"No
 objects"*, because silence is what a station that never heard of the query
 sends and the asker cannot tell those two apart.
 
-Xastir does not answer this one. `db.c` recognises `?APRSO` as a legal query and
+Xastir does not answer this one. `db.c` recognizes `?APRSO` as a legal query and
 marks it `// NOT IMPLEMENTED YET`, so in practice the asker will be another
 AXTerm more often than not. Implementing it is still right — it is APRS 1.01
 ch.15 — but nobody should expect the channel to be full of them.
@@ -189,7 +189,7 @@ been on its way regardless (see **Did they answer?** above).
 
 `axtermAnswersIt` marks the four this station answers itself. It is asserted
 against `receiveQuery` in `APRSDirectedQueryTests`, so the badge and the
-behaviour cannot drift apart.
+behavior cannot drift apart.
 
 **Two ways in, one action.** The map's station card carries a split button:
 clicking **Ping** still sends `?APRSP` in one click, its menu lists all seven,
@@ -206,7 +206,7 @@ reach — a directed question and a channel-wide one are different decisions.
 
 **Typed queries.** `?APRSH`, `?IGATE?` and the station-specific queries some
 software invents have wire formats this app has no authority over, so there is a
-free field instead of guessed rows. Typed text is normalised the way the spec
+free field instead of guessed rows. Typed text is normalized the way the spec
 writes queries — upper-cased, leading `?` — because Xastir (and anything else
 following the spec) rejects a lowercase query as illegal rather than guessing.
 
@@ -248,7 +248,7 @@ both unread-badged.
 ### Checked against Xastir, executably
 
 "AXTerm matches Xastir" used to be a prose comment: the source was read and the
-behaviour written down. Nothing failed when the reading was wrong — and twice it
+behavior written down. Nothing failed when the reading was wrong — and twice it
 was. The rig now runs **real Xastir 2.1.8 as a station on the simulated
 channel** (`TestRig/xastir`, `docker compose --profile aprs up -d`) and
 `TestRig/scripts/xastir_oracle.py` captures its replies byte-exact into
@@ -406,12 +406,12 @@ and records what Direwolf — neither AXTerm nor Xastir — made of it.
 | status (`>`) | *Status Report* | carries no fix; `testFramesWithoutAFixYieldNoPosition` requires we invent none |
 
 Most of these are real transmissions off the operator's own channel
-(2026-09-09), reconstructed from the RX trace; the rest are synthesised to
+(2026-09-09), reconstructed from the RX trace; the rest are synthesized to
 APRS 1.01, and Direwolf decoding them **at all** is what validates the
 synthesis, since a malformed frame simply is not decoded.
 
 One divergence, recorded and not asserted: Direwolf calls `/r` a *Repeater* and
-our symbol catalogue calls it an *Antenna*. Both names are in circulation; the
+our symbol catalog calls it an *Antenna*. Both names are in circulation; the
 symbol character is the protocol and the label is not, so the tests compare
 characters.
 

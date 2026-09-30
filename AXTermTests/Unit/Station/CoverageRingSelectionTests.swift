@@ -35,7 +35,7 @@ final class CoverageRingSelectionTests: XCTestCase {
         XCTAssertEqual(rings.count, 2, "one ring drawn over the other measures neither")
         XCTAssertEqual(
             rings.map(\.evidence), [.answered, .digipeated],
-            "the connected-mode ring keeps the colour it has when it is alone")
+            "the connected-mode ring keeps the color it has when it is alone")
     }
 
     func testAnUncollectedRingDrawsNothingEvenWhenAskedFor() {

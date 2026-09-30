@@ -8,10 +8,10 @@ import AppKit
 #endif
 
 /// Renders an APRS symbol to a white template `CGImage`, cached, so the map's
-/// station dots can carry a glyph without re-rasterising on every reconfigure.
+/// station dots can carry a glyph without re-rasterizing on every reconfigure.
 /// The dot's CAShapeLayers are jitter-tuned and must not be disturbed; a glyph
 /// is a separate `CALayer` whose `contents` is one of these images, tinted
-/// white so it reads over any recency colour.
+/// white so it reads over any recency color.
 ///
 /// Keyed on the symbol rather than on an SF Symbol name, because the name was
 /// never the identity: it hid both which artwork answers — ours where we have
@@ -72,7 +72,7 @@ nonisolated enum APRSGlyphRasterizer {
     ///
     /// The character is punched out of the glyph first and then filled white,
     /// leaving a transparent halo. Without it a white letter on a white glyph
-    /// is invisible — the overlay plates have a clear centre, but `\9` with a
+    /// is invisible — the overlay plates have a clear center, but `\9` with a
     /// `G` on it is a solid gas pump.
     private static func compose(base: CGImage?, overlay: Character?, points: CGFloat) -> CGImage? {
         guard base != nil || overlay != nil else { return nil }
@@ -95,7 +95,7 @@ nonisolated enum APRSGlyphRasterizer {
         return ctx.makeImage()
     }
 
-    /// Overlay characters are read, not glanced at: `S` (a digi honouring the
+    /// Overlay characters are read, not glanced at: `S` (a digi honoring the
     /// state alias) against `5`, `8` against `B`, `0` against `O`. At heavy
     /// weight the aperture of an `S` closes and it becomes a `5` — so this is
     /// bold and a little larger, which is more legible small, not less.
@@ -162,7 +162,7 @@ nonisolated enum APRSGlyphRasterizer {
     }
 
     /// Flattens to a solid white shape with the source's alpha, which is what
-    /// makes one image usable over every recency colour.
+    /// makes one image usable over every recency color.
     private static func whiten(_ image: NSImage, to size: CGSize) -> CGImage? {
         guard size.width > 0, size.height > 0 else { return nil }
         let tinted = NSImage(size: size)

@@ -6,7 +6,7 @@ import Foundation
 /// their duplicate copies into one packet at ingest (`CrossRadioDedup`), so
 /// they are one channel and their traffic must roll up, not double. Two radios
 /// on *different* frequencies hear disjoint populations (145.050 packet vs
-/// 144.390 APRS), so their neighbours, routes and link quality must never be
+/// 144.390 APRS), so their neighbors, routes and link quality must never be
 /// averaged together — they are separate channels. A radio whose frequency is
 /// unknown is its own channel: we cannot claim it shares a band with anything.
 ///
@@ -33,7 +33,7 @@ nonisolated struct AnalyticsRadioChannel: Identifiable, Equatable, Sendable {
     }
 
     /// Groups visible radios into channels by frequency. Hidden radios are
-    /// dropped — the analytics filter honours the same hidden set as the map
+    /// dropped — the analytics filter honors the same hidden set as the map
     /// and the packets table. Radios sharing a frequency become one channel;
     /// radios with no known frequency each become their own. Deterministic
     /// order: by frequency ascending, then unknown-frequency channels by name,

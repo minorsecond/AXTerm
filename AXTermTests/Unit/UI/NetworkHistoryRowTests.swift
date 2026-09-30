@@ -3,7 +3,7 @@ import XCTest
 
 /// How another station's observations read on screen.
 ///
-/// The labelling is a safety property, not cosmetics: an operator who reads
+/// The labeling is a safety property, not cosmetics: an operator who reads
 /// these as their own will conclude their radio can reach places it cannot.
 final class NetworkHistoryRowTests: XCTestCase {
 

@@ -356,7 +356,7 @@ final class MobilinkdLevelAssistantRunner: ObservableObject {
     private var task: Task<Void, Never>?
     private weak var control: MobilinkdControlling?
 
-    /// The TNC4 re-centres its input for about a second after a gain change
+    /// The TNC4 re-centers its input for about a second after a gain change
     /// (tnc4-firmware AudioLevel.cpp, setAudioInputLevels).
     static let settleSeconds = 2.5
     static let sampleSeconds = 2.0

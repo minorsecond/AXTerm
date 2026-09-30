@@ -5,12 +5,12 @@
 //  Working out the chain of nodes a terminal relay has to walk.
 //
 //  The relay drives a node's *command prompt*: connect, wait for the
-//  banner, type `C <somewhere>`. Until now it modelled exactly one hop —
+//  banner, type `C <somewhere>`. Until now it modeled exactly one hop —
 //  `us → node → destination` — and picked the node from whichever
 //  station's table listed the destination.
 //
 //  That is not enough on this network, and the field capture of
-//  2026-08-27 shows why. COSCO is listed by KB5YZB-7, so the relay dialled
+//  2026-08-27 shows why. COSCO is listed by KB5YZB-7, so the relay dialed
 //  KB5YZB-7 direct; the link came up and the node never greeted, three
 //  separate times. What *did* work, by hand, was two hops:
 //
@@ -79,13 +79,13 @@ nonisolated enum NetRomRelayPlan {
     ///   - destination: what the operator asked for.
     ///   - teller: the station whose node table lists it — from the alias
     ///     directory. Nil when the destination is reached directly.
-    ///   - routeLookup: station → the neighbour that reaches it, from the
+    ///   - routeLookup: station → the neighbor that reaches it, from the
     ///     NET/ROM route table (`bestRouteTo(_:)?.origin`).
     ///   - aliasResolve: node name → the callsign behind it. The route
     ///     table files routes by callsign, but a teller is usually a node
     ///     *name* — ASHCHT's teller is COSCO, and COSCO's route lives
     ///     under KE0GB-7. Without this the walk ended at the alias and the
-    ///     relay dialled COSCO direct into silence (field capture
+    ///     relay dialed COSCO direct into silence (field capture
     ///     2026-08-28).
     static func plan(
         destination: String,

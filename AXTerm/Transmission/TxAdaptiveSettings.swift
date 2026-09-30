@@ -321,7 +321,7 @@ nonisolated struct TxAdaptiveSettings: Sendable {
     ///     evidence about the path but nothing we send can mend it, and
     ///     treating it as a reason to back off spends throughput on a
     ///     problem at the other end. Nil (aggregate sources, older
-    ///     callers) falls back to `lossRate`, the previous behaviour.
+    ///     callers) falls back to `lossRate`, the previous behavior.
     ///   - etx: this sample's expected transmissions (≥ 1). Both directions,
     ///     per CLAUDE.md §8 — unchanged, and still what ranks routes.
     ///   - srtt: smoothed RTT if known.

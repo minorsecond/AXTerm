@@ -36,7 +36,7 @@ Three details the format hides:
 
 - **Wind sits in the course/speed slot.** For every other station `220/004` is
   course and speed. Decoding a weather station that way reports a house
-  travelling at four knots, and puts a fixed station in the map's *moving*
+  traveling at four knots, and puts a fixed station in the map's *moving*
   class. `APRSParser` therefore routes the whole tail to the weather parser
   when the symbol code is `_`, and leaves `courseDegrees`/`speedKnots` nil.
 - **`s` means two things.** Snowfall in a position report, wind speed in a

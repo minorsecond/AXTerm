@@ -84,7 +84,7 @@ nonisolated enum APRSDigestLine {
         let name = o.name.trimmingCharacters(in: .whitespaces)
         // A killed object is news: it says the thing is no longer there, and a
         // line that read like any other placement would say the opposite.
-        var parts = ["\(o.kind == .item ? "Item" : "Object") \(name)\(o.isLive ? "" : " (cancelled)")"]
+        var parts = ["\(o.kind == .item ? "Item" : "Object") \(name)\(o.isLive ? "" : " (canceled)")"]
         parts.append(coordinates(latitude: o.latitude, longitude: o.longitude))
         if let away = distance(to: GreatCircle.Point(latitude: o.latitude, longitude: o.longitude),
                                from: observer, inMiles: inMiles) {
@@ -121,7 +121,7 @@ nonisolated enum APRSDigestLine {
 
     /// A telemetry frame, named and calibrated where the station has said how.
     ///
-    /// `T#217,137,140,41,0,0,00010011` is thirteen channels: five analogue
+    /// `T#217,137,140,41,0,0,00010011` is thirteen channels: five analog
     /// counts and eight digital lines the operator wired up. What any of them
     /// mean lives in four messages the station sends every few hours — `PARM`
     /// names the channels, `UNIT` gives their units, `EQNS` carries the

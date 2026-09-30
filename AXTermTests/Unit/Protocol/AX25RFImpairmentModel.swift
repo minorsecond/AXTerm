@@ -5,7 +5,7 @@
 //  Deterministic RF impairment simulation for adaptive AX.25 testing.
 //
 //  All impairment generators:
-//    - accept a seeded SplitMix64 RNG for reproducible behaviour
+//    - accept a seeded SplitMix64 RNG for reproducible behavior
 //    - are composable (CompositeImpairmentModel)
 //    - support time-based phase switching (ImpairmentTimeline)
 //    - emit FrameDisposition, not side-effects
@@ -92,7 +92,7 @@ protocol RFImpairmentModel {
     /// Evaluate disposition for one frame.
     /// - Parameters:
     ///   - type: AX.25 frame type: "i", "s", or "u"
-    ///   - direction: Which direction on the link this frame is travelling.
+    ///   - direction: Which direction on the link this frame is traveling.
     ///   - time: Current virtual clock time (seconds).
     ///   - rng: Caller-owned RNG for deterministic randomness.
     /// - Returns: What to do with the frame.

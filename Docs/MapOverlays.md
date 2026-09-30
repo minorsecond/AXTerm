@@ -55,7 +55,7 @@ database. Three reasons, in order of weight:
    county boundaries before an activation needs them during it, and the
    activation is the part where nobody has a spare hand to re-import anything.
 2. **It is the same format they export and send.** One writer, one reader, and
-   the file on disk is already the file to attach — no second serialisation to
+   the file on disk is already the file to attach — no second serialization to
    keep in step with the one that goes over the air.
 3. **A layer is a file the operator brought.** Keeping it as a file means they
    can take it away again, and a corrupt layer costs one file rather than the
@@ -64,7 +64,7 @@ database. Three reasons, in order of weight:
 A shapefile is converted to GeoJSON once, on import, rather than re-parsed on
 every launch.
 
-Colour and visibility live in a `.display.json` sidecar so the `.geojson` stays
+Color and visibility live in a `.display.json` sidecar so the `.geojson` stays
 a clean standard file any other tool can open — putting AXTerm's display
 preferences in its properties would make every exported file carry app-specific
 noise.
@@ -92,7 +92,7 @@ can also be drawn on.
 | **Area** | 3 corners | Done, and closes itself |
 
 Taps land anywhere on the map and are converted with
-`MKMapView.convert(_:toCoordinateFrom:)`. The tap recogniser runs
+`MKMapView.convert(_:toCoordinateFrom:)`. The tap recognizer runs
 *simultaneously* with MapKit's own, so panning and pinch-zoom keep working
 while drawing, and a tap that lands on a station marker is ignored — the
 operator meant to look at the station.
@@ -118,11 +118,11 @@ zone beside it, and the label is what makes the drawing worth anything to
 whoever receives it.
 
 Labels are anchored at the **area-weighted centroid**, not the bounding-box
-centre. They differ a lot for a real boundary — an L-shaped county puts its
-bounding-box centre in the notch, outside itself, which would float the label
-over the neighbouring county. A degenerate ring (three collinear points
+center. They differ a lot for a real boundary — an L-shaped county puts its
+bounding-box center in the notch, outside itself, which would float the label
+over the neighboring county. A degenerate ring (three collinear points
 enclose no area, and the formula divides by it) falls back to the bounding
-centre. A line labels its midpoint, not its start, where the label would land
+center. A line labels its midpoint, not its start, where the label would land
 on whatever the route begins at.
 
 Shapes get a floating label with no pin; a marker in the middle of a county

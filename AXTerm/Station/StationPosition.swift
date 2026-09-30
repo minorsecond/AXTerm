@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Everything geometric in this app starts here, and the sources are not
 /// remotely equal. Carrying the source alongside the coordinate is what lets
-/// a page say "grid centre, ±4.3 km" instead of implying a survey, and what
+/// a page say "grid center, ±4.3 km" instead of implying a survey, and what
 /// lets a terrain profile decline to answer when the origin is more uncertain
 /// than the path is long.
 nonisolated struct StationPosition: Equatable, Sendable {
@@ -26,7 +26,7 @@ nonisolated struct StationPosition: Equatable, Sendable {
     ///
     /// A doubt does not make the source's figure wrong so much as
     /// meaningless, so it raises the number to something that stops a page
-    /// quoting metres about a post office.
+    /// quoting meters about a post office.
     var accuracyMetres: Double {
         doubts.isEmpty ? source.accuracyMetres : max(source.accuracyMetres, 5_000)
     }
@@ -44,7 +44,7 @@ nonisolated struct StationPosition: Equatable, Sendable {
     /// Whether this is good enough to say anything about a path of this
     /// length.
     ///
-    /// A 6 km path from a grid centre good to 4.3 km is not a path, it is a
+    /// A 6 km path from a grid center good to 4.3 km is not a path, it is a
     /// guess with a chart attached. The threshold is half: beyond that the
     /// error is a large enough fraction that the terrain under it is not the
     /// terrain being flown over.
@@ -73,9 +73,9 @@ nonisolated enum StationPositionResolver {
         var announcedLocator: GreatCircle.Point?
         var licenceAddress: GreatCircle.Point?
         var gridSquare: GreatCircle.Point?
-        /// The licence street line, for spotting a mailbox.
+        /// The license street line, for spotting a mailbox.
         var licenceStreet: String?
-        /// How many other stations share the licence coordinate.
+        /// How many other stations share the license coordinate.
         var sharedWith: Int = 0
 
         init() {}
@@ -96,8 +96,8 @@ nonisolated enum StationPositionResolver {
 
         guard let best = found.min(by: { $0.0 < $1.0 }) else { return nil }
 
-        // Doubts belong to the licence coordinate. A surveyed position is not
-        // a post office because the licence happens to be one.
+        // Doubts belong to the license coordinate. A surveyed position is not
+        // a post office because the license happens to be one.
         var doubts: [PositionQuality.Doubt] = []
         if best.0 == .licenceAddress {
             if PositionQuality.isMailbox(candidates.licenceStreet) {
@@ -122,7 +122,7 @@ extension StationPositionResolver {
     /// time this ladder was written out again it was written slightly
     /// wrong. Twice in one afternoon the `.gps` check below was the thing
     /// omitted, publishing a 7 km grid square to the whole app as a
-    /// twenty-metre fix.
+    /// twenty-meter fix.
     ///
     /// - Parameter deviceLocation: the service's `lastLocation`, passed
     ///   whole. It is *not* always a fix: `currentLocation()` falls back to
@@ -165,8 +165,8 @@ extension StationPositionResolver {
     ///
     /// Both shells install this, so a beacon goes out from the position the
     /// map draws: the exact coordinate when one is set, else this device's
-    /// fix when that is switched on, else the grid centre. It used to
-    /// read the device's last location, or the grid centre when there was
+    /// fix when that is switched on, else the grid center. It used to
+    /// read the device's last location, or the grid center when there was
     /// none, and ignored the exact coordinate altogether. The iOS shell
     /// installed nothing, so there a beacon following the station never went
     /// out at all.

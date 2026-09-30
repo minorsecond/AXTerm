@@ -114,7 +114,7 @@ nonisolated enum TransferProtocolState: Equatable, Sendable {
     /// Transfer failed
     case failed(reason: String)
 
-    /// Transfer cancelled by user or peer
+    /// Transfer canceled by user or peer
     case cancelled
 
     /// Whether the transfer is in a terminal state
@@ -311,7 +311,10 @@ nonisolated enum FileTransferError: Error, LocalizedError, Sendable {
         case .protocolNotSupported:
             return "Transfer protocol not supported by peer"
         case .invalidState(let expected, let actual):
-            return "Invalid state: expected \(expected), got \(actual)"
+            // `actual` is a state enum's case name, and the `cancelled` and
+            // `peerCancelled` case names keep their old spelling in code.
+            let shown = actual.replacingOccurrences(of: "ancelled", with: "anceled")
+            return "Invalid state: expected \(expected), got \(shown)"
         case .transferRejected(let reason):
             return "Transfer rejected: \(reason)"
         case .checksumMismatch:
@@ -321,9 +324,9 @@ nonisolated enum FileTransferError: Error, LocalizedError, Sendable {
         case .maxRetriesExceeded:
             return "Maximum retries exceeded"
         case .cancelled:
-            return "Transfer cancelled"
+            return "Transfer canceled"
         case .peerCancelled:
-            return "Transfer cancelled by peer"
+            return "Transfer canceled by peer"
         case .invalidData(let reason):
             return "Invalid data: \(reason)"
         case .fileTooLarge(let maxSize):

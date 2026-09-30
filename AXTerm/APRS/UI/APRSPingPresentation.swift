@@ -49,7 +49,7 @@ enum APRSPingPresentation {
                     + "not an answer to \(ping.query)."
             }
             // What an answer proves depends entirely on how the question
-            // travelled. A digipeated query may have been repeated twice on
+            // traveled. A digipeated query may have been repeated twice on
             // the way out and the answer twice on the way back, so the two
             // stations can be nowhere near each other; saying "directly"
             // there claims a measurement nobody made.

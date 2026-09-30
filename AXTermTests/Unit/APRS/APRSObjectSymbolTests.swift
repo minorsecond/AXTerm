@@ -4,7 +4,7 @@ import XCTest
 /// What the rest of the channel sees when we place an object.
 ///
 /// The symbol is the only thing most receiving stations will ever render, so
-/// a mislabelled one puts a house where the operator marked a road closure —
+/// a mislabeled one puts a house where the operator marked a road closure —
 /// which is precisely what the first version of this picker did. `/-` is a
 /// House, `/h` is a Hospital and not a shelter, and `\0` is the
 /// IRLP/Echolink circle. All three were caught by transmitting them on the

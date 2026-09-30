@@ -26,7 +26,7 @@ nonisolated struct BBSFileArea: Equatable, Sendable, Identifiable {
     }
 
     /// Area names are typed on a radio link by someone who cannot see the
-    /// screen they are typing into. Case and spaces are not worth honouring.
+    /// screen they are typing into. Case and spaces are not worth honoring.
     static func normalize(_ name: String) -> String {
         name.uppercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
@@ -39,7 +39,7 @@ nonisolated struct BBSFileArea: Equatable, Sendable, Identifiable {
 /// Deliberately holds **no path**. Resolution happens by lookup in the index
 /// (`BBSFileIndex.resolve`), never by joining a caller's input onto a
 /// directory — which is what makes traversal impossible by construction
-/// rather than by sanitising.
+/// rather than by sanitizing.
 nonisolated struct BBSSharedFile: Equatable, Sendable, Identifiable {
     var area: String
     /// Basename as it appears on disk, and as callers type it.
@@ -69,7 +69,7 @@ nonisolated struct BBSSharedFile: Equatable, Sendable, Identifiable {
     ]
 }
 
-/// The catalogue, and every question a caller can ask of it.
+/// The catalog, and every question a caller can ask of it.
 ///
 /// Built by scanning; the shell only ever reads it. That split is what keeps
 /// the safety property checkable: the shell has no filesystem access at all,

@@ -47,7 +47,7 @@ final class StationConnectModeTests: XCTestCase {
             .ax25)
     }
 
-    /// `heardVia` is ordered as the frame travelled *to* us; the way out is the
+    /// `heardVia` is ordered as the frame traveled *to* us; the way out is the
     /// same hops the other way. No difference through one digipeater and every
     /// difference through two.
     func testTheReturnPathIsReversed() {

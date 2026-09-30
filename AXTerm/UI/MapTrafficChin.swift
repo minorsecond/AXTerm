@@ -114,7 +114,7 @@ struct MapTrafficChin: View {
         // bottom-left it sat on top of the legend, which lives in that same
         // corner inside `StationMapView` — expanded the legend poked out above
         // and could still be clicked, but collapsed it was completely covered,
-        // so minimising the legend made it unreachable. Docking the strip
+        // so minimizing the legend made it unreachable. Docking the strip
         // below the map means nothing can hide behind it.
         .overlay(alignment: .top) { Divider() }
         .overlay(alignment: .top) { dragPreview }

@@ -22,7 +22,7 @@ final class CoverageEstimateTests: XCTestCase {
                     unansweredAttempts: 0)
     }
 
-    /// Roughly north of the observer by a chosen number of kilometres.
+    /// Roughly north of the observer by a chosen number of kilometers.
     private func point(kmNorth: Double) -> GreatCircle.Point {
         GreatCircle.Point(latitude: observer.latitude + kmNorth / 111.32,
                           longitude: observer.longitude)
@@ -91,7 +91,7 @@ final class CoverageEstimateTests: XCTestCase {
             positions: ["K0NTS-1": point(kmNorth: 80)], observer: observer))
     }
 
-    /// An inferred path was never actually travelled.
+    /// An inferred path was never actually traveled.
     func testTransitivePathsDoNotCount() {
         let paths = [path(from: "K0EPI-7", to: "COSCO", evidence: .transitive)]
         XCTAssertNil(CoverageEstimate.ring(

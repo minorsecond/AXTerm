@@ -115,7 +115,7 @@ nonisolated struct BBSCallSyncSource: WinlinkSyncSource {
 }
 
 /// What both sources stamp on a record: which device, which mailbox, which
-/// station, where. Read at publish time so a callsign change is honoured
+/// station, where. Read at publish time so a callsign change is honored
 /// without a restart.
 nonisolated struct BBSMailboxStamp: Sendable {
     let deviceID: String

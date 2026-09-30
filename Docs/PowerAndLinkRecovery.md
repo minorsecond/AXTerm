@@ -125,7 +125,7 @@ On `didWakeNotification`:
   would hand the operator an alert about their own lid.
 - `SessionCoordinator.announceAfterWake()` arms one NODES broadcast thirty
   seconds out, reusing the warm-up shot the launch path already had. Our
-  neighbours' routes to this station aged while it was away and the steady
+  neighbors' routes to this station aged while it was away and the steady
   cadence can be an hour. Thirty seconds rather than the launch path's ninety
   because a resumed link reopens with no backoff to serve, but still a delay,
   because a Mac that has just woken has not finished re-associating to Wi-Fi.
@@ -156,7 +156,7 @@ outbound connection is not a port, and left alone it becomes a connection that
 fails forever with a thirty-second delay in it.
 
 A dropped connection has its `stateUpdateHandler` cleared before it is
-cancelled. `cancel()` delivers `.cancelled` asynchronously, and a late report
+canceled. `cancel()` delivers `.cancelled` asynchronously, and a late report
 from a dead connection landing on a live one puts a freshly reopened link back
 to `.disconnected` — which is exactly what a resume after sleep looked like
 before this was fixed.

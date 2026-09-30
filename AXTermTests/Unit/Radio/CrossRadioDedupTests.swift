@@ -25,7 +25,7 @@ final class CrossRadioDedupTests: XCTestCase {
     }
 
     /// The same radio again is not this stage's business: the per-radio
-    /// duplicate tracker decides whether that was an ingestion artefact or a
+    /// duplicate tracker decides whether that was an ingestion artifact or a
     /// retry, and it must keep seeing them.
     func testTheSameRadioAgainIsLeftToTheRetryTracker() {
         var dedup = CrossRadioDedup()

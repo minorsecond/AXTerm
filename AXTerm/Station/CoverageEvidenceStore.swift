@@ -14,7 +14,7 @@ final class CoverageEvidenceStore: ObservableObject {
     @Published private(set) var evidence = CoverageEvidence()
 
     /// Whether a callsign is one this station transmits as. Matched on the
-    /// licence rather than the SSID: a digipeater repeats whichever of our
+    /// license rather than the SSID: a digipeater repeats whichever of our
     /// addresses transmitted.
     var isOurs: ((String) -> Bool)?
 

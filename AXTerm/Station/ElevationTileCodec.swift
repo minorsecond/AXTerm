@@ -11,10 +11,10 @@ import Foundation
 ///     Int16 + deflate         0.93 MB
 ///     Int16 delta + deflate   0.67 MB   (5.9x)
 ///
-/// Metres as `Int16` is not a compromise. The source is quantised to a metre
+/// Meters as `Int16` is not a compromise. The source is quantized to a meter
 /// long before it reaches here, the range covers Denali and Death Valley
 /// several times over, and the profile compares terrain against a Fresnel
-/// zone tens of metres across. Storing a fractional metre was precision the
+/// zone tens of meters across. Storing a fractional meter was precision the
 /// data never had.
 ///
 /// Row-wise deltas are what make it compress: ground next to ground is nearly
@@ -40,7 +40,7 @@ nonisolated enum ElevationTileCodec {
         case wrongSampleCount(expected: Int, got: Int)
     }
 
-    /// Encodes a square grid of metres.
+    /// Encodes a square grid of meters.
     ///
     /// Gaps travel in their own bitmap rather than in the delta stream. A
     /// no-data sample is `Int16.min`, and the step to it from ordinary
@@ -133,7 +133,7 @@ nonisolated enum ElevationTileCodec {
         return (samples, grid)
     }
 
-    /// Metres, rounded, with anything unreadable becoming the no-data
+    /// Meters, rounded, with anything unreadable becoming the no-data
     /// sentinel. NaN in means NaN out, which is the property TerrainProfile
     /// depends on: a gap read as sea level would turn an unknown ridge into a
     /// clear path, the most dangerous possible way to be wrong.

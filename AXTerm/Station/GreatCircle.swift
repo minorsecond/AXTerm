@@ -26,7 +26,7 @@ nonisolated enum GreatCircle {
         }
     }
 
-    /// Haversine distance in kilometres.
+    /// Haversine distance in kilometers.
     static func kilometres(from origin: Point, to destination: Point) -> Double {
         let dLat = radians(destination.latitude - origin.latitude)
         let dLon = radians(destination.longitude - origin.longitude)
@@ -74,14 +74,14 @@ nonisolated enum GreatCircle {
 
 nonisolated extension GreatCircle {
 
-    /// Mean Earth radius in metres, as used for the great-circle maths above.
+    /// Mean Earth radius in meters, as used for the great-circle maths above.
     static let earthRadiusMetres = 6_371_008.8
 
     /// A point a fraction of the way along the great circle from one point to
     /// another.
     ///
     /// Spherical interpolation rather than linear: over a 100 km VHF path the
-    /// two differ by hundreds of metres, and a terrain profile sampled along
+    /// two differ by hundreds of meters, and a terrain profile sampled along
     /// the wrong line is a profile of the wrong ridge.
     static func interpolate(from origin: Point, to destination: Point,
                             fraction: Double) -> Point {

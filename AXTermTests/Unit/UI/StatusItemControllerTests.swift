@@ -66,7 +66,7 @@ final class StatusItemControllerTests: XCTestCase {
             runInMenuBar: false, appIsRunning: false))
     }
 
-    /// The setting is still honoured once there is an app — the guard must
+    /// The setting is still honored once there is an app — the guard must
     /// delay the menu bar item, not suppress it.
     func testTheSettingIsHonouredOnceTheAppIsRunning() {
         XCTAssertTrue(StatusItemController.shouldInsert(

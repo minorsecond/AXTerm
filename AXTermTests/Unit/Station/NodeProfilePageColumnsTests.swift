@@ -58,7 +58,7 @@ final class NodeProfilePageColumnsTests: XCTestCase {
 
     // MARK: - Staying put
 
-    /// Cards arrive late. Terrain is computed off the main thread, a licence
+    /// Cards arrive late. Terrain is computed off the main thread, a license
     /// lookup lands seconds after the page opens, an activity chart grows a
     /// row. Packing tallest-first re-sorted every card against whichever
     /// estimate had just changed, so the page rearranged itself under the

@@ -17,7 +17,7 @@ nonisolated enum LinkDropCause: String, Equatable, Sendable, CaseIterable {
 
 /// Deciding whether a drop belongs to a sleep.
 ///
-/// Split out from the monitor so the judgement can be tested against plain
+/// Split out from the monitor so the judgment can be tested against plain
 /// dates rather than by putting a Mac to sleep.
 nonisolated enum PowerInterruption {
 

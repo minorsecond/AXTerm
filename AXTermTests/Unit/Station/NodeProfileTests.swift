@@ -78,7 +78,7 @@ final class NodeProfileTests: XCTestCase {
 
     func testANeighbourIsMeasuredButNotLabelledANode() {
         let profile = NodeProfile.make(callsign: "AB0VZ", neighbourQuality: 80)
-        // The neighbour table is built by watching traffic, so membership
+        // The neighbor table is built by watching traffic, so membership
         // means "nearby and audible", not "runs NET/ROM". Claiming otherwise
         // put the label on ordinary stations.
         XCTAssertFalse(profile.roles.contains(.netromNode))

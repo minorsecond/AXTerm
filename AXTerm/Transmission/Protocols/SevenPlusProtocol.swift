@@ -170,7 +170,7 @@ nonisolated final class SevenPlusProtocol: FileTransferProtocol, @unchecked Send
         sevenPlusState = .cancelled
         state = .cancelled
         delegate?.transferProtocol(self, stateChanged: state)
-        delegate?.transferProtocol(self, didComplete: false, error: "Cancelled")
+        delegate?.transferProtocol(self, didComplete: false, error: "Canceled")
     }
 
     // MARK: - Receiver Side

@@ -86,7 +86,7 @@ final class XastirOracleTests: XCTestCase {
                            "\(query): Xastir answered \(reply.infoAscii)")
             if let kind = APRSDirectedQuery(rawValue: query) {
                 XCTAssertEqual(kind.isProvable, provable,
-                               "\(query): our catalogue disagrees with Xastir")
+                               "\(query): our catalog disagrees with Xastir")
             }
         }
     }
@@ -156,7 +156,7 @@ final class XastirOracleTests: XCTestCase {
     /// not answer. Xastir accepts them as well-formed and returns nothing —
     /// `?APRSS`, `?APRSO`, `?APRSM` and `?APRSH` are all marked "NOT
     /// IMPLEMENTED YET" in `db.c`, and `?WX?`/`?IGATE?` do not apply to it.
-    /// Silence here is the expected behaviour, not a rig failure.
+    /// Silence here is the expected behavior, not a rig failure.
     func testTheQueriesXastirDoesNotImplement() throws {
         let oracle = try Self.loadOracle()
         for query in ["?APRSS", "?APRSO", "?APRSM", "?APRSH", "?IGATE?", "?WX?"] {
@@ -308,7 +308,7 @@ final class XastirDifferentialTests: XCTestCase {
 
     /// One deliberate divergence, recorded here so it stays deliberate.
     ///
-    /// Xastir recognises `?APRSO` as a legal query and answers nothing —
+    /// Xastir recognizes `?APRSO` as a legal query and answers nothing —
     /// `db.c` marks it `// NOT IMPLEMENTED YET`. We answer it, because it is
     /// APRS 1.01 ch.15 and because placing objects made it a real question:
     /// a station asking what objects we hold should not get the same silence
@@ -328,7 +328,7 @@ final class XastirDifferentialTests: XCTestCase {
                        APRSMessage.messageInfo(to: "ORACLE-1", text: "No objects", number: nil))
     }
 
-    /// Case, again — but as a transmission test rather than a catalogue one.
+    /// Case, again — but as a transmission test rather than a catalog one.
     /// Xastir treats a lowercase query as illegal and stays silent.
     func testALowercaseQueryTransmitsNothing() async throws {
         for query in ["?aprsp", "?ver", "?aprst", "?aprsd"] {
@@ -346,7 +346,7 @@ final class XastirDifferentialTests: XCTestCase {
 ///
 /// A query capture proves we can read what Xastir writes. This proves Xastir
 /// can read what we write: each message below was transmitted in AXTerm's own
-/// wire format and the reply is the reference implementation's acknowledgement
+/// wire format and the reply is the reference implementation's acknowledgment
 /// of it. An `ack` coming back is proof it found the 9-character padded
 /// addressee and the message number exactly where APRS 1.01 ch.14 puts them.
 final class XastirMessageRoundTripTests: XCTestCase {
@@ -379,7 +379,7 @@ final class XastirMessageRoundTripTests: XCTestCase {
     /// Every reply in the capture, from any window.
     ///
     /// Deliberately not per-exchange. Xastir re-sends an ack at +30/+60/+120 s
-    /// (`transmit_message_data_delayed`), so an acknowledgement routinely lands
+    /// (`transmit_message_data_delayed`), so an acknowledgment routinely lands
     /// in a *later* query's listening window than the message that earned it.
     /// The claim being tested is "Xastir acknowledged this message", and an ack
     /// carrying the right number is that, whenever it arrived.
@@ -453,7 +453,7 @@ final class XastirMessageRoundTripTests: XCTestCase {
 /// demodulated by a separate modem with its own DCD and slot timing.
 ///
 /// The point is not that RF works — it is that the *protocol answers are the
-/// same* and only the timing changes. A behaviour that differed between the two
+/// same* and only the timing changes. A behavior that differed between the two
 /// would mean the hub had been lying to every other test in this file.
 final class XastirRFParityTests: XCTestCase {
 

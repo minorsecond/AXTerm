@@ -109,7 +109,7 @@ nonisolated struct TerminalSession: Identifiable, Equatable, Sendable {
     }
 
     /// The far end of the conversation, which on a relay is not who we
-    /// dialled.
+    /// dialed.
     var correspondent: String { relayDestination ?? remote }
 
     var duration: TimeInterval? { endedAt.map { $0.timeIntervalSince(startedAt) } }

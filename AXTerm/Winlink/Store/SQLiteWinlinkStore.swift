@@ -530,7 +530,7 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
     func setCatalogFavorite(inquiryId: String, isFavorite: Bool) throws {
         try dbQueue.write { db in
             if isFavorite {
-                // Re-starring an existing favourite must not move its
+                // Re-starring an existing favorite must not move its
                 // date; `save` would overwrite `addedAt`.
                 try WinlinkCatalogFavoriteRecord(inquiryId: inquiryId, addedAt: Date())
                     .insert(db, onConflict: .ignore)
@@ -814,7 +814,7 @@ extension SQLiteWinlinkStore: WinlinkSyncStore {
         }
     }
 
-    /// Honours another device's deletion.
+    /// Honors another device's deletion.
     ///
     /// The tombstone is recorded whether or not the message is here — a
     /// device that never received it still has to remember the decision, or

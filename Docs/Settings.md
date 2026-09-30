@@ -137,10 +137,10 @@ delay (MobilinkdTNC4.md).
 "Station position" (stored as `APRSPositionConfig.useGPS`) sends the position
 the map draws, from `StationPositionResolver.ownStation`: the exact coordinate
 when one is set, else this device's fix when "This device's location" is on,
-else the centre of the grid square. Both shells install
+else the center of the grid square. Both shells install
 `StationPositionResolver.beaconProvider` as the coordinator's
 `aprsLocationProvider`. It used to read the device's last location or the
-grid centre and ignore the exact coordinate, and the iOS shell installed
+grid center and ignore the exact coordinate, and the iOS shell installed
 nothing, so there such a beacon never went out.
 
 "Fixed position for this radio" sends the radio's own latitude and longitude.

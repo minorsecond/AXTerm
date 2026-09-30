@@ -29,7 +29,7 @@ import XCTest
 /// not own, which nothing else in the suite exercises.
 final class SerialDescriptorOwnershipTests: XCTestCase {
 
-    /// Comfortably past finishOpen's one-second stabilisation sleep.
+    /// Comfortably past finishOpen's one-second stabilization sleep.
     private static let openSettle = Duration.milliseconds(2500)
 
     private var master: Int32 = -1
