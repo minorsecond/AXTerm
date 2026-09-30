@@ -19,14 +19,29 @@ struct SetupFrame<Content: View, Buttons: View>: View {
     @ViewBuilder var content: Content
     @ViewBuilder var buttons: Buttons
 
+    #if os(macOS)
+    /// The content's own height, measured, so the sheet can follow it from
+    /// step to step. A sheet sized once when it opens kept the first step's
+    /// height and clipped the header and buttons of a taller one.
+    @State private var contentHeight: CGFloat = 0
+    #endif
+
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             #if os(macOS)
-            VStack(alignment: .leading, spacing: 16) { content }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) { content }
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(key: SetupContentHeightKey.self, value: proxy.size.height)
+                    })
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(max(contentHeight, 1), SetupSheetResizer.maxContentHeight))
+            .onPreferenceChange(SetupContentHeightKey.self) { contentHeight = $0 }
             #else
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) { content }
@@ -41,7 +56,7 @@ struct SetupFrame<Content: View, Buttons: View>: View {
         #if os(macOS)
         .frame(width: 620)
         .fixedSize(horizontal: false, vertical: true)
-        .presentationSizing(.fitted)
+        .background(SetupSheetResizer(contentHeight: contentHeight))
         #endif
         .animation(.snappy(duration: 0.25), value: current)
     }
@@ -67,6 +82,39 @@ struct SetupFrame<Content: View, Buttons: View>: View {
         .padding(.bottom, 12)
     }
 }
+
+#if os(macOS)
+private struct SetupContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// Resizes the sheet's window to fit its content whenever the content's
+/// height changes, keeping the top edge where it is so the sheet grows
+/// downward from under the title bar.
+struct SetupSheetResizer: NSViewRepresentable {
+    /// Beyond this the content scrolls instead of the sheet growing.
+    static let maxContentHeight: CGFloat = 620
+
+    let contentHeight: CGFloat
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = view.window, let hosting = window.contentView else { return }
+            let fitting = hosting.fittingSize
+            guard fitting.height > 0, abs(window.frame.height - window.frameRect(
+                forContentRect: NSRect(origin: .zero, size: fitting)).height) > 1 else { return }
+            var frame = window.frame
+            let newHeight = window.frameRect(forContentRect: NSRect(origin: .zero, size: fitting)).height
+            frame.origin.y += frame.height - newHeight
+            frame.size.height = newHeight
+            window.setFrame(frame, display: true, animate: true)
+        }
+    }
+}
+#endif
 
 /// The app's mark in the setup header.
 struct SetupGlyph: View {

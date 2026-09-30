@@ -69,7 +69,21 @@ final class StationLocationService: ObservableObject {
            now().timeIntervalSince(held.timestamp) < maxFixAge {
             return held
         }
+        // A second caller joins the request already out. CoreLocation takes
+        // one at a time, so asking again failed with "already in progress",
+        // which is what switching device location on did: Settings and the
+        // main window both asked at once.
+        if let inFlight { return await inFlight.value }
+        let request = Task { await resolve(gpsTimeout: gpsTimeout, maxFixAge: maxFixAge) }
+        inFlight = request
+        let result = await request.value
+        inFlight = nil
+        return result
+    }
 
+    private var inFlight: Task<StationLocation?, Never>?
+
+    private func resolve(gpsTimeout: TimeInterval, maxFixAge: TimeInterval) async -> StationLocation? {
         isResolving = true
         defer { isResolving = false }
 
