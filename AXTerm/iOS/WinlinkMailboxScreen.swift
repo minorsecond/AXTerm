@@ -543,11 +543,6 @@ struct WinlinkMailboxScreen: View {
         }
     }
 
-    /// Creates a draft and opens it.
-    ///
-    /// The draft is saved *before* the editor opens, exactly as on macOS, so
-    /// a compose interrupted by a crash or a task switch is still in Drafts
-    /// rather than lost with the sheet.
     /// Opens compose for a request from outside the mailbox, once.
     private func takeComposeRequest() {
         guard let request = composeRequest else { return }
@@ -560,6 +555,11 @@ struct WinlinkMailboxScreen: View {
         }
     }
 
+    /// Creates a draft and opens it, with `files` attached as it opens.
+    ///
+    /// The draft is saved *before* the editor opens, exactly as on macOS, so
+    /// a compose interrupted by a crash or a task switch is still in Drafts
+    /// rather than lost with the sheet.
     private func composeNew(prefill: WinlinkB2Message? = nil, files: [ComposeIncomingFile] = []) {
         guard let store = context.store else { return }
         let me = myCallsign.isEmpty ? "NOCALL" : myCallsign

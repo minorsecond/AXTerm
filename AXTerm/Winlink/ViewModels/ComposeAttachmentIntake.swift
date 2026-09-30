@@ -181,7 +181,13 @@ nonisolated enum ComposeAttachmentIntake {
         }
         return ([], [])
         #else
-        return await load(UIPasteboard.general.itemProviders)
+        // Copied text is not an attachment; leaving it out here means a
+        // clipboard holding only text reads as "nothing to attach" rather
+        // than as a file that failed.
+        let providers = UIPasteboard.general.itemProviders.filter {
+            route(for: $0.registeredTypeIdentifiers, hasSuggestedName: $0.suggestedName != nil) != .unsupported
+        }
+        return await load(providers)
         #endif
     }
 
