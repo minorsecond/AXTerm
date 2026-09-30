@@ -251,6 +251,52 @@ final class SettingsSidebarPublishTests: XCTestCase {
         }
     }
 
+    /// The awkward states: four radios, one switched off, one whose beacon is
+    /// the other channel's kind, per-radio node aliases showing, and each
+    /// page emptied of radios and filled again.
+    func testTheServicePagesRenderTheirEdgeStates() throws {
+        try preservingRouter {
+            let station = station("SettingsServiceEdges", radios: 4)
+            let settings = station.settings
+            let ids = settings.activeRadios.map(\.id)
+            XCTAssertEqual(ids.count, 4)
+            settings.netRomNodeIdentity = .perRadio
+            for (index, id) in ids.enumerated() {
+                settings.updateRadio(id) {
+                    (index < 2 ? RadioChannel.aprs : .packet).apply(to: &$0)
+                    $0.beacon.enabled = true
+                    $0.announcesNode = true
+                    $0.digi.enabled = index == 3
+                }
+            }
+            settings.updateRadio(ids[1]) { $0.enabled = false }
+            settings.updateRadio(ids[2]) { $0.beacon.kind = .aprsPosition }
+            let pages: [(String, AnyView)] = [
+                ("APRS", AnyView(APRSSettingsView(settings: settings, client: station.client))),
+                ("Packet Node", AnyView(PacketNodeSettingsView(settings: settings, client: station.client))),
+            ]
+            for (name, page) in pages {
+                let window = host(page.environmentObject(SettingsRouter.shared), width: 700, height: 900)
+                spin(0.5)
+                let start = Date()
+                for id in ids { settings.updateRadio(id) { RadioChannel.packet.apply(to: &$0) } }
+                spin(0.3)
+                for id in ids { settings.updateRadio(id) { RadioChannel.aprs.apply(to: &$0) } }
+                spin(0.3)
+                for (index, id) in ids.enumerated() {
+                    settings.updateRadio(id) { (index < 2 ? RadioChannel.aprs : .packet).apply(to: &$0) }
+                }
+                settings.netRomNodeIdentity = .unified
+                spin(0.3)
+                settings.netRomNodeIdentity = .perRadio
+                spin(0.3)
+                XCTAssertEqual(try Self.publishWarnings(since: start), 0,
+                               "the \(name) page published from inside a view update")
+                window.close()
+            }
+        }
+    }
+
     /// "Open in APRS" and "Open in Packet Node" from a radio's page: the
     /// service page takes the section and the radio, so the Radios pane does
     /// not open that radio on a later visit.
