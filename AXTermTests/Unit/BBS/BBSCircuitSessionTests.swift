@@ -12,6 +12,8 @@ final class BBSCircuitSessionTests: XCTestCase {
     private var settings: BBSSettings!
     private var store: SQLiteBBSMessageStore!
     private var coordinator: SessionCoordinator!
+    private var library: BBSFileLibrary!
+    private var root: URL!
 
     override func setUp() async throws {
         let queue = try DatabaseQueue(path: ":memory:")
@@ -23,6 +25,15 @@ final class BBSCircuitSessionTests: XCTestCase {
         settings.onAir = true
         settings.callsign = "K0EPI-2"
 
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bbs-circuit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("Net at 1900\nCheck in by suffix\n".utf8)
+            .write(to: root.appendingPathComponent("netscript.txt"))
+        try Data([0x00, 0x01, 0x02, 0xFF]).write(to: root.appendingPathComponent("logo.bin"))
+        library = BBSFileLibrary(store: store)
+        library.addArea(name: "OPS", about: "Nets", url: root)
+
         coordinator = SessionCoordinator()
         service = BBSService(
             store: store,
@@ -31,7 +42,12 @@ final class BBSCircuitSessionTests: XCTestCase {
             sendFrames: { _ in },
             stationCallsign: { "K0EPI" },
             isWinlinkP2PArmed: { false },
-            winlinkP2PCallsign: { "" })
+            winlinkP2PCallsign: { "" },
+            library: library)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: root)
     }
 
     /// Greets, and skips the first-caller registration interview the
@@ -82,12 +98,46 @@ final class BBSCircuitSessionTests: XCTestCase {
         XCTAssertEqual(stored.first?.from, "W0ARP-1")
     }
 
-    func testFileTransfersAreDeclinedHonestly() throws {
+    func testUploadsAreRefusedWithTheCallsignToConnectTo() throws {
         let session = try openSession(caller: "W0ARP-1")
         let upload = session.handle(line: "U")
-        XCTAssertTrue(upload.lines.joined().contains("not available over a NET/ROM circuit"),
-                      "a transfer protocol owns a byte stream the node host owns here")
+        XCTAssertEqual(upload.lines, [
+            "Uploads need a direct connection: this link carries typed lines only. "
+            + "Connect to K0EPI-2 to send a file."
+        ], "the node host gives the mailbox lines, so no transfer protocol can run here")
         XCTAssertFalse(upload.closed)
+        XCTAssertNotNil(upload.prompt)
+    }
+
+    func testListingsWorkOverACircuit() throws {
+        let session = try openSession(caller: "W0ARP-1")
+        let areas = session.handle(line: "W").lines.joined(separator: "\n")
+        XCTAssertTrue(areas.contains("OPS"), areas)
+        let files = session.handle(line: "W OPS").lines.joined(separator: "\n")
+        XCTAssertTrue(files.contains("netscript.txt"), files)
+        XCTAssertTrue(files.contains("logo.bin"), files)
+        let fresh = session.handle(line: "FN").lines.joined(separator: "\n")
+        XCTAssertFalse(fresh.contains("not available"), fresh)
+    }
+
+    func testATextFileIsTypedOutOverACircuit() throws {
+        let session = try openSession(caller: "W0ARP-1")
+        let reply = session.handle(line: "D netscript.txt")
+        XCTAssertEqual(reply.lines.first, "netscript.txt is text — sending it as text (<1m).")
+        XCTAssertTrue(reply.lines.contains("--- netscript.txt ---"), "\(reply.lines)")
+        XCTAssertTrue(reply.lines.contains("Check in by suffix"), "\(reply.lines)")
+        XCTAssertEqual(reply.lines.last, "--- end of netscript.txt ---")
+        XCTAssertNotNil(reply.prompt)
+    }
+
+    func testABinaryIsRefusedUpFrontWithTheCallsignToConnectTo() throws {
+        let session = try openSession(caller: "W0ARP-1")
+        let reply = session.handle(line: "D logo.bin")
+        XCTAssertEqual(reply.lines, [
+            "logo.bin needs a transfer protocol, and this link carries typed lines only. "
+            + "Connect to K0EPI-2 to download it."
+        ], "refused before any airtime confirmation for a file that cannot be sent")
+        XCTAssertFalse(reply.closed)
     }
 
     func testByeClosesWithoutKillingTheService() throws {

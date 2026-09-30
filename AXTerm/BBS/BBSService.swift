@@ -1316,12 +1316,18 @@ extension BBSService {
     /// One mailbox caller arriving over a NET/ROM circuit instead of an
     /// AX.25 link. Same shell, same store, same effects — but its own
     /// state, because circuits multiplex where the AX.25 listener serves
-    /// one caller at a time. File transfer protocols are declined
-    /// honestly for now: they own a byte stream, and a circuit caller's
-    /// bytes are owned by the node host.
+    /// one caller at a time.
+    ///
+    /// The node host hands this session lines and sends back lines
+    /// (`NodeMailboxSession`), so text is all it can carry. NET/ROM itself
+    /// would carry binary, but no byte stream reaches the mailbox to run a
+    /// transfer protocol on. So text files are typed out as on a direct
+    /// call, listings work unchanged, and binaries and uploads are refused
+    /// by the shell with the callsign to connect to instead.
     // nonisolated class, MainActor methods — see NodeMailboxSession.
     nonisolated final class CircuitSession: NodeMailboxSession {
         private var shell: BBSShell
+        private let caller: String
         // weak, not unowned: an unowned stored property in a FAILABLE
         // init corrupts the heap when the guard returns nil (the
         // partially-initialized object's teardown double-releases it) —
@@ -1332,12 +1338,15 @@ extension BBSService {
         fileprivate init?(service: BBSService, caller: String) {
             guard service.settings.onAir else { return nil }
             self.service = service
+            self.caller = caller
             self.shell = BBSShell(
                 caller: caller,
                 sysop: service.answeringCallsign,
                 banner: service.settings.banner,
                 publishesHeardList: service.settings.publishHeardList,
-                publishesWhitePages: service.settings.publishWhitePages)
+                publishesWhitePages: service.settings.publishWhitePages,
+                bytesPerSecond: service.linkBytesPerSecond(),
+                linesOnlyDirectCall: service.answeringCallsign)
         }
 
         @MainActor
@@ -1359,10 +1368,23 @@ extension BBSService {
                 switch effect {
                 case .store, .kill, .markRead, .learnWhitePages:
                     service.apply(effect)
-                case .viewFile, .sendFile, .beginUpload, .abortTransfer:
-                    output.lines.append(
-                        "File transfers are not available over a NET/ROM "
-                        + "circuit yet — sorry.")
+                case .viewFile(let file):
+                    // Text is what this link carries, so a text file is
+                    // typed out here exactly as it is on a direct call.
+                    if let lines = service.textLines(for: file) {
+                        output.lines.append(contentsOf: lines)
+                        service.append(.note, "\(caller) read \(file.area)/\(file.name) over NET/ROM")
+                    } else {
+                        output.lines.append("\(file.name) could not be read.")
+                    }
+                case .sendFile, .beginUpload:
+                    // The shell refuses these itself in lines-only mode; this
+                    // is the backstop if that ever changes.
+                    output.lines = ["That needs a direct connection to "
+                                    + "\(service.answeringCallsign)."]
+                case .abortTransfer:
+                    // Nothing can be running here; the shell's "Stopped." is true.
+                    break
                 case .disconnect:
                     closed = true
                 }
