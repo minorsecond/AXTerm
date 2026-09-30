@@ -47,6 +47,15 @@ final class ConnectionTransportViewModelModemTests: XCTestCase {
 
     /// Warbler stands in for the IC-705 on port 50100, so the control port
     /// has to be settable; it reaches the session through the profile.
+    /// "localhost" resolves to ::1 first, which the IPv4-pinned session
+    /// sockets can't reach, so the session dials 127.0.0.1 instead.
+    func testLocalhostIsDialedAsIPv4() {
+        XCTAssertEqual(ModemLinkConfig.lanDialHost("localhost"), "127.0.0.1")
+        XCTAssertEqual(ModemLinkConfig.lanDialHost(" LocalHost "), "127.0.0.1")
+        XCTAssertEqual(ModemLinkConfig.lanDialHost("192.168.3.34"), "192.168.3.34")
+        XCTAssertEqual(ModemLinkConfig.lanDialHost("ic705.local"), "ic705.local")
+    }
+
     func testTheLANControlPortReachesTheSessionAndStaysInRange() async {
         let vm = makeViewModel()
         XCTAssertEqual(vm.lanControlPort, 50001, "the radio's own port by default")

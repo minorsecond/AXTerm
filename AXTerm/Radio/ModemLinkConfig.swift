@@ -108,9 +108,21 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
 
     /// The network session's settings, for a Wi-Fi radio.
     var lanConfiguration: IcomLANSession.Configuration {
-        var c = IcomLANSession.Configuration(host: lanHost, username: lanUsername, password: lanPassword)
+        var c = IcomLANSession.Configuration(host: Self.lanDialHost(lanHost), username: lanUsername,
+                                             password: lanPassword)
         c.controlPort = lanControlPort
         return c
+    }
+
+    /// The address the session dials. "localhost" becomes 127.0.0.1: it
+    /// resolves to IPv6 ::1 first, and the session pins its sockets to the
+    /// IPv4 wildcard so the radio can check our session ID against our
+    /// IPv4 source. Pinned that way, a socket can't reach ::1 and the
+    /// program standing in for the radio on this Mac (Warbler) never
+    /// hears it.
+    static func lanDialHost(_ host: String) -> String {
+        let trimmed = host.trimmingCharacters(in: .whitespaces)
+        return trimmed.lowercased() == "localhost" ? "127.0.0.1" : trimmed
     }
 
     var txLevelDBFS: Float { -40 + 40 * Float(max(0, min(100, txAudioLevel))) / 100 }

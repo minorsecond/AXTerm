@@ -260,7 +260,9 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         let base = Self.routedSource(toward: host, port: port)?.base
         if let reservedPort = Self.reserveLocalPort() {
             self.reservedLocalPort = reservedPort
-            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "0.0.0.0",
+            // The wildcard of the destination's family: an IPv4-pinned
+            // socket can't reach an IPv6 address such as ::1.
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: host.contains(":") ? "::" : "0.0.0.0",
                                                                port: NWEndpoint.Port(rawValue: reservedPort)!)
             self.localID = (base ?? UInt32.random(in: 0x1000_0000...0xFFFF_0000)) & 0xFFFF_0000 | UInt32(reservedPort)
         } else if let base {
