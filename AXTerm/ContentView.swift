@@ -334,6 +334,21 @@ struct ContentView: View {
         let coordinator: SessionCoordinator
         if let existing = SessionCoordinator.shared {
             coordinator = existing
+            // This initialiser runs inside AXTermApp's body, which is
+            // evaluated again every time any setting publishes. Assigning
+            // the callsign here unconditionally published `localCallsign`
+            // from inside that view update on every settings edit: 36 of the
+            // 61 warnings logged with the Settings window open on
+            // 2026-09-29. With a window up, the onChange in
+            // presentationLayer keeps the callsign in step; a change made
+            // while no window was open catches up on the next turn of the
+            // run loop, outside the update.
+            if existing.localCallsign != settings.myCallsign {
+                DispatchQueue.main.async { [weak existing, weak settings] in
+                    guard let existing, let settings else { return }
+                    existing.applyLocalCallsign(settings.myCallsign)
+                }
+            }
         } else {
             coordinator = SessionCoordinator()
             // Seed AXDP / transmission adaptive settings from persisted settings
@@ -354,8 +369,8 @@ struct ContentView: View {
             } else {
                 TxLog.adaptiveDisabled()
             }
+            coordinator.localCallsign = settings.myCallsign
         }
-        coordinator.localCallsign = settings.myCallsign
         coordinator.appSettings = settings
         // An APRS position beacon set to "use GPS" reads the last known fix
         // (or the manual grid-square position) at send time.

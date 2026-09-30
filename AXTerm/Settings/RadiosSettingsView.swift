@@ -33,7 +33,9 @@ struct RadiosSettingsView: View {
             RadioDetailView(radioID: only.id, settings: settings, client: client,
                             onAddSecondRadio: { path = [settings.addRadio().id] })
                 .id(only.id)
-                .onAppear { router.pendingRadio = nil }
+                // Only when set: @Published announces every assignment,
+                // including nil over nil.
+                .onAppear { if router.pendingRadio != nil { router.pendingRadio = nil } }
         }
     }
 

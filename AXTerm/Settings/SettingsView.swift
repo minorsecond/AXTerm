@@ -29,6 +29,16 @@ struct SettingsView: View {
     // Inject the router for navigation
     @StateObject var router = SettingsRouter.shared
 
+    /// The sidebar's selection, kept apart from the router's.
+    ///
+    /// The List writes its selection binding from inside a view update, both
+    /// when a row is clicked and when it re-asserts the current row. Bound
+    /// straight to `router.selectedTab` that write was a publish during the
+    /// update: SwiftUI logged "Publishing changes from within view updates"
+    /// three to seven times per click on 2026-09-29. Local state takes the
+    /// write, and the router follows in `onChange`, which runs afterwards.
+    @State private var sidebarSelection: SettingsTab? = SettingsRouter.shared.selectedTab
+
     var body: some View {
         // A sidebar, not a tab strip: eight tabs crammed into a 550-point
         // toolbar read as clutter and hid what the pages had in common.
@@ -36,12 +46,10 @@ struct SettingsView: View {
         // services running on it, and the machinery underneath — in a
         // window the operator can finally resize.
         NavigationSplitView {
-            // Optional-selection binding: the non-optional List selection
+            // Optional selection: the non-optional List selection
             // initialiser is macOS-only, and this file compiles into the
             // iOS target even though the iOS shell composes pages directly.
-            List(selection: Binding<SettingsTab?>(
-                get: { router.selectedTab },
-                set: { if let tab = $0 { router.selectedTab = tab } })) {
+            List(selection: $sidebarSelection) {
                 Section("Station") {
                     sidebarRow(.general)
                     sidebarRow(.notifications)
@@ -77,6 +85,22 @@ struct SettingsView: View {
         } detail: {
             detail
                 .navigationTitle(router.selectedTab.settingsTitle(hasMultipleRadios: settings.hasMultipleRadios))
+        }
+        .onAppear {
+            if sidebarSelection != router.selectedTab { sidebarSelection = router.selectedTab }
+        }
+        .onChange(of: sidebarSelection) { _, tab in
+            // A click in empty sidebar space deselects; keep the page and
+            // put its row back.
+            guard let tab else {
+                sidebarSelection = router.selectedTab
+                return
+            }
+            if tab != router.selectedTab { router.selectedTab = tab }
+        }
+        .onChange(of: router.selectedTab) { _, tab in
+            // Deep links move the router; the sidebar follows.
+            if sidebarSelection != tab { sidebarSelection = tab }
         }
         .environmentObject(router) // Provide router to all tabs
         .frame(minWidth: 760, idealWidth: 800, minHeight: 560, idealHeight: 660)
