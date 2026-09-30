@@ -123,7 +123,8 @@ that decision for them.
 listen callsign (Settings → Winlink and Settings → BBS), and with different
 SSIDs both run at once. They collide only when *both* answer the address that
 was dialed — which happens when a listen callsign is left empty and falls back
-to the station callsign the other one also uses. Then nothing can tell what
+to the primary radio's callsign (the station's base call with that radio's
+SSID) the other one also uses. Then nothing can tell what
 the caller wanted, because the answering station speaks first in both
 protocols. The refusal names the fix:
 

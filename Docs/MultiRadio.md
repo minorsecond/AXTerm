@@ -29,7 +29,8 @@ A **radio** is one TNC port on one link, operating under a callsign.
   `kissTransportType` scalar always spelled them), every transport's fields
   at once (switching TCP → serial → TCP keeps the host, as the Connection
   pane always did), Mobilinkd settings, TNC capabilities, and the fields the
-  later layers act on: `kissPort`, `callsign` (empty = station callsign),
+  later layers act on: `kissPort`, `callsign` (empty = the station's base
+  callsign with no SSID; see "Station callsign and SSIDs" below),
   `enabled`, `autoConnect`, `frequencyHz`, `archived`. Every field but the id
   decodes with a default, so a profile written by an older build loads
   under a newer one.
@@ -80,11 +81,12 @@ same one. The Radios list says so under the rows.
 `AppSettingsStore.hasMultipleRadios`.
 
 **One radio**: the tab is called **Connection**, carries the cable icon, and
-shows that radio's form directly — the same segmented transport picker, the
-same per-transport content, the same link status and TNC identification the
-Connection pane always had. No list, no back button, no name to edit, no
-Remove. The only new thing is a quiet **"Add a second radio…"** row at the
-bottom. Nothing says "radios" until the operator has two.
+shows that radio's form directly: its Identity section (the SSID picker) at
+the top, then the same segmented transport picker, the same per-transport
+content, the same link status and TNC identification the Connection pane
+always had. No list, no back button, no name to edit, no Remove. The only
+other new thing is a quiet **"Add a second radio…"** row at the bottom.
+Nothing says "radios" until the operator has two.
 
 **Several radios**: the tab becomes **Radios**, and shows a list — status
 dot, name, callsign · endpoint, drag to reorder, "Add Radio…" — with a form
@@ -93,10 +95,10 @@ Remove (refused for the last radio: a station needs one). Deep links
 (`SettingsRouter.navigate(to: .radios, radio:)`) land on the named radio's
 form with the list beneath for the back button.
 
-The form shows **only controls the code acts on**. The per-radio callsign,
-KISS port and auto-connect are in the profile and appear as the layers that
-give them effect land. A switch that changes nothing teaches the operator to
-stop trusting switches.
+The form shows **only controls the code acts on**. The KISS port and
+auto-connect are in the profile and appear as the layers that give them
+effect land. A switch that changes nothing teaches the operator to stop
+trusting switches.
 
 On iOS the same two faces sit behind the More screen's row, which is likewise
 "Connection" or "Radios" (`SettingsDestination.radios` / `.radio(id)`).
@@ -145,37 +147,106 @@ The session layer's dimension is the radio: `SessionKey.radio` (was
 through, with `.primary` as the default so callers that predate radios still
 compile. One peer heard on two radios is two sessions.
 
+## Station callsign and SSIDs
+
+The callsign under Settings › General (`AppSettingsStore.myCallsign`) is the
+licence call alone: K0EPI, never K0EPI-5. The SSID belongs to a radio. With
+several radios an SSID on the station callsign could only be right for one of
+them, and with one radio it was a second place to set the same thing.
+
+- **The General field refuses an SSID.** The setter keeps the part before
+  the hyphen (`StationCallsignRules.base`). While the operator is typing, the
+  field keeps what they typed and says under it that only the base is kept
+  and where the SSID goes (`StationCallsignRules.ssidGuidance`): with one
+  radio, "pick 5 under Identity on the Connection page"; with several, the
+  radio's page under Radios.
+- **Every radio has an Identity section**, a single radio included. It is an
+  SSID picker under the station's base call, annotated from
+  `SSIDConvention.detail`, plus "Another callsign…" for a club or tactical
+  call. Choosing an SSID writes the whole callsign into
+  `RadioProfile.callsign` (K0EPI-5), so the stored shape is unchanged. With
+  one radio the section is the first thing on the Connection page; with
+  several it is on the radio's On the Air page
+  (`RadioDetailView.showsIdentity`).
+- **Radios follow a corrected base.** Changing the station callsign moves
+  every radio set to an SSID under the old base onto the new one, SSID kept
+  (`StationCallsignRules.rebase`). A club or tactical callsign is left
+  alone, and an inheriting radio follows by itself. Clearing the field and
+  typing again rebases from the last base that was not empty.
+- **Migration.** Older builds stored the station callsign as it went on the
+  air, SSID and all, and every radio without a callsign inherited it. On
+  load (`AppSettingsStore.init`, `StationCallsignRules.splitStoredStation`)
+  a stored SSID moves onto every radio whose callsign is empty (K0EPI-5 on
+  each), and the station keeps the base. Radios with a callsign of their own
+  keep it. SSID 0 is no suffix, so those radios stay empty. A suffix that is
+  not an SSID is copied onto the radios as it was. Both keys are written
+  back, and a bare station callsign is left alone, so it runs every launch
+  and does something at most once. Nothing changes on the air.
+- **`--callsign TEST-2`** under `--test-mode` goes through the same rule
+  (`AppSettingsStore.adoptStationCallsign`): base to the station, SSID to the
+  radios, applied again after `--radios` replaces the list.
+- Identity sync between devices carries only the base; each device's SSIDs
+  stay on its radios.
+
+### Which callsign a reader wants
+
+- `onAirCallsign(for: radio)` is what a frame from that radio carries:
+  `RadioProfile.resolvedCallsign(station:)`. Nil or an unknown radio means
+  the primary radio.
+- `primaryCallsign` is the primary radio's address. It stands in wherever
+  something is not tied to one radio: the session manager's fallback
+  address, the unified NET/ROM node, the NET/ROM inference's "local", the
+  terminal's source call, what an empty mailbox or Winlink P2P callsign
+  answers as, and link statistics on a station page. After the migration it
+  equals what older builds called the station callsign, so a single-radio
+  station reads exactly as before.
+- `onAirCallsigns` is every address an enabled radio transmits as, for
+  "is this frame ours" questions: collision detection, APRS "addressed to
+  us", digipeated echoes, the map's own-station set, a ROUTES table listing
+  us. The bare base is in it only when a radio actually operates under it.
+- `myCallsign`, the base, is for identity: highlighting our own node in the
+  graph, mail and mention notifications, the licence region, Winlink
+  accounts and message addresses, and the "set your callsign" gate.
+
 ## Per-radio callsigns
 
 Each radio operates as an address: its own callsign+SSID if the operator gave
-it one (`RadioProfile.callsign`), else the station callsign. Two radios on
+it one (`RadioProfile.callsign`), else the station's base call. Two radios on
 one licence are two stations on the air — an HF and a VHF station, say —
 and a remote station may need to reach one in particular.
 
-- `AX25SessionManager.localAddresses` holds the addresses that differ from
-  the station callsign; `localAddress(for:)` answers for every radio.
-  Outbound sessions open under the radio's address, `answers` accepts every
-  radio's address, and the DM for a stranger's poll comes from the address
-  of the radio that heard it. `setLocalAddresses` ends the sessions of a
-  radio whose address changed — a session is bound to the address it
-  opened under — and no others.
-- `SessionCoordinator` watches the radio list and the station callsign
-  through `appSettings` and keeps the manager's addresses current. It also
-  keeps `radioOwners`: for each address exactly one radio operates as, that
-  radio. The station callsign, shared by every radio without its own, is
-  deliberately not owned.
+- `AX25SessionManager.localCallsign` is the primary radio's address, and
+  `localAddresses` holds the addresses that differ from it;
+  `localAddress(for:)` answers for every radio. Outbound sessions open under
+  the radio's address, `answers` accepts every radio's address and never the
+  bare base unless a radio uses it, and the DM for a stranger's poll, the
+  DM refusing a SABME or a DISC with no session, and an XID answer come from
+  the address of the radio that heard the frame. `setLocalAddresses` ends
+  the sessions of a radio whose address changed — a session is bound to the
+  address it opened under — and no others.
+- `SessionCoordinator` watches the radio list through `appSettings`, sets
+  `localCallsign` to the primary radio's address when that changes, and
+  keeps the manager's addresses current. It also keeps `radioOwners`: for
+  each address exactly one radio operates as, that radio. The primary
+  radio's address is deliberately not owned, as the station callsign was
+  when radios inherited it.
+- AXDP capability frames sent as UI frames leave on a radio and carry that
+  radio's address (`SessionCoordinator.uiOrigin`): the radio a PING arrived
+  on, else the radio of the session with the peer, else the primary.
+- APRS messages are stored with the address of the radio `sendAPRS` will
+  pick (`SessionCoordinator.aprsCallsign`), and a terminal datagram leaves
+  on the picker's radio under that radio's address.
 - **The owner rule.** A frame addressed to an address one radio owns runs
   on that radio and is answered by it, whichever link heard it: two radios
   on one frequency both hear the call, and the one it was for replies. A
   frame to a shared address runs on the radio that heard it. Pinned end to
   end in `TwoRadioSessionTraceTests`.
 - The digipeater repeats frames addressed to the hearing radio's callsign
-  as well as the station's.
+  (its resolved address) and its aliases. The bare base is not its callsign
+  unless the radio operates under it.
 
-The Identity section of a radio's form appears only when there is another
-radio to differ from; with one radio the station callsign under General is
-the whole story. The Radios list flags two enabled radios answering as one
-address — legal on different frequencies, a collision on the same one.
+The Radios list flags two enabled radios answering as one address — legal on
+different frequencies, a collision on the same one.
 
 ## Two radios on one frequency
 
@@ -196,8 +267,9 @@ world must not double for either.
   is rightly two packets. Off with one radio.
 - **Own echo.** Our transmission on one radio is heard by the other.
   `StationIdentityMonitor.classifyReceived` judges a received frame from any
-  address this station operates as — the station callsign and every radio's
-  own — as `.foreign`, `.ownEcho` (a frame we sent, heard straight back) or
+  address an enabled radio transmits as (`AppSettingsStore.onAirCallsigns`;
+  the bare base only when a radio uses it) — as `.foreign`, `.ownEcho` (a
+  frame we sent, heard straight back) or
   `.collision`. An echo is logged (`Packet.isOwnEcho`) so the operator can
   see the radios share a channel, but it is counted for no station, fed to
   no route inference and observed as no network path; its airtime was
@@ -446,11 +518,11 @@ path rules were read out of its source rather than guessed:
 
 **NODES and the node identity.** `netRomNodeIdentity` is operator-selectable:
 
-- `unified` (default, BPQ's NODECALL over several PORTCALLs): the station
-  callsign and alias are the node. Every announcing radio sends the same
-  payload under its own L2 callsign, and a connect request for the node is
-  accepted on any radio. The console reads "Announced this station as
-  EPINOD on 2 radios."
+- `unified` (default, BPQ's NODECALL over several PORTCALLs): the primary
+  radio's callsign and the station alias are the node. Every announcing
+  radio sends the same payload under its own L2 callsign, and a connect
+  request for the node is accepted on any radio. The console reads
+  "Announced this station as EPINOD on 2 radios."
 - `perRadio`: each radio's callsign is its own node with its own alias
   (`RadioProfile.netRomAlias`, falling back to the station alias). The
   endpoint answers as the node that was called

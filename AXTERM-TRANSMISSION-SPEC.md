@@ -276,6 +276,13 @@ AX.25 address field includes:
 **Rules**
 - Provide a path editor with presets and a “safe default” (empty path on local, or a minimal digi path where appropriate).
 - Validate call signs & SSIDs.
+- The source address is the address of the radio the frame leaves on:
+  `AX25SessionManager.localAddress(for:)`, which is
+  `RadioProfile.resolvedCallsign(station:)`. The station callsign under
+  Settings › General is the base call with no SSID, and a frame carries it
+  only when a radio operates under it. Traffic tied to no radio leaves on the
+  primary radio under the primary radio's address. See `Docs/MultiRadio.md`,
+  "Station callsign and SSIDs".
 - Normalize case for display; encode per AX.25 rules (shifted ASCII in address field).
 - On receive, a frame whose addresses break those rules (bit 0 set in a callsign byte, anything but A-Z/0-9 with trailing spaces, an address field that never ends) is refused and logged, never shown as a station. See `Docs/AX25Decoding.md`.
 1) Use routes data to power Suggestions
