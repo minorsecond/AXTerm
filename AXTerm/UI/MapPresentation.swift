@@ -171,10 +171,11 @@ struct MapLegend: View {
     /// True when coverage rings are on the map, so the legend explains
     /// what each ring means without the operator having to find the chip.
     var showsCoverage = false
-    /// Which coverage rings are on the map. With both drawn the legend has to
-    /// name each one's evidence and colour, or the two purple circles are
-    /// unexplained.
-    var coverageEvidence: [CoverageEstimate.Evidence] = [.answered]
+    /// Which coverage rings are on the map. With several drawn the legend has
+    /// to name each one's evidence, family and colour, or the circles are
+    /// unexplained. Rings rather than bare evidence, because two receive
+    /// rings share an evidence kind and only their family tells them apart.
+    var coverageRings: [CoverageEstimate.Ring] = []
 
     /// What each ring measured, for the legend's tooltip.
     private func coverageLegendHelp(_ evidence: CoverageEstimate.Evidence) -> String {
@@ -350,11 +351,12 @@ struct MapLegend: View {
 
             if showsCoverage {
                 Divider().padding(.vertical, 1)
-                ForEach(coverageEvidence, id: \.self) { evidence in
+                ForEach(coverageRings, id: \.legendID) { ring in
+                    let evidence = ring.evidence
                     let tint = evidence.ringColor
-                    let qualifier = coverageEvidence.count > 1
-                        ? " (" + evidence.ringLabel.lowercased() + ")"
-                        : ""
+                    let qualifier = CoverageRingSelection
+                        .legendQualifier(for: ring, among: coverageRings)
+                        .map { " (" + $0 + ")" } ?? ""
                     HStack(spacing: 6) {
                         Circle()
                             .strokeBorder(tint.opacity(0.8), lineWidth: 1.5)
@@ -373,7 +375,9 @@ struct MapLegend: View {
                             .font(.caption)
                         Spacer(minLength: 0)
                     }
-                    .help("The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach \u{2014} not a promise, and not a propagation model. Terrain will bend both rings.")
+                    .help(evidence.isTransmit
+                          ? "The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach \u{2014} not a promise, and not a propagation model. Terrain will bend both rings."
+                          : "The dashed outer ring: the most distant station you decoded with no digipeater in the path in the last two weeks. How far you have actually heard \u{2014} not a promise, and not a propagation model. Terrain will bend both rings.")
                 }
             }
 

@@ -129,7 +129,7 @@ struct StationMapView: View {
             if !legendGivesWayToSelection {
                 MapLegend(kind: legend, overDarkBasemap: store == nil && basemap.isDark,
                           showsCoverage: !coverageRings.isEmpty,
-                          coverageEvidence: coverageRings.map(\.evidence),
+                          coverageRings: coverageRings,
                           showsNodes: hasNodeSites,
                           showsPositionSource: !aprsSymbols.isEmpty)
                     .padding(10)
@@ -212,7 +212,7 @@ struct StationMapView: View {
             if !legendGivesWayToSelection {
                 MapLegend(kind: legend, overDarkBasemap: basemap.isDark,
                           showsCoverage: !coverageRings.isEmpty,
-                          coverageEvidence: coverageRings.map(\.evidence),
+                          coverageRings: coverageRings,
                           showsNodes: hasNodeSites,
                           showsPositionSource: !aprsSymbols.isEmpty)
                     .padding(10)
@@ -274,7 +274,7 @@ struct StationMapView: View {
         // would name two different measurements, so each says which evidence
         // it came from as soon as there is more than one.
         VStack(alignment: .trailing, spacing: 4) {
-            ForEach(Array(coverageRings.enumerated()), id: \.offset) { _, ring in
+            ForEach(coverageRings, id: \.legendID) { ring in
                 Label(coverageChipText(ring), systemImage: "dot.radiowaves.left.and.right")
                     .font(.caption)
                     .padding(.horizontal, 8)
@@ -289,8 +289,7 @@ struct StationMapView: View {
 
     private func coverageChipText(_ ring: CoverageEstimate.Ring) -> String {
         let reach = DistanceDisplay.string(kilometres: ring.reachKm, inMiles: distanceInMiles)
-        guard coverageRings.count > 1 else { return "Coverage ~" + reach }
-        return ring.evidence.ringLabel + " ~" + reach
+        return CoverageRingSelection.chipLabel(for: ring, among: coverageRings) + " ~" + reach
     }
 
     /// What the camera frames: the observer and the *heard* stations.

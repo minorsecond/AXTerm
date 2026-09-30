@@ -22,6 +22,10 @@ nonisolated struct MapCoverageEvidence: Equatable, Sendable {
 
     init() {}
 
+    /// - Parameter families: what each radio carries for the map, from
+    ///   `RadioTrafficClassifier.mapFamilies`. A radio listed under both
+    ///   families gives both receive sets the same stations, which is why an
+    ///   APRS-channel radio is held to APRS before it gets here.
     init(_ evidence: CoverageEvidence, families: [RadioID: Set<RadioTrafficFamily>]) {
         func radios(carrying family: RadioTrafficFamily) -> Set<RadioID> {
             Set(families.filter { $0.value.contains(family) }.keys)

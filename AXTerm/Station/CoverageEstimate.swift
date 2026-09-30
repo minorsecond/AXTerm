@@ -71,6 +71,17 @@ nonisolated enum CoverageEstimate {
         var stationCount: Int
         var farthestCallsign: String
         var evidence: Evidence = .answered
+        /// Which radios' evidence the ring was built from, APRS or packet.
+        /// Nil when it stands for both, which is what a receive ring becomes
+        /// when the two families' evidence turned out to be the same.
+        var family: RadioTrafficFamily? = nil
+
+        /// The same measurement, whichever family it was filed under.
+        func measuresSame(as other: Ring) -> Bool {
+            evidence == other.evidence && typicalKm == other.typicalKm
+                && reachKm == other.reachKm && stationCount == other.stationCount
+                && farthestCallsign == other.farthestCallsign
+        }
 
         /// Tooltip prose: what the rings mean and where they came from.
         var summary: String { summary(inMiles: true) }
@@ -105,14 +116,22 @@ nonisolated enum CoverageEstimate {
             case .digipeated: farthestLabel = "repeat"
             case .heardDirect: farthestLabel = "decode"
             }
+            // Which radios, when that is what sets it apart from a ring
+            // beside it measuring the same thing on the other family.
+            let radios: String
+            switch (evidence, family) {
+            case (.heardDirect, .aprs?): radios = " Counted on the radios carrying APRS."
+            case (.heardDirect, .ax25?): radios = " Counted on the radios carrying packet traffic."
+            default: radios = ""
+            }
             return String(
                 format: "%@, %@. Inner ring: half of them are within %@. "
                 + "Outer ring: the farthest %@ came from %@ at %@. Measurements, not a "
-                + "propagation model \u{2014} terrain will bend both.",
+                + "propagation model \u{2014} terrain will bend both.%@",
                 evidence.isTransmit ? "Estimated coverage" : "Estimated receive range",
                 source, typical,
                 farthestLabel,
-                farthestCallsign, reach)
+                farthestCallsign, reach, radios)
         }
     }
 
@@ -165,7 +184,9 @@ nonisolated enum CoverageEstimate {
             typicalKm: median,
             reachKm: farthest.km,
             stationCount: sorted.count,
-            farthestCallsign: farthest.callsign)
+            farthestCallsign: farthest.callsign,
+            // Answers to our frames only come from connected mode.
+            family: .ax25)
     }
 
     /// Coverage from APRS evidence: who put our own frames back on the air.
@@ -189,7 +210,7 @@ nonisolated enum CoverageEstimate {
                              positions: [String: GreatCircle.Point],
                              observer: GreatCircle.Point,
                              now: Date = Date()) -> Ring? {
-        ring(from: repeaters, evidence: .digipeated, positions: positions,
+        ring(from: repeaters, evidence: .digipeated, family: .aprs, positions: positions,
              observer: observer, now: now)
     }
 
@@ -199,17 +220,22 @@ nonisolated enum CoverageEstimate {
     /// The other direction entirely, and it is the one that fills in fastest,
     /// because every station on the channel contributes to it whether or not
     /// it has ever heard us.
+    ///
+    /// - Parameter family: whose radios `heardDirect` was collected on, so
+    ///   the ring can say so when both families have one.
     static func receiveRing(heardDirect: [String: Date],
+                            family: RadioTrafficFamily? = nil,
                             positions: [String: GreatCircle.Point],
                             observer: GreatCircle.Point,
                             now: Date = Date()) -> Ring? {
-        ring(from: heardDirect, evidence: .heardDirect, positions: positions,
+        ring(from: heardDirect, evidence: .heardDirect, family: family, positions: positions,
              observer: observer, now: now)
     }
 
     /// Shared arithmetic for the rings built from "who, and when last".
     private static func ring(from sightings: [String: Date],
                              evidence: Evidence,
+                             family: RadioTrafficFamily?,
                              positions: [String: GreatCircle.Point],
                              observer: GreatCircle.Point,
                              now: Date) -> Ring? {
@@ -229,7 +255,8 @@ nonisolated enum CoverageEstimate {
             reachKm: farthest.km,
             stationCount: sorted.count,
             farthestCallsign: farthest.callsign,
-            evidence: evidence)
+            evidence: evidence,
+            family: family)
     }
 }
 
@@ -258,7 +285,77 @@ nonisolated enum CoverageRingSelection {
         if showsDigipeated, let digipeated { rings.append(digipeated) }
         // The receive rings last, so a transmit ring keeps its colour and its
         // place whatever the other direction is doing.
-        if showsReceived { rings.append(contentsOf: received) }
+        if showsReceived { rings.append(contentsOf: deduplicated(received)) }
         return rings
     }
+
+    /// One ring per measurement.
+    ///
+    /// A radio that carries both families hands the same heard-direct
+    /// stations to both receive rings, and the map drew two identical teal
+    /// circles with two identical "Hearing ~23 mi" chips. When two rings
+    /// measure the same thing only the first is kept, and it stops claiming
+    /// a family, because it now stands for both.
+    static func deduplicated(_ rings: [CoverageEstimate.Ring]) -> [CoverageEstimate.Ring] {
+        var kept: [CoverageEstimate.Ring] = []
+        for ring in rings {
+            if let index = kept.firstIndex(where: { $0.measuresSame(as: ring) }) {
+                if kept[index].family != ring.family { kept[index].family = nil }
+            } else {
+                kept.append(ring)
+            }
+        }
+        return kept
+    }
+
+    // MARK: - Names
+
+    /// Whether the rings on the map come from both families, so each has to
+    /// say which radios it was measured on.
+    private static func mixesFamilies(_ rings: [CoverageEstimate.Ring]) -> Bool {
+        Set(rings.compactMap(\.family)).count > 1
+    }
+
+    /// The name on a ring's chip, before its distance.
+    ///
+    /// "Coverage" while there is one ring. With several, the evidence it was
+    /// built from ("Repeated", "Hearing"), and with rings from both families
+    /// on the map the family in front of that: "APRS hearing" beside
+    /// "Packet hearing" rather than "Hearing" twice.
+    static func chipLabel(for ring: CoverageEstimate.Ring,
+                          among rings: [CoverageEstimate.Ring]) -> String {
+        guard rings.count > 1 else { return "Coverage" }
+        let evidence = ring.evidence.ringLabel
+        guard mixesFamilies(rings), let family = ring.family else { return evidence }
+        return family.coverageName + " " + evidence.lowercased()
+    }
+
+    /// What the legend adds after "Typical hearing" or "Farthest proof" so
+    /// that two entries never read the same. The legend's own words already
+    /// give the direction, so this carries only what they leave out: the
+    /// family when both are drawn, and which proof when two transmit rings
+    /// are. Nil when nothing needs adding.
+    static func legendQualifier(for ring: CoverageEstimate.Ring,
+                                among rings: [CoverageEstimate.Ring]) -> String? {
+        guard rings.count > 1 else { return nil }
+        var parts: [String] = []
+        if mixesFamilies(rings), let family = ring.family {
+            parts.append(family.coverageName)
+        }
+        if ring.evidence.isTransmit, rings.filter(\.evidence.isTransmit).count > 1 {
+            parts.append(ring.evidence.ringLabel.lowercased())
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    /// A stable identity for a ring, for the views that list them. Evidence
+    /// alone is not unique once two receive rings can be drawn.
+    static func id(for ring: CoverageEstimate.Ring) -> String {
+        "\(ring.evidence)|\(ring.family?.rawValue ?? "both")"
+    }
+}
+
+nonisolated extension CoverageEstimate.Ring {
+    /// See `CoverageRingSelection.id(for:)`.
+    var legendID: String { CoverageRingSelection.id(for: self) }
 }

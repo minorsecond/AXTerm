@@ -26,6 +26,16 @@ nonisolated enum RadioTrafficFamily: String, CaseIterable, Sendable, Hashable {
         }
     }
 
+    /// The family's name on a coverage ring and its layer switch. "Packet"
+    /// rather than "AX.25": APRS is AX.25 too, and the ring is about the
+    /// packet network, not the frame format.
+    var coverageName: String {
+        switch self {
+        case .aprs: return "APRS"
+        case .ax25: return "Packet"
+        }
+    }
+
     var help: String {
         switch self {
         case .aprs:
@@ -60,6 +70,47 @@ nonisolated enum RadioTrafficClassifier {
             }
         }
         return result
+    }
+
+    /// Families per radio as the map should use them: the heard evidence,
+    /// narrowed by what the operator has said a radio is for.
+    ///
+    /// A radio marked as on an APRS channel counts as APRS and nothing else.
+    /// Packet services are locked off there, so it never opens a session and
+    /// can never collect the answers the packet coverage ring is built from,
+    /// and its "heard direct" stations are the same set the APRS ring already
+    /// draws. Letting it carry AX.25 as well only ever produced a second copy
+    /// of the APRS receive ring under a packet label. On 2026-09-30 a single
+    /// corrupt frame on a TNC4 (garbage addresses, decoded as an I frame) was
+    /// enough to do that.
+    ///
+    /// The radio gets APRS even before anything has been heard on it: the
+    /// operator has already said what the channel is, which is better
+    /// evidence than silence.
+    static func mapFamilies(heard: [RadioID: Set<RadioTrafficFamily>],
+                            aprsChannels: Set<RadioID>) -> [RadioID: Set<RadioTrafficFamily>] {
+        var result = heard
+        for radio in aprsChannels { result[radio] = [.aprs] }
+        return result
+    }
+
+    /// Whether a frame's addresses could have come from a real station.
+    ///
+    /// AX.25 addresses are upper-case letters and digits, one to six of them.
+    /// A frame whose CRC passed by luck, or a TNC reply mistaken for data,
+    /// decodes to punctuation in the address field, and its control byte is
+    /// just as random, so it should not stand as proof that a radio is on a
+    /// connected-mode channel.
+    static func hasWellFormedAddresses(from: String?, to: String?) -> Bool {
+        guard let from, let to else { return false }
+        return isWellFormedCall(from) && isWellFormedCall(to)
+    }
+
+    private static func isWellFormedCall(_ call: String) -> Bool {
+        guard (1...6).contains(call.count) else { return false }
+        return call.unicodeScalars.allSatisfy {
+            ("A"..."Z").contains($0) || ("0"..."9").contains($0)
+        }
     }
 
     /// The radios that carry `family`, among `visible`.

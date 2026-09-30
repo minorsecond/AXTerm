@@ -35,13 +35,13 @@ nonisolated enum MapLayerCatalog {
                  family: .aprs),
         MapLayer(title: "Weather Field", storageKey: "stations.showsWeatherField",
                  family: .aprs),
-        MapLayer(title: "Coverage Rings", storageKey: "stations.showsAPRSCoverageRing",
+        MapLayer(title: "APRS Coverage Rings", storageKey: "stations.showsAPRSCoverageRing",
                  family: .aprs),
         MapLayer(title: "Objects & Hazards", storageKey: "stations.showsObjects",
                  family: .aprs),
 
         // AX.25: what a connected-mode network draws.
-        MapLayer(title: "Coverage Rings", storageKey: "stations.showsCoverageRing",
+        MapLayer(title: "Packet Coverage Rings", storageKey: "stations.showsCoverageRing",
                  family: .ax25),
         MapLayer(title: "Observed Paths", storageKey: "stations.showsPaths",
                  family: .ax25),

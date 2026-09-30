@@ -539,7 +539,89 @@ nonisolated enum HeardStationMap {
         return now.timeIntervalSince(lastHeard) > staleWindow
     }
 
-    static func detail(for entry: Entry, observer: GreatCircle.Point, now: Date,
+    // MARK: - Our own station
+
+    /// How close a sibling SSID has to be to our own position to count as
+    /// this station rather than another radio. Our own beacon heard back
+    /// carries the fix we sent, a few metres from the observer at most; the
+    /// operator's HT (K0EPI-4, below) was ninety yards from the desk and is
+    /// a separate station.
+    static let ownStationRadiusMetres = 50.0
+
+    /// Heard entries with this station taken out.
+    ///
+    /// `entries(excluding:)` drops the exact addresses this station operates
+    /// as, which is right for sibling SSIDs that are other radios. It missed
+    /// our own beacon heard back under an address we no longer use: K0EPI
+    /// beaconed as SSID 0 before the SSID was set to -5, a digipeater
+    /// repeated it, and the repeat became a heard station drawn on top of
+    /// the K0EPI-5 marker. The rules:
+    ///
+    /// - any address in `ownAddresses` goes, which the caller fills with
+    ///   every address we have transmitted as, old SSIDs included;
+    /// - a sibling SSID of one of our own callsigns goes when it is placed
+    ///   within `ownStationRadiusMetres` of us, because a marker there is
+    ///   our own marker a second time whatever SSID it wears;
+    /// - a node alias operated under one of our callsigns goes, since it is
+    ///   our own node placed at our own licence address.
+    ///
+    /// A sibling farther away (a mobile K0EPI-9 across town) stays: it is
+    /// another radio, and APRS treats it as another station.
+    static func withoutOwnStation(_ entries: [Entry],
+                                  ownAddresses: Set<String>,
+                                  observer: GreatCircle.Point?) -> [Entry] {
+        let own = Set(ownAddresses.map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
+            .filter { !$0.isEmpty })
+        guard !own.isEmpty else { return entries }
+        let ownBases = Set(own.map(CallsignQuery.normalize))
+        return entries.filter { entry in
+            let call = entry.callsign.uppercased()
+            if own.contains(call) { return false }
+            // Our own node alias in somebody's via path is this station too,
+            // placed at our own licence address.
+            if entry.isNodeAlias {
+                guard let operatorCall = entry.nodeCallsign else { return true }
+                return !ownBases.contains(CallsignQuery.normalize(operatorCall))
+            }
+            guard ownBases.contains(CallsignQuery.normalize(call)),
+                  let observer, let position = entry.position else { return true }
+            return GreatCircle.kilometres(from: observer, to: position) * 1000
+                > ownStationRadiusMetres
+        }
+    }
+
+    // MARK: - Station list text
+
+    /// "2.2 mi WNW" or "23 mi SSE": how far a station is from us and which
+    /// way. Nil unless both ends are known, because a distance measured from
+    /// a guessed origin is worse than none.
+    static func rangeText(from observer: GreatCircle.Point?, to position: GreatCircle.Point?,
+                          inMiles: Bool) -> String? {
+        guard let observer, let position else { return nil }
+        let kilometres = GreatCircle.kilometres(from: observer, to: position)
+        let value = DistanceDisplay.value(kilometres: kilometres, inMiles: inMiles)
+        // A tenth is worth showing for a station down the road and noise for
+        // one three counties away.
+        let format = value < 10 ? "%.1f" : "%.0f"
+        let bearing = GreatCircle.bearingDegrees(from: observer, to: position)
+        return DistanceDisplay.string(kilometres: kilometres, inMiles: inMiles, format: format)
+            + " " + GreatCircle.compassPoint(bearing)
+    }
+
+    /// The count at the end of a station row: "61 pkts", "1 pkt".
+    static func packetCountText(_ count: Int) -> String {
+        count == 1 ? "1 pkt" : "\(count) pkts"
+    }
+
+    /// What the count is and where it comes from.
+    static func packetCountHelp(_ count: Int) -> String {
+        "\(count) packet\(count == 1 ? "" : "s") heard from this station: every frame it "
+            + "sent that reached this receiver, direct or through a digipeater, counted "
+            + "from the packets AXTerm holds in memory this session. A frame heard on "
+            + "two radios counts once."
+    }
+
+    static func detail(for entry: Entry, observer: GreatCircle.Point?, now: Date,
                        distanceInMiles: Bool = true) -> String {
         var lines = [entry.callsign]
         // A node wears two names and the operator needs both: the alias is
@@ -560,7 +642,9 @@ nonisolated enum HeardStationMap {
         if let symbol = entry.aprsSymbol {
             lines.append(APRSSymbolType.label(code: symbol.code))
         }
-        if let position = entry.position {
+        // Only with our own position known. The list used to pass 0,0 when
+        // it was not, and every tooltip measured from the Gulf of Guinea.
+        if let observer, let position = entry.position {
             let kilometres = GreatCircle.kilometres(from: observer, to: position)
             let bearing = GreatCircle.bearingDegrees(from: observer, to: position)
             lines.append(String(format: "%@ at %.0f° (%@)",
@@ -752,8 +836,12 @@ nonisolated enum HeardStationMap {
                                      directory: [String: CallsignRecord],
                                      announcedGrids: [String: String],
                                      stations: [Station],
-                                     excluding ownCallsign: String = "") -> [Entry] {
-        let own = CallsignQuery.normalize(ownCallsign)
+                                     excluding ownCallsign: String = "",
+                                     excludingAll ownCallsigns: Set<String> = []) -> [Entry] {
+        // Every licence this station operates under, not just the beacon
+        // callsign: a radio can run under a club call of its own.
+        let own = Set(([ownCallsign] + Array(ownCallsigns)).map(CallsignQuery.normalize))
+            .subtracting([""])
         let shownBases = Set(shownCallsigns.map(CallsignQuery.normalize))
         let all = Set(aliases.allEntries.map { $0.alias.uppercased() })
         let candidates = all.subtracting(alreadyShown).filter { name in
@@ -770,9 +858,9 @@ nonisolated enum HeardStationMap {
             guard !own.isEmpty else { return true }
             // Our own node alias resolves to our own callsign — the centre
             // marker already is this station.
-            if CallsignQuery.normalize(name) == own { return false }
+            if own.contains(CallsignQuery.normalize(name)) { return false }
             if let call = aliases.callsign(for: name),
-               CallsignQuery.normalize(call) == own { return false }
+               own.contains(CallsignQuery.normalize(call)) { return false }
             return true
         }
 

@@ -788,6 +788,8 @@ struct AXTermiOSRootView: View {
                 observerPosition: myPosition,
                 myCallsign: settings.myCallsign,
                 ownCallsigns: ownAddresses,
+                ownTransmittedAddresses: ownTransmittedAddresses,
+                aprsChannelRadios: Set(settings.activeRadios.filter(\.aprsEnabled).map(\.id)),
                 lookup: callsignLookup,
                 aliases: nodeAliases,
                 settings: context.settings,
@@ -1123,6 +1125,15 @@ struct AXTermiOSRootView: View {
         let answered = Set(sessionCoordinator.sessionManager.answeredAddresses
             .map { $0.display.uppercased() })
         return answered.isEmpty ? [settings.myCallsign.uppercased()] : answered
+    }
+
+    /// Every address this station has transmitted as, so a beacon sent under
+    /// an earlier SSID and heard back off a digipeater is not drawn as
+    /// somebody else. Same as the Mac's.
+    private var ownTransmittedAddresses: Set<String> {
+        Set(client.packets.lazy
+            .filter { $0.direction == .tx }
+            .compactMap { $0.from?.display.uppercased() })
     }
 
     private var resolver: NodeProfileResolver {

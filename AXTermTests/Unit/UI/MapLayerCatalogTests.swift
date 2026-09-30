@@ -32,18 +32,25 @@ final class MapLayerCatalogTests: XCTestCase {
             "a packet channel's stations never beacon a position")
     }
 
-    /// Both families have a layer called "Coverage Rings" and they are
-    /// different layers measuring different evidence. Collapsing them onto one
-    /// key would tie the two radios' rings together.
+    /// Both families have a coverage-ring layer and they are different layers
+    /// measuring different evidence. Collapsing them onto one key would tie
+    /// the two radios' rings together.
     func testTheTwoCoverageRingsAreSeparateLayers() {
         let aprs = MapLayerCatalog.layers(in: .families([.aprs]))
-            .first { $0.title == "Coverage Rings" }
+            .first { $0.title == "APRS Coverage Rings" }
         let ax25 = MapLayerCatalog.layers(in: .families([.ax25]))
-            .first { $0.title == "Coverage Rings" }
+            .first { $0.title == "Packet Coverage Rings" }
 
         XCTAssertNotNil(aprs)
         XCTAssertNotNil(ax25)
         XCTAssertNotEqual(aprs?.storageKey, ax25?.storageKey)
+    }
+
+    /// On a single-radio station every layer is in one list, and two rows
+    /// both titled "Coverage Rings" gave no way to tell which was which.
+    func testNoTwoLayersShareATitle() {
+        let titles = MapLayerCatalog.all.map(\.title)
+        XCTAssertEqual(titles.count, Set(titles).count, titles.description)
     }
 
     func testAnUntouchedInstallIsSummarisedFromTheDefaults() {

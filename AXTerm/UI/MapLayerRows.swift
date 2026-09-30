@@ -324,14 +324,15 @@ struct MapLayerToggles: View {
                       + "measured it.")
             }
 
-            layer("Coverage Rings", "circle.dashed",
+            layer("APRS Coverage Rings", "circle.dashed",
                   isOn: $showsAPRSCoverageRing,
-                  help: "Both directions of this radio's reach. Purple is how far you are "
+                  help: "Both directions of the APRS radios' reach. Purple is how far you are "
                       + "heard: the digipeaters that put your own beacons back on the air, "
                       + "which proves they decoded you. Teal is how far you hear: the "
-                      + "stations you decoded with no digipeater in the path. They are "
-                      + "rarely the same distance, and the purple one fills in on its own "
-                      + "with every beacon. Measurements, not a propagation model.")
+                      + "stations you decoded with no digipeater in the path, on radios "
+                      + "carrying APRS. They are rarely the same distance, and the purple "
+                      + "one fills in on its own with every beacon. Measurements, not a "
+                      + "propagation model.")
 
             layer("Objects & Hazards", "exclamationmark.triangle.fill",
                   isOn: $showsObjects,
@@ -345,14 +346,15 @@ struct MapLayerToggles: View {
         }
 
         if scope.includes(.ax25) {
-            layer("Coverage Rings", "circle.dashed",
+            layer("Packet Coverage Rings", "circle.dashed",
                   isOn: $showsCoverageRing,
-                  help: "Both directions of this radio's reach. Blue is how far you are "
+                  help: "Both directions of the packet radios' reach. Blue is how far you are "
                       + "heard: the stations that answered you directly, since a UA, DM or "
                       + "FRMR to your frames proves they decoded you. It only grows where "
                       + "you went looking for someone to talk to. Teal is how far you hear: "
-                      + "the stations you decoded with no digipeater in the path. "
-                      + "Measurements, not a propagation model.")
+                      + "the stations you decoded with no digipeater in the path, on radios "
+                      + "carrying packet traffic. A radio marked as on an APRS channel never "
+                      + "counts here. Measurements, not a propagation model.")
 
             layer("Observed Paths", "point.topleft.down.to.point.bottomright.curvepath",
                   isOn: $showsPaths,

@@ -44,6 +44,15 @@ struct StationsMapView: View {
     /// is; any *other* SSID on the same licence is a different radio and
     /// belongs on the map like anyone else's.
     var ownCallsigns: Set<String> = []
+    /// Every address this station has actually transmitted as, including
+    /// SSIDs it no longer uses. Our own old beacon heard back off a
+    /// digipeater is still us, and without this it drew a second marker on
+    /// top of the centre one.
+    var ownTransmittedAddresses: Set<String> = []
+    /// Radios the operator has marked as on an APRS channel. They count as
+    /// APRS for the map whatever else they have heard; see
+    /// `RadioTrafficClassifier.mapFamilies`.
+    var aprsChannelRadios: Set<RadioID> = []
     @ObservedObject var lookup: CallsignLookupService
     @ObservedObject var aliases: NodeAliasStore
     /// Owned rather than copied so the "no positions" banner can turn
@@ -247,9 +256,23 @@ struct StationsMapView: View {
     /// a directory lead rather than a heard station and is governed by its own
     /// layer, not by this.
     private func withinFalloff(_ entry: HeardStationMap.Entry) -> Bool {
-        guard falloffMinutes > 0 else { return true }
-        guard let lastHeard = entry.lastHeard else { return true }
-        return Date().timeIntervalSince(lastHeard) <= Double(falloffMinutes) * 60
+        MapEntryVisibility(falloffMinutes: falloffMinutes).withinFalloff(entry)
+    }
+
+    /// Every switch that decides which entries get a marker, in one value.
+    /// The markers and the station list both read it, so the list cannot
+    /// name a station the map is not drawing. Build it once per use: it
+    /// walks the station list to find who is on an APRS channel.
+    private var visibility: MapEntryVisibility {
+        MapEntryVisibility(
+            falloffMinutes: falloffMinutes,
+            prefersTransmittedPosition: prefersTransmittedPosition,
+            showsDigipeaters: showsTypeDigipeater,
+            showsWeather: showsTypeWeather,
+            showsVehicles: showsTypeVehicle,
+            showsFixed: showsTypeFixed,
+            callsOnAPRSChannels: callsOnAPRSChannels,
+            now: Date())
     }
 
     /// How many placed stations the fall-off is currently holding back, so the
@@ -289,47 +312,20 @@ struct StationsMapView: View {
         MapLayerGeneration.ownObjectToken(objects.live(), ours: ownCallsigns)
     }
 
-    /// Which families each radio has heard, from the traffic itself. The map's
-    /// APRS layers apply only to radios that actually carry APRS; on a packet
-    /// channel of nodes and sessions they would otherwise hide everything.
+    /// Which families each radio carries, from the traffic itself and from
+    /// the APRS-channel switch. The map's APRS layers apply only to radios
+    /// that carry APRS; on a packet channel of nodes and sessions they would
+    /// otherwise hide everything.
     private var radioFamilies: [RadioID: Set<RadioTrafficFamily>] {
-        RadioTrafficClassifier.families(from: stations)
+        RadioTrafficClassifier.mapFamilies(
+            heard: RadioTrafficClassifier.families(from: stations),
+            aprsChannels: aprsChannelRadios)
     }
 
     /// Callsigns heard on at least one radio that carries APRS. A station
     /// nobody heard on an APRS channel is outside the APRS layers' remit.
-    ///
-    /// A radio that has heard nothing classifiable yet counts as APRS, so a
-    /// fresh session behaves exactly as it did before any evidence arrived
-    /// rather than briefly drawing a different map.
     private var callsOnAPRSChannels: Set<String> {
-        let families = radioFamilies
-        var result: Set<String> = []
-        for station in stations {
-            let onAPRS = station.perRadio.keys.contains { radio in
-                guard let known = families[radio], !known.isEmpty else { return true }
-                return known.contains(.aprs)
-            }
-            if onAPRS || station.perRadio.isEmpty { result.insert(station.call.uppercased()) }
-        }
-        return result
-    }
-
-    private func isOnAPRSChannel(_ entry: HeardStationMap.Entry) -> Bool {
-        callsOnAPRSChannels.contains(entry.callsign.uppercased())
-    }
-
-    /// Whether a placed entry survives the per-type filter. Only a
-    /// transmitted-APRS station carries a symbol to classify; everything else
-    /// passes untouched.
-    private func typeVisible(_ entry: HeardStationMap.Entry) -> Bool {
-        guard let code = entry.aprsSymbol?.code else { return true }
-        switch APRSTypeBucket.of(code: code) {
-        case .digipeater: return showsTypeDigipeater
-        case .weather:    return showsTypeWeather
-        case .vehicle:    return showsTypeVehicle
-        case .fixed:      return showsTypeFixed
-        }
+        MapEntryVisibility.callsOnAPRSChannels(stations: stations, families: radioFamilies)
     }
 
     private var positionPreference: HeardStationMap.PositionPreference {
@@ -641,16 +637,28 @@ struct StationsMapView: View {
     }
     @State private var observerAnchor = ObserverAnchor()
 
+    /// Every address that is this station. Falls back to the beacon callsign
+    /// alone when the caller has not said what else this station answers to.
+    /// Everything we have transmitted as is included too, so a beacon sent
+    /// under an old SSID is recognised when it comes back.
+    private var ownAddresses: Set<String> {
+        let current = ownCallsigns.isEmpty ? [myCallsign.uppercased()] : ownCallsigns
+        return current.union(ownTransmittedAddresses.map { $0.uppercased() })
+    }
+
     /// Stations the radio has actually met: heard stations plus the
     /// via-path aliases. These are the entries the *analysis* layers
     /// (paths, terrain, coverage) are allowed to see.
-    /// Falls back to the beacon callsign alone when the caller has not said
-    /// what else this station answers to.
-    private var ownAddresses: Set<String> {
-        ownCallsigns.isEmpty ? [myCallsign.uppercased()] : ownCallsigns
+    ///
+    /// This station is taken out: a sibling SSID sitting on our own
+    /// position, or our own node alias, would draw a second marker on top of
+    /// the centre one. See `HeardStationMap.withoutOwnStation`.
+    private var coreEntries: [HeardStationMap.Entry] {
+        HeardStationMap.withoutOwnStation(
+            heardAndAliasEntries, ownAddresses: ownAddresses, observer: observer)
     }
 
-    private var coreEntries: [HeardStationMap.Entry] {
+    private var heardAndAliasEntries: [HeardStationMap.Entry] {
         let heard = HeardStationMap.entries(
             stations: stations,
             directory: lookup.records,
@@ -707,7 +715,8 @@ struct StationsMapView: View {
             directory: lookup.records,
             announcedGrids: announcedGrids,
             stations: stations,
-            excluding: myCallsign)
+            excluding: myCallsign,
+            excludingAll: ownAddresses)
     }
 
     /// One derivation of the entry pipeline per ~15 seconds, not one per
@@ -747,6 +756,8 @@ struct StationsMapView: View {
             + "|\(observer?.latitude ?? 0),\(observer?.longitude ?? 0)"
             // Flipping the position-source toggle must re-derive placements.
             + "|\(prefersTransmittedPosition)"
+            // Which addresses are ours decides which heard entries survive.
+            + "|\(ownAddresses.sorted().joined(separator: ","))"
         if entriesCache.key != key {
             let core = coreEntries
             let all = core + directoryEntries(core: core)
@@ -929,17 +940,18 @@ struct StationsMapView: View {
             : nil
         // Hearing is the other direction and it is measured per family: a
         // station heard direct on 2 m APRS says nothing about what the packet
-        // radio on another band can hear.
+        // radio on another band can hear. One radio carrying both families
+        // yields the same ring twice; CoverageRingSelection keeps one.
         var received: [CoverageEstimate.Ring] = []
         if showsCoverageRing,
            let ax25 = CoverageEstimate.receiveRing(
-            heardDirect: coverageEvidence.heardDirectAX25,
+            heardDirect: coverageEvidence.heardDirectAX25, family: .ax25,
             positions: networkPositions, observer: observer) {
             received.append(ax25)
         }
         if showsAPRSCoverageRing,
            let aprs = CoverageEstimate.receiveRing(
-            heardDirect: coverageEvidence.heardDirectAPRS,
+            heardDirect: coverageEvidence.heardDirectAPRS, family: .aprs,
             positions: networkPositions, observer: observer) {
             received.append(aprs)
         }
@@ -1056,26 +1068,10 @@ struct StationsMapView: View {
         // own beaconed fix — a licence/registry guess is not a transmitted
         // position, so those heard stations are dropped from the map (nodes and
         // still-unplaced entries are left alone). Off, every placeable station
-        // shows at whatever point it has.
-        let entriesForMap = prefersTransmittedPosition
-            ? visibleEntries.filter { entry in
-                // Unplaced entries feed the analysis layers, not the map, and
-                // are left alone. A placed station shows only at its own
-                // transmitted fix (a node alias, placed through its operator,
-                // counts) — and in APRS mode a per-type toggle can hide its
-                // whole class.
-                guard entry.isPlaced else { return true }
-                guard withinFalloff(entry) else { return false }
-                // An APRS layer only governs APRS stations. A station heard
-                // only on a radio that carries no APRS — a packet channel of
-                // nodes and sessions — has no beaconed fix to prefer and must
-                // not be hidden for lacking one, which emptied the whole map
-                // whenever such a radio was the one being shown.
-                guard entry.isNodeAlias || entry.origin == .transmittedAPRS
-                        || !isOnAPRSChannel(entry) else { return false }
-                return typeVisible(entry)
-            }
-            : visibleEntries.filter { !$0.isPlaced || withinFalloff($0) }
+        // shows at whatever point it has. "Drop after" applies either way.
+        // The rules live in MapEntryVisibility so the station list can apply
+        // the same ones.
+        let entriesForMap = visibility.entriesForMap(visibleEntries)
         let stationScope = HeardStationMap.scope(
             observerLabel: observerGrid.uppercased(),
             observer: observer, entries: entriesForMap, now: Date(),
@@ -1789,7 +1785,7 @@ struct StationsMapView: View {
                 Text("\(placedDirectoryCount) drawn · \(mergedNodeBoxCount) folded "
                      + "into heard stations · \(aliases.directory.allEntries.count) known")
             }
-            Toggle("Coverage Rings", isOn: $showsCoverageRing)
+            Toggle("Packet Coverage Rings", isOn: $showsCoverageRing)
             Toggle("APRS Coverage Rings", isOn: $showsAPRSCoverageRing)
 
             Divider()
@@ -2010,8 +2006,10 @@ struct StationsMapView: View {
         // In transmitted mode the address-placed heard stations are hidden, so
         // say so rather than counting points that are not on the map.
         if prefersTransmittedPosition {
+            let onAPRS = callsOnAPRSChannels
             let hidden = placed.filter {
-                !$0.isNodeAlias && $0.origin != .transmittedAPRS && isOnAPRSChannel($0)
+                !$0.isNodeAlias && $0.origin != .transmittedAPRS
+                    && onAPRS.contains($0.callsign.uppercased())
             }.count
             let tail = hidden > 0 ? " \u{b7} \(hidden) address-only hidden" : ""
             return "\(beaconed) from beacons\(tail)"
@@ -2577,24 +2575,32 @@ struct StationsMapView: View {
             }
     }
 
+    /// The list goes through the same filter as the markers. It used to list
+    /// every placed entry, so "Drop after", Transmitted Positions and the
+    /// station-type switches thinned the map and left the list untouched.
     private var stationList: some View {
-        List(selection: $selection) {
-            if !placed.isEmpty {
+        let sections = visibility.listSections(visibleEntries)
+        let origin = observer
+        return List(selection: $selection) {
+            if !sections.onMap.isEmpty {
                 Section("On the map") {
-                    ForEach(placed) { row(for: $0) }
+                    ForEach(sections.onMap) { row(for: $0, observer: origin) }
                 }
             }
-            if !unplaced.isEmpty {
+            if !sections.noPosition.isEmpty {
                 Section("No known position") {
-                    ForEach(unplaced) { row(for: $0) }
+                    ForEach(sections.noPosition) { row(for: $0, observer: origin) }
                 }
             }
         }
         .listStyle(.inset)
     }
 
-    private func row(for entry: HeardStationMap.Entry) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
+    private func row(for entry: HeardStationMap.Entry,
+                     observer: GreatCircle.Point?) -> some View {
+        let range = HeardStationMap.rangeText(
+            from: observer, to: entry.position, inMiles: settings.distanceUnitIsMiles)
+        return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
                 if entry.isNodeAlias {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
@@ -2610,10 +2616,25 @@ struct StationsMapView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text("\(entry.heardCount)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .help("\(entry.heardCount) packets heard from this station.")
+                if let range {
+                    Text(range)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .help("Distance and compass direction from your station to where "
+                              + "this station is placed, along the great circle. "
+                              + (entry.positionSource.map { "Position source: \($0)." }
+                                 ?? ""))
+                }
+                // A node alias is a hop in other stations' paths, never a
+                // transmitter heard in its own right, so it has no count.
+                if entry.heardCount > 0 {
+                    Text(HeardStationMap.packetCountText(entry.heardCount))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .help(HeardStationMap.packetCountHelp(entry.heardCount))
+                        .accessibilityLabel(
+                            "\(entry.heardCount) packet\(entry.heardCount == 1 ? "" : "s") heard")
+                }
             }
             HStack(spacing: 6) {
                 if let name = entry.name {
@@ -2639,7 +2660,7 @@ struct StationsMapView: View {
         .tag(entry.callsign)
         .help(HeardStationMap.detail(
             for: entry,
-            observer: observer ?? .init(latitude: 0, longitude: 0),
+            observer: observer,
             now: Date(),
             distanceInMiles: settings.distanceUnitIsMiles))
     }

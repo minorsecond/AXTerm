@@ -1379,10 +1379,35 @@ struct ContentView: View {
         RadioTrafficClassifier.families(from: client.stations)
     }
 
+    /// The radios the operator has marked as on an APRS channel.
+    private var aprsChannelRadios: Set<RadioID> {
+        Set(settings.activeRadios.filter(\.aprsEnabled).map(\.id))
+    }
+
+    /// What each radio carries for the map's purposes: the heard families,
+    /// with an APRS-channel radio held to APRS alone. The badges keep the raw
+    /// evidence; the layers and coverage rings use this, so a radio that can
+    /// never run a packet service does not grow packet layers or a packet
+    /// ring. See `RadioTrafficClassifier.mapFamilies`.
+    private var mapRadioFamilies: [RadioID: Set<RadioTrafficFamily>] {
+        RadioTrafficClassifier.mapFamilies(heard: radioFamilies,
+                                           aprsChannels: aprsChannelRadios)
+    }
+
+    /// Every address this station has put a frame on the air as, from the
+    /// packets in memory. Wider than `ownAddresses`, which only knows the
+    /// current identity: a beacon sent as K0EPI before the SSID was set to -5
+    /// still comes back off a digipeater, and it is still us.
+    private var ownTransmittedAddresses: Set<String> {
+        Set(client.packets.lazy
+            .filter { $0.direction == .tx }
+            .compactMap { $0.from?.display.uppercased() })
+    }
+
     /// Which family's layers sit under which radio, and which are left in the
     /// shared Layers section.
     private var mapLayerPlan: MapLayerPlacement.Plan {
-        MapLayerPlacement.plan(families: radioFamilies,
+        MapLayerPlacement.plan(families: mapRadioFamilies,
                                radios: client.radioSummaries.map(\.id))
     }
 
@@ -1966,6 +1991,8 @@ struct ContentView: View {
             observerPosition: myPosition,
             myCallsign: settings.myCallsign,
             ownCallsigns: ownAddresses,
+            ownTransmittedAddresses: ownTransmittedAddresses,
+            aprsChannelRadios: aprsChannelRadios,
             lookup: callsignLookup,
             aliases: nodeAliases,
             settings: winlinkContext.settings,
@@ -1997,14 +2024,15 @@ struct ContentView: View {
             pingState: { aprsPings.outcome(for: $0) },
             // Both directions of coverage, narrowed to the radios that carry
             // each family: a station heard on 2 m APRS says nothing about
-            // what the packet radio on another band can hear.
+            // what the packet radio on another band can hear. An APRS-channel
+            // radio carries APRS only, so it cannot feed the packet ring.
             coverageEvidence: MapCoverageEvidence(coverageEvidence.evidence,
-                                                  families: radioFamilies),
+                                                  families: mapRadioFamilies),
             // Built on demand: measuring the channel walks the recent packet
             // history, which is not worth doing for a panel that is closed.
             channelReport: {
                 let evidence = MapCoverageEvidence(coverageEvidence.evidence,
-                                                   families: radioFamilies)
+                                                   families: mapRadioFamilies)
                 return APRSChannelReport.build(
                     packets: client.packets,
                     repeatHops: evidence.repeatHopsAPRS,

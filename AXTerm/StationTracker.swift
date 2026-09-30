@@ -210,8 +210,11 @@ nonisolated struct StationTracker {
     /// What a frame proves about the *radio* that heard it. See
     /// `RadioTrafficFamily`.
     ///
-    /// Three guards, each of which this got wrong at least once:
+    /// Four guards, each of which this got wrong at least once:
     ///
+    /// * **A session frame needs addresses a station could have.** One corrupt
+    ///   frame on the TNC4 (source `V},'-11`, decoded as an I frame) badged an
+    ///   APRS-only radio as AX.25 and put a packet coverage ring on its map.
     /// * **APRS only ever rides in a UI frame with PID 0xF0.** Without that
     ///   check, an I-frame inside a connected-mode session counted as APRS
     ///   evidence, and a packet-only radio was badged "APRS · AX.25" for
@@ -225,6 +228,8 @@ nonisolated struct StationTracker {
     ///   APRS and a NET/ROM NODES broadcast both ride in one.
     static func trafficEvidence(_ packet: Packet) -> (aprs: Bool, session: Bool) {
         let session = RadioTrafficClassifier.isSessionEvidence(packet.frameType)
+            && RadioTrafficClassifier.hasWellFormedAddresses(
+                from: packet.from?.call, to: packet.to?.call)
         guard !packet.info.isEmpty,
               packet.frameType == .ui,
               packet.pid == 0xF0 else { return (false, session) }
