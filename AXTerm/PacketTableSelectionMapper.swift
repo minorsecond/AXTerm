@@ -22,22 +22,27 @@ nonisolated struct PacketRowViewModel: Identifiable, Hashable {
     /// Which radio decoded this frame — not which one the sender used. Nil
     /// with one radio, when the column does not exist.
     var radioName: String? = nil
+    /// Whether this frame was heard more than once by different paths. Nil
+    /// where nobody worked it out (the Mac table) or it was heard once.
+    var duplicate: PacketDuplicates.Mark? = nil
 
-    static func fromPacket(_ packet: Packet, radioNames: [RadioID: String] = [:]) -> PacketRowViewModel {
-        let classification = packet.classification
+    static func fromPacket(_ packet: Packet, radioNames: [RadioID: String] = [:],
+                           duplicate: PacketDuplicates.Mark? = nil) -> PacketRowViewModel {
+        let tag = PacketTypeTag.of(packet)
         return PacketRowViewModel(
             id: packet.id,
             timeText: packet.timestamp.formatted(date: .omitted, time: .standard),
             fromText: packet.fromDisplay,
             toText: packet.toDisplay,
             viaText: packet.viaDisplay,
-            typeLabel: classification.badge,
-            typeTooltip: classification.tooltip,
-            typeAccessibilityLabel: "Frame type: \(classification.badge). \(classification.tooltip)",
+            typeLabel: tag.label,
+            typeTooltip: tag.tooltip,
+            typeAccessibilityLabel: "Frame type: \(tag.label). \(tag.tooltip)",
             infoText: packet.infoDisplay,
             infoTooltip: packet.infoTooltip,
             isLowSignal: packet.isLowSignal,
-            radioName: radioNames.isEmpty ? nil : radioNames[packet.radioID ?? .primary]
+            radioName: radioNames.isEmpty ? nil : radioNames[packet.radioID ?? .primary],
+            duplicate: duplicate
         )
     }
 }

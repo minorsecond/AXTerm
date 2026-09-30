@@ -217,16 +217,22 @@ final class PacketClassificationTests: XCTestCase {
         XCTAssertEqual(PacketClassification.dataProgress.badge, "DATA")
         XCTAssertEqual(PacketClassification.ackOnly.badge, "ACK")
         XCTAssertEqual(PacketClassification.retryOrDuplicate.badge, "RETRY")
-        XCTAssertEqual(PacketClassification.uiBeacon.badge, "BEACON")
+        XCTAssertEqual(PacketClassification.uiBeacon.badge, "BCN")
         XCTAssertEqual(PacketClassification.routingBroadcast.badge, "ROUTE")
         XCTAssertEqual(PacketClassification.sessionControl.badge, "CTRL")
         XCTAssertEqual(PacketClassification.unknown.badge, "—")
     }
 
     func testTooltipMapping() {
-        XCTAssertEqual(PacketClassification.ackOnly.tooltip, "ACK — An acknowledgment frame confirming reception. Does not carry new data.")
-        XCTAssertTrue(PacketClassification.dataProgress.tooltip.hasPrefix("DATA —"))
-        XCTAssertTrue(PacketClassification.uiBeacon.tooltip.hasPrefix("BEACON —"))
+        XCTAssertEqual(PacketClassification.ackOnly.tooltip,
+                       "An acknowledgment frame confirming reception. It carries no new data.")
+        XCTAssertTrue(PacketClassification.dataProgress.tooltip.hasPrefix("A data frame"))
+        XCTAssertTrue(PacketClassification.uiBeacon.tooltip.hasPrefix("A broadcast frame"))
+        // Plain sentences: no em dash in any tooltip.
+        for classification in [PacketClassification.dataProgress, .ackOnly, .retryOrDuplicate,
+                               .uiBeacon, .routingBroadcast, .sessionControl, .unknown] {
+            XCTAssertFalse(classification.tooltip.contains("\u{2014}"), classification.rawValue)
+        }
     }
 
     // MARK: - NET/ROM Broadcast Classification

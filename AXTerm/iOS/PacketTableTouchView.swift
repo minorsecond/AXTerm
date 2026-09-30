@@ -31,7 +31,10 @@ struct PacketTableTouchView: View {
     @State private var scrollPosition: Packet.ID?
 
     private var rows: [PacketRowViewModel] {
-        packets.map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
+        let duplicates = PacketDuplicates.marks(for: packets)
+        return packets.map {
+            PacketRowViewModel.fromPacket($0, radioNames: radioNames, duplicate: duplicates[$0.id])
+        }
     }
 
     var body: some View {
@@ -52,7 +55,7 @@ struct PacketTableTouchView: View {
                 .buttonStyle(.plain)
                 .padding([.bottom, .trailing], 18)
                 .accessibilityLabel("Jump to newest packet")
-                .explain("Scrolls back to the newest packet and resumes following the stream. Following stopped because you scrolled away to read something — the monitor will not move the view out from under you.",
+                .explain("Scrolls back to the newest packet and resumes following the stream. Following stopped because you scrolled away to read something, and the list will not move the view out from under you.",
                          showsIndicator: false)
             }
         }
@@ -60,9 +63,19 @@ struct PacketTableTouchView: View {
     }
 
     private var list: some View {
-        List(selection: $selection) {
+        // A tap opens the packet, as a click does on the Mac. With list
+        // selection a tap only highlighted the row, and the inspector was
+        // reachable only from the long-press menu.
+        List {
             ForEach(rows) { row in
-                PacketRow(row: row)
+                Button {
+                    selection = [row.id]
+                    onInspectSelection()
+                } label: {
+                    PacketRow(row: row)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the packet's decoded fields and raw bytes")
                     .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
                     .contextMenu {
                         if let packet = packets.first(where: { $0.id == row.id }) {
@@ -118,8 +131,11 @@ private struct PacketRow: View {
                 Text(row.toText)
                     .font(.system(size: 12, design: .monospaced))
                 Spacer(minLength: 4)
+                duplicateBadge
                 Text(row.typeLabel)
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+                    .fixedSize()
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
                     .background(Color.secondary.opacity(0.15), in: Capsule())
@@ -129,7 +145,7 @@ private struct PacketRow: View {
             if !row.infoText.isEmpty {
                 Text(row.infoText)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(row.isLowSignal ? .tertiary : .primary)
+                    .foregroundStyle(row.isLowSignal || isCopy ? .tertiary : .primary)
                     .lineLimit(2)
             }
 
@@ -145,12 +161,47 @@ private struct PacketRow: View {
                     Text("\u{b7} \(radio)")
                         .font(.system(size: 9))
                         .lineLimit(1)
-                        .explain("Decoded by \(radio) \u{2014} which radio heard it, not which the sender used.", showsIndicator: false)
+                        .explain("Decoded by \(radio): the radio that heard it, not the one the sender used.", showsIndicator: false)
                 }
             }
             .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
+    }
+
+    private var isCopy: Bool {
+        if case .copy = row.duplicate { return true }
+        return false
+    }
+
+    /// The terminal's "+1" on the first sighting, and "copy" on the later
+    /// ones, which the terminal folds away but a packet list shows.
+    @ViewBuilder
+    private var duplicateBadge: some View {
+        switch row.duplicate {
+        case .heardAgain(let count):
+            Text("+\(count)")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(.purple)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .background(Color.purple.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
+                .explain("Heard \(CountPhrase.of(count + 1, "time")), by different paths. The later copies are marked below.",
+                         showsIndicator: false)
+                .accessibilityLabel("Heard \(CountPhrase.of(count, "more time")) by other paths")
+        case .copy:
+            Text("copy")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(.purple)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.purple.opacity(0.5), lineWidth: 0.5))
+                .explain("The same frame heard again a moment later by another path, usually a digipeater repeating it.",
+                         showsIndicator: false)
+                .accessibilityLabel("Copy of an earlier frame, heard by another path")
+        case nil:
+            EmptyView()
+        }
     }
 }
 #endif

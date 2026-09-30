@@ -45,16 +45,17 @@ nonisolated enum PacketClassification: String, Codable, Hashable, Sendable {
 
     // MARK: - Display Properties
 
-    /// Short badge text for UI display
+    /// Short badge text for UI display. BCN, not BEACON: the same word as
+    /// the terminal's filter chip.
     var badge: String {
         switch self {
         case .dataProgress: return "DATA"
         case .ackOnly: return "ACK"
         case .retryOrDuplicate: return "RETRY"
-        case .uiBeacon: return "BEACON"
+        case .uiBeacon: return "BCN"
         case .routingBroadcast: return "ROUTE"
         case .sessionControl: return "CTRL"
-        case .unknown: return "—"
+        case .unknown: return "\u{2014}"
         }
     }
 
@@ -62,19 +63,19 @@ nonisolated enum PacketClassification: String, Codable, Hashable, Sendable {
     var tooltip: String {
         switch self {
         case .dataProgress:
-            return "DATA — A data frame carrying information between stations."
+            return "A data frame carrying information between stations."
         case .ackOnly:
-            return "ACK — An acknowledgment frame confirming reception. Does not carry new data."
+            return "An acknowledgment frame confirming reception. It carries no new data."
         case .retryOrDuplicate:
-            return "RETRY — A retransmission or duplicate frame, indicating possible link issues."
+            return "A retransmission or duplicate frame, a sign of trouble on the link."
         case .uiBeacon:
-            return "BEACON — A beacon or broadcast frame, typically position reports or status."
+            return "A broadcast frame nobody acknowledges: a beacon, an announcement or similar."
         case .routingBroadcast:
-            return "ROUTE — A routing update sharing network topology information."
+            return "A NET/ROM routing update sharing what the node can reach."
         case .sessionControl:
-            return "CTRL — A session management frame (connect, disconnect, or error)."
+            return "A session management frame: connect, disconnect, or an error."
         case .unknown:
-            return "— — Frame type could not be determined."
+            return "The frame type could not be determined."
         }
     }
 

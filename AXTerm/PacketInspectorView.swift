@@ -168,8 +168,10 @@ struct PacketInspectorView: View {
                 }
 
                 HStack(spacing: 10) {
-                    FrameTypeBadge(text: packet.classification.badge)
-                        .help(packet.classification.tooltip)
+                    // The packet list's tag, so the two agree about a frame.
+                    let tag = PacketTypeTag.of(packet)
+                    FrameTypeBadge(text: tag.label)
+                        .help(tag.tooltip)
                     Text(packet.timestamp, style: .date)
                         .foregroundStyle(.secondary)
                     Text(packet.timestamp, style: .time)
@@ -180,6 +182,7 @@ struct PacketInspectorView: View {
 
             Spacer()
 
+            #if os(macOS)
             Button {
                 onTogglePin?()
             } label: {
@@ -194,6 +197,18 @@ struct PacketInspectorView: View {
             }
             .keyboardShortcut(.cancelAction)
             .help("Close inspector")
+            #else
+            // The sheet's own Done closes it on iOS, and nothing there pins.
+            if let onTogglePin {
+                Button {
+                    onTogglePin()
+                } label: {
+                    Image(systemName: isPinned ? "pin.fill" : "pin")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel(isPinned ? "Unpin Packet" : "Pin Packet")
+            }
+            #endif
         }
         .padding()
         .background(.bar)
@@ -235,7 +250,7 @@ struct PacketInspectorView: View {
         GroupBox("Raw AX.25") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("\(packet.rawAx25.count) bytes")
+                    Text(CountPhrase.of(packet.rawAx25.count, "byte"))
                         .foregroundStyle(.secondary)
 
                     Spacer()
@@ -379,7 +394,7 @@ struct PacketInspectorView: View {
                 GridRow {
                     Text("Length:")
                         .foregroundStyle(.secondary)
-                    Text("\(packet.rawAx25.count) bytes")
+                    Text(CountPhrase.of(packet.rawAx25.count, "byte"))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -671,7 +686,7 @@ struct PacketInspectorView: View {
                 }
 
                 HStack {
-                    Text("\(packet.info.count) bytes")
+                    Text(CountPhrase.of(packet.info.count, "byte"))
                         .foregroundStyle(.secondary)
 
                     Spacer()
@@ -743,7 +758,7 @@ struct PacketInspectorView: View {
                 Label("NET/ROM Routing Broadcast", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.headline)
                 Spacer()
-                Text("\(result.entries.count) routes")
+                Text(CountPhrase.of(result.entries.count, "route"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

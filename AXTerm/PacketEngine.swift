@@ -545,7 +545,9 @@ final class PacketEngine: ObservableObject {
     /// Tracks recent console line signatures to detect duplicates received via different paths
     private var recentConsoleSignatures: [String: (timestamp: Date, viaPath: [String])] = [:]
     /// Time window for considering console lines as duplicates (5 seconds)
-    private let consoleDuplicateWindow: TimeInterval = 5.0
+    /// Shared with the packet list's copy marks, so both call the same
+    /// frames duplicates.
+    private let consoleDuplicateWindow: TimeInterval = PacketDuplicates.window
 
     // MARK: - Initialization
 
@@ -1331,7 +1333,7 @@ final class PacketEngine: ObservableObject {
             isOwnEcho = true
         case .collision(let collision):
             identityCollision = collision
-            addErrorLine("Another station is transmitting as \(collision.callsign) \u{2014} give one device a different SSID.",
+            addErrorLine("Another station is transmitting as \(collision.callsign). Give one device a different SSID.",
                          category: .connection)
             eventLogger?.log(level: .warning, category: .connection,
                              message: "Callsign collision on channel",
