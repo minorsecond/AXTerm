@@ -283,7 +283,7 @@ struct RadioDetailView: View {
         } else if viewModel.radioConnected {
             if viewModel.isPrimary {
                 Button { viewModel.disconnect() } label: {
-                    Label("Disconnect", systemImage: "bolt.horizontal.circle.fill")
+                    Label("Disconnect", systemImage: "xmark.circle")
                 }
             } else {
                 Text("Connected. Disconnecting from the first radio stops every radio.")
@@ -292,7 +292,7 @@ struct RadioDetailView: View {
             }
         } else {
             Button { viewModel.connectThisRadio() } label: {
-                Label("Connect", systemImage: "bolt.horizontal.circle")
+                Label("Connect", systemImage: "link")
             }
             .disabled(!viewModel.enabled || viewModel.radioUnavailableReason != nil)
         }
@@ -354,21 +354,10 @@ struct RadioDetailView: View {
         }
     }
 
-    /// What this radio has been heard carrying, when the traffic settles it.
-    ///
-    /// Both families or neither reads as unsettled. A radio bridging two
-    /// worlds has no single convention to quote, and advice for the wrong one
-    /// is worse than none.
-    private var trafficFamily: RadioTrafficFamily? {
-        let families = RadioTrafficClassifier.families(from: client.stations)[radioID] ?? []
-        return families.count == 1 ? families.first : nil
-    }
-
-    /// Which SSID convention to quote. What the radio has been heard carrying
-    /// wins; before that an APRS channel has its published convention, and a
-    /// packet channel has only what the neighbors turn out to use.
-    private var adviceFamily: RadioTrafficFamily? {
-        trafficFamily ?? (channel == .aprs ? .aprs : nil)
+    /// Which SSID convention to quote: the published one on an APRS channel,
+    /// the neighbors' habits on a packet channel. See `SSIDConvention.family(for:)`.
+    private var adviceFamily: RadioTrafficFamily {
+        SSIDConvention.family(for: channel)
     }
 
     /// This radio's SSID, or nil when it operates under a callsign of its own.
@@ -431,10 +420,10 @@ struct RadioDetailView: View {
         case .aprs:
             text += " The meanings shown are the published APRS convention, which other "
                 + "people's software reads whatever you meant by it."
-        case .ax25:
+        case .ax25 where SSIDConvention.hasLocalMeanings(ssidUsage):
             text += " Packet has no standard for SSIDs, so the meanings shown are what "
                 + "this station has heard its own neighbors use them for."
-        case nil:
+        case .ax25:
             text += " Packet has no standard for SSIDs. Meanings from your neighbors appear "
                 + "here once this radio has heard enough of them."
         }
@@ -599,11 +588,13 @@ struct RadioDetailView: View {
             LabeledContent("Latitude") {
                 TextField("Latitude", text: coordString(\.latitude), prompt: Text("39.5000"))
                     .labelsHidden()
+                    .coordinateEntry()
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 140)
             }
             LabeledContent("Longitude") {
                 TextField("Longitude", text: coordString(\.longitude), prompt: Text("-105.2500"))
                     .labelsHidden()
+                    .coordinateEntry()
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 140)
             }
         }

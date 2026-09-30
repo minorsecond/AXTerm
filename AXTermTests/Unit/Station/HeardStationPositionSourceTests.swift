@@ -49,7 +49,7 @@ final class HeardStationPositionSourceTests: XCTestCase {
             StationPlausibility.positionSourceLine(
                 source: try XCTUnwrap(e.positionSource),
                 verdict: .plausible),
-            "Position from APRS position (heard over the air).")
+            "Beaconed position, heard over the air.")
     }
 
     func testLicencePreferenceUsesTheLicenceAddressAndTagsItDerived() throws {

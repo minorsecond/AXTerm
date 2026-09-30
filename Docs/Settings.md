@@ -70,9 +70,14 @@ Top to bottom:
    the TNC's own sections: a Mobilinkd TNC4's audio and interface, or the sound
    modem's rig control, transmit level and radio setup.
 2. **Identity**: the SSID under the station's base call, or another callsign.
+   The picker shows the published APRS meaning of each SSID only on an APRS
+   channel; a packet radio shows what its neighbors use an SSID for, or
+   nothing (`SSIDConvention.family(for:)`).
 3. **Channel**: APRS or Packet, a segmented control. It reads and writes
    `RadioProfile.aprsEnabled`, which stays the stored truth (`RadioChannel`).
-4. On an **APRS** channel: the **APRS path** (presets and advice) and the
+4. On an **APRS** channel: the **APRS path** (presets and advice; a radio
+   moved to APRS for the first time with no path set starts at
+   `WIDE1-1,WIDE2-1`, see MultiRadio.md) and the
    **Position beacon** (on/off, symbol and overlay, comment, position,
    ambiguity, compressed, a preview of the info field, interval, Send one now).
    On a **Packet** channel: **Services on this radio** (announce the NET/ROM
@@ -117,6 +122,9 @@ own copies. How the values reach the air depends on the transport
 | Bluetooth LE TNC | `KISSLinkBLE` sends the KISS frames | on connect, and again when they change (`applyLive`) |
 | Serial Mobilinkd | `KISSLinkSerial` sends them | on connect, and again when they change |
 | Network TNC (Direwolf), plain serial TNC | only when "Send these to the TNC" is on (`sendsKISSTiming`, off by default); `RadioManager` sends them on the radio's KISS port | on connect, and again when they change |
+
+With "Send these to the TNC" off, the four fields are dimmed and locked but
+keep their values (`RadioTimingSection.fieldsEditable`).
 
 While a radio's page is open the engine does not reconcile, so a half-typed
 host does not reopen the link on every keystroke. Timing and a TNC4's levels

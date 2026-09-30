@@ -133,7 +133,7 @@ struct ConnectionStatusStripView: View {
 
     private func relayHopHelp(_ hop: NetRomRelayProgress.Hop) -> String {
         switch hop.state {
-        case .done: return "\(hop.name) is on the chain — the link to it is made."
+        case .done: return "\(hop.name) is on the chain. The link to it is made."
         case .active: return "Negotiating with \(hop.name) right now."
         case .pending: return "\(hop.name) has not been linked yet."
         }
@@ -303,8 +303,10 @@ struct ConnectionStatusStripView: View {
                 .fill(Color(platform: .platformTertiaryLabel))
                 .frame(width: 8, height: 8)
             
-            // "Not connected" - subheadline, clearly not connected state
-            Text("Not connected")
+            // "No session" rather than "Not connected": this strip is about
+            // the AX.25 link to a station, and "Not connected" over a live
+            // TNC read as the TNC being down. The TNC strip speaks for the TNC.
+            Text("No session")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
 
@@ -320,7 +322,7 @@ struct ConnectionStatusStripView: View {
                 Text("·")
                     .foregroundStyle(.tertiary)
 
-                Text("Select a station and Connect")
+                Text("Pick a station to connect to")
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
             }
@@ -343,7 +345,7 @@ struct ConnectionStatusStripView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .help("How a connect to \(destinationCall) would be relayed, "
-                          + "from what this station has learned — measured routes "
+                          + "from what this station has learned: measured routes "
                           + "first, then each node's own directory. Hover each hop "
                           + "for its evidence. Every hop is proven live during the "
                           + "connect before the next is asked.")

@@ -227,32 +227,48 @@ struct SetupPositionStep: View {
         }
     }
 
+    /// The label beside the two fields where they fit, above them on a phone.
     private var coordinateRow: some View {
-        HStack(spacing: 8) {
-            Text("Coordinates")
-            Spacer(minLength: 8)
-            // Only the numbers are monospace; the row's label stays in the
-            // form's own font like every other row.
-            Group {
-                TextField("Latitude", text: $manualLatitude)
-                    .frame(width: 110)
-                TextField("Longitude", text: $manualLongitude)
-                    .frame(width: 110)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                Text("Coordinates")
+                Spacer(minLength: 8)
+                coordinateFields(width: CoordinateFieldWidth.points)
             }
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.body, design: .monospaced))
-            if !manualLatitude.isEmpty || !manualLongitude.isEmpty {
-                Button {
-                    manualLatitude = ""
-                    manualLongitude = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .help("Clear the coordinate")
-                .accessibilityLabel("Clear coordinate")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Coordinates")
+                HStack(spacing: 8) { coordinateFields(width: nil) }
             }
+        }
+    }
+
+    /// Fixed width beside the label; sharing the row when stacked.
+    @ViewBuilder
+    private func coordinateFields(width: CGFloat?) -> some View {
+        // Only the numbers are monospace; the row's label stays in the
+        // form's own font like every other row.
+        Group {
+            TextField("Latitude", text: $manualLatitude)
+                .frame(width: width)
+                .frame(maxWidth: width == nil ? .infinity : nil)
+            TextField("Longitude", text: $manualLongitude)
+                .frame(width: width)
+                .frame(maxWidth: width == nil ? .infinity : nil)
+        }
+        .coordinateEntry()
+        .textFieldStyle(.roundedBorder)
+        .font(.system(.body, design: .monospaced))
+        if !manualLatitude.isEmpty || !manualLongitude.isEmpty {
+            Button {
+                manualLatitude = ""
+                manualLongitude = ""
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("Clear the coordinate")
+            .accessibilityLabel("Clear coordinate")
         }
     }
 

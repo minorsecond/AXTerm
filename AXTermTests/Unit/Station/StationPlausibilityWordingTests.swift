@@ -29,7 +29,7 @@ final class StationPlausibilityWordingTests: XCTestCase {
     func testAStationInRangeIsStillSaidToHaveBeenHeard() {
         let line = StationPlausibility.positionSourceLine(
             source: "APRS position", verdict: verdict(for: nearby))
-        XCTAssertEqual(line, "Position from APRS position (heard over the air).")
+        XCTAssertEqual(line, "Beaconed position, heard over the air.")
     }
 
     func testAStationBeyondRangeIsNotSaidToHaveBeenHeard() {
@@ -75,7 +75,7 @@ final class StationPlausibilityWordingTests: XCTestCase {
     func testAStationWithNoPositionKeepsItsPlainWording() {
         let line = StationPlausibility.positionSourceLine(
             source: "license address", verdict: verdict(for: nil))
-        XCTAssertEqual(line, "Position from license address (heard over the air).")
+        XCTAssertEqual(line, "Position from license address; the station itself was heard over the air.")
     }
 
     /// A position inferred from the operator's license is about the person,

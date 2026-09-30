@@ -41,6 +41,7 @@ struct DestinationPickerControl: View {
                 Text("To:")
                     .font(.system(size: compactLabel ? 11 : 12, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .fixedSize()
 
                 HStack(spacing: 6) {
                     // On touch this is a *button*, not a text field.

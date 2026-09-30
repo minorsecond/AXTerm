@@ -245,7 +245,7 @@ nonisolated enum APRSDigestLine {
 
     /// Speed and heading, with 0 knots left out: a parked mobile reporting
     /// "0 mph at 0°" is three words saying nothing.
-    private static func motion(courseDegrees: Int?, speedKnots: Int?, inMiles: Bool) -> String? {
+    static func motion(courseDegrees: Int?, speedKnots: Int?, inMiles: Bool) -> String? {
         let course = APRSParser.validCourse(courseDegrees)
         guard let speedKnots, speedKnots > 0 else {
             return course.map { "heading \($0)°" }

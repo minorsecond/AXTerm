@@ -132,11 +132,20 @@ struct AddRadioSheet: View {
         }
 
         SetupCard(title: linkBinding.wrappedValue.title, note: linkBinding.wrappedValue.summary) {
-            LabeledContent("Name") {
-                DraftTextField("Name", text: $viewModel.name, prompt: RadioProfile.defaultName(for: radio))
-                    .labelsHidden()
-                    .frame(maxWidth: 240)
+            // Laid out like the Host and Port rows below it: label, then a
+            // bordered field starting at the left. As a LabeledContent the
+            // name sat right-aligned and borderless above left-aligned fields.
+            Grid(alignment: .leading, verticalSpacing: 10) {
+                GridRow {
+                    Text("Name")
+                        .gridColumnAlignment(.trailing)
+                    DraftTextField("Name", text: $viewModel.name, prompt: RadioProfile.defaultName(for: radio))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: .infinity)
+                }
             }
+            .padding(.vertical, 4)
             Divider()
             switch viewModel.selectedTransport {
             case .network: NetworkSettingsContent(viewModel: viewModel)
@@ -264,7 +273,7 @@ struct AddRadioSheet: View {
             }
             Spacer(minLength: 0)
             if let ssid = flow.ssid, !usesOwnCallsign,
-               let meaning = SSIDConvention.detail(ssid: ssid, family: channel == .aprs ? .aprs : nil, usage: [:]) {
+               let meaning = SSIDConvention.detail(ssid: ssid, family: SSIDConvention.family(for: channel), usage: [:]) {
                 Text(meaning)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -329,7 +338,7 @@ struct AddRadioSheet: View {
         let call = ssid == 0 ? stationCallsign : "\(stationCallsign)-\(ssid)"
         let detail = taken.contains(ssid)
             ? "used by another radio"
-            : SSIDConvention.detail(ssid: ssid, family: channel == .aprs ? .aprs : nil, usage: [:])
+            : SSIDConvention.detail(ssid: ssid, family: SSIDConvention.family(for: channel), usage: [:])
         if let detail {
             Text("\(call)  \u{00B7}  \(detail)")
         } else {

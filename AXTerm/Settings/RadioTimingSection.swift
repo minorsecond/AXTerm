@@ -16,7 +16,14 @@ struct RadioTimingSection: View {
     @ObservedObject var viewModel: ConnectionTransportViewModel
     let delivery: RadioProfile.TimingDelivery
 
-    private var sent: Bool { delivery != .optional || viewModel.sendsKISSTiming }
+    private var sent: Bool { Self.fieldsEditable(delivery: delivery, sendsTiming: viewModel.sendsKISSTiming) }
+
+    /// Whether the four values can be edited. Only when something uses them:
+    /// with "Send these to the TNC" off nothing is sent, so the fields are
+    /// dimmed and locked, keeping their values for when it is switched on.
+    nonisolated static func fieldsEditable(delivery: RadioProfile.TimingDelivery, sendsTiming: Bool) -> Bool {
+        delivery != .optional || sendsTiming
+    }
 
     var body: some View {
         Section {
@@ -27,17 +34,16 @@ struct RadioTimingSection: View {
                           + "AXTerm sends the values below as KISS commands on this radio's "
                           + "port each time it connects, and again when you change one.")
             }
-            Group {
-                row("TX delay", value: $viewModel.txDelayMs, unit: "ms", range: 0...2000, step: 10,
-                    help: Self.txDelayHelp)
-                row("Persistence", value: $viewModel.persistence, unit: "", range: 0...255, step: 1,
-                    help: Self.persistenceHelp)
-                row("Slot time", value: $viewModel.slotTimeMs, unit: "ms", range: 10...1000, step: 10,
-                    help: Self.slotTimeHelp)
-                row("TX tail", value: $viewModel.txTailMs, unit: "ms", range: 0...1000, step: 10,
-                    help: Self.txTailHelp)
-            }
-            .disabled(!sent)
+            // Disabled row by row: on iOS a `.disabled` on a Group around
+            // the rows left every field editable.
+            row("TX delay", value: $viewModel.txDelayMs, unit: "ms", range: 0...2000, step: 10,
+                help: Self.txDelayHelp)
+            row("Persistence", value: $viewModel.persistence, unit: "", range: 0...255, step: 1,
+                help: Self.persistenceHelp)
+            row("Slot time", value: $viewModel.slotTimeMs, unit: "ms", range: 10...1000, step: 10,
+                help: Self.slotTimeHelp)
+            row("TX tail", value: $viewModel.txTailMs, unit: "ms", range: 0...1000, step: 10,
+                help: Self.txTailHelp)
         } header: {
             Text("Timing")
         } footer: {
@@ -89,15 +95,20 @@ struct RadioTimingSection: View {
 
     private func row(_ title: String, value: Binding<Int>, unit: String,
                      range: ClosedRange<Int>, step: Int, help: String) -> some View {
-        LabeledContent(title) {
+        LabeledContent {
             HStack(spacing: 6) {
                 TextField(title, value: value, format: .number)
                     .labelsHidden()
                     .frame(width: 60)
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.trailing)
+                    #if os(iOS)
+                    .keyboardType(.numberPad)
+                    #endif
+                    .disabled(!sent)
                 Stepper(title, value: value, in: range, step: step)
                     .labelsHidden()
+                    .disabled(!sent)
                 // Every row keeps the unit column, so Persistence, which has
                 // no unit, lays out on one line like the other three.
                 Text(unit.isEmpty ? "ms" : unit)
@@ -106,6 +117,10 @@ struct RadioTimingSection: View {
                     .opacity(unit.isEmpty ? 0 : 1)
                     .accessibilityHidden(unit.isEmpty)
             }
+            .opacity(sent ? 1 : 0.5)
+        } label: {
+            Text(title)
+                .foregroundStyle(sent ? .primary : .secondary)
         }
         .help(help)
     }

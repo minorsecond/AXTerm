@@ -949,3 +949,58 @@ Two bugs found by running the app rather than the tests:
 Also: on the real Denver station set every untried path is genuinely blocked,
 which drew an empty map. The paths menu now always reports the outcome and
 names the nearest miss.
+
+## iPad and iPhone polish (2026-09-30)
+
+Found by driving the app on an iPad mini and an iPhone 17 Pro simulator
+against a receive-only Direwolf with live APRS traffic.
+
+### Packets
+
+- **Tags.** A UI frame's tag comes from `PacketTypeTag`: the APRS data type
+  when `APRSDigest` decodes it (POS, MIC-E, WX, OBJ, ITEM, STATUS, MSG,
+  MSG ACK, MSG REJ, BLN, QUERY, TLM), otherwise ID, MAIL or BCN, the words
+  the terminal's filter chips use. Telemetry setup messages (`PARM.`,
+  `UNIT.`, `EQNS.`, `BITS.`) are TLM, not MSG. Connected-mode frames keep
+  their control-field tag. Routing still reads `PacketClassification`; the
+  tag is display only. The Mac table and the inspector header use it too.
+- **Copies.** `PacketDuplicates` marks the same frame heard again by another
+  path within five seconds, the terminal's rule and window. The first
+  sighting shows the terminal's "+1"; each later one shows "copy" and dims
+  its payload. iOS only for now.
+- **Tap to open.** A tap opens the inspector sheet; the long-press menu is
+  still there. The sheet has Done and no Close button.
+
+### Terminal
+
+The filter chips keep their labels on one line and scroll sideways when the
+row is short. The session line says "No session", with "Pick a station to
+connect to" when the TNC is up, so it cannot be read as the TNC being down.
+On an iPad the compose bar takes the phone's two-line layout when one line
+does not fit (`ViewThatFits`), so the callsign field keeps its width and
+"Auto Connect" stays on one line.
+
+### Map
+
+With no position of its own the map now draws the heard stations, centered
+on them (`MapCenterRule`), with no pin of our own and no distances, under a
+banner whose Set Position button opens General › Station position. The
+scope view still needs a position. The legend starts closed on iOS. The
+station card no longer repeats the callsign, quotes speed and course
+("37 mph at 274°") when the beacon carried them, and says "Beaconed
+position, heard over the air."
+
+### Shell and settings
+
+- The iPad's floating tab bar leaves wide margins, and seven names did not
+  fit an iPad mini in portrait, so Messages and Settings hid behind a
+  scroll arrow. Below 1,000 points of width the tabs show their symbols
+  only (names stay as accessibility labels). Forcing a compact size class
+  for the bottom bar was tried and rejected: UIKit then folds tabs five and
+  up into More.
+- Setup sheets (first run, Add Radio) size to their content: a height
+  detent on a phone, a form sheet fitted to the content on an iPad.
+- Coordinate fields use the numbers-and-punctuation keyboard, which has the
+  minus sign a number pad lacks.
+- The settings list shows the callsign under General and the radio's name
+  and endpoint under Radios.

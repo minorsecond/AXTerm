@@ -236,7 +236,7 @@ extension ConsoleTypeFilterFlags.Kind {
     var tooltip: String {
         switch self {
         case .mine:
-            return "Only traffic this station is a party to \u{2014} sent by you, addressed to you, or digipeated by you. Matches any SSID of your callsign. On this channel most frames are conversations between other stations."
+            return "Only traffic this station is a party to: sent by you, addressed to you, or digipeated by you. Matches any SSID of your callsign. On this channel most frames are conversations between other stations."
         case .id:
             return "Station identification broadcasts. Stations periodically announce their callsign and capabilities."
         case .beacon:
@@ -244,7 +244,7 @@ extension ConsoleTypeFilterFlags.Kind {
         case .mail:
             return "Mail notifications. Alerts about new messages waiting at a BBS or mailbox."
         case .data:
-            return "Content messages. The actual data being exchanged \u{2014} personal messages, bulletins, and transferred information."
+            return "Content messages. The actual data being exchanged: personal messages, bulletins, and transferred information."
         case .prompt:
             return "AX.25 Link Control frames. Protocol-level session messages like SABM, DISC, RR, and UA."
         case .other:
@@ -457,11 +457,23 @@ struct ConsoleView: View {
                 HStack(spacing: 12) {
                     Toggle("Auto-scroll", isOn: $autoScroll)
                         .platformCheckboxToggle()
+                        // Its own width first: on a phone the chip row took
+                        // the space and broke the label into "scro / ll".
+                        .fixedSize()
 
+                    // Filter toggles. On iOS they scroll sideways when the
+                    // row is short of room: squeezed into it, each chip wrapped
+                    // its label mid-word ("BC/N", "OT/HE/R").
+                    #if os(iOS)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        filterToggleGroup
+                    }
+                    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                    #else
                     Spacer()
 
-                    // Filter toggles
                     filterToggleGroup
+                    #endif
 
                     Divider()
                         .frame(height: 16)
@@ -471,7 +483,7 @@ struct ConsoleView: View {
                     // back to a quiet console should not have to audit eight
                     // switches to find out why.
                     HStack(spacing: 4) {
-                        Text("\(groupedLines.count) messages")
+                        Text(CountPhrase.of(groupedLines.count, "message"))
                         if let restriction = currentFilterFlags.restrictionSummary {
                             Text("\u{b7} \(restriction)")
                                 .foregroundStyle(.orange)
@@ -483,6 +495,8 @@ struct ConsoleView: View {
                     }
                     .foregroundStyle(.secondary)
                     .font(.caption)
+                    .lineLimit(1)
+                    .fixedSize()
 
                     Button(action: {
                         clearConsole()
@@ -701,7 +715,7 @@ struct ConsoleView: View {
                 text: .init(
                     help: "Print APRS frames as they arrived instead of decoding them.\n\n"
                         + "A Mic-E position keeps its latitude in the AX.25 destination and the rest "
-                        + "in bytes that are not text, so raw is unreadable for most of them — but "
+                        + "in bytes that are not text, so raw is unreadable for most of them, but "
                         + "this is a terminal, and the wire is what it is for. Hovering a decoded "
                         + "line shows the same bytes without switching.",
                     soloTitle: "", toggleTitle: "Show APRS frames raw"))
@@ -1548,6 +1562,8 @@ struct FilterToggle: View {
     var body: some View {
         Text(label)
             .font(.system(size: 9, weight: .medium, design: .monospaced))
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(isOn ? color.opacity(isSoloed ? 0.35 : 0.2) : Color.gray.opacity(0.1))

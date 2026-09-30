@@ -91,6 +91,22 @@ nonisolated enum SSIDConvention {
 
     // MARK: - What the picker shows
 
+    /// Which convention to quote for a radio on `channel`. APRS meanings only
+    /// on an APRS channel, whatever the radio has happened to hear: on a
+    /// packet channel they contradicted the footer saying packet has no
+    /// standard. A packet radio gets what its neighbors use instead.
+    static func family(for channel: RadioChannel) -> RadioTrafficFamily {
+        switch channel {
+        case .aprs: return .aprs
+        case .packet: return .ax25
+        }
+    }
+
+    /// True when the neighbors' usage names a meaning for at least one SSID.
+    static func hasLocalMeanings(_ usage: [Int: [StationServiceParser.Service: Int]]) -> Bool {
+        range.contains { localMeaning($0, usage: usage) != nil }
+    }
+
     /// The line beside an SSID.
     ///
     /// `family` is what the radio has been *heard* carrying, not what it is

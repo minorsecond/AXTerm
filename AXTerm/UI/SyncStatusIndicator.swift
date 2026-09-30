@@ -28,14 +28,18 @@ struct SyncStatusIndicator: View {
         if case .disabled = sync.status {
             EmptyView()
         } else {
-            HStack(spacing: 4) {
-                icon
-                if showsLabel, let label = shortLabel {
-                    Text(label)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+            Group {
+                #if os(iOS)
+                // The label never truncates: where the toolbar has no room
+                // for it ("No iClo…" on an iPad) the glyph stands alone, and
+                // the accessibility label and value still say it all.
+                ViewThatFits(in: .horizontal) {
+                    labeled
+                    icon.padding(.horizontal, 6)
                 }
+                #else
+                labeled
+                #endif
             }
             .toolbarPill()
             .onTapGesture { sync.syncNow() }
@@ -44,6 +48,23 @@ struct SyncStatusIndicator: View {
             .accessibilityLabel("iCloud sync")
             .accessibilityValue(sync.status.summary)
         }
+    }
+
+    private var labeled: some View {
+        HStack(spacing: 4) {
+            icon
+            if showsLabel, let label = shortLabel {
+                Text(label)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        #if os(iOS)
+        .padding(.horizontal, 6)
+        #endif
     }
 
     @ViewBuilder

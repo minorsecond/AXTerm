@@ -633,7 +633,7 @@ private struct RoutingPopoverContent: View {
                     .lineLimit(1)
             }
 
-            Text("\(viewModel.viaHopCount) hops")
+            Text(CountPhrase.of(viewModel.viaHopCount, "hop"))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(viewModel.viaHopCount > 2 ? .orange : .secondary)
         }
@@ -1144,7 +1144,7 @@ private struct ConnectBarAdvancedDisclosure: View {
                     .lineLimit(1)
             }
 
-            Text("\(viewModel.viaHopCount) hops")
+            Text(CountPhrase.of(viewModel.viaHopCount, "hop"))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(viewModel.viaHopCount > 2 ? .orange : .secondary)
                 .padding(.horizontal, 8)
@@ -1493,44 +1493,20 @@ struct TerminalComposeView: View {
                 // only at a compact width costs the desktop nothing: it is
                 // the one width where a single line was never possible.
                 if isCompactWidth {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            connectionModeToggle
-                            Spacer(minLength: 8)
-                            if connectionMode == .connected {
-                                connectStatusText
-                                sessionActionButton
-                            } else {
-                                broadcastStrip
-                            }
-                        }
-                        if connectionMode == .connected {
-                            HStack(spacing: 8) {
-                                destinationControl
-                                routingCapsule
-                            }
-                            // Full width rather than intrinsic: four segments
-                            // across a phone is 90 points each, which is a
-                            // readable control. Intrinsic width plus the
-                            // toggle overflows the row all over again.
-                            routingPicker
-                        }
-                    }
+                    twoLineSetupRow
                 } else {
-                    HStack(spacing: 8) {
-                        connectionModeToggle
-                        if connectionMode == .connected {
-                            destinationControl
-                            routingPicker
-                            routingCapsule
-                            Spacer(minLength: 8)
-                            connectStatusText
-                            sessionActionButton
-                        } else {
-                            broadcastStrip
-                            Spacer(minLength: 8)
-                        }
+                    #if os(iOS)
+                    // An iPad in portrait is a regular width but not a wide
+                    // one: on a mini the single line squeezed the callsign
+                    // field to "Calls…" and wrapped "Auto Connect". It takes
+                    // the phone's two lines whenever one does not fit.
+                    ViewThatFits(in: .horizontal) {
+                        singleLineSetupRow
+                        twoLineSetupRow
                     }
+                    #else
+                    singleLineSetupRow
+                    #endif
                 }
 
                 // Row 1 — compose. The message/broadcast field + Send.
@@ -1612,6 +1588,51 @@ struct TerminalComposeView: View {
 
     // MARK: Setup row pieces
 
+    /// The setup row on one line: a Mac window or a wide iPad.
+    private var singleLineSetupRow: some View {
+        HStack(spacing: 8) {
+            connectionModeToggle
+            if connectionMode == .connected {
+                destinationControl
+                routingPicker
+                routingCapsule
+                Spacer(minLength: 8)
+                connectStatusText
+                sessionActionButton
+            } else {
+                broadcastStrip
+                Spacer(minLength: 8)
+            }
+        }
+    }
+
+    /// The setup row on two lines, for a phone or a narrow iPad.
+    private var twoLineSetupRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                connectionModeToggle
+                Spacer(minLength: 8)
+                if connectionMode == .connected {
+                    connectStatusText
+                    sessionActionButton
+                } else {
+                    broadcastStrip
+                }
+            }
+            if connectionMode == .connected {
+                HStack(spacing: 8) {
+                    destinationControl
+                    routingCapsule
+                }
+                // Full width rather than intrinsic: four segments
+                // across a phone is 90 points each, which is a
+                // readable control. Intrinsic width plus the
+                // toggle overflows the row all over again.
+                routingPicker
+            }
+        }
+    }
+
     // Extracted so the compact and regular arrangements share one definition
     // of each control rather than two that drift apart.
 
@@ -1658,7 +1679,14 @@ struct TerminalComposeView: View {
                     }
                 }
             )
-            .frame(maxWidth: isCompactWidth ? .infinity : 240)
+            #if os(iOS)
+            // Room for a full callsign-SSID; without a floor the field was
+            // the first thing squeezed.
+            .frame(minWidth: 170, maxWidth: isCompactWidth ? .infinity : 240)
+            #else
+            .frame(maxWidth: 240)
+            #endif
+            .layoutPriority(1)
         }
     }
 
@@ -1676,7 +1704,7 @@ struct TerminalComposeView: View {
         // on a phone, where it has the row to itself.
         .modifier(SegmentedWidth(fillsRow: isCompactWidth))
         .disabled(sessionState == .connected)
-        .help("Auto tries the best route it knows — direct, then a digipeater, then a NET/ROM circuit, then a node relay. Or force one.")
+        .help("Auto tries the best route it knows: direct, then a digipeater, then a NET/ROM circuit, then a node relay. Or force one.")
         .accessibilityIdentifier("connectBar.routingChoice")
     }
 
@@ -1708,11 +1736,13 @@ struct TerminalComposeView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.red.opacity(0.7))
                 .lineLimit(1)
+                .layoutPriority(-1)
         } else if let autoStatus = connectBarViewModel.autoAttemptStatus {
             Text(autoStatus)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .layoutPriority(-1)
         }
     }
 
@@ -1722,12 +1752,18 @@ struct TerminalComposeView: View {
             Button(sessionActionTitle) {
                 handleSessionAction()
             }
+            .lineLimit(1)
+            .fixedSize()
             .buttonStyle(.bordered)
             .controlSize(.small)
             .accessibilityIdentifier("connectBar.disconnectButton")
         } else {
-            Button(sessionActionTitle) {
+            Button {
                 handleSessionAction()
+            } label: {
+                Text(sessionActionTitle)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)

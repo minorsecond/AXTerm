@@ -115,7 +115,7 @@ struct StationsMapView: View {
     /// learns the reach was overridden and why.
     static func pingHelp(label: String, reach: APRSProbeReach,
                          advice: APRSReachAdvice, selected: APRSProbeReach) -> String {
-        var text = "Send \(label) a position request (?APRSP) \u{2014} a targeted "
+        var text = "Send \(label) a position request (?APRSP), a targeted "
         text += "\u{201C}can you hear me\u{201D}. "
         text += reach == .wide
             ? "Digipeated on this radio's APRS path, so an answer proves the station is "
@@ -124,7 +124,7 @@ struct StationsMapView: View {
         // Silence about an override would be the worst of both: the operator
         // picked one reach and a different one goes out.
         if advice.disagrees(with: selected), let caution = advice.caution {
-            text += " \u{2014} " + caution
+            text += " But: " + caution
         } else if let caution = advice.caution {
             text += " " + caution
         }
@@ -397,19 +397,19 @@ struct StationsMapView: View {
     /// nothing and reads better besides.
     private var findPositionsHelp: String {
         guard settings.callsignLookupEnabled else {
-            return "Turn on \u{201C}Look up callsigns online\u{201D} in Settings \u{2192} Winlink first. "
+            return "Turn on \u{201C}Look up callsigns online\u{201D} in Settings \u{203A} Winlink first. "
                  + "It is off by default because a lookup tells a third party which stations you are hearing."
         }
         let candidates = HeardStationMap.lookupCandidates(unplaced, aliases: aliases.directory).count
         var text = "Tries the \(candidates) unplaced callsigns again."
         if showsDirectoryNodes {
             text += " With the node directory shown, each press also looks up "
-                  + "as many as forty directory operators — the ones most nodes "
-                  + "vouch for first — so the layer fills in a batch at a time "
+                  + "as many as forty directory operators, the ones most nodes "
+                  + "vouch for first, so the layer fills in a batch at a time "
                   + "rather than flooding the lookup service."
         }
         text += " Lookups run on their own as stations are heard; this is for retrying the ones"
-              + " that failed — after the network came back, say. Answers are cached permanently"
+              + " that failed, after the network came back, say. Answers are cached permanently"
               + " and keep working offline."
         return text
     }
@@ -528,7 +528,7 @@ struct StationsMapView: View {
             return "\(snapshot.predictions.count) untried paths checked, "
                 + "none clear at \(assumed) assumed"
         }
-        return "None clear at \(assumed) assumed \u{2014} closest is "
+        return "None clear at \(assumed) assumed. Closest is "
             + "\(closest.from)\u{2013}\(closest.to), terrain \(describe(metres)) above the line"
     }
 
@@ -634,6 +634,12 @@ struct StationsMapView: View {
     /// anything that matters at map zoom.
     static let observerJitterFloorMetres = 25.0
 
+    /// What the map is drawn around: this station, or without its position
+    /// the heard stations (`MapCenterRule`). Nil only with neither.
+    private var mapCenter: MapCenterRule.Center? {
+        MapCenterRule.center(own: observer, heard: placed.compactMap(\.position))
+    }
+
     /// Reference box, same pattern as `PathAssemblyCache`: mutating it
     /// during a body evaluation must never invalidate the view.
     nonisolated final class ObserverAnchor {
@@ -699,7 +705,7 @@ struct StationsMapView: View {
             guard let names = badges[CallsignQuery.normalize(entry.callsign)]
             else { return entry }
             var entry = entry
-            let badge = "Node — \(names.joined(separator: ", "))"
+            let badge = "Node: \(names.joined(separator: ", "))"
             entry.name = entry.name.map { "\($0) · \(badge)" } ?? badge
             return entry
         }
@@ -1074,7 +1080,8 @@ struct StationsMapView: View {
     private var unplaced: [HeardStationMap.Entry] { visibleEntries.filter { !$0.isPlaced } }
 
     private var scope: StationScope {
-        guard let observer else { return StationScope.build(observerLabel: "", sites: []) }
+        guard let center = mapCenter else { return StationScope.build(observerLabel: "", sites: []) }
+        let observer = center.point
         // Showing transmitted positions means showing *only* stations at their
         // own beaconed fix — a license/registry guess is not a transmitted
         // position, so those heard stations are dropped from the map (nodes and
@@ -1086,14 +1093,16 @@ struct StationsMapView: View {
         let stationScope = HeardStationMap.scope(
             observerLabel: observerGrid.uppercased(),
             observer: observer, entries: entriesForMap, now: Date(),
-            distanceInMiles: settings.distanceUnitIsMiles)
+            distanceInMiles: settings.distanceUnitIsMiles,
+            showsDistance: center.showsDistances)
         guard showsObjects else { return stationScope }
         // Objects sit alongside stations rather than replacing them: a fire
         // and the station reporting it are two different points and an
         // operator needs both.
         return StationScope.build(
             observerLabel: stationScope.observerLabel,
-            sites: stationScope.sites + objectSites(observer: observer))
+            sites: stationScope.sites + objectSites(observer: observer,
+                                                    showsDistance: center.showsDistances))
     }
 
     /// One of our own live objects, by the site id the card was built from.
@@ -1109,7 +1118,7 @@ struct StationsMapView: View {
 
     /// The heard objects as map sites. Ids are prefixed so an object named
     /// after a callsign can never collide with the station of that name.
-    private func objectSites(observer: GreatCircle.Point) -> [StationScope.Site] {
+    private func objectSites(observer: GreatCircle.Point, showsDistance: Bool) -> [StationScope.Site] {
         let now = Date()
         return objects.live(now: now).map { placed in
             let position = placed.position
@@ -1120,7 +1129,7 @@ struct StationsMapView: View {
                 bearingDegrees: GreatCircle.bearingDegrees(from: observer, to: position),
                 signal: placed.report.urgency == .hazard ? .poor : .good,
                 subtitle: placed.report.symbolLabel,
-                detail: Self.objectDetail(placed, observer: observer, now: now,
+                detail: Self.objectDetail(placed, observer: showsDistance ? observer : nil, now: now,
                                           inMiles: settings.distanceUnitIsMiles),
                 isStale: now.timeIntervalSince(placed.heard) > HeardStationMap.activeWindow,
                 aprsSymbol: APRSMapSymbol(table: placed.report.symbolTable,
@@ -1136,7 +1145,7 @@ struct StationsMapView: View {
     /// claim by a person, and who made it is the first thing that decides
     /// how much weight it carries.
     static func objectDetail(_ placed: APRSObjectStore.Placed,
-                             observer: GreatCircle.Point, now: Date,
+                             observer: GreatCircle.Point?, now: Date,
                              inMiles: Bool) -> String {
         var lines = [placed.report.name]
         lines.append(placed.report.symbolLabel
@@ -1144,17 +1153,19 @@ struct StationsMapView: View {
         if !placed.report.comment.trimmingCharacters(in: .whitespaces).isEmpty {
             lines.append(placed.report.comment.trimmingCharacters(in: .whitespaces))
         }
-        let kilometres = GreatCircle.kilometres(from: observer, to: placed.position)
-        let bearing = GreatCircle.bearingDegrees(from: observer, to: placed.position)
-        lines.append(String(format: "%@ at %.0f\u{00b0} (%@)",
-                            DistanceDisplay.string(kilometres: kilometres, inMiles: inMiles),
-                            bearing, GreatCircle.compassPoint(bearing)))
+        if let observer {
+            let kilometres = GreatCircle.kilometres(from: observer, to: placed.position)
+            let bearing = GreatCircle.bearingDegrees(from: observer, to: placed.position)
+            lines.append(String(format: "%@ at %.0f\u{00b0} (%@)",
+                                DistanceDisplay.string(kilometres: kilometres, inMiles: inMiles),
+                                bearing, GreatCircle.compassPoint(bearing)))
+        }
         lines.append("")
         lines.append("Reported by \(placed.reportedBy)")
         lines.append("Heard \(placed.heard.formatted(.relative(presentation: .named)))"
                      + (placed.timesHeard > 1 ? " \u{b7} repeated \(placed.timesHeard) times" : ""))
         if placed.timesHeard == 1 {
-            lines.append("Heard once and not repeated \u{2014} treat as unconfirmed.")
+            lines.append("Heard once and not repeated, so treat it as unconfirmed.")
         }
         return lines.joined(separator: "\n")
     }
@@ -1225,9 +1236,12 @@ struct StationsMapView: View {
             header
             Divider()
             #endif
-            if observer == nil {
+            if mapCenter == nil {
                 noPosition
             } else {
+                // No position of our own: the heard stations are still drawn,
+                // centered on them, and this says why no distances are shown.
+                if observer == nil { noOwnPositionBanner }
                 // Above every other banner: a hazard or a live warning is the
                 // reason someone opens this page in an emergency, and it must
                 // not sit below a note about callsign lookups.
@@ -1535,7 +1549,7 @@ struct StationsMapView: View {
                       : "Offline Map\u{2026}",
                       systemImage: "square.stack.3d.down.right")
             }
-            .help("Stores map tiles on this device so the map keeps working with no network \u{2014} the situation this app exists for. Import a file or download the area you are looking at.")
+            .help("Stores map tiles on this device so the map keeps working with no network, the situation this app exists for. Import a file or download the area you are looking at.")
             Button {
                 drawing.begin(.download)
             } label: {
@@ -1567,7 +1581,7 @@ struct StationsMapView: View {
             } label: {
                 Label("Station Directory\u{2026}", systemImage: "text.book.closed")
             }
-            .help("What the stations around here run \u{2014} nodes, bulletin boards, digipeaters and gateways, as they announced themselves in ID and beacon frames. The network's own directory, which nothing else assembles because nobody publishes one.")
+            .help("What the stations around here run (nodes, bulletin boards, digipeaters and gateways), as they announced themselves in ID and beacon frames. The network's own directory, which nothing else assembles because nobody publishes one.")
         }
 
         // Kept, against the first instinct to delete it as redundant.
@@ -1678,8 +1692,8 @@ struct StationsMapView: View {
                   systemImage: "antenna.radiowaves.left.and.right")
         }
         .fixedSize()
-        .help("One unaddressed APRS query that every station in earshot answers on its own "
-              + "\u{2014} the flood broadcast, not a poll. Forty directed queries would be "
+        .help("One unaddressed APRS query that every station in earshot answers on its own: "
+              + "the flood broadcast, not a poll. Forty directed queries would be "
               + "forty transmissions on a shared channel; this is one. Plain AX.25 nodes are "
               + "not listening for these and are never bothered. Replies keep arriving for two "
               + "minutes, and you can ask another question while they do.")
@@ -1847,7 +1861,7 @@ struct StationsMapView: View {
         }
         .disabled(observer == nil || onPlaceObject == nil)
         if observer == nil {
-            Text("No position yet \u{2014} set a grid square or wait for a fix")
+            Text("No position yet. Set a grid square or wait for a fix.")
         }
         Divider()
         #endif
@@ -1984,7 +1998,7 @@ struct StationsMapView: View {
                                 .font(.caption.weight(.semibold))
                             Text("Reported by \(hazard.reportedBy), heard "
                                  + hazard.heard.formatted(.relative(presentation: .named))
-                                 + (hazard.timesHeard == 1 ? " \u{2014} unconfirmed" : ""))
+                                 + (hazard.timesHeard == 1 ? " (unconfirmed)" : ""))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -2037,7 +2051,30 @@ struct StationsMapView: View {
         if unplaced.isEmpty {
             return "\(placed.count) station\(placed.count == 1 ? "" : "s"), all placed\(suffix)"
         }
-        return "\(placed.count) of \(entries.count) placed \u{2014} \(unplaced.count) with no known position\(suffix)"
+        return "\(placed.count) of \(entries.count) placed, \(unplaced.count) with no known position\(suffix)"
+    }
+
+    /// The map without a position of our own: the heard stations are drawn,
+    /// the distances are not, and the way to fix it is one tap away.
+    private var noOwnPositionBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "location.slash")
+                .foregroundStyle(.orange)
+            Text("Your station has no position, so distances are left out.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button("Set Position\u{2026}") {
+                SettingsRouter.shared.navigate(to: .stationPosition)
+            }
+            .font(.caption)
+            .buttonStyle(.borderless)
+            .help("Opens Settings \u{203A} General \u{203A} Station position: this device\u{2019}s location, a latitude and longitude, or a grid square.")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.orange.opacity(0.10))
     }
 
     /// Says what the filter took away, and offers it straight back.
@@ -2049,7 +2086,7 @@ struct StationsMapView: View {
         HStack(spacing: 8) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(.secondary)
-            Text("\(distantStations.count) station\(distantStations.count == 1 ? "" : "s") hidden \u{2014} further than \(Int(StationPlausibility.defaultRangeKilometres)) km, so not heard by radio.")
+            Text("\(CountPhrase.of(distantStations.count, "station")) hidden: further than \(Int(StationPlausibility.defaultRangeKilometres)) km, so not heard by radio.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
@@ -2073,9 +2110,9 @@ struct StationsMapView: View {
                 Image(systemName: "mappin.slash")
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("\(unplaced.count) stations have no position")
+                    Text(unplaced.count == 1 ? "1 station has no position" : "\(unplaced.count) stations have no position")
                         .font(.callout.weight(.medium))
-                    Text("Gateways get a grid square from the RMS directory. Everyone else needs a callsign lookup \u{2014} it is off by default because it tells a third party which stations you hear.")
+                    Text("Gateways get a grid square from the RMS directory. Everyone else needs a callsign lookup, which is off by default because it tells a third party which stations you hear.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2099,11 +2136,15 @@ struct StationsMapView: View {
 
     @ViewBuilder
     private var mapPane: some View {
-        if let observer {
+        if let center = mapCenter?.point {
             if placed.isEmpty {
                 noPlacedStations
             } else if modeRaw == "Map" {
-                mapWithDrawing(observer: observer)
+                mapWithDrawing(observer: center)
+            } else if observer == nil {
+                // The scope is range and bearing from this station, which
+                // means nothing without its position.
+                noPosition
             } else {
                 StationScopeView(scope: scope, selection: $selection, legend: .recency,
                                  distanceInMiles: settings.distanceUnitIsMiles)
@@ -2140,6 +2181,7 @@ struct StationsMapView: View {
         ZStack(alignment: .top) {
             StationMapView(scope: scope, distanceInMiles: settings.distanceUnitIsMiles,
                            observer: observer,
+                           showsObserver: self.observer != nil,
                                coordinates: coordinates,
                                observerCallsign: myCallsign,
                                basemap: basemap, legend: .recency,
@@ -2307,7 +2349,7 @@ struct StationsMapView: View {
                         }
                     }
                     .help("Sent by the station itself. A value marked (raw) is the count as "
-                          + "transmitted \u{2014} the station has not published the equation "
+                          + "transmitted: the station has not published the equation "
                           + "that turns it into a measurement, so AXTerm will not guess one.")
                 }
                 if let chain = plannedChainFor?(site.id), !chain.isEmpty {
@@ -2335,7 +2377,7 @@ struct StationsMapView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
-                        .help("Opens the Terminal and starts the connect — relayed "
+                        .help("Opens the Terminal and starts the connect, relayed "
                               + "through the chain above when one is needed.")
                     }
                     if let onOpenProfile {
@@ -2541,8 +2583,8 @@ struct StationsMapView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .help("This station has put one of our own frames back on the air, so it receives us "
-              + "\u{2014} whatever it does about queries. Only a query sent through a "
+        .help("This station has put one of our own frames back on the air, so it receives us, "
+              + "whatever it does about queries. Only a query sent through a "
               + "digipeater path can produce this evidence; a direct one has no path to repeat.")
     }
 
@@ -2736,7 +2778,9 @@ struct StationsMapView: View {
         unavailable(
             symbol: "location.slash",
             title: "No position for this station",
-            message: "Everything is plotted relative to where you are. Set your position in Settings \u{2192} General: this device\u{2019}s location, a latitude and longitude, or a grid square.")
+            message: observer == nil && !placed.isEmpty
+                ? "The scope plots range and bearing from where you are. Set your position in Settings \u{203A} General: this device\u{2019}s location, a latitude and longitude, or a grid square."
+                : "Nothing heard has a position yet, and neither does this station. Set your position in Settings \u{203A} General: this device\u{2019}s location, a latitude and longitude, or a grid square.")
     }
 
     private var noPlacedStations: some View {
@@ -2780,7 +2824,7 @@ struct StationsMapView: View {
                 .fixedSize(horizontal: false, vertical: true)
             TextField("Name", text: $captureName, prompt: Text("e.g. Mount Evans"))
                 .textFieldStyle(.roundedBorder)
-            Text("Basemap: \(basemap.rawValue) \u{2014} captured as shown, so pick the one you want before saving.")
+            Text("Basemap: \(basemap.rawValue). It is captured as shown, so pick the one you want before saving.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let captureError {

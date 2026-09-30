@@ -101,6 +101,9 @@ struct AXTermiOSRootView: View {
             deviceLocation: context.locationService.lastLocation)
     }
 
+    /// The shell's width, for the tab labels (see `tabLabel`).
+    @State private var shellWidth: CGFloat = 0
+
     @State private var packetSelection = Set<Packet.ID>()
     @State private var inspectedPacket: Packet?
 
@@ -156,17 +159,10 @@ struct AXTermiOSRootView: View {
         return nil
     }
 
-    /// Says what the station is currently set up as, so the section is not
-    /// four nouns the operator has to open one at a time to check.
+    /// Says who the station is, so the section is not a noun the operator
+    /// has to open to check. The radios' endpoints go under Radios.
     private var stationFooter: String {
-        let call = settings.myCallsign.isEmpty ? "No callsign set" : settings.myCallsign
-        // One radio: where its link goes. Several: their names, because the
-        // endpoints belong to the radios and the list inside names them.
-        let radios = settings.activeRadios
-        if radios.count > 1 {
-            return "\(call) · \(radios.map(\.name).joined(separator: ", "))"
-        }
-        return "\(call) · \(radios.first?.displayEndpoint ?? "no radio")"
+        SettingsListFooter.station(callsign: settings.myCallsign, onAir: settings.onAirCallsigns)
     }
 
     /// Views of the network, reachable from the traffic they describe.
@@ -392,6 +388,7 @@ struct AXTermiOSRootView: View {
             }
             tabs
         }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { shellWidth = $0 }
         .animation(.default, value: client.identityCollision)
         .modifier(FirstRunSetupHost(router: SettingsRouter.shared, settings: settings,
                                     winlinkSettings: context.settings,
@@ -492,23 +489,40 @@ struct AXTermiOSRootView: View {
             isListening: context.settings.p2pListenEnabled)
     }
 
+    /// A tab's label. On an iPad narrower than `namedTabsMinWidth` the bar
+    /// shows the symbols alone: the floating bar leaves wide margins either
+    /// side, and seven names overflowed it, hiding Messages and Settings
+    /// behind a scroll arrow on an iPad mini in portrait. The name is still
+    /// the tab's accessibility label.
+    @ViewBuilder
+    private func tabLabel(_ title: String, systemImage: String) -> some View {
+        if horizontalSizeClass == .regular, shellWidth < Self.namedTabsMinWidth {
+            Label(title, systemImage: systemImage).labelStyle(.iconOnly)
+        } else {
+            Label(title, systemImage: systemImage)
+        }
+    }
+
+    /// The width at which the seven tab names fit the iPad's floating bar.
+    private static let namedTabsMinWidth: CGFloat = 1_000
+
     private var tabs: some View {
         TabView(selection: $selection) {
             withTNCStrip(terminal)
-                .tabItem { Label("Terminal", systemImage: "terminal") }
+                .tabItem { tabLabel("Terminal", systemImage: "terminal") }
                 .tag(NavigationItem.terminal)
 
             withTNCStrip(packets)
-                .tabItem { Label("Packets", systemImage: "list.bullet.rectangle") }
+                .tabItem { tabLabel("Packets", systemImage: "list.bullet.rectangle") }
                 .tag(NavigationItem.packets)
 
             withTNCStrip(mail)
-                .tabItem { Label("Mail", systemImage: "envelope") }
+                .tabItem { tabLabel("Mail", systemImage: "envelope") }
                 .badge(context.unreadCount)
                 .tag(NavigationItem.mail)
 
             withTNCStrip(map)
-                .tabItem { Label("Map", systemImage: "map") }
+                .tabItem { tabLabel("Map", systemImage: "map") }
                 .tag(NavigationItem.map)
 
             // A sixth tab on an iPad, whose bar seats it. A phone seats five,
@@ -520,13 +534,13 @@ struct AXTermiOSRootView: View {
             // moves.
             if horizontalSizeClass == .regular {
                 withTNCStrip(bbs)
-                    .tabItem { Label("BBS", systemImage: "tray.full") }
+                    .tabItem { tabLabel("BBS", systemImage: "tray.full") }
                     .badge(bbsService.suggestions.count)
                     .tag(NavigationItem.bbs)
 
                 if client.aprsMessaging != nil {
                     withTNCStrip(messages)
-                        .tabItem { Label("Messages", systemImage: "message") }
+                        .tabItem { tabLabel("Messages", systemImage: "message") }
                         .badge(client.aprsMessaging?.unreadCount ?? 0)
                         .tag(NavigationItem.messages)
                 }
@@ -535,7 +549,7 @@ struct AXTermiOSRootView: View {
             withTNCStrip(more)
                 .tabItem {
                     if horizontalSizeClass == .regular {
-                        Label("Settings", systemImage: "gearshape")
+                        tabLabel("Settings", systemImage: "gearshape")
                     } else {
                         Label("More", systemImage: "ellipsis")
                     }
@@ -953,6 +967,8 @@ struct AXTermiOSRootView: View {
                         Label("Radios", systemImage: SettingsTab.radios.settingsIcon)
                     }
                     .accessibilityHint("The TNCs and radios this station uses, and what each one does")
+                } footer: {
+                    Text(SettingsListFooter.radios(settings.activeRadios))
                 }
 
                 Section {

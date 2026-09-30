@@ -28,6 +28,9 @@ struct OfflineBasemapMapView {
 
     let scope: StationScope
     let observer: GreatCircle.Point
+    /// False when this station has no position and `observer` only centers
+    /// the map: no pin of our own is drawn.
+    var showsObserver: Bool = true
     let coordinates: [String: GreatCircle.Point]
     var observerCallsign: String = ""
     /// Stored tiles. Nil draws Apple's basemap instead — the same view serves
@@ -304,15 +307,18 @@ struct OfflineBasemapMapView {
     }
 
     private func annotations() -> [SiteAnnotation] {
-        var result = [SiteAnnotation(
-            id: "__observer__",
-            coordinate: observer.clCoordinate,
-            title: observerCallsign.isEmpty ? scope.observerLabel : observerCallsign.uppercased(),
-            subtitle: "This station",
-            signal: .good, isApproximate: false, isObserver: true,
-            aprsSymbol: observerSymbol)]
+        var result: [SiteAnnotation] = []
+        if showsObserver {
+            result.append(SiteAnnotation(
+                id: "__observer__",
+                coordinate: observer.clCoordinate,
+                title: observerCallsign.isEmpty ? scope.observerLabel : observerCallsign.uppercased(),
+                subtitle: "This station",
+                signal: .good, isApproximate: false, isObserver: true,
+                aprsSymbol: observerSymbol))
+        }
 
-        var seen: Set<String> = [result[0].id]
+        var seen = Set(result.map(\.id))
         for site in scope.sites {
             guard let position = coordinates[site.id],
                   seen.insert(site.id).inserted else { continue }

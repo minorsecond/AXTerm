@@ -79,9 +79,15 @@ nonisolated enum StationPlausibility {
     static func positionSourceLine(source: String,
                                    verdict: Verdict,
                                    inMiles: Bool = false) -> String {
+        let what = sourcePhrase(source)
         switch verdict {
         case .plausible, .unknown:
-            return "Position from \(source) (heard over the air)."
+            // "Position from APRS position (heard over the air)" said
+            // "position" twice and named the obvious; a beaconed fix gets a
+            // plain phrase of its own.
+            return source == aprsSource
+                ? "\(what), heard over the air."
+                : "\(what); the station itself was heard over the air."
         case .beyondRadioRange(let kilometres):
             // States the distance and the rule, not the physics. Whether a
             // path is possible depends on both stations' altitude, the
@@ -94,9 +100,16 @@ nonisolated enum StationPlausibility {
             let distance = DistanceDisplay.string(kilometres: kilometres, inMiles: inMiles)
             let limit = DistanceDisplay.string(kilometres: defaultRangeKilometres,
                                                inMiles: inMiles)
-            return "Position from \(source). At \(distance) it is further than the "
+            return "\(what). At \(distance) it is further than the "
                  + "\(limit) this map treats as directly hearable."
         }
+    }
+
+    /// The source `HeardStationMap` gives a station's own beaconed fix.
+    static let aprsSource = "APRS position"
+
+    private static func sourcePhrase(_ source: String) -> String {
+        source == aprsSource ? "Beaconed position" : "Position from \(source)"
     }
 
     /// Splits entries into what to show and what to set aside.

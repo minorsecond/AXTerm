@@ -132,7 +132,7 @@ struct RadiosListView<Destination: Hashable>: View {
     }
 
     private func name(_ id: RadioID) -> String {
-        settings.radio(id)?.name ?? "A radio"
+        settings.radio(id).map(RadioDetailView.title(for:)) ?? "A radio"
     }
 }
 
@@ -148,7 +148,9 @@ private struct RadioListRow: View {
                 .frame(width: 8, height: 8)
                 .help(RadioPresentation.dotHelp(summary))
             VStack(alignment: .leading, spacing: 2) {
-                Text(radio.name.isEmpty ? radio.displayEndpoint : radio.name)
+                // The name the radio goes by everywhere else ("Direwolf"),
+                // never its endpoint, which the line below already shows.
+                Text(RadioDetailView.title(for: radio))
                     .foregroundStyle(radio.enabled ? .primary : .secondary)
                 Text(subtitle)
                     .font(.caption)

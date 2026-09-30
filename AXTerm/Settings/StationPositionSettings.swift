@@ -167,13 +167,17 @@ struct StationPositionSettings: View {
                           prompt: Text("Latitude"))
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 110)
+                    .coordinateEntry()
+                    .frame(minWidth: 104, idealWidth: CoordinateFieldWidth.points,
+                           maxWidth: CoordinateFieldWidth.points)
                     .accessibilityLabel("Latitude")
                 TextField("Longitude", text: $manualLongitude,
                           prompt: Text("Longitude"))
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 110)
+                    .coordinateEntry()
+                    .frame(minWidth: 104, idealWidth: CoordinateFieldWidth.points,
+                           maxWidth: CoordinateFieldWidth.points)
                     .accessibilityLabel("Longitude")
                 if hasManualCoordinate {
                     Button("Clear") {

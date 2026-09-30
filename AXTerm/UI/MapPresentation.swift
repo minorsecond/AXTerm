@@ -91,7 +91,7 @@ nonisolated enum MapBasemap: String, CaseIterable, Identifiable, Sendable {
         case .standard: "Apple's map. Needs a network."
         case .hybrid: "Apple's imagery with labels. Needs a network."
         case .satellite: "Apple's imagery. Needs a network."
-        case .offline: "Tiles stored on this device. Works with the network down — the only mode that does."
+        case .offline: "Tiles stored on this device. The only mode that works with the network down."
         case .none: "Bearing and range only, on no basemap at all. Needs nothing."
         }
     }
@@ -154,7 +154,7 @@ struct MapLegend: View {
     private var keyedDimension: String { aprsMode ? "Station type" : kind.title }
     private var effectiveFootnote: String {
         aprsMode
-        ? "In APRS mode color is the station type; recency is opacity \u{2014} fresh is solid, older fades, nothing is hidden."
+        ? "In APRS mode color is the station type and recency is opacity: fresh is solid, older fades, nothing is hidden."
         : kind.footnote
     }
     /// Drawn over imagery needs a stronger backing than over a light map.
@@ -181,7 +181,7 @@ struct MapLegend: View {
     private func coverageLegendHelp(_ evidence: CoverageEstimate.Evidence) -> String {
         switch evidence {
         case .answered:
-            return "The inner ring: half the stations that answered you directly are inside it. An answer \u{2014} a UA, DM or FRMR to your frames \u{2014} proves that station decoded your transmitter, so it is a measured point in your footprint. Where your signal reliably works."
+            return "The inner ring: half the stations that answered you directly are inside it. An answer (a UA, DM or FRMR to your frames) proves that station decoded your transmitter, so it is a measured point in your footprint. Where your signal reliably works."
         case .digipeated:
             return "The inner ring: half the digipeaters that put your own beacons back on the air are inside it. Repeating a frame proves the repeater decoded it, so each one is a measured point in your footprint. This ring fills in on its own with every beacon."
         case .heardDirect:
@@ -203,9 +203,17 @@ struct MapLegend: View {
     /// who knows the colors has a real reason to want it gone; that is what
     /// a disclosure is for.
     ///
-    /// Stored, so it stays how it was left. Open by default: a colored dot
-    /// with no key is decoration.
-    @AppStorage("map.legendExpanded") private var isExpanded = true
+    /// Stored, so it stays how it was left. Open by default on the Mac: a
+    /// colored dot with no key is decoration. Closed by default on iOS, where
+    /// the open key covered a large corner of an iPad's map; the header row
+    /// still says what the colors key and opens it with a tap.
+    @AppStorage("map.legendExpanded") private var isExpanded = MapLegend.expandedByDefault
+
+    #if os(iOS)
+    static let expandedByDefault = false
+    #else
+    static let expandedByDefault = true
+    #endif
 
     /// The station-type key shown in APRS mode. Color keys the class exactly
     /// as the map paints it (digi blue, weather teal, vehicle orange, home
@@ -221,16 +229,16 @@ struct MapLegend: View {
 
     private static let typeSwatches: [(color: Color, symbol: String, label: String, help: String)] = [
         (digipeaterTint, "antenna.radiowaves.left.and.right", "Digipeater / relay",
-         "Fixed relay infrastructure — a digipeater, i-gate, gateway or repeater. It forwards other stations rather than being a destination."),
+         "Fixed relay infrastructure: a digipeater, i-gate, gateway or repeater. It forwards other stations rather than being a destination."),
         (weatherTint, "cloud.sun.fill", "Weather station",
          "A station beaconing weather data. Its position is fixed; the payload is temperature, wind and rain. "
-         + "Its current temperature is drawn beside its callsign, and the rest of the reading \u{2014} wind, gust, "
-         + "humidity, pressure, rainfall \u{2014} is on the station's card. A reading over an hour old loses the "
+         + "Its current temperature is drawn beside its callsign, and the rest of the reading (wind, gust, "
+         + "humidity, pressure, rainfall) is on the station's card. A reading over an hour old loses the "
          + "temperature beside the callsign, because a stale number on a map reads as the current one."),
         (vehicleTint, "car.fill", "Vehicle",
-         "Something on the move, or wearing a vehicle symbol — a car, truck, boat, aircraft or glider — placed where it last beaconed."),
+         "Something on the move, or wearing a vehicle symbol (a car, truck, boat, aircraft or glider), placed where it last beaconed."),
         (fixedTint, "house.fill", "Fixed / home station",
-         "A station at a fixed location that is not infrastructure — typically an operator's home station."),
+         "A station at a fixed location that is not infrastructure, typically an operator's home station."),
     ]
 
     var body: some View {
@@ -319,7 +327,7 @@ struct MapLegend: View {
                     .font(.caption2)
                 Spacer(minLength: 0)
             }
-            .help("A hollow marker is a lead, not a fix: the position comes from a different entity than the thing shown \u{2014} typically a NET/ROM node placed at its operator's license address. Nodes usually sit on a hilltop or a repeater site, not at the operator's house.")
+            .help("A hollow marker is a lead, not a fix: the position comes from a different entity than the thing shown, typically a NET/ROM node placed at its operator's license address. Nodes usually sit on a hilltop or a repeater site, not at the operator's house.")
 
             if showsPositionSource {
                 HStack(spacing: 6) {
@@ -333,7 +341,7 @@ struct MapLegend: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                 }
-                .help("A station drawn with its APRS symbol is at the position it beaconed over the air \u{2014} a live fix. A plain colored dot is placed from a lookup about the callsign (license address, registry grid), not from a transmitted position. Toggle which one is shown under Layers \u{2192} Transmitted Positions.")
+                .help("A station drawn with its APRS symbol is at the position it beaconed over the air: a live fix. A plain colored dot is placed from a lookup about the callsign (license address, registry grid), not from a transmitted position. Toggle which one is shown under Layers \u{203A} Transmitted Positions.")
             }
 
             if showsNodes {
@@ -346,7 +354,7 @@ struct MapLegend: View {
                         .font(.caption)
                     Spacer(minLength: 0)
                 }
-                .help("A diamond is NET/ROM infrastructure — a node or a station harvested from a node's directory — rather than a station heard on the air.")
+                .help("A diamond is NET/ROM infrastructure (a node, or a station harvested from a node's directory) rather than a station heard on the air.")
             }
 
             if showsCoverage {
@@ -376,8 +384,8 @@ struct MapLegend: View {
                         Spacer(minLength: 0)
                     }
                     .help(evidence.isTransmit
-                          ? "The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach \u{2014} not a promise, and not a propagation model. Terrain will bend both rings."
-                          : "The dashed outer ring: the most distant station you decoded with no digipeater in the path in the last two weeks. How far you have actually heard \u{2014} not a promise, and not a propagation model. Terrain will bend both rings.")
+                          ? "The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach. It is not a promise or a propagation model. Terrain will bend both rings."
+                          : "The dashed outer ring: the most distant station you decoded with no digipeater in the path in the last two weeks. How far you have actually heard. It is not a promise or a propagation model. Terrain will bend both rings.")
                 }
             }
 

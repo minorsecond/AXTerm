@@ -65,9 +65,9 @@ nonisolated enum KeepAwakePolicy: String, CaseIterable, Identifiable, Sendable, 
         #else
         switch self {
         case .never:
-            "The device sleeps as usual. A Winlink exchange or file transfer that is running when it sleeps will be interrupted — iOS suspends the app and the connection to the TNC drops."
+            "The device sleeps as usual. A Winlink exchange or file transfer that is running when it sleeps will be interrupted: iOS suspends the app and the connection to the TNC drops."
         case .duringTransfers:
-            "The screen stays on while a Winlink exchange, a file transfer, or an armed peer-to-peer listener is running, and sleeps normally the rest of the time. This is the setting that protects what would actually break."
+            "The screen stays on while a Winlink exchange, a file transfer, or an armed peer-to-peer listener is running, and sleeps normally the rest of the time. Those are the jobs a sleeping device would cut off."
         case .whileConnected:
             "The screen stays on for as long as the app is connected to a TNC. Use it when the device is on power and acting as a station; it will flatten a battery over an afternoon."
         }
@@ -234,7 +234,7 @@ final class KeepAwakeController: ObservableObject {
             return "Screen held on: this station is armed to answer peer-to-peer calls. A sleeping device stops answering, and nobody finds out until somebody fails to reach it."
         }
         if isConnected {
-            return "Screen held on: connected to a TNC. This will use the battery noticeably — see Settings if the device is not on power."
+            return "Screen held on: connected to a TNC. This will use the battery noticeably. See Settings if the device is not on power."
         }
         return "Screen held on."
         #endif

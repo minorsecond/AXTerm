@@ -19,6 +19,9 @@ struct StationMapView: View {
     /// Needed to place markers — the scope model carries range and
     /// bearing, but a map wants coordinates.
     let observer: GreatCircle.Point
+    /// False when `observer` is only where the map is centered, because this
+    /// station has no position: then there is no pin of our own to draw.
+    var showsObserver: Bool = true
     let coordinates: [String: GreatCircle.Point]
     /// The operator's own callsign, for the center marker. A grid
     /// reference is not what someone looking for themselves scans for.
@@ -101,6 +104,7 @@ struct StationMapView: View {
         OfflineBasemapMapView(
             scope: scope,
             observer: observer,
+            showsObserver: showsObserver,
             coordinates: coordinates,
             observerCallsign: observerLabel,
             store: store,
@@ -180,11 +184,13 @@ struct StationMapView: View {
                         style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
             }
 
-            Annotation("", coordinate: observer.clCoordinate, anchor: .center) {
-                observerMarker
+            if showsObserver {
+                Annotation("", coordinate: observer.clCoordinate, anchor: .center) {
+                    observerMarker
+                }
+                .annotationTitles(.hidden)
+                .tag("__observer__")
             }
-            .annotationTitles(.hidden)
-            .tag("__observer__")
 
             ForEach(scope.sites) { site in
                 if let position = coordinates[site.id] {
@@ -323,10 +329,11 @@ struct StationMapView: View {
     private var framingPoints: [GreatCircle.Point] {
         let stationPoints = scope.sites.filter { !$0.isNode }
             .compactMap { coordinates[$0.id] }
+        let own = showsObserver ? [observer] : []
         if stationPoints.isEmpty {
-            return [observer] + scope.sites.compactMap { coordinates[$0.id] }
+            return own + scope.sites.compactMap { coordinates[$0.id] }
         }
-        return [observer] + stationPoints
+        return own + stationPoints
     }
 
     /// Frame the observer *and* every station, so nothing sits off the
@@ -372,7 +379,7 @@ struct StationMapView: View {
                 .foregroundStyle(.white)
         }
         .shadow(radius: 2)
-        .help("Your station \u{2014} \(observerLabel) at \(scope.observerLabel)")
+        .help("Your station: \(observerLabel) at \(scope.observerLabel)")
     }
 
     /// A marker's footprint is **constant**, selected or not.

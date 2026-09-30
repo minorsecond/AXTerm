@@ -91,3 +91,36 @@ struct NumericInput: View {
     }
     return PreviewWrapper()
 }
+
+/// A decimal-degrees coordinate field: digits, a decimal point and a minus
+/// sign on the iOS keyboard, and no autocorrection or capitalization. The
+/// default keyboard was alphabetic, and a number pad has no minus sign,
+/// which every western longitude needs.
+struct CoordinateEntry: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+            .keyboardType(.numbersAndPunctuation)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+        #else
+        content.autocorrectionDisabled()
+        #endif
+    }
+}
+
+extension View {
+    /// See `CoordinateEntry`.
+    func coordinateEntry() -> some View { modifier(CoordinateEntry()) }
+}
+
+/// How wide a coordinate field is: room for "-104.73282", minus sign and
+/// all, in the font it is drawn in. 110 points on an iPad scrolled the
+/// minus sign out of a longitude.
+nonisolated enum CoordinateFieldWidth {
+    #if os(iOS)
+    static let points: CGFloat = 132
+    #else
+    static let points: CGFloat = 110
+    #endif
+}

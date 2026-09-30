@@ -70,6 +70,6 @@ final class StationRowTextTests: XCTestCase {
         let text = HeardStationMap.detail(for: entry, observer: nil, now: now)
         XCTAssertFalse(text.contains(" mi at "), text)
         XCTAssertTrue(text.contains("61 packets heard"), text)
-        XCTAssertTrue(text.contains("Position from APRS position"), text)
+        XCTAssertTrue(text.contains("Beaconed position"), text)
     }
 }

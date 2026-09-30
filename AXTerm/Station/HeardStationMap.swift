@@ -79,6 +79,10 @@ nonisolated enum HeardStationMap {
         /// The APRS symbol this station beaconed, set only when placed at its
         /// own transmitted fix.
         var aprsSymbol: APRSMapSymbol?
+        /// Course and speed from the station's own beacon, when it sent them.
+        /// The card quotes them ("37 mph at 274°") as the terminal does.
+        var courseDegrees: Int?
+        var speedKnots: Int?
         /// Altitude the station transmitted, in feet (`/A=` or Mic-E).
         ///
         /// It was parsed and then dropped — nothing outside the parser read
@@ -186,13 +190,15 @@ nonisolated enum HeardStationMap {
                     // Just the fact. Whether it was "heard over the air"
                     // depends on geometry the entry does not have, and is
                     // decided by StationPlausibility.positionSourceLine.
-                    positionSource: "APRS position",
+                    positionSource: StationPlausibility.aprsSource,
                     frameOrigin: station.frameOrigin,
                     confidence: .exact,
                     gridSquare: record?.gridSquare?.uppercased(),
                     name: record?.name, locality: record?.locality,
                     origin: .transmittedAPRS,
                     aprsSymbol: APRSMapSymbol(table: aprs.symbolTable, code: aprs.symbolCode),
+                    courseDegrees: aprs.courseDegrees,
+                    speedKnots: aprs.speedKnots,
                     altitudeFeet: aprs.altitudeFeet,
                     weather: station.weather, weatherHeard: station.weatherHeard,
                     weatherHistory: station.weatherHistory,
@@ -476,11 +482,15 @@ nonisolated enum HeardStationMap {
     /// `fannedPositions` so stations sharing a grid square stay
     /// individually visible. Unplaced stations are absent — a map cannot
     /// show them, and inventing a position would be worse than the gap.
+    /// `showsDistance` false when `observer` is only where the map is
+    /// centered, not where this station is: the detail then leaves out the
+    /// distance and bearing, which would be measured from nowhere real.
     static func scope(observerLabel: String,
                       observer: GreatCircle.Point,
                       entries: [Entry],
                       now: Date,
-                      distanceInMiles: Bool = true) -> StationScope {
+                      distanceInMiles: Bool = true,
+                      showsDistance: Bool = true) -> StationScope {
         let positions = fannedPositions(entries)
         let shared = sharedPositionCounts(entries)
         return StationScope.build(
@@ -488,8 +498,10 @@ nonisolated enum HeardStationMap {
             observer: observer,
             entries: entries.compactMap { entry in
                 guard let position = positions[entry.callsign] else { return nil }
-                var text = detail(for: entry, observer: observer, now: now,
-                                  distanceInMiles: distanceInMiles)
+                // Without the callsign: the site's label carries it, and the
+                // card heads itself with it.
+                var text = detail(for: entry, observer: showsDistance ? observer : nil, now: now,
+                                  distanceInMiles: distanceInMiles, includesCallsign: false)
                 if let others = shared[entry.callsign], others > 0 {
                     text += entry.isExactPosition
                         ? "\n\nShares an exact position with "
@@ -621,9 +633,12 @@ nonisolated enum HeardStationMap {
             + "two radios counts once."
     }
 
+    /// The lines under a station's name. `includesCallsign` is for a tooltip,
+    /// which has no title; the map's card already heads itself with the
+    /// callsign and printed it twice.
     static func detail(for entry: Entry, observer: GreatCircle.Point?, now: Date,
-                       distanceInMiles: Bool = true) -> String {
-        var lines = [entry.callsign]
+                       distanceInMiles: Bool = true, includesCallsign: Bool = true) -> String {
+        var lines = includesCallsign ? [entry.callsign] : []
         // A node wears two names and the operator needs both: the alias is
         // what the network answers to (`C INRMS` at a prompt), the
         // callsign is who is licensed to be there.
@@ -641,6 +656,12 @@ nonisolated enum HeardStationMap {
         // give, so the line is simply absent rather than guessed.
         if let symbol = entry.aprsSymbol {
             lines.append(APRSSymbolType.label(code: symbol.code))
+        }
+        // How it is moving, in the terminal's words ("37 mph at 274°").
+        if let motion = APRSDigestLine.motion(courseDegrees: entry.courseDegrees,
+                                              speedKnots: entry.speedKnots,
+                                              inMiles: distanceInMiles) {
+            lines.append(motion.prefix(1).uppercased() + motion.dropFirst())
         }
         // Only with our own position known. The list used to pass 0,0 when
         // it was not, and every tooltip measured from the Gulf of Guinea.
@@ -665,7 +686,7 @@ nonisolated enum HeardStationMap {
         }
         if case .gatedOntoRF(_, let gateway) = entry.frameOrigin {
             lines.append("")
-            lines.append("Relayed onto RF by \(gateway) \u{2014} its traffic reaches "
+            lines.append("Relayed onto RF by \(gateway). Its traffic reaches "
                        + "this channel from the internet, not from its own transmitter.")
         } else if entry.frameOrigin == .internetPath {
             lines.append("")
@@ -895,7 +916,7 @@ nonisolated enum HeardStationMap {
                 var entry = entry
                 if let others = siblings[entry.callsign] {
                     let base = entry.name ?? "Node"
-                    entry.name = "\(base) — also \(others.joined(separator: ", "))"
+                    entry.name = "\(base), also \(others.joined(separator: ", "))"
                 }
                 let placed = placingFromAnnouncedGrid(
                     entry, aliases: aliases, announcedGrids: announcedGrids)

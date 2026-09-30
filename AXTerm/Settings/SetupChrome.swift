@@ -8,9 +8,11 @@ import SwiftUI
 
 /// The frame around a setup step: header, step strip, content and buttons.
 ///
-/// On the Mac the window takes the height its content needs, so a short
-/// step makes a short sheet. iOS gets a scroll view, since its sheets are
-/// full height anyway.
+/// The sheet takes the height its content needs, so a short step makes a
+/// short sheet; past a limit the content scrolls. On the Mac that is the
+/// window resized to fit. On iOS it is a height detent on a phone and a
+/// form sheet fitted to the content on an iPad. A full-height sheet left a
+/// large empty area under the cards of every step.
 struct SetupFrame<Content: View, Buttons: View>: View {
     let title: String
     let subtitle: String
@@ -19,16 +21,23 @@ struct SetupFrame<Content: View, Buttons: View>: View {
     @ViewBuilder var content: Content
     @ViewBuilder var buttons: Buttons
 
-    #if os(macOS)
     /// The content's own height, measured, so the sheet can follow it from
     /// step to step. A sheet sized once when it opens kept the first step's
     /// height and clipped the header and buttons of a taller one.
     @State private var contentHeight: CGFloat = 0
+    #if os(iOS)
+    /// The header's and the button row's heights, which with the content's
+    /// make the height the sheet asks for.
+    @State private var chromeHeights = SetupChromeHeights()
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
 
     var body: some View {
         VStack(spacing: 0) {
             header
+                #if os(iOS)
+                .background(heightReader { chromeHeights.header = $0 })
+                #endif
             Divider()
             #if os(macOS)
             ScrollView {
@@ -46,20 +55,52 @@ struct SetupFrame<Content: View, Buttons: View>: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) { content }
                     .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(key: SetupContentHeightKey.self, value: proxy.size.height)
+                    })
             }
+            .scrollBounceBehavior(.basedOnSize)
+            // At most the content's height, and less when the keyboard or a
+            // short screen leaves less: then it scrolls.
+            .frame(idealHeight: max(contentHeight, 1), maxHeight: max(contentHeight, 1))
+            .onPreferenceChange(SetupContentHeightKey.self) { contentHeight = $0 }
             #endif
             Divider()
             HStack(spacing: 8) { buttons }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
+                #if os(iOS)
+                .background(heightReader { chromeHeights.buttons = $0 })
+                #endif
         }
         #if os(macOS)
         .frame(width: 620)
         .fixedSize(horizontal: false, vertical: true)
         .background(SetupSheetResizer(contentHeight: contentHeight))
+        #else
+        .frame(maxHeight: .infinity, alignment: .top)
+        .presentationDetents(horizontalSizeClass == .compact ? [.height(sheetHeight)] : [.large])
+        .presentationSizing(.form.fitted(horizontal: false, vertical: true))
         #endif
         .animation(.snappy(duration: 0.25), value: current)
     }
+
+    #if os(iOS)
+    /// Header, content, buttons and the two rules between them.
+    private var sheetHeight: CGFloat {
+        SetupSheetHeight.fitting(header: chromeHeights.header, content: contentHeight,
+                                 buttons: chromeHeights.buttons)
+    }
+
+    private func heightReader(_ update: @escaping (CGFloat) -> Void) -> some View {
+        GeometryReader { proxy in
+            Color.clear
+                .onAppear { update(proxy.size.height) }
+                .onChange(of: proxy.size.height) { _, height in update(height) }
+        }
+    }
+    #endif
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -83,11 +124,33 @@ struct SetupFrame<Content: View, Buttons: View>: View {
     }
 }
 
-#if os(macOS)
 private struct SetupContentHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
+
+/// The measured heights around the content of a setup sheet on iOS.
+struct SetupChromeHeights: Equatable {
+    var header: CGFloat = 0
+    var buttons: CGFloat = 0
+}
+
+/// The height a setup sheet asks for on a phone.
+nonisolated enum SetupSheetHeight {
+    /// Before anything has been measured the sheet opens at this height
+    /// rather than at zero.
+    static let unmeasured: CGFloat = 420
+
+    /// Header, content and buttons, plus the two one-point rules between
+    /// them. Taller than the screen is fine: the system holds a detent to
+    /// the height it has, and the content scrolls.
+    static func fitting(header: CGFloat, content: CGFloat, buttons: CGFloat) -> CGFloat {
+        guard header > 0, content > 0, buttons > 0 else { return unmeasured }
+        return (header + content + buttons + 2).rounded(.up)
+    }
+}
+
+#if os(macOS)
 
 /// Resizes the sheet's window to fit its content whenever the content's
 /// height changes, keeping the top edge where it is so the sheet grows

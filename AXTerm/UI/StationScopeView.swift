@@ -166,7 +166,7 @@ struct StationScopeView: View {
         }
         .opacity(site.isStale ? 0.55 : 1)
         .offset(x: point.x * radius, y: point.y * radius)
-        .help(site.detail)
+        .help(site.label + "\n" + site.detail)
         .onTapGesture { selection = isSelected ? nil : site.id }
     }
 
@@ -179,7 +179,7 @@ struct StationScopeView: View {
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
         }
-        .help("Your station — everything is plotted by true bearing and range from here.")
+        .help("Your station. Everything is plotted by true bearing and range from here.")
     }
 
     private func cardinalLabels(radius: CGFloat) -> some View {
