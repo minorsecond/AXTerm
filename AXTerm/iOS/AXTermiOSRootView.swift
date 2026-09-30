@@ -116,6 +116,14 @@ struct AXTermiOSRootView: View {
     @State private var settingsIsSplit = false
     /// The Add Radio sheet's state while it is open.
     @State private var addRadioFlow: AddRadioFlow?
+    /// Opens compose in the mailbox from elsewhere: a file another app
+    /// handed over, or a map layer being sent.
+    @State private var composeRequest: WinlinkComposeRequest?
+    /// A file another app opened in AXTerm, copied in and waiting for the
+    /// operator to say what it is for.
+    @State private var incomingFile: IncomingDocumentRouter.StagedFile?
+    /// Why an incoming file, a packet send or a map layer could not be used.
+    @State private var fileProblem: String?
 
     /// Puts the TNC link strip above the tab bar, on every tab.
     ///
@@ -437,6 +445,41 @@ struct AXTermiOSRootView: View {
             }
         }
         .task { applyKeepAwake() }
+        // Files from other apps: "Open in AXTerm", the share sheet's AXTerm
+        // entry, a drop on the app. They arrive as file URLs; the app has no
+        // URL scheme of its own, so anything else is ignored.
+        .onOpenURL { url in
+            guard url.isFileURL else { return }
+            receiveIncoming(url)
+        }
+        .sheet(item: $incomingFile) { file in
+            IncomingFileSheet(
+                file: file,
+                choices: IncomingDocumentRouter.choices(
+                    for: file,
+                    winlinkAvailable: context.store != nil,
+                    connectedCallsigns: sessionCoordinator.connectedCallsigns),
+                onChoose: { choice in use(file, for: choice) },
+                onCancel: {
+                    incomingFile = nil
+                    IncomingDocumentRouter.discard(file)
+                })
+        }
+        .alert("Could not send the file", isPresented: Binding(
+            get: { fileProblem != nil },
+            set: { if !$0 { fileProblem = nil } })) {
+            Button("OK") { fileProblem = nil }
+        } message: {
+            Text(fileProblem ?? "")
+        }
+        .task {
+            // Copies from earlier launches that a packet transfer may have
+            // been reading; a day is far longer than any transfer runs.
+            let inbox = IncomingDocumentRouter.inbox()
+            await Task.detached(priority: .utility) {
+                IncomingDocumentRouter.purge(inbox: inbox, olderThan: 24 * 3600)
+            }.value
+        }
         // A remembered BBS tab on a device that has no BBS tab: land on the
         // More list with the mailbox already pushed, rather than on nothing.
         .task(id: horizontalSizeClass) {
@@ -488,6 +531,123 @@ struct AXTermiOSRootView: View {
                     : SettingsDeepLink.path(current: settingsPath, target: target,
                                             stackIsShowing: showing)
             }
+        }
+    }
+
+    // MARK: - Files from other apps
+
+    /// Copies an incoming file in and asks what it is for. The copy runs off
+    /// the main actor: a file can be large, and iOS may be fetching it from
+    /// iCloud as it is read.
+    private func receiveIncoming(_ url: URL) {
+        let inbox = IncomingDocumentRouter.inbox()
+        Task {
+            do {
+                let staged = try await Task.detached(priority: .userInitiated) {
+                    try IncomingDocumentRouter.stage(url, inbox: inbox)
+                }.value
+                if let previous = incomingFile { IncomingDocumentRouter.discard(previous) }
+                incomingFile = staged
+            } catch {
+                fileProblem = "AXTerm could not read \(url.lastPathComponent): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func use(_ file: IncomingDocumentRouter.StagedFile, for choice: IncomingDocumentRouter.Choice) {
+        incomingFile = nil
+        switch choice {
+        case .winlink:
+            guard let contents = IncomingDocumentRouter.contents(of: file) else {
+                fileProblem = "AXTerm could not read \(file.name) back from its own copy."
+                IncomingDocumentRouter.discard(file)
+                return
+            }
+            // Read into memory, so the copy has done its job.
+            IncomingDocumentRouter.discard(file)
+            selection = .mail
+            composeRequest = WinlinkComposeRequest(files: [contents])
+        case .packet(let callsign):
+            sendOverPacket(file, to: callsign)
+        }
+    }
+
+    /// Starts a packet transfer through the same coordinator call the
+    /// terminal's Send File uses, on the session's own path, with the best
+    /// protocol the peer supports. The staged copy is left for the transfer
+    /// to read and cleared on a later launch.
+    private func sendOverPacket(_ file: IncomingDocumentRouter.StagedFile, to callsign: String) {
+        guard let session = sessionCoordinator.connectedSessions.first(where: {
+            $0.remoteAddress.display.uppercased() == callsign.uppercased()
+        }) else {
+            fileProblem = "The session with \(callsign) is no longer connected."
+            IncomingDocumentRouter.discard(file)
+            return
+        }
+        let transferProtocol = sessionCoordinator.availableProtocols(for: callsign).first ?? .axdp
+        if let error = sessionCoordinator.startTransfer(
+            to: session.remoteAddress.display, fileURL: file.url,
+            path: session.path, transferProtocol: transferProtocol) {
+            fileProblem = error
+            IncomingDocumentRouter.discard(file)
+        } else {
+            selection = .terminal
+        }
+    }
+
+    // MARK: - Map layers by Winlink
+
+    /// Nil without a mailbox, which hides the map's send action rather than
+    /// offering one that cannot work. As on the Mac.
+    private var layerSendAction: ((MapOverlayLayer, MapOverlayExport.Format) -> Void)? {
+        guard context.store != nil else { return nil }
+        return { layer, format in sendLayerViaWinlink(layer, format: format) }
+    }
+
+    /// Turns a map layer into a Winlink draft and opens compose on it.
+    ///
+    /// The same draft the Mac builds (`ContentView.sendLayerViaWinlink`):
+    /// the operator picks the recipient and sees the size before anything is
+    /// queued. The Mac lands in the mailbox with the draft in Drafts; here
+    /// compose opens on it straight away, since on a phone the mailbox is a
+    /// stack of screens away from the draft.
+    private func sendLayerViaWinlink(_ layer: MapOverlayLayer, format: MapOverlayExport.Format) {
+        guard let store = context.store else { return }
+        do {
+            let data: Data
+            switch format {
+            case .geoJSON: data = try GeoJSONWriter.data(for: layer)
+            case .shapefile: data = try ShapefileWriter.zippedShapefile(layer: layer)
+            }
+            let airtime = WinlinkAirtimeEstimate.forGateway(
+                callsign: context.settings.gatewayCallsign,
+                frequencyHz: nil,
+                quality: context.mapLinkQuality)
+            let assessment = MapOverlayExport.assess(byteCount: data.count, airtime: airtime)
+            let draft = MapOverlayMessage.draft(
+                layer: layer, format: format, attachment: data,
+                assessment: assessment,
+                operatorCallsign: settings.myCallsign,
+                generatedAt: Date())
+            let message = WinlinkB2Message(
+                mid: WinlinkB2Message.generateMID(callsign: settings.myCallsign),
+                date: Date(),
+                type: .privateMessage,
+                from: settings.myCallsign,
+                to: [],
+                cc: [],
+                subject: draft.subject,
+                mbo: settings.myCallsign,
+                body: Data(draft.body.utf8),
+                attachments: [.init(name: draft.attachmentName, data: draft.attachment)])
+            try store.saveDraft(message)
+            context.refreshUnread()
+            selection = .mail
+            composeRequest = WinlinkComposeRequest(draftMID: message.mid)
+        } catch let error as ShapefileWriter.WriteError {
+            fileProblem = error.explanation
+        } catch {
+            fileProblem = "Could not prepare \(layer.name) for sending: \(error.localizedDescription)"
         }
     }
 
@@ -799,7 +959,8 @@ struct AXTermiOSRootView: View {
                                  appSettings: settings,
                                  sessionCoordinator: sessionCoordinator,
                                  myCallsign: settings.myCallsign,
-                                 onAddToMap: addSpatialAttachmentToMap)
+                                 onAddToMap: addSpatialAttachmentToMap,
+                                 composeRequest: $composeRequest)
         } else {
             NavigationStack { storeUnavailable }
         }
@@ -888,6 +1049,7 @@ struct AXTermiOSRootView: View {
                 focusCallsign: $mapFocusCallsign,
                 elevation: elevation,
                 overlayStore: overlayStore,
+                onSendLayer: layerSendAction,
                 onBeacon: { sessionCoordinator.sendBeacon(settings) },
                 onPlaceObject: { name, live, latitude, longitude, table, code, comment in
                     sessionCoordinator.sendAPRSObject(

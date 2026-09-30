@@ -8,21 +8,71 @@ final class WinlinkComposeViewModel: ObservableObject {
 
     /// Winlink's practical per-message limit (body + attachments,
     /// uncompressed).
-    static let messageSizeBudget = 120 * 1024
+    nonisolated static let messageSizeBudget = 120 * 1024
 
-    struct AttachmentItem: Identifiable, Hashable {
-        let id = UUID()
+    nonisolated struct AttachmentItem: Identifiable, Hashable, Sendable {
+        /// What was done to the file the operator attached before it went
+        /// into the message.
+        enum Change: Hashable, Sendable {
+            case none
+            /// Zipped, because deflate beats LZHUF on this file.
+            case zipped
+            /// A photo scaled down and re-encoded as JPEG to fit the budget.
+            case shrunk(pixelWidth: Int, pixelHeight: Int)
+            /// A photo with its GPS position taken out, pixels untouched.
+            case locationRemoved
+        }
+
+        /// Kept through Send Original and Shrink to Fit, so the chip changes
+        /// in place rather than being replaced by a new one.
+        var id = UUID()
         var name: String
         var data: Data
-        /// Set when `data` is a zip of the file the user attached — kept so
-        /// the compression can be undone in place and the saving shown.
+        /// Set when `data` is not the file the user attached (zipped, shrunk
+        /// or with its location removed), kept so the change can be undone
+        /// in place and the saving shown.
         var original: (name: String, data: Data)?
+        var change: Change
+        /// Why a photo that is over the budget was not shrunk. Shown on the
+        /// chip so a red gauge comes with a reason.
+        var note: String?
 
-        var isCompressed: Bool { original != nil }
+        /// An `original` with no `change` given means zipped, which is what
+        /// it meant before photos could be shrunk.
+        init(name: String, data: Data, original: (name: String, data: Data)? = nil,
+             change: Change = .none, note: String? = nil) {
+            self.name = name
+            self.data = data
+            self.original = original
+            self.change = original == nil ? .none : (change == .none ? .zipped : change)
+            self.note = note
+        }
+
+        var isCompressed: Bool { change == .zipped }
+        var isShrunk: Bool { if case .shrunk = change { return true } else { return false } }
+        /// True when "Send Original" has something to go back to.
+        var canSendOriginal: Bool { original != nil }
+        var isImage: Bool { ImageShrinker.isImage(named: name) }
+
+        /// The line under the name on the compose chip.
+        var summary: String {
+            let now = ByteCount.string(Int64(data.count))
+            guard let original else { return now }
+            let before = ByteCount.string(Int64(original.data.count))
+            switch change {
+            case .shrunk:
+                return "Shrunk to \(now) from \(before)"
+            case .locationRemoved:
+                return "\(now), location removed"
+            case .zipped, .none:
+                return before + " \u{2192} " + now
+            }
+        }
 
         static func == (lhs: AttachmentItem, rhs: AttachmentItem) -> Bool {
             lhs.id == rhs.id && lhs.name == rhs.name && lhs.data == rhs.data
                 && lhs.original?.name == rhs.original?.name
+                && lhs.change == rhs.change && lhs.note == rhs.note
         }
 
         func hash(into hasher: inout Hasher) {
@@ -37,15 +87,34 @@ final class WinlinkComposeViewModel: ObservableObject {
     @Published var bodyText: String = ""
     @Published var attachments: [AttachmentItem] = []
     @Published private(set) var validationError: String?
+    /// Files being read or photos being shrunk. The chip strip shows a
+    /// placeholder while this is above zero, so an attach that takes a second
+    /// does not look like one that did nothing.
+    @Published private(set) var preparingCount = 0
+    /// Something the operator picked that could not be attached, with the
+    /// reason. Cleared by the alert that shows it.
+    @Published var attachmentProblem: String?
+    /// Keep a photo's GPS position when it is attached. Remembered across
+    /// messages, and off unless the operator turns it on, because a photo
+    /// taken at home says where home is to everyone who copies the message.
+    @Published var keepsPhotoLocation: Bool {
+        didSet { defaults.set(keepsPhotoLocation, forKey: Self.keepsPhotoLocationKey) }
+    }
+
+    static let keepsPhotoLocationKey = "winlink.compose.keepsPhotoLocation"
 
     private let store: WinlinkStore
     private let myCallsign: String
+    private let defaults: UserDefaults
     /// Non-nil while editing an existing draft row.
     private(set) var draftMID: String?
 
-    init(store: WinlinkStore, myCallsign: String, prefill: WinlinkB2Message? = nil, existingDraftMID: String? = nil) {
+    init(store: WinlinkStore, myCallsign: String, prefill: WinlinkB2Message? = nil,
+         existingDraftMID: String? = nil, defaults: UserDefaults = AppEnvironment.defaults) {
         self.store = store
         self.myCallsign = myCallsign
+        self.defaults = defaults
+        self.keepsPhotoLocation = defaults.bool(forKey: Self.keepsPhotoLocationKey)
         self.draftMID = existingDraftMID
 
         if let prefill {
@@ -186,6 +255,38 @@ final class WinlinkComposeViewModel: ObservableObject {
         }
     }
 
+    /// Writes what is in the window to the draft row without checking it,
+    /// for keeping attachments that arrived from another app safe before
+    /// the operator has addressed anything. Queueing still validates
+    /// everything. Returns false when the draft could not be written (a body
+    /// Winlink cannot carry, or no draft row yet), which leaves the window
+    /// holding the only copy, exactly as before this was called.
+    @discardableResult
+    func saveDraftContents() -> Bool {
+        guard let draftMID, !myCallsign.isEmpty else { return false }
+        let body = bodyText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\n", with: "\r\n")
+        guard let bodyData = body.data(using: .isoLatin1) else { return false }
+        let message = WinlinkB2Message(
+            mid: draftMID,
+            date: Date(),
+            type: .privateMessage,
+            from: myCallsign,
+            to: Self.parseAddressList(toText).valid,
+            cc: Self.parseAddressList(ccText).valid,
+            subject: subject,
+            mbo: myCallsign,
+            body: bodyData,
+            attachments: attachments.map { .init(name: $0.name, data: $0.data) })
+        return (try? store.updateDraft(message)) != nil
+    }
+
+    /// Set once the files a compose window was opened with have been added,
+    /// so reappearing (a sheet brought back, a window restored) does not add
+    /// them twice.
+    var hasTakenInitialFiles = false
+
     /// Saves and queues the message for the next exchange. Returns the MID.
     @discardableResult
     func queueForSending() -> String? {
@@ -201,29 +302,186 @@ final class WinlinkComposeViewModel: ObservableObject {
 
     // MARK: - Attachments
 
-    /// Attaches a file, zipping it first when that meaningfully shrinks
-    /// what will cross the air. LZHUF — the only compression B2F puts on
-    /// the wire — has a 2 KB window; deflate's 32 KB routinely halves a
-    /// large text attachment that LZHUF barely dents. Media, archives,
-    /// tiny files, and form XML pass through untouched, and the chip in
-    /// the compose window shows the saving with an undo.
+    /// What is left of the budget after the body and every attachment.
+    var remainingBudget: Int { Self.messageSizeBudget - totalSizeBytes }
+
+    /// Attaches a file, shrinking or zipping it first when that is worth
+    /// doing (see `ComposeAttachmentPlanner`). The chip in the compose window
+    /// shows what changed, with an undo.
+    ///
+    /// Runs on the caller's thread. The compose window uses
+    /// `addAttachments(_:)` instead, which does the work off the main actor,
+    /// because shrinking a 12-megapixel photo takes long enough to stall
+    /// typing.
     func addAttachment(name: String, data: Data) {
-        if let zipped = AttachmentCompressor.zipped(name: name, data: data) {
-            attachments.append(AttachmentItem(
-                name: zipped.name, data: zipped.data, original: (name: name, data: data)))
-        } else {
-            attachments.append(AttachmentItem(name: name, data: data))
+        append(ComposeAttachmentPlanner.plan(
+            name: name, data: data, remainingBudget: remainingBudget,
+            keepsLocation: keepsPhotoLocation))
+    }
+
+    /// Attaches several files in order, each planned against the budget the
+    /// ones before it left. The heavy part runs off the main actor.
+    func addAttachments(_ files: [ComposeIncomingFile]) async {
+        guard !files.isEmpty else { return }
+        preparingCount += files.count
+        for file in files {
+            let remaining = remainingBudget
+            let keeps = keepsPhotoLocation
+            let item = await Task.detached(priority: .userInitiated) {
+                ComposeAttachmentPlanner.plan(name: file.name, data: file.data,
+                                              remainingBudget: remaining, keepsLocation: keeps)
+            }.value
+            append(item)
+            preparingCount -= 1
         }
     }
 
-    /// Reverts a zipped attachment to the exact file the user picked.
-    func revertAttachmentCompression(id: UUID) {
+    /// Reports files that could not be read, naming each in one alert.
+    /// Attaching three of four and saying nothing sends an incomplete message
+    /// over airtime that cannot be recovered.
+    func reportUnreadable(_ names: [String]) {
+        guard !names.isEmpty else { return }
+        attachmentProblem = "Could not read: " + names.joined(separator: ", ")
+    }
+
+    private func append(_ item: AttachmentItem) {
+        var item = item
+        item.name = ComposeAttachmentIntake.uniqueName(item.name, existing: attachments.map(\.name))
+        attachments.append(item)
+    }
+
+    /// Puts back the exact file the operator attached: unzipped, unshrunk,
+    /// location and all.
+    func sendOriginal(id: UUID) {
         guard let index = attachments.firstIndex(where: { $0.id == id }),
               let original = attachments[index].original else { return }
-        attachments[index] = AttachmentItem(name: original.name, data: original.data)
+        var restored = AttachmentItem(
+            name: ComposeAttachmentIntake.uniqueName(original.name, existing: names(except: index)),
+            data: original.data)
+        restored.id = id
+        attachments[index] = restored
+    }
+
+    /// The older name for `sendOriginal(id:)`, from when zipping was the only
+    /// change there was to undo.
+    func revertAttachmentCompression(id: UUID) {
+        sendOriginal(id: id)
+    }
+
+    /// Shrinks a photo that is going as the original, against the budget left
+    /// by everything else. Offered after the operator chose Send Original and
+    /// then found the message would not fit.
+    func shrinkToFit(id: UUID) async {
+        guard let index = attachments.firstIndex(where: { $0.id == id }) else { return }
+        let item = attachments[index]
+        let source = item.original ?? (name: item.name, data: item.data)
+        let remaining = remainingBudget + item.data.count
+        let keeps = keepsPhotoLocation
+        preparingCount += 1
+        defer { preparingCount -= 1 }
+        let planned = await Task.detached(priority: .userInitiated) {
+            ComposeAttachmentPlanner.plan(name: source.name, data: source.data,
+                                          remainingBudget: remaining, keepsLocation: keeps,
+                                          forceShrink: true)
+        }.value
+        // The operator may have removed it while it was being shrunk.
+        guard let current = attachments.firstIndex(where: { $0.id == id }) else { return }
+        var replacement = planned
+        replacement.id = id
+        replacement.name = ComposeAttachmentIntake.uniqueName(planned.name, existing: names(except: current))
+        attachments[current] = replacement
     }
 
     func removeAttachment(id: UUID) {
         attachments.removeAll { $0.id == id }
+    }
+
+    private func names(except index: Int) -> [String] {
+        attachments.enumerated().filter { $0.offset != index }.map(\.element.name)
+    }
+}
+
+/// Decides what goes into a message when the operator attaches a file.
+///
+/// Photos are the case that matters. A phone photo is several megabytes and
+/// the whole message may be 120 KB, so a photo that would push the message
+/// over is shrunk by default, to a size that is kind to the channel, and the
+/// operator can still choose Send Original. Other files are zipped when
+/// deflate beats LZHUF (see `AttachmentCompressor`).
+///
+/// Nothing is dropped and nothing is changed without the chip saying so. A
+/// photo that cannot be shrunk into the room left goes in as it is, with a
+/// note; the budget gauge turns red and Queue refuses. That is better than a
+/// message that silently lost a picture.
+nonisolated enum ComposeAttachmentPlanner {
+
+    /// The size a shrunk photo aims for when the message has room for more.
+    /// About five minutes at 1200 baud, and enough for a 1024-pixel photo a
+    /// recipient can actually read.
+    static let photoTargetBytes = 48 * 1024
+
+    /// Below this there is no room for a photo worth sending, and shrinking
+    /// is not attempted.
+    static let minimumPhotoBytes = 6 * 1024
+
+    /// The longest edge a shrunk photo starts from.
+    static let photoMaxLongEdge = 1280
+
+    static func plan(name: String, data: Data, remainingBudget: Int, keepsLocation: Bool,
+                     forceShrink: Bool = false) -> WinlinkComposeViewModel.AttachmentItem {
+        guard !isFormAttachment(name), ImageShrinker.isImage(data) else {
+            if let zipped = AttachmentCompressor.zipped(name: name, data: data) {
+                return .init(name: zipped.name, data: zipped.data,
+                             original: (name: name, data: data), change: .zipped)
+            }
+            return .init(name: name, data: data)
+        }
+        if data.count <= remainingBudget && !forceShrink {
+            // It fits. Only the location may need to come out.
+            guard !keepsLocation, ImageShrinker.containsLocation(data) else {
+                return .init(name: name, data: data)
+            }
+            return shrink(name: name, data: data, budget: remainingBudget, keepsLocation: false)
+        }
+        let target = min(photoTargetBytes, remainingBudget)
+        guard target >= minimumPhotoBytes else {
+            return .init(name: name, data: data,
+                         note: "There is no room left in this message to shrink it into. "
+                             + "Remove something, or send it in a message of its own.")
+        }
+        return shrink(name: name, data: data, budget: target, keepsLocation: keepsLocation)
+    }
+
+    private static func shrink(name: String, data: Data, budget: Int,
+                               keepsLocation: Bool) -> WinlinkComposeViewModel.AttachmentItem {
+        let options = ImageShrinker.Options(byteBudget: budget, maxLongEdge: photoMaxLongEdge,
+                                            keepsLocation: keepsLocation)
+        switch ImageShrinker.shrink(data, name: name, options: options) {
+        case .success(.shrunk(let shrunk)):
+            return .init(name: shrunk.name, data: shrunk.data,
+                         original: (name: name, data: data),
+                         change: .shrunk(pixelWidth: shrunk.pixelWidth, pixelHeight: shrunk.pixelHeight))
+        case .success(.locationRemoved(let stripped)):
+            return .init(name: name, data: stripped,
+                         original: (name: name, data: data), change: .locationRemoved)
+        case .success(.unchanged):
+            return .init(name: name, data: data)
+        case .failure(.animated):
+            return .init(name: name, data: data,
+                         note: "Animated images go as they are, since shrinking one keeps only its first frame.")
+        case .failure(.cannotMeetBudget(let smallest)):
+            return .init(name: name, data: data,
+                         note: "It would not go below \(ByteCount.string(smallest)) "
+                             + "without getting too small to be useful, so it is attached as it is.")
+        case .failure(.notAnImage), .failure(.encodeFailed):
+            return .init(name: name, data: data,
+                         note: "This image could not be re-encoded, so it is attached as it is.")
+        }
+    }
+
+    /// Winlink form workflows key on exact attachment names, so a form's
+    /// files are never renamed or changed.
+    private static func isFormAttachment(_ name: String) -> Bool {
+        (name as NSString).pathExtension.lowercased() == "xml"
     }
 }

@@ -155,7 +155,43 @@ Never compressed: files under 512 B, already-dense extensions (media,
 archives, office formats), anything saving less than 10% (the recipient
 pays a rename to `.zip` — a marginal win doesn't cover it), and **xml —
 Winlink form workflows key on exact attachment names**. The compose chip
-shows `original → zipped` sizes with a right-click "Send Original".
+shows `original → zipped` sizes, with "Send Original" in its menu
+(right-click on the Mac, touch and hold on iOS).
+
+### Photos
+
+A phone photo is 2 to 5 MB, so attached as taken it can never be sent.
+`ComposeAttachmentPlanner` (in `WinlinkComposeViewModel.swift`) decides
+what goes in, and `ImageShrinker` (`AXTerm/Platform/`, ImageIO only, shared
+with anything else that needs it) does the work off the main actor:
+
+- A photo that would push the message over 120 KB is shrunk by default to
+  `min(48 KB, room left)`: JPEG, long edge from 1280 px down in steps of
+  0.8, quality 0.75 → 0.6 → 0.45 at each size and down to 0.25 only at the
+  320 px floor. The orientation is baked into the pixels. The chip reads
+  "Shrunk to 38 KB from 3.1 MB"; "Send Original" puts the exact file back
+  and "Shrink to Fit" shrinks it again, both in place.
+- A photo that fits is left alone, except that its GPS position is removed
+  (a lossless metadata copy) unless Keep Photo Location is on in the Attach
+  menu. Packet radio is readable by anyone listening.
+- A photo that cannot be shrunk goes in unchanged with a note on the chip
+  saying why: no room left (under 6 KB), an animated GIF (shrinking keeps
+  one frame), or a budget ImageIO could not meet at the floor. The gauge
+  turns red and Queue refuses. Nothing is dropped silently.
+- The same photo always shrinks to the same bytes.
+
+### Getting files into compose
+
+Attach is a menu on both platforms: Files…, Photos… (`PhotosPicker`,
+several at once, original encoding), Take Photo (iOS, where there is a
+camera), Paste, and the Keep Photo Location toggle. Files and pictures can
+be dropped anywhere on the window. `ComposeAttachmentIntake` decides how to
+read each dragged or pasted item (a file URL first, then the source's own
+first data type; text only when it has a name, since dragged prose belongs
+in the body) and what to call it ("Pasted.png", "Photo 1.heic"). Every
+attachment in a message gets a unique name. On iOS a file opened in AXTerm
+from another app can start a message too (Docs/iOSPort.md, "Files in and
+out").
 
 ## Catalog requests
 
@@ -714,7 +750,17 @@ callsign, since looking up "DRLNOD" would fail.
 
 - `Mail` navigation area (⌘5), unread badge on the sidebar item.
 - Three panes: folder sidebar / message table (search, delivery badges) /
-  reading pane (attachment save, reply/reply-all/forward with quoting).
+  reading pane (attachments, reply/reply-all/forward with quoting).
+- **Attachments in the reading pane.** A tap opens Quick Look, on both
+  platforms. The chip's menu (`AttachmentActions`) has Quick Look, then
+  Open and Show in Finder on the Mac or Share on iOS, then Save, then Add
+  to Map for spatial files. Show in Finder saves a copy to
+  `~/Downloads/AXTerm Attachments` (reusing an identical copy, numbering a
+  different one) because the sandbox's temp folder is no place to send the
+  Finder. Quick Look, Open and Share read temporary copies written per
+  message by `AttachmentPreviewFiles`, purged after a day. Any image type
+  the platform decodes (HEIC included) is shown inline, and tapping it
+  opens Quick Look.
 - **Reading-pane placement** is an operator preference, remembered in
   `@AppStorage("winlink.readingPaneLayout")`: right (the classic
   three-column layout), bottom, or hidden. Bottom exists because the
@@ -737,7 +783,10 @@ callsign, since looking up "DRLNOD" would fail.
 - Compose is a separate window (`winlinkCompose` scene) that always edits
   a **persisted draft row**, so drafts survive restarts. Live 120 kB size
   gauge; addresses normalize to callsigns or `SMTP:` internet addresses;
-  bodies are validated as ISO-8859-1 with CRLF endings.
+  bodies are validated as ISO-8859-1 with CRLF endings. On iPhone and iPad
+  it is a sheet: Queue and Save Draft sit in the navigation bar, and Attach,
+  Insert Position and a compact gauge in the bottom toolbar, because the
+  Mac's footer wrapped every label at 393 points.
 - Stations tab: cache-first CMS proximity list with Set Gateway /
   Exchange actions.
 - Settings › Winlink: the grid square read-only (it is set under
@@ -764,6 +813,19 @@ callsign, since looking up "DRLNOD" would fail.
 - `SQLiteWinlinkStoreTests` — real migrator on in-memory queues; draft
   immutability, duplicate MIDs, cascades.
 - `WinlinkCMSClientTests` — stubbed URLProtocol; key-redaction test.
+- `ImageShrinkerTests` — budgets met for several synthetic photos, aspect
+  ratio and orientation kept, GPS stripped or kept, HEIC and PNG in, JPEG
+  out, a small image untouched, an impossible budget reported as a failure,
+  determinism.
+- `WinlinkComposeAttachmentTests`, `ComposeAttachmentIntakeTests` — every
+  attach source, shrink by default, Send Original and Shrink to Fit, several
+  photos sharing the budget, unique names, drop and paste routing, queue
+  refused over budget.
+- `AttachmentExportTests` — exporter content types round trip, the actions
+  each platform offers, the temporary and Downloads copies.
+- `WinlinkComposeHostingTests` — compose and the reading pane hosted at
+  iPhone, iPad and Mac widths, counting SwiftUI's publish-during-update
+  warnings.
 
 End-to-end without RF: run a Telnet exchange against the live CMS (send a
 self-addressed message; run a catalog request and poll again). On RF: the

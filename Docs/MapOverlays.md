@@ -208,6 +208,10 @@ thing to put on a shared channel, and that a memory card will do it in seconds.
 compresses it; a zipped shapefile is already compressed and gains nothing. The
 Winlink action offers GeoJSON only.
 
+The action saves the layer as a draft with no recipient. On the Mac the
+mailbox opens with it in Drafts; on iPhone and iPad compose opens on it
+directly, since the draft is several screens from the map there.
+
 ### The coordinate system is stated, always
 
 `MapOverlayMessage` puts the CRS in the message **body**, not just in the

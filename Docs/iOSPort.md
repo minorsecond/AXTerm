@@ -69,6 +69,12 @@ user's behalf, so the file goes through a document exporter the user drives.
 `.exportFile($binding) { error in }` covers both, and failure is never silent
 — an attachment may be the only copy of something that cost airtime.
 
+The iOS exporter's `ExportableFileDocument` has to declare every type it is
+asked to write. It used to declare only `.data` while the exporter was handed
+`.jpeg` or `.pdf`. It now declares `ExportableFile.exportableTypes` (the types
+Winlink traffic carries), and `exportContentType` falls back to `.data` for
+anything not on that list, keeping the file's own name.
+
 ---
 
 ## 3. What the iOS app has
@@ -369,6 +375,12 @@ it from iOS is one line in the exception set.
 - Target `AXTerm-iOS`, bundle `com.rosswardrup.AXTerm`, deployment iOS 18.0,
   `TARGETED_DEVICE_FAMILY = "1,2"` (iPhone and iPad)
 - `AXTerm/AXTerm-iOS.entitlements` — CloudKit and the shared container
+- `AXTerm/iOS/AXTerm-iOS-Info.plist` — the keys the generated Info.plist
+  cannot express (`CFBundleDocumentTypes`, `UIFileSharingEnabled`). It is the
+  target's `INFOPLIST_FILE`, merged with the generated keys, and is listed in
+  both targets' exception sets so it is never copied in as a resource.
+  `INFOPLIST_KEY_UIFileSharingEnabled` does nothing, which is why that key
+  lives in the file.
 - The macOS-only icon catalog (`Assets/Icon/Assets.xcassets`, `mac` idiom
   images) is excluded; the iOS target needs its own app icon
 
@@ -1004,3 +1016,63 @@ position, heard over the air."
   minus sign a number pad lacks.
 - The settings list shows the callsign under General and the radio's name
   and endpoint under Radios.
+
+## Files in and out (2026-09-30)
+
+### Winlink compose on a phone
+
+The compose view is the Mac's, but its footer (Attach, Position, the size
+gauge, Save Draft, Queue for Sending) wrapped every label on a 393-point
+iPhone and on an iPad sheet. On iOS the 560 × 440 minimum frame is gone,
+Queue is the navigation bar's confirmation action with Save Draft beside it,
+and the bottom toolbar carries Attach and Insert Position as icons (with
+accessibility labels) and a compact gauge. Help text says "Touch and hold"
+where the Mac's says "Right-click". The view model is a `@StateObject`; built
+in `init` as an `@ObservedObject`, each parent redraw made a fresh model and
+dropped unsaved typing.
+
+Attach is a menu: Files, Photos (`PhotosPicker`, several at once), Take Photo
+(`ComposeCameraPicker`, only where `UIImagePickerController` reports a
+camera), Paste, and Keep Photo Location. Drag and drop works on the whole
+window. A photo too big for the message is shrunk by `ImageShrinker`; see
+Docs/Winlink.md, "Photos".
+
+### Received attachments
+
+A tap previews with Quick Look. The menu adds Share (`ShareLink`) and Save on
+iOS; the Mac gets Open and Show in Finder instead of Share. HEIC previews
+inline.
+
+### Getting files into the app
+
+- `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` put the
+  app's Documents folder in the Files app under On My iPhone › AXTerm.
+  Nothing else lives in Documents (the database and caches are in
+  Application Support), so what shows there is received packet files in
+  `Documents/AXTerm Transfers`.
+- `CFBundleDocumentTypes` claims `public.item` and `public.data` at rank
+  Alternate, so "Open in AXTerm" and the share sheet's AXTerm entry appear for
+  any file, without AXTerm becoming the default app for anything.
+- The root view takes the file in `.onOpenURL`. `IncomingDocumentRouter`
+  copies it into `tmp/Incoming Files/<uuid>/` inside the security scope and
+  removes the copy iOS may have left in `Documents/Inbox` (the Files app
+  would show it). `IncomingFileSheet` then offers "Attach to a new Winlink
+  message" and, per connected packet session, "Send to <callsign> over
+  packet". Winlink opens compose in the mailbox through
+  `WinlinkComposeRequest` with the file attached as if picked, and saves the
+  draft at once. Packet calls `SessionCoordinator.startTransfer` on the
+  session's path with the peer's first available protocol and switches to
+  the Terminal; that copy is purged a day later rather than deleted while a
+  transfer may read it.
+
+A share extension was considered and not built. It needs its own target and
+signing, an app group to pass the file to the app, and a way to bring the app
+forward, and "Open in AXTerm" already covers files from other apps. The
+Photos app's share sheet only lists extensions, so photos are attached from
+inside compose.
+
+### Map layers
+
+The iOS map now gets `onSendLayer`, so Send by Winlink appears in the layer
+menu. It builds the Mac's draft (see `ContentView.sendLayerViaWinlink`) and
+opens compose on it.

@@ -1,7 +1,17 @@
 import SwiftUI
+import QuickLook
+#if os(macOS)
+import AppKit
+#endif
 
 /// Reading pane: headers, monospaced body, attachment chips, and
 /// reply/forward actions.
+///
+/// Tapping an attachment previews it with Quick Look, on both platforms: the
+/// question asked of an attachment is nearly always "what is it", and saving
+/// it somewhere to find out was the only way to answer that. The chip's menu
+/// has the rest: Share on iOS, Open and Show in Finder on the Mac, Save, and
+/// Add to Map for spatial files.
 struct WinlinkMessageDetail: View {
 
     /// The message to show, or nil for the placeholder. Passed in rather
@@ -37,6 +47,12 @@ struct WinlinkMessageDetail: View {
 
     @State private var saveError: String?
     @State private var pendingExport: ExportableFile?
+    /// Temporary copies of this message's attachments, in attachment order,
+    /// for Quick Look, Share and Open, which all want a file. Written when
+    /// the message is shown, off the main actor.
+    @State private var attachmentURLs: [URL] = []
+    /// The attachment Quick Look is showing.
+    @State private var previewURL: URL?
     /// Derived off the main actor when the message changes — never in
     /// `body`. See `WinlinkRenderedBody`.
     @State private var rendered: WinlinkRenderedBody?
@@ -137,8 +153,8 @@ struct WinlinkMessageDetail: View {
                 Divider()
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, attachment in
-                            attachmentChip(attachment)
+                        ForEach(Array(message.attachments.enumerated()), id: \.offset) { index, attachment in
+                            attachmentChip(attachment, index: index)
                         }
                     }
                     .padding(.horizontal, 12)
@@ -208,8 +224,21 @@ struct WinlinkMessageDetail: View {
             // previous one's text while its own is being derived.
             wantsFullText = false
             rendered = nil
+            attachmentURLs = []
         }
-        .alert("Save failed", isPresented: Binding(
+        .task(id: message.mid) {
+            let files = message.attachments.map { ExportableFile(name: $0.name, data: $0.data) }
+            guard !files.isEmpty else { return }
+            let mid = message.mid
+            let urls = await Task.detached(priority: .utility) {
+                AttachmentPreviewFiles.purge(olderThan: 24 * 3600)
+                return (try? AttachmentPreviewFiles.write(files, messageID: mid)) ?? []
+            }.value
+            guard !Task.isCancelled else { return }
+            attachmentURLs = urls
+        }
+        .quickLookPreview($previewURL, in: attachmentURLs)
+        .alert("Attachment", isPresented: Binding(
             get: { saveError != nil },
             set: { if !$0 { saveError = nil } })) {
             Button("OK") { saveError = nil }
@@ -260,10 +289,7 @@ struct WinlinkMessageDetail: View {
     }
 
     private func imageAttachments(in message: WinlinkB2Message) -> [WinlinkB2Message.Attachment] {
-        message.attachments.filter { attachment in
-            let ext = (attachment.name as NSString).pathExtension.lowercased()
-            return ["jpg", "jpeg", "png", "gif", "tif", "tiff", "bmp"].contains(ext)
-        }
+        message.attachments.filter { AttachmentActions.isInlineImage(named: $0.name) }
     }
 
     @ViewBuilder
@@ -278,7 +304,17 @@ struct WinlinkMessageDetail: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity)
-                    .help("\(attachment.name): \(ByteCount.string(Int64(attachment.data.count))) as received. Right-click the chip above to save it.")
+                    // Quick Look zooms, which a phone screen needs for a
+                    // chart or a map scan.
+                    .onTapGesture {
+                        if let message = stored?.message,
+                           let index = message.attachments.firstIndex(where: { $0.name == attachment.name }) {
+                            preview(index: index, attachment: attachment)
+                        }
+                    }
+                    .accessibilityAddTraits(.isButton)
+                    .help("\(attachment.name): \(ByteCount.string(Int64(attachment.data.count))) as received. "
+                          + "\(AttachmentActions.secondaryClick()) the attachment above to save or share it.")
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
@@ -297,9 +333,11 @@ struct WinlinkMessageDetail: View {
         }
     }
 
-    private func attachmentChip(_ attachment: WinlinkB2Message.Attachment) -> some View {
-        Button {
-            saveAttachment(attachment)
+    private func attachmentChip(_ attachment: WinlinkB2Message.Attachment, index: Int) -> some View {
+        let canAddToMap = onAddToMap != nil
+            && MapOverlayAttachment.kind(forAttachmentNamed: attachment.name) != nil
+        return Button {
+            preview(index: index, attachment: attachment)
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "paperclip")
@@ -315,13 +353,11 @@ struct WinlinkMessageDetail: View {
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
-        .help("Save \"\(attachment.name)\" to disk")
+        .help("Preview \"\(attachment.name)\". \(AttachmentActions.secondaryClick()) for more.")
+        .accessibilityHint("Previews the attachment. \(AttachmentActions.secondaryClick()) for Share, Save and more.")
         .contextMenu {
-            Button("Save…") { saveAttachment(attachment) }
-            if let onAddToMap, let kind = MapOverlayAttachment.kind(forAttachmentNamed: attachment.name) {
-                Button("Add to Map (\(kind.displayName))") {
-                    onAddToMap(attachment, stored?.message.from ?? "")
-                }
+            ForEach(AttachmentActions.available(canAddToMap: canAddToMap), id: \.self) { action in
+                actionControl(action, attachment: attachment, index: index)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -357,4 +393,90 @@ struct WinlinkMessageDetail: View {
     private func saveAttachment(_ attachment: WinlinkB2Message.Attachment) {
         pendingExport = ExportableFile(name: attachment.name, data: attachment.data)
     }
+
+    /// The temporary copy of attachment `index`, written now if the
+    /// background write has not got to it yet (a tap in the first instant
+    /// after the message opens).
+    private func fileURL(index: Int, attachment: WinlinkB2Message.Attachment) -> URL? {
+        if attachmentURLs.indices.contains(index) { return attachmentURLs[index] }
+        guard let message = stored?.message else { return nil }
+        let files = message.attachments.map { ExportableFile(name: $0.name, data: $0.data) }
+        guard let urls = try? AttachmentPreviewFiles.write(files, messageID: message.mid),
+              urls.indices.contains(index) else {
+            saveError = "Could not prepare \(attachment.name) for viewing."
+            return nil
+        }
+        attachmentURLs = urls
+        return urls[index]
+    }
+
+    private func preview(index: Int, attachment: WinlinkB2Message.Attachment) {
+        previewURL = fileURL(index: index, attachment: attachment)
+    }
+
+    @ViewBuilder
+    private func actionControl(_ action: AttachmentAction,
+                               attachment: WinlinkB2Message.Attachment, index: Int) -> some View {
+        switch action {
+        case .quickLook:
+            Button { preview(index: index, attachment: attachment) } label: {
+                Label(action.title, systemImage: action.systemImage)
+            }
+        case .share:
+            if attachmentURLs.indices.contains(index) {
+                ShareLink(item: attachmentURLs[index]) {
+                    Label(action.title, systemImage: action.systemImage)
+                }
+            }
+        case .open:
+            #if os(macOS)
+            Button {
+                if let url = fileURL(index: index, attachment: attachment),
+                   !NSWorkspace.shared.open(url) {
+                    saveError = "No app on this Mac opens \(attachment.name). Save it and open it from the Finder."
+                }
+            } label: {
+                Label(action.title, systemImage: action.systemImage)
+            }
+            #endif
+        case .showInFinder:
+            #if os(macOS)
+            Button { showInFinder(attachment) } label: {
+                Label(action.title, systemImage: action.systemImage)
+            }
+            .help("Saves a copy to Downloads \u{203A} \(AttachmentPreviewFiles.folderName) and shows it in the Finder.")
+            #endif
+        case .save:
+            Button { saveAttachment(attachment) } label: {
+                Label(action.title, systemImage: action.systemImage)
+            }
+        case .addToMap:
+            if let onAddToMap, let kind = MapOverlayAttachment.kind(forAttachmentNamed: attachment.name) {
+                Button {
+                    onAddToMap(attachment, stored?.message.from ?? "")
+                } label: {
+                    Label("Add to Map (\(kind.displayName))", systemImage: action.systemImage)
+                }
+            }
+        }
+    }
+
+    #if os(macOS)
+    /// The app's temporary folder is inside its sandbox container, which is
+    /// no place to send the Finder, so this saves a copy to Downloads (which
+    /// the app is entitled to write) and selects it there.
+    private func showInFinder(_ attachment: WinlinkB2Message.Attachment) {
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            saveError = "Could not find the Downloads folder."
+            return
+        }
+        do {
+            let url = try AttachmentPreviewFiles.downloadsCopy(
+                of: ExportableFile(name: attachment.name, data: attachment.data), in: downloads)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } catch {
+            saveError = "Could not save \(attachment.name) to Downloads: \(error.localizedDescription)"
+        }
+    }
+    #endif
 }

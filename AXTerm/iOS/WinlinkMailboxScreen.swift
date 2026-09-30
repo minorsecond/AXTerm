@@ -2,6 +2,15 @@
 import SwiftUI
 import Combine
 
+/// Asks the mailbox to open compose: on a new draft carrying `files`, or on
+/// a draft that already exists (`draftMID`), such as a map layer the map
+/// saved as a draft.
+struct WinlinkComposeRequest: Identifiable, Equatable {
+    let id = UUID()
+    var files: [ComposeIncomingFile] = []
+    var draftMID: String?
+}
+
 /// The mailbox on a handheld.
 ///
 /// Same view model, same list and same reading pane as the Mac — only the
@@ -20,6 +29,9 @@ struct WinlinkMailboxScreen: View {
     let myCallsign: String
     /// Imports a spatial attachment onto the map. Nil hides the action.
     var onAddToMap: ((WinlinkB2Message.Attachment, String) -> Void)?
+    /// A message to open compose on, from outside the mailbox: a file
+    /// another app handed over, or a map layer to send. Cleared once taken.
+    @Binding var composeRequest: WinlinkComposeRequest?
 
     @StateObject private var viewModel: ViewModelBox
     @StateObject private var catalogVM: WinlinkCatalogViewModel
@@ -30,8 +42,10 @@ struct WinlinkMailboxScreen: View {
 
     /// The draft being edited. A wrapper because `sheet(item:)` needs an
     /// Identifiable and a bare MID string is not one.
-    private struct ComposeTarget: Identifiable, Hashable {
+    private struct ComposeTarget: Identifiable {
         let id: String
+        /// Files the compose window attaches as it opens.
+        var files: [ComposeIncomingFile] = []
     }
     @State private var showingForms = false
     @State private var showingConsole = false
@@ -83,8 +97,10 @@ struct WinlinkMailboxScreen: View {
          appSettings: AppSettingsStore,
          sessionCoordinator: SessionCoordinator,
          myCallsign: String,
-         onAddToMap: ((WinlinkB2Message.Attachment, String) -> Void)? = nil) {
+         onAddToMap: ((WinlinkB2Message.Attachment, String) -> Void)? = nil,
+         composeRequest: Binding<WinlinkComposeRequest?> = .constant(nil)) {
         self.context = context
+        _composeRequest = composeRequest
         self.client = client
         self.appSettings = appSettings
         self.sessionCoordinator = sessionCoordinator
@@ -281,8 +297,9 @@ struct WinlinkMailboxScreen: View {
             // second window to put it in, and a draft is a modal task
             // anyway — it ends in send, save or discard.
             .sheet(item: $composingDraft) { target in
-                composeSheet(draftMID: target.id)
+                composeSheet(target)
             }
+            .task(id: composeRequest?.id) { takeComposeRequest() }
             .sheet(isPresented: $showingForms) {
                 if let store = context.store {
                     NavigationStack {
@@ -501,22 +518,23 @@ struct WinlinkMailboxScreen: View {
     // MARK: - Composing
 
     @ViewBuilder
-    private func composeSheet(draftMID: String) -> some View {
+    private func composeSheet(_ target: ComposeTarget) -> some View {
         if let store = context.store {
             NavigationStack {
                 WinlinkComposeWindow(
                     store: store,
                     myCallsign: myCallsign,
-                    draftMID: draftMID,
+                    draftMID: target.id,
                     locationService: context.locationService,
                     contactStore: context.contactStore,
+                    initialFiles: target.files,
                     onChanged: { refresh() })
                     .navigationTitle("New Message")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        // The compose view carries Save Draft and Queue; this
-                        // is the third outcome, and without it a sheet opened
-                        // by mistake has no way out.
+                        // The compose view puts Save Draft and Queue in this
+                        // bar; this is the third outcome, and without it a
+                        // sheet opened by mistake has no way out.
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Close") { composingDraft = nil }
                         }
@@ -525,12 +543,24 @@ struct WinlinkMailboxScreen: View {
         }
     }
 
-    /// Creates a draft and opens it.
+    /// Opens compose for a request from outside the mailbox, once.
+    private func takeComposeRequest() {
+        guard let request = composeRequest else { return }
+        composeRequest = nil
+        if let mid = request.draftMID {
+            refresh()
+            composingDraft = ComposeTarget(id: mid)
+        } else {
+            composeNew(files: request.files)
+        }
+    }
+
+    /// Creates a draft and opens it, with `files` attached as it opens.
     ///
     /// The draft is saved *before* the editor opens, exactly as on macOS, so
     /// a compose interrupted by a crash or a task switch is still in Drafts
     /// rather than lost with the sheet.
-    private func composeNew(prefill: WinlinkB2Message? = nil) {
+    private func composeNew(prefill: WinlinkB2Message? = nil, files: [ComposeIncomingFile] = []) {
         guard let store = context.store else { return }
         let me = myCallsign.isEmpty ? "NOCALL" : myCallsign
         let draft = prefill ?? WinlinkB2Message(
@@ -547,7 +577,7 @@ struct WinlinkMailboxScreen: View {
         do {
             try store.saveDraft(draft)
             refresh()
-            composingDraft = ComposeTarget(id: draft.mid)
+            composingDraft = ComposeTarget(id: draft.mid, files: files)
         } catch {
             composeError = "Could not create the draft: \(error.localizedDescription)"
         }
