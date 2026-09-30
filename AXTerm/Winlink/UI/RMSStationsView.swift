@@ -266,6 +266,7 @@ struct RMSStationsView: View {
         if editingPathFor == key {
             HStack(spacing: 4) {
                 TextField("direct", text: $pathDraft)
+                    .callsignInput($pathDraft)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption.monospaced())
                     .focused($pathFieldFocused)

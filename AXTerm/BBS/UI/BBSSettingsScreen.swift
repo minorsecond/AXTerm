@@ -63,9 +63,7 @@ struct BBSSettingsScreen: View {
                 TextField("Mailbox callsign", text: $settings.callsign,
                           prompt: Text(stationCallsign.isEmpty ? "NOCALL" : stationCallsign))
                     .font(.system(.body, design: .monospaced))
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                    .keyboardType(.asciiCapable)
+                    .callsignInput($settings.callsign)
             } header: {
                 Text("Identity")
             } footer: {

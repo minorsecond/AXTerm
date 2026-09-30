@@ -63,6 +63,7 @@ struct WinlinkICS309Sheet: View {
                 Section {
                     TextField("Operator name", text: $operatorName)
                     TextField("Station ID", text: $stationId)
+                        .callsignInput($stationId)
                         .font(.body.monospaced())
                 }
             }

@@ -215,6 +215,7 @@ struct WinlinkContactEditorSheet: View {
                     Section("Identity") {
                         TextField("Name", text: binding(\.displayName))
                         TextField("Callsign", text: binding(\.callsign), prompt: Text("e.g. W1AW or KE7XO-10"))
+                            .callsignInput(binding(\.callsign))
                         TextField("Email", text: binding(\.smtpEmail), prompt: Text("routed via the Winlink internet gateway"))
                         Toggle("Favorite", isOn: binding(\.favorite))
                     }
@@ -223,6 +224,7 @@ struct WinlinkContactEditorSheet: View {
                         TextField("Organization", text: binding(\.organization))
                         TextField("Position / title", text: binding(\.positionTitle))
                         TextField("Grid square", text: binding(\.gridSquare))
+                            .gridSquareInput(binding(\.gridSquare))
                     }
                     Section("Address") {
                         TextField("Street", text: binding(\.street))

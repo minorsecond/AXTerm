@@ -22,6 +22,7 @@ struct ConnectBarView: View {
                     placeholder: "Destination (CALL-SSID)",
                     items: viewModel.flatToSuggestions,
                     width: 230,
+                    uppercases: true,
                     onCommit: {}
                 )
                 .frame(width: 240)
@@ -210,6 +211,7 @@ struct ConnectBarView: View {
             .frame(maxWidth: 320)
 
             TextField("Add digis (comma or space separated)", text: $viewModel.pendingViaTokenInput)
+                .callsignInput($viewModel.pendingViaTokenInput)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11, design: .monospaced))
                 .frame(width: 200)

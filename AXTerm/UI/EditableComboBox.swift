@@ -61,17 +61,22 @@ struct EditableComboBox: View {
     var width: CGFloat
     var focusRequested: Binding<Bool>? = nil
     var accessibilityIdentifier: String? = nil
+    /// True for callsigns: upper-case as the operator types, as
+    /// `callsignInput` does for a plain text field.
+    var uppercases: Bool = false
     var onCommit: (() -> Void)? = nil
 
     var body: some View {
         #if os(macOS)
         AppKitComboBox(text: $text, placeholder: placeholder, items: items,
                        groups: groups, width: width, focusRequested: focusRequested,
-                       accessibilityIdentifier: accessibilityIdentifier, onCommit: onCommit)
+                       accessibilityIdentifier: accessibilityIdentifier,
+                       uppercases: uppercases, onCommit: onCommit)
         #else
         TouchComboBox(text: $text, placeholder: placeholder, items: items,
                       groups: groups, width: width,
-                      accessibilityIdentifier: accessibilityIdentifier, onCommit: onCommit)
+                      accessibilityIdentifier: accessibilityIdentifier,
+                      uppercases: uppercases, onCommit: onCommit)
         #endif
     }
 }
@@ -90,15 +95,28 @@ private struct TouchComboBox: View {
     var groups: [EditableComboBoxGroup] = []
     var width: CGFloat
     var accessibilityIdentifier: String?
+    var uppercases: Bool
     var onCommit: (() -> Void)?
+
+    /// What the field shows. The owner's binding may tidy what it stores
+    /// (trim it, upper-case it) in its setter, and a focused iOS field does
+    /// not redraw a value rewritten there. Editing a copy and passing
+    /// changes both ways in onChange gets the tidied value onto the screen.
+    @State private var draft = ""
 
     var body: some View {
         HStack(spacing: 4) {
-            TextField(placeholder, text: $text)
+            TextField(placeholder, text: $draft)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
+                .callsignInput($draft, isEnabled: uppercases)
+                .onAppear { draft = text }
+                .onChange(of: draft) { _, typed in
+                    if typed != text { text = typed }
+                }
+                .onChange(of: text) { _, stored in
+                    if stored != draft { draft = stored }
+                }
                 .submitLabel(.go)
                 .onSubmit { onCommit?() }
                 .accessibilityIdentifier(accessibilityIdentifier ?? "")
@@ -149,6 +167,7 @@ private struct AppKitComboBox: NSViewRepresentable {
     var width: CGFloat
     var focusRequested: Binding<Bool>? = nil
     var accessibilityIdentifier: String? = nil
+    var uppercases: Bool = false
     var onCommit: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
@@ -238,7 +257,25 @@ private struct AppKitComboBox: NSViewRepresentable {
 
         func controlTextDidChange(_ obj: Notification) {
             guard let field = obj.object as? NSTextField else { return }
+            if parent.uppercases { Self.uppercaseInPlace(field) }
             parent.text = field.stringValue
+        }
+
+        /// Upper-cases the text being edited without moving the caret.
+        /// `CallsignCase` keeps the length, so the old selection still fits.
+        /// Left alone while an input method is composing.
+        static func uppercaseInPlace(_ field: NSTextField) {
+            guard let editor = field.currentEditor() as? NSTextView,
+                  !editor.hasMarkedText(),
+                  let storage = editor.textStorage else { return }
+            let typed = storage.string
+            let upper = CallsignCase.uppercased(typed)
+            guard upper != typed else { return }
+            let selection = editor.selectedRanges
+            storage.beginEditing()
+            storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: upper)
+            storage.endEditing()
+            editor.selectedRanges = selection
         }
 
         func comboBoxSelectionDidChange(_ notification: Notification) {

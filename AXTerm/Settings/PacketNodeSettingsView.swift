@@ -73,6 +73,7 @@ struct PacketNodeSettingsView: View {
                     // Applied on commit, never per keystroke: this used to
                     // push a NODES broadcast on every character typed.
                     TextField("e.g. EPINOD", text: $settings.netRomNodeAlias)
+                        .callsignInput($settings.netRomNodeAlias)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 160)
                         .onSubmit { applyNetRomSettings() }

@@ -18,7 +18,9 @@ nonisolated struct TextEntryPrompt: Identifiable {
     var placeholder: String = ""
     var confirmTitle: String = "Add"
     /// True for callsigns: they travel upper-case on the air, and every
-    /// comparison in the app spells them that way.
+    /// comparison in the app spells them that way. The field upper-cases as
+    /// it is typed (`callsignInput`), and the committed value is upper-cased
+    /// again, since a system alert's field may not show a rewritten value.
     var uppercases: Bool = false
     /// Called with the trimmed value. Not called for an empty entry or a
     /// cancel.
@@ -41,10 +43,7 @@ private struct TextEntryPromptModifier: ViewModifier {
             get: { prompt != nil },
             set: { if !$0 { dismiss() } })) {
             TextField(prompt?.placeholder ?? "", text: $text)
-                #if os(iOS)
-                .textInputAutocapitalization(prompt?.uppercases == true ? .characters : .sentences)
-                .autocorrectionDisabled(prompt?.uppercases == true)
-                #endif
+                .callsignInput($text, isEnabled: prompt?.uppercases == true)
 
             Button(prompt?.confirmTitle ?? "OK") { commit() }
             Button("Cancel", role: .cancel) { dismiss() }

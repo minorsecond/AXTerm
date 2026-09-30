@@ -240,6 +240,7 @@ struct APRSAskStationSheet: View {
             .buttonStyle(.plain)
             if usingCustom {
                 TextField("?APRSH K0EPI", text: $custom)
+                    .callsignInput($custom)
                     .textFieldStyle(.roundedBorder)
                     .font(.callout.monospaced())
                     .onSubmit {

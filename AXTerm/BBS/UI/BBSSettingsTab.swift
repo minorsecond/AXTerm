@@ -63,6 +63,7 @@ struct BBSSettingsTab: View {
             Section {
                 TextField("Mailbox callsign", text: $settings.callsign,
                           prompt: Text(stationCallsign.isEmpty ? "NOCALL" : stationCallsign))
+                    .callsignInput($settings.callsign)
                     .font(.system(.body, design: .monospaced))
                 Text("Leave empty to answer as \(stationCallsign.isEmpty ? "your station callsign" : stationCallsign). "
                      + "Give the mailbox its own SSID when anything else answers to that "

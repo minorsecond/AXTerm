@@ -81,7 +81,7 @@ struct APRSComposeSheet: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.body.monospaced())
                     .focused($focus, equals: .to)
-                    .callsignInput()
+                    .callsignInput($model.to)
                     .onSubmit { focus = .text }
 
                 if !suggestions.isEmpty {
@@ -199,16 +199,5 @@ struct APRSComposeSheet: View {
             Image(systemName: symbol)
         }
         .foregroundStyle(tint)
-    }
-}
-
-private extension View {
-    /// Callsigns are upper-case and never autocorrected.
-    @ViewBuilder func callsignInput() -> some View {
-        #if os(iOS)
-        self.textInputAutocapitalization(.characters).autocorrectionDisabled()
-        #else
-        self.autocorrectionDisabled()
-        #endif
     }
 }

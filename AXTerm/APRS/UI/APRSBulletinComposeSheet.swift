@@ -64,10 +64,7 @@ struct APRSBulletinComposeSheet: View {
                         }
                     }
                     TextField("Group (optional, e.g. ARES)", text: $group)
-                        .autocorrectionDisabled()
-                        #if os(iOS)
-                        .textInputAutocapitalization(.characters)
-                        #endif
+                        .callsignInput($group)
                 } header: {
                     Text("Slot")
                 } footer: {

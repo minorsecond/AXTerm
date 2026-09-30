@@ -62,6 +62,29 @@ nonisolated enum Maidenhead {
         return result
     }
 
+    /// A typed locator in the conventional case: the field pair upper, the
+    /// subsquare pair (and any later letter pair) lower, as in DM79po45.
+    ///
+    /// Trims surrounding spaces and changes only ASCII letters, so a
+    /// half-typed or malformed locator comes back with its length and its
+    /// mistakes intact for the validation to point at.
+    static func formatted(_ typed: String) -> String {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        var scalars = String.UnicodeScalarView()
+        for (index, scalar) in trimmed.unicodeScalars.enumerated() {
+            let pair = index / 2
+            switch scalar.value {
+            case 0x61...0x7A where pair == 0:
+                scalars.append(Unicode.Scalar(scalar.value - 0x20)!)
+            case 0x41...0x5A where pair >= 2 && pair.isMultiple(of: 2):
+                scalars.append(Unicode.Scalar(scalar.value + 0x20)!)
+            default:
+                scalars.append(scalar)
+            }
+        }
+        return String(scalars)
+    }
+
     /// True when `grid` is a syntactically valid 4/6/8-character locator.
     static func isValid(_ grid: String) -> Bool {
         center(of: grid) != nil

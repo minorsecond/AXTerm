@@ -613,6 +613,7 @@ private struct RoutingPopoverContent: View {
 
             HStack(spacing: 8) {
                 TextField("Add digis (comma or space separated)", text: $viewModel.pendingViaTokenInput)
+                    .callsignInput($viewModel.pendingViaTokenInput)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11, design: .monospaced))
                     .onSubmit {
@@ -928,6 +929,7 @@ private struct ConnectBarPrimaryRow: View {
                 width: 340,
                 focusRequested: $requestDestinationFocus,
                 accessibilityIdentifier: "connectBar.destinationField",
+                uppercases: true,
                 onCommit: {
                     if viewModel.validationErrors.isEmpty {
                         onConnect()
@@ -1123,6 +1125,7 @@ private struct ConnectBarAdvancedDisclosure: View {
             .frame(maxWidth: 340)
 
             TextField("Add digis (comma or space separated)", text: $viewModel.pendingViaTokenInput)
+                .callsignInput($viewModel.pendingViaTokenInput)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11, design: .monospaced))
                 .frame(width: 220)

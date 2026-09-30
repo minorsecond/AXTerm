@@ -20,18 +20,17 @@ struct SetupCallsignStep: View {
                 Image(systemName: "person.text.rectangle")
                     .font(.system(size: 20))
                     .foregroundStyle(.secondary)
+                // Trimmed here, upper-cased by callsignInput; see there for
+                // why the setter leaves the case alone.
                 TextField("N0CALL", text: Binding(
                     get: { draft },
                     set: { typed in
-                        draft = CallsignValidator.normalize(typed)
+                        draft = typed.trimmingCharacters(in: .whitespacesAndNewlines)
                         settings.myCallsign = draft
                     }))
                     .textFieldStyle(.plain)
                     .font(.system(size: 28, weight: .semibold, design: .monospaced))
-                    .disableAutocorrection(true)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.characters)
-                    #endif
+                    .callsignInput($draft)
                     .focused($focused)
                     .accessibilityLabel("Callsign")
                 if CallsignValidator.isValidCallsign(settings.myCallsign) {
@@ -319,9 +318,7 @@ struct SetupPositionStep: View {
                 Button("Use \(precise)") { winlinkSettings.gridSquare = precise }
                     .help("The locator for the position above")
             }
-            TextField("DM79", text: Binding(
-                get: { winlinkSettings.gridSquare },
-                set: { winlinkSettings.gridSquare = $0.trimmingCharacters(in: .whitespaces) }))
+            GridSquareTextField(winlinkSettings: winlinkSettings)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
                 .frame(width: 90)

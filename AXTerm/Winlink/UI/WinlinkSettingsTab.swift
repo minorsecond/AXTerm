@@ -126,6 +126,7 @@ struct WinlinkSettingsTab: View {
                     TextField("Answer on callsign", text: $settings.p2pListenCallsign,
                               prompt: Text(stationCallsign.isEmpty ? "your station callsign"
                                            : stationCallsign.uppercased()))
+                        .callsignInput($settings.p2pListenCallsign)
                         .font(.system(.body, design: .monospaced))
                     Text("Leave empty to answer as \(stationCallsign.isEmpty ? "your station callsign" : stationCallsign.uppercased()). "
                          + "Give the listener its own SSID to share the radio with another service, such as "
@@ -348,6 +349,7 @@ struct WinlinkSettingsTab: View {
 
                 HStack {
                     TextField("Add gateway", text: $newLadderCallsign, prompt: Text("e.g. K0NTS-10"))
+                        .callsignInput($newLadderCallsign)
                         .frame(maxWidth: 160)
                         .onSubmit(addLadderEntry)
                     Button("Add", action: addLadderEntry)
@@ -355,6 +357,7 @@ struct WinlinkSettingsTab: View {
                 }
 
                 TextField("Digipeater path", text: $settings.gatewayPath, prompt: Text("optional, e.g. WIDE1-1"))
+                    .callsignInput($settings.gatewayPath)
                     .frame(maxWidth: 200)
                     .help("Optional comma-separated digipeater path, applied when exchanging with ladder gateways.")
 
