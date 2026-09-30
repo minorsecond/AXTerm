@@ -25,6 +25,38 @@ nonisolated struct ExportableFile: Equatable, Sendable {
     var contentType: UTType {
         UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
     }
+
+    /// The type handed to the iOS exporter: this file's own type when the
+    /// exporter document declares it, and plain data otherwise.
+    ///
+    /// The document has to declare every type it is asked to write. It
+    /// declared only `.data` while the exporter was handed `.jpeg` or `.pdf`,
+    /// and a type the document does not list is one the exporter is entitled
+    /// to refuse. Falling back to `.data` for anything unlisted keeps the
+    /// file's own name and bytes, which is what matters.
+    var exportContentType: UTType {
+        let type = contentType
+        return ExportableFileDocument.writableContentTypes.contains(type) ? type : .data
+    }
+
+    /// The types the exporter document declares: the ones Winlink traffic
+    /// actually carries, plus `.data` for everything else. Types the system
+    /// only knows as dynamic identifiers are left out, since they mean
+    /// nothing to the Files app.
+    static let exportableTypes: [UTType] = {
+        let named: [UTType] = [
+            .data, .jpeg, .png, .heic, .heif, .gif, .tiff, .bmp, .webP,
+            .pdf, .plainText, .utf8PlainText, .text, .rtf, .html, .xml, .json,
+            .commaSeparatedText, .zip, .gzip, .mp3, .mpeg4Audio, .wav,
+            .mpeg4Movie, .quickTimeMovie,
+        ]
+        let byExtension = ["txt", "log", "md", "csv", "kml", "kmz", "gpx", "geojson", "shp",
+                           "docx", "xlsx", "pptx", "odt", "b2f"]
+            .compactMap { UTType(filenameExtension: $0) }
+            .filter { !$0.isDynamic }
+        var seen = Set<UTType>()
+        return (named + byExtension).filter { seen.insert($0).inserted }
+    }()
 }
 
 #if os(macOS)
@@ -55,9 +87,11 @@ enum PlatformFileExport {
 /// A `FileDocument` wrapper so iOS can hand the bytes to `.fileExporter`.
 ///
 /// Read support is present because `FileDocument` requires it; the app only
-/// ever exports through this type.
+/// ever exports through this type. The writable types are listed explicitly
+/// and must include whatever `exportContentType` returns; see there.
 nonisolated struct ExportableFileDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.data] }
+    static var readableContentTypes: [UTType] { ExportableFile.exportableTypes }
+    static var writableContentTypes: [UTType] { ExportableFile.exportableTypes }
 
     var file: ExportableFile
 
@@ -104,7 +138,7 @@ private struct FileExportModifier: ViewModifier {
             isPresented: Binding(get: { file != nil },
                                  set: { if !$0 { file = nil } }),
             document: file.map(ExportableFileDocument.init(file:)),
-            contentType: file?.contentType ?? .data,
+            contentType: file?.exportContentType ?? .data,
             defaultFilename: file?.name
         ) { result in
             if case .failure(let error) = result {
