@@ -1,5 +1,5 @@
 # transmitting.md — AXTerm Transmission Logic (state-of-the-art, compatible)
-Status: 2/2 items complete
+Status: 17/18 items complete
 
 > **Scope:** This document guides AI coders implementing **packet transmission** features in **AXTerm** (macOS, Swift/SwiftUI) **above Direwolf** via **KISS**. AXTerm already decodes/sniffs RX frames; this adds a modern TX pipeline, unnumbered (UI) app protocols, and **AX.25 connected-mode** session support (implemented in-app, transmitted via Direwolf).  
 > **Compatibility rule:** Everything must remain usable on existing packet networks. Unknown frames should be ignorable by legacy stations. No “requires everyone to upgrade” assumptions.
@@ -916,6 +916,61 @@ Sender can restart from missing set.
 **Implementation status:**
 - Implemented: FILE_META, whole-file SHA256 at end, per-chunk PayloadCRC32 on send/verify, completion request (ACK 0xFFFFFFFE), receiver response with completion ACK or NACK+SACK bitmap, sender selective retransmit from NACK, completion ACK/NACK for success/failure.
 
+### 9.3.2 Canceling a transfer (either side)
+
+Decision: the core message types have no abort, and adding one would not be
+understood by AXTerm versions already on the air. Cancel therefore reuses
+the message a receiver sends to decline an offer: NACK with the transfer's
+SessionId and MessageId 1.
+
+- A receiver that cancels mid-transfer sends it to the sender. An older
+  sender treats it as "declined by remote" and stops; a newer one marks the
+  transfer canceled.
+- A sender that cancels sends it to the receiver. An older receiver ignores
+  a NACK for an inbound session, which is harmless; a newer one marks the
+  transfer canceled and drops its partial state.
+- Completion NACKs (MessageId 0xFFFFFFFF) are never read as a cancel.
+
+Checklist:
+- [x] Cancel reaches the other station and both ends finish canceled
+  - Implementation notes: `SessionCoordinator.cancelTransfer` /
+    `sendAXDPCancel` (SessionCoordinator+FileTransfers.swift);
+    `handleNackMessage` for the receiving side of it. Tested in
+    `TwoStationTransferTests`.
+
+### 9.5 Transfers that cannot finish
+
+A transfer must end with a reason, never sit "sending" forever.
+
+- [x] A transfer riding a connected session fails when that session closes
+  or times out, naming which
+  - Implementation notes: `failTransfersOnLinkLoss`, wired to the session
+    state callback; reasons from `TransferLinkLoss`.
+- [x] A transfer with no activity for too long is failed by a watchdog, with
+  a limit per kind of wait (acceptance, sending, completion, receiving)
+  - Implementation notes: `TransferWatchdog`, `runTransferWatchdog`.
+- [x] Offers are judged (deny list, size cap, allow list) in the
+  coordinator as they arrive, whatever the UI is showing
+  - Implementation notes: `TransferOfferPolicy`, `applyOfferPolicy`.
+
+### 9.6 Legacy protocols over connected mode (YAPP)
+
+YAPP is a third-party wire protocol and follows §16: plain PID 0xF0
+I-frames, never an AXDP envelope, and the session's byte stream claimed for
+the length of the transfer. The frame table is the published one (WA7MBL,
+with YAPPC checksums); see `Docs/PacketFileTransfer.md`.
+
+- [x] The protocol chosen in the Send File sheet is the one sent; a protocol
+  with no sender is refused, never replaced by AXDP
+  - Implementation notes: `TransferSendRoute`, `startTransfer(to:fileName:data:...)`.
+- [x] YAPP send and receive over a connected session, byte-exact to the
+  frame table, stream-parsed across I-frame boundaries
+  - Implementation notes: `YAPPProtocol.swift`, `YAPPSessionTransfer.swift`.
+- [x] A YAPP download started by a BBS is recognized only by an exact SI
+  packet (ENQ 01) with no other transfer running on that session
+  - Implementation notes: `YAPPReceiveDetector`, `interceptUnclaimedDelivery`,
+    `AX25SessionManager.onUnclaimedDelivery`.
+
 ### 9.4 Connected mode transfer framing
 Even in connected mode, keep your **AXDP TLV envelope**:
 - It simplifies decoding and future extension
@@ -938,6 +993,12 @@ Even in connected mode, keep your **AXDP TLV envelope**:
 8. **Connected-mode session manager** (SABM/UA/DISC, I/S frames, timers, window)
 9. **Adaptive tuning** (RTO from RTT, AIMD cwnd, paclen adaptation, per-peer stats)
 10. **Bulk transfer UX** (Send file flow, progress, pause/resume, failure explanations)
+    - [x] Send file flow on Mac, iPad and iPhone (picker, multiple files, drop, Mac menu command)
+    - [x] Progress, pause and resume that restarts sending, cancel that reaches the peer
+    - [x] Failure explanations for declines, timeouts and lost links
+    - [x] Received files saved where the operator can reach them, with Quick Look / Finder / Share
+      - Implementation notes: `Docs/PacketFileTransfer.md`; `ReceivedFileStore`, `TransferUI.swift`,
+        `BulkTransferView.swift`.
 
 ---
 
