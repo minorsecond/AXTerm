@@ -9,9 +9,11 @@ import Combine
 /// "is what I'm looking at also on my other radio, and how stale is that".
 /// Everything else lives behind the tooltip.
 ///
-/// Hidden entirely when sync is off. An indicator for a feature nobody turned
-/// on is clutter, and a grayed-out cloud invites the question "is it broken?"
-/// about something that is simply not enabled.
+/// Hidden entirely when sync is off, and when this device has no iCloud
+/// account. An indicator for a feature nobody turned on is clutter, and a
+/// permanent "No iCloud" in the toolbar of every screen told an operator who
+/// does not use iCloud about something they cannot act on here. Winlink's
+/// settings still say why sync is not running.
 struct SyncStatusIndicator: View {
 
     @ObservedObject var sync: WinlinkSyncController
@@ -25,9 +27,10 @@ struct SyncStatusIndicator: View {
     private let tick = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        if case .disabled = sync.status {
+        switch sync.status {
+        case .disabled, .unavailable:
             EmptyView()
-        } else {
+        default:
             Group {
                 #if os(iOS)
                 // The label never truncates: where the toolbar has no room

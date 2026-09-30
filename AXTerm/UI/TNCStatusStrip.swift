@@ -168,9 +168,9 @@ struct TNCStatusStrip: View {
         static func label(_ status: ConnectionStatus) -> String? {
             switch status {
             case .connected: nil
-            case .connecting: "Connecting to the TNC…"
-            case .disconnected: "Not connected to a TNC"
-            case .failed: "TNC connection failed"
+            case .connecting: "Connecting to the radio…"
+            case .disconnected: "No radio connected"
+            case .failed: "Radio connection failed"
             }
         }
 
@@ -179,10 +179,10 @@ struct TNCStatusStrip: View {
         static func spoken(_ status: ConnectionStatus, host: String, port: Int) -> String {
             let endpoint = host.isEmpty ? "" : " at \(host) port \(port)"
             switch status {
-            case .connected: return "Connected to the TNC\(endpoint)"
-            case .connecting: return "Connecting to the TNC\(endpoint)"
-            case .disconnected: return "Not connected to a TNC\(endpoint)"
-            case .failed: return "TNC connection failed\(endpoint)"
+            case .connected: return "Connected to the radio\(endpoint)"
+            case .connecting: return "Connecting to the radio\(endpoint)"
+            case .disconnected: return "Not connected to the radio\(endpoint)"
+            case .failed: return "Radio connection failed\(endpoint)"
             }
         }
 
@@ -224,10 +224,10 @@ struct TNCStatusStrip: View {
                     // Bluetooth, serial or the built-in modem: name the device.
                     let endpoint = radio.endpoint.isEmpty ? "" : " at \(radio.endpoint)"
                     switch radio.status {
-                    case .connected: return "Connected to the TNC\(endpoint)"
-                    case .connecting: return "Connecting to the TNC\(endpoint)"
-                    case .disconnected: return "Not connected to a TNC\(endpoint)"
-                    case .failed: return "TNC connection failed\(endpoint)"
+                    case .connected: return "Connected to the radio\(endpoint)"
+                    case .connecting: return "Connecting to the radio\(endpoint)"
+                    case .disconnected: return "Not connected to the radio\(endpoint)"
+                    case .failed: return "Radio connection failed\(endpoint)"
                     }
                 }
                 return spoken(radio?.status ?? .disconnected,

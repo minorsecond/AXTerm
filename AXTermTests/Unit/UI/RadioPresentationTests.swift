@@ -36,7 +36,7 @@ final class RadioPresentationTests: XCTestCase {
         let ble = RadioStatusSummary.fixture(
             status: .connected, host: "", port: nil, endpoint: "TNC4 Mobilinkd")
         XCTAssertEqual(RadioPresentation.capsuleLabel([ble]), "TNC: TNC4 Mobilinkd")
-        XCTAssertEqual(TNCStatusStrip.Presentation.spoken([ble]), "Connected to the TNC at TNC4 Mobilinkd")
+        XCTAssertEqual(TNCStatusStrip.Presentation.spoken([ble]), "Connected to the radio at TNC4 Mobilinkd")
     }
 
     func testNoRadiosReadsAsDisconnected() {

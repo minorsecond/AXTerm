@@ -60,12 +60,11 @@ struct WinlinkMessageList: View {
                         .foregroundStyle(.tertiary)
                     Text(viewModel.searchText.isEmpty ? "No messages" : "No matches")
                         .font(.headline)
-                        .foregroundStyle(.secondary)
                     Text(viewModel.searchText.isEmpty
                          ? "Start an exchange with a gateway to collect mail."
                          : "No message in this folder matches \u{201C}\(viewModel.searchText)\u{201D}.")
                         .font(.subheadline)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
                 }

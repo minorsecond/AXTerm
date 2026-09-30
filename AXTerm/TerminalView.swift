@@ -2974,11 +2974,16 @@ struct TerminalView: View {
 
             VStack(spacing: 8) {
                 if txViewModel.allLines.isEmpty {
-                    Text("No messages yet")
+                    // Only claim to be listening when a radio is up; with
+                    // none, the empty screen is waiting on the operator.
+                    Text(client.status == .connected ? "Listening" : "No radio connected")
                         .font(.headline)
-                    Text("Monitoring network traffic and active sessions.")
+                    Text(client.status == .connected
+                         ? "Traffic you hear and sessions you open show up here."
+                         : "Traffic you hear and sessions you open show up here once a radio is connected.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 } else if let call = stationFilter {
                     Text("No traffic for \(call)")
                         .font(.headline)

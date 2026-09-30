@@ -2137,7 +2137,12 @@ struct StationsMapView: View {
     @ViewBuilder
     private var mapPane: some View {
         if let center = mapCenter?.point {
-            if placed.isEmpty {
+            if placed.isEmpty, observer != nil, modeRaw == "Map" {
+                // The station's own position is known, so show where it is
+                // and say what is missing on top. A blank page read as a map
+                // that had failed to load.
+                mapWithDrawing(observer: center, showsEmptyNote: true)
+            } else if placed.isEmpty {
                 noPlacedStations
             } else if modeRaw == "Map" {
                 mapWithDrawing(observer: center)
@@ -2167,9 +2172,13 @@ struct StationsMapView: View {
         }
     }
 
-    private func mapWithDrawing(observer: GreatCircle.Point) -> some View {
+    private func mapWithDrawing(observer: GreatCircle.Point,
+                                showsEmptyNote: Bool = false) -> some View {
         VStack(spacing: 0) {
             mapStack(observer: observer)
+                .overlay(alignment: .bottom) {
+                    if showsEmptyNote { emptyMapNote }
+                }
             // Below the map, not over it: the map's own bottom-corner
             // overlays (the legend, the selection card) keep their space.
             trafficChin
@@ -2790,6 +2799,33 @@ struct StationsMapView: View {
             message: entries.isEmpty
                 ? "No stations heard so far."
                 : "None of the \(entries.count) stations heard has a known position. Gateways get one from the RMS directory; anyone else needs a callsign lookup.")
+    }
+
+    /// The "nothing heard yet" note, as a card over a map that shows only
+    /// this station.
+    private var emptyMapNote: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "antenna.radiowaves.left.and.right")
+                .font(.system(size: 18))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entries.isEmpty ? "No stations heard yet" : "No positions yet")
+                    .font(.callout.weight(.semibold))
+                Text(entries.isEmpty
+                     ? "Stations appear around you as your radios hear them."
+                     : "None of the \(entries.count) stations heard has a known position. Gateways get one from the RMS directory; anyone else needs a callsign lookup.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: 420)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 12)
+        // Clear of the legend and the controls in the map's bottom corners.
+        .padding(.bottom, 60)
     }
 
     private func unavailable(symbol: String, title: String, message: String) -> some View {

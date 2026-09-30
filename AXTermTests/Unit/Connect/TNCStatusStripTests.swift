@@ -34,7 +34,7 @@ final class TNCStatusStripTests: XCTestCase {
             XCTAssertTrue(Strip.needsAttention(status), status.rawValue)
             let label = Strip.label(status)
             XCTAssertNotNil(label, status.rawValue)
-            XCTAssertTrue(label?.lowercased().contains("tnc") ?? false,
+            XCTAssertTrue(label?.lowercased().contains("radio") ?? false,
                           "\(status.rawValue) must name what is not connected")
         }
     }
