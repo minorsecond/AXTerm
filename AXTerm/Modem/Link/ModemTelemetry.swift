@@ -16,6 +16,11 @@ nonisolated struct ModemTelemetry: Equatable, Sendable {
     var slicerLocked: [Bool] = []
     var pllJitterBits: [Float] = []
     var framesDecoded: UInt64 = 0
+    /// Transmissions heard on the channel, counted from the receiver's noise
+    /// quieting rather than decoded (`NoiseQuietingDetector`). Set against
+    /// `framesDecoded`, it tells a quiet channel from one the modem cannot
+    /// read.
+    var carriersHeard: UInt64 = 0
     var fcsErrors: UInt64 = 0
     var duplicatesSuppressed: UInt64 = 0
     var lastDecodingSlicer: Int?

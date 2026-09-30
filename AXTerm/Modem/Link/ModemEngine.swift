@@ -83,6 +83,10 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     /// Replaced with a rate-derived hold when the engine starts; this is only
     /// the value before an audio format is known.
     private var carrier = DataCarrierDetect(holdSamples: 12_000)
+    /// Transmissions heard from the receiver's noise, decodable or not; see
+    /// `NoiseQuietingDetector`. Rebuilt with the sample rate.
+    private var quieting = NoiseQuietingDetector(sampleRate: 48_000)
+    private var carriersHeard: UInt64 = 0
     private var access = ChannelAccess(parameters: .init(slotTimeSamples: 4800, persist: 63, maxWaitSamples: 480_000),
                                        rng: SystemRandomNumberGenerator())
     private var encoder: HDLCEncoder?
@@ -132,6 +136,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         capture = ModemAudioCapture.makeIfEnabled(sampleRate: sampleRate)
         if let capture { TxLog.debug(.transport, "Recording receive audio", ["path": capture.url.path]) }
         rebuildDSP()
+        carriersHeard = 0
         rxClock = 0
         txWrittenTotal = 0
         outputConsumed.store(0, ordering: .releasing)
@@ -307,7 +312,12 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     private func receive(_ block: [Float]) {
         capture?.append(block)
         guard let demodulator else { return }
-        if isMuted { return }
+        if isMuted {
+            // Our own transmission and its tail are not the channel.
+            quieting.interrupt()
+            return
+        }
+        carriersHeard &+= UInt64(quieting.process(block))
         demodulator.process(block) { [self] event in
             switch event {
             case .frame(let data, let slicer):
@@ -506,6 +516,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         // the reply they are waiting for. It costs us a quarter second before
         // our own DWAIT starts, against AX.25 timers measured in seconds.
         carrier = DataCarrierDetect(holdSamples: Int(0.25 * sampleRate))
+        quieting = NoiseQuietingDetector(sampleRate: sampleRate)
         access = ChannelAccess(parameters: .init(sampleRate: sampleRate, configuration: active),
                                rng: SystemRandomNumberGenerator())
     }
@@ -527,6 +538,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         t.slicerLocked = demodulator?.slicerLocked ?? []
         t.pllJitterBits = demodulator?.pllJitterBits ?? []
         t.framesDecoded = demodulator?.framesDecoded ?? 0
+        t.carriersHeard = carriersHeard
         t.fcsErrors = demodulator?.fcsErrors ?? 0
         t.duplicatesSuppressed = demodulator?.duplicatesSuppressed ?? 0
         t.lastDecodingSlicer = demodulator?.lastDecodingSlicer
