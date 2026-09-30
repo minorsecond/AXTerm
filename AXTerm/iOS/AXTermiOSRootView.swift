@@ -110,6 +110,10 @@ struct AXTermiOSRootView: View {
     /// Where the More tab is pushed to, so "Open Settings" can land on the
     /// screen that holds the setting rather than on a menu.
     @State private var settingsPath: [SettingsDestination] = []
+    /// Whether Settings is showing as a sidebar and a page, mirrored from the
+    /// size class so the router's open action, a closure made once, reads
+    /// the current layout rather than the one it was made in.
+    @State private var settingsIsSplit = false
     /// The Add Radio sheet's state while it is open.
     @State private var addRadioFlow: AddRadioFlow?
 
@@ -476,8 +480,13 @@ struct AXTermiOSRootView: View {
                 }
                 let showing = selection == .analytics
                 selection = .analytics
-                settingsPath = SettingsDeepLink.path(current: settingsPath, target: target,
-                                                     stackIsShowing: showing)
+                // With a sidebar the link selects the page in it. Pushed
+                // onto the current page instead, APRS opened with Radios
+                // still highlighted beside it.
+                settingsPath = settingsIsSplit
+                    ? target
+                    : SettingsDeepLink.path(current: settingsPath, target: target,
+                                            stackIsShowing: showing)
             }
         }
     }
@@ -926,9 +935,83 @@ struct AXTermiOSRootView: View {
     /// Analytics, routes and settings are all things an operator opens
     /// deliberately rather than lives in, so they sit one tap deeper rather
     /// than pushing the terminal or the mailbox off the bar.
+    /// A phone pushes each page over the list. An iPad in regular width
+    /// shows the list as a sidebar with the page beside it, as the Mac's
+    /// Settings window and iPad Settings do; a full-width list of eight rows
+    /// left most of the screen empty.
+    ///
+    /// `settingsPath` stays the one record of where the operator is, so deep
+    /// links work the same in both: its first element is the sidebar's
+    /// selection and the rest is the page's own stack.
+    @ViewBuilder
     private var more: some View {
-        NavigationStack(path: $settingsPath) {
-            List {
+        Group {
+            if horizontalSizeClass == .regular {
+                NavigationSplitView {
+                    moreList(selection: sidebarSelection)
+                        .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 360)
+                } detail: {
+                    NavigationStack(path: detailPath) {
+                        // Registered on the stack's root, where it takes
+                        // effect; on the stack itself it was ignored and a
+                        // radio row highlighted without opening.
+                        Group {
+                            if let page = settingsPath.first {
+                                settingsScreen(page)
+                            } else {
+                                ContentUnavailableView("Choose a Setting", systemImage: "gear")
+                            }
+                        }
+                        .navigationDestination(for: SettingsDestination.self, destination: settingsScreen)
+                    }
+                }
+                .navigationSplitViewStyle(.balanced)
+                .onAppear { if settingsPath.isEmpty { settingsPath = [.general] } }
+            } else {
+                NavigationStack(path: $settingsPath) {
+                    moreList(selection: nil)
+                        .navigationDestination(for: SettingsDestination.self, destination: settingsScreen)
+                }
+            }
+        }
+        .sheet(item: $addRadioFlow) { flow in
+            AddRadioSheet(flow: flow, client: client) { added in
+                addRadioFlow = nil
+                if let added { settingsPath.append(.radio(added)) }
+            }
+        }
+        .onAppear { settingsIsSplit = horizontalSizeClass == .regular }
+        .onChange(of: horizontalSizeClass) { _, size in settingsIsSplit = size == .regular }
+    }
+
+    /// The sidebar's selection: the first page on the path.
+    private var sidebarSelection: Binding<SettingsDestination?> {
+        Binding(
+            get: { settingsPath.first },
+            set: { page in if let page, page != settingsPath.first { settingsPath = [page] } })
+    }
+
+    /// What is pushed over the selected page.
+    private var detailPath: Binding<[SettingsDestination]> {
+        Binding(
+            get: { Array(settingsPath.dropFirst()) },
+            set: { pushed in settingsPath = Array(settingsPath.prefix(1)) + pushed })
+    }
+
+    @ViewBuilder
+    private func moreList(selection: Binding<SettingsDestination?>?) -> some View {
+        if let selection {
+            List(selection: selection) { moreRows }
+                .navigationTitle("Settings")
+        } else {
+            List { moreRows }
+                .navigationTitle("More")
+        }
+    }
+
+    @ViewBuilder
+    private var moreRows: some View {
+            Group {
                 if horizontalSizeClass != .regular {
                     Section {
                         NavigationLink(value: SettingsDestination.bbs) {
@@ -1008,6 +1091,7 @@ struct AXTermiOSRootView: View {
                             Text(policy.title).tag(policy)
                         }
                     }
+                    .accessibilityHint(settings.keepAwakePolicy.detail)
 
                     if let reason = keepAwake.reason {
                         Label(reason, systemImage: "sun.max.fill")
@@ -1021,7 +1105,11 @@ struct AXTermiOSRootView: View {
                     // The consequence belongs under the control, where iOS
                     // puts it, rather than behind a tap on an ⓘ. It is one
                     // sentence and it is the whole reason the setting exists.
-                    Text(settings.keepAwakePolicy.detail)
+                    // In an iPad's sidebar it ran seven lines, so there it
+                    // is left to the accessibility hint.
+                    if horizontalSizeClass != .regular {
+                        Text(settings.keepAwakePolicy.detail)
+                    }
                 }
 
                 Section {
@@ -1032,15 +1120,6 @@ struct AXTermiOSRootView: View {
                     Text("Connection history and decode errors, for working out why a session failed.")
                 }
             }
-            .navigationTitle(horizontalSizeClass == .regular ? "Settings" : "More")
-            .navigationDestination(for: SettingsDestination.self, destination: settingsScreen)
-        }
-        .sheet(item: $addRadioFlow) { flow in
-            AddRadioSheet(flow: flow, client: client) { added in
-                addRadioFlow = nil
-                if let added { settingsPath.append(.radio(added)) }
-            }
-        }
     }
 
     @ViewBuilder

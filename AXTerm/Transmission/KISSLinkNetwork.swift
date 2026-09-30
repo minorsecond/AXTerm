@@ -272,7 +272,7 @@ final class KISSLinkNetwork: KISSLink, @unchecked Sendable {
 
         case .failed(let error):
             setState(.failed)
-            notifyError("Connection failed: \(error.localizedDescription)")
+            notifyError(Self.plainError(error, host: host, port: port, waiting: false))
             scheduleReconnect()
 
         case .cancelled:
@@ -282,7 +282,7 @@ final class KISSLinkNetwork: KISSLink, @unchecked Sendable {
             // Network.framework is still trying on its own here, so this is a
             // progress report rather than a failure. Saying so does not earn a
             // reconnect of ours on top of the one already running.
-            notifyError("Connection waiting: \(error.localizedDescription)")
+            notifyError(Self.plainError(error, host: host, port: port, waiting: true))
 
         default:
             break
@@ -449,6 +449,49 @@ nonisolated enum KISSTransportError: Error, LocalizedError {
             return "Connection failed: \(reason)"
         case .sendFailed(let reason):
             return "Send failed: \(reason)"
+        }
+    }
+}
+
+// MARK: - What went wrong, in words
+
+extension KISSLinkNetwork {
+    /// A connection error the way an operator would say it.
+    ///
+    /// Network.framework's own text reads "The operation couldn't be
+    /// completed. (Network.NWError error 61 - Connection refused)", which is
+    /// what the terminal showed. The POSIX code says what actually happened,
+    /// and each common one has a plain cause and a next step.
+    nonisolated static func plainError(_ error: NWError, host: String, port: UInt16,
+                                       waiting: Bool) -> String {
+        let place = "\(host):\(port)"
+        switch error {
+        case .posix(let code):
+            return plainPOSIX(code, place: place, waiting: waiting)
+        case .dns:
+            return "Can't find \(host). Check the host name, or use the computer's IP address."
+        default:
+            return (waiting ? "Still trying \(place): " : "Can't connect to \(place): ")
+                + error.localizedDescription
+        }
+    }
+
+    nonisolated static func plainPOSIX(_ code: POSIXErrorCode, place: String, waiting: Bool) -> String {
+        let retry = waiting ? " Still trying." : ""
+        switch code {
+        case .ECONNREFUSED:
+            return "Nothing is answering at \(place). Check that Direwolf or the TNC is running "
+                + "and listening on that port.\(retry)"
+        case .ETIMEDOUT:
+            return "\(place) did not answer in time. Check the address and that the computer is on.\(retry)"
+        case .EHOSTUNREACH, .EHOSTDOWN:
+            return "Can't reach \(place). Check the address and that this device is on the same network.\(retry)"
+        case .ENETUNREACH, .ENETDOWN:
+            return "No network to reach \(place). Check Wi-Fi or the network cable.\(retry)"
+        case .ECONNRESET:
+            return "\(place) closed the connection.\(retry)"
+        default:
+            return "Can't connect to \(place) (\(String(cString: strerror(code.rawValue)))).\(retry)"
         }
     }
 }
