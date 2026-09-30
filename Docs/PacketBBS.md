@@ -656,11 +656,14 @@ protocol byte, and a text file's "sending it as text" line before the text.
 Each reply is sent as one batch, so a command costs one burst of frames.
 
 While a transfer runs it owns the session's byte stream; the line assembler
-gets it back when the transfer ends. `YAPPFrameAssembler` sits in front of
-the protocol, because AX.25 carries bytes and not frames: a 254-byte YAPP
-block over a 128-byte paclen arrives as two I-frames, and `YAPPProtocol`
-NAKs anything short. Replies from the caller go to the sender's ACK and NAK
-handlers.
+gets it back when the transfer ends. `YAPPProtocol` speaks YAPP as the
+WA7MBL frame table defines it (send init `ENQ 01`, replies `ACK 01` to
+`ACK 05`, one-byte block lengths, YAPPC checksums when the receiver asks
+with RT) and reassembles its own stream, since AX.25 carries bytes and a
+block routinely spans two I-frames. An upload's bytes go to it as they come.
+During a download `YAPPFrameAssembler` sits in front of it only to tell the
+caller's YAPP replies from what they type, so a caller whose software has
+no YAPP can still type `A` to stop.
 
 A transfer ends, and the mailbox is at its prompt again, in every one of
 these cases:
@@ -807,14 +810,12 @@ carry binary, but no byte stream reaches the mailbox to run YAPP on. So:
   and views both use.
 - **No forwarding, by choice** (§1). White pages are learned locally and never
   exchanged with other BBSs, which is the other half of that decision.
-- **YAPP interoperability is unverified.** `YAPPProtocol` frames a transfer
-  its own way (send-init `SOH 01`, receive-init `SOH 02`, two-byte block
-  lengths with an XOR checksum, single-byte ACK/NAK). The YAPP most packet
-  terminals implement uses `ENQ 01` to start, `ACK 01`..`ACK 05` replies, and
-  one-byte block lengths. Until the two are reconciled, mailbox downloads and
-  uploads should be expected to work between AXTerm stations, and a caller
-  running other software will see the transfer fail or can type `A`. It also
-  needs the caller's AXTerm to receive YAPP in the terminal.
+- **YAPP is tested against the frame table, not yet against other
+  software.** The bytes follow the published WA7MBL table and the F6FBB
+  YAPPC extension, and AXTerm stations exchange files both ways (the
+  terminal receives YAPP too). No transfer has been tried yet with a caller
+  running LinFBB, BPQ, JNOS or WinPack. RI (`ENQ 02`, server mode) is not
+  handled.
 - **No AXDP downloads or resume.** See §14 for why a mailbox session cannot
   use the coordinator's AXDP sender. A stopped download starts over.
 - **Areas are flat.** Subfolders are not scanned, which keeps `D <name>`

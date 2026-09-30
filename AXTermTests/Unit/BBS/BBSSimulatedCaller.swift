@@ -139,9 +139,8 @@ nonisolated final class CallerYAPPReceiver: FileTransferProtocolDelegate, @unche
     func consume(_ bytes: Data) {
         for piece in framing.push(bytes) {
             switch piece {
-            case .frame(let frame): driver.handleIncomingData(frame)
+            case .frame(let frame): _ = driver.handleIncomingData(frame)
             case .text(let typed): text.append(typed)
-            case .malformed: error = "malformed"
             }
         }
     }
@@ -182,19 +181,13 @@ nonisolated final class CallerYAPPSender: FileTransferProtocolDelegate, @uncheck
 
     init() { driver.delegate = self }
 
-    /// Mailbox replies go to the sender's ACK and NAK handlers, as the
-    /// mailbox's own download path does in the other direction.
+    /// Mailbox replies go to the sender's own stream, as the mailbox's
+    /// download path does in the other direction.
     func consume(_ bytes: Data) {
         for piece in framing.push(bytes) {
             switch piece {
-            case .frame(let frame):
-                switch frame.first.flatMap(YAPPControlChar.init(rawValue:)) {
-                case .ack, .soh: driver.handleAck(data: frame)
-                case .nak, .can: driver.handleNak(data: frame)
-                default: break
-                }
+            case .frame(let frame): _ = driver.handleIncomingData(frame)
             case .text(let typed): text.append(typed)
-            case .malformed: error = "malformed"
             }
         }
     }

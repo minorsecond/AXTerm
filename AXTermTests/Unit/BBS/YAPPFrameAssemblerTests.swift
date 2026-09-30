@@ -1,85 +1,91 @@
 import XCTest
 @testable import AXTerm
 
-/// Cutting a session's byte stream back into YAPP frames.
+/// Separating a caller's YAPP replies from what they type during a mailbox
+/// download.
 ///
-/// The failure this exists for is ordinary: a 254-byte data block over a
-/// 128-byte paclen arrives as two I-frames, and `YAPPProtocol` NAKs anything
-/// short. These pin every frame kind, split at every byte, and joined.
+/// The replies are YAPP's own two-byte and counted frames (the WA7MBL table);
+/// anything else is the caller typing, which has to be heard so `A` stops
+/// the transfer. These pin every reply kind, split at every byte, joined,
+/// and mixed with text.
 final class YAPPFrameAssemblerTests: XCTestCase {
 
-    private let yapp = YAPPProtocol()
-
-    private var everyFrame: [Data] {
+    /// Everything a receiving caller can send back.
+    private var everyReply: [Data] {
         [
-            yapp.encodeSendInit(),
-            yapp.encodeReceiveInit(),
-            yapp.encodeHeader(fileName: "roster.bin", fileSize: 4096),
-            yapp.encodeDataBlock(data: Data((0..<250).map { UInt8($0 & 0xFF) })),
-            yapp.encodeDataBlock(data: Data([0x01, 0x02, 0x03, 0x04, 0x06, 0x15, 0x18])),
-            yapp.encodeEndFile(),
-            yapp.encodeEndTransmission(),
-            yapp.encodeAck(),
-            yapp.encodeNak(),
-            yapp.encodeCancel()
+            YAPPEncoder.receiveReady(),
+            YAPPEncoder.receiveFile(),
+            YAPPEncoder.receiveFileWithChecksum(),
+            YAPPEncoder.ackEndFile(),
+            YAPPEncoder.ackEndTransmission(),
+            YAPPEncoder.ackCancel(),
+            YAPPEncoder.notReady(reason: "Disk full"),
+            YAPPEncoder.cancel(reason: "Stopped"),
+            YAPPEncoder.notReady(reason: ""),
         ]
     }
 
-    func testEachFrameArrivingWholeComesOutWhole() {
-        for frame in everyFrame {
+    func testEachReplyArrivingWholeComesOutWhole() {
+        for reply in everyReply {
             var assembler = YAPPFrameAssembler()
-            XCTAssertEqual(assembler.push(frame), [.frame(frame)], "\(Array(frame.prefix(3)))")
+            XCTAssertEqual(assembler.push(reply), [.frame(reply)], "\(Array(reply))")
             XCTAssertTrue(assembler.isEmpty)
         }
     }
 
-    func testEachFrameSplitAtEveryByteComesOutOnceAndWhole() {
-        for frame in everyFrame where frame.count > 1 {
-            for cut in 1..<frame.count {
+    func testEachReplySplitAtEveryByteComesOutOnceAndWhole() {
+        for reply in everyReply where reply.count > 1 {
+            for cut in 1..<reply.count {
                 var assembler = YAPPFrameAssembler()
-                XCTAssertEqual(assembler.push(frame.prefix(cut)), [],
+                XCTAssertEqual(assembler.push(reply.prefix(cut)), [],
                                "nothing until the frame is complete (cut \(cut))")
-                XCTAssertEqual(assembler.push(frame.dropFirst(cut)), [.frame(frame)],
+                XCTAssertEqual(assembler.push(reply.dropFirst(cut)), [.frame(reply)],
                                "cut at \(cut)")
             }
         }
     }
 
-    func testFramesJoinedInOneDeliveryComeOutSeparately() {
+    func testRepliesJoinedInOneDeliveryComeOutSeparately() {
         var assembler = YAPPFrameAssembler()
-        let joined = everyFrame.reduce(Data(), +)
-        XCTAssertEqual(assembler.push(joined), everyFrame.map { .frame($0) })
+        let joined = everyReply.reduce(Data(), +)
+        XCTAssertEqual(assembler.push(joined), everyReply.map { .frame($0) })
     }
 
     func testByteAtATimeDeliveryStillAssemblesEverything() {
         var assembler = YAPPFrameAssembler()
         var pieces: [YAPPFrameAssembler.Piece] = []
-        for byte in everyFrame.reduce(Data(), +) {
+        for byte in everyReply.reduce(Data(), +) {
             pieces += assembler.push(Data([byte]))
         }
-        XCTAssertEqual(pieces, everyFrame.map { .frame($0) })
+        XCTAssertEqual(pieces, everyReply.map { .frame($0) })
     }
 
     func testTypedTextIsHandedBackAsText() {
         var assembler = YAPPFrameAssembler()
-        let ack = yapp.encodeAck()
-        XCTAssertEqual(assembler.push(Data("A\r".utf8) + ack + Data("hi".utf8)),
-                       [.text(Data("A\r".utf8)), .frame(ack), .text(Data("hi".utf8))],
+        let rr = YAPPEncoder.receiveReady()
+        XCTAssertEqual(assembler.push(Data("A\r".utf8) + rr + Data("hi".utf8)),
+                       [.text(Data("A\r".utf8)), .frame(rr), .text(Data("hi".utf8))],
                        "a caller whose software has no YAPP can still type A")
     }
 
-    func testABlockAnnouncingAnImpossibleSizeIsNotWaitedFor() {
-        var assembler = YAPPFrameAssembler()
-        let lie = Data([YAPPControlChar.stx.rawValue, 0xFF, 0xFF, 0x00])
-        XCTAssertEqual(assembler.push(lie), [.malformed],
-                       "64 KB that will never come would hang the transfer")
-        XCTAssertTrue(assembler.isEmpty)
+    /// The frames the sending side itself produces are measured the same way,
+    /// so a caller echoing them back is not misread as text.
+    func testSenderFramesHaveTheirTableLengths() {
+        let block = YAPPEncoder.data(Data((0..<200).map { UInt8($0) }), checksum: false)
+        let full = YAPPEncoder.data(Data(repeating: 0x41, count: 256), checksum: false)
+        for frame in [YAPPEncoder.sendInit(), YAPPEncoder.header(name: "ROSTER.BIN", size: 4096),
+                      block, full, YAPPEncoder.endFile(), YAPPEncoder.endTransmission()] {
+            var assembler = YAPPFrameAssembler()
+            XCTAssertEqual(assembler.push(frame), [.frame(frame)], "\(Array(frame.prefix(3)))")
+        }
     }
 
-    func testTheLargestRealisticBlockIsAccepted() {
+    func testResetDropsAPartialFrame() {
         var assembler = YAPPFrameAssembler()
-        let block = yapp.encodeDataBlock(data: Data(repeating: 0x55,
-                                                    count: YAPPFrameAssembler.maxBlockBytes))
-        XCTAssertEqual(assembler.push(block), [.frame(block)])
+        _ = assembler.push(YAPPEncoder.notReady(reason: "Disk full").prefix(3))
+        XCTAssertFalse(assembler.isEmpty)
+        assembler.reset()
+        XCTAssertTrue(assembler.isEmpty)
+        XCTAssertEqual(assembler.push(Data("A".utf8)), [.text(Data("A".utf8))])
     }
 }

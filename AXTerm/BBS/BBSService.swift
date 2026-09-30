@@ -952,6 +952,13 @@ final class BBSService: ObservableObject {
     private func feedTransfer(_ data: Data) {
         guard var run = running else { return }
         lastTransferActivity = now()
+        // An upload's blocks carry a checksum only the protocol knows was
+        // negotiated, and the protocol reassembles its own stream, so the
+        // caller's bytes go to it as they come.
+        if run.direction == .upload {
+            _ = run.driver.handleIncomingData(data)
+            return
+        }
         let pieces = run.framing.push(data)
         running?.framing = run.framing
 
@@ -965,30 +972,14 @@ final class BBSService: ObservableObject {
                 dispatch(frame, to: run)
             case .text(let text):
                 typedDuringTransfer(text)
-            case .malformed:
-                stopTransfer(tellCaller: "The transfer stopped: a YAPP block announced "
-                             + "a size no real block has.",
-                             log: "transfer stopped: malformed YAPP block")
             }
         }
     }
 
+    /// A reply from the caller during a download. The protocol reads RR,
+    /// RF/RT, AF, AT, NAK and CAN from its own stream.
     private func dispatch(_ frame: Data, to run: RunningTransfer) {
-        switch run.direction {
-        case .upload:
-            run.driver.handleIncomingData(frame)
-        case .download:
-            // The sender only ever hears replies. Receive-init and ACK move
-            // it on; NAK and CAN are retries and refusals.
-            switch frame.first.flatMap(YAPPControlChar.init(rawValue:)) {
-            case .ack, .soh:
-                run.driver.handleAck(data: frame)
-            case .nak, .can:
-                run.driver.handleNak(data: frame)
-            default:
-                break
-            }
-        }
+        _ = run.driver.handleIncomingData(frame)
     }
 
     /// A caller whose software does not speak YAPP sees the protocol bytes
@@ -1122,7 +1113,9 @@ final class BBSService: ObservableObject {
     /// Only a send-init opens an upload. Anything else after `U` is most
     /// likely the caller typing, and falls through to the command line.
     private func startReceiving(_ data: Data) -> Bool {
-        guard data.first == YAPPControlChar.soh.rawValue else { return false }
+        // ENQ 01, YAPP's send init. It may share an I-frame with the header.
+        guard data.count >= 2, data[data.startIndex] == YAPPControlChar.enq.rawValue,
+              data[data.startIndex + 1] == 0x01 else { return false }
 
         let driver = YAPPProtocol()
         let id = UUID()
@@ -1150,8 +1143,8 @@ final class BBSService: ObservableObject {
             transfer?.totalBytes = metadata.fileSize
             run.driver.acceptTransfer()
         case .reject(let reason):
-            // `rejectTransfer` sends the CAN but reports no completion, so
-            // the mailbox ends the transfer itself.
+            // `rejectTransfer` sends YAPP's refusal (NR) but reports no
+            // completion, so the mailbox ends the transfer itself.
             clearTransfer()
             run.driver.rejectTransfer(reason: reason)
             write(["Upload refused — \(reason).", BBSShell.commandPrompt])

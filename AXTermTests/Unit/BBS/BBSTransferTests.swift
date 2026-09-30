@@ -238,7 +238,9 @@ final class BBSTransferTests: XCTestCase {
         }
         caller.type("D a.bin")
         await caller.pump { self.caller.text.contains("was not sent") && self.caller.text.hasSuffix(">\r") }
-        XCTAssertTrue(caller.text.contains("a.bin was not sent: Canceled by peer."), caller.text)
+        // YAPP refuses with NR and its reason ("no" from this receiver).
+        XCTAssertTrue(caller.text.contains("a.bin was not sent: The other station refused the file: no."),
+                      caller.text)
         assertIdle()
 
         let again = await download("a.bin")
@@ -254,7 +256,7 @@ final class BBSTransferTests: XCTestCase {
         caller.clearReceived()
         caller.type("D a.bin")
         // The send-init arrives as noise to a caller with no YAPP.
-        await caller.pump { self.caller.received.contains(YAPPControlChar.soh.rawValue) }
+        await caller.pump { self.caller.received.contains(YAPPControlChar.enq.rawValue) }
         XCTAssertTrue(service.isTransferring)
         XCTAssertEqual(service.transfer?.fileName, "a.bin")
 
@@ -440,13 +442,12 @@ final class BBSTransferTests: XCTestCase {
         await armUpload()
 
         // A hand-built sender that promises 10 bytes and sends 200.
-        let yapp = YAPPProtocol()
         caller.clearReceived()
-        caller.send(yapp.encodeSendInit())
-        await caller.pump { self.caller.received.count >= 2 }
-        caller.send(yapp.encodeHeader(fileName: "liar.bin", fileSize: 10))
-        await caller.pump { self.caller.received.count >= 3 }
-        caller.send(yapp.encodeDataBlock(data: binary(200)))
+        caller.send(YAPPEncoder.sendInit())
+        await caller.pump { self.caller.received.count >= 2 }      // RR
+        caller.send(YAPPEncoder.header(name: "liar.bin", size: 10))
+        await caller.pump { self.caller.received.count >= 4 }      // RF
+        caller.send(YAPPEncoder.data(binary(200), checksum: false))
         await caller.pump { self.caller.text.hasSuffix(">\r") }
 
         XCTAssertTrue(caller.text.contains("The upload was larger than its header said"),
