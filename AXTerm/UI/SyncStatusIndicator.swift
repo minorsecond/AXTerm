@@ -37,10 +37,7 @@ struct SyncStatusIndicator: View {
                         .monospacedDigit()
                 }
             }
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(.quaternary.opacity(0.35), in: Capsule())
-            .contentShape(Capsule())
+            .toolbarPill()
             .onTapGesture { sync.syncNow() }
             .onReceive(tick) { now = $0 }
             .explain(tooltip, showsIndicator: false)

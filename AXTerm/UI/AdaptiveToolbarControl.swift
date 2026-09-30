@@ -36,13 +36,7 @@ struct AdaptiveToolbarControl: View {
                     .foregroundStyle(.secondary)
             }
             .lineLimit(1)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.thinMaterial, in: Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
-            )
+            .toolbarPill()
         }
         .buttonStyle(.plain)
         .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {

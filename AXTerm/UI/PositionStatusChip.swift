@@ -40,15 +40,22 @@ struct PositionStatusChip: View {
         Button {
             SettingsRouter.shared.navigate(to: .general)
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
+                // The symbol carries the warning colour; orange text as well
+                // was louder than anything else in the toolbar.
                 Image(systemName: symbol)
-                    .font(.caption2)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(problem == nil ? AnyShapeStyle(.secondary)
+                                                    : AnyShapeStyle(Color.orange))
                 Text(title)
-                    .font(.caption.weight(.medium))
+                    .font(.system(size: 11, weight: .medium))
                     .monospacedDigit()
+                    .foregroundStyle(problem == nil ? AnyShapeStyle(.secondary)
+                                                    : AnyShapeStyle(.primary))
             }
-            .foregroundStyle(problem == nil ? AnyShapeStyle(.secondary)
-                                            : AnyShapeStyle(Color.orange))
+            .lineLimit(1)
+            .fixedSize()
+            .toolbarPill()
         }
         .buttonStyle(.plain)
         .help(helpText)

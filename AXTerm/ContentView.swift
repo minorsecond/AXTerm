@@ -2688,11 +2688,13 @@ struct ContentView: View {
     private var radiosToolbarMenu: some View {
         let radios = client.radioSummaries
         return HStack(spacing: 8) {
-            HStack(spacing: 2) {
-                Blinkenlight(color: .green, trigger: client.lastRxTime)
-                    .help("RX Activity, any radio")
-                Blinkenlight(color: .red, trigger: client.lastTxTime)
-                    .help("TX Activity, any radio")
+            if radios.contains(where: { $0.status == .connected }) {
+                HStack(spacing: 2) {
+                    Blinkenlight(color: .green, trigger: client.lastRxTime)
+                        .help("RX Activity, any radio")
+                    Blinkenlight(color: .red, trigger: client.lastTxTime)
+                        .help("TX Activity, any radio")
+                }
             }
 
             HStack(spacing: 3) {
@@ -2743,13 +2745,7 @@ struct ContentView: View {
             .menuStyle(.borderlessButton)
             .help("Radio connection actions")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(.thinMaterial, in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
-        )
+        .toolbarPill()
     }
 
     private func radioTint(_ status: ConnectionStatus) -> Color {
@@ -2763,12 +2759,15 @@ struct ContentView: View {
 
     private var singleRadioToolbarMenu: some View {
         HStack(spacing: 8) {
-            // TX / RX Blinkenlights
-            HStack(spacing: 2) {
-                Blinkenlight(color: .green, trigger: client.lastRxTime)
-                    .help("RX Activity")
-                Blinkenlight(color: .red, trigger: client.lastTxTime)
-                    .help("TX Activity")
+            // TX / RX Blinkenlights, only while connected. Idle, two grey
+            // dots beside the status dot read as a loading indicator.
+            if client.status == .connected {
+                HStack(spacing: 2) {
+                    Blinkenlight(color: .green, trigger: client.lastRxTime)
+                        .help("RX Activity")
+                    Blinkenlight(color: .red, trigger: client.lastTxTime)
+                        .help("TX Activity")
+                }
             }
             
             // Connection status dot
@@ -2823,13 +2822,7 @@ struct ContentView: View {
             .menuStyle(.borderlessButton)
             .help("TNC connection actions")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(.thinMaterial, in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
-        )
+        .toolbarPill()
     }
     
     private var tncLedColor: Color {
