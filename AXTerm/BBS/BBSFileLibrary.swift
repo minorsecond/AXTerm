@@ -329,7 +329,7 @@ final class BBSFileLibrary: ObservableObject {
     // MARK: - Adding files
 
     /// What became of one file the operator asked to share.
-    enum AddOutcome: Equatable, Sendable {
+    nonisolated enum AddOutcome: Equatable, Sendable {
         case added(name: String)
         /// A file of that name was already in the folder, and nothing is
         /// ever replaced: callers may have fetched the old one by name.

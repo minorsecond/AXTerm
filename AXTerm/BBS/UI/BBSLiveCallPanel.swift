@@ -18,6 +18,10 @@ struct BBSLiveCallPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
+            if let status = service.transfer {
+                transferRow(BBSTransferRowModel.make(status, now: now))
+                Divider()
+            }
             transcript
         }
         .background(Color(platform: .platformTextBackground))
@@ -51,6 +55,39 @@ struct BBSLiveCallPanel: View {
                 .explain("Sends the caller a closing line and a DISC, so their "
                          + "software knows the session ended rather than retrying "
                          + "into a station that went quiet.")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    /// A file on its way, with how far it has got. The transcript only says
+    /// that a transfer began and how it ended.
+    private func transferRow(_ model: BBSTransferRowModel) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: model.systemImage)
+                    .foregroundStyle(.secondary)
+                Text(model.title)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                // A hint, not an explanation: an explanation wrapping a
+                // control can stop it responding on iOS (Docs/PacketBBS.md).
+                Button("Stop") { service.sysopStopTransfer() }
+                    .controlSize(.small)
+                    .help("Cancels the transfer and tells the caller's software, then "
+                          + "returns the caller to the prompt. The call stays up.")
+                    .accessibilityHint("Cancels the transfer. The call stays up.")
+            }
+            if let fraction = model.fraction {
+                ProgressView(value: fraction)
+            } else {
+                ProgressView().progressViewStyle(.linear)
+            }
+            Text(model.detail)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

@@ -23,17 +23,10 @@ struct BBSAreaListScreen: View {
     @Binding var selection: String?
     var presentation: BBSScreenPresentation = .tab
 
-    /// One importer for both jobs.
-    ///
-    /// Two `.fileImporter` modifiers on one view behave like two sheets — the
-    /// last one wins and the other silently never opens. What the picked
-    /// folder is *for* is state, not a second presenter.
-    private enum FolderPurpose: Identifiable {
-        case share
-        case inbox
-        var id: Int { self == .share ? 0 : 1 }
-    }
-    @State private var picking: FolderPurpose?
+    /// One importer for every folder this screen picks. Two `.fileImporter`
+    /// modifiers on one view behave like two sheets: the last one wins and
+    /// the other silently never opens. What the pick is *for* is state.
+    @State private var picking: BBSFilePickPurpose?
     @State private var pendingURL: URL?
     @State private var newAreaName = ""
     @State private var newAreaAbout = ""
@@ -60,7 +53,7 @@ struct BBSAreaListScreen: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    picking = .share
+                    picking = .shareFolder
                 } label: {
                     Label("Share a Folder", systemImage: "plus")
                 }
@@ -68,14 +61,12 @@ struct BBSAreaListScreen: View {
         }
         .fileImporter(isPresented: Binding(get: { picking != nil },
                                            set: { if !$0 { picking = nil } }),
-                      allowedContentTypes: [.folder],
-                      allowsMultipleSelection: false) { result in
+                      allowedContentTypes: picking?.contentTypes ?? [.folder],
+                      allowsMultipleSelection: picking?.allowsMultipleSelection ?? false) { result in
             let purpose = picking
             picking = nil
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            switch purpose {
-            case .inbox: library.setInbox(url: url)
-            case .share, .none:
+            guard let purpose, case .success(let urls) = result else { return }
+            if case .nameNewArea(let url) = BBSFilePick.apply(purpose, urls: urls, library: library) {
                 pendingURL = url
                 newAreaName = BBSFileArea.normalize(url.lastPathComponent)
             }
@@ -134,6 +125,9 @@ struct BBSAreaListScreen: View {
                             library.removeArea(name: area.name)
                             if selection == area.name { selection = nil }
                         }
+                        Button("Choose Folder", systemImage: "folder") {
+                            picking = .relocate(area: area.name)
+                        }
                     }
                 }
             }
@@ -154,13 +148,30 @@ struct BBSAreaListScreen: View {
 
     private func areaRow(_ area: BBSFileArea) -> some View {
         let model = BBSAreaRowModel.make(area, files: library.index.files(in: area.name))
+        let missing = library.unreachableAreas.contains(area.name)
         return VStack(alignment: .leading, spacing: 2) {
-            Text(model.name)
-                .font(.system(.body, design: .monospaced))
-                .fontWeight(.medium)
-            Text(model.subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(model.name)
+                    .font(.system(.body, design: .monospaced))
+                    .fontWeight(.medium)
+                if missing {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("Folder missing")
+                }
+            }
+            if missing {
+                // On the row, with the fix in its detail and swipe actions:
+                // an area whose folder moved looks exactly like an empty one.
+                Text("Folder can no longer be found. Swipe to choose it again.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else {
+                Text(model.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if !model.about.isEmpty {
                 Text(model.about).font(.caption).foregroundStyle(.tertiary)
             }
@@ -176,7 +187,14 @@ struct BBSAreaListScreen: View {
             Toggle("Let callers send me files", isOn: $settings.acceptUploads)
 
             if settings.acceptUploads {
-                if let inbox = library.inboxName {
+                if library.inboxUnreachable {
+                    Button("Choose Upload Folder Again…") { picking = .uploadInbox }
+                    Label("The upload folder can no longer be found, so uploads are refused "
+                          + "until you choose it again.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if let inbox = library.inboxName {
                     let box = BBSUploadInboxModel.make(count: library.inboxCount,
                                                        bytes: library.inboxBytes,
                                                        quotaBytes: settings.uploadQuotaBytes)
@@ -189,7 +207,7 @@ struct BBSAreaListScreen: View {
                                 .foregroundStyle(box.isFull ? Color.orange : Color.secondary)
                         }
                         Spacer()
-                        Button("Change") { picking = .inbox }
+                        Button("Change") { picking = .uploadInbox }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
@@ -201,7 +219,7 @@ struct BBSAreaListScreen: View {
                             .foregroundStyle(.orange)
                     }
                 } else {
-                    Button("Choose Where Uploads Land…") { picking = .inbox }
+                    Button("Choose Where Uploads Land…") { picking = .uploadInbox }
                     Label("Uploads are refused until you pick a folder.",
                           systemImage: "exclamationmark.triangle")
                         .font(.caption)
@@ -293,9 +311,19 @@ struct BBSFileListScreen: View {
 
     @State private var editing: BBSSharedFile?
     @State private var draftAbout = ""
+    /// This screen's one importer: files to add, or the area's folder chosen
+    /// again when it has gone missing.
+    @State private var picking: BBSFilePickPurpose?
+    /// What happened to the last files added, until dismissed.
+    @State private var addMessage: String?
+    @State private var dropTargeted = false
 
     private var files: [BBSSharedFile] {
         area.map { library.index.files(in: $0) } ?? []
+    }
+
+    private var isMissing: Bool {
+        area.map { library.unreachableAreas.contains($0) } ?? false
     }
 
     var body: some View {
@@ -306,17 +334,85 @@ struct BBSFileListScreen: View {
                     title: "Select an area",
                     detail: "Each shared folder is one area. Callers list them with F and "
                         + "fetch a file with D.")
+            } else if let area, isMissing {
+                VStack(spacing: 12) {
+                    BBSEmptyState(
+                        systemImage: "folder.badge.questionmark",
+                        title: "Folder can no longer be found",
+                        detail: "Callers see \(area) as empty until you choose its folder again.")
+                    Button("Choose Folder Again…") { picking = .relocate(area: area) }
+                        .buttonStyle(.borderedProminent)
+                }
             } else if files.isEmpty {
                 BBSEmptyState(
                     systemImage: "doc",
                     title: "This area has no files",
-                    detail: "Files over \(BBSFileIndex.size(BBSFileLibrary.defaultMaxFileBytes)), "
+                    detail: "Add files with the + button, or drop them here. Files over "
+                        + "\(BBSFileIndex.size(BBSFileLibrary.defaultMaxFileBytes)), "
                         + "hidden files and symlinks are skipped, and so are subfolders.")
             } else {
                 List(files) { file in
                     row(file)
                 }
                 .listStyle(.plain)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let addMessage {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(addMessage)
+                        .font(.caption)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        self.addMessage = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Dismiss")
+                }
+                .padding(12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            }
+        }
+        .overlay {
+            if dropTargeted, area != nil, !isMissing {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.accentColor, lineWidth: 2)
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
+        }
+        // Drag files in from Files or another app on iPad. Copied into the
+        // area's folder; the originals stay where they were.
+        .onDrop(of: BBSFileDrop.acceptedTypes, isTargeted: $dropTargeted) { providers in
+            guard let area, !isMissing else { return false }
+            BBSFileDrop.add(providers, to: area, library: library) { addMessage = $0 }
+            return true
+        }
+        .toolbar {
+            if let area, !isMissing {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        picking = .addFiles(area: area)
+                    } label: {
+                        Label("Add Files", systemImage: "plus")
+                    }
+                }
+            }
+        }
+        .fileImporter(isPresented: Binding(get: { picking != nil },
+                                           set: { if !$0 { picking = nil } }),
+                      allowedContentTypes: picking?.contentTypes ?? [.item],
+                      allowsMultipleSelection: picking?.allowsMultipleSelection ?? true) { result in
+            let purpose = picking
+            picking = nil
+            guard let purpose, case .success(let urls) = result else { return }
+            if case .finished(let message) = BBSFilePick.apply(purpose, urls: urls, library: library) {
+                addMessage = message
             }
         }
         .navigationTitle(area ?? "Files")

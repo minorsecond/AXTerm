@@ -39,7 +39,7 @@ final class BBSService: ObservableObject {
     /// The transcript only says a transfer started and how it ended; forty
     /// minutes of YAPP in between look like nothing is happening. This is
     /// what the live call panel draws its progress bar from.
-    struct TransferStatus: Equatable, Sendable {
+    nonisolated struct TransferStatus: Equatable, Sendable {
         enum Direction: Equatable, Sendable { case download, upload }
         var direction: Direction
         var caller: String
