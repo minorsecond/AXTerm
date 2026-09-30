@@ -277,6 +277,7 @@ AX.25 address field includes:
 - Provide a path editor with presets and a “safe default” (empty path on local, or a minimal digi path where appropriate).
 - Validate call signs & SSIDs.
 - Normalize case for display; encode per AX.25 rules (shifted ASCII in address field).
+- On receive, a frame whose addresses break those rules (bit 0 set in a callsign byte, anything but A-Z/0-9 with trailing spaces, an address field that never ends) is refused and logged, never shown as a station. See `Docs/AX25Decoding.md`.
 1) Use routes data to power Suggestions
 
 In the path editor:

@@ -35,7 +35,7 @@ nonisolated enum AX25Digipeater {
     /// wide-area needs a remaining N within `wideAreaMaxHops`.
     static func repeatWideN(_ raw: Data, insert: AX25Address,
                             fillIn: Bool, wideAreaMaxHops: Int) -> Data? {
-        guard raw.count >= 16 else { return nil }
+        guard raw.count >= 16, isWellFormed(raw) else { return nil }
         let start = raw.startIndex
 
         // Never repeat our own transmissions.
@@ -125,7 +125,7 @@ nonisolated enum AX25Digipeater {
         guard !mine.isEmpty else { return nil }
 
         // dest(7) + src(7) minimum before any digi can exist.
-        guard raw.count >= 16 else { return nil }
+        guard raw.count >= 16, isWellFormed(raw) else { return nil }
         let start = raw.startIndex
 
         // Never repeat our own transmissions.
@@ -156,6 +156,14 @@ nonisolated enum AX25Digipeater {
     }
 
     // MARK: - Address bytes
+
+    /// Only a frame the decoder accepts may be repeated. The engine asks the
+    /// digipeater before it decodes, and the address walks below read bytes
+    /// without judging them, so without this a malformed frame (noise with
+    /// our call in it, a path that never ends) would go back on the air.
+    private static func isWellFormed(_ raw: Data) -> Bool {
+        AX25.decodeFrame(ax25: raw) != nil
+    }
 
     private struct Decoded { let display: String }
 

@@ -54,7 +54,7 @@ sequence a failure event needs.
 
 `SentryManager.captureThrottled(key:…)` ships the first occurrence
 immediately, suppresses identical repeats for 60 s, and attaches the
-suppressed count to the next one. Used for decode failures (keyed per reason),
+suppressed count to the next one. Used for decode failures (keyed per kind of fault),
 invariant violations, AXDP/compression errors — anything a hostile byte
 stream can trigger per-frame.
 
@@ -83,7 +83,10 @@ machine, both off by default:
   sampled decode-success crumb, per-frame `TxLog` crumbs — all budgeted.
 - **Decode failures**: KISS reject paths log warnings with reasons
   (`KISSAX25Decoder`); AX.25 decode failure ships ONE throttled event with a
-  differentiated reason from `AX25.decodeFailureReason`.
+  differentiated reason from `AX25.checkFrame` (`FrameFault.reason`, which
+  names the address and byte). The throttle key is `FrameFault.summary`, the
+  same reason without byte values or positions, so open-squelch noise yields a
+  few keys rather than one per byte value. See `AX25Decoding.md`.
 - **Routing decisions**: `netrom.routing` crumbs — next-hop selected/switched
   (`NetRomRouter.bestRouteTo`), new route stored (`storeRoute`), stale purges,
   and mode changes (`NetRomIntegration.setMode`).

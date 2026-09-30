@@ -1,0 +1,2542 @@
+{
+ "note": "Frames that must decode identically under the strict AX.25 address rules. Expected fields come from the decoder as it stood before the rules (transcribed in the generator), so this file pins that nothing real changed. Sources: the AXTerm test database (overnight 2026-09-29), the other fixtures in this folder, and frames constructed to AX.25 2.2 for the connected-mode, NET/ROM and edge-case shapes the capture lacks.",
+ "frames": [
+  {
+   "name": "db rx N1ROG-8>S8UPXR 2026-09-29 23:49:16.843",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a670aaa0b0a4609c62a49e8e40f0a0ac98b24040e0ae92888a6240e0ae609c8a8840e0ae92888a6440e103f06070494a6d2a756a2f6022484e7d21534e215f250d",
+   "expect": {
+    "to": "S8UPXR",
+    "from": "N1ROG-8",
+    "via": [
+     "PVLY*",
+     "WIDE1*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070494a6d2a756a2f6022484e7d21534e215f250d"
+   }
+  },
+  {
+   "name": "db rx SIMLA>APMI06 2026-09-29 23:50:14.324",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c60a6929a988240609c868ca08840e0ae609c8a8840e0ae92888a6440e103f054233232392c3138352c3039382c3032352c3037362c3030302c3030303030303030",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [
+     "NCFPD*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "54233232392c3138352c3039382c3032352c3037362c3030302c3030303030303030"
+   }
+  },
+  {
+   "name": "db rx N1ROG-8>S8UQPW 2026-09-29 23:50:19.001",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a670aaa2a0ae609c62a49e8e40f09c868ca08840e0ae92888a6240e0ae609c8a8840e0ae92888a6440e103f0607049346c5c436a2f6022485e7d21534e215f250d",
+   "expect": {
+    "to": "S8UQPW",
+    "from": "N1ROG-8",
+    "via": [
+     "NCFPD*",
+     "WIDE1*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "607049346c5c436a2f6022485e7d21534e215f250d"
+   }
+  },
+  {
+   "name": "db tx K0EPI>APZAXT 2026-09-29 23:50:40.278",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa0924060ae92888a624062ae92888a64406303f0212f3a4b6c2234232d562d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c2234232d562d202041"
+   }
+  },
+  {
+   "name": "db rx K0EPI>APZAXT 2026-09-29 23:50:42.764",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a0b482b0a8e096608aa0924060aea2709a4040f2ae92888a6240e0ae609c8a8840e0ae92888a6440e103f0212f3a4b6c2234232d562d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI",
+    "via": [
+     "WQ8M-9*",
+     "WIDE1*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c2234232d562d202041"
+   }
+  },
+  {
+   "name": "db rx W8XAL-10>TPSTYS 2026-09-29 23:51:54.348",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a8a0a6a8b2a660ae70b0829840f4ae609c8a8840e0ae92888a6240e0ae92888a64406303f0607048236d347a3e5c6022444e7d3433382e3032354d487a2043303838202d35303020546865207472757468206973206f75742074686572652e205f310d",
+   "expect": {
+    "to": "TPSTYS",
+    "from": "W8XAL-10",
+    "via": [
+     "W0NED*",
+     "WIDE1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "607048236d347a3e5c6022444e7d3433382e3032354d487a2043303838202d35303020546865207472757468206973206f75742074686572652e205f310d"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-29 23:52:03.794",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c4e34232d482d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c4e34232d482d202041"
+   }
+  },
+  {
+   "name": "db rx WA0DE-9>S9RSVQ 2026-09-29 23:52:24.346",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a672a4a6aca260ae8260888a4072ae609c8a8840e0ae92888a6240e0ae92888a64406303f06070444d1c1e1d232f224a217d4152455344454320436f6d6d547261696c6572",
+   "expect": {
+    "to": "S9RSVQ",
+    "from": "WA0DE-9",
+    "via": [
+     "W0NED*",
+     "WIDE1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070444d1c1e1d232f224a217d4152455344454320436f6d6d547261696c6572"
+   }
+  },
+  {
+   "name": "db rx K0PWO>APGRWO 2026-09-30 00:11:03.437",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a08ea4ae9ee09660a0ae9e4060ae92888a624062ae92888a64406303f0212f3a5a3333342633332d2020432f413d303035393835",
+   "expect": {
+    "to": "APGRWO",
+    "from": "K0PWO",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a5a3333342633332d2020432f413d303035393835"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 00:20:28.938",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c3934232d422d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c3934232d422d202041"
+   }
+  },
+  {
+   "name": "db rx KE0HXD-7>S9STQV 2026-09-30 00:23:31.411",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a672a6a8a2ac60968a6090b088eeae92888a624062ae92888a64406303f06070461c6e4b3e6b2f5d22484d7d3134352e3139304d487a2020202020202d303630ffffffffffffffffffffffffffffffffffff3d0d",
+   "expect": {
+    "to": "S9STQV",
+    "from": "KE0HXD-7",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070461c6e4b3e6b2f5d22484d7d3134352e3139304d487a2020202020202d303630ffffffffffffffffffffffffffffffffffff3d0d"
+   }
+  },
+  {
+   "name": "db rx KE0HXD-7>S9STWP 2026-09-30 00:28:26.074",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a672a6a8aea060968a6090b088eeae92888a624062ae92888a64406303f06070474c6d54516b2f5d22482d7d3134352e3139304d487a2020202020202d303630ffffffffffffffffffffffffffffffffffff3d0d",
+   "expect": {
+    "to": "S9STWP",
+    "from": "KE0HXD-7",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070474c6d54516b2f5d22482d7d3134352e3139304d487a2020202020202d303630ffffffffffffffffffffffffffffffffffff3d0d"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 00:50:28.944",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c2f34232d612d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c2f34232d612d202041"
+   }
+  },
+  {
+   "name": "db rx N1ROG-8>S9PSTP 2026-09-30 01:08:25.049",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a672a0a6a8a0609c62a49e8e40f09c868ca08840e0ae92888a6240e0ae609c8a8840e0ae92888a6440e103f060704f376d5f1e6a2f60224a657d21534e215f250d",
+   "expect": {
+    "to": "S9PSTP",
+    "from": "N1ROG-8",
+    "via": [
+     "NCFPD*",
+     "WIDE1*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "60704f376d5f1e6a2f60224a657d21534e215f250d"
+   }
+  },
+  {
+   "name": "db rx AD1CT-4>S9SWSV 2026-09-30 01:08:40.773",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a672a6aea6ac6082886286a840e8ae92888a624062ae92888a64406303f060704a3d6c21586a2f602247557d3134352e3235304d487a2054313030202d3036305f340d",
+   "expect": {
+    "to": "S9SWSV",
+    "from": "AD1CT-4",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "60704a3d6c21586a2f602247557d3134352e3235304d487a2054313030202d3036305f340d"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 01:09:14.646",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c3134232d472d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c3134232d472d202041"
+   }
+  },
+  {
+   "name": "db rx SIMLA>APMI06 2026-09-30 01:09:33.040",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c60a6929a988240609c868ca08840e0ae609c8a8840e0ae92888a6440e103f03e415245532052314435205765656b6c79204e657420546875722032303a3030203134372e31303520706c7573203130372e32202f203434382e343235206d696e7573203130372e3220207777772e415245534445432e6f7267",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [
+     "NCFPD*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e415245532052314435205765656b6c79204e657420546875722032303a3030203134372e31303520706c7573203130372e32202f203434382e343235206d696e7573203130372e3220207777772e415245534445432e6f7267"
+   }
+  },
+  {
+   "name": "db rx SIMLA>APMI06 2026-09-30 01:10:13.359",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c60a6929a98824060ae609c8a8840e0ae92888a64406303f054233235332c3138352c3130302c3032372c3037302c3030302c3030303030303030",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [
+     "W0NED*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "54233235332c3138352c3130302c3032372c3037302c3030302c3030303030303030"
+   }
+  },
+  {
+   "name": "db rx N7CTM-9>TPPWPV 2026-09-30 01:12:55.715",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a8a0a0aea0ac609c6e86a89a40f2ae609c8a8840e0ae92888a6240e0ae92888a64406303f06070566e212a1c6a2f5d22444e7d3d0d",
+   "expect": {
+    "to": "TPPWPV",
+    "from": "N7CTM-9",
+    "via": [
+     "W0NED*",
+     "WIDE1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070566e212a1c6a2f5d22444e7d3d0d"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 01:20:28.952",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c3b34232d452d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c3b34232d452d202041"
+   }
+  },
+  {
+   "name": "db rx KB7OKL-1>APT314 2026-09-30 01:35:31.808",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a0a86662686096846e9e969862ae92888a624062ae92888a64406303f021333933342e36324e2f31303434332e3633573e3236322f3036352f413d3030363032362177586421",
+   "expect": {
+    "to": "APT314",
+    "from": "KB7OKL-1",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "21333933342e36324e2f31303434332e3633573e3236322f3036352f413d3030363032362177586421"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 01:50:28.954",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c3534232d572d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c3534232d572d202041"
+   }
+  },
+  {
+   "name": "db rx KE0HXD-7>S9SSSU 2026-09-30 02:19:21.130",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a672a6a6a6aa60968a6090b088eeae92888a624062ae92888a64406303f0607050342049436b2f5d2247707d3d0d",
+   "expect": {
+    "to": "S9SSSU",
+    "from": "KE0HXD-7",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "607050342049436b2f5d2247707d3d0d"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 02:20:28.955",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c2f34232d5d2d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c2f34232d5d2d202041"
+   }
+  },
+  {
+   "name": "db rx KE0HXD-7>S9STVQ 2026-09-30 02:27:39.320",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a672a6a8aca260968a6090b088eeae92888a624062ae92888a64406303f0607047456d21336b2f5d2248317d3134352e3139304d487a2020202020202d303630ffffffffffffffffffffffffffffffffffff3d0d",
+   "expect": {
+    "to": "S9STVQ",
+    "from": "KE0HXD-7",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "607047456d21336b2f5d2248317d3134352e3139304d487a2020202020202d303630ffffffffffffffffffffffffffffffffffff3d0d"
+   }
+  },
+  {
+   "name": "db rx KE0HXD-7>S9STVY 2026-09-30 02:31:15.263",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a672a6a8acb260968a6090b088eeae92888a624062ae92888a64406303f06070463a6e674c6b2f5d2248257d3134352e3139304d487a2020202020202d303630ffffffffffffffffffffffffffffffffffff3d0d",
+   "expect": {
+    "to": "S9STVY",
+    "from": "KE0HXD-7",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070463a6e674c6b2f5d2248257d3134352e3139304d487a2020202020202d303630ffffffffffffffffffffffffffffffffffff3d0d"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 02:50:28.962",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c6134232d382d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c6134232d382d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 03:20:28.971",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c4c34232d442d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c4c34232d442d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 03:50:28.982",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c4c34232d3a2d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c4c34232d3a2d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 04:20:28.984",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6d2234232d3d2d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6d2234232d3d2d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 04:50:28.987",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c6334232c712d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c6334232c712d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 05:20:28.992",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c7334232d302d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c7334232d302d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 05:50:28.996",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c3d34232c722d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c3d34232c722d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 06:20:28.997",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c6134232d422d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c6134232d422d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 06:50:29.004",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c6434232d3c2d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c6434232d3c2d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 07:20:29.008",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c6d34232d302d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c6d34232d302d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 07:50:29.018",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c3f34232d572d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c3f34232d572d202041"
+   }
+  },
+  {
+   "name": "db rx KC6ETE-9>SYUTYW 2026-09-30 07:59:40.353",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a6b2aaa8b2ae6096866c8aa88af29c60a6b44040e4ae92888a6240e0ae92888a64406303f060715c7e6c204c522f602246337d5f340d",
+   "expect": {
+    "to": "SYUTYW",
+    "from": "KC6ETE-9",
+    "via": [
+     "N0SZ-2*",
+     "WIDE1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "60715c7e6c204c522f602246337d5f340d"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 08:20:29.018",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c4c34232d5c2d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c4c34232d5c2d202041"
+   }
+  },
+  {
+   "name": "db rx SIMLA>APMI06 2026-09-30 08:40:12.523",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c60a6929a988240609c868ca08840e0ae609c8a8840e0ae92888a6440e103f03a53494d4c41202020203a424954532e31313131313131312c575833696e31506c757332302054656c656d65747279",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [
+     "NCFPD*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a53494d4c41202020203a424954532e31313131313131312c575833696e31506c757332302054656c656d65747279"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 08:50:29.021",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6b7a34232d4f2d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6b7a34232d4f2d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 09:20:29.029",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c6e34232c7a2d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c6e34232c7a2d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 09:50:29.031",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c7b34232d302d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c7b34232d302d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 10:20:29.043",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c7334232c782d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c7334232c782d202041"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 10:25:07.039",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c5334232d302d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c5334232d302d202041"
+   }
+  },
+  {
+   "name": "db rx SIMLA>APMI06 2026-09-30 10:29:24.492",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c60a6929a988240609c868ca08840e0ae609c8a8840e0ae92888a6440e103f03e4e6f20415052532d4953202d3e446967692020333030393235",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [
+     "NCFPD*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e4e6f20415052532d4953202d3e446967692020333030393235"
+   }
+  },
+  {
+   "name": "db rx KF0HEG-9>KF0HEG 2026-09-30 10:32:00.733",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "968c60908a8e72968c60908a8e72ae60aaa0a640feae92888a6240e0ae609c8a8840e0ae92888a6440e103f021333935332e38374e2f31303435382e3231572d3030302f3030304b46304845472d392042415345203134362e353230204c4c4150",
+   "expect": {
+    "to": "KF0HEG-9",
+    "from": "KF0HEG-9",
+    "via": [
+     "W0UPS-15*",
+     "WIDE1*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "21333935332e38374e2f31303435382e3231572d3030302f3030304b46304845472d392042415345203134362e353230204c4c4150"
+   }
+  },
+  {
+   "name": "db rx NCFPD>BEACON 2026-09-30 10:32:58.874",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "848a82869e9c609c868ca0884060ae609c8a8840e0ae92888a6440e103f054233430302c3133372c3134302c3033382c302c302c30303031303031310d",
+   "expect": {
+    "to": "BEACON",
+    "from": "NCFPD",
+    "via": [
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "54233430302c3133372c3134302c3033382c302c302c30303031303031310d"
+   }
+  },
+  {
+   "name": "db rx W0NED>APJYC1 2026-09-30 10:33:36.075",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a094b2866260ae609c8a8840e0a886a092a040e0ae609c8a8840e0a48c9e9c98b2609c9e8e82a88a6103f07d4b42304e41562d423e4150444730322c54435049502c57304e45442a3a21333935362e36324e4431303532352e34305726524e47303030312f413d303030303130203730636d20566f6963652028442d5374617229203433332e31323530304d487a202b302e303030304d487a",
+   "expect": {
+    "to": "APJYC1",
+    "from": "W0NED",
+    "via": [
+     "TCPIP*",
+     "W0NED*",
+     "RFONLY",
+     "NOGATE"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "7d4b42304e41562d423e4150444730322c54435049502c57304e45442a3a21333935362e36324e4431303532352e34305726524e47303030312f413d303030303130203730636d20566f6963652028442d5374617229203433332e31323530304d487a202b302e303030304d487a"
+   }
+  },
+  {
+   "name": "db rx SIMLA>APMI06 2026-09-30 10:40:08.560",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c60a6929a988240609c868ca08840e0ae609c8a8840e0ae92888a6440e103f03a53494d4c41202020203a554e49542e566f6c742c506b742c506b742c50636e742c4e6f6e652c4f6e2c4f6e2c4f6e2c4f6e2c48692c48692c48692c4869",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [
+     "NCFPD*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a53494d4c41202020203a554e49542e566f6c742c506b742c506b742c50636e742c4e6f6e652c4f6e2c4f6e2c4f6e2c4f6e2c48692c48692c48692c4869"
+   }
+  },
+  {
+   "name": "db rx SIMLA>APMI06 2026-09-30 10:40:16.883",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c60a6929a988240609c868ca08840e0ae609c8a8840e0ae92888a6440e103f054233136382c3138352c3035372c3031312c3036322c3030302c3030303030303030",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [
+     "NCFPD*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "54233136382c3138352c3035372c3031312c3036322c3030302c3030303030303030"
+   }
+  },
+  {
+   "name": "db rx K5KTI-1>APMI06 2026-09-30 10:41:56.128",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c60966a96a8924062a0ac98b24040e0ae609c8a8840e0ae92888a6440e103f0403330313034317a333835342e32344e2f31303434352e3933572d575833696e31506c7573322e3020553d31342e33562c543d3f3f2e3f432f3f3f2e3f46",
+   "expect": {
+    "to": "APMI06",
+    "from": "K5KTI-1",
+    "via": [
+     "PVLY*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "403330313034317a333835342e32344e2f31303434352e3933572d575833696e31506c7573322e3020553d31342e33562c543d3f3f2e3f432f3f3f2e3f46"
+   }
+  },
+  {
+   "name": "db rx NCFPD>BEACON 2026-09-30 10:43:02.252",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "848a82869e9c609c868ca0884060ae609c8a8840e0ae92888a6440e103f05741304445204e4346504420646967692057322c434f6e204e4520456c626572742064696769207777772e415245534445432e6f72670d",
+   "expect": {
+    "to": "BEACON",
+    "from": "NCFPD",
+    "via": [
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "5741304445204e4346504420646967692057322c434f6e204e4520456c626572742064696769207777772e415245534445432e6f72670d"
+   }
+  },
+  {
+   "name": "db rx KC5W>SYSRSQ 2026-09-30 10:45:31.957",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a6b2a6a4a6a26096866aae4040e0ae669e9e4040e2ae609c8a8840e0ae92888a6440e103f0607158786c201c2d2f605f340d",
+   "expect": {
+    "to": "SYSRSQ",
+    "from": "KC5W",
+    "via": [
+     "W3OO-1*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "607158786c201c2d2f605f340d"
+   }
+  },
+  {
+   "name": "db rx N0SZ-3>APMI06 2026-09-30 10:47:12.877",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c609c60a6b44040669c868ca08840e0ae609c8a8840e0ae92888a6440e103f0403330313034367a333931302e38394e2f31303433372e3135572d524d48414d2049476174652d44696769203020553d31342e32562c543d31392e32432f36362e3546",
+   "expect": {
+    "to": "APMI06",
+    "from": "N0SZ-3",
+    "via": [
+     "NCFPD*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "403330313034367a333931302e38394e2f31303433372e3135572d524d48414d2049476174652d44696769203020553d31342e32562c543d31392e32432f36362e3546"
+   }
+  },
+  {
+   "name": "db rx WA0DE-9>APMI0 2026-09-30 10:47:34.296",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92604060ae8260888a4072ae609c8a8840e0ae92888a6240e0ae92888a64406303f02f3330313034377a333932332e36314e2f31303434302e343957234150525320566f796167657220553d31332e33562e",
+   "expect": {
+    "to": "APMI0",
+    "from": "WA0DE-9",
+    "via": [
+     "W0NED*",
+     "WIDE1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "2f3330313034377a333932332e36314e2f31303434302e343957234150525320566f796167657220553d31332e33562e"
+   }
+  },
+  {
+   "name": "db rx KC5W>SYSRSQ 2026-09-30 10:48:43.600",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a6b2a6a4a6a26096866aae4040e09c60a6b44040e4ae92888a6240e0ae92888a64406303f0607158786c201c2d2f605f340d",
+   "expect": {
+    "to": "SYSRSQ",
+    "from": "KC5W",
+    "via": [
+     "N0SZ-2*",
+     "WIDE1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "607158786c201c2d2f605f340d"
+   }
+  },
+  {
+   "name": "db rx K5KTI-9>S8UTRT 2026-09-30 10:49:14.261",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a670aaa8a4a860966a96a89240f29c868ca08840e0ae92888a6240e0ae609c8a8840e0ae92888a6440e103f06070497a6c23576b2f6022495c7d3134352e3133304d487a2054303838202d30363020667269657372407961686f6f2e636f6d5f250d",
+   "expect": {
+    "to": "S8UTRT",
+    "from": "K5KTI-9",
+    "via": [
+     "NCFPD*",
+     "WIDE1*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070497a6c23576b2f6022495c7d3134352e3133304d487a2054303838202d30363020667269657372407961686f6f2e636f6d5f250d"
+   }
+  },
+  {
+   "name": "db rx KC5W>SYSRSQ 2026-09-30 10:49:30.159",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "a6b2a6a4a6a26096866aae4040e0ae60aaa0a640feae92888a6240e0ae609c8a8840e0ae92888a6440e103f0607158786c201c2d2f605f340d",
+   "expect": {
+    "to": "SYSRSQ",
+    "from": "KC5W",
+    "via": [
+     "W0UPS-15*",
+     "WIDE1*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "607158786c201c2d2f605f340d"
+   }
+  },
+  {
+   "name": "db tx K0EPI-5>APZAXT 2026-09-30 10:50:29.070",
+   "provenance": "AXTerm test database, AXTerm's own transmission",
+   "frame_hex": "82a0b482b0a8e096608aa092406aae92888a624062ae92888a64406303f0212f3a4b6c4634232d652d202041",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-5",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6c4634232d652d202041"
+   }
+  },
+  {
+   "name": "db rx WQ8M-9>APRX29 2026-09-30 10:51:45.402",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a0a4b0647260aea2709a404072ae609c8a8840e0ae92888a6240e103f021333933332e34384e2f31303434372e363557234c5341205749444531204469676947617465",
+   "expect": {
+    "to": "APRX29",
+    "from": "WQ8M-9",
+    "via": [
+     "W0NED*",
+     "WIDE1*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "21333933332e34384e2f31303434372e363557234c5341205749444531204469676947617465"
+   }
+  },
+  {
+   "name": "db rx AF4IG-8>EAAQXP 2026-09-30 10:56:18.965",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "8a8282a2b0a060828c68928e40f0ae609c8a8840e0ae92888a6240e103f06070564c1c1c3d522f33303030464630303835383738333034",
+   "expect": {
+    "to": "EAAQXP",
+    "from": "AF4IG-8",
+    "via": [
+     "W0NED*",
+     "WIDE1*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070564c1c1c3d522f33303030464630303835383738333034"
+   }
+  },
+  {
+   "name": "db rx NCFPD>BEACON 2026-09-30 10:57:58.794",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "848a82869e9c609c868ca0884060ae609c8a8840e0ae92888a6440e103f054233430352c3133372c3133392c3033382c302c302c30303031303031310d",
+   "expect": {
+    "to": "BEACON",
+    "from": "NCFPD",
+    "via": [
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "54233430352c3133372c3133392c3033382c302c302c30303031303031310d"
+   }
+  },
+  {
+   "name": "db rx KK0X-10>APMI04 2026-09-30 10:59:30.839",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606860969660b0404074ae60aaa0a640feae609c8a8840e0ae92888a6440e103f0403330303834397a333933342e31354e2f31303435352e3035572d575833696e314d696e6920553d31322e34562e",
+   "expect": {
+    "to": "APMI04",
+    "from": "KK0X-10",
+    "via": [
+     "W0UPS-15*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "403330303834397a333933342e31354e2f31303435352e3035572d575833696e314d696e6920553d31322e34562e"
+   }
+  },
+  {
+   "name": "db rx W0NED>APJYC1 2026-09-30 11:00:38.401",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a094b28662e0ae609c8a884060ae92888a624062ae92888a64406303f04031313030333768343030322e31314e5431303533322e34335726504847353133302c2f57323134342e3339304d487a20544f4646202f413d393934385270692c20544e432c20594141432c2069476174652c203134342e3339204d687a0d",
+   "expect": {
+    "to": "APJYC1",
+    "from": "W0NED",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "4031313030333768343030322e31314e5431303533322e34335726504847353133302c2f57323134342e3339304d487a20544f4646202f413d393934385270692c20544e432c20594141432c2069476174652c203134342e3339204d687a0d"
+   }
+  },
+  {
+   "name": "db rx NCFPD>BEACON 2026-09-30 11:02:59.195",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "848a82869e9c609c868ca0884060ae609c8a8840e0ae92888a6440e103f054233430362c3133372c3133392c3033382c302c302c30303031303031310d",
+   "expect": {
+    "to": "BEACON",
+    "from": "NCFPD",
+    "via": [
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "54233430362c3133372c3133392c3033382c302c302c30303031303031310d"
+   }
+  },
+  {
+   "name": "db rx PVLY>APMI04 2026-09-30 11:05:26.844",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606860a0ac98b2404060ae609c8a8840e0ae92888a64406303f054233235342c3135322c3036312c3031352c3037312c3133322c3030303030303030",
+   "expect": {
+    "to": "APMI04",
+    "from": "PVLY",
+    "via": [
+     "W0NED*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "54233235342c3135322c3036312c3031352c3037312c3133322c3030303030303030"
+   }
+  },
+  {
+   "name": "db rx WA0DE-9>APMI0 2026-09-30 11:05:34.808",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92604060ae8260888a4072ae609c8a8840e0ae92888a6240e0ae92888a64406303f02f3330313130357a333932332e36314e2f31303434302e343957234150525320566f796167657220553d31332e33562e",
+   "expect": {
+    "to": "APMI0",
+    "from": "WA0DE-9",
+    "via": [
+     "W0NED*",
+     "WIDE1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "2f3330313130357a333932332e36314e2f31303434302e343957234150525320566f796167657220553d31332e33562e"
+   }
+  },
+  {
+   "name": "db rx SIMLA>APMI06 2026-09-30 11:10:13.002",
+   "provenance": "AXTerm test database, received off the air",
+   "frame_hex": "82a09a92606c60a6929a988240609c868ca08840e0ae609c8a8840e0ae92888a6440e103f054233137372c3138352c3035362c3031302c3036312c3030302c3030303030303030",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [
+     "NCFPD*",
+     "W0NED*",
+     "WIDE2*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "54233137372c3138352c3035362c3031302c3036312c3030302c3030303030303030"
+   }
+  },
+  {
+   "name": "aprs-zoo.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/aprs-zoo.json",
+   "frame_hex": "a6b2a8a0b4b4e0aea860a440407303f06070491c6c2039662f602247267d3134372e3231304d487a2043313030202b3036305f310d",
+   "expect": {
+    "to": "SYTPZZ",
+    "from": "WT0R-9",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070491c6c2039662f602247267d3134372e3231304d487a2043313030202b3036305f310d"
+   }
+  },
+  {
+   "name": "aprs-zoo.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/aprs-zoo.json",
+   "frame_hex": "82a08ea4ae9ee082886286a8406103f0212f3a4b4137342236232d2020432f413d30303538313547726179776f6c662f302e31342e3133",
+   "expect": {
+    "to": "APGRWO",
+    "from": "AD1CT",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b4137342236232d2020432f413d30303538313547726179776f6c662f302e31342e3133"
+   }
+  },
+  {
+   "name": "aprs-zoo.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/aprs-zoo.json",
+   "frame_hex": "82a09a926068e0969660b040407503f0403038303033307a333933342e31354e2f31303435352e3035572d575833696e314d696e6920553d31322e34562e",
+   "expect": {
+    "to": "APMI04",
+    "from": "KK0X-10",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "403038303033307a333933342e31354e2f31303435352e3035572d575833696e314d696e6920553d31322e34562e"
+   }
+  },
+  {
+   "name": "aprs-zoo.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/aprs-zoo.json",
+   "frame_hex": "82a09a926068e09a8aa8909e886103f03b3134372e323835434f2a3131313131317a333832362e37384e2f31303630302e36355772543838205234306d207265706561746572",
+   "expect": {
+    "to": "APMI04",
+    "from": "METHOD",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3b3134372e323835434f2a3131313131317a333832362e37384e2f31303630302e36355772543838205234306d207265706561746572"
+   }
+  },
+  {
+   "name": "aprs-zoo.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/aprs-zoo.json",
+   "frame_hex": "82a0b482b0a8e096608aa092406f03f02941494421333933342e31354e2f31303435352e3035572d696e636964656e74206d61726b6572",
+   "expect": {
+    "to": "APZAXT",
+    "from": "K0EPI-7",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "2941494421333933342e31354e2f31303435352e3035572d696e636964656e74206d61726b6572"
+   }
+  },
+  {
+   "name": "aprs-zoo.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/aprs-zoo.json",
+   "frame_hex": "82a09a92606ce0a6929a9882406103f054233231322c3138352c3034372c3031322c3037352c3030302c3030303030303030",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "54233231322c3138352c3034372c3031322c3037352c3030302c3030303030303030"
+   }
+  },
+  {
+   "name": "aprs-zoo.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/aprs-zoo.json",
+   "frame_hex": "82a0a4a64040e09c64b08e98406303f0403038303433337a343031312e39304e2f31303530382e3934575f3030302f3030306730303174303635723030307030303050303030683432623130313630",
+   "expect": {
+    "to": "APRS",
+    "from": "N2XGL-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "403038303433337a343031312e39304e2f31303530382e3934575f3030302f3030306730303174303635723030307030303050303030683432623130313630"
+   }
+  },
+  {
+   "name": "aprs-zoo.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/aprs-zoo.json",
+   "frame_hex": "82a09a92606ce0a6929a9882406103f03e4e6f20415052532d4953202d3e446967692020303830343238",
+   "expect": {
+    "to": "APMI06",
+    "from": "SIMLA",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e4e6f20415052532d4953202d3e446967692020303830343238"
+   }
+  },
+  {
+   "name": "axterm-object-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-object-onair.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03b524f4144434c4f53452a3039313230307a333933362e37304e2f31303434332e3930572d55532d383520776173686564206f7574",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3b524f4144434c4f53452a3039313230307a333933362e37304e2f31303434332e3930572d55532d383520776173686564206f7574"
+   }
+  },
+  {
+   "name": "axterm-object-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-object-onair.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03b524f4144434c4f53455f3039313230307a333933362e37304e2f31303434332e3930572d",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3b524f4144434c4f53455f3039313230307a333933362e37304e2f31303434332e3930572d"
+   }
+  },
+  {
+   "name": "axterm-object-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-object-onair.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03b4649524520202020202a3039313230307a333933362e30304e5c31303434322e303057217374727563747572652066697265",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3b4649524520202020202a3039313230307a333933362e30304e5c31303434322e303057217374727563747572652066697265"
+   }
+  },
+  {
+   "name": "axterm-object-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-object-onair.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03b45564143554154494f2a3039313230307a333933302e30304e2f31303434382e3030572b",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3b45564143554154494f2a3039313230307a333933302e30304e2f31303434382e3030572b"
+   }
+  },
+  {
+   "name": "axterm-onair-frames.json ping-position",
+   "provenance": "AXTermTests/Fixtures/axterm-onair-frames.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5841535449522d31203a3f4150525350",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5841535449522d31203a3f4150525350"
+   }
+  },
+  {
+   "name": "axterm-onair-frames.json query-version",
+   "provenance": "AXTermTests/Fixtures/axterm-onair-frames.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5841535449522d31203a3f564552",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5841535449522d31203a3f564552"
+   }
+  },
+  {
+   "name": "axterm-onair-frames.json query-directs",
+   "provenance": "AXTermTests/Fixtures/axterm-onair-frames.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5841535449522d31203a3f4150525344",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5841535449522d31203a3f4150525344"
+   }
+  },
+  {
+   "name": "axterm-onair-frames.json query-trace-digipeated",
+   "provenance": "AXTermTests/Fixtures/axterm-onair-frames.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a62ae92888a62406303f03a5841535449522d31203a3f4150525354",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [
+     "WIDE1-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5841535449522d31203a3f4150525354"
+   }
+  },
+  {
+   "name": "axterm-onair-frames.json message-numbered",
+   "provenance": "AXTermTests/Fixtures/axterm-onair-frames.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5841535449522d31203a41585465726d206f6e2d6169722070726f6f667b303432",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5841535449522d31203a41585465726d206f6e2d6169722070726f6f667b303432"
+   }
+  },
+  {
+   "name": "axterm-onair-frames.json beacon-position",
+   "provenance": "AXTermTests/Fixtures/axterm-onair-frames.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f021333933362e37304e2f31303434332e3930572d41585465726d206f6e2d6169722070726f6f66",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "21333933362e37304e2f31303434332e3930572d41585465726d206f6e2d6169722070726f6f66"
+   }
+  },
+  {
+   "name": "axterm-onair-frames.json beacon-compressed",
+   "provenance": "AXTermTests/Fixtures/axterm-onair-frames.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f0212f3a4b6f48342330532d20204141585465726d206f6e2d6169722070726f6f66",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "212f3a4b6f48342330532d20204141585465726d206f6e2d6169722070726f6f66"
+   }
+  },
+  {
+   "name": "axterm-onair-frames.json general-query",
+   "provenance": "AXTermTests/Fixtures/axterm-onair-frames.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03f415052533f",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3f415052533f"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "RFDIGI-1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3d333933362e37304e2f31303434332e3930572d41585465726d20726967206f7261636c650d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a78617374697220322e312e380d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a78617374697220322e312e380d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a78617374697220322e312e380d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "RFDIGI-1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a78617374697220322e312e380d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a446972656374733d203134372e323835434f20414431435420414944204b4b30582d3130204e3258474c2d31204f5241434c452d310d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a446972656374733d203134372e323835434f20414431435420414944204b4b30582d3130204e3258474c2d31204f5241434c452d310d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a446972656374733d2053494d4c4120575430522d390d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a446972656374733d2053494d4c4120575430522d390d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a446972656374733d203134372e323835434f20414431435420414944204b4b30582d3130204e3258474c2d31204f5241434c452d310d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "RFDIGI-1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a446972656374733d203134372e323835434f20414431435420414944204b4b30582d3130204e3258474c2d31204f5241434c452d310d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a446972656374733d2053494d4c4120575430522d390d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "RFDIGI-1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a446972656374733d2053494d4c4120575430522d390d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c57494445312d310d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c57494445312d310d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c57494445312d310d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "RFDIGI-1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c57494445312d310d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c5246444947492d312a0d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c5246444947492d312a0d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c5246444947492d312a0d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "RFDIGI-1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a504154483d204f5241434c452d313e41505a4158542c5246444947492d312a0d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462ae92888a624062ae92888a64406303f03a4f5241434c452d31203a61636b3034320d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a61636b3034320d"
+   }
+  },
+  {
+   "name": "axterm-onair.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/axterm-onair.json",
+   "frame_hex": "82a0b064627060b082a6a892a462a48c88928e92e2ae92888a64406303f03a4f5241434c452d31203a61636b3034320d",
+   "expect": {
+    "to": "APX218",
+    "from": "XASTIR-1",
+    "via": [
+     "RFDIGI-1*",
+     "WIDE2-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a4f5241434c452d31203a61636b3034320d"
+   }
+  },
+  {
+   "name": "rf-digipeater.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/rf-digipeater.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a62ae92888a62406303f03d333933362e37304e2f31303434332e3930572d41585465726d206f7261636c65",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [
+     "WIDE1-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3d333933362e37304e2f31303434332e3930572d41585465726d206f7261636c65"
+   }
+  },
+  {
+   "name": "rf-digipeater.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/rf-digipeater.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a62a48c88928e92e303f03d333933362e37304e2f31303434332e3930572d41585465726d206f7261636c65",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [
+     "RFDIGI-1*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3d333933362e37304e2f31303434332e3930572d41585465726d206f7261636c65"
+   }
+  },
+  {
+   "name": "rf-digipeater.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/rf-digipeater.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03d333933362e37304e2f31303434332e3930572d41585465726d206f7261636c6520646972656374",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3d333933362e37304e2f31303434332e3930572d41585465726d206f7261636c6520646972656374"
+   }
+  },
+  {
+   "name": "rf-digipeater.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/rf-digipeater.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5246444947492d31203a3f4150525350",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5246444947492d31203a3f4150525350"
+   }
+  },
+  {
+   "name": "rf-digipeater.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/rf-digipeater.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5246444947492d31203a3f564552",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5246444947492d31203a3f564552"
+   }
+  },
+  {
+   "name": "rf-digipeater.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/rf-digipeater.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a6303f03a5246444947492d31203a3f4150525354",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5246444947492d31203a3f4150525354"
+   }
+  },
+  {
+   "name": "rf-digipeater.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/rf-digipeater.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a62ae92888a62406303f03a5246444947492d31203a3f4150525350",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [
+     "WIDE1-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5246444947492d31203a3f4150525350"
+   }
+  },
+  {
+   "name": "rf-digipeater.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/rf-digipeater.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a62a48c88928e92e303f03a5246444947492d31203a3f4150525350",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [
+     "RFDIGI-1*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5246444947492d31203a3f4150525350"
+   }
+  },
+  {
+   "name": "rf-digipeater.json frame_hex",
+   "provenance": "AXTermTests/Fixtures/rf-digipeater.json",
+   "frame_hex": "82a0b482b0a8e09ea48286988a62a48c88928e92e303f03a5841535449522d31203a3f4150525354",
+   "expect": {
+    "to": "APZAXT",
+    "from": "ORACLE-1",
+    "via": [
+     "RFDIGI-1*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3a5841535449522d31203a3f4150525354"
+   }
+  },
+  {
+   "name": "SABM via digi",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96846ab2b484ee96608aa09240629c60a6b44040653f",
+   "expect": {
+    "to": "KB5YZB-7",
+    "from": "K0EPI-1",
+    "via": [
+     "N0SZ-2"
+    ],
+    "control": 63,
+    "pid": null,
+    "frame_type": "U",
+    "info_hex": ""
+   }
+  },
+  {
+   "name": "UA back through digi (H set)",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96608aa092406296846ab2b484ee9c60a6b44040e573",
+   "expect": {
+    "to": "K0EPI-1",
+    "from": "KB5YZB-7",
+    "via": [
+     "N0SZ-2*"
+    ],
+    "control": 115,
+    "pid": null,
+    "frame_type": "U",
+    "info_hex": ""
+   }
+  },
+  {
+   "name": "I-frame two digis first repeated",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96608aa09240e296846ab2b4846eae609c8a8840e09c60a6b440406500f057656c636f6d6520746f204b4235595a42204242530d",
+   "expect": {
+    "to": "K0EPI-1",
+    "from": "KB5YZB-7",
+    "via": [
+     "W0NED*",
+     "N0SZ-2"
+    ],
+    "control": 0,
+    "pid": 240,
+    "frame_type": "I",
+    "info_hex": "57656c636f6d6520746f204b4235595a42204242530d"
+   }
+  },
+  {
+   "name": "I-frame N(S)=5 N(R)=3 P",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96846ab2b484ee96608aa09240637af04c0d",
+   "expect": {
+    "to": "KB5YZB-7",
+    "from": "K0EPI-1",
+    "via": [],
+    "control": 122,
+    "pid": 240,
+    "frame_type": "I",
+    "info_hex": "4c0d"
+   }
+  },
+  {
+   "name": "RR response F",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96608aa092406296846ab2b484ef71",
+   "expect": {
+    "to": "K0EPI-1",
+    "from": "KB5YZB-7",
+    "via": [],
+    "control": 113,
+    "pid": null,
+    "frame_type": "S",
+    "info_hex": ""
+   }
+  },
+  {
+   "name": "RNR command",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96846ab2b484ee96608aa092406345",
+   "expect": {
+    "to": "KB5YZB-7",
+    "from": "K0EPI-1",
+    "via": [],
+    "control": 69,
+    "pid": null,
+    "frame_type": "S",
+    "info_hex": ""
+   }
+  },
+  {
+   "name": "REJ",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96608aa092406296846ab2b484ef69",
+   "expect": {
+    "to": "K0EPI-1",
+    "from": "KB5YZB-7",
+    "via": [],
+    "control": 105,
+    "pid": null,
+    "frame_type": "S",
+    "info_hex": ""
+   }
+  },
+  {
+   "name": "SREJ",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96608aa092406296846ab2b484ef2d",
+   "expect": {
+    "to": "K0EPI-1",
+    "from": "KB5YZB-7",
+    "via": [],
+    "control": 45,
+    "pid": null,
+    "frame_type": "S",
+    "info_hex": ""
+   }
+  },
+  {
+   "name": "DISC",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96846ab2b484ee96608aa092406353",
+   "expect": {
+    "to": "KB5YZB-7",
+    "from": "K0EPI-1",
+    "via": [],
+    "control": 83,
+    "pid": null,
+    "frame_type": "U",
+    "info_hex": ""
+   }
+  },
+  {
+   "name": "DM",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96608aa092406296846ab2b484ef1f",
+   "expect": {
+    "to": "K0EPI-1",
+    "from": "KB5YZB-7",
+    "via": [],
+    "control": 31,
+    "pid": null,
+    "frame_type": "U",
+    "info_hex": ""
+   }
+  },
+  {
+   "name": "FRMR with info",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96608aa092406296846ab2b484ef873f2201",
+   "expect": {
+    "to": "K0EPI-1",
+    "from": "KB5YZB-7",
+    "via": [],
+    "control": 135,
+    "pid": null,
+    "frame_type": "U",
+    "info_hex": "3f2201"
+   }
+  },
+  {
+   "name": "XID command",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96846ab2b484ee96608aa0924063bf8280000c02020001030201",
+   "expect": {
+    "to": "KB5YZB-7",
+    "from": "K0EPI-1",
+    "via": [],
+    "control": 191,
+    "pid": null,
+    "frame_type": "U",
+    "info_hex": "8280000c02020001030201"
+   }
+  },
+  {
+   "name": "TEST command",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "96846ab2b484ee96608aa0924063f370696e67",
+   "expect": {
+    "to": "KB5YZB-7",
+    "from": "K0EPI-1",
+    "via": [],
+    "control": 243,
+    "pid": null,
+    "frame_type": "U",
+    "info_hex": "70696e67"
+   }
+  },
+  {
+   "name": "eight digipeaters, all repeated",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e09c60868298987288928e926240e288928e926440e488928e926640e688928e926840e888928e926a40ea88928e926c40ec88928e926e40ee88928e927040f103f03e6d61782070617468",
+   "expect": {
+    "to": "APRS",
+    "from": "N0CALL-9",
+    "via": [
+     "DIGI1-1*",
+     "DIGI2-2*",
+     "DIGI3-3*",
+     "DIGI4-4*",
+     "DIGI5-5*",
+     "DIGI6-6*",
+     "DIGI7-7*",
+     "DIGI8-8*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e6d61782070617468"
+   }
+  },
+  {
+   "name": "eight digipeaters, none repeated",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e09c608682989874ae92888a6e406eae92888a6e406eae92888a6e406eae92888a6e406eae92888a6e406eae92888a6e406eae92888a6e406eae92888a6e406f03f03e6d61782070617468",
+   "expect": {
+    "to": "APRS",
+    "from": "N0CALL-10",
+    "via": [
+     "WIDE7-7",
+     "WIDE7-7",
+     "WIDE7-7",
+     "WIDE7-7",
+     "WIDE7-7",
+     "WIDE7-7",
+     "WIDE7-7",
+     "WIDE7-7"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e6d61782070617468"
+   }
+  },
+  {
+   "name": "source SSID 0",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404060ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 1",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404062ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-1",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 2",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404064ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-2",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 3",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404066ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-3",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 4",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404068ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-4",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 5",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae40406aae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-5",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 6",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae40406cae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-6",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 7",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae40406eae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-7",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 8",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404070ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-8",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 9",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404072ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-9",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 10",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404074ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-10",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 11",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404076ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-11",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 12",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae404078ae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-12",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 13",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae40407aae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-13",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 14",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae40407cae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-14",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "source SSID 15",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82a0a4a64040e0ae6282ae40407eae92888a64406503f03e73736964",
+   "expect": {
+    "to": "APRS",
+    "from": "W1AW-15",
+    "via": [
+     "WIDE2-2"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "3e73736964"
+   }
+  },
+  {
+   "name": "reserved bits zero (V1 style)",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "86a2404040408096608aa0924006a48a9882b2408103f068656c6c6f",
+   "expect": {
+    "to": "CQ",
+    "from": "K0EPI-3",
+    "via": [
+     "RELAY*"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "68656c6c6f"
+   }
+  },
+  {
+   "name": "reserved bits zero, no C bits",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "a2a6a84040400096608aa092408103f078",
+   "expect": {
+    "to": "QST",
+    "from": "K0EPI",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "78"
+   }
+  },
+  {
+   "name": "single-letter destination",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "b04040404040e096608aa092406103f078",
+   "expect": {
+    "to": "X",
+    "from": "K0EPI",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "78"
+   }
+  },
+  {
+   "name": "six-digit destination",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "60626466686ae096608aa092406103f078",
+   "expect": {
+    "to": "012345",
+    "from": "K0EPI",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "78"
+   }
+  },
+  {
+   "name": "generic destinations and aliases",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "848a82869e9ce09c608682989860a8a482868a66e6a48c9e9c98b2609c9e8e82a88a60a886a092a0406103f021",
+   "expect": {
+    "to": "BEACON",
+    "from": "N0CALL",
+    "via": [
+     "TRACE3-3*",
+     "RFONLY",
+     "NOGATE",
+     "TCPIP"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "21"
+   }
+  },
+  {
+   "name": "ID beacon",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "928840404040e096846ab2b4846f03f04b4235595a422d372f5220424253",
+   "expect": {
+    "to": "ID",
+    "from": "KB5YZB-7",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "4b4235595a422d372f5220424253"
+   }
+  },
+  {
+   "name": "MAIL destination",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "9a8292984040e096846ab2b4846303f04d61696c20666f723a204b30455049",
+   "expect": {
+    "to": "MAIL",
+    "from": "KB5YZB-1",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "4d61696c20666f723a204b30455049"
+   }
+  },
+  {
+   "name": "Mic-E destination, A-K and L/P/Z",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "82949698a0b4e09c608682989872ae92888a62406303f06070491c6c2039662f60",
+   "expect": {
+    "to": "AJKLPZ",
+    "from": "N0CALL-9",
+    "via": [
+     "WIDE1-1"
+    ],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070491c6c2039662f60"
+   }
+  },
+  {
+   "name": "Mic-E destination, digits and L/Z",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "609872a0b498e09c60868298986f03f06070491c6c2039662f60",
+   "expect": {
+    "to": "0L9PZL",
+    "from": "N0CALL-7",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "6070491c6c2039662f60"
+   }
+  },
+  {
+   "name": "Mic-E destination, P-Y",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "a0a2a4a6a8b2e09c60868298986f03f027704a1c6c2039662f",
+   "expect": {
+    "to": "PQRSTY",
+    "from": "N0CALL-7",
+    "via": [],
+    "control": 3,
+    "pid": 240,
+    "frame_type": "UI",
+    "info_hex": "27704a1c6c2039662f"
+   }
+  },
+  {
+   "name": "NET/ROM NODES broadcast",
+   "provenance": "NODES info from RigFarmWireCompatibilityTests, header constructed",
+   "frame_hex": "9c9e888aa640e0ae60a8b040406503cfff44454e564552968a608e84406e434f53434f2096846ab2b4846ec0ae6082a4a04074424f554c4452ae6082a4a040748c",
+   "expect": {
+    "to": "NODES",
+    "from": "W0TX-2",
+    "via": [],
+    "control": 3,
+    "pid": 207,
+    "frame_type": "UI",
+    "info_hex": "ff44454e564552968a608e84406e434f53434f2096846ab2b4846ec0ae6082a4a04074424f554c4452ae6082a4a040748c"
+   }
+  },
+  {
+   "name": "NET/ROM L3 datagram in I-frame",
+   "provenance": "constructed to AX.25 2.2",
+   "frame_hex": "ae60a8b04040e496608aa092406300cf96608aa0924062ae60a8b040406507050100000568656c6c6f",
+   "expect": {
+    "to": "W0TX-2",
+    "from": "K0EPI-1",
+    "via": [],
+    "control": 0,
+    "pid": 207,
+    "frame_type": "I",
+    "info_hex": "96608aa0924062ae60a8b040406507050100000568656c6c6f"
+   }
+  }
+ ],
+ "rejected": [
+  {
+   "name": "db rx V},'-11>;Q,C*B 2026-09-30 10:22:58.558",
+   "frame_hex": "76E359C655C54CEDFB584F2B269689477AF8DA2F06180000000C0000000000000000000000000000000000000000"
+  }
+ ]
+}

@@ -1173,10 +1173,17 @@ final class PacketEngine: ObservableObject {
             "hex": hexPrefix(ax25Data)
         ])
 
-        guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
-            let reason = AX25.decodeFailureReason(ax25: ax25Data)
+        // A frame that is not AX.25 (noise that passed the TNC's FCS, a bad
+        // address, an address field that never ends) stops here. It is
+        // logged with its reason and never becomes a packet or a station.
+        let decoded: AX25.FrameDecodeResult
+        switch AX25.checkFrame(ax25: ax25Data) {
+        case .success(let frame):
+            decoded = frame
+        case .failure(let fault):
+            let reason = fault.reason
             LinkDebugLog.shared.recordParseError(
-                message: "AX.25 decode failed (\(ax25Data.count) bytes)",
+                message: "AX.25 decode failed (\(ax25Data.count) bytes): \(reason)",
                 rawBytes: ax25Data)
             TxLog.ax25DecodeError(reason: reason, size: ax25Data.count)
             eventLogger?.log(
@@ -1185,8 +1192,9 @@ final class PacketEngine: ObservableObject {
                 message: "Failed to decode AX.25 frame",
                 metadata: ["byteCount": "\(ax25Data.count)", "reason": reason]
             )
-            // The single Sentry event for this failure (throttled per reason).
-            SentryManager.shared.captureDecodeFailure(byteCount: ax25Data.count, reason: reason)
+            // The single Sentry event for this failure, throttled per kind.
+            SentryManager.shared.captureDecodeFailure(
+                byteCount: ax25Data.count, reason: reason, kind: fault.summary)
             return
         }
 

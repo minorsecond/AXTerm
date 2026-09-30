@@ -266,58 +266,236 @@ nonisolated enum AX25 {
         let frameType: FrameType
     }
 
-    /// Decode a single AX.25 address from data at given offset
-    /// Each address is 7 bytes: 6 callsign chars (shifted left 1) + 1 SSID byte
-    static func decodeAddress(data: Data, offset: Int) -> AddressDecodeResult? {
-        guard offset + 7 <= data.count else { return nil }
+    /// Why one 7-byte address field was refused.
+    enum AddressFault: Error, Equatable, Sendable {
+        /// Fewer than 7 bytes left where an address should be.
+        case truncated
+        /// Bit 0 of callsign byte `position` (0-based) is set.
+        case extensionBitInCallsign(position: Int)
+        /// Callsign byte `position` unshifts to something other than A–Z,
+        /// 0–9 or space. `value` is the unshifted character.
+        case invalidCharacter(position: Int, value: UInt8)
+        /// A space before a letter or digit, leading or in the middle.
+        /// `position` is the space. Padding may only trail.
+        case embeddedSpace(position: Int)
+        /// All six characters are spaces.
+        case emptyCallsign
 
-        // Extract and unshift the 6 callsign characters
-        var callChars: [Character] = []
-        for i in 0..<6 {
-            let shifted = data[offset + i]
-            let char = shifted >> 1
-            if char >= 0x20 && char < 0x7F {
-                let c = Character(UnicodeScalar(char))
-                if c != " " {
-                    callChars.append(c)
-                }
+        /// Stable wording with no byte values, for keying event throttles.
+        var summary: String {
+            switch self {
+            case .truncated: return "truncated"
+            case .extensionBitInCallsign: return "extension bit set in callsign"
+            case .invalidCharacter: return "invalid character"
+            case .embeddedSpace: return "space inside callsign"
+            case .emptyCallsign: return "empty callsign"
             }
         }
 
-        let callsign = String(callChars)
-        guard !callsign.isEmpty else { return nil }
+        /// The summary plus where and what, for logs.
+        var detail: String {
+            switch self {
+            case .truncated:
+                return summary
+            case .extensionBitInCallsign(let position):
+                return "\(summary) at position \(position + 1)"
+            case .invalidCharacter(let position, let value):
+                return String(format: "invalid character 0x%02X at position %d", value, position + 1)
+            case .embeddedSpace(let position):
+                return "\(summary) at position \(position + 1)"
+            case .emptyCallsign:
+                return summary
+            }
+        }
+    }
 
-        let ssidByte = data[offset + 6]
+    /// Which address in the header a fault belongs to.
+    enum AddressRole: Equatable, Sendable {
+        case destination
+        case source
+        /// 1-based position in the digipeater list.
+        case digipeater(Int)
+
+        var label: String {
+            switch self {
+            case .destination: return "destination address"
+            case .source: return "source address"
+            case .digipeater(let n): return "digipeater \(n) address"
+            }
+        }
+    }
+
+    /// Why decodeFrame refused a frame. Every case is a frame that is not
+    /// AX.25 as the spec defines it, so it must not become a packet.
+    enum FrameFault: Error, Equatable, Sendable {
+        case tooShort(count: Int)
+        case badAddress(AddressRole, AddressFault)
+        /// The destination's SSID byte has the extension bit set, which ends
+        /// the address field before the source.
+        case endsAfterDestination
+        /// The bytes ran out before any address set the extension bit.
+        case unterminatedAddressField(addresses: Int)
+        /// No extension bit within dest + source + 8 digipeaters.
+        case tooManyDigipeaters
+        /// The address field is the whole frame: there is no control byte.
+        case missingControlField
+
+        /// Stable text with no byte values or positions. Keys the Sentry
+        /// throttle, so a noisy channel produces a handful of distinct
+        /// events rather than one per byte value.
+        var summary: String {
+            switch self {
+            case .tooShort: return "frame shorter than 15-byte minimum"
+            case .badAddress(let role, let fault):
+                // Digipeaters share one key whatever their position.
+                let label: String
+                switch role {
+                case .digipeater: label = "digipeater address"
+                default: label = role.label
+                }
+                return "\(label): \(fault.summary)"
+            case .endsAfterDestination: return "address field ends after destination"
+            case .unterminatedAddressField: return "address field never ends"
+            case .tooManyDigipeaters: return "more than 8 digipeaters"
+            case .missingControlField: return "no control field"
+            }
+        }
+
+        /// Human-readable reason naming the address and the byte at fault.
+        var reason: String {
+            switch self {
+            case .tooShort(let count):
+                return "frame shorter than 15-byte minimum (\(count) bytes)"
+            case .badAddress(let role, let fault):
+                return "\(role.label): \(fault.detail)"
+            case .endsAfterDestination:
+                return "address field ends after destination (extension bit set in its SSID byte)"
+            case .unterminatedAddressField(let addresses):
+                return "address field never ends (no extension bit in \(addresses) addresses before the frame ran out)"
+            case .tooManyDigipeaters:
+                return "more than 8 digipeaters (no extension bit by the 10th address)"
+            case .missingControlField:
+                return "no control field after the address field"
+            }
+        }
+    }
+
+    /// Decode a single AX.25 address from data at given offset.
+    /// Each address is 7 bytes: 6 callsign chars (shifted left 1) + 1 SSID byte.
+    /// Returns nil for anything `checkAddress` refuses.
+    static func decodeAddress(data: Data, offset: Int) -> AddressDecodeResult? {
+        try? checkAddress(data: data, offset: offset).get()
+    }
+
+    /// Decode one 7-byte address field, refusing anything AX.25 2.2 §3.12
+    /// does not allow in a callsign. These are the rules that keep a burst
+    /// of noise that happened to pass the TNC's FCS from turning into a
+    /// heard station:
+    ///
+    /// - Bit 0 of each of the six callsign bytes must be clear. It is the
+    ///   HDLC address-extension bit, and the spec only ever sets it in the
+    ///   SSID byte of the last address. A callsign byte is an ASCII
+    ///   character shifted left one bit, so bit 0 is always 0 from any
+    ///   encoder. Direwolf finds the end of the address field by the first
+    ///   byte with bit 0 set, so a frame that breaks this rule is unreadable
+    ///   to it as well.
+    /// - Each unshifted character must be A–Z, 0–9 or space. The spec
+    ///   allows upper-case letters and digits only. APRS tocalls, WIDEn-N,
+    ///   RELAY, TRACE, RFONLY, NOGATE, TCPIP, BEACON, ID, CQ, QST, MAIL,
+    ///   NODES and Mic-E destinations (0–9, A–L, P–Z) all fit. Lower case
+    ///   is refused: TNC firmware, the Linux ax25 tools and BPQ upper-case
+    ///   the callsign when they encode it, and Direwolf rejects a received
+    ///   address with lower case in it. The old decoder upper-cased what it
+    ///   read, which is how `q` in the noise became `Q`.
+    /// - Spaces are padding, so they may only trail. A leading or embedded
+    ///   space, or six spaces, is not a callsign.
+    ///
+    /// The SSID byte is read but not judged. Bits 5–6 are reserved and
+    /// normally 1, but some software sends 0; bit 7 is the C or H bit and
+    /// any value is legal. Its bit 0 is the extension bit, which the frame
+    /// decoder interprets.
+    static func checkAddress(data: Data, offset: Int) -> Result<AddressDecodeResult, AddressFault> {
+        guard offset >= 0, offset + 7 <= data.count else { return .failure(.truncated) }
+        let base = data.startIndex + offset
+
+        var callsign = ""
+        var sawPadding = false
+        for position in 0..<6 {
+            let byte = data[base + position]
+            if byte & 0x01 != 0 {
+                return .failure(.extensionBitInCallsign(position: position))
+            }
+            let char = byte >> 1
+            let isUpper = char >= 0x41 && char <= 0x5A
+            let isDigit = char >= 0x30 && char <= 0x39
+            if char == 0x20 {
+                sawPadding = true
+                continue
+            }
+            guard isUpper || isDigit else {
+                return .failure(.invalidCharacter(position: position, value: char))
+            }
+            if sawPadding {
+                // A letter or digit after a space. Report the space itself.
+                // An all-space prefix counts too: " ABC" has a leading space.
+                return .failure(.embeddedSpace(position: callsign.count))
+            }
+            callsign.append(Character(UnicodeScalar(char)))
+        }
+        guard !callsign.isEmpty else { return .failure(.emptyCallsign) }
+
+        let ssidByte = data[base + 6]
         let ssid = Int((ssidByte >> 1) & 0x0F)
         let isLast = (ssidByte & 0x01) != 0
         let repeated = (ssidByte & 0x80) != 0
 
         let address = AX25Address(call: callsign, ssid: ssid, repeated: repeated)
-        return AddressDecodeResult(address: address, nextOffset: offset + 7, isLast: isLast)
+        return .success(AddressDecodeResult(address: address, nextOffset: offset + 7, isLast: isLast))
     }
 
-    /// Explain why decodeFrame returned nil for the given bytes, so decode
-    /// failures reach Sentry differentiated by cause instead of as one
-    /// undifferentiated bucket. Only called on the failure path, so
-    /// re-examining the bytes costs nothing in the common case.
+    /// Explain why decodeFrame returned nil for the given bytes, naming the
+    /// address and the byte at fault (for example "source address: invalid
+    /// character 0x7D at position 2").
     static func decodeFailureReason(ax25 data: Data) -> String {
-        if data.count < 15 { return "frame shorter than 15-byte minimum" }
-        if decodeAddress(data: data, offset: 0) == nil { return "invalid destination address" }
-        if decodeAddress(data: data, offset: 7) == nil { return "invalid source address" }
-        return "unrecognized structure"
+        if case .failure(let fault) = checkFrame(ax25: data) { return fault.reason }
+        return "no fault found (the frame decodes)"
     }
 
-    /// Decode an AX.25 frame from raw data
+    /// Decode an AX.25 frame from raw data. Nil for any frame `checkFrame`
+    /// refuses.
     static func decodeFrame(ax25 data: Data) -> FrameDecodeResult? {
+        try? checkFrame(ax25: data).get()
+    }
+
+    /// Decode an AX.25 frame, or say why it is not one.
+    ///
+    /// The address field is dest, source and up to 8 digipeaters, and it
+    /// ends at the first SSID byte with the extension bit set (AX.25 2.2
+    /// §3.12). Anything else is malformed and refused whole: a digipeater
+    /// address that fails `checkAddress`, an extension bit on the
+    /// destination, no extension bit by the 10th address or before the
+    /// bytes run out, or no control byte after the addresses. The old
+    /// decoder stopped at the first bad digipeater and read its bytes as
+    /// the control field, and read a frame whose address field never ended
+    /// as if the leftover bytes were control and info.
+    static func checkFrame(ax25 data: Data) -> Result<FrameDecodeResult, FrameFault> {
         // Minimum: destination (7) + source (7) + control (1) = 15 bytes
-        guard data.count >= 15 else { return nil }
+        guard data.count >= 15 else { return .failure(.tooShort(count: data.count)) }
 
-        // Decode destination address
-        guard let destResult = decodeAddress(data: data, offset: 0) else { return nil }
+        let destResult: AddressDecodeResult
+        switch checkAddress(data: data, offset: 0) {
+        case .success(let result): destResult = result
+        case .failure(let fault): return .failure(.badAddress(.destination, fault))
+        }
+        let srcResult: AddressDecodeResult
+        switch checkAddress(data: data, offset: 7) {
+        case .success(let result): srcResult = result
+        case .failure(let fault): return .failure(.badAddress(.source, fault))
+        }
+        // Checked after the source so a frame that is noise throughout is
+        // reported by its characters, which say more than this bit does.
+        if destResult.isLast { return .failure(.endsAfterDestination) }
         let to = destResult.address
-
-        // Decode source address
-        guard let srcResult = decodeAddress(data: data, offset: 7) else { return nil }
         let from = srcResult.address
 
         // Decode via addresses (digipeaters)
@@ -325,23 +503,26 @@ nonisolated enum AX25 {
         var offset = 14
         var lastAddress = srcResult.isLast
 
-        while !lastAddress && offset + 7 <= data.count && via.count < 8 {
-            guard let viaResult = decodeAddress(data: data, offset: offset) else { break }
-            via.append(viaResult.address)
-            offset = viaResult.nextOffset
-            lastAddress = viaResult.isLast
+        while !lastAddress {
+            guard via.count < 8 else { return .failure(.tooManyDigipeaters) }
+            guard offset + 7 <= data.count else {
+                return .failure(.unterminatedAddressField(addresses: 2 + via.count))
+            }
+            switch checkAddress(data: data, offset: offset) {
+            case .success(let viaResult):
+                via.append(viaResult.address)
+                offset = viaResult.nextOffset
+                lastAddress = viaResult.isLast
+            case .failure(let fault):
+                return .failure(.badAddress(.digipeater(via.count + 1), fault))
+            }
         }
 
         // Control field
-        guard offset < data.count else {
-            return FrameDecodeResult(
-                from: from, to: to, via: via,
-                control: 0, controlByte1: nil, pid: nil, info: Data(),
-                frameType: .unknown
-            )
-        }
+        guard offset < data.count else { return .failure(.missingControlField) }
 
-        let control = data[offset]
+        let base = data.startIndex
+        let control = data[base + offset]
         offset += 1
 
         // Determine frame type from control byte
@@ -356,7 +537,7 @@ nonisolated enum AX25 {
         var pid: UInt8? = nil
         if frameType == .ui || frameType == .i {
             if offset < data.count {
-                pid = data[offset]
+                pid = data[base + offset]
                 offset += 1
             }
         }
@@ -364,16 +545,16 @@ nonisolated enum AX25 {
         // Info field (remaining data)
         let info: Data
         if offset < data.count {
-            info = data.subdata(in: offset..<data.count)
+            info = data.subdata(in: (base + offset)..<data.endIndex)
         } else {
             info = Data()
         }
 
-        return FrameDecodeResult(
+        return .success(FrameDecodeResult(
             from: from, to: to, via: via,
             control: control, controlByte1: controlByte1, pid: pid, info: info,
             frameType: frameType
-        )
+        ))
     }
 
     /// Classify frame type from control byte

@@ -133,11 +133,11 @@ final class TelemetryGovernorTests: XCTestCase {
 
     func testDecodeFailureReasonsAreDifferentiated() {
         XCTAssertEqual(AX25.decodeFailureReason(ax25: Data([0x01, 0x02])),
-                       "frame shorter than 15-byte minimum")
+                       "frame shorter than 15-byte minimum (2 bytes)")
 
-        // 15 bytes of zeros: destination callsign decodes to empty → invalid.
+        // 15 bytes of zeros: the destination's first character is NUL.
         XCTAssertEqual(AX25.decodeFailureReason(ax25: Data(repeating: 0x00, count: 15)),
-                       "invalid destination address")
+                       "destination address: invalid character 0x00 at position 1")
 
         // Valid destination, garbage source (zeroed callsign bytes).
         var badSource = Data()
@@ -145,6 +145,7 @@ final class TelemetryGovernorTests: XCTestCase {
         badSource.append(0x60)                          // dest SSID byte
         badSource.append(contentsOf: Data(repeating: 0x00, count: 7))  // source
         badSource.append(0x3F)                          // control
-        XCTAssertEqual(AX25.decodeFailureReason(ax25: badSource), "invalid source address")
+        XCTAssertEqual(AX25.decodeFailureReason(ax25: badSource),
+                       "source address: invalid character 0x00 at position 1")
     }
 }

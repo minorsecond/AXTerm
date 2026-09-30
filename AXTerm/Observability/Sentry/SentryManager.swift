@@ -424,16 +424,18 @@ final class SentryManager {
         )
     }
 
-    func captureDecodeFailure(byteCount: Int, reason: String? = nil) {
+    func captureDecodeFailure(byteCount: Int, reason: String? = nil, kind: String? = nil) {
         var extra: [String: Any] = ["byteCount": byteCount]
         if let reason {
             extra["reason"] = reason
         }
-        // Throttled per reason: a garbled stream fails once per frame, and one
+        // Throttled per kind: a garbled stream fails once per frame, and one
         // Sentry issue with a suppressed count diagnoses that better than a
-        // thousand identical events.
+        // thousand identical events. `kind` is the reason without byte values
+        // or positions (`AX25.FrameFault.summary`). Keying on the full reason
+        // would give open-squelch noise a new key for every byte value.
         captureThrottled(
-            key: "decode.ax25.\(reason ?? "unknown")",
+            key: "decode.ax25.\(kind ?? reason ?? "unknown")",
             message: "Failed to decode AX.25 frame",
             level: .warning,
             extra: extra
