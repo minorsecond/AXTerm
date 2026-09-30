@@ -53,6 +53,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				"iOS/AXTerm-iOS-Info.plist",
 			);
 			target = 3487E89C2F2AA2A700DF0172 /* AXTerm */;
 		};
@@ -65,6 +66,7 @@
 				AXTermCommands.swift,
 				ContentView.swift,
 				Info.plist,
+				"iOS/AXTerm-iOS-Info.plist",
 				PacketNSTableView.swift,
 				PacketTableCoordinator.swift,
 				PacketTableNSTableView.swift,
@@ -767,8 +769,11 @@
 				DEVELOPMENT_TEAM = 7KNS6YGX5V;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "AXTerm/iOS/AXTerm-iOS-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "AXTerm connects to Bluetooth LE KISS TNCs, such as a Mobilinkd TNC4, for packet radio.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "AXTerm uses the camera when you take a photo to attach to a Winlink message.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to reach a KISS TNC service (for example Direwolf or LinBPQ) on your network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "AXTerm uses your position to set the station grid square, place stations on the map, and stamp position reports.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -804,8 +809,11 @@
 				DEVELOPMENT_TEAM = 7KNS6YGX5V;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "AXTerm/iOS/AXTerm-iOS-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "AXTerm connects to Bluetooth LE KISS TNCs, such as a Mobilinkd TNC4, for packet radio.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "AXTerm uses the camera when you take a photo to attach to a Winlink message.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to reach a KISS TNC service (for example Direwolf or LinBPQ) on your network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "AXTerm uses your position to set the station grid square, place stations on the map, and stamp position reports.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
