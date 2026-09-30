@@ -13,16 +13,19 @@ final class TransferProtocolRegistryTests: XCTestCase {
 
     // MARK: - Protocol Creation Tests
 
-    func testCreateAXDPProtocol() throws {
-        // Skip: AXDP adapter instantiation has test environment issues
-        throw XCTSkip("AXDP adapter test skipped - known test environment issue")
+    /// AXDP transfers run in `SessionCoordinator`; there is no adapter to
+    /// create. The placeholder that used to be returned changed its own
+    /// state and sent nothing, which left a mailbox download hanging.
+    func testCreateAXDPProtocolReturnsNothing() {
+        let registry = TransferProtocolRegistry.shared
+        XCTAssertNil(registry.createProtocol(type: .axdp))
     }
 
     func testCreateYAPPProtocol() {
         let registry = TransferProtocolRegistry.shared
         let proto = registry.createProtocol(type: .yapp)
 
-        XCTAssertEqual(proto.protocolType, .yapp)
+        XCTAssertEqual(proto?.protocolType, .yapp)
     }
 
     func testCreateSevenPlusProtocol() throws {
@@ -104,6 +107,15 @@ final class TransferProtocolRegistryTests: XCTestCase {
 
         XCTAssertNotNil(proto)
         XCTAssertEqual(proto?.protocolType, .yapp)
+    }
+
+    func testDetectAndCreateAXDPReturnsNothing() {
+        let registry = TransferProtocolRegistry.shared
+        let axdpData = AXDP.Message(type: .fileMeta, sessionId: 7, messageId: 0).encode()
+
+        XCTAssertEqual(registry.detectProtocol(from: axdpData), .axdp,
+                       "still recognized, so a caller can decline it")
+        XCTAssertNil(registry.detectAndCreate(from: axdpData))
     }
 
     func testDetectAndCreateUnknown() {
