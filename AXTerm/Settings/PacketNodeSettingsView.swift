@@ -404,6 +404,7 @@ struct PacketNodeSettingsView: View {
                      + "beacon appear here once its channel is Packet.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
+                Button("Radios\u{2026}") { router.navigate(to: .radios) }
             }
             .id(SettingsSection.packetRadios)
         } else {
