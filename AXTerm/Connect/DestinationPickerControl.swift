@@ -22,6 +22,12 @@ struct DestinationPickerControl: View {
     @FocusState private var textFieldFocused: Bool
     @State private var showPopover = false
     @State private var userInitiatedPopover = false
+    /// What the field shows. The view model tidies what it stores (upper
+    /// case, no stray characters, no spaces at the ends), and a focused iOS
+    /// field does not redraw a value its binding rewrote in the setter. So
+    /// the field edits this copy, and the tidied text comes back to it in
+    /// onChange, which does redraw.
+    @State private var draft = ""
 
     /// The reserved inline-error row, omitted entirely in compact mode.
     @ViewBuilder private var inlineErrorRow: some View {
@@ -70,7 +76,8 @@ struct DestinationPickerControl: View {
                     .accessibilityLabel("Connect to")
                     .accessibilityValue(viewModel.typedText.isEmpty ? "No station chosen" : viewModel.typedText)
                     #else
-                    TextField("Callsign-SSID", text: textBinding)
+                    TextField("Callsign-SSID", text: $draft)
+                        .callsignInput($draft)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12, design: .monospaced))
                         .monospacedDigit()
@@ -133,6 +140,11 @@ struct DestinationPickerControl: View {
         .onAppear {
             viewModel.syncExternalDestination(externalText)
             viewModel.updateDataSources(groups: groups, reachableVia: reachableVia)
+            draft = viewModel.typedText
+        }
+        .onChange(of: draft) { _, typed in draftEdited(typed) }
+        .onChange(of: viewModel.typedText) { _, stored in
+            if stored != draft { draft = stored }
         }
         .onChange(of: externalText) { _, newValue in
             if !textFieldFocused {
@@ -181,21 +193,21 @@ struct DestinationPickerControl: View {
         return 0.6
     }
 
-    private var textBinding: Binding<String> {
-        Binding(
-            get: { viewModel.typedText },
-            set: { newValue in
-                viewModel.handleTypedTextChanged(newValue, autoOpenPopover: false)
-                if textFieldFocused {
-                    if !viewModel.typedText.isEmpty {
-                        showPopover = true
-                    } else if userInitiatedPopover {
-                        showPopover = true
-                    }
+    /// An edit to the field. Only a change that survives tidying reaches the
+    /// view model; the draft always settles on the tidied text.
+    private func draftEdited(_ typed: String) {
+        if DestinationPickerViewModel.sanitizeForTyping(typed) != viewModel.typedText {
+            viewModel.handleTypedTextChanged(typed, autoOpenPopover: false)
+            if textFieldFocused {
+                if !viewModel.typedText.isEmpty {
+                    showPopover = true
+                } else if userInitiatedPopover {
+                    showPopover = true
                 }
-                onDestinationChanged(DestinationPickerViewModel.normalizeCandidate(viewModel.typedText))
             }
-        )
+            onDestinationChanged(DestinationPickerViewModel.normalizeCandidate(viewModel.typedText))
+        }
+        if draft != viewModel.typedText { draft = viewModel.typedText }
     }
 
 #if os(iOS)
@@ -212,11 +224,10 @@ struct DestinationPickerControl: View {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("Callsign-SSID", text: textBinding)
+                    TextField("Callsign-SSID", text: $draft)
+                        .callsignInput($draft)
                         .textFieldStyle(.plain)
                         .font(.system(.body, design: .monospaced))
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
                         .focused($textFieldFocused)
                         .submitLabel(.go)
                         .onSubmit {
