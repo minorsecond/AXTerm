@@ -25,12 +25,15 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "K0EPI-7"
 
         // Two radios on one Direwolf: same host and port, KISS ports 0 and 1.
         settings.updateRadio(settings.radios[0].id) { $0.host = "192.168.3.218"; $0.port = 8001; $0.kissPort = 0 }
         let uhf = settings.addRadio()
         settings.updateRadio(uhf.id) { $0.name = "UHF"; $0.host = "192.168.3.218"; $0.port = 8001; $0.kissPort = 1 }
+        // Both radios on K0EPI-7, as they were when they inherited it from
+        // the station callsign. The station callsign is the base now; the
+        // SSID is written onto each radio.
+        settings.adoptStationCallsign("K0EPI-7")
 
         let engine = PacketEngine(settings: settings, linkFactory: { [weak self] _ in
             // One loopback for the one byte stream both radios share.

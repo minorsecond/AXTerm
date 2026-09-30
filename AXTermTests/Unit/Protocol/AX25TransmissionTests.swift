@@ -316,7 +316,7 @@ final class AX25TransmissionTests: XCTestCase {
         let defaults = TestDefaults.make("AX25TransmissionTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "TEST-2"
+        settings.adoptStationCallsign("TEST-2")
 
         let client = PacketEngine(maxPackets: 100, maxConsoleLines: 100, maxRawChunks: 100, settings: settings)
         let coordinator = SessionCoordinator()
@@ -848,7 +848,7 @@ final class AX25TransmissionTests: XCTestCase {
         let defaults = TestDefaults.make("AX25TransmissionTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "TEST-2"
+        settings.adoptStationCallsign("TEST-2")
 
         let client = PacketEngine(maxPackets: 100, maxConsoleLines: 100, maxRawChunks: 100, settings: settings)
         let coordinator = SessionCoordinator()

@@ -136,7 +136,7 @@ nonisolated enum StationIdentityLeaseResolver {
 
         Unattended transmission is held off on this device while that is true: it will not answer inbound Winlink calls and will not send queued mail on a timer. You can still transmit deliberately.
 
-        To use both devices at once, give this one a different SSID in Settings → General → Callsign.
+        To use both devices at once, give this radio a different SSID under Identity in its connection settings.
         """
     }
 }

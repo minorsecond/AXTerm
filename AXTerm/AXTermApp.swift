@@ -50,8 +50,13 @@ struct AXTermApp: App {
 
         // Apply test mode overrides
         if testConfig.isTestMode {
+            // `--callsign TEST-2`: the base becomes the station callsign and
+            // the SSID goes to the radios, as it would for a station upgrading
+            // from a build that kept the SSID on the station callsign. Here,
+            // before the engine reads the callsign, and again below once
+            // --radios has replaced the radio list.
             if let callsign = testConfig.callsign {
-                settingsStore.myCallsign = callsign
+                settingsStore.adoptStationCallsign(callsign)
             }
             settingsStore.runInMenuBar = false
 
@@ -137,6 +142,9 @@ struct AXTermApp: App {
                 radio.port = endpoint.port
                 return radio
             }
+        }
+        if testConfig.isTestMode, !testConfig.radios.isEmpty, let callsign = testConfig.callsign {
+            settingsStore.adoptStationCallsign(callsign)
         }
 
         // Auto-connect if settings say so OR if test mode requests it

@@ -22,7 +22,7 @@ final class AXDPChatDisplayTests: XCTestCase {
         let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "TEST-2"
+        settings.adoptStationCallsign("TEST-2")
 
         let client = PacketEngine(
             maxPackets: 100,
@@ -103,7 +103,7 @@ final class AXDPChatDisplayTests: XCTestCase {
         let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "TEST-2"
+        settings.adoptStationCallsign("TEST-2")
 
         let client = PacketEngine(
             maxPackets: 100,
@@ -162,7 +162,7 @@ final class AXDPChatDisplayTests: XCTestCase {
         let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "TEST-2"
+        settings.adoptStationCallsign("TEST-2")
 
         let client = PacketEngine(
             maxPackets: 100,
@@ -234,7 +234,7 @@ final class AXDPChatDisplayTests: XCTestCase {
         let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "TEST-2"
+        settings.adoptStationCallsign("TEST-2")
 
         let client = PacketEngine(
             maxPackets: 100,
@@ -290,7 +290,7 @@ final class AXDPChatDisplayTests: XCTestCase {
         let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "TEST-2"
+        settings.adoptStationCallsign("TEST-2")
 
         let client = PacketEngine(
             maxPackets: 100,

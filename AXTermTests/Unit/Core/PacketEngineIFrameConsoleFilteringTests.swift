@@ -15,7 +15,7 @@ final class PacketEngineIFrameConsoleFilteringTests: XCTestCase {
 
     func testUserAddressedIFrameWithoutConnectedSessionIsShownInConsole() {
         let settings = makeSettings()
-        settings.myCallsign = "TEST-7"
+        settings.adoptStationCallsign("TEST-7")
         let engine = PacketEngine(settings: settings)
 
         let packet = Packet(
@@ -37,7 +37,7 @@ final class PacketEngineIFrameConsoleFilteringTests: XCTestCase {
 
     func testUserAddressedIFrameWithConnectedSessionIsSuppressedFromRawConsole() {
         let settings = makeSettings()
-        settings.myCallsign = "TEST-7"
+        settings.adoptStationCallsign("TEST-7")
         let engine = PacketEngine(settings: settings)
 
         let coordinator = SessionCoordinator()
@@ -68,7 +68,7 @@ final class PacketEngineIFrameConsoleFilteringTests: XCTestCase {
 
     func testUserAddressedIFrameWithNonConnectedSessionStillShowsInConsole() {
         let settings = makeSettings()
-        settings.myCallsign = "TEST-7"
+        settings.adoptStationCallsign("TEST-7")
         let engine = PacketEngine(settings: settings)
 
         let coordinator = SessionCoordinator()

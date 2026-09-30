@@ -31,15 +31,14 @@ struct GeneralSettingsView: View {
     var body: some View {
         Form {
             PreferencesSection("Identity") {
-                CallsignField(title: "My Callsign", text: $settings.myCallsign)
-                
-                Text(settings.hasMultipleRadios
-                     ? "Your base callsign. Each radio picks its SSID on its own page in Settings \u{203A} Radios."
-                     : "Your callsign as it goes on the air, with an SSID if you use one, such as K0EPI-5.")
+                StationCallsignField(settings: settings)
+
+                Text("Your callsign without an SSID, such as K0EPI. Each radio adds its own "
+                     + "SSID, set under Identity on the radio's connection page.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            
+
             // Beside the callsign, because it is the other half of "who and
             // where this station is". It lived on the Winlink tab as a grid
             // square, which is a strange home for the fact the map, the
@@ -187,6 +186,56 @@ struct GeneralSettingsView: View {
             }
         }
         #endif
+    }
+}
+
+/// The station callsign: the base call alone.
+///
+/// Typed into like any callsign field, but an SSID never reaches the store.
+/// `AppSettingsStore.myCallsign` keeps the base, and the line under the field
+/// says where the SSID is set instead. What was typed stays in the field
+/// while it has focus, so the operator can see what they typed and why part
+/// of it was not kept; it settles to the stored value once focus leaves.
+private struct StationCallsignField: View {
+    @ObservedObject var settings: AppSettingsStore
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("My Callsign", text: Binding(
+                get: { draft },
+                set: { typed in
+                    draft = CallsignValidator.normalize(typed)
+                    settings.myCallsign = draft
+                }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .disableAutocorrection(true)
+            #if os(iOS)
+            .textInputAutocapitalization(.characters)
+            #endif
+            .focused($focused)
+            .onAppear { draft = settings.myCallsign }
+            .onChange(of: focused) { _, isFocused in
+                if !isFocused { draft = settings.myCallsign }
+            }
+            .onChange(of: settings.myCallsign) { _, stored in
+                if !focused { draft = stored }
+            }
+
+            if let guidance = StationCallsignRules.ssidGuidance(
+                for: draft, hasMultipleRadios: settings.hasMultipleRadios) {
+                Label(guidance, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !draft.isEmpty && !CallsignValidator.isValidCallsign(draft) {
+                Label("Invalid format (e.g. K0EPI)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
     }
 }
 

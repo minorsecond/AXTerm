@@ -29,7 +29,7 @@ final class AppSettingsStore: ObservableObject {
     static let notifyOnMentionKey = "notifyOnMention"
     static let notifyPlaySoundKey = "notifyPlaySound"
     static let notifyOnlyWhenInactiveKey = "notifyOnlyWhenInactive"
-    static let myCallsignKey = "myCallsign"
+    nonisolated static let myCallsignKey = "myCallsign"
     static let watchCallsignsKey = "watchCallsigns"
     static let watchKeywordsKey = "watchKeywords"
     static let ignoredServiceEndpointsKey = "ignoredServiceEndpoints"
@@ -38,7 +38,7 @@ final class AppSettingsStore: ObservableObject {
     static let sentrySendConnectionDetailsKey = "sentrySendConnectionDetails"
 
     // Radios: every TNC this station runs, JSON, in the operator's order
-    static let radiosKey = "radios.v1"
+    nonisolated static let radiosKey = "radios.v1"
 
     // Serial transport settings keys
     static let transportTypeKey = "kissTransportType"
@@ -483,14 +483,81 @@ final class AppSettingsStore: ObservableObject {
 
     @Published private var myCallsignStorage: String
 
+    /// The station's base callsign: the licence call, with no SSID (K0EPI).
+    ///
+    /// SSIDs belong to radios. Each radio goes on the air as this call with
+    /// its own SSID, or under a callsign of its own; ask `onAirCallsign(for:)`
+    /// for the address a frame should carry. Anything typed after a hyphen is
+    /// dropped here, so this never holds an SSID. Radios set to an SSID under
+    /// the old base move to the new one with their SSIDs kept (see
+    /// `StationCallsignRules.rebase`).
     var myCallsign: String {
         get { myCallsignStorage }
         set {
-            let sanitized = CallsignValidator.normalize(newValue)
-            guard sanitized != myCallsignStorage else { return }
-            myCallsignStorage = sanitized
+            let base = StationCallsignRules.base(of: newValue)
+            guard base != myCallsignStorage else { return }
+            myCallsignStorage = base
             persistMyCallsign()
+            // From the last base that was not empty, so clearing the field
+            // and typing the call again finds the radios where it left them.
+            if !base.isEmpty {
+                var moved = radios
+                if StationCallsignRules.rebase(&moved, from: radioBase, to: base) { radios = moved }
+                radioBase = base
+            }
         }
+    }
+
+    /// Announces the base callsign as it changes, for observers outside the
+    /// view layer (the session coordinator re-reads the primary radio's
+    /// address from it).
+    var myCallsignPublisher: AnyPublisher<String, Never> {
+        $myCallsignStorage.eraseToAnyPublisher()
+    }
+
+    /// The base the radios' SSIDs were last written under. Differs from
+    /// `myCallsign` only while the field is empty.
+    private var radioBase = ""
+
+    /// Takes a callsign typed with an SSID, as `--callsign TEST-2` is: the
+    /// base becomes the station callsign and the SSID goes to every radio
+    /// that has no callsign of its own, which is what an older build would
+    /// have put on the air.
+    func adoptStationCallsign(_ typed: String) {
+        myCallsign = typed
+        var updated = radios
+        if StationCallsignRules.splitStoredStation(typed, radios: &updated).radiosChanged {
+            radios = updated
+        }
+    }
+
+    // MARK: - On-air identity
+
+    /// The callsign a radio transmits as, SSID included: its own callsign, or
+    /// the station's base call.
+    ///
+    /// Nil, or a radio that no longer exists, means the primary radio. That is
+    /// the fallback for traffic nothing ties to one radio, and with one radio
+    /// it is the only answer there is.
+    func onAirCallsign(for radio: RadioID?) -> String {
+        let profile = radio.flatMap { self.radio($0) } ?? primaryRadio
+        return profile?.resolvedCallsign(station: myCallsign) ?? myCallsign
+    }
+
+    /// The primary radio's callsign: what this station transmits as when
+    /// nothing says which radio. Equal to what older builds called the
+    /// station callsign, once the migration has moved its SSID onto the radio.
+    var primaryCallsign: String { onAirCallsign(for: nil) }
+
+    /// Every callsign an enabled radio transmits as, uppercased. The set to
+    /// test "is this frame from us / to us" against; the bare base call is
+    /// only in it when a radio actually operates under it.
+    var onAirCallsigns: Set<String> {
+        var calls = Set(activeRadios.filter(\.enabled)
+            .map { $0.resolvedCallsign(station: myCallsign) }
+            .filter { !$0.isEmpty })
+        if calls.isEmpty, !primaryCallsign.isEmpty { calls.insert(primaryCallsign) }
+        return calls
     }
 
     @Published var watchCallsigns: [String] {
@@ -1137,6 +1204,17 @@ final class AppSettingsStore: ObservableObject {
                 capabilities: storedTNCCapabilities)]
         }
 
+        // The station callsign used to carry the SSID (K0EPI-5) and every
+        // radio without a callsign of its own inherited it. The SSID now
+        // belongs to the radios: move it onto those radios and keep the base.
+        // A bare callsign is left alone, so this runs every launch and does
+        // something at most once.
+        let splitStation = StationCallsignRules.splitStoredStation(storedMyCallsign, radios: &storedRadios)
+        let stationWasSplit = splitStation.base != CallsignValidator.normalize(storedMyCallsign)
+        if stationWasSplit {
+            defaults.set(splitStation.base, forKey: Self.myCallsignKey)
+        }
+
         // One-time: the beacon used to be a single station-wide setting; it is
         // now per radio (so each radio is its own station). Seed the legacy
         // beacon onto the first radio and leave every other radio's beacon off,
@@ -1207,7 +1285,8 @@ final class AppSettingsStore: ObservableObject {
         self.notifyOnlyWhenInactive = storedNotifyOnlyWhenInactive
         self.keepAwakePolicy = defaults.string(forKey: Self.keepAwakePolicyKey)
             .flatMap(KeepAwakePolicy.init(rawValue:)) ?? .duringTransfers
-        self.myCallsignStorage = CallsignValidator.normalize(storedMyCallsign)
+        self.myCallsignStorage = splitStation.base
+        self.radioBase = splitStation.base
         self.watchCallsigns = storedWatchCallsigns
         self.watchKeywords = storedWatchKeywords
         self.ignoredServiceEndpoints = Self.sanitizeWatchList(storedIgnoredServiceEndpoints, normalize: CallsignValidator.normalize)
@@ -1285,7 +1364,8 @@ final class AppSettingsStore: ObservableObject {
         // The first launch after the update: the list was read off the old
         // keys above; write it now so the migration is over before anything
         // else runs, and the old keys are never consulted again.
-        if migratedRadios || clearedDefaultNames || seededBeaconOntoRadio || seededAPRS { persistRadios() }
+        if migratedRadios || clearedDefaultNames || seededBeaconOntoRadio || seededAPRS
+            || splitStation.radiosChanged { persistRadios() }
     }
 
 

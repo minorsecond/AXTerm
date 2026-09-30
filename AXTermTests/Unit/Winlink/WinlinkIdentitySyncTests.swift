@@ -224,7 +224,9 @@ final class WinlinkIdentitySyncTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         let settings = AppSettingsStore(defaults: defaults)
         let profile = StationProfile(defaults: defaults)
-        settings.myCallsign = callsign
+        // The SSID goes onto the device's radio; the station callsign keeps
+        // the base, which is all identity sync carries.
+        settings.adoptStationCallsign(callsign)
         return (LiveIdentityStore(settings: settings, profile: profile, defaults: defaults),
                 settings, profile, defaults)
     }
@@ -240,7 +242,8 @@ final class WinlinkIdentitySyncTests: XCTestCase {
 
         await store.apply(WinlinkIdentityPayload(callsignBase: "K0EPI", updatedAt: t(100)))
 
-        XCTAssertEqual(settings.myCallsign, "K0EPI-9")
+        XCTAssertEqual(settings.myCallsign, "K0EPI")
+        XCTAssertEqual(settings.primaryCallsign, "K0EPI-9", "the radio keeps this device's SSID")
     }
 
     /// A device with no SSID stays without one — the rule preserves what is
@@ -252,6 +255,7 @@ final class WinlinkIdentitySyncTests: XCTestCase {
         await store.apply(WinlinkIdentityPayload(callsignBase: "K0EPI", updatedAt: t(100)))
 
         XCTAssertEqual(settings.myCallsign, "K0EPI")
+        XCTAssertEqual(settings.primaryCallsign, "K0EPI")
     }
 
     /// A corrected licence still lands; only the SSID half is protected.
@@ -261,7 +265,8 @@ final class WinlinkIdentitySyncTests: XCTestCase {
 
         await store.apply(WinlinkIdentityPayload(callsignBase: "K0EPI", updatedAt: t(100)))
 
-        XCTAssertEqual(settings.myCallsign, "K0EPI-9")
+        XCTAssertEqual(settings.myCallsign, "K0EPI")
+        XCTAssertEqual(settings.primaryCallsign, "K0EPI-9", "the radio moves to the new base, SSID kept")
     }
 
     /// And the live store never publishes its SSID either.
@@ -281,7 +286,8 @@ final class WinlinkIdentitySyncTests: XCTestCase {
 
         await store.apply(WinlinkIdentityPayload(updatedAt: t(100)))
 
-        XCTAssertEqual(settings.myCallsign, "K0EPI-9")
+        XCTAssertEqual(settings.myCallsign, "K0EPI")
+        XCTAssertEqual(settings.primaryCallsign, "K0EPI-9")
         XCTAssertEqual(profile.realName, "Ross Wardrup")
     }
 
@@ -339,7 +345,8 @@ final class WinlinkIdentitySyncTests: XCTestCase {
 
         XCTAssertEqual(iPadProfile.realName, "Ross Wardrup")
         XCTAssertEqual(iPadProfile.city, "Denver")
-        XCTAssertEqual(iPadSettings.myCallsign, "K0EPI-9", "the iPad keeps its own station address")
-        XCTAssertEqual(macSettings.myCallsign, "K0EPI-10", "and the Mac keeps its own")
+        XCTAssertEqual(iPadSettings.primaryCallsign, "K0EPI-9", "the iPad keeps its own station address")
+        XCTAssertEqual(macSettings.primaryCallsign, "K0EPI-10", "and the Mac keeps its own")
+        XCTAssertEqual(iPadSettings.myCallsign, "K0EPI")
     }
 }

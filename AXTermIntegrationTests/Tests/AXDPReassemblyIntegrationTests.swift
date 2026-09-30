@@ -36,7 +36,7 @@ final class AXDPReassemblyIntegrationTests: XCTestCase {
         }
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "TEST-2"
+        settings.adoptStationCallsign("TEST-2")
         settings.axdpExtensionsEnabled = true
         settings.axdpAutoNegotiateCapabilities = true
 

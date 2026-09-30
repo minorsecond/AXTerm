@@ -834,7 +834,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "LOCAL-7"
+        settings.adoptStationCallsign("LOCAL-7")
 
         let client = PacketEngine(maxPackets: 100, maxConsoleLines: 100, maxRawChunks: 100, settings: settings)
         let coordinator = SessionCoordinator()
@@ -887,7 +887,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "LOCAL-7"
+        settings.adoptStationCallsign("LOCAL-7")
 
         let client = PacketEngine(maxPackets: 100, maxConsoleLines: 100, maxRawChunks: 100, settings: settings)
         let coordinator = SessionCoordinator()
@@ -1292,7 +1292,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "K0EPI-7"
+        settings.adoptStationCallsign("K0EPI-7")
         
         let client = PacketEngine(maxPackets: 100, maxConsoleLines: 100, maxRawChunks: 100, settings: settings)
         let coordinator = SessionCoordinator()
@@ -1343,7 +1343,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "K0EPI-7"
+        settings.adoptStationCallsign("K0EPI-7")
         
         let client = PacketEngine(maxPackets: 100, maxConsoleLines: 100, maxRawChunks: 100, settings: settings)
         let coordinator = SessionCoordinator()
@@ -1536,7 +1536,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "K0EPI-7"
+        settings.adoptStationCallsign("K0EPI-7")
         
         let client = PacketEngine(maxPackets: 100, maxConsoleLines: 100, maxRawChunks: 100, settings: settings)
         coordinator.subscribeToPackets(from: client)

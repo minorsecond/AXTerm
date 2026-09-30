@@ -259,14 +259,14 @@ final class LiveIdentityStore: WinlinkIdentitySyncSource.Store {
     }
 
     func apply(_ payload: WinlinkIdentityPayload) {
-        // The SSID this device already chose is preserved. Overwriting it
-        // with the incoming callsign would put two stations on one
-        // address — the collision the whole split exists to avoid.
+        // Only the base travels. This device's SSIDs live on its radios and
+        // stay there (the store moves radios set under the old base onto the
+        // new one); taking another device's SSID would put two stations on
+        // one address, the collision the whole split exists to avoid.
         if !payload.callsignBase.isEmpty {
-            let existing = CallsignParser.parse(settings.myCallsign)
-            let merged = ParsedCallsign(base: payload.callsignBase, ssid: existing.ssid)
-            if merged.full != settings.myCallsign {
-                settings.myCallsign = merged.full
+            let base = CallsignParser.parse(payload.callsignBase).base
+            if base != settings.myCallsign {
+                settings.myCallsign = base
             }
         }
 

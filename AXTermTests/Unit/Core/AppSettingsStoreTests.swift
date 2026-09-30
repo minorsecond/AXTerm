@@ -64,9 +64,12 @@ final class AppSettingsStoreTests: XCTestCase {
 
     func testMyCallsignPersistsUppercased() {
         withIsolatedDefaults { defaults in
+            // The base call only: an SSID belongs to a radio and is covered
+            // in StationCallsignRulesTests.
             let store = AppSettingsStore(defaults: defaults)
-            store.myCallsign = "n0call-7"
-            XCTAssertEqual(store.myCallsign, "N0CALL-7")
+            store.myCallsign = "n0call"
+            XCTAssertEqual(store.myCallsign, "N0CALL")
+            XCTAssertEqual(defaults.string(forKey: AppSettingsStore.myCallsignKey), "N0CALL")
         }
     }
 

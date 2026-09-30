@@ -35,7 +35,7 @@ final class AX25SessionViaPathTests: XCTestCase {
 
     private func makeEngine() -> PacketEngine {
         let settings = AppSettingsStore()
-        settings.myCallsign = "K0EPI-7"
+        settings.adoptStationCallsign("K0EPI-7")
         return PacketEngine(settings: settings)
     }
 

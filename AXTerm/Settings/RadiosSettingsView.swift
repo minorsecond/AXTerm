@@ -178,9 +178,9 @@ private struct RadioListRow: View {
 /// The two halves of a radio's form, once there are enough radios to have
 /// halves: reaching it, and what it does once reached.
 ///
-/// Only shown for a second radio. One radio's form carries no name,
-/// callsign, beacon, services or digipeater rows at all, so there is nothing
-/// to divide and a picker over a single page would be furniture.
+/// Only shown for a second radio. One radio's form carries no name, services
+/// or digipeater rows, and its identity and beacon sit on the one page, so a
+/// picker over it would be furniture.
 enum RadioPage: String, CaseIterable, Identifiable {
     case connection
     case onAir
@@ -195,13 +195,14 @@ enum RadioPage: String, CaseIterable, Identifiable {
     }
 }
 
-/// One radio's form: how its TNC is reached and the link as it stands — and,
-/// once there are several radios, what it is called and whether it is on.
+/// One radio's form: the SSID it goes on the air with, how its TNC is reached
+/// and the link as it stands — and, once there are several radios, what it is
+/// called and whether it is on.
 ///
-/// Only controls the code acts on. The per-radio callsign, KISS port and
-/// auto-connect exist in the profile and arrive here with the phases that
-/// give them effect — a switch that changes nothing teaches the operator to
-/// stop trusting switches.
+/// Only controls the code acts on. The KISS port and auto-connect exist in
+/// the profile and arrive here with the phases that give them effect — a
+/// switch that changes nothing teaches the operator to stop trusting
+/// switches.
 struct RadioDetailView: View {
     let radioID: RadioID
     @ObservedObject var settings: AppSettingsStore
@@ -224,6 +225,15 @@ struct RadioDetailView: View {
     /// One radio has no pages, so its connection rows are always showing.
     private var showsConnection: Bool {
         !settings.hasMultipleRadios || page == .connection
+    }
+
+    /// Whether the SSID picker is on the page. Every radio has one, a single
+    /// radio included: the station callsign under General is the base call
+    /// alone, so this is the only place a radio's SSID is set. With several
+    /// radios it sits on the On the Air page; with one, at the top of the
+    /// only page, where General's hint sends the operator.
+    nonisolated static func showsIdentity(hasMultipleRadios: Bool, page: RadioPage) -> Bool {
+        !hasMultipleRadios || page == .onAir
     }
 
     init(radioID: RadioID, settings: AppSettingsStore, client: PacketEngine,
@@ -260,15 +270,22 @@ struct RadioDetailView: View {
                 }
             }
 
-            // With one radio its callsign is the station callsign, set under
-            // General; a second field saying the same thing would be noise.
-            if settings.hasMultipleRadios, page == .onAir {
+            // Every radio sets its own SSID here, one radio included. General
+            // holds the base callsign only.
+            if Self.showsIdentity(hasMultipleRadios: settings.hasMultipleRadios, page: page) {
                 Section {
                     Picker("SSID", selection: ssidBinding) {
                         ForEach(Array(SSIDConvention.range), id: \.self) { ssid in
                             ssidRow(ssid).tag(Optional(ssid))
                         }
                         Text("Another callsign\u{2026}").tag(Optional<Int>.none)
+                    }
+                    // An SSID is written under the station callsign; with
+                    // none set there is nothing to put it after.
+                    if stationCallsign.isEmpty, ssidBinding.wrappedValue != nil {
+                        Text("Set your callsign under General first.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     if ssidBinding.wrappedValue == nil {
                         CallsignField(title: stationCallsign.isEmpty ? "NOCALL" : stationCallsign,
@@ -918,22 +935,17 @@ struct RadioDetailView: View {
                 }
                 usesOwnCallsign = false
                 let base = stationCallsign.uppercased()
+                // "-5" is not a callsign. With no station callsign the
+                // picker says so and changes nothing.
+                guard !base.isEmpty else { return }
                 viewModel.callsign = ssid == 0 ? base : "\(base)-\(ssid)"
             })
     }
 
-    /// The SSID a callsign carries *under this station's own call*, or nil
-    /// when it is some other identity.
-    ///
-    /// A club call or a tactical alias is its own identity even when it has an
-    /// SSID, so only the station's own base maps back onto the picker.
-    static func ssidUnderStation(_ callsign: String, station: String) -> Int? {
-        if callsign.isEmpty { return 0 }
-        guard let ssid = SSIDConvention.ssid(of: callsign) else {
-            return callsign.uppercased() == station.uppercased() ? 0 : nil
-        }
-        let base = callsign.split(separator: "-", maxSplits: 1).first.map(String.init) ?? ""
-        return base.uppercased() == station.uppercased() ? ssid : nil
+    /// The SSID a callsign carries under this station's own call, or nil
+    /// when it is some other identity. See `StationCallsignRules.ssidUnderStation`.
+    nonisolated static func ssidUnderStation(_ callsign: String, station: String) -> Int? {
+        StationCallsignRules.ssidUnderStation(callsign, station: station)
     }
 
     /// What this station has heard other people use each SSID for.
@@ -959,9 +971,12 @@ struct RadioDetailView: View {
     }
 
     private var identityFooter: String {
-        let base = "Give this radio its own SSID when two radios share a frequency, or when a "
-            + "remote station should be able to reach this radio in particular. A call to an "
-            + "SSID only one radio uses is answered by that radio whichever link heard it."
+        let base = settings.hasMultipleRadios
+            ? "Give this radio its own SSID when two radios share a frequency, or when a "
+                + "remote station should be able to reach this radio in particular. A call to an "
+                + "SSID only one radio uses is answered by that radio whichever link heard it."
+            : "This radio goes on the air as your callsign from General with the SSID "
+                + "picked here. Choose another callsign for a club or tactical call."
         switch trafficFamily {
         case .aprs:
             return base + " The meanings shown are the published APRS convention, which other "

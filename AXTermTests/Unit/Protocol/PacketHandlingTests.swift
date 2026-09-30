@@ -180,7 +180,7 @@ final class PacketHandlingTests: XCTestCase {
     #if DEBUG
     func testDebugRebuildUsesLivePacketsWhenPacketDatabaseIsEmpty() async throws {
         let settings = makeSettings(persistHistory: false)
-        settings.myCallsign = "K0EPI-7"
+        settings.adoptStationCallsign("K0EPI-7")
 
         let queue = try DatabaseQueue(path: ":memory:")
         try DatabaseManager.migrator.migrate(queue)
