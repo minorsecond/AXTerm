@@ -14,7 +14,7 @@ import XCTest
 final class MalformedFrameIngestTests: XCTestCase {
 
     private func makeEngine(_ logger: MockEventLogger) -> PacketEngine {
-        let defaults = UserDefaults(suiteName: "AXTermTests-\(UUID().uuidString)") ?? .standard
+        let defaults = TestDefaults.make("MalformedFrameIngestTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         return PacketEngine(
             maxPackets: 10, maxConsoleLines: 10, maxRawChunks: 10,
