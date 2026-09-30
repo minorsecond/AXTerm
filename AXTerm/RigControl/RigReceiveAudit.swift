@@ -35,10 +35,75 @@ nonisolated enum RigReceiveAudit {
         /// 1 = wide, 2 = mid, 3 = narrow.
         var filter: Int
         var dataMode: Bool
+        /// Automatic notch filter (ANF), `16 41`.
+        var autoNotch: Bool = false
+        /// Manual notch, `16 48`.
+        var manualNotch: Bool = false
+        /// The tone squelch function, `16 5D`. Read only where that command
+        /// is confirmed for the radio (see `CIVCommand.readToneSquelchFunction`);
+        /// elsewhere it stays `.off`, which judges nothing.
+        var toneSquelch: ToneSquelchFunction = .off
         /// Whether the radio answered anything at all. A settings struct full
         /// of benign defaults because every read timed out must not be judged
         /// as a healthy radio.
         var answered: Bool = true
+    }
+
+    /// What the radio does with CTCSS tones and DTCS codes, as the IC-705
+    /// reports it in `16 5D`.
+    ///
+    /// Values from the IC-705 CI-V Reference Guide (Icom, 2020 edition,
+    /// command table p. 4): 00 OFF, 01 TONE, 02 TSQL, 03 DTCS, 06 DTCS(T),
+    /// 07 TONE(T)/DTCS(R), 08 DTCS(T)/TSQL(R), 09 TONE(T)/TSQL(R). wfview's
+    /// IC-705 rig file lists the same command as "Tone Squelch Type", 0-9.
+    ///
+    /// "(T)" is transmit only and "(R)" receive only; TSQL and DTCS on their
+    /// own do both, sending the tone and muting everything that lacks it.
+    /// Only the receive half is a receive problem. A repeater tone on
+    /// transmit changes nothing about what the modem hears, so the fix keeps
+    /// whatever the radio sends and drops only the decoder.
+    enum ToneSquelchFunction: UInt8, Sendable, Equatable {
+        case off = 0x00
+        case tone = 0x01
+        case tsql = 0x02
+        case dtcs = 0x03
+        case dtcsTransmit = 0x06
+        case toneTransmitDTCSReceive = 0x07
+        case dtcsTransmitTSQLReceive = 0x08
+        case toneTransmitTSQLReceive = 0x09
+
+        /// Whether the receiver stays muted for a station that does not send
+        /// the right tone or code.
+        var mutesReceive: Bool {
+            switch self {
+            case .off, .tone, .dtcsTransmit: return false
+            case .tsql, .dtcs, .toneTransmitDTCSReceive, .dtcsTransmitTSQLReceive,
+                 .toneTransmitTSQLReceive: return true
+            }
+        }
+
+        /// The same transmit behavior with the receive decoder off.
+        var withoutReceiveDecoder: ToneSquelchFunction {
+            switch self {
+            case .off, .tone, .dtcsTransmit: return self
+            case .tsql, .toneTransmitDTCSReceive, .toneTransmitTSQLReceive: return .tone
+            case .dtcs, .dtcsTransmitTSQLReceive: return .dtcsTransmit
+            }
+        }
+
+        /// The radio's own name for the setting.
+        var label: String {
+            switch self {
+            case .off: return "OFF"
+            case .tone: return "TONE"
+            case .tsql: return "TSQL"
+            case .dtcs: return "DTCS"
+            case .dtcsTransmit: return "DTCS(T)"
+            case .toneTransmitDTCSReceive: return "TONE(T)/DTCS(R)"
+            case .dtcsTransmitTSQLReceive: return "DTCS(T)/TSQL(R)"
+            case .toneTransmitTSQLReceive: return "TONE(T)/TSQL(R)"
+            }
+        }
     }
 
     enum Severity: Int, Comparable, Sendable {
@@ -65,6 +130,10 @@ nonisolated enum RigReceiveAudit {
         case noiseReductionOff
         case noiseBlankerOff
         case widestFilter
+        case autoNotchOff
+        case manualNotchOff
+        /// Tone squelch off for receive, keeping any tone the radio sends.
+        case toneSquelchReceiveOff
     }
 
     struct Finding: Equatable, Sendable, Identifiable {
@@ -191,6 +260,38 @@ nonisolated enum RigReceiveAudit {
                 fix: "Turn NB off. It punches holes in the audio, and a hole inside a "
                    + "frame costs the whole frame.",
                 severity: .degrading, correction: .noiseBlankerOff))
+        }
+
+        // Found live on 2026-09-30: an IC-705 on a busy 144.390 decoded about
+        // one APRS frame a minute with the notch on by accident, and fourteen
+        // in three minutes with it off, while Direwolf on the same audio
+        // decoded seventeen. Nothing in this audit looked at the notch.
+        if s.autoNotch {
+            out.append(Finding(
+                title: "The auto notch is on",
+                detail: "ANF is enabled.",
+                fix: "Turn the auto notch off. It hunts for steady tones and removes them, "
+                   + "and AFSK is two steady tones. On the IC-705 it cut decoding on a "
+                   + "busy APRS channel to a handful of frames.",
+                severity: .blocking, correction: .autoNotchOff))
+        }
+        if s.manualNotch {
+            out.append(Finding(
+                title: "The manual notch is on",
+                detail: "The manual notch is enabled.",
+                fix: "Turn the manual notch off. It cuts a slot out of the audio, and "
+                   + "wherever it sits near \(modemMode.ridesOnSSB ? "1600 or 1800" : "1200 or 2200") Hz "
+                   + "it takes one of the two tones with it.",
+                severity: .degrading, correction: .manualNotchOff))
+        }
+        if s.toneSquelch.mutesReceive {
+            out.append(Finding(
+                title: "Tone squelch is on",
+                detail: "Set to \(s.toneSquelch.label).",
+                fix: "Turn the receive tone squelch off. It keeps the audio muted for every "
+                   + "station that does not send the matching tone, and packet stations "
+                   + "almost never do. AXTerm leaves any tone you transmit alone.",
+                severity: .blocking, correction: .toneSquelchReceiveOff))
         }
 
         if s.preamp == 0 {

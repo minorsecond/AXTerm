@@ -719,9 +719,13 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         // still returns an empty finding list. That would read as "nothing is
         // wrong", which is the one thing it must not say — so the reads are
         // required to have produced at least one answer.
+        // `16 5D` is the IC-705's tone squelch command. The radio answers
+        // from `A4` by default and a LAN login names it; either is enough.
+        let isIC705 = config.civAddress == CIVCommand.ic705 || (rigModel?.contains("705") ?? false)
         let settings = await rig.readReceiveSettings(mode: status.mode ?? .fm,
                                                      filter: Int(status.filter ?? 1),
-                                                     dataMode: status.dataMode ?? true)
+                                                     dataMode: status.dataMode ?? true,
+                                                     toneSquelchFunction: isIC705)
         guard settings.answered else {
             return .unavailable("the radio did not answer any of them.")
         }
@@ -731,7 +735,8 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// Make the corrections the audit asked for, and report what changed.
     ///
     /// Only settings whose right value for packet is a fact: the attenuator,
-    /// RF gain, squelch, the noise processing and the FM filter. The mode and
+    /// RF gain, squelch, the noise processing, the notches, the receive tone
+    /// squelch and the filter. The mode and
     /// the preamp are named by the audit and deliberately left alone — the
     /// operator may be in USB on purpose, and whether a preamp helps is a
     /// judgment about the band.

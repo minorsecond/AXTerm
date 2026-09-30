@@ -204,4 +204,39 @@ final class CIVFrameTests: XCTestCase {
         XCTAssertEqual(frames.first?.command, 0x27)
         XCTAssertTrue(frames.last?.isOK ?? false)
     }
+
+    // MARK: - Notch and tone squelch
+    //
+    // IC-705 CI-V Reference Guide (Icom, 2020 edition), command table p. 4.
+
+    func testNotchAndToneSquelchFrames() {
+        XCTAssertEqual(hex(CIVCommand.readAutoNotch()), "FE FE A4 E0 16 41 FD")
+        XCTAssertEqual(hex(CIVCommand.setAutoNotch(false)), "FE FE A4 E0 16 41 00 FD")
+        XCTAssertEqual(hex(CIVCommand.setAutoNotch(true)), "FE FE A4 E0 16 41 01 FD")
+        XCTAssertEqual(hex(CIVCommand.readManualNotch()), "FE FE A4 E0 16 48 FD")
+        XCTAssertEqual(hex(CIVCommand.setManualNotch(false)), "FE FE A4 E0 16 48 00 FD")
+        XCTAssertEqual(hex(CIVCommand.setManualNotch(true)), "FE FE A4 E0 16 48 01 FD")
+        XCTAssertEqual(hex(CIVCommand.readToneSquelchFunction()), "FE FE A4 E0 16 5D FD")
+        XCTAssertEqual(hex(CIVCommand.setToneSquelchFunction(0x01)), "FE FE A4 E0 16 5D 01 FD")
+        XCTAssertEqual(hex(CIVCommand.setAttenuator(0x20)), "FE FE A4 E0 11 20 FD")
+    }
+
+    /// `16` has a one-byte subcommand; if the table forgot that, replies to
+    /// these reads would never match and the radio would look mute.
+    func testTheFunctionCommandCarriesASubcommand() {
+        XCTAssertEqual(CIVCommand.subcommandLength(0x16), 1)
+        let parsed = CIVFrame.parse([0xFE, 0xFE, 0xE0, 0xA4, 0x16, 0x5D, 0x02, 0xFD])
+        XCTAssertEqual(parsed?.subcommand, 0x5D)
+        XCTAssertEqual(parsed?.data, [0x02])
+    }
+
+    func testTheToneSquelchValuesAreTheGuides() {
+        typealias T = RigReceiveAudit.ToneSquelchFunction
+        XCTAssertEqual([T.off, .tone, .tsql, .dtcs, .dtcsTransmit, .toneTransmitDTCSReceive,
+                        .dtcsTransmitTSQLReceive, .toneTransmitTSQLReceive].map(\.rawValue),
+                       [0x00, 0x01, 0x02, 0x03, 0x06, 0x07, 0x08, 0x09])
+        XCTAssertNil(T(rawValue: 0x04), "04 and 05 are not in the IC-705 guide")
+        XCTAssertNil(T(rawValue: 0x05))
+        XCTAssertNil(T(rawValue: 0x0A))
+    }
 }

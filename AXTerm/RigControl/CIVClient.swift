@@ -179,13 +179,36 @@ nonisolated final class CIVClient: @unchecked Sendable {
     /// throws away nine good answers because of a tenth helps nobody. What
     /// could not be read keeps its benign default, so the audit never invents
     /// a fault out of a missing reply.
-    func readReceiveSettings(mode: RigMode, filter: Int, dataMode: Bool) async -> RigReceiveAudit.Settings {
+    /// - Parameter toneSquelchFunction: whether this radio's tone squelch
+    ///   function is confirmed at `16 5D` (the IC-705). Elsewhere it is not
+    ///   asked, and stays off.
+    func readReceiveSettings(mode: RigMode, filter: Int, dataMode: Bool,
+                             toneSquelchFunction: Bool = false) async -> RigReceiveAudit.Settings {
+        // Two unanswered reads in a row and the rest are not asked. With
+        // nine reads now, a radio that has stopped answering would otherwise
+        // hold the bus for nine timeouts every two minutes, and a keyed
+        // transmission waits behind them. A radio lacking one setting answers
+        // NG at once, so this never costs an answer from one that is there.
+        var unanswered = 0
+        func reply(_ frame: CIVFrame, _ command: UInt8, _ sub: UInt8?) async -> CIVFrame? {
+            guard unanswered < 2 else { return nil }
+            do {
+                let answer = try await request(frame, expecting: .reply(command: command, subcommand: sub))
+                unanswered = 0
+                return answer
+            } catch CIVError.timeout {
+                unanswered += 1
+                return nil
+            } catch {
+                unanswered = 0
+                return nil
+            }
+        }
         func byte(_ frame: CIVFrame, _ command: UInt8, _ sub: UInt8?) async -> UInt8? {
-            try? await request(frame, expecting: .reply(command: command, subcommand: sub)).data.first
+            await reply(frame, command, sub)?.data.first
         }
         func level(_ frame: CIVFrame, _ command: UInt8, _ sub: UInt8?) async -> Int? {
-            guard let d = try? await request(frame, expecting: .reply(command: command, subcommand: sub)).data,
-                  let value = CIVBCD.meter(d) else { return nil }
+            guard let d = await reply(frame, command, sub)?.data, let value = CIVBCD.meter(d) else { return nil }
             return Int((Double(value) / 255 * 100).rounded())
         }
         let r = radioAddress, c = controllerAddress
@@ -196,8 +219,14 @@ nonisolated final class CIVClient: @unchecked Sendable {
         let nr = await byte(CIVCommand.readNoiseReduction(radio: r, controller: c), 0x16, 0x40)
         let rfGain = await level(CIVCommand.readRFGain(radio: r, controller: c), 0x14, 0x02)
         let squelch = await level(CIVCommand.readSquelchLevel(radio: r, controller: c), 0x14, 0x03)
+        let anf = await byte(CIVCommand.readAutoNotch(radio: r, controller: c), 0x16, 0x41)
+        let notch = await byte(CIVCommand.readManualNotch(radio: r, controller: c), 0x16, 0x48)
+        var tone: UInt8?
+        if toneSquelchFunction {
+            tone = await byte(CIVCommand.readToneSquelchFunction(radio: r, controller: c), 0x16, 0x5D)
+        }
         let anyAnswer = attenuator != nil || preamp != nil || nb != nil
-            || nr != nil || rfGain != nil || squelch != nil
+            || nr != nil || rfGain != nil || squelch != nil || anf != nil || notch != nil || tone != nil
         return RigReceiveAudit.Settings(
             attenuatorDB: attenuator.map { Int($0 >> 4) * 10 + Int($0 & 0x0F) } ?? 0,
             preamp: Int(preamp ?? 1),
@@ -205,7 +234,13 @@ nonisolated final class CIVClient: @unchecked Sendable {
             noiseReduction: nr == 0x01,
             rfGainPercent: rfGain ?? 100,
             squelchPercent: squelch ?? 0,
-            mode: mode, filter: filter, dataMode: dataMode, answered: anyAnswer)
+            mode: mode, filter: filter, dataMode: dataMode,
+            autoNotch: anf == 0x01,
+            manualNotch: notch == 0x01,
+            // A value outside the guide's list is not a setting this can
+            // judge, so it reads as off rather than as a guess.
+            toneSquelch: tone.flatMap(RigReceiveAudit.ToneSquelchFunction.init(rawValue:)) ?? .off,
+            answered: anyAnswer)
     }
 
     /// Make one correction the audit asked for. Each is a setting whose right
@@ -221,6 +256,17 @@ nonisolated final class CIVClient: @unchecked Sendable {
         case .noiseReductionOff: command = CIVCommand.setNoiseReduction(false, radio: r, controller: c)
         case .noiseBlankerOff:   command = CIVCommand.setNoiseBlanker(false, radio: r, controller: c)
         case .widestFilter:      command = CIVCommand.setMode(mode, filter: 1, radio: r, controller: c)
+        case .autoNotchOff:      command = CIVCommand.setAutoNotch(false, radio: r, controller: c)
+        case .manualNotchOff:    command = CIVCommand.setManualNotch(false, radio: r, controller: c)
+        case .toneSquelchReceiveOff:
+            // Which value keeps the transmit tone depends on what is set now,
+            // so read it; a radio that will not say is not guessed at.
+            guard let raw = try await request(CIVCommand.readToneSquelchFunction(radio: r, controller: c),
+                                              expecting: .reply(command: 0x16, subcommand: 0x5D)).data.first,
+                  let function = RigReceiveAudit.ToneSquelchFunction(rawValue: raw) else {
+                throw CIVError.unexpectedResponse(command: 0x16)
+            }
+            command = CIVCommand.setToneSquelchFunction(function.withoutReceiveDecoder.rawValue, radio: r, controller: c)
         }
         _ = try await request(command, expecting: .acknowledgement)
     }
