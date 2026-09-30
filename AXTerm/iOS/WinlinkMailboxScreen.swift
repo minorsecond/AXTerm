@@ -531,14 +531,7 @@ struct WinlinkMailboxScreen: View {
                     onChanged: { refresh() })
                     .navigationTitle("New Message")
                     .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        // The compose view puts Save Draft and Queue in this
-                        // bar; this is the third outcome, and without it a
-                        // sheet opened by mistake has no way out.
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Close") { composingDraft = nil }
-                        }
-                    }
+
             }
         }
     }

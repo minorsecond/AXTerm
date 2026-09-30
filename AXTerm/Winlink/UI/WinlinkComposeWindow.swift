@@ -35,6 +35,8 @@ struct WinlinkComposeWindow: View {
     @State private var photoSelection: [PhotosPickerItem] = []
     @State private var isTakingPhoto = false
     @State private var isDropTargeted = false
+    /// Cancel asking what to do with what was typed, as Mail does.
+    @State private var isConfirmingCancel = false
     @FocusState private var focusedAddressField: AddressField?
 
     enum AddressField { case to, cc }
@@ -191,7 +193,8 @@ struct WinlinkComposeWindow: View {
             addressSuggestions(for: .cc)
             HStack {
                 labelled("Subject:") {
-                    TextField("Subject:", text: $viewModel.subject)
+                    // No prompt: the label beside it already says Subject.
+                    TextField("Subject:", text: $viewModel.subject, prompt: Text(""))
                 }
                 Text("\(viewModel.subjectRemaining)")
                     .font(.caption.monospacedDigit())
@@ -200,7 +203,14 @@ struct WinlinkComposeWindow: View {
             }
         }
         .textFieldStyle(.roundedBorder)
+        #if os(iOS)
+        // On a phone the grouped form's gray, inset by the padding, drew
+        // the fields as a card inside a gray box inside a white sheet.
+        .scrollContentBackground(.hidden)
+        .scrollDisabled(true)
+        #else
         .padding(12)
+        #endif
     }
 
     private var messageBody: some View {
@@ -469,14 +479,32 @@ struct WinlinkComposeWindow: View {
     #endif
 
     #if os(iOS)
+    /// Anything worth asking about before the sheet closes.
+    private var hasSomethingToKeep: Bool {
+        !viewModel.toText.trimmingCharacters(in: .whitespaces).isEmpty
+            || !viewModel.subject.trimmingCharacters(in: .whitespaces).isEmpty
+            || !viewModel.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !viewModel.attachments.isEmpty
+    }
+
     @ToolbarContentBuilder
     private var iosToolbar: some ToolbarContent {
+        // Mail's arrangement: Cancel, the title, and the one action. Save
+        // Draft is Cancel's first answer rather than a third button, which
+        // on a phone left the title reading "New Me...".
+        ToolbarItem(placement: .cancellationAction) {
+            Button("Cancel") {
+                if hasSomethingToKeep { isConfirmingCancel = true } else { dismiss() }
+            }
+            .confirmationDialog("Keep this message?", isPresented: $isConfirmingCancel,
+                                titleVisibility: .hidden) {
+                Button("Save Draft", action: saveDraft)
+                Button("Don't Save", role: .destructive) { dismiss() }
+            }
+        }
         ToolbarItem(placement: .confirmationAction) {
             Button("Queue", action: queue)
                 .accessibilityHint("Moves the message to the Outbox. It is sent at the next Connect and Exchange.")
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            Button("Save Draft", action: saveDraft)
         }
         ToolbarItemGroup(placement: .bottomBar) {
             attachMenu

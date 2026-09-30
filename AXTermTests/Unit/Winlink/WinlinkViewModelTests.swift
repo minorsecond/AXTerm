@@ -282,6 +282,56 @@ final class WinlinkViewModelTests: XCTestCase {
         XCTAssertTrue(vm.validationError!.contains("Invalid address"), vm.validationError!)
     }
 
+    /// A draft is where a message waits while it is still missing things,
+    /// so it saves without a To address, over the size budget, or with a
+    /// long subject. Queueing still refuses each of those.
+    func testADraftSavesWhatQueueingWouldRefuse() async throws {
+        let store = try makeStore()
+        let vm = WinlinkComposeViewModel(store: store, myCallsign: "K0EPI")
+        vm.subject = "Notes for the net"
+        vm.bodyText = "Half written"
+
+        let mid = try XCTUnwrap(vm.saveDraft(), vm.validationError ?? "")
+        XCTAssertNil(vm.validationError)
+        let saved = try XCTUnwrap(try store.message(mid: mid))
+        XCTAssertEqual(saved.message.to, [])
+        XCTAssertEqual(saved.message.subject, "Notes for the net")
+
+        vm.subject = String(repeating: "S", count: WinlinkB2Message.maxSubjectLength + 5)
+        XCTAssertNotNil(vm.saveDraft(), "a long subject is fixed later, not refused now")
+
+        XCTAssertNil(vm.queueForSending(), "queueing still needs a recipient")
+        XCTAssertTrue(try store.queuedOutboundMessages().isEmpty)
+    }
+
+    /// What a draft cannot store is still refused: an address that does not
+    /// parse, text Winlink cannot carry, no callsign.
+    func testADraftStillRefusesWhatCannotBeStored() async throws {
+        let store = try makeStore()
+        let vm = WinlinkComposeViewModel(store: store, myCallsign: "K0EPI")
+        vm.toText = "!!bad!!"
+        XCTAssertNil(vm.saveDraft())
+        XCTAssertTrue(vm.validationError!.contains("Invalid address"), vm.validationError!)
+
+        vm.toText = ""
+        vm.bodyText = "emoji 🚀"
+        XCTAssertNil(vm.saveDraft())
+        XCTAssertTrue(vm.validationError!.contains("ISO-8859-1"), vm.validationError!)
+
+        let nocall = WinlinkComposeViewModel(store: store, myCallsign: "NOCALL")
+        nocall.bodyText = "hi"
+        XCTAssertNil(nocall.saveDraft())
+    }
+
+    /// A message that cannot be queued is not left half-saved as a draft.
+    func testAFailedQueueWritesNothing() async throws {
+        let store = try makeStore()
+        let vm = WinlinkComposeViewModel(store: store, myCallsign: "K0EPI")
+        vm.bodyText = "no recipient"
+        XCTAssertNil(vm.queueForSending())
+        XCTAssertNil(vm.draftMID, "nothing was saved on the way to refusing")
+    }
+
     func testComposeEnforcesSizeBudget() async throws {
         let store = try makeStore()
         let vm = WinlinkComposeViewModel(store: store, myCallsign: "K0EPI")

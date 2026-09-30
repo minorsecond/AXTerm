@@ -182,7 +182,12 @@ final class WinlinkComposeViewModel: ObservableObject {
 
     /// Validates fields and builds the message. Publishes
     /// `validationError` and returns nil when invalid.
-    func buildMessage() -> WinlinkB2Message? {
+    ///
+    /// `complete` is false for a draft, which only has to be storable: a
+    /// draft is where a message waits while it is still missing things, and
+    /// refusing to save one because it had no To address yet lost the work
+    /// it existed to keep. Queueing asks for everything.
+    func buildMessage(complete: Bool = true) -> WinlinkB2Message? {
         validationError = nil
 
         let (to, invalidTo) = Self.parseAddressList(toText)
@@ -192,17 +197,19 @@ final class WinlinkComposeViewModel: ObservableObject {
             validationError = "Invalid address: \((invalidTo + invalidCc).joined(separator: ", "))"
             return nil
         }
-        guard !to.isEmpty else {
-            validationError = "At least one To address is required."
-            return nil
-        }
-        guard subject.count <= WinlinkB2Message.maxSubjectLength else {
-            validationError = "Subject exceeds \(WinlinkB2Message.maxSubjectLength) characters."
-            return nil
-        }
-        guard !isOverBudget else {
-            validationError = "Message exceeds the \(Self.messageSizeBudget / 1024) kB Winlink limit."
-            return nil
+        if complete {
+            guard !to.isEmpty else {
+                validationError = "At least one To address is required."
+                return nil
+            }
+            guard subject.count <= WinlinkB2Message.maxSubjectLength else {
+                validationError = "Subject exceeds \(WinlinkB2Message.maxSubjectLength) characters."
+                return nil
+            }
+            guard !isOverBudget else {
+                validationError = "Message exceeds the \(Self.messageSizeBudget / 1024) kB Winlink limit."
+                return nil
+            }
         }
         guard !myCallsign.isEmpty, myCallsign != "NOCALL" else {
             validationError = "Set your callsign in Settings before composing mail."
@@ -240,7 +247,7 @@ final class WinlinkComposeViewModel: ObservableObject {
     /// Saves (or re-saves) the compose state as a draft. Returns the MID.
     @discardableResult
     func saveDraft() -> String? {
-        guard let message = buildMessage() else { return nil }
+        guard let message = buildMessage(complete: false) else { return nil }
         do {
             if draftMID != nil {
                 try store.updateDraft(message)
@@ -290,7 +297,9 @@ final class WinlinkComposeViewModel: ObservableObject {
     /// Saves and queues the message for the next exchange. Returns the MID.
     @discardableResult
     func queueForSending() -> String? {
-        guard let mid = saveDraft() else { return nil }
+        // Everything checked before anything is written, so a message that
+        // cannot go is not half-saved on the way to saying so.
+        guard buildMessage(complete: true) != nil, let mid = saveDraft() else { return nil }
         do {
             try store.queueDraft(mid: mid)
             return mid
