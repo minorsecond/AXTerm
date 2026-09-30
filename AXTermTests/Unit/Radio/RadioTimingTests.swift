@@ -144,6 +144,29 @@ final class RadioTimingTests: XCTestCase {
         XCTAssertEqual(link.sentData.last, tcp.kissTiming.frames(port: 0).reduce(Data(), +))
     }
 
+    /// While a radio's settings page is open the engine does not reconcile,
+    /// but a timing change still reaches the TNC; a transport change waits.
+    func testATimingChangeReachesTheLinkWhileSettingsAreOpen() throws {
+        let manager = makeManager()
+        var tcp = radio(.tcp)
+        tcp.sendsKISSTiming = true
+        manager.reconcile([tcp], open: true)
+        let link = try XCTUnwrap(links.values.first)
+        XCTAssertEqual(link.sentData.count, 1)
+
+        tcp.txDelayMs = 450
+        manager.applyInPlace([tcp])
+        XCTAssertEqual(link.sentData.count, 2)
+        XCTAssertEqual(link.sentData.last, tcp.kissTiming.frames(port: 0).reduce(Data(), +))
+
+        var moved = tcp
+        moved.host = "10.0.0.9"
+        moved.txDelayMs = 600
+        manager.applyInPlace([moved])
+        XCTAssertEqual(link.sentData.count, 2, "a radio whose transport changed waits for the reconcile")
+        XCTAssertEqual(manager.sessions.count, 1, "and nothing was opened")
+    }
+
     func testAReconnectSendsItAgain() throws {
         let manager = makeManager()
         var tcp = radio(.tcp)

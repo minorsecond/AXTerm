@@ -118,6 +118,13 @@ own copies. How the values reach the air depends on the transport
 | Serial Mobilinkd | `KISSLinkSerial` sends them | on connect, and again when they change |
 | Network TNC (Direwolf), plain serial TNC | only when "Send these to the TNC" is on (`sendsKISSTiming`, off by default); `RadioManager` sends them on the radio's KISS port | on connect, and again when they change |
 
+While a radio's page is open the engine does not reconcile, so a half-typed
+host does not reopen the link on every keystroke. Timing and a TNC4's levels
+change nothing about the link, so they are still applied as they change
+(`RadioManager.applyInPlace`); before, they waited until some later edit made
+the engine reconcile, since closing the page reconciles only when a
+transport changed.
+
 A network or plain serial TNC was never sent timing, so the option is off by
 default and such a TNC keeps the values it was configured with (direwolf.conf's
 TXDELAY, PERSIST, SLOTTIME and TXTAIL). With the option on, Direwolf takes the

@@ -69,7 +69,7 @@ nonisolated struct BeaconConfig: Codable, Equatable, Sendable {
 /// fixed, ambiguity, data extensions, compressed form) in the APRS phase;
 /// declared now so `BeaconConfig` has a stable shape and older/newer settings
 /// interoperate. Every field defaulted and `decodeIfPresent`-ed.
-struct APRSPositionConfig: Codable, Equatable, Sendable {
+nonisolated struct APRSPositionConfig: Codable, Equatable, Sendable {
     /// Drive the position from the device's GPS instead of the fixed lat/lon.
     var useGPS: Bool = false
     var latitude: Double?

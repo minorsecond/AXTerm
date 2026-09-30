@@ -222,6 +222,35 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         return created
     }
 
+    /// Applies to open links the settings they take in place, and nothing
+    /// else: no link is opened, closed or reconnected.
+    ///
+    /// For while a radio's settings page is open. The engine holds off
+    /// reconciling then, so the link is not reopened on every keystroke in a
+    /// host field, but timing and TNC4 levels change nothing about the link
+    /// and have to reach the TNC while the operator is setting them (the TNC4
+    /// level assistant tries each gain live). A radio whose transport changed
+    /// is left for the reconcile that follows when the page closes.
+    func applyInPlace(_ radios: [RadioProfile]) {
+        for radio in radios where radio.enabled && !radio.archived {
+            guard let index = profiles.firstIndex(where: { $0.id == radio.id }),
+                  profiles[index].transportSignature == radio.transportSignature,
+                  let session = session(for: radio.id) else { continue }
+            #if os(macOS)
+            // The modem rebuilds itself for some settings outside its
+            // signature (the CI-V address); those wait for the page to close.
+            if let modem = session.link as? ModemRadioLink, let config = radio.modemConfig,
+               config.requiresReopen(from: modem.config) { continue }
+            #endif
+            profiles[index] = radio
+            // One link, one config: the radio that leads the link sets it.
+            if profiles.first(where: { $0.linkKey == radio.linkKey })?.id == radio.id {
+                update(session, from: radio)
+            }
+            sendTimingIfNeeded(radio)
+        }
+    }
+
     // MARK: - KISS timing for links that do not send it
 
     /// Sends a radio's timing to its TNC when the operator has asked for it

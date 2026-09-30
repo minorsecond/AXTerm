@@ -63,7 +63,7 @@ nonisolated enum SettingsSection: String, Hashable, Sendable, CaseIterable {
 /// key constants) or, for a radio's own settings, `radio.` and the
 /// `RadioProfile` field. Moving a control means changing its entry here; the
 /// stored key never changes.
-nonisolated enum SettingsHome {
+enum SettingsHome {
 
     struct Entry: Sendable {
         let setting: String

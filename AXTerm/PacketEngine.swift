@@ -2438,7 +2438,13 @@ final class PacketEngine: ObservableObject {
             .dropFirst()
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
             .sink { [weak self] radios in
-                guard let self, !self.isConnectionLogicSuspended else { return }
+                guard let self else { return }
+                // A radio's settings page is open: nothing reconnects until it
+                // closes, but timing and TNC4 levels still reach the link.
+                guard !self.isConnectionLogicSuspended else {
+                    self.radioManager.applyInPlace(radios)
+                    return
+                }
                 if self.radioManager.reconcile(radios, open: true) > 0 {
                     self.loadPersistedPackets(reason: "connect")
                 }
