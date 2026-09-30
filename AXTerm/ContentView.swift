@@ -2717,25 +2717,70 @@ struct ContentView: View {
                 usesDeviceLocation: useDeviceLocation,
                 deviceFix: deviceGPSFix,
                 gpsError: winlinkContext.locationService.lastGPSError)
-            tncToolbarMenu
+            // Re-read every 30 seconds: a deaf receiver brings no frames, so
+            // nothing else would redraw the pill to say so.
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                tncToolbarMenu(now: context.date)
+            }
+        }
+    }
+
+    /// The receive-health warning for each connected radio that has one
+    /// (see ReceiveHealth).
+    private func receiveWarnings(now: Date) -> [RadioID: String] {
+        var warnings: [RadioID: String] = [:]
+        for radio in client.radioSummaries where radio.status == .connected {
+            if let verdict = client.receiveHealth(for: radio.id, now: now) {
+                warnings[radio.id] = ReceiveHealth.message(verdict)
+            }
+        }
+        return warnings
+    }
+
+    /// The pill's warning glyph, shown only when a radio looks deaf.
+    @ViewBuilder
+    private func receiveWarningGlyph(_ warnings: [RadioID: String]) -> some View {
+        if !warnings.isEmpty {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.orange)
+                .help(warnings.values.sorted().joined(separator: "\n"))
+                .accessibilityLabel("Receive warning")
+        }
+    }
+
+    /// "Check the receive level" for a TNC4, which has a meter to check it
+    /// with; a menu line for any other radio.
+    @ViewBuilder
+    private func receiveWarningItems(_ radio: RadioID, warning: String?) -> some View {
+        if let warning {
+            Text(warning)
+            if client.mobilinkdControl(for: radio) != nil {
+                Button("Check Receive Level\u{2026}") {
+                    SettingsRouter.shared.navigate(to: .radioReceiveAudio, radio: radio)
+                }
+            }
         }
     }
 
     /// TNC transport status menu — clickable pill with connect/disconnect actions
     @ViewBuilder
-    private var tncToolbarMenu: some View {
+    private func tncToolbarMenu(now: Date) -> some View {
+        let warnings = receiveWarnings(now: now)
         if settings.hasMultipleRadios {
-            radiosToolbarMenu
+            radiosToolbarMenu(warnings: warnings)
         } else {
-            singleRadioToolbarMenu
+            singleRadioToolbarMenu(warnings: warnings)
         }
     }
 
     /// Several radios: one dot each, the blinkenlights for all of them, a
     /// label that counts, and a menu with a section per radio.
-    private var radiosToolbarMenu: some View {
+    private func radiosToolbarMenu(warnings: [RadioID: String]) -> some View {
         let radios = client.radioSummaries
         return HStack(spacing: 8) {
+            receiveWarningGlyph(warnings)
+
             if radios.contains(where: { $0.status == .connected }) {
                 HStack(spacing: 2) {
                     Blinkenlight(color: .green, trigger: client.lastRxTime)
@@ -2769,6 +2814,7 @@ struct ContentView: View {
                         if radio.status == .failed, let error = radio.lastError {
                             Text(error)
                         }
+                        receiveWarningItems(radio.id, warning: warnings[radio.id])
                     }
                 }
 
@@ -2791,7 +2837,8 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .medium))
             }
             .menuStyle(.borderlessButton)
-            .help("Radio connection actions")
+            .help(warnings.isEmpty ? "Radio connection actions"
+                  : "Radio connection actions\n\n" + warnings.values.sorted().joined(separator: "\n"))
         }
         .toolbarPill()
     }
@@ -2805,8 +2852,12 @@ struct ContentView: View {
         }
     }
 
-    private var singleRadioToolbarMenu: some View {
-        HStack(spacing: 8) {
+    private func singleRadioToolbarMenu(warnings: [RadioID: String]) -> some View {
+        let primary = settings.primaryRadio?.id
+        let warning = primary.flatMap { warnings[$0] }
+        return HStack(spacing: 8) {
+            receiveWarningGlyph(warnings)
+
             // TX / RX Blinkenlights, only while connected. Idle, two gray
             // dots beside the status dot read as a loading indicator.
             if client.status == .connected {
@@ -2852,6 +2903,12 @@ struct ContentView: View {
                     Text(connectionEndpointLabel)
                 }
 
+                if let primary, warning != nil {
+                    Section("Receive") {
+                        receiveWarningItems(primary, warning: warning)
+                    }
+                }
+
                 if let lastError = client.lastError {
                     Section("Last error") {
                         Text(lastError)
@@ -2868,7 +2925,7 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .medium))
             }
             .menuStyle(.borderlessButton)
-            .help("TNC connection actions")
+            .help(warning.map { "TNC connection actions\n\n\($0)" } ?? "TNC connection actions")
         }
         .toolbarPill()
     }

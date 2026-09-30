@@ -22,6 +22,8 @@ nonisolated enum SettingsSection: String, Hashable, Sendable, CaseIterable {
 
     // A radio's page, top to bottom
     case radioConnection
+    /// A TNC4's receive audio: its level meter, input gain and twist.
+    case radioReceiveAudio
     case radioIdentity
     case radioChannel
     case radioAPRSPath
@@ -46,7 +48,7 @@ nonisolated enum SettingsSection: String, Hashable, Sendable, CaseIterable {
         switch self {
         case .stationIdentity, .stationPosition, .display, .online, .system:
             return .general
-        case .radioConnection, .radioIdentity, .radioChannel, .radioAPRSPath,
+        case .radioConnection, .radioReceiveAudio, .radioIdentity, .radioChannel, .radioAPRSPath,
              .radioBeacon, .radioPacketServices, .radioDigipeater, .radioTiming:
             return .radios
         case .netRomNode, .ping, .linkLayer, .adaptiveTransmission, .axdpProtocol, .fileTransfer:
@@ -114,6 +116,8 @@ enum SettingsHome {
         Entry(setting: "radio.blePeripheralUUID", section: .radioConnection),
         Entry(setting: "radio.mobilinkdEnabled", section: .radioConnection),
         Entry(setting: "radio.tnc4", section: .radioConnection),
+        Entry(setting: "radio.tnc4.inputGain", section: .radioReceiveAudio),
+        Entry(setting: "radio.tnc4.inputTwist", section: .radioReceiveAudio),
         Entry(setting: "radio.modem", section: .radioConnection),
         Entry(setting: "radio.maxTransmitSeconds", section: .radioConnection),
         Entry(setting: "radio.callsign", section: .radioIdentity),

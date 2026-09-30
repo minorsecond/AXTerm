@@ -381,6 +381,10 @@ final class PacketEngine: ObservableObject {
     /// The same two clocks, per radio, for the sidebar's radio rows.
     @Published private(set) var lastRxByRadio: [RadioID: Date] = [:]
     @Published private(set) var lastTxByRadio: [RadioID: Date] = [:]
+    /// When each radio's link last came up, and the frames it has sent since,
+    /// for `ReceiveHealth`. Cleared when the link goes down.
+    @Published private(set) var connectedAtByRadio: [RadioID: Date] = [:]
+    @Published private(set) var txSinceConnectByRadio: [RadioID: Int] = [:]
 
     /// The radios the operator has switched off in the sidebar. Empty — the
     /// default, and the only state a one-radio station can be in — shows
@@ -833,6 +837,7 @@ final class PacketEngine: ObservableObject {
             completion?(.failure(error))
             return
         }
+        txSinceConnectByRadio[frame.radio, default: 0] += 1
 
         // Encode the frame as AX.25
         let ax25Data = frame.encodeAX25()
@@ -3201,6 +3206,11 @@ extension PacketEngine: RadioManagerDelegate {
 
         case .connected:
             clearPendingConnectionError(for: link)
+            let now = Date()
+            for radio in radioManager.radios(carriedBy: link) {
+                connectedAtByRadio[radio] = now
+                txSinceConnectByRadio[radio] = 0
+            }
             addSystemLine("Connected to \(endpoint)", category: .connection,
                           radios: radioManager.radios(carriedBy: link))
             eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)
@@ -3222,18 +3232,40 @@ extension PacketEngine: RadioManagerDelegate {
             }
 
         case .disconnected:
+            forgetConnection(of: link)
             addSystemLine("Disconnected", category: .connection,
                           radios: radioManager.radios(carriedBy: link))
             eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
             SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Disconnected", level: .info, data: nil)
 
         case .failed:
+            forgetConnection(of: link)
             deferConnectionError("Connection to \(endpoint) failed", for: link, category: .connection)
             eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(endpoint)", metadata: nil)
             SentryManager.shared.captureConnectionFailure("KISS link failed: \(endpoint)")
         }
 
         refreshLinkSummary()
+    }
+
+    private func forgetConnection(of link: LinkSession) {
+        for radio in radioManager.radios(carriedBy: link) {
+            connectedAtByRadio[radio] = nil
+            txSinceConnectByRadio[radio] = nil
+        }
+    }
+
+    /// Whether this radio's receiver looks deaf right now (see
+    /// `ReceiveHealth`). Nil for a radio whose link is not up, or one that
+    /// is hearing traffic.
+    func receiveHealth(for radio: RadioID, now: Date = Date()) -> ReceiveHealth.Verdict? {
+        guard radioManager.state(of: radio) == .connected else { return nil }
+        let onAPRS = radioManager.profiles.first { $0.id == radio }?.aprsEnabled ?? false
+        return ReceiveHealth.assess(connectedAt: connectedAtByRadio[radio],
+                                    lastRx: lastRxByRadio[radio],
+                                    transmittedSinceConnect: txSinceConnectByRadio[radio] ?? 0,
+                                    now: now,
+                                    quietAfter: ReceiveHealth.quietAfter(onAPRS: onAPRS))
     }
 
     /// Recompute the top connection banner from the links that are failed

@@ -28,12 +28,16 @@ struct RadioDetailView: View {
     /// the operator's, so choosing "Another callsign" does not snap back while
     /// the field is still empty.
     @State private var usesOwnCallsign = false
+    /// The clock the receive-health warning is judged by, moved on every 30
+    /// seconds while the radio is connected. A deaf receiver brings no
+    /// frames, and so nothing else that would redraw the page.
+    @State private var healthClock = Date()
     /// What the last "Send one now" did, shown under the button for a while.
     @State private var beaconNowResult: BeaconNowFeedback.Result?
 
     /// The sections a deep link can land on.
     static let landingSections: Set<SettingsSection> = [
-        .radioConnection, .radioIdentity, .radioChannel, .radioAPRSPath,
+        .radioConnection, .radioReceiveAudio, .radioIdentity, .radioChannel, .radioAPRSPath,
         .radioBeacon, .radioPacketServices, .radioDigipeater, .radioTiming,
     ]
 
@@ -80,6 +84,12 @@ struct RadioDetailView: View {
         .task(id: viewModel.radioState) {
             await MobilinkdSettingsSections.readTNC4WhenUp(radioID: radioID, client: client,
                                                            state: viewModel.radioState)
+        }
+        .task(id: viewModel.radioConnected) {
+            while viewModel.radioConnected, !Task.isCancelled {
+                healthClock = Date()
+                try? await Task.sleep(for: .seconds(30))
+            }
         }
         .sheet(isPresented: $showingSymbolPicker) {
             APRSSymbolPicker(
@@ -184,12 +194,35 @@ struct RadioDetailView: View {
                     .foregroundStyle(.orange)
             }
 
+            receiveHealthRows
+
             if viewModel.selectedTransport == .modem, viewModel.radioConnected {
                 ModemStatusRows(viewModel: viewModel)
             }
 
             tncIdentityRow
             connectRow
+        }
+    }
+
+    /// A connected radio that has decoded nothing for a while, said where
+    /// the operator is already looking, with the TNC4's level meter one
+    /// click away (see ReceiveHealth).
+    @ViewBuilder
+    private var receiveHealthRows: some View {
+        if let verdict = client.receiveHealth(for: radioID, now: max(healthClock, Date())) {
+            Label(ReceiveHealth.message(verdict), systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .help("Worked out from this radio's own traffic: when its link came up, when it last "
+                      + "decoded a frame, and how many it has sent since. A radio that has just "
+                      + "connected is never flagged.")
+            if client.mobilinkdControl(for: radioID) != nil {
+                Button("Check the Receive Level\u{2026}") {
+                    router.navigate(to: .radioReceiveAudio, radio: radioID)
+                }
+            }
         }
     }
 

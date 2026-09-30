@@ -120,6 +120,7 @@ struct MobilinkdSettingsSections: View {
         } footer: {
             Text("Measure with the radio's squelch open on a quiet channel, and aim for a level that never touches either end. For the same level, less gain and more radio volume recovers faster after transmitting. Twist is usually 6 dB for a radio's speaker output and 0 dB for flat audio.")
         }
+        .id(SettingsSection.radioReceiveAudio)
     }
 
     @ViewBuilder
