@@ -7,9 +7,13 @@ on 2026-09-29 with an Icom IC-V8 on 144.390 and 145.050 MHz.
 Code: `Transmission/MobilinkdTNC.swift` (commands),
 `MobilinkdDeviceState.swift` (replies), `MobilinkdSettings.swift` (per-radio
 settings), `MobilinkdSession.swift` and `MobilinkdSessionDriver.swift` (what
-happens on connect and disconnect), `MobilinkdLevelAssistant.swift`,
-`KISSLinkBLE.swift` and `KISSLinkSerial.swift` (transports), and
-`Settings/MobilinkdSettingsSections.swift` (the settings page).
+happens on connect and disconnect, and timed level recordings),
+`TNC4LevelSampling.swift`, `MobilinkdLevelAssistant.swift`,
+`KISSLinkBLE.swift` and `KISSLinkSerial.swift` (transports),
+`Radio/ReceiveLevel/` (receive-level calibration and the drift watch),
+`Radio/ReceiveHealth.swift` (the deaf-receiver warning), and
+`Settings/MobilinkdSettingsSections.swift` and `ReceiveLevelTuningRows.swift`
+(the settings page).
 
 The command set comes from the firmware source, checked out as the
 `tnc4-firmware` submodule (`Core/TNC/KissHardware.hpp` and `.cpp`). Mobilinkd's
@@ -50,8 +54,9 @@ or another app, finds the TNC4 as its owner left it.
 The radio's page (Settings › Radios), under Connection, shows:
 
 - The TNC4's model, firmware, serial number and battery.
-- Receive audio: a live level meter, input gain and twist, and "Find the right
-  gain".
+- Receive audio: a live level meter, receive-level calibration and the
+  half-hourly level check (see "Receive-level calibration" below), input gain
+  and twist, and "Find the right gain".
 - Transmit audio: output level and twist, and test tones.
 - Radio interface: PTT style and modem type. TX delay, persistence, slot time
   and TX tail are the page's Timing section, sent on every connect and again
@@ -69,6 +74,12 @@ because the input recovers from an unkey sooner at low gain (see "The unkey
 jolt" below). If the lowest gain clips, turn the radio down; if the highest is
 too quiet, turn it up.
 
+Noise is a poor stand-in for packets. On 2026-09-30 open-squelch noise filled
+55% of the range while a real packet's tones arrived at 16%, so a gain chosen
+from noise can leave packets 10 dB quieter than intended. Receive-level
+calibration measures the packets themselves and is the better tool where it
+can run.
+
 The firmware's own auto-adjust isn't used. It saves its result to flash,
 changing the TNC4 for every radio, and it loops forever if the input clips at
 gain 0 (`AudioLevel.cpp`).
@@ -79,6 +90,212 @@ A test tone keys the radio and holds it keyed until it is stopped. AXTerm asks
 before sending one and stops it after 10 seconds regardless. The output level
 can be changed while it plays. Mobilinkd advises keeping output gain at 64 or
 below for a handheld, whose mic input expects very low levels.
+
+## Receive level
+
+The right input gain puts packet tones in the middle of the TNC4's range, and
+stays right only as long as nobody touches the radio's volume.
+AXTerm sets it per radio from packets it measures, watches for it drifting,
+and does both with the one radio and what's on the air. No second receiver
+is involved.
+
+Every measurement streams input levels (`06 05`), which turns the TNC4's
+demodulator off, and ends with RESET, including when it is canceled, fails,
+or the link closes. A link that drops can't send one; the next connection
+restarts the demodulator and its connect sequence ends with RESET anyway.
+Changes go into the radio's managed input gain like any other setting:
+applied in working memory while connected, the TNC4's own put back on
+disconnect, never saved to flash, and never through the firmware's
+auto-adjust.
+
+### What a packet looks like in the level stream
+
+The TNC4 sends a level report about ten times a second in 1200 baud mode
+(30 blocks of 88 samples at 26.4 kHz per report, `AudioInput.cpp`,
+`streamLevels`). On 2026-09-30, with the IC-V8's squelch open on 144.390,
+each packet left the same trace:
+
+1. Open-squelch noise at 30,000 to 40,000 peak to peak (about 55%).
+2. The sending station's carrier, quieting the noise to about 560.
+3. The AFSK tones, steady at about 10,500 (16%) for the half second to a
+   second the packet lasts.
+4. Noise again.
+
+With the squelch closed, the noise is replaced by silence and the trace is
+silence, tones, silence. `PacketToneSignature` looks for a steady run of
+reports that starts right after a much quieter one:
+
+| Rule | Value | Why |
+|---|---|---|
+| Quiet report before the tones | at most 15% of the tone level (-16.5 dB), within 2 reports | The carrier was 25 dB under the tones and a closed squelch about 30 dB. The tones at the end of a packet were only 10 dB under the noise that followed, and must not pass for a carrier. |
+| Steadiness | every report within ±30% of the run's median | AFSK has a constant envelope; one packet's reports varied by a few percent. |
+| Length | 3 reports (0.3 s) to 4 s | The shortest useful APRS frame takes about 0.3 s; 256 bytes with a 500 ms preamble takes 2.3 s. |
+| Apart from the floor | at least 15% from the clean reports between packets | Rejects the noise that comes back after a carrier with no data on it. |
+
+All the rules are ratios, so they hold at any gain step. Clipped reports can
+be part of a run (the packet is then marked clipped) but never count as the
+quiet report, because an input pinned at one end, as after the IC-V8 unkeys,
+reads as a small peak-to-peak.
+
+### Choosing the gain
+
+Input gain steps are 0 to 4: follower mode, then PGA gains of 2, 4, 8 and
+16 (`AudioLevel.cpp`, `set_input_gain`), shown as 0 to +24 dB. One step
+doubles the peak-to-peak of everything at the input until it reaches full
+scale, so one measurement predicts every other step (`ReceiveGainAdvice`).
+
+- Aim for packet tones near 45% of full scale. The firmware's auto-adjust
+  puts whatever is on the input between 50% and 100%, usually noise; tones
+  need more headroom because stations' deviation differs by 3 dB or so.
+- Never pick a step predicted above 80%.
+- Take the lowest step within 1.5 dB of the one nearest 45%. Less gain
+  recovers sooner after an unkey. Today's 16% sits almost exactly between
+  +6 dB (32%) and +12 dB (64%); +6 dB wins.
+- Anything from 30% to 70% is fine. If even +24 dB leaves packets under 30%,
+  AXTerm sets +24 dB and says to turn the radio's volume up. If even 0 dB puts
+  them over 80%, or they clip at 0 dB, it says to turn the volume down.
+- Clipped tones only give a lower bound, so the advice is one step down and
+  calibrate again.
+
+### Calibrating an APRS radio
+
+"Calibrate receive level…" in the radio's Receive audio section asks first,
+then:
+
+1. Waits for the radio to be idle, and for the ten-minute limit (below).
+2. Arms a recording, then sends the radio's own beacon once through the usual
+   beacon path, with its own path and SSID.
+3. When the link writes the frame, estimates when the TNC4 will finish sending
+   it: 0.1 s for the link, the TX delay, the frame at 1200 bps with 5% for bit
+   stuffing, and the tail (`TNC4Airtime`). The stream must not be running when
+   the TNC4 keys up or unkeys: both post to its audio task and end the stream
+   (`HDLCEncoder.hpp`). If it stops anyway, AXTerm asks again, twice at most.
+4. Streams from 0.3 s to 6 s after that estimate, which covers fill-in and
+   wide digipeaters, then sends RESET.
+5. Finds the packets, takes their median tone level, and sets the input gain
+   the rules above choose. Reports within 3 s of the unkey are left out of the
+   noise floor, because the IC-V8's jolt pins the input for up to 2.7 s.
+
+Calibrating applies the result straight away, because the operator asked for
+it; the result says what changed and offers Undo. For example: "Set to +6 dB.
+Heard 2 digipeats at 16% at 0 dB. +6 dB puts them near 32%." The tooltip lists
+each packet (when, how loud, how long, the carrier before it), the noise
+between packets and the aim. Packets heard in the window are taken as the
+beacon's digipeats; any packet serves to measure level.
+
+If no packet is heard, nothing changes: "No digipeater was heard in the 6 s
+after the beacon, so nothing was changed. Try again after 10:15, or check the
+radio's volume, squelch and antenna."
+
+The TNC4 doesn't decode during the window, so those digipeats don't appear in
+the log, and the calibration beacon is left out of the digipeat check.
+
+APRS etiquette: one beacon per calibration, and no calibration beacon within
+ten minutes of the last on that radio (`CalibrationBeaconLimit`). The time is
+stored with the radio's record, so restarting AXTerm doesn't reset it. Ten
+minutes is the usual fixed-station beacon interval. AXTerm never sweeps gains
+by sending more beacons.
+
+### Packet channels
+
+No calibration beacon, ever. The drift watch's samples (below) sometimes
+catch a packet; each one's tone level is kept, carried to the current gain
+at ×2 per step. With three or more from the last day, the page recommends a
+gain from their median and offers "Use +12 dB" (or whichever). Until then it
+says how many it has and points to the level meter.
+
+### The drift watch
+
+While a TNC4 radio is connected, AXTerm takes a 2 s level sample about every
+30 minutes (±5 minutes, so radios don't all go deaf together; the first two to
+three minutes after connecting), and sends RESET after it. It skips a sample,
+and tries again shortly, while the TNC4 is measuring or sending a tone from
+the settings page, while a calibration is running, or within 5 s of a frame
+received or sent. A frame going out mid-sample ends it: RESET goes first, so
+the demodulator is back for CSMA. That leaves the TNC4 unable to decode for
+about 0.1% of the time. A switch on the Receive audio section turns it off.
+
+Each sample records the noise floor (the median of the clean reports between
+packets), the share of reports that clipped, and any packets' tone levels.
+The first sample at a calibration's gain fills in its noise floor if the
+calibration couldn't measure one.
+
+`ReceiveLevelDrift` compares samples with the calibration, gain steps taken
+out (6.02 dB each):
+
+| Rule | Threshold | Why |
+|---|---|---|
+| Noise floor moved | 4 dB, two samples in a row, same way, at most 2 h apart | 2 s noise floors wandered about ±1.2 dB with nothing touched; 4 dB moves packets from the middle of the 30-70% band past its edge. Two in a row rules out one burst of interference or another station's carrier. |
+| Packet tones moved | 6 dB, two samples with packets in a row | Stations' deviation differs by about 3 dB, and a sample catches whoever is on. |
+| Packets clipping | two samples with packets in a row, both clipped | Clipped packets are lost now. |
+
+Readings that fill the range only bound the change: noise pinned at full
+scale can show the audio got louder but not by how much, and a calibration
+whose noise already filled the range can only show it got quieter. A
+calibration noise floor under 5% of full scale means the squelch was closed;
+the noise test is then off for that radio and only packets count.
+
+This has limits worth knowing. With the squelch open and the gain set for
+packets, noise often fills the range, and then only packets can show the
+audio got louder. With the squelch closed, only packets count at all. Both
+depend on a sample happening to catch a packet.
+
+### The digipeat check
+
+On an APRS radio, AXTerm remembers which digipeaters repeat the UI frames
+this radio sends through a path (beacons, messages, objects), crediting a
+repeat heard up to 30 s after sending to the station in the last used hop
+(`DigipeatExpectation`, last 20 frames). If three frames in a row come back
+from nobody, and at least five earlier frames were repeated by a digipeater
+that repeated 60% or more of them, that's a finding. It can't tell a receive
+problem from a transmit problem, and says so in the tooltip.
+
+### Receive health
+
+`ReceiveHealth` flags a connected radio of any kind that looks deaf, from its
+own traffic:
+
+- Nothing decoded for 20 minutes on an APRS channel, or 60 on a packet
+  channel, counted from the later of the last decoded frame and the moment
+  the link came up.
+- Or at least 3 frames sent since the link came up, at least 5 minutes ago,
+  and nothing decoded since.
+
+A radio that has just connected is never flagged. On 2026-09-30 a TNC4 heard
+nothing for 40 minutes because of the radio's antenna and nothing on screen
+said so; this is the rule that says so now.
+
+### What the operator sees
+
+Findings show on the radio page's status section, in the TNC pill's tooltip
+and menu on the Mac, and in the TNC strip on iOS, next to the receive-health
+line. Each has a tooltip with the evidence: the calibration it's compared
+against, the samples, the change in dB, and the rule. For example: "Receive
+audio on TNC4 Mobilinkd is about 8 dB louder than when calibrated at 10:05.
+The volume may have been moved."
+
+AXTerm never changes the gain on its own after a finding. Retune does:
+
+- On an APRS radio, Retune runs a calibration (one beacon, the ten-minute
+  limit applies).
+- On a packet radio, it offers the step that would undo the change ("Use
+  +0 dB"), or the level meter when there's nothing to go on.
+- When the step needed is outside 0 to +24 dB, the finding says which way to
+  turn the radio's volume instead.
+
+### What is kept
+
+Per radio, in the settings store's defaults under `receiveLevel.v1.<radio>`
+(`ReceiveLevelRecord`): the calibration baseline (time, gain, packet tone
+level, noise floor, and how many packets it came from), the last 12 samples,
+the last 24 packet levels, the time of the last calibration beacon, the last
+20 frames for the digipeat check, and the watch switch. Every field decodes
+tolerantly, so a record from another build loads with defaults for what it
+lacks.
+
+Calibration start and end, each recording window, each sample and each
+finding as it appears or clears go to breadcrumbs (`tnc4.receiveLevel`), the
+transmission log and the event log. New findings also get one console line.
 
 ## Things the TNC4 does that matter
 
@@ -193,7 +410,19 @@ measurement) also need `TEST_RUNNER_AXTERM_TNC4_TX=1`. Check the frequency
 first.
 
 Unit tests cover the command bytes, reply parsing, the settings diff and
-restore, the level assistant and the profile migration.
+restore, the level assistant and the profile migration. For receive level
+(`AXTermTests/Unit/Radio/ReceiveLevel/`, `MobilinkdLevelSamplingTests`): the
+packet finder against synthetic recordings built from the 2026-09-30 numbers,
+the gain choice, the drift and digipeat rules, the calibration beacon limit,
+the stored record, the monitor against a stand-in TNC4, and the driver's
+recordings against a link that only records what it's sent, checking that
+every stream ends with RESET when it completes, is canceled, meets a frame
+going out, a tone, a settings change, or a closing or dropped link.
+
+Not yet tested on hardware: calibration and the drift watch. The window
+timing and the packet finder are built from one afternoon's level traces on
+an IC-V8; other radios' carriers and squelch tails may need the thresholds
+adjusted.
 
 `TNC4SerialLiveTests.swift` does the same over USB and is skipped unless
 `TEST_RUNNER_AXTERM_TNC4_USB=1` is set. On 2026-09-29 it confirmed the session,
