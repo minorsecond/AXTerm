@@ -93,3 +93,17 @@ struct RadioLanding {
     /// The id to scroll to for the radio a link names, or for none.
     let anchor: (RadioID?) -> AnyHashable
 }
+
+extension View {
+    /// The margin the older settings pages keep around their form on the Mac.
+    /// On iOS a grouped form already runs edge to edge with its own insets,
+    /// and the extra padding drew it as a gray box inside a white page.
+    @ViewBuilder
+    func settingsPagePadding() -> some View {
+        #if os(macOS)
+        padding(20)
+        #else
+        self
+        #endif
+    }
+}

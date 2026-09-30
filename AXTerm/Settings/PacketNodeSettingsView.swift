@@ -376,7 +376,7 @@ struct PacketNodeSettingsView: View {
                 }
             }
         }
-        .padding(20)
+        .settingsPagePadding()
         .onAppear {
             seedAdaptiveSettings()
         }

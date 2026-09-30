@@ -394,7 +394,7 @@ struct WinlinkSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
+        .settingsPagePadding()
         .onAppear {
             passwordDraft = settings.password
             apiKeyDraft = settings.apiKeyOverride

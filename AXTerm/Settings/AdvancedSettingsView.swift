@@ -67,7 +67,7 @@ struct AdvancedSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .padding(20)
+        .settingsPagePadding()
         .onChange(of: settings.sentryEnabled) { _, _ in SentryManager.shared.startIfEnabled(settings: settings) }
         .onChange(of: settings.sentrySendPacketContents) { _, _ in SentryManager.shared.startIfEnabled(settings: settings) }
         .onChange(of: settings.sentrySendConnectionDetails) { _, _ in SentryManager.shared.startIfEnabled(settings: settings) }

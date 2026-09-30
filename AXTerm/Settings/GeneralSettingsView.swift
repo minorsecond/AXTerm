@@ -131,7 +131,7 @@ struct GeneralSettingsView: View {
                 #endif
             }
         }
-        .padding(20)
+        .settingsPagePadding()
         .onTapGesture {
             // Clear focus when clicking background. A touch platform
             // dismisses the keyboard through the focus system instead.

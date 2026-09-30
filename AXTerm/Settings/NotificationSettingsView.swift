@@ -164,7 +164,7 @@ struct NotificationSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .padding(20)
+        .settingsPagePadding()
         .textEntryPrompt($prompt)
     }
     

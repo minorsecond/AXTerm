@@ -99,13 +99,16 @@ struct RadioAPRSSections: View {
                 RadioMismatchedBeaconRows(profile: profile, channel: .aprs, bind: bind)
             }
         } header: {
+            // The link lands on the header, not the section. A section's id
+            // scrolls its first row to the top, which left the radio's name
+            // hidden under the navigation bar on iOS.
             Text(RadioRoleSections.header(for: profile, callsign: settings.onAirCallsign(for: radioID)))
+                .id(RadioRoleSections.anchor(radioID, on: .aprs))
         } footer: {
             Text("The path is for everything APRS this radio sends: the beacon, the map's Ping and "
                  + "your messages. The beacon uses the station position from General unless this "
                  + "radio has a fixed one.")
         }
-        .id(RadioRoleSections.anchor(radioID, on: .aprs))
     }
 
     @ViewBuilder
@@ -283,10 +286,10 @@ struct RadioPacketSections: View {
                       + "mailbox is on the air at all is set under BBS.")
         } header: {
             Text(RadioRoleSections.header(for: profile, callsign: settings.onAirCallsign(for: radioID)))
+                .id(RadioRoleSections.anchor(radioID, on: .packet))
         } footer: {
             Text(RadioServiceNotes.packetFooter(radio: profile, settings: settings))
         }
-        .id(RadioRoleSections.anchor(radioID, on: .packet))
     }
 
     private var digipeaterSection: some View {
