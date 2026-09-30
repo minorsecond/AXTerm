@@ -5,8 +5,8 @@ import Foundation
 /// `RadioProfile.aprsEnabled` is the stored truth and this is a way of
 /// reading and setting it. An APRS channel is a shared beacon frequency, so
 /// the packet services (node announcements, ping, the mailbox, AXDP) stay off
-/// there (`RadioProfile.runsPacketServices`). The radio's page shows the
-/// sections for its channel and nothing else.
+/// there (`RadioProfile.runsPacketServices`). A radio's role settings are
+/// shown on the service page for its channel (`RadioRoleSections`).
 nonisolated enum RadioChannel: String, CaseIterable, Identifiable, Sendable {
     case aprs
     case packet

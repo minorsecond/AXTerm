@@ -1671,7 +1671,7 @@ final class SessionCoordinator: ObservableObject {
     func beaconObstacle(_ settings: AppSettingsStore) -> String? {
         let radios = settings.activeRadios.filter { $0.enabled && $0.beacon.enabled }
         guard !radios.isEmpty else {
-            return "No radio has a beacon switched on. Each radio's beacon is on its page under Settings › Radios."
+            return "No radio has a beacon switched on. A radio's beacon is set in its section under Settings › APRS or Settings › Packet Node."
         }
         let obstacles = radios.compactMap { beaconObstacle(for: $0.id, settings: settings) }
         return obstacles.count == radios.count ? obstacles.first : nil
@@ -1936,8 +1936,9 @@ final class SessionCoordinator: ObservableObject {
         func serviceRadios(_ uses: (RadioProfile) -> Bool) -> [RadioID] {
         guard let appSettings else { return [.primary] }
         let enabled = appSettings.activeRadios.filter(\.enabled)
-        // One radio answers to its own switches too: they are on its page,
-        // and Ping stations switched off there means no pinging. It used to
+        // One radio answers to its own switches too: they are in its section
+        // under Packet Node, and Ping stations switched off there means no
+        // pinging. It used to
         // be used whatever its switches said, when they were not shown.
         guard enabled.count > 1 else {
             guard let only = enabled.first else { return [.primary] }

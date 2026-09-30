@@ -3,8 +3,9 @@
 //  AXTermTests
 //
 //  The per-radio service switches (announce the node, ping, answer the
-//  mailbox, digipeat) live on the radio's page and work with one radio as
-//  well as several. The service pages only say which radios they run on.
+//  mailbox, digipeat) live in each packet radio's sections under Packet Node
+//  and work with one radio as well as several. The "Runs on" lines only say
+//  which radios a service runs on.
 //
 
 import XCTest

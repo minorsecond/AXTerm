@@ -107,7 +107,7 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
 
     // MARK: Services on this radio
     // All on by default, so one radio behaves exactly as it always has. The
-    // switches sit on the radio's page, under its Packet channel. An older
+    // switches sit in the radio's section on the Packet Node page. An older
     // build also stored `sendsBeacons` here; it never had a control or a
     // reader, and decoding ignores it.
     var pings: Bool = true

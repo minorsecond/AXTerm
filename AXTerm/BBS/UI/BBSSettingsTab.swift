@@ -22,7 +22,8 @@ struct BBSSettingsTab: View {
     let stationCallsign: String
     let isWinlinkP2PArmed: Bool
     /// The radios the mailbox answers on, named on the page. Which radios
-    /// those are is set on each radio's page (Answer mailbox calls).
+    /// those are is set in each radio's section under Packet Node (Answer
+    /// mailbox calls).
     var runsOn: [String]? = nil
 
     /// True only when a call to the mailbox would *also* be answered by
@@ -41,7 +42,7 @@ struct BBSSettingsTab: View {
                 Toggle("Answer calls", isOn: $settings.onAir)
                 if let runsOn {
                     RunsOnRow(names: runsOn,
-                              none: "No packet radio answers mailbox calls. Switch Answer mailbox calls on under a packet radio's services.")
+                              none: "No packet radio answers mailbox calls. Switch Answer mailbox calls on for a packet radio under Packet Node.")
                 }
                 Text("A mailbox that answers transmits with nobody present. "
                      + "In the US that is automatic control, so it is off until you say otherwise.")

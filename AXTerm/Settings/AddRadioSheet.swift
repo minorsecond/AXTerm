@@ -2,7 +2,8 @@ import SwiftUI
 
 /// Adding a radio, one question at a time: how it is reached, what its
 /// channel is for, the SSID it goes on the air with, and the few settings
-/// that role needs. Done opens the radio's page, where everything else is.
+/// that role needs. Done opens the radio's page. The rest of its role is set
+/// in its section under APRS or Packet Node.
 ///
 /// The steps reuse the radio page's own transport views and view model, so
 /// the sheet and the page cannot disagree about what a field does. See
@@ -63,7 +64,9 @@ struct AddRadioSheet: View {
         case .connect: return "How AXTerm reaches the TNC or radio. Nothing is transmitted while you set it up."
         case .channel: return "What this radio's frequency is for. It decides which services run on it."
         case .identity: return "The address this radio goes on the air with."
-        case .basics: return "The few settings this channel needs. Everything else is on the radio's page."
+        case .basics: return channel == .aprs
+            ? "The few settings this channel needs. The rest are under Settings \u{203A} APRS."
+            : "The few settings this channel needs. The rest are under Settings \u{203A} Packet Node."
         case .done: return "Check it over. Done switches the radio on."
         }
     }
@@ -368,7 +371,7 @@ struct AddRadioSheet: View {
     private var aprsBasics: some View {
         SetupCard(title: "Position beacon",
                   note: "The beacon uses the station position from General. A fixed position, a "
-                    + "comment and the rest are on the radio's page.") {
+                    + "comment and the rest are under Settings \u{203A} APRS.") {
             LabeledContent("Symbol") {
                 HStack(spacing: 8) {
                     Text("\(String(symbol.table))\(String(symbol.code))")
@@ -442,8 +445,10 @@ struct AddRadioSheet: View {
                     ("Call", radio.resolvedCallsign(station: settings.myCallsign)),
                     ("Channel", channel.title),
                 ])
-                Text("Done switches this radio on. The rest of its settings are on its page "
-                     + "under Settings \u{203A} Radios.")
+                Text("Done switches this radio on. Its connection and timing are on its page "
+                     + "under Settings \u{203A} Radios, and its "
+                     + (channel == .aprs ? "path and beacon under Settings \u{203A} APRS."
+                        : "services, digipeater and ID beacon under Settings \u{203A} Packet Node."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
