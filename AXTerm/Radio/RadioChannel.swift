@@ -41,12 +41,30 @@ nonisolated enum RadioChannel: String, CaseIterable, Identifiable, Sendable {
     /// moved to APRS for the first time gets a position beacon that follows
     /// the station position. Its packet services are not touched either;
     /// they are only held off while the channel is APRS.
+    ///
+    /// Moved to APRS for the first time with no path ever set, it also gets
+    /// `APRSPath.newRadioDefault`. Only then: a stored path, direct included,
+    /// is the operator's; a radio already on APRS keeps what it sends; and a
+    /// radio that has been on APRS before (it has a position beacon set up)
+    /// keeps resolving its path from that beacon as it always has.
     func apply(to radio: inout RadioProfile) {
+        if Self.takesDefaultAPRSPath(radio, movingTo: self) {
+            radio.aprsPath = APRSPath.newRadioDefault
+        }
         radio.aprsEnabled = self == .aprs
         radio.beacon.kind = beaconKind
         if self == .aprs, radio.beacon.aprs == nil {
             radio.beacon.aprs = .followingStation
         }
+    }
+
+    /// Whether moving `radio` to `channel` should give it the default APRS
+    /// path. See `apply(to:)`.
+    static func takesDefaultAPRSPath(_ radio: RadioProfile, movingTo channel: RadioChannel) -> Bool {
+        channel == .aprs
+            && of(radio) != .aprs
+            && radio.aprsPath == nil
+            && radio.beacon.aprs == nil
     }
 
     /// Whether the stored beacon is the kind this radio's channel sends.

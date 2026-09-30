@@ -24,9 +24,15 @@ nonisolated enum APRSPath {
     static let maxWides = 3
 
     /// The paths worth offering, in the order a station should consider them.
-    /// Empty is direct: the honest default for a station that has not decided,
-    /// because it puts nothing extra on the channel.
+    /// Empty is direct: it puts nothing extra on the channel.
     static let presets: [String] = ["", "WIDE1-1", "WIDE1-1,WIDE2-1", "WIDE2-1", "WIDE2-2"]
+
+    /// The path a radio gets when it first goes on an APRS channel with no
+    /// path of its own: the usual fixed-station path, one fill-in hop and one
+    /// wide one. A new APRS radio used to start direct, so its beacons went
+    /// no further than its own horizon. See `RadioChannel.apply(to:)` for
+    /// why an existing radio never has its path changed by this.
+    static let newRadioDefault = "WIDE1-1,WIDE2-1"
 
     /// How a path reads in a menu.
     static func label(_ path: String) -> String {
@@ -123,7 +129,7 @@ nonisolated enum APRSPath {
             guard parts.count == 2, let n = Int(call.dropFirst(call.hasPrefix("WIDE") ? 4 : 5)),
                   let N = Int(parts[1]) else { continue }
             if N == 0 {
-                return "\(token) is a used-up digipeater slot — its hops are spent, "
+                return "\(token) is a used-up digipeater slot. Its hops are spent, "
                     + "so no digipeater will act on it."
             }
             if n < N {
@@ -187,7 +193,7 @@ nonisolated enum APRSProbeReach: String, Sendable, CaseIterable, Identifiable {
         switch self {
         case .direct:
             return "One transmission, no digipeaters. Everyone who answers can hear this "
-                + "station directly — the only form that answers \"who can hear me\"."
+                + "station directly. It is the only form that answers \"who can hear me\"."
         case .wide:
             return "Digipeated on this radio's APRS path, so stations a hop or two away "
                 + "answer too. Every one of them transmits a reply, so ask sparingly."

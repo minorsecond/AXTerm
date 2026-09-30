@@ -487,6 +487,23 @@ which is where the setting lived before, so upgrading never silently shortens a
 working station's reach. An empty string is a decision — direct, deliberately —
 and is kept.
 
+A radio that goes on an APRS channel for the first time with no path ever set
+gets `APRSPath.newRadioDefault`, `WIDE1-1,WIDE2-1`, the usual fixed-station
+path; the path menu then shows that preset. Before this a new APRS radio
+started direct and its beacons reached only its own horizon.
+`RadioChannel.apply(to:)` sets it, so the Add Radio sheet, first-run setup and
+the radio page's Channel picker all behave the same, and it applies only when
+all of these hold:
+
+- the radio is moving to APRS, not already on it;
+- `aprsPath` is `nil` (a stored path, direct included, is the operator's);
+- the radio has no APRS position beacon set up yet (`beacon.aprs == nil`),
+  which is how a radio that was on APRS before is told apart. That radio
+  keeps resolving its path from the beacon as before.
+
+So no existing radio changes what it sends on the air, and the `nil` mapping
+in `effectiveAPRSPath` is unchanged. A packet radio is never touched.
+
 #### Checked against Xastir
 
 Xastir is the de-facto reference for what a well-behaved station does, so the
