@@ -307,7 +307,7 @@ struct StationPositionSettings: View {
                 + "Privacy & Security \u{203A} Location Services."
         case .timeout:
             #if os(macOS)
-            return "Couldn't get a location in time. A Mac has no GPS — it locates by "
+            return "Couldn't get a location in time. A Mac has no GPS; it locates by "
                 + "Wi\u{2011}Fi, so make sure Wi\u{2011}Fi is on (even on Ethernet) and "
                 + "Location Services are enabled, then try again."
             #else

@@ -319,9 +319,9 @@ struct LinkDebugView: View {
 
     private func inputLevelGuidance(_ level: MobilinkdInputLevel) -> String {
         if level.vpp < Self.optimalVppMin {
-            return "Vpp \(level.vpp) is LOW — audio input too quiet. Increase gain or radio volume."
+            return "Vpp \(level.vpp) is low: the audio input is too quiet. Increase gain or radio volume."
         } else if level.vpp > Self.optimalVppMax {
-            return "Vpp \(level.vpp) is HIGH — audio input too loud. Decrease gain or radio volume."
+            return "Vpp \(level.vpp) is high: the audio input is too loud. Decrease gain or radio volume."
         } else {
             return "Vpp \(level.vpp) is in the optimal range (\(Self.optimalVppMin)-\(Self.optimalVppMax))."
         }

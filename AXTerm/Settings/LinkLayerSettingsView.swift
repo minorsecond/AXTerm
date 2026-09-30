@@ -65,7 +65,7 @@ struct LinkLayerSettingsView: View {
                   + "parameters via XID. A 2.2 peer agrees to selective reject "
                   + "(retransmit only the lost frame instead of the whole window) and "
                   + "exchanges packet-length and window limits. Older stations answer "
-                  + "FRMR or stay silent — either way the connect proceeds classically, "
+                  + "FRMR or stay silent, and either way the connect proceeds classically, "
                   + "and the answer is remembered so the one-time timeout is never paid "
                   + "twice. Turn off only if a node misbehaves when it sees XID.")
 

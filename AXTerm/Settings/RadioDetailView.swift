@@ -28,6 +28,8 @@ struct RadioDetailView: View {
     /// the operator's, so choosing "Another callsign" does not snap back while
     /// the field is still empty.
     @State private var usesOwnCallsign = false
+    /// What the last "Send one now" did, shown under the button for a while.
+    @State private var beaconNowResult: BeaconNowFeedback.Result?
 
     /// The sections a deep link can land on.
     static let landingSections: Set<SettingsSection> = [
@@ -374,7 +376,7 @@ struct RadioDetailView: View {
         if let detail = SSIDConvention.detail(ssid: ssid,
                                               family: adviceFamily,
                                               usage: ssidUsage) {
-            Text("\(ssid == 0 ? call : "\(call)-\(ssid)")  \u{2014}  \(detail)")
+            Text("\(ssid == 0 ? call : "\(call)-\(ssid)")  \u{00B7}  \(detail)")
         } else {
             Text(ssid == 0 ? call : "\(call)-\(ssid)")
         }
@@ -530,7 +532,8 @@ struct RadioDetailView: View {
 
         if (profile.beacon.aprs?.symbolTable ?? "/") != "/" {
             LabeledContent("Overlay") {
-                TextField("none", text: overlayBinding)
+                TextField("Overlay", text: overlayBinding, prompt: Text("none"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 60)
                     .help("A single 0\u{2013}9 or A\u{2013}Z drawn over an alternate-table symbol "
                           + "(an S over the digi star, say). Leave empty for the plain "
@@ -556,11 +559,13 @@ struct RadioDetailView: View {
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             LabeledContent("Latitude") {
-                TextField("39.5000", text: coordString(\.latitude))
+                TextField("Latitude", text: coordString(\.latitude), prompt: Text("39.5000"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 140)
             }
             LabeledContent("Longitude") {
-                TextField("-105.2500", text: coordString(\.longitude))
+                TextField("Longitude", text: coordString(\.longitude), prompt: Text("-105.2500"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 140)
             }
         }
@@ -610,7 +615,8 @@ struct RadioDetailView: View {
             }
         }
         LabeledContent("Via digipeaters") {
-            TextField("direct", text: beaconBinding(\.path))
+            TextField("Via digipeaters", text: beaconBinding(\.path), prompt: Text("direct"))
+                .labelsHidden()
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 160)
         }
@@ -625,11 +631,21 @@ struct RadioDetailView: View {
     /// it.
     @ViewBuilder
     private var beaconNowRow: some View {
-        let obstacle = SessionCoordinator.shared?.beaconObstacle(for: radioID, settings: settings)
+        let obstacle = BeaconNowFeedback.blocker(
+            obstacle: SessionCoordinator.shared?.beaconObstacle(for: radioID, settings: settings),
+            linkUp: viewModel.radioConnected)
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Button("Send one now") {
-                    SessionCoordinator.shared?.sendBeacon(for: radioID, settings: settings)
+                    guard let coordinator = SessionCoordinator.shared else {
+                        beaconNowResult = .failed("AXTerm isn't ready to transmit yet.")
+                        return
+                    }
+                    if let why = coordinator.sendBeacon(for: radioID, settings: settings) {
+                        beaconNowResult = .failed(why)
+                    } else {
+                        beaconNowResult = .sent(Date())
+                    }
                 }
                 .disabled(obstacle != nil)
                 Text(obstacle == nil
@@ -643,7 +659,25 @@ struct RadioDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if let result = beaconNowResult {
+                switch result {
+                case .sent(let at):
+                    Label(BeaconNowFeedback.sentLine(at: at), systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                case .failed(let why):
+                    Label("Not sent: \(why)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
+        }
+        // The confirmation is for the moment after the click, not a record.
+        .task(id: beaconNowResult) {
+            guard beaconNowResult != nil else { return }
+            try? await Task.sleep(for: .seconds(20))
+            if !Task.isCancelled { beaconNowResult = nil }
         }
     }
 
@@ -756,8 +790,9 @@ struct RadioDetailView: View {
             if settings.netRomNodeIdentity == .perRadio,
                serviceBinding(\.announcesNode).wrappedValue {
                 LabeledContent("Node alias on this radio") {
-                    TextField(settings.netRomNodeAlias.isEmpty ? "e.g. UHFNOD" : settings.netRomNodeAlias,
-                              text: netRomAliasBinding)
+                    TextField("Node alias on this radio", text: netRomAliasBinding,
+                              prompt: Text(settings.netRomNodeAlias.isEmpty ? "e.g. UHFNOD" : settings.netRomNodeAlias))
+                        .labelsHidden()
                         .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
                 }
                 .help("The six-character name this radio's node announces under, because "
@@ -817,7 +852,9 @@ struct RadioDetailView: View {
                           + "repeating off; 2 is a responsible default that does not "
                           + "regenerate WIDE7-7 floods.")
                 LabeledContent("Also answer to") {
-                    TextField("aliases (comma-separated)", text: digiAliasesBinding)
+                    TextField("Also answer to", text: digiAliasesBinding,
+                              prompt: Text("aliases (comma-separated)"))
+                        .labelsHidden()
                         .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
                 }
                 .help("Other names this digipeater repeats for, such as a club alias. Its "
@@ -871,18 +908,25 @@ struct RadioAPRSPathRow: View {
         VStack(alignment: .leading, spacing: 4) {
             LabeledContent("Path") {
                 HStack(spacing: 8) {
-                    TextField("direct", text: $path)
+                    // Labels hidden: in a grouped form a text field's title
+                    // shows as a second label, and "direct" sat beside a
+                    // field that said WIDE1-1,WIDE2-1.
+                    TextField("Path", text: $path, prompt: Text("direct"))
+                        .labelsHidden()
+                        .multilineTextAlignment(.leading)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 160)
+                    // Labeled with the path in the field, or Custom, so the
+                    // menu never names a different path from the one used.
                     Menu {
                         ForEach(APRSPath.presets, id: \.self) { preset in
                             Button(APRSPath.label(preset)) { path = preset }
                         }
                     } label: {
-                        Image(systemName: "list.bullet")
+                        Text(APRSPath.menuTitle(path))
                     }
                     .menuStyle(.borderlessButton)
-                    .frame(width: 28)
+                    .fixedSize()
                     .help("Common paths.")
                 }
             }
@@ -915,6 +959,31 @@ struct RadioAPRSPathRow: View {
         }
         return "Asks for \(total - 1) digipeater hop\(total - 1 == 1 ? "" : "s"): "
             + "\(total) transmissions of every frame."
+    }
+}
+
+/// What the beacon's "Send one now" button says about itself. Pure, so the
+/// wording can be tested.
+nonisolated enum BeaconNowFeedback {
+    enum Result: Equatable {
+        case sent(Date)
+        case failed(String)
+    }
+
+    /// Why the button can't send: the beacon's own problem first (it needs
+    /// fixing whatever the link does), then a radio that isn't connected.
+    static func blocker(obstacle: String?, linkUp: Bool) -> String? {
+        if let obstacle { return obstacle }
+        return linkUp ? nil : "This radio isn't connected. Connect it above, then send."
+    }
+
+    /// The confirmation, with the time the frame went to the radio.
+    static func sentLine(at date: Date, timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "HH:mm:ss"
+        return "Sent at \(formatter.string(from: date))"
     }
 }
 

@@ -12,7 +12,7 @@ struct NetworkSettingsContent: View {
     var body: some View {
         Grid(alignment: .leading, verticalSpacing: 10) {
             GridRow {
-                Text("Host:")
+                Text("Host")
                     .gridColumnAlignment(.trailing)
                 TextField("Host", text: $viewModel.host)
                     .labelsHidden()
@@ -33,7 +33,7 @@ struct NetworkSettingsContent: View {
             }
             
             GridRow {
-                Text("Port:")
+                Text("Port")
                     .gridColumnAlignment(.trailing)
                 TextField("Port", value: $viewModel.port, format: .number.grouping(.never))
                     .labelsHidden()
@@ -59,7 +59,7 @@ struct SerialSettingsContent: View {
         
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Picker("Device:", selection: selectionBinding) {
+                Picker("Device", selection: selectionBinding) {
                     Text("Select a device...").tag("")
                     Divider()
                     
@@ -144,11 +144,14 @@ struct BLESettingsContent: View {
         
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Picker("Device:", selection: selectionBinding) {
+                Picker("Device", selection: selectionBinding) {
                     Text("Select a device...").tag("")
                     Divider()
-                    ForEach(viewModel.bleDevices) { device in
-                        Text("\(device.displayName) (\(device.rssi) dBm)").tag(device.id.uuidString)
+                    ForEach(BLEDevicePicker.rows(scanned: viewModel.bleDevices,
+                                                 selectedID: viewModel.selectedBLEPeripheralID,
+                                                 savedName: viewModel.savedBLEPeripheralName,
+                                                 connected: viewModel.radioConnected)) { row in
+                        Text(row.label).tag(row.id)
                     }
                 }
                 .labelsHidden()
@@ -187,6 +190,29 @@ struct BLESettingsContent: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// The rows of the Bluetooth device picker.
+///
+/// The scan only lists what has advertised since it started, and a TNC that
+/// is already connected stops advertising, so the radio's own device was
+/// often missing and the picker showed nothing selected. The saved device
+/// always has a row, named as it was when chosen.
+enum BLEDevicePicker {
+    struct Row: Identifiable, Equatable {
+        let id: String
+        let label: String
+    }
+
+    static func rows(scanned: [BLEDiscoveredDevice], selectedID: String,
+                     savedName: String, connected: Bool) -> [Row] {
+        var rows = scanned.map { Row(id: $0.id.uuidString, label: "\($0.displayName) (\($0.rssi) dBm)") }
+        if !selectedID.isEmpty, !rows.contains(where: { $0.id == selectedID }) {
+            let name = savedName.isEmpty ? selectedID : savedName
+            rows.insert(Row(id: selectedID, label: connected ? "\(name) (connected)" : name), at: 0)
+        }
+        return rows
     }
 }
 

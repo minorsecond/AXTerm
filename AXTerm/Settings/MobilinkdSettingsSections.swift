@@ -337,6 +337,9 @@ private struct ManagedTNC4Setting<Value: Hashable, Control: View>: View {
         Toggle(title, isOn: Binding(
             get: { value != nil },
             set: { value = $0 ? (tncValue ?? fallback) : nil }))
+            // Named outright: in the grouped form VoiceOver found these
+            // switches with no title at all.
+            .accessibilityLabel(title)
         if value != nil {
             control(Binding(get: { value ?? fallback }, set: { value = $0 }))
         } else {

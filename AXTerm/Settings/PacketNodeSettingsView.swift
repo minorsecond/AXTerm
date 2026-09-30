@@ -29,7 +29,7 @@ struct PacketNodeSettingsView: View {
                                .axdpProtocol, .fileTransfer]) {
             PreferencesSection("NET/ROM Node", id: .netRomNode) {
                 if settings.allRadiosOnAPRS { aprsLockNote }
-                Toggle("Run the node — answer callers with the node shell",
+                Toggle("Run the node: answer callers with the node shell",
                        isOn: $settings.netRomAcceptInbound)
                     .disabled(settings.allRadiosOnAPRS)
                     .help("Accept NET/ROM circuits AND plain AX.25 connects "
@@ -60,7 +60,7 @@ struct PacketNodeSettingsView: View {
                       + "the same cap.")
 
                 Text("AXTerm always listens to NET/ROM and learns routes from what it hears. "
-                     + "These switches decide whether it also speaks — both change what other "
+                     + "These switches decide whether it also speaks. Both change what other "
                      + "operators' nodes do, so both start off.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -104,7 +104,7 @@ struct PacketNodeSettingsView: View {
                           + "shared channel on routing overhead.")
 
                     if settings.netRomNodeAlias.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text("Set a node alias — announcing without one is legal but leaves "
+                        Text("Set a node alias. Announcing without one is legal but leaves "
                              + "a blank name in every neighbor's node list.")
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -131,7 +131,7 @@ struct PacketNodeSettingsView: View {
 
             PreferencesSection("Ping", id: .ping) {
                 Text("Asks stations whether they can hear this one, using a frame "
-                     + "any AX.25 station answers — no connection, nothing opened. "
+                     + "any AX.25 station answers, with no connection and nothing opened. "
                      + "An answer proves radio works both ways right now; it does "
                      + "not mean the station will route or accept a call.")
                     .font(.caption)
@@ -191,7 +191,7 @@ struct PacketNodeSettingsView: View {
                     .onChange(of: settings.pingBoxCooldownMinutes) { _, _ in applyNetRomSettings() }
                     .help("One station, whatever its SSIDs. K0NTS-1, -7, -10 and -14 "
                           + "are one radio on one antenna, and asking the second "
-                          + "address learns nothing the first did not \u{2014} but "
+                          + "address learns nothing the first did not, but "
                           + "without this they come due together and go out back to "
                           + "back. Set it to No limit to pace each address alone.")
 
@@ -210,7 +210,7 @@ struct PacketNodeSettingsView: View {
                         .onChange(of: settings.pingProbeStationsOthersCall) { _, _ in applyNetRomSettings() }
                         .help("Stations this receiver has never heard, but that a "
                               + "neighbor was heard calling. Asks whether this station "
-                              + "can reach what its neighbors reach — a longer shot, "
+                              + "can reach what its neighbors reach: a longer shot, "
                               + "and a transmission either way.")
 
                     Text("Never while a session is running, never within 10 s of other "

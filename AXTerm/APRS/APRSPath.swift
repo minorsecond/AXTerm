@@ -31,7 +31,27 @@ nonisolated enum APRSPath {
     /// How a path reads in a menu.
     static func label(_ path: String) -> String {
         let text = path.trimmingCharacters(in: .whitespaces)
-        return text.isEmpty ? "Direct — no digipeaters" : text
+        return text.isEmpty ? "Direct, no digipeaters" : text
+    }
+
+    /// The preset a path is, compared entry by entry so case, spaces and
+    /// commas don't matter. Nil when it is none of them.
+    static func matchingPreset(_ path: String) -> String? {
+        let entries = tokens(path)
+        return presets.first { tokens($0) == entries }
+    }
+
+    /// The path menu's own label: which preset the path is, or "Custom" for
+    /// one the operator typed.
+    static func menuTitle(_ path: String) -> String {
+        guard let preset = matchingPreset(path) else { return "Custom" }
+        return preset.isEmpty ? "Direct" : preset
+    }
+
+    private static func tokens(_ path: String) -> [String] {
+        path.uppercased()
+            .split(whereSeparator: { $0 == "," || $0.isWhitespace })
+            .map(String.init)
     }
 
     /// Parse a path the operator typed. Same grammar as the beacon's.

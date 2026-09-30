@@ -72,8 +72,8 @@ enum RadioLinkChoice: String, CaseIterable, Identifiable {
         case .network: "Network TNC"
         case .serial: "Serial TNC"
         case .ble: "Bluetooth LE TNC"
-        case .modemUSB: "Sound modem \u{2014} USB cable"
-        case .modemWiFi: "Sound modem \u{2014} Wi-Fi (Icom LAN)"
+        case .modemUSB: "Sound modem over USB"
+        case .modemWiFi: "Sound modem over Wi-Fi (Icom LAN)"
         }
     }
 
@@ -82,7 +82,7 @@ enum RadioLinkChoice: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .network:
-            "A TNC reached over TCP \u{2014} Direwolf on this Mac, or on another machine."
+            "A TNC reached over TCP, such as Direwolf on this Mac or on another machine."
         case .serial:
             "A hardware TNC on a serial or USB port."
         case .ble:
@@ -90,7 +90,7 @@ enum RadioLinkChoice: String, CaseIterable, Identifiable {
         case .modemUSB:
             "No TNC. This Mac decodes the radio's audio through a USB sound device and keys it over a CI-V serial port."
         case .modemWiFi:
-            "No TNC. This Mac reaches the radio over the radio's own Wi-Fi \u{2014} Icom's network protocol, the one RS-BA1 and wfview use \u{2014} which carries the audio and CI-V together."
+            "No TNC. This Mac reaches the radio over its own Wi-Fi, using Icom's network protocol (the one RS-BA1 and wfview use), which carries the audio and CI-V together."
         }
     }
 
@@ -212,6 +212,12 @@ final class ConnectionTransportViewModel: ObservableObject {
         }
     }
     
+    /// The saved Bluetooth device's name, for the picker when this scan has
+    /// not seen it.
+    var savedBLEPeripheralName: String {
+        settings.radio(radioID)?.blePeripheralName ?? ""
+    }
+
     @Published var host: String = "" {
         didSet { update { $0.host = AppSettingsStore.sanitizeHost(host) } }
     }
@@ -1030,8 +1036,8 @@ final class ConnectionTransportViewModel: ObservableObject {
                 self?.receiveActionMessage = String(
                     format: "Audio output %d \u{2192} %d; the modem now sees %.0f dBFS.", from, to, peak)
             case .controlDoesNothing:
-                self?.receiveActionMessage = "That control does not feed the modem on this link \u{2014} "
-                    + "the level was moved a long way and the audio did not follow. Set the level on the radio."
+                self?.receiveActionMessage = "That control does not feed the modem on this link. "
+                    + "The level was moved a long way and the audio did not follow. Set the level on the radio."
             case .nothingHeard:
                 self?.receiveActionMessage = "Nothing was received while measuring. Try again when the channel is busy."
             case .unavailable(let why):

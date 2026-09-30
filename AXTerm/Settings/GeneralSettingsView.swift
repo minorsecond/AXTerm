@@ -248,13 +248,13 @@ private struct OnlineLookupToggle: View {
         Toggle("Look up callsigns online", isOn: $settings.callsignLookupEnabled)
             .help("Resolves heard and claimed callsigns to a name and "
                   + "location via hamdb.org so they can be placed on the "
-                  + "map \u{2014} this gates the map's automatic lookups and "
+                  + "map. This gates the map's automatic lookups and "
                   + "the node directory's, not just Winlink. Answers are "
                   + "cached permanently and stay usable offline.\n\nOff by "
                   + "default: a lookup tells a third party which stations "
                   + "you are hearing. Public license data, but still a "
                   + "disclosure.")
-        Text("Gates every automatic position lookup in the app \u{2014} the "
+        Text("Gates every automatic position lookup in the app: the "
              + "map, the node directory and Winlink alike.")
             .font(.caption)
             .foregroundStyle(.secondary)

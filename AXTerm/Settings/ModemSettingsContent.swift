@@ -28,7 +28,7 @@ struct ModemSettingsContent: View {
                 usbAudioFields(inputBinding: inputBinding, outputBinding: outputBinding)
             }
 
-            Picker("Mode:", selection: $viewModel.modemMode) {
+            Picker("Mode", selection: $viewModel.modemMode) {
                 ForEach(ModemMode.selectable, id: \.self) { mode in
                     Text(mode.title).tag(mode)
                 }
@@ -95,7 +95,7 @@ struct ModemSettingsContent: View {
                                              ? .green : .red)
                     }
                 }
-                .help("Logs in to the radio over Wi-Fi and waits for it to name itself, then lets go \u{2014} without starting the modem. It confirms the address, username and password reach the radio before you connect for real.")
+                .help("Logs in to the radio over Wi-Fi and waits for it to name itself, then lets go without starting the modem. It confirms the address, username and password reach the radio before you connect for real.")
             }
         }
         // What the operator has to go and do on the radio. What this link
@@ -111,7 +111,7 @@ struct ModemSettingsContent: View {
     @ViewBuilder
     private func usbAudioFields(inputBinding: Binding<String>, outputBinding: Binding<String>) -> some View {
         Group {
-            Picker("Audio in:", selection: inputBinding) {
+            Picker("Audio in", selection: inputBinding) {
                 Text("Choose a device\u{2026}").tag("")
                 Divider()
                 ForEach(viewModel.audioInputs) { device in
@@ -124,7 +124,7 @@ struct ModemSettingsContent: View {
             }
             .help("The device that carries the radio's receive audio. An IC-705 over USB is \u{201C}USB Audio CODEC\u{201D}.")
 
-            Picker("Audio out:", selection: outputBinding) {
+            Picker("Audio out", selection: outputBinding) {
                 Text("Choose a device\u{2026}").tag("")
                 Divider()
                 ForEach(viewModel.audioOutputs) { device in
@@ -137,7 +137,7 @@ struct ModemSettingsContent: View {
             }
             .help("The device the modem's transmit audio plays into. Usually the same codec.")
 
-            Picker("Receive from:", selection: $viewModel.audioInputChannel) {
+            Picker("Receive from", selection: $viewModel.audioInputChannel) {
                 Text("Left channel").tag(ModemInputChannel.left)
                 Text("Right channel").tag(ModemInputChannel.right)
                 Text("Both, averaged").tag(ModemInputChannel.mono)
@@ -159,7 +159,7 @@ struct ModemLevelMeter: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("Receive level:")
+            Text("Receive level")
             ProgressView(value: fraction)
                 .tint(tint)
                 .frame(maxWidth: 220)
@@ -397,7 +397,7 @@ struct ModemRadioSection: View {
                         .controlSize(.small)
                 } label: {
                     Text("Correct them")
-                    Text("Changes only the settings whose right value for packet is not a matter of taste \u{2014} not the mode, not the preamp.")
+                    Text("Changes only the settings whose right value for packet is not a matter of taste. It leaves the mode and the preamp alone.")
                 }
             }
             LabeledContent {

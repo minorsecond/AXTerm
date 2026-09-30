@@ -1540,20 +1540,26 @@ final class SessionCoordinator: ObservableObject {
     /// This radio's beacon, now, on this radio only. Re-planned from the
     /// radio's own config at send time so an edit takes effect at the next
     /// beacon rather than the next launch.
-    func sendBeacon(for radioID: RadioID, settings: AppSettingsStore) {
-        guard let radio = settings.radio(radioID), radio.beacon.enabled else { return }
+    ///
+    /// Returns nil when the frame was handed to the radio, or why it was not,
+    /// for the button that asked to say so beside itself.
+    @discardableResult
+    func sendBeacon(for radioID: RadioID, settings: AppSettingsStore) -> String? {
+        guard let radio = settings.radio(radioID) else { return "This radio is gone." }
+        guard radio.beacon.enabled else { return "The beacon is switched off for this radio." }
         guard let (frame, note) = buildBeaconFrame(for: radio) else {
             let why = beaconObstacle(for: radioID, settings: settings)
                 ?? "the beacon could not be built"
             packetEngine?.appendSystemNotification(
                 "Beacon not sent\(radioSuffix([radioID])): \(why)", radio: radioID)
-            return
+            return why
         }
         transmit(frame, staggeredBy: 0)
         // Attributed as well as named: the suffix tells the operator which
         // radio beaconed, and the attribution makes the line follow that radio
         // when it is hidden.
         packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radioID])).", radio: radioID)
+        return nil
     }
 
     // MARK: - APRS objects

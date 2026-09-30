@@ -10,7 +10,20 @@ final class APRSPathTests: XCTestCase {
 
     func testDirectIsOneTransmission() {
         XCTAssertEqual(APRSPath.transmissions(""), 1)
-        XCTAssertEqual(APRSPath.label(""), "Direct — no digipeaters")
+        XCTAssertEqual(APRSPath.label(""), "Direct, no digipeaters")
+    }
+
+    /// The presets menu beside the path field names the path in the field,
+    /// so the two can't disagree.
+    func testTheMenuTitleNamesThePathInTheField() {
+        XCTAssertEqual(APRSPath.menuTitle(""), "Direct")
+        XCTAssertEqual(APRSPath.menuTitle("  "), "Direct")
+        XCTAssertEqual(APRSPath.menuTitle("WIDE1-1,WIDE2-1"), "WIDE1-1,WIDE2-1")
+        XCTAssertEqual(APRSPath.menuTitle("wide1-1, wide2-1"), "WIDE1-1,WIDE2-1")
+        XCTAssertEqual(APRSPath.menuTitle("WIDE2-2"), "WIDE2-2")
+        XCTAssertEqual(APRSPath.menuTitle("DRLNOD,WIDE2-1"), "Custom")
+        XCTAssertEqual(APRSPath.menuTitle("WIDE2-1,WIDE1-1"), "Custom", "order matters")
+        XCTAssertNil(APRSPath.matchingPreset("WIDE1"))
     }
 
     /// The hop budget is the `N`, not the number of entries: `WIDE2-2` is two

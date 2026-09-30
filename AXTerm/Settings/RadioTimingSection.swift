@@ -98,9 +98,13 @@ struct RadioTimingSection: View {
                     .multilineTextAlignment(.trailing)
                 Stepper(title, value: value, in: range, step: step)
                     .labelsHidden()
-                Text(unit)
+                // Every row keeps the unit column, so Persistence, which has
+                // no unit, lays out on one line like the other three.
+                Text(unit.isEmpty ? "ms" : unit)
                     .foregroundStyle(.secondary)
                     .frame(width: 24, alignment: .leading)
+                    .opacity(unit.isEmpty ? 0 : 1)
+                    .accessibilityHidden(unit.isEmpty)
             }
         }
         .help(help)
