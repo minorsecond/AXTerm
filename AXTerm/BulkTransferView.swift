@@ -174,6 +174,14 @@ struct BulkTransferRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
+            // A received file: where it went and what to do with it.
+            if transfer.direction == .inbound, transfer.status == .completed,
+               let path = transfer.savedFilePath {
+                ReceivedFileActions(path: path)
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            }
+
             // Failure explanation (if failed)
             if case .failed(let reason) = transfer.status {
                 HStack(spacing: 4) {
@@ -573,14 +581,18 @@ struct BulkTransferListView: View {
     var onAcceptIncoming: ((UUID) -> Void)?
     var onDeclineIncoming: ((UUID) -> Void)?
 
+    /// Offers waiting for this operator, shown with Accept and Decline so
+    /// one that was swiped away, or arrived while the prompt showed another,
+    /// can still be answered here.
     private var visibleIncomingRequests: [IncomingTransferRequest] {
-        []
+        suppressIncomingRequests ? [] : pendingIncomingTransfers
     }
 
+    /// Every transfer, except the inbound rows for offers listed above: the
+    /// offer card already stands for them.
     private var visibleTransfers: [BulkTransfer] {
-        suppressIncomingRequests
-            ? transfers.filter { $0.status != .awaitingAcceptance }
-            : transfers
+        let offered = Set(visibleIncomingRequests.map(\.id))
+        return transfers.filter { !offered.contains($0.id) }
     }
 
     var body: some View {
@@ -623,7 +635,7 @@ struct BulkTransferListView: View {
                     Text("No file transfers")
                         .foregroundStyle(.secondary)
 
-                    Text("Drag a file here or click + to add")
+                    Text(TransferCopy.emptyStateHint(for: TransferDevice.current))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -632,6 +644,19 @@ struct BulkTransferListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
+                        if !visibleIncomingRequests.isEmpty {
+                            Section {
+                                ForEach(visibleIncomingRequests) { request in
+                                    IncomingTransferRequestView(
+                                        request: request,
+                                        onAccept: { onAcceptIncoming?(request.id) },
+                                        onDecline: { onDeclineIncoming?(request.id) })
+                                }
+                            } header: {
+                                SectionHeader(title: "Offered to You", count: visibleIncomingRequests.count)
+                            }
+                        }
+
                         // Active transfers
                         if !activeTransfers.isEmpty {
                             Section {
@@ -678,7 +703,7 @@ struct BulkTransferListView: View {
     private var activeTransfers: [BulkTransfer] {
         visibleTransfers.filter { transfer in
             switch transfer.status {
-            case .pending, .sending, .paused, .awaitingCompletion:
+            case .pending, .awaitingAcceptance, .sending, .paused, .awaitingCompletion:
                 return true
             default:
                 return false
@@ -856,7 +881,7 @@ struct SendFileSheet: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
         }
-        .frame(width: 560, height: 620)
+        .modifier(PlatformSheetFrame(macWidth: 560, macHeight: 620))
         .onAppear {
             analyzeFile()
         }
@@ -1255,7 +1280,7 @@ struct SendFileSheet: View {
                 .padding(.vertical, 2)
                 .background(Color.orange.opacity(0.1))
                 .clipShape(Capsule())
-                .help("Station does not support AXDP. File transfers may fail.")
+                .help("This station does not speak AXDP. Send by YAPP, which most packet software understands.")
 
             case .unknown:
                 HStack(spacing: 2) {
@@ -1330,9 +1355,10 @@ struct IncomingTransferRequestView: View {
                         .font(.system(.body, design: .monospaced))
                         .fontWeight(.medium)
 
-                    Text(ByteCount.string(Int64(request.fileSize)))
+                    Text(TransferCopy.offerSummary(request))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
@@ -1461,9 +1487,10 @@ struct IncomingTransferSheet: View {
                             .lineLimit(2)
                             .truncationMode(.middle)
 
-                        Text(ByteCount.string(Int64(request.fileSize)))
+                        Text(TransferCopy.offerSummary(request))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Spacer()
@@ -1473,9 +1500,10 @@ struct IncomingTransferSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 Label {
-                    Text("The file will be saved to your Downloads folder after transfer.")
+                    Text(TransferCopy.saveLocation(for: TransferDevice.current))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "folder.fill")
                         .foregroundStyle(.blue)
@@ -1513,34 +1541,55 @@ struct IncomingTransferSheet: View {
 
                 Divider()
 
-                // "Always" options
-                HStack(spacing: 16) {
-                    Button {
-                        onAlwaysDeny()
-                        isPresented = false
-                    } label: {
-                        Label("Always Deny from \(request.sourceCallsign)", systemImage: "xmark.shield")
-                            .font(.caption)
+                // "Always" options. Side by side where they fit; stacked on
+                // a phone, where the two labels ran into each other.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) {
+                        alwaysDenyButton
+                        Spacer()
+                        alwaysAcceptButton
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.red)
-
-                    Spacer()
-
-                    Button {
-                        onAlwaysAccept()
-                        isPresented = false
-                    } label: {
-                        Label("Always Accept from \(request.sourceCallsign)", systemImage: "checkmark.shield")
-                            .font(.caption)
+                    VStack(alignment: .leading, spacing: 10) {
+                        alwaysAcceptButton
+                        alwaysDenyButton
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.green)
                 }
             }
             .padding(20)
         }
-        .frame(width: 450)
+        .modifier(sheetFrame)
+    }
+
+    private var sheetFrame: PlatformSheetFrame {
+        #if os(iOS)
+        PlatformSheetFrame(macWidth: 450, macHeight: nil, detents: [.medium, .large])
+        #else
+        PlatformSheetFrame(macWidth: 450, macHeight: nil)
+        #endif
+    }
+
+    private var alwaysDenyButton: some View {
+        Button {
+            onAlwaysDeny()
+            isPresented = false
+        } label: {
+            Label("Always Deny from \(request.sourceCallsign)", systemImage: "xmark.shield")
+                .font(.caption)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.red)
+    }
+
+    private var alwaysAcceptButton: some View {
+        Button {
+            onAlwaysAccept()
+            isPresented = false
+        } label: {
+            Label("Always Accept from \(request.sourceCallsign)", systemImage: "checkmark.shield")
+                .font(.caption)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.green)
     }
 
     private func fileIcon(for fileName: String) -> String {

@@ -1841,15 +1841,16 @@ struct TerminalView: View {
     @State private var selectedTab: TerminalTab = .session
     @State private var showingTransferSheet = false
     @State private var selectedFileURL: URL?
+    /// Files waiting their turn in the send sheet. Picking or dropping
+    /// several queues them; each gets the sheet in order.
+    @State private var outgoingQueue: [URL] = []
     /// Drives the iOS file importer; unused on macOS, which runs a panel.
     @State private var isPickingTransfer = false
+    @ObservedObject private var transferRouter = TransferUIRouter.shared
 
     // Transfer error alert
     @State private var transferError: String?
     @State private var showingTransferError = false
-
-    // Incoming transfer sheet - using item binding for .sheet(item:)
-    @State private var currentIncomingRequest: IncomingTransferRequest?
 
     @State private var lastAutoFilledPath: String = ""
     @State private var lastObservedDestination: String = ""
@@ -2070,26 +2071,31 @@ struct TerminalView: View {
             .onDisappear {
                 stopAutoConnectAttempts()
             }
+            // "Send File…" from the menu bar. It may have been chosen before
+            // this view existed, so a waiting request is also taken on appear.
+            .onReceive(transferRouter.$sendFileRequest.dropFirst()) { _ in
+                takeSendFileRequest()
+            }
+            .onAppear { takeSendFileRequest() }
             #if os(iOS)
             .fileImporter(isPresented: $isPickingTransfer,
                           allowedContentTypes: [.item],
-                          allowsMultipleSelection: false,
+                          allowsMultipleSelection: true,
                           onCompletion: acceptPickedTransfer)
             #endif
             .modifier(TerminalViewModifiers(
                 searchModel: searchModel,
                 showingTransferSheet: $showingTransferSheet,
                 showingTransferError: $showingTransferError,
-                currentIncomingRequest: $currentIncomingRequest,
                 selectedFileURL: selectedFileURL,
                 transferError: transferError,
                 client: client,
                 settings: settings,
                 sessionCoordinator: sessionCoordinator,
                 txViewModel: txViewModel,
-                handlePendingIncomingTransfers: handlePendingIncomingTransfers,
                 handleFileDrop: handleFileDrop,
                 startTransfer: startTransfer,
+                onSendSheetDismissed: sendSheetDismissed,
                 wireCallbacks: wireCallbacks
             ))
     }
@@ -4617,8 +4623,7 @@ struct TerminalView: View {
     private var transfersView: some View {
         BulkTransferListView(
             transfers: sessionCoordinator.transfers,
-            pendingIncomingTransfers: currentIncomingRequest == nil ? sessionCoordinator.pendingIncomingTransfers : [],
-            suppressIncomingRequests: true,
+            pendingIncomingTransfers: sessionCoordinator.pendingIncomingTransfers,
             onPause: { id in
                 sessionCoordinator.pauseTransfer(id)
             },
@@ -4644,50 +4649,39 @@ struct TerminalView: View {
     }
 
     // MARK: - Transfer Management
+    //
+    // Incoming offers are not handled here. The coordinator applies the
+    // allow and deny lists and the size cap as each offer arrives, and the
+    // main window's IncomingTransferPromptHost asks the operator about the
+    // rest, whichever page is showing. This view used to do both, from an
+    // onChange that only ran while the terminal was on screen.
 
-    /// Handle pending incoming transfer requests with auto-accept/deny logic
-    private func handlePendingIncomingTransfers(_ newRequests: [IncomingTransferRequest]) {
-        // Auto-show modal for first pending request if not already showing
-        guard currentIncomingRequest == nil, let first = newRequests.first else { return }
-
-        // Check if auto-accept or auto-deny is enabled for this callsign
-        if settings.isCallsignAllowedForFileTransfer(first.sourceCallsign) {
-            // Auto-accept - log so user knows what happened
-            TxLog.inbound(.session, "Auto-accepted file transfer (callsign in allow list)", [
-                "from": first.sourceCallsign,
-                "file": first.fileName,
-                "size": first.fileSize
-            ])
-            sessionCoordinator.acceptIncomingTransfer(first.id)
-        } else if settings.isCallsignDeniedForFileTransfer(first.sourceCallsign) {
-            // Auto-deny - log so user knows what happened
-            TxLog.inbound(.session, "Auto-declined file transfer (callsign in deny list)", [
-                "from": first.sourceCallsign,
-                "file": first.fileName,
-                "size": first.fileSize
-            ])
-            sessionCoordinator.declineIncomingTransfer(first.id)
-        } else {
-            // Show modal for user decision - setting the item shows the sheet
-            currentIncomingRequest = first
-        }
+    /// Opens the picker in answer to the menu command.
+    private func takeSendFileRequest() {
+        guard transferRouter.consumeSendFileRequest() else { return }
+        selectedTab = .transfers
+        // One turn later, so the tab switch is not part of the same update
+        // that presents the picker.
+        DispatchQueue.main.async { selectFileForTransfer() }
     }
 
+    /// Files dropped on the terminal, one or several.
+    ///
+    /// Loaded as file representations rather than as URL objects: a drag out
+    /// of Files or Photos on iPad offers the file's own type and no file URL,
+    /// so asking for a URL dropped it on the floor. Each is copied before its
+    /// provider's temporary file disappears, then queued for the send sheet.
     private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-
-        _ = provider.loadObject(ofClass: URL.self) { url, _ in
-            guard let url = url else { return }
-            Task { @MainActor in
-                selectedFileURL = url
-                showingTransferSheet = true
+        TransferDropLoader.load(providers) { urls, failures in
+            enqueueOutgoing(urls)
+            if !failures.isEmpty {
+                transferError = failures.joined(separator: "\n")
+                showingTransferError = true
             }
         }
-
-        return true
     }
 
-    /// Picks a file to send over the air.
+    /// Picks files to send over the air.
     ///
     /// macOS runs its own panel modally, which is the platform convention and
     /// keeps this a plain function call. iOS has no modal panel, so the flag
@@ -4695,30 +4689,70 @@ struct TerminalView: View {
     private func selectFileForTransfer() {
         #if os(macOS)
         let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
+        panel.prompt = "Choose"
+        panel.message = "Choose one or more files to send"
 
-        if panel.runModal() == .OK, let url = panel.url {
-            selectedFileURL = url
-            showingTransferSheet = true
+        if panel.runModal() == .OK {
+            enqueueOutgoing(panel.urls)
         }
         #else
         isPickingTransfer = true
         #endif
     }
 
-    /// Accepts the file the operator chose on a platform with no modal panel.
+    /// Accepts the files the operator chose on a platform with no modal panel.
     ///
-    /// The security scope has to be *held*, not released here: the transfer
-    /// reads the file later, on its own schedule. Releasing on return would
-    /// leave the transfer reading a URL it no longer has permission to open,
-    /// which fails partway through a send rather than before one.
+    /// Each file is copied into the app's temporary folder while its security
+    /// scope is held, and the scope is released straight after. Holding it
+    /// for the life of the transfer leaked it; releasing it before a read
+    /// failed the transfer. A picker that fails says why instead of closing
+    /// with nothing happening.
     private func acceptPickedTransfer(_ result: Result<[URL], Error>) {
-        guard case .success(let urls) = result, let url = urls.first else { return }
-        _ = url.startAccessingSecurityScopedResource()
-        selectedFileURL = url
+        switch result {
+        case .failure(let error):
+            transferError = "The file could not be opened: \(error.localizedDescription)"
+            showingTransferError = true
+        case .success(let urls):
+            var staged: [URL] = []
+            var failures: [String] = []
+            for url in urls {
+                do {
+                    staged.append(try OutgoingFileStaging.stage(url, securityScoped: true))
+                } catch {
+                    failures.append(error.localizedDescription)
+                }
+            }
+            enqueueOutgoing(staged)
+            if !failures.isEmpty {
+                transferError = failures.joined(separator: "\n")
+                showingTransferError = true
+            }
+        }
+    }
+
+    /// Queues files for the send sheet and shows the first if none is up.
+    private func enqueueOutgoing(_ urls: [URL]) {
+        outgoingQueue.append(contentsOf: urls)
+        presentNextOutgoing()
+    }
+
+    private func presentNextOutgoing() {
+        guard !showingTransferSheet, selectedFileURL == nil, !outgoingQueue.isEmpty else { return }
+        selectedFileURL = outgoingQueue.removeFirst()
         showingTransferSheet = true
+    }
+
+    /// The send sheet closed, sent or canceled: drop the staged copy and
+    /// move on to the next queued file.
+    private func sendSheetDismissed() {
+        if let url = selectedFileURL {
+            OutgoingFileStaging.discard(url)
+        }
+        selectedFileURL = nil
+        DispatchQueue.main.async { presentNextOutgoing() }
     }
 
     private func startTransfer(destination: String, path: String, transferProtocol: TransferProtocolType = .axdp, compressionSettings: TransferCompressionSettings = .useGlobal) {
@@ -4729,7 +4763,6 @@ struct TerminalView: View {
             transferError = error
             showingTransferError = true
         }
-        selectedFileURL = nil
     }
 }
 
@@ -4739,19 +4772,18 @@ struct TerminalViewModifiers: ViewModifier {
     @ObservedObject var searchModel: AppToolbarSearchModel
     @Binding var showingTransferSheet: Bool
     @Binding var showingTransferError: Bool
-    @Binding var currentIncomingRequest: IncomingTransferRequest?
-    
+
     let selectedFileURL: URL?
     let transferError: String?
-    
+
     let client: PacketEngine
     let settings: AppSettingsStore
     let sessionCoordinator: SessionCoordinator
     let txViewModel: ObservableTerminalTxViewModel
-    
-    let handlePendingIncomingTransfers: ([IncomingTransferRequest]) -> Void
+
     let handleFileDrop: ([NSItemProvider]) -> Bool
     let startTransfer: (String, String, TransferProtocolType, TransferCompressionSettings) -> Void
+    let onSendSheetDismissed: () -> Void
     let wireCallbacks: () -> Void
 
     func body(content: Content) -> some View {
@@ -4761,7 +4793,7 @@ struct TerminalViewModifiers: ViewModifier {
             .onChange(of: settings.primaryCallsign) { _, newValue in
                 txViewModel.updateSourceCall(newValue)
             }
-            .sheet(isPresented: $showingTransferSheet) {
+            .sheet(isPresented: $showingTransferSheet, onDismiss: onSendSheetDismissed) {
                 SendFileSheet(
                     isPresented: $showingTransferSheet,
                     selectedFileURL: selectedFileURL,
@@ -4782,37 +4814,9 @@ struct TerminalViewModifiers: ViewModifier {
             } message: {
                 Text(transferError ?? "Unknown error")
             }
-            .sheet(item: $currentIncomingRequest) { request in
-                IncomingTransferSheet(
-                    isPresented: Binding(
-                        get: { currentIncomingRequest != nil },
-                        set: { if !$0 { currentIncomingRequest = nil } }
-                    ),
-                    request: request,
-                    onAccept: {
-                        sessionCoordinator.acceptIncomingTransfer(request.id)
-                        currentIncomingRequest = nil
-                    },
-                    onDecline: {
-                        sessionCoordinator.declineIncomingTransfer(request.id)
-                        currentIncomingRequest = nil
-                    },
-                    onAlwaysAccept: {
-                        settings.allowCallsignForFileTransfer(request.sourceCallsign)
-                        sessionCoordinator.acceptIncomingTransfer(request.id)
-                        currentIncomingRequest = nil
-                    },
-                    onAlwaysDeny: {
-                        settings.denyCallsignForFileTransfer(request.sourceCallsign)
-                        sessionCoordinator.declineIncomingTransfer(request.id)
-                        currentIncomingRequest = nil
-                    }
-                )
-            }
-            .onChange(of: sessionCoordinator.pendingIncomingTransfers) { _, newRequests in
-                handlePendingIncomingTransfers(newRequests)
-            }
-            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            // Any file-like item: a drag out of Files or Photos on iPad
+            // carries the file's own type, not a file URL.
+            .onDrop(of: [.fileURL, .item], isTargeted: nil) { providers in
                 handleFileDrop(providers)
             }
             .onAppear {

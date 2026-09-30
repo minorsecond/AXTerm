@@ -894,6 +894,10 @@ struct ContentView: View {
         .focusedValue(\.selectNavigation, SelectNavigationAction { item in
             selectedNav = item
         })
+        .focusedValue(\.sendFile, SendFileAction {
+            selectedNav = .terminal
+            TransferUIRouter.shared.requestSendFile()
+        })
         // Harvested wherever the operator happens to be. Tying this to the
         // Map tab meant the network's own directory only grew while someone
         // was looking at a map, which is the one time they are not reading it.
@@ -926,6 +930,10 @@ struct ContentView: View {
                                     winlinkSettings: winlinkContext.settings,
                                     locationService: winlinkContext.locationService,
                                     client: client))
+        // File offers are asked about here, on the window, so one that
+        // arrives while the operator is on the map or in mail still gets
+        // an answer.
+        .modifier(IncomingTransferPromptHost(coordinator: sessionCoordinator, settings: settings))
         .sheet(item: rootSheet) { sheet in
             switch sheet {
             case .inspector(let packetID):

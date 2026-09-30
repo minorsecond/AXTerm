@@ -23,6 +23,10 @@ nonisolated struct SelectNavigationAction {
     let action: (NavigationItem) -> Void
 }
 
+nonisolated struct SendFileAction {
+    let action: () -> Void
+}
+
 extension FocusedValues {
     var searchFocus: SearchFocusAction? {
         get { self[SearchFocusActionKey.self] ?? nil }
@@ -43,6 +47,16 @@ extension FocusedValues {
         get { self[SelectNavigationActionKey.self] ?? nil }
         set { self[SelectNavigationActionKey.self] = newValue }
     }
+
+    var sendFile: SendFileAction? {
+        get { self[SendFileActionKey.self] ?? nil }
+        set { self[SendFileActionKey.self] = newValue }
+    }
+}
+
+nonisolated private struct SendFileActionKey: FocusedValueKey {
+    typealias Value = SendFileAction?
+    static let defaultValue: SendFileAction? = nil
 }
 
 nonisolated private struct SearchFocusActionKey: FocusedValueKey {
@@ -70,9 +84,20 @@ struct AXTermCommands: Commands {
     @FocusedValue(\.toggleConnection) private var toggleConnection
     @FocusedValue(\.inspectPacket) private var inspectPacket
     @FocusedValue(\.selectNavigation) private var selectNavigation
+    @FocusedValue(\.sendFile) private var sendFile
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        // Sends over the connected session, from the terminal's Transfers
+        // tab, which the command opens.
+        CommandGroup(after: .newItem) {
+            Button("Send File…") {
+                sendFile?.action()
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(sendFile == nil)
+        }
+
         CommandGroup(after: .textEditing) {
             Button("Focus Search") {
                 searchFocus?.action()

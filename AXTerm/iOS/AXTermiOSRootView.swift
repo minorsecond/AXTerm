@@ -398,6 +398,9 @@ struct AXTermiOSRootView: View {
                                     winlinkSettings: context.settings,
                                     locationService: context.locationService,
                                     client: client))
+        // File offers are asked about from the root, over whichever tab is
+        // showing, so one that arrives on the map still gets an answer.
+        .modifier(IncomingTransferPromptHost(coordinator: sessionCoordinator, settings: settings))
         // Re-evaluated whenever anything that feeds the decision changes, so
         // the hold is taken and released as the station's state moves rather
         // than being set once and forgotten.
