@@ -106,8 +106,8 @@ struct PositionStatusChip: View {
 
         var symbol: String {
             switch self {
-            case .noPosition: return "location.slash"
-            case .denied: return "location.slash"
+            case .noPosition: return "location.slash.fill"
+            case .denied: return "location.slash.fill"
             case .noFix: return "location.magnifyingglass"
             }
         }
