@@ -184,12 +184,18 @@ struct FirstRunSetupView: View {
                             .accessibilityLabel("Set up")
                     }
                 }
+                // Two lines, the identity and then the link, so a phone does
+                // not cut the middle out of both ("Pa\u{2026}calhost").
                 Text("\(Self.onAir(radio, station: settings.myCallsign))  \u{00B7}  "
-                     + "\(RadioChannel.of(radio).title)  \u{00B7}  \(radio.displayEndpoint)")
+                     + RadioChannel.of(radio).title)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                Text(radio.displayEndpoint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             // One button in the same place either way: filled in the accent

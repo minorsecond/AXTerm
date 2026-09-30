@@ -61,6 +61,7 @@ struct SetupFrame<Content: View, Buttons: View>: View {
                     })
             }
             .scrollBounceBehavior(.basedOnSize)
+            .scrollDismissesKeyboard(.interactively)
             // At most the content's height, and less when the keyboard or a
             // short screen leaves less: then it scrolls.
             .frame(idealHeight: max(contentHeight, 1), maxHeight: max(contentHeight, 1))
@@ -84,6 +85,15 @@ struct SetupFrame<Content: View, Buttons: View>: View {
         .presentationSizing(.form.fitted(horizontal: false, vertical: true))
         #endif
         .animation(.snappy(duration: 0.25), value: current)
+        #if os(iOS)
+        // A new step starts with the keyboard down. Left up, the callsign
+        // keyboard covered the position step and the sheet cross-faded
+        // two steps' content while it resized.
+        .onChange(of: current) { _, _ in
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                            to: nil, from: nil, for: nil)
+        }
+        #endif
     }
 
     #if os(iOS)

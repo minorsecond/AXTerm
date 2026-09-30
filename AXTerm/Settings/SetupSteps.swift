@@ -143,22 +143,21 @@ struct SetupPositionStep: View {
     @ViewBuilder
     private var readout: some View {
         if let resolved {
-            HStack(alignment: .top, spacing: 14) {
-                SetupPositionMap(position: resolved, callsign: StationCallsignRules.base(of: settings.myCallsign))
-                    .frame(width: 220, height: 132)
-                VStack(alignment: .leading, spacing: 8) {
-                    SetupReadout(rows: [
-                        ("Lat", SetupFormat.latitude(resolved.point.latitude)),
-                        ("Lon", SetupFormat.longitude(resolved.point.longitude)),
-                        ("Grid", Maidenhead.gridSquare(latitude: resolved.point.latitude,
-                                                       longitude: resolved.point.longitude) ?? "\u{2014}"),
-                        ("Error", SetupFormat.accuracy(resolved.accuracyMetres)),
-                    ])
-                    Label(resolved.source.label, systemImage: symbol(for: resolved.source))
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(resolved.accuracyMetres > 1_000 ? .orange : .secondary)
+            // Side by side where the read-out fits beside the map; on a phone
+            // the map goes on top, because squeezed beside it every value
+            // truncated to "39\u{2026}N".
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 14) {
+                    positionMap(resolved)
+                        .frame(width: 220, height: 132)
+                    positionFacts(resolved)
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 12) {
+                    positionMap(resolved)
+                        .frame(height: 150)
+                    positionFacts(resolved)
+                }
             }
             .padding(12)
             .background(SetupSurface())
@@ -180,6 +179,26 @@ struct SetupPositionStep: View {
             .padding(12)
             .background(SetupSurface())
         }
+    }
+
+    private func positionMap(_ resolved: StationPosition) -> some View {
+        SetupPositionMap(position: resolved, callsign: StationCallsignRules.base(of: settings.myCallsign))
+    }
+
+    private func positionFacts(_ resolved: StationPosition) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SetupReadout(rows: [
+                ("Lat", SetupFormat.latitude(resolved.point.latitude)),
+                ("Lon", SetupFormat.longitude(resolved.point.longitude)),
+                ("Grid", Maidenhead.gridSquare(latitude: resolved.point.latitude,
+                                               longitude: resolved.point.longitude) ?? "\u{2014}"),
+                ("Error", SetupFormat.accuracy(resolved.accuracyMetres)),
+            ])
+            Label(resolved.source.label, systemImage: symbol(for: resolved.source))
+                .font(.caption.weight(.medium))
+                .foregroundStyle(resolved.accuracyMetres > 1_000 ? .orange : .secondary)
+        }
+        .fixedSize()
     }
 
     private func symbol(for source: PositionQuality.Source) -> String {
