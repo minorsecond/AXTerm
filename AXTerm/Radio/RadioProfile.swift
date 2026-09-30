@@ -328,8 +328,14 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
             return blePeripheralUUID.isEmpty ? "No device" : blePeripheralUUID
         case .modem:
             if modemRigLink == .lan {
-                let where_ = lanHost.isEmpty ? "no address" : lanHost
-                return "\(rigModel.isEmpty ? "Sound modem" : rigModel) over Wi-Fi (\(where_))"
+                // The port only when it isn't the radio's own, so a stand-in
+                // for the radio (Warbler at localhost:50100) says so, and a
+                // local host reads as this Mac rather than Wi-Fi.
+                let port = lanControlPort == 50001 ? "" : ":\(lanControlPort)"
+                let where_ = lanHost.isEmpty ? "no address" : lanHost + port
+                let host = lanHost.lowercased()
+                let local = host == "localhost" || host == "127.0.0.1" || host == "::1"
+                return "\(rigModel.isEmpty ? "Sound modem" : rigModel) over \(local ? "Icom LAN on this Mac" : "Wi-Fi") (\(where_))"
             }
             guard !audioInputDeviceName.isEmpty || !audioInputDeviceUID.isEmpty else { return "No audio device" }
             let device = audioInputDeviceName.isEmpty ? audioInputDeviceUID : audioInputDeviceName

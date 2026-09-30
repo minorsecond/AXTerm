@@ -112,8 +112,10 @@ struct RadiosListView<Destination: Hashable>: View {
     }
 
     /// The engine holds one link, and it is the primary radio's.
+    /// Each radio's own link state. Only the first radio used to get a
+    /// live answer, so a second radio showed a grey dot while connected.
     private func status(for radio: RadioProfile) -> ConnectionStatus {
-        radio.id == settings.primaryRadio?.id ? client.status : .disconnected
+        client.radioSummaries.first { $0.id == radio.id }?.status ?? .disconnected
     }
 
     private var issueLines: [String] {

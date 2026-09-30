@@ -111,6 +111,19 @@ final class RadioProfileModemTests: XCTestCase {
         XCTAssertEqual(bare.displayEndpoint, "No audio device")
     }
 
+    /// A radio on the WLAN reads as Wi-Fi; a stand-in on this Mac (Warbler)
+    /// reads as local and names its port.
+    func testWiFiEndpointNamesAStandInAndItsPort() {
+        var radio = modem()
+        radio.rigModel = "IC-705"
+        radio.modemRigLink = .lan
+        radio.lanHost = "192.168.3.34"
+        XCTAssertEqual(radio.displayEndpoint, "IC-705 over Wi-Fi (192.168.3.34)")
+        radio.lanHost = "localhost"
+        radio.lanControlPort = 50100
+        XCTAssertEqual(radio.displayEndpoint, "IC-705 over Icom LAN on this Mac (localhost:50100)")
+    }
+
     // MARK: - The link's view of the profile
 
     func testModemConfigMirrorsTheProfile() {
