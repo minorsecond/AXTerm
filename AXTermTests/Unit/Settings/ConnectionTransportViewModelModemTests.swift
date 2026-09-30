@@ -45,6 +45,20 @@ final class ConnectionTransportViewModelModemTests: XCTestCase {
 
     // MARK: - Profile <-> fields
 
+    /// Warbler stands in for the IC-705 on port 50100, so the control port
+    /// has to be settable; it reaches the session through the profile.
+    func testTheLANControlPortReachesTheSessionAndStaysInRange() async {
+        let vm = makeViewModel()
+        XCTAssertEqual(vm.lanControlPort, 50001, "the radio's own port by default")
+        vm.lanControlPort = 50100
+        XCTAssertEqual(profile.lanControlPort, 50100)
+        XCTAssertEqual(profile.modemConfig?.lanControlPort, 50100)
+        vm.lanControlPort = 0
+        XCTAssertEqual(profile.lanControlPort, 1)
+        vm.lanControlPort = 70000
+        XCTAssertEqual(profile.lanControlPort, 65535)
+    }
+
     func testTheFieldsAreTheProfile() async {
         let vm = makeViewModel()
         XCTAssertEqual(vm.selectedTransport, .modem)

@@ -773,7 +773,12 @@ final class ConnectionTransportViewModel: ObservableObject {
         didSet { update { $0.lanHost = lanHost.trimmingCharacters(in: .whitespaces) } }
     }
     @Published var lanControlPort: Int = 50001 {
-        didSet { update { $0.lanControlPort = lanControlPort } }
+        didSet {
+            // A UDP port: anything outside 1...65535 can't be one.
+            let clamped = min(max(lanControlPort, 1), 65535)
+            if clamped != lanControlPort { lanControlPort = clamped; return }
+            update { $0.lanControlPort = lanControlPort }
+        }
     }
     @Published var lanUsername: String = "" {
         didSet { update { $0.lanUsername = lanUsername.trimmingCharacters(in: .whitespaces) } }

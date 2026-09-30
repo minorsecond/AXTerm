@@ -63,6 +63,19 @@ struct ModemSettingsContent: View {
                     .help("The radio's IP address or host name on your network. The IC-705 shows its own address under Network settings.")
             }
             GridRow {
+                Text("Port")
+                    .gridColumnAlignment(.trailing)
+                    .foregroundStyle(.secondary)
+                TextField("Port", value: $viewModel.lanControlPort, format: .number.grouping(.never))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+                    #if os(iOS)
+                    .keyboardType(.numberPad)
+                    #endif
+                    .help("The control port. 50001 for the radio itself. A program that stands in for the radio, such as Warbler on this Mac, uses its own; Warbler's is 50100.")
+            }
+            GridRow {
                 Text("Username")
                     .gridColumnAlignment(.trailing)
                     .foregroundStyle(.secondary)
