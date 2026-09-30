@@ -33,6 +33,10 @@ nonisolated enum MobilinkdActivity: Equatable, Sendable {
     case measuring
     /// Sending a test tone, which keeps the radio keyed.
     case sendingTone(MobilinkdTestTone)
+    /// A short timed recording for the receive-level tuner, or waiting for
+    /// the transmission it starts after. The demodulator is off while the
+    /// stream runs.
+    case sampling
 }
 
 /// Live operations on a connected Mobilinkd TNC4, for the settings page.
@@ -62,6 +66,14 @@ protocol MobilinkdControlling: AnyObject {
     /// from now on, with every radio. Afterwards there is nothing to put back
     /// when the link closes.
     func saveSettingsToTNC()
+
+    /// Record the input level for a few seconds and hand back every report.
+    /// Ends with RESET whenever a stream was started. `completion` runs once,
+    /// on the link's queue.
+    func sampleInputLevels(_ request: LevelSampleRequest,
+                           completion: @escaping @Sendable (LevelSampleResult) -> Void)
+    /// End a recording early. Its completion reports `.cancelled`.
+    func cancelInputSampling()
 }
 
 extension MobilinkdTNC {

@@ -228,6 +228,8 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 completion(KISSSerialError.notOpen)
                 return
             }
+            // A level recording waits for, or has to stop for, a data frame.
+            if self.mobilinkd.isMobilinkd { self.mobilinkd.willSend(data) }
             completion(self.writeBytes(data))
         }
     }
@@ -1170,4 +1172,12 @@ extension KISSLinkSerial: MobilinkdControlling {
     }
     func stopTestTone() { serialQueue.async { [weak self] in self?.mobilinkd.stopTone() } }
     func saveSettingsToTNC() { serialQueue.async { [weak self] in self?.mobilinkd.save() } }
+    func sampleInputLevels(_ request: LevelSampleRequest,
+                           completion: @escaping @Sendable (LevelSampleResult) -> Void) {
+        serialQueue.async { [weak self] in
+            guard let self else { completion(.unavailable()); return }
+            self.mobilinkd.sampleLevels(request, completion: completion)
+        }
+    }
+    func cancelInputSampling() { serialQueue.async { [weak self] in self?.mobilinkd.cancelSampling() } }
 }

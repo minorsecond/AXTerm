@@ -454,6 +454,8 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
                 return
             }
 
+            // A level recording waits for, or has to stop for, a data frame.
+            if self.mobilinkd.isMobilinkd { self.mobilinkd.willSend(data) }
             self.writeBLE(data, completion: completion)
         }
     }
@@ -1391,4 +1393,12 @@ extension KISSLinkBLE: MobilinkdControlling {
     }
     func stopTestTone() { bleQueue.async { [weak self] in self?.mobilinkd.stopTone() } }
     func saveSettingsToTNC() { bleQueue.async { [weak self] in self?.mobilinkd.save() } }
+    func sampleInputLevels(_ request: LevelSampleRequest,
+                           completion: @escaping @Sendable (LevelSampleResult) -> Void) {
+        bleQueue.async { [weak self] in
+            guard let self else { completion(.unavailable()); return }
+            self.mobilinkd.sampleLevels(request, completion: completion)
+        }
+    }
+    func cancelInputSampling() { bleQueue.async { [weak self] in self?.mobilinkd.cancelSampling() } }
 }
