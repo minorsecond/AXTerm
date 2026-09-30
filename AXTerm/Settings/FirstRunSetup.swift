@@ -3,9 +3,11 @@ import SwiftUI
 /// When first-run setup is shown by itself.
 ///
 /// Once, on a station with no callsign, until it is finished or skipped.
-/// Never in a test-mode instance or a unit-test host, which start with empty
-/// settings on purpose. The compose banner's button opens it whenever the
-/// callsign is missing, skipped or not.
+/// Never in a unit-test host. A --test-mode instance starts with empty
+/// settings, so it offers setup on every launch, which is how the operator
+/// tries the flow; the test rig passes --callsign and never sees it. The
+/// compose banner's button opens it whenever the callsign is missing,
+/// skipped or not.
 nonisolated enum FirstRunSetup {
     static let dismissedKey = "setup.firstRun.dismissed.v1"
 
@@ -25,7 +27,28 @@ struct FirstRunSetupHost: ViewModifier {
     let client: PacketEngine
 
     func body(content: Content) -> some View {
-        content
+        // The sheet hangs off a background view of its own. Chained onto the
+        // shell's view it shared a presentation slot with the inspector and
+        // profile sheet, and SwiftUI showed only one of them, so "Set Up…"
+        // did nothing.
+        content.background {
+            Color.clear
+                .accessibilityHidden(true)
+                .modifier(Presenter(router: router, settings: settings,
+                                    winlinkSettings: winlinkSettings,
+                                    locationService: locationService, client: client))
+        }
+    }
+
+    private struct Presenter: ViewModifier {
+        @ObservedObject var router: SettingsRouter
+        let settings: AppSettingsStore
+        let winlinkSettings: WinlinkSettings
+        let locationService: StationLocationService?
+        let client: PacketEngine
+
+        func body(content: Content) -> some View {
+            content
             .sheet(isPresented: $router.showsSetup) {
                 FirstRunSetupView(settings: settings, winlinkSettings: winlinkSettings,
                                   locationService: locationService, client: client) { radio in
@@ -37,11 +60,11 @@ struct FirstRunSetupHost: ViewModifier {
             .task {
                 let dismissed = settings.defaults.bool(forKey: FirstRunSetup.dismissedKey)
                 if FirstRunSetup.offersItself(callsign: settings.myCallsign, dismissed: dismissed,
-                                              isTestInstance: AppEnvironment.isTestMode
-                                                || AppEnvironment.isUnitTestHost) {
+                                              isTestInstance: AppEnvironment.isUnitTestHost) {
                     router.presentSetup()
                 }
             }
+        }
     }
 }
 
