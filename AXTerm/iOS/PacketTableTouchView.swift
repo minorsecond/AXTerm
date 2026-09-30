@@ -28,7 +28,15 @@ struct PacketTableTouchView: View {
     /// own when the operator scrolls back down, which is what they mean by
     /// scrolling back down.
     @State private var isFollowing = true
-    @State private var scrollPosition: Packet.ID?
+    /// Asks the list to show the newest row; bumped rather than set so the
+    /// same request can be made twice.
+    @State private var jumpToken = 0
+    /// Whether the operator's finger is moving the list. Only that stops
+    /// following: the tab view builds this list while it is hidden and then
+    /// resets it to the top when the tab comes forward, with no scroll from
+    /// anyone, and stored history arrives after the list first appears.
+    /// Judged by position alone, both read as the operator scrolling away.
+    @State private var userIsScrolling = false
 
     private var rows: [PacketRowViewModel] {
         let duplicates = PacketDuplicates.marks(for: packets)
@@ -44,7 +52,7 @@ struct PacketTableTouchView: View {
             if !isFollowing {
                 Button {
                     isFollowing = true
-                    scrollToNewest()
+                    jumpToken &+= 1
                 } label: {
                     Image(systemName: "arrow.down.circle.fill")
                         .resizable()
@@ -63,19 +71,24 @@ struct PacketTableTouchView: View {
     }
 
     private var list: some View {
-        // A tap opens the packet, as a click does on the Mac. With list
-        // selection a tap only highlighted the row, and the inspector was
-        // reachable only from the long-press menu.
-        List {
-            ForEach(rows) { row in
-                Button {
-                    selection = [row.id]
-                    onInspectSelection()
-                } label: {
-                    PacketRow(row: row)
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint("Opens the packet's decoded fields and raw bytes")
+        // `scrollPosition(id:)` is honored by lazy stacks, not by `List`, so
+        // the list opened at the oldest stored frame (11:38 on a screen whose
+        // newest was 12:39) and never followed. The reader scrolls it, and
+        // the scroll geometry says whether the bottom is in view.
+        ScrollViewReader { proxy in
+            // A tap opens the packet, as a click does on the Mac. With list
+            // selection a tap only highlighted the row, and the inspector was
+            // reachable only from the long-press menu.
+            List {
+                ForEach(rows) { row in
+                    Button {
+                        selection = [row.id]
+                        onInspectSelection()
+                    } label: {
+                        PacketRow(row: row)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens the packet's decoded fields and raw bytes")
                     .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
                     .contextMenu {
                         if let packet = packets.first(where: { $0.id == row.id }) {
@@ -87,27 +100,49 @@ struct PacketTableTouchView: View {
                             Button("Copy Raw Hex") { onCopyRawHex(packet) }
                         }
                     }
+                }
+            }
+            .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, 34)
+            .defaultScrollAnchor(.bottom)
+            .onScrollPhaseChange { _, phase in
+                userIsScrolling = phase == .interacting || phase == .decelerating
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                PacketListFollow.isAtBottom(contentHeight: geometry.contentSize.height,
+                                            visibleMaxY: geometry.visibleRect.maxY)
+            } action: { _, atBottom in
+                if atBottom {
+                    // Scrolling back down resumes following.
+                    isFollowing = true
+                } else if userIsScrolling {
+                    // The operator scrolling away to read stops it.
+                    isFollowing = false
+                } else if isFollowing {
+                    // Moved by something else while following: put it back.
+                    DispatchQueue.main.async { scroll(proxy, animated: false) }
+                }
+            }
+            .onChange(of: packets.count) { _, _ in
+                guard isFollowing else { return }
+                // A beat later, once the new rows are laid out.
+                DispatchQueue.main.async { scroll(proxy, animated: false) }
+            }
+            .onChange(of: jumpToken) { _, _ in scroll(proxy, animated: true) }
+            .onAppear {
+                guard isFollowing else { return }
+                DispatchQueue.main.async { scroll(proxy, animated: false) }
             }
         }
-        .listStyle(.plain)
-        .environment(\.defaultMinListRowHeight, 34)
-        .scrollPosition(id: $scrollPosition, anchor: .bottom)
-        .onChange(of: packets.count) { _, _ in
-            guard isFollowing else { return }
-            scrollToNewest()
-        }
-        .onChange(of: scrollPosition) { _, position in
-            // The operator scrolling away is the signal to stop following.
-            // Comparing against the newest id rather than a scroll offset
-            // keeps this correct as rows are appended underneath.
-            guard let position, let newest = rows.last?.id else { return }
-            isFollowing = position == newest
-        }
-        .onAppear(perform: scrollToNewest)
     }
 
-    private func scrollToNewest() {
-        scrollPosition = rows.last?.id
+    private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard let newest = rows.last?.id else { return }
+        if animated {
+            withAnimation { proxy.scrollTo(newest, anchor: .bottom) }
+        } else {
+            proxy.scrollTo(newest, anchor: .bottom)
+        }
     }
 }
 
