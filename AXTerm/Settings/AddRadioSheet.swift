@@ -232,12 +232,12 @@ struct AddRadioSheet: View {
     private var channelStep: some View {
         HStack(spacing: 10) {
             SetupTile(symbol: "point.3.connected.trianglepath.dotted", title: "Packet",
-                      detail: "A node, BBS or keyboard frequency: connected sessions, the NET/ROM "
-                        + "node and the mailbox. No APRS goes out on it.",
+                      detail: "A node or BBS frequency, for connected sessions, NET/ROM and the "
+                        + "mailbox. No APRS goes out on it.",
                       selected: channel == .packet) { flow.setChannel(.packet) }
             SetupTile(symbol: "mappin.and.ellipse", title: "APRS",
-                      detail: "A shared APRS frequency such as 144.390 MHz: position beacons, "
-                        + "messages and the map's Ping. Node, ping and mailbox stay off.",
+                      detail: "A shared APRS frequency such as 144.390 MHz, for position beacons "
+                        + "and APRS messages. The node and mailbox stay off.",
                       selected: channel == .aprs) { flow.setChannel(.aprs) }
         }
         Text("A radio is one or the other. You can change it later on the radio's page.")
@@ -435,8 +435,8 @@ struct AddRadioSheet: View {
                     ("Call", radio.resolvedCallsign(station: settings.myCallsign)),
                     ("Channel", channel.title),
                 ])
-                Text("Done switches this radio on and opens its page, where its timing, beacon "
-                     + "and everything else live.")
+                Text("Done switches this radio on. The rest of its settings are on its page "
+                     + "under Settings \u{203A} Radios.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

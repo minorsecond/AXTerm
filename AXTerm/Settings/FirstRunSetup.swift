@@ -92,6 +92,8 @@ struct FirstRunSetupView: View {
     @State private var stage: Stage
     /// The Add Radio steps, shown in place of the radio stage while open.
     @State private var radioFlow: AddRadioFlow?
+    /// Radios set up during this run of setup, marked in the list.
+    @State private var configured: Set<RadioID> = []
 
     init(settings: AppSettingsStore, winlinkSettings: WinlinkSettings,
          locationService: StationLocationService?, client: PacketEngine,
@@ -107,9 +109,11 @@ struct FirstRunSetupView: View {
     var body: some View {
         Group {
             if let radioFlow {
+                // Finishing or cancelling a radio comes back to the list, so
+                // a station with several radios sets them all up here.
                 AddRadioSheet(flow: radioFlow, client: client) { radio in
                     self.radioFlow = nil
-                    if let radio { finish(radio: radio) }
+                    if let radio { configured.insert(radio) }
                 }
             } else {
                 SetupFrame(title: "Set Up AXTerm", subtitle: stageSubtitle,
@@ -126,8 +130,8 @@ struct FirstRunSetupView: View {
     private var stageSubtitle: String {
         switch stage {
         case .callsign: return "Who this station is. Three short steps, and you can change any of it later."
-        case .position: return "Where the station is. The map, distances, terrain profiles and position beacons start here."
-        case .radio: return "How AXTerm reaches your radio, what its channel is for, and its SSID."
+        case .position: return "Where the station is. Distances, terrain profiles and position beacons are measured from here."
+        case .radio: return "Set up each radio this station uses. You can add more later under Settings \u{203A} Radios."
         }
     }
 
@@ -147,41 +151,79 @@ struct FirstRunSetupView: View {
     @ViewBuilder
     private var radioStage: some View {
         let radios = settings.activeRadios
-        SetupCard(title: radios.count == 1 ? "Your radio" : "Your radios",
-                  note: radios.count == 1
-                    ? "Set it up to choose how it is reached, its channel and its SSID. You can "
-                        + "also leave it and change it later under Settings \u{203A} Radios."
-                    : "Your radios are set up already. Each has its own page under Settings \u{203A} Radios.") {
+        SetupCard(title: radios.count == 1 ? "Radio" : "Radios (\(radios.count))",
+                  note: "Each radio gets its own link, channel and SSID. A radio you don't set up "
+                    + "now keeps its current settings.") {
             ForEach(Array(radios.enumerated()), id: \.element.id) { index, radio in
                 if index > 0 { Divider() }
-                HStack(alignment: .firstTextBaseline) {
-                    SetupReadout(rows: [
-                        ("Radio", RadioDetailView.title(for: radio)),
-                        ("Reached by", radio.displayEndpoint),
-                        ("Channel", RadioChannel.of(radio).title),
-                        ("On air as", Self.onAir(radio, station: settings.myCallsign)),
-                    ])
-                    Spacer(minLength: 0)
-                }
+                radioRow(radio, canRemove: radios.count > 1)
             }
         }
-        HStack(spacing: 10) {
-            if radios.count == 1, let only = radios.first {
-                Button {
-                    radioFlow = AddRadioFlow(settings: settings, mode: .configure(only.id))
-                } label: {
-                    Label("Set Up This Radio\u{2026}", systemImage: "slider.horizontal.3")
+        Button {
+            radioFlow = AddRadioFlow(settings: settings, mode: .new)
+        } label: {
+            Label("Add a Radio\u{2026}", systemImage: "plus")
+        }
+        .controlSize(.large)
+    }
+
+    private func radioRow(_ radio: RadioProfile, canRemove: Bool) -> some View {
+        let done = configured.contains(radio.id)
+        return HStack(spacing: 12) {
+            Image(systemName: Self.symbol(for: radio.kind))
+                .font(.system(size: 18))
+                .foregroundStyle(done ? Color.accentColor : .secondary)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(RadioDetailView.title(for: radio))
+                        .font(.callout.weight(.semibold))
+                    if done {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .accessibilityLabel("Set up")
+                    }
+                }
+                Text("\(Self.onAir(radio, station: settings.myCallsign))  \u{00B7}  "
+                     + "\(RadioChannel.of(radio).title)  \u{00B7}  \(radio.displayEndpoint)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            if done {
+                Button("Edit\u{2026}") {
+                    radioFlow = AddRadioFlow(settings: settings, mode: .configure(radio.id))
+                }
+            } else {
+                Button("Set Up\u{2026}") {
+                    radioFlow = AddRadioFlow(settings: settings, mode: .configure(radio.id))
                 }
                 .buttonStyle(.borderedProminent)
             }
-            Button {
-                radioFlow = AddRadioFlow(settings: settings, mode: .new)
-            } label: {
-                Label(radios.count == 1 ? "Add Another Radio\u{2026}" : "Add a Radio\u{2026}",
-                      systemImage: "plus")
+            if canRemove {
+                Button {
+                    configured.remove(radio.id)
+                    settings.archiveRadio(radio.id)
+                } label: {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Remove this radio")
+                .accessibilityLabel("Remove \(RadioDetailView.title(for: radio))")
             }
         }
-        .controlSize(.large)
+    }
+
+    private static func symbol(for kind: RadioTransportKind) -> String {
+        switch kind {
+        case .ble: return "dot.radiowaves.left.and.right"
+        case .serial: return "cable.connector"
+        case .tcp: return "network"
+        case .modem: return "waveform"
+        }
     }
 
     private static func onAir(_ radio: RadioProfile, station: String) -> String {
