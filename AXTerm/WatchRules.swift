@@ -126,4 +126,11 @@ protocol NotificationScheduling {
     func scheduleMailNotification(packet: Packet)
     func scheduleMentionNotification(packet: Packet)
     func scheduleConnectionNotification(callsign: String)
+    /// A file offer, or a transfer that finished or failed.
+    func scheduleTransferNotification(_ event: TransferNotificationEvent)
+}
+
+extension NotificationScheduling {
+    /// Schedulers that predate file-transfer notifications stay silent.
+    func scheduleTransferNotification(_ event: TransferNotificationEvent) {}
 }

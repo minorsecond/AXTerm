@@ -60,6 +60,8 @@ final class AppSettingsStore: ObservableObject {
     // File transfer settings keys
     static let allowedFileTransferCallsignsKey = "allowedFileTransferCallsigns"
     static let deniedFileTransferCallsignsKey = "deniedFileTransferCallsigns"
+    static let maxIncomingTransferBytesKey = "maxIncomingTransferBytes"
+    static let notifyOnFileTransfersKey = "notifyOnFileTransfers"
 
     // Analytics settings keys
     static let analyticsTimeframeKey = "analyticsTimeframe"
@@ -241,6 +243,8 @@ final class AppSettingsStore: ObservableObject {
     static let defaultNotifyOnNodeMail = true
     static let defaultNotifyOnInboundConnection = true
     static let defaultNotifyOnMention = true
+    static let defaultNotifyOnFileTransfers = true
+    static let defaultMaxIncomingTransferBytes = TransferOfferPolicy.defaultMaxBytes
     static let defaultNotifyPlaySound = true
     static let defaultNotifyOnlyWhenInactive = true
     static let defaultIgnoredServiceEndpoints: [String] = []
@@ -459,6 +463,11 @@ final class AppSettingsStore: ObservableObject {
 
     @Published var notifyOnMention: Bool {
         didSet { persistNotifyOnMention() }
+    }
+
+    /// File offers, and transfers that finish or fail.
+    @Published var notifyOnFileTransfers: Bool {
+        didSet { defaults.set(notifyOnFileTransfers, forKey: Self.notifyOnFileTransfersKey) }
     }
 
     @Published var notifyPlaySound: Bool {
@@ -839,6 +848,26 @@ final class AppSettingsStore: ObservableObject {
         allowedFileTransferCallsigns.removeAll { CallsignValidator.normalize($0) == normalized }
     }
 
+    /// The largest file another station may offer before it is refused
+    /// without asking. Zero turns the cap off. See `TransferOfferPolicy`.
+    @Published var maxIncomingTransferBytes: Int {
+        didSet {
+            let clamped = max(0, maxIncomingTransferBytes)
+            guard clamped == maxIncomingTransferBytes else {
+                maxIncomingTransferBytes = clamped
+                return
+            }
+            defaults.set(maxIncomingTransferBytes, forKey: Self.maxIncomingTransferBytesKey)
+        }
+    }
+
+    /// The offer rules as one value, for the code that applies them.
+    var fileTransferOfferPolicy: TransferOfferPolicy {
+        TransferOfferPolicy(allowed: allowedFileTransferCallsigns,
+                            denied: deniedFileTransferCallsigns,
+                            maxBytes: maxIncomingTransferBytes)
+    }
+
     /// Callsigns that are always denied from sending files
     @Published var deniedFileTransferCallsigns: [String] {
         didSet {
@@ -1107,6 +1136,8 @@ final class AppSettingsStore: ObservableObject {
         let storedSentrySendConnectionDetails = defaults.object(forKey: Self.sentrySendConnectionDetailsKey) as? Bool ?? Self.defaultSentrySendConnectionDetails
         let storedAllowedFileTransferCallsigns = defaults.stringArray(forKey: Self.allowedFileTransferCallsignsKey) ?? []
         let storedDeniedFileTransferCallsigns = defaults.stringArray(forKey: Self.deniedFileTransferCallsignsKey) ?? []
+        let storedMaxIncomingTransferBytes = defaults.object(forKey: Self.maxIncomingTransferBytesKey) as? Int ?? Self.defaultMaxIncomingTransferBytes
+        let storedNotifyOnFileTransfers = defaults.object(forKey: Self.notifyOnFileTransfersKey) as? Bool ?? Self.defaultNotifyOnFileTransfers
 
         // Analytics settings
         let storedAnalyticsTimeframe = defaults.string(forKey: Self.analyticsTimeframeKey) ?? Self.defaultAnalyticsTimeframe
@@ -1295,6 +1326,8 @@ final class AppSettingsStore: ObservableObject {
         self.sentrySendConnectionDetails = storedSentrySendConnectionDetails
         self.allowedFileTransferCallsigns = storedAllowedFileTransferCallsigns
         self.deniedFileTransferCallsigns = storedDeniedFileTransferCallsigns
+        self.maxIncomingTransferBytes = max(0, storedMaxIncomingTransferBytes)
+        self.notifyOnFileTransfers = storedNotifyOnFileTransfers
 
         // Analytics settings
         self.analyticsTimeframe = storedAnalyticsTimeframe
@@ -1832,6 +1865,8 @@ final class AppSettingsStore: ObservableObject {
             Self.sentrySendConnectionDetailsKey: Self.defaultSentrySendConnectionDetails,
             Self.allowedFileTransferCallsignsKey: [String](),
             Self.deniedFileTransferCallsignsKey: [String](),
+            Self.maxIncomingTransferBytesKey: Self.defaultMaxIncomingTransferBytes,
+            Self.notifyOnFileTransfersKey: Self.defaultNotifyOnFileTransfers,
             Self.analyticsTimeframeKey: Self.defaultAnalyticsTimeframe,
             Self.analyticsBucketKey: Self.defaultAnalyticsBucket,
             Self.analyticsIncludeViaKey: Self.defaultAnalyticsIncludeVia,

@@ -73,6 +73,8 @@ struct NotificationSettingsView: View {
                 Toggle("Notify when someone connects to me", isOn: $settings.notifyOnInboundConnection)
                 Toggle("Notify when a node broadcasts I have mail", isOn: $settings.notifyOnNodeMail)
                 Toggle("Notify when my callsign is mentioned", isOn: $settings.notifyOnMention)
+                Toggle("Notify about file transfers", isOn: $settings.notifyOnFileTransfers)
+                    .help("A station offers you a file, or a transfer finishes or fails.")
             }
             
             PreferencesSection("Watch List") {

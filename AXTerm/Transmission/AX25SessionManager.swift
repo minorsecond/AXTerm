@@ -573,6 +573,12 @@ final class AX25SessionManager: ObservableObject {
     /// Callback when session state changes
     var onSessionStateChanged: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?
 
+    /// Offered each delivered payload on a session nobody has claimed,
+    /// before AXDP reassembly and the terminal see it. Returning true
+    /// consumes the payload. Used to notice a YAPP transfer starting, which
+    /// then claims the session (see `claimDelivery`).
+    var onUnclaimedDelivery: ((AX25Session, Data) -> Bool)?
+
     /// Callback when we have a link quality sample (e.g. after RR with RTT) for adaptive tuning. Parameters: session, lossRate, etx, srtt.
     var onLinkQualitySample: ((AX25Session, LinkQualitySample) -> Void)?
 
@@ -3486,6 +3492,9 @@ final class AX25SessionManager: ObservableObject {
                     // A protocol conversation (e.g. Winlink B2F) owns this
                     // session's bytes; terminal and AXDP must not see them.
                     claim.handler(session, data)
+                } else if onUnclaimedDelivery?(session, data) == true {
+                    // Taken by whoever recognized it; see onUnclaimedDelivery.
+                    continue
                 } else {
                     onDataDeliveredForReassembly?(session, data)
                     onDataReceived?(session, data)

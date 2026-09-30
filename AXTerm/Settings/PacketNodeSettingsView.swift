@@ -24,6 +24,16 @@ struct PacketNodeSettingsView: View {
     @State private var newDenyCallsign = ""
     @State private var prompt: TextEntryPrompt?
 
+    /// Offer size caps to choose from. The stored value is added when it is
+    /// not one of these, so a cap set some other way still shows as chosen.
+    private var transferCapChoices: [Int] {
+        let base = [65_536, 262_144, 524_288, 1_048_576, 5_242_880, 0]
+        let current = settings.maxIncomingTransferBytes
+        return base.contains(current) ? base : (base.dropLast() + [current, 0]).sorted { a, b in
+            a == 0 ? false : (b == 0 ? true : a < b)
+        }
+    }
+
     var body: some View {
         SettingsForm(landing: [.netRomNode, .ping, .linkLayer, .adaptiveTransmission,
                                .axdpProtocol, .fileTransfer],
@@ -374,6 +384,16 @@ struct PacketNodeSettingsView: View {
                         onAdd: addToDenyList,
                         onRemove: { settings.removeCallsignFromFileTransferDenylist($0) }
                     )
+
+                    Picker("Largest file accepted", selection: $settings.maxIncomingTransferBytes) {
+                        ForEach(transferCapChoices, id: \.self) { bytes in
+                            Text(bytes == 0 ? "No limit" : ByteCount.string(bytes)).tag(bytes)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .help("Offers larger than this are declined without asking, even from stations on the "
+                          + "auto-accept list. A received file is held in memory until it is complete, and a "
+                          + "megabyte takes more than two hours of a 1200 baud channel.")
                 }
             }
         }
