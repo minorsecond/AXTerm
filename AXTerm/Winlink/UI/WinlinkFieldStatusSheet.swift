@@ -181,7 +181,7 @@ struct WinlinkFieldStatusSheet: View {
             if let solar, let location {
                 solarBody(solar, location: location)
             } else {
-                Text("No position known, so sun and moon cannot be computed. Set a grid square in Settings → Winlink, or wait for a GPS fix.")
+                Text("No position known, so sun and moon cannot be computed. Set the station position or grid square in Settings › General, or wait for a GPS fix.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

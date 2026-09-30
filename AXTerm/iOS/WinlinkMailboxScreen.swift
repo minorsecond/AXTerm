@@ -705,7 +705,7 @@ struct WinlinkMailboxScreen: View {
 
         let myCall = appSettings.myCallsign
         guard !myCall.isEmpty, myCall != "NOCALL" else {
-            exchangeAlert = "Set your callsign in Settings → Identity before exchanging mail."
+            exchangeAlert = "Set your callsign in Settings › General before exchanging mail."
             return
         }
 

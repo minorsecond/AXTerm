@@ -46,7 +46,7 @@ nonisolated final class StationIdentityMonitor: @unchecked Sendable {
 
             AX.25 connected mode keeps sequence numbers and timers per link and assumes one station answers to an address. With two, sessions drop for no visible reason, retries never resolve, and both stations answer the same call.
 
-            Give one of them a different SSID (the radio's Identity section, under Settings → Connection, or the radio under Settings → Radios). Any unused SSID will do; the two are then separate stations and both can share the TNC safely.
+            Give one of them a different SSID (the Identity section on the radio's page, under Settings › Radios). Any unused SSID will do; the two are then separate stations and both can share the TNC safely.
             """
         }
     }

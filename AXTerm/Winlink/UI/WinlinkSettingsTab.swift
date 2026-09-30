@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// Settings → Winlink: station location, account credentials, CMS key,
-/// and exchange preferences.
+/// Settings › Winlink: the postal address and operator details forms use,
+/// account credentials, CMS key, and exchange preferences. The station's
+/// position and its grid square are under General, their one home; this
+/// page shows the grid square it uses without editing it.
 struct WinlinkSettingsTab: View {
 
     @ObservedObject var settings: WinlinkSettings
@@ -60,11 +62,11 @@ struct WinlinkSettingsTab: View {
                         if isLocating {
                             ProgressView().controlSize(.small)
                         } else {
-                            Label("Use My Current Position", systemImage: "location.fill")
+                            Label("Fill Address From My Position", systemImage: "location.fill")
                         }
                     }
                     .disabled(isLocating || locationService == nil)
-                    .help("Sets the grid square from GPS \u{2014} pure arithmetic on the fix, so it works with everything else down \u{2014} and fills city, state, county and ZIP from a reverse lookup, which does need the internet.")
+                    .help("Fills street, city, state, county and ZIP below from a reverse lookup of this device's position, which needs the internet. The grid square is not changed here; it is set under General \u{203A} Station position.")
                     Spacer()
                 }
                 if let locationNote {
@@ -76,7 +78,7 @@ struct WinlinkSettingsTab: View {
             } header: {
                 Text("Position")
             } footer: {
-                Text("Fills the grid square and address below. The grid square comes from the GPS fix alone; the postal address needs a network lookup, so do it while you have a path.")
+                Text("Fills the postal address below. It needs a network lookup, so do it while you have a path.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -136,21 +138,18 @@ struct WinlinkSettingsTab: View {
             }
 
             Section {
-                HStack {
-                    TextField("Grid square", text: $settings.gridSquare, prompt: Text("e.g. DM79lr"))
-                        .frame(maxWidth: 160)
-                    if settings.gridSquare.isEmpty {
-                        Text("required for the station list")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else if Maidenhead.isValid(settings.gridSquare) {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    } else {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-                            .help("Not a valid Maidenhead locator (4, 6 or 8 characters, e.g. DM79 or DM79lr).")
-                    }
+                // Read-only: the one grid square lives under General, beside
+                // the rest of where the station is.
+                LabeledContent("Grid square") {
+                    Text(settings.gridSquare.isEmpty ? "Not set" : settings.gridSquare)
+                        .foregroundStyle(settings.gridSquare.isEmpty ? .orange : .secondary)
                 }
                 .help(WinlinkCopy.gridSquareTooltip)
+                Text(settings.gridSquare.isEmpty
+                     ? "The station list needs a grid square. Set it under General \u{203A} Station position."
+                     : "Set under General \u{203A} Station position.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 AntennaHeightField(title: "Antenna height above ground",
                                    metres: $settings.antennaHeightMetres,
@@ -576,9 +575,8 @@ struct WinlinkSettingsTab: View {
 
     // MARK: - Position
 
-    /// Two halves with different dependencies, and the UI says which is
-    /// which: the grid square is arithmetic on the fix and always works,
-    /// the postal address is a network lookup and does not.
+    /// The postal address from this device's position, by reverse lookup.
+    /// The grid square is left alone: its one home is General.
     private func fillFromCurrentPosition() async {
         guard let locationService else { return }
         isLocating = true
@@ -587,14 +585,9 @@ struct WinlinkSettingsTab: View {
         defer { isLocating = false }
 
         guard let location = await locationService.currentLocation() else {
-            locationNote = "No position available. Check Location permission in System Settings, or set a grid square by hand."
+            locationNote = "No position available. Check Location permission in System Settings."
             locationNoteIsError = true
             return
-        }
-
-        if let grid = Maidenhead.locator(
-            latitude: location.latitude, longitude: location.longitude) {
-            settings.gridSquare = grid
         }
 
         do {
@@ -605,12 +598,9 @@ struct WinlinkSettingsTab: View {
             if !address.county.isEmpty { profile.county = address.county }
             if !address.postalCode.isEmpty { profile.postalCode = address.postalCode }
             if !address.street.isEmpty { profile.street = address.street }
-            locationNote = "Grid square and address set from \(location.source.rawValue)."
+            locationNote = "Address set from \(location.source.rawValue)."
         } catch {
-            // The grid square still landed — say so, so this does not
-            // read as a total failure.
-            locationNote = "Grid square set to \(settings.gridSquare). "
-                + (error.localizedDescription)
+            locationNote = error.localizedDescription
             locationNoteIsError = true
         }
     }

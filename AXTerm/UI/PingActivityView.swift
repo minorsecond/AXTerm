@@ -4,7 +4,7 @@
 //
 //  Every probe this station has put on the air, and what came back.
 //
-//  The Transmission settings pane shows the last eight probes, which
+//  The Packet Node settings page shows the last eight probes, which
 //  answers "is this thing running". It cannot answer the questions that
 //  actually come up — which stations answer and which never do, how far
 //  the round trips spread, whether a station stopped answering or was

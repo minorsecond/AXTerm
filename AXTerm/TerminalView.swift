@@ -3786,7 +3786,7 @@ struct TerminalView: View {
             let advice = driver.advertisesItself ? ""
                 : " No node advertises a route back to this station, so a reply may "
                     + "have nowhere to go — turn on \"Announce this station to the "
-                    + "network\" in Transmission settings if you want circuits to "
+                    + "network\" under Settings › Packet Node if you want circuits to "
                     + "work here."
             let fallbackText = announceFallback
                 ? " Asking a node to connect on our behalf instead — its menus will appear below."

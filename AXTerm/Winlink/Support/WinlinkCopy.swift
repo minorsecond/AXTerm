@@ -41,7 +41,7 @@ nonisolated enum WinlinkCopy {
     static let stationDistanceTooltip = """
     Great-circle distance from your grid square to the gateway's reported
     grid square, from the Winlink CMS proximity service. Set your grid
-    square in Settings → Winlink.
+    square in Settings › General.
     """
 
     static let stationFrequencyTooltip = "The gateway's published operating frequency. Tune your radio here before connecting."
@@ -78,7 +78,7 @@ nonisolated enum WinlinkCopy {
 
     // MARK: - Settings
 
-    static let gridSquareTooltip = "Your Maidenhead locator (e.g. DM79lr). Used to find nearby RMS gateways and compute distances. 4, 6, or 8 characters."
+    static let gridSquareTooltip = "Your Maidenhead locator (e.g. DM79lr), set under General › Station position. Used to find nearby RMS gateways and compute distances. 4, 6, or 8 characters."
 
     static let antennaHeightTooltip = "How far your antenna is above the ground beneath it \u{2014} not above sea level, which the terrain data already supplies. This is the single number that most often decides whether a path is workable: 60% Fresnel clearance over 13 km at 145 MHz needs roughly 49 m, and the same path from 10 m clears about 9% of the zone. Height, not gain, is what terrain analysis uses."
 

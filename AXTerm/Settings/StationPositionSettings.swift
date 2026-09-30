@@ -18,9 +18,9 @@ struct StationPositionSettings: View {
     var winlinkSettings: WinlinkSettings?
     var locationService: StationLocationService?
 
-    @AppStorage("station.useDeviceLocation") private var useDeviceLocation = false
-    @AppStorage("station.manualLatitude") private var manualLatitude = ""
-    @AppStorage("station.manualLongitude") private var manualLongitude = ""
+    @AppStorage(StationPositionKeys.useDeviceLocation) private var useDeviceLocation = false
+    @AppStorage(StationPositionKeys.manualLatitude) private var manualLatitude = ""
+    @AppStorage(StationPositionKeys.manualLongitude) private var manualLongitude = ""
     @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
 
     @State private var isLocating = false
@@ -39,7 +39,7 @@ struct StationPositionSettings: View {
     @State private var address = ""
 
     var body: some View {
-        PreferencesSection("Station position") {
+        PreferencesSection("Station position", id: .stationPosition) {
             // The answer first. Everything under it is a way to improve this
             // line, and without it the operator is editing fields with no
             // idea whether they made anything better.
@@ -229,13 +229,26 @@ struct StationPositionSettings: View {
     private var gridSquareRow: some View {
         if let winlinkSettings {
             LabeledContent {
-                TextField("DM79po", text: Binding(
-                    get: { winlinkSettings.gridSquare },
-                    set: { winlinkSettings.gridSquare = $0.uppercased() }))
-                    .labelsHidden()
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 110)
-                    .accessibilityLabel("Grid square")
+                HStack(spacing: 6) {
+                    TextField("DM79po", text: Binding(
+                        get: { winlinkSettings.gridSquare },
+                        set: { winlinkSettings.gridSquare = $0.uppercased() }))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 110)
+                        .accessibilityLabel("Grid square")
+                    // The square around a better position, so it does not
+                    // have to be worked out by hand. Winlink's page used to
+                    // do this from GPS; this is now the grid square's one home.
+                    if let point = preciseResolvedPoint,
+                       let grid = Maidenhead.locator(latitude: point.latitude, longitude: point.longitude),
+                       grid.caseInsensitiveCompare(winlinkSettings.gridSquare) != .orderedSame {
+                        Button("Use \(grid)") { winlinkSettings.gridSquare = grid }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tint)
+                            .help("The six-character square around the position in use above.")
+                    }
+                }
             } label: {
                 HStack(spacing: 6) {
                     Text("Grid square")
@@ -309,6 +322,13 @@ struct StationPositionSettings: View {
     // MARK: - Resolving
 
     private var hasManualCoordinate: Bool { manualPoint != nil }
+
+    /// The position in use when it is better than a grid square, which is
+    /// what a grid square can be worked out from.
+    private var preciseResolvedPoint: GreatCircle.Point? {
+        guard let resolved, resolved.source == .surveyed || resolved.source == .deviceGPS else { return nil }
+        return resolved.point
+    }
 
     private var manualPoint: GreatCircle.Point? {
         guard let latitude = Double(manualLatitude.trimmingCharacters(in: .whitespaces)),

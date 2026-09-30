@@ -83,7 +83,7 @@ struct APRSWhoCanHearMeView: View {
                 if let reason = probe.transmitFailureReason {
                     return "The query didn't reach the air — the radio reported: \(reason). Nothing was listened for, so try again once the radio can transmit."
                 }
-                return "Couldn't transmit — no connected radio has APRS turned on. Enable APRS for a radio in Settings ▸ Radios (a radio that beacons an APRS position already counts), and make sure it's connected."
+                return "Couldn't transmit — no connected radio has APRS turned on. Set a radio's channel to APRS on its page under Settings › Radios, and make sure it's connected."
             }
             return probe.sentAt == nil
                 ? "Sends one general query on your APRS radio(s) and lists who answers — direct or via a digipeater. One transmission, Xastir-style."

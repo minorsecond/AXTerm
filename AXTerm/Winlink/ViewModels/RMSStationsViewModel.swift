@@ -44,7 +44,7 @@ final class RMSStationsViewModel: ObservableObject {
     /// What blocks a refresh right now, if anything (drives inline banners).
     var refreshBlocker: String? {
         if settings.gridSquare.isEmpty {
-            return "Set your grid square in Settings → Winlink to find nearby gateways."
+            return "Set your grid square in Settings › General to find nearby gateways."
         }
         if !Maidenhead.isValid(settings.gridSquare) {
             return "\"\(settings.gridSquare)\" is not a valid Maidenhead grid square."
