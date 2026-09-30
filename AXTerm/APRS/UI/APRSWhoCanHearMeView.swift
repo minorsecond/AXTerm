@@ -81,12 +81,12 @@ struct APRSWhoCanHearMeView: View {
                 // different places: nothing took the frame at all, or a radio
                 // took it and then couldn't key.
                 if let reason = probe.transmitFailureReason {
-                    return "The query didn't reach the air — the radio reported: \(reason). Nothing was listened for, so try again once the radio can transmit."
+                    return "The query didn't reach the air. The radio reported: \(reason). Nothing was listened for, so try again once the radio can transmit."
                 }
-                return "Couldn't transmit — no connected radio has APRS turned on. Set a radio's channel to APRS on its page under Settings › Radios, and make sure it's connected."
+                return "Couldn't transmit: no connected radio has APRS turned on. Set a radio's channel to APRS on its page under Settings › Radios, and make sure it's connected."
             }
             return probe.sentAt == nil
-                ? "Sends one general query on your APRS radio(s) and lists who answers — direct or via a digipeater. One transmission, Xastir-style."
+                ? "Sends one general query on your APRS radio(s) and lists who answers, direct or via a digipeater. One transmission, Xastir-style."
                 : "Stopped. \(probe.scopedAnsweringResponders.count) answered."
         case .listening:
             return "Listening… \(probe.scopedAnsweringResponders.count) answered so far."
@@ -95,7 +95,7 @@ struct APRSWhoCanHearMeView: View {
             let direct = probe.scopedAnsweringResponders.filter(\.direct).count
             let anyway = probe.scopedResponders.count - answered
             var line = probe.reach == .wide
-                ? "Done, asked \(APRSProbeReach.wide.label.lowercased()). \(answered) answered — reachable, though not necessarily in direct earshot."
+                ? "Done, asked \(APRSProbeReach.wide.label.lowercased()). \(answered) answered (reachable, though not necessarily in direct earshot)."
                 : "Done. \(answered) answered and can hear you directly or via a digi (\(direct) direct)."
             if anyway > 0 {
                 line += " \(anyway) more transmitted inside the window but beacon often enough to have done so anyway."
@@ -109,7 +109,7 @@ struct APRSWhoCanHearMeView: View {
     /// all, so calling that section "can hear you" would be a lie the results
     /// panel tells every time.
     private var answeredTitle: String {
-        probe.reach == .wide ? "Answered" : "Answered — can hear you"
+        probe.reach == .wide ? "Answered" : "Answered and can hear you"
     }
 
     private var emptyLine: String {

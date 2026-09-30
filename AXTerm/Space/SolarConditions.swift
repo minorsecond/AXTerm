@@ -109,7 +109,7 @@ nonisolated enum SolarBandRelevance {
                  + "all, though most days it is closed regardless."
         case .marginal:
             if let k = kIndex, k >= 6 {
-                return "A disturbed field like this can reach \(band ?? "VHF") — auroral "
+                return "A disturbed field like this can reach \(band ?? "VHF"): auroral "
                      + "absorption and aurora scatter are real up here. Even so, a local "
                      + "packet link is usually limited by noise, collisions and terrain "
                      + "rather than by the sun."

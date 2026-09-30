@@ -83,8 +83,8 @@ nonisolated enum APRSPressureNowcast {
         /// ordinary reading needs no qualification.
         var caveat: String? {
             if stations < APRSPressureNowcast.minimumForAnArea {
-                return "Too few barometers to call this an area trend \u{2014} "
-                    + "it describes \(stations == 1 ? "one station" : "\(stations) stations")."
+                return "Too few barometers to call this an area trend. "
+                    + "It describes \(stations == 1 ? "one station" : "\(stations) stations")."
             }
             if agreement < APRSPressureNowcast.agreementForAnArea {
                 return "The stations disagree, so this is local variation rather than "

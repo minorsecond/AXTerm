@@ -326,7 +326,7 @@ struct BBSMessageDetailScreen: View {
                 .foregroundStyle(.secondary)
 
                 if message.isBulletin {
-                    Label("Addressed to ALL — every caller can read this.",
+                    Label("Addressed to ALL. Every caller can read this.",
                           systemImage: "megaphone")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -334,7 +334,7 @@ struct BBSMessageDetailScreen: View {
 
                 if let killedAt = message.killedAt {
                     Label("Killed \(killedAt.formatted(date: .abbreviated, time: .shortened)) "
-                          + "— hidden from callers",
+                          + "(hidden from callers)",
                           systemImage: "trash")
                         .font(.caption)
                         .foregroundStyle(.orange)

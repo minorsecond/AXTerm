@@ -275,7 +275,7 @@ struct MapTrafficChin: View {
                     Text("waiting for a clear channel\u{2026}")
                         .foregroundStyle(.tertiary)
                 case .dropped:
-                    Text("never sent \u{2014} channel stayed busy")
+                    Text("never sent (channel stayed busy)")
                         .foregroundStyle(.red)
                 case .onAir, .none:
                     EmptyView()

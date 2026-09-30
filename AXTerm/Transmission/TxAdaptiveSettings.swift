@@ -407,7 +407,7 @@ nonisolated struct TxAdaptiveSettings: Sendable {
             paclen.adaptiveReason = "Our frames losing \(Int(smoothedForward * 100))%"
         } else if freshFailure {
             paclen.currentAdaptive = Self.stepDown(paclen.currentAdaptive, ladder: Self.paclenLadder)
-            paclen.adaptiveReason = "Retransmission — backing off"
+            paclen.adaptiveReason = "Retransmission: backing off"
         } else if smoothedForward > 0.1 {
             paclen.currentAdaptive = min(paclen.currentAdaptive, 128)
             paclen.adaptiveReason = "Moderate loss on our frames (\(Int(smoothedForward * 100))%)"
@@ -420,10 +420,10 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         let windowBefore = windowSize.currentAdaptive
         if smoothedForward >= 0.2 {
             windowSize.currentAdaptive = 1
-            windowSize.adaptiveReason = "Our frames losing \(Int(smoothedForward * 100))% — stop-and-wait"
+            windowSize.adaptiveReason = "Our frames losing \(Int(smoothedForward * 100))%: stop-and-wait"
         } else if freshFailure {
             windowSize.currentAdaptive = max(1, windowSize.currentAdaptive / 2)
-            windowSize.adaptiveReason = "Retransmission — halving window"
+            windowSize.adaptiveReason = "Retransmission: halving window"
         }
 
         if freshFailure {
@@ -432,8 +432,8 @@ nonisolated struct TxAdaptiveSettings: Sendable {
                 // pre-upgrade values and double the skepticism for next time.
                 windowSize.currentAdaptive = min(windowSize.currentAdaptive, failed.priorWindow)
                 paclen.currentAdaptive = min(paclen.currentAdaptive, failed.priorPaclen)
-                windowSize.adaptiveReason = "Upgrade made things worse — rolled back"
-                paclen.adaptiveReason = "Upgrade made things worse — rolled back"
+                windowSize.adaptiveReason = "Upgrade made things worse: rolled back"
+                paclen.adaptiveReason = "Upgrade made things worse: rolled back"
                 probation = nil
                 upgradeStreakRequirement = min(Self.maxStreakRequirement, upgradeStreakRequirement * 2)
                 metrics.probeRollbacks += 1
@@ -476,7 +476,7 @@ nonisolated struct TxAdaptiveSettings: Sendable {
             let raisedPaclen = min(paclenCeiling, Self.stepUp(priorPaclen, ladder: Self.paclenLadder))
             if raisedPaclen != priorPaclen {
                 paclen.currentAdaptive = raisedPaclen
-                paclen.adaptiveReason = "Stable link — probing larger frames"
+                paclen.adaptiveReason = "Stable link: probing larger frames"
                 upgraded = true
             }
             if smoothedEtx <= 1.5, priorWindow < Self.autoWindowCap {

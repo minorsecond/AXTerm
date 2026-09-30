@@ -84,7 +84,7 @@ struct BBSDirectoryPane: View {
             }
             .frame(maxHeight: 140)
 
-            Text("Read from sessions you opened — nothing was asked of anyone. "
+            Text("Read from sessions you opened. Nothing was asked of anyone. "
                  + "Recorded as worked-out-from-traffic, so it never overwrites "
                  + "what somebody told you.")
                 .font(.caption2)
@@ -132,7 +132,7 @@ struct BBSDirectoryPane: View {
                     .help("Looks up everyone here and everyone who has called, and fills "
                           + "empty names and locations from the license record. Anything a "
                           + "caller told you is left alone.\n\nNeeds \"Look up callsigns "
-                          + "online\" in Settings → Winlink.")
+                          + "online\" in Settings › Winlink.")
                     if isLookingUp {
                         ProgressView().controlSize(.small)
                     }

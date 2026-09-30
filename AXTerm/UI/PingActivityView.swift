@@ -74,8 +74,8 @@ struct PingActivityView: View {
                      + "older than the log.")
             tile("Answered", value: "\(stats.answered)",
                  caption: rateCaption(stats),
-                 help: "An answer proves radio worked both ways at that moment — "
-                     + "no more than that. It is not a route and not a promise "
+                 help: "An answer proves radio worked both ways at that moment, "
+                     + "and no more than that. It is not a route and not a promise "
                      + "to accept a call.")
             tile("Median latency", value: stats.medianRTT.map(Self.latency) ?? "\u{2014}",
                  caption: spreadCaption(stats),
@@ -196,7 +196,7 @@ struct PingActivityView: View {
                 systemImage: "antenna.radiowaves.left.and.right.slash",
                 description: Text(settings.pingEnabled
                     ? "Pinging is on. Probes appear here as they go out."
-                    : "Pinging is off. Turn it on in Settings \u{2192} Transmission, "
+                    : "Pinging is off. Turn it on in Settings \u{203A} Transmission, "
                         + "or ping a station by hand from its profile."))
         } else {
             switch pane {

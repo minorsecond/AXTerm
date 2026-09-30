@@ -177,12 +177,12 @@ final class MapDrawingSessionTests: XCTestCase {
     func testProgressSaysWhatIsStillNeeded() {
         var session = MapDrawingSession()
         session.begin(.area)
-        XCTAssertEqual(session.progressText, "0 of 3 — tap 3 more")
+        XCTAssertEqual(session.progressText, "0 of 3. Tap 3 more")
         session.addVertex(at(39, -105))
-        XCTAssertEqual(session.progressText, "1 of 3 — tap 2 more")
+        XCTAssertEqual(session.progressText, "1 of 3. Tap 2 more")
         session.addVertex(at(39, -104))
         session.addVertex(at(40, -104))
-        XCTAssertEqual(session.progressText, "3 points — tap Done to finish")
+        XCTAssertEqual(session.progressText, "3 points. Tap Done to finish")
     }
 
     /// A mark needs no running commentary.

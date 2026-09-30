@@ -36,8 +36,8 @@ nonisolated struct KeychainStore: Sendable {
         /// hunt for something they never lost.
         var operatorAdvice: String? {
             guard case .unreadable = self else { return nil }
-            return "A password is saved, but this build of AXTerm cannot unlock it — "
-                + "rebuilding the app changes its code signature, and macOS ties "
+            return "A password is saved, but this build of AXTerm cannot unlock it. "
+                + "Rebuilding the app changes its code signature, and macOS ties "
                 + "Keychain access to that. Re-enter it once to rebind it."
         }
     }

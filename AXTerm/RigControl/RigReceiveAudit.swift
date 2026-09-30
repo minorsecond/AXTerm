@@ -111,7 +111,7 @@ nonisolated enum RigReceiveAudit {
                 title: "RF gain is backed off",
                 detail: "At \(s.rfGainPercent)% rather than fully clockwise.",
                 fix: "Turn RF gain fully up. Backing it off raises the level a signal "
-                   + "must reach before the receiver hears it at all — easy to leave "
+                   + "must reach before the receiver hears it at all. It is easy to leave "
                    + "behind after chasing noise on another band.",
                 severity: .blocking, correction: .rfGainFull))
         }
@@ -139,7 +139,7 @@ nonisolated enum RigReceiveAudit {
                     detail: "Mode is \(s.mode.label); AXTerm sets \(wantedMode.label) for "
                           + "\(modemMode.title).",
                     fix: "Either sideband decodes, as long as the station you are working is "
-                       + "on the same one — the tones invert with the sideband and NRZI does "
+                       + "on the same one: the tones invert with the sideband and NRZI does "
                        + "not care which is which. But while \u{201C}Set the radio for packet "
                        + "when connecting\u{201D} is on, AXTerm puts this back to "
                        + "\(wantedMode.label) at every connect, so a sideband set by hand will "
@@ -171,7 +171,7 @@ nonisolated enum RigReceiveAudit {
                     + "needs about 1.8 kHz of passband; a narrow data filter cuts the space "
                     + "tone off and the two can no longer be told apart."
                     : "Select FIL1, the widest. 1200-baud AFSK runs about 3 kHz "
-                    + "deviation and a narrow filter clips it — strong signals survive "
+                    + "deviation and a narrow filter clips it. Strong signals survive "
                     + "the clipping, marginal ones do not.",
                 severity: .blocking, correction: .widestFilter))
         }
@@ -198,10 +198,10 @@ nonisolated enum RigReceiveAudit {
                 title: "The preamp is off",
                 detail: "No preamp selected.",
                 fix: modemMode.ridesOnSSB
-                    ? "Worth trying P.AMP1 on a quiet HF band. Not a fault — it is the right "
-                    + "choice on a crowded one — but it is free margin otherwise."
-                    : "Worth trying P.AMP1 on 2 m. Not a fault — it is the right choice "
-                    + "on a crowded band — but it is free margin on a quiet one.",
+                    ? "Worth trying P.AMP1 on a quiet HF band. Not a fault, since it is the right "
+                    + "choice on a crowded one, but it is free margin otherwise."
+                    : "Worth trying P.AMP1 on 2 m. Not a fault, since it is the right choice "
+                    + "on a crowded band, but it is free margin on a quiet one.",
                 severity: .suggestion))
         }
 
@@ -234,7 +234,7 @@ nonisolated enum RigReceiveAudit {
         var summary: String {
             switch self {
             case .unavailable(let why):
-                return "Could not read the radio's settings — \(why)"
+                return "Could not read the radio's settings: \(why)"
             case .checked(let findings):
                 return RigReceiveAudit.summary(findings)
                     ?? "Nothing in the radio's settings is holding receive back."

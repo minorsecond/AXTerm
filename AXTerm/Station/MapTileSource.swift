@@ -69,7 +69,7 @@ nonisolated struct MapTileSource: Identifiable, Hashable, Sendable {
     static let usgsTopo = MapTileSource(
         id: "usgs-topo",
         name: "USGS Topo",
-        summary: "US Geological Survey topographic maps — contours, terrain, hydrography. Public domain, and downloadable for offline use.",
+        summary: "US Geological Survey topographic maps: contours, terrain, hydrography. Public domain, and downloadable for offline use.",
         urlTemplate: "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}",
         attribution: "USGS The National Map \u{00B7} public domain",
         maximumZoom: 16,
@@ -95,7 +95,7 @@ nonisolated struct MapTileSource: Identifiable, Hashable, Sendable {
     static let usgsRelief = MapTileSource(
         id: "usgs-relief",
         name: "USGS Shaded Relief",
-        summary: "Terrain shading with nothing else on it. Coarse but very small \u{2014} a whole state costs little.",
+        summary: "Terrain shading with nothing else on it. Coarse but very small: a whole state costs little.",
         urlTemplate: "https://basemap.nationalmap.gov/arcgis/rest/services/USGSShadedReliefOnly/MapServer/tile/{z}/{y}/{x}",
         attribution: "USGS The National Map \u{00B7} public domain",
         maximumZoom: 13,
@@ -111,7 +111,7 @@ nonisolated struct MapTileSource: Identifiable, Hashable, Sendable {
     static let openTopo = MapTileSource(
         id: "opentopo",
         name: "OpenTopoMap",
-        summary: "Contours and terrain shading — the basemap that actually shows why a path does or does not work.",
+        summary: "Contours and terrain shading: the basemap that actually shows why a path does or does not work.",
         urlTemplate: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
         attribution: "Map data © OpenStreetMap contributors, SRTM · Style © OpenTopoMap (CC-BY-SA)",
         maximumZoom: 17,

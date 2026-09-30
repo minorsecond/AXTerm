@@ -289,7 +289,7 @@ struct WinlinkMailView: View {
                 } label: {
                     Image(systemName: showConsole ? "chevron.up.square" : "terminal")
                 }
-                .help("Show the exchange console — the live conversation with the gateway (what is being sent and received).")
+                .help("Show the exchange console: the live conversation with the gateway (what is being sent and received).")
                 .accessibilityIdentifier("winlinkConsoleToggle")
             }
 
@@ -370,7 +370,7 @@ struct WinlinkMailView: View {
                 } label: {
                     let ladder = winlinkSettings.gatewayLadder
                     if ladder.isEmpty {
-                        Text("Packet — add gateways in Stations first")
+                        Text("Packet (add gateways in Stations first)")
                     } else if ladder.count == 1 {
                         Text("Packet via \(ladder[0].callsign)")
                     } else {
@@ -399,7 +399,7 @@ struct WinlinkMailView: View {
                 Button("Queue Loopback Test Message") {
                     if catalogVM.queueTestMessage(myCallsign: appSettings.myCallsign) != nil {
                         mailboxVM.refresh()
-                        exchangeAlert = "Test message queued. Exchange once to send it — the Winlink TEST bot echoes it back on your next exchange."
+                        exchangeAlert = "Test message queued. Exchange once to send it. The Winlink TEST bot echoes it back on your next exchange."
                     }
                 }
             } label: {
@@ -731,7 +731,7 @@ struct WinlinkMailView: View {
             TextField("Comment", text: $positionComment,
                       prompt: Text("e.g. POTA K-1234, portable"))
                 .textFieldStyle(.roundedBorder)
-                .help("Sent with the report and remembered between reports \u{2014} an activation reference stays the same all day.")
+                .help("Sent with the report and remembered between reports. An activation reference stays the same all day.")
 
             HStack {
                 Spacer()
@@ -909,7 +909,7 @@ struct WinlinkMailView: View {
         // was indistinguishable from a dead button. Whatever the cause, the
         // operator needs to see that the app declined rather than failed.
         guard let runner = context.runner else {
-            exchangeAlert = "The mailbox is not ready yet \u{2014} the Winlink store failed to open on this device. Reopening the app usually clears it."
+            exchangeAlert = "The mailbox is not ready yet: the Winlink store failed to open on this device. Reopening the app usually clears it."
             return
         }
         guard !runner.isRunning else {
@@ -929,8 +929,8 @@ struct WinlinkMailView: View {
                 // need opposite things from the operator, and the second is
                 // what actually happens after a rebuild.
                 exchangeAlert = winlinkSettings.passwordReadOutcome.operatorAdvice
-                    ?? "No Winlink password found — the CMS requires secure login, so "
-                    + "the exchange was not started. Enter your password in Settings → Winlink."
+                    ?? "No Winlink password found. The CMS requires secure login, so "
+                    + "the exchange was not started. Enter your password in Settings › Winlink."
                 return
             }
         let product = winlinkSettings.clientProduct.trimmingCharacters(in: .whitespaces)

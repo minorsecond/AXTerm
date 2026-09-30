@@ -188,7 +188,7 @@ struct BBSDirectoryListScreen: View {
             Label(BBSDirectorySuggestions.headline(service.suggestions),
                   systemImage: "sparkle.magnifyingglass")
         } footer: {
-            Text("Read from sessions you opened — nothing was asked of anyone. Recorded "
+            Text("Read from sessions you opened. Nothing was asked of anyone. Recorded "
                  + "as worked-out-from-traffic, so it never overwrites what somebody "
                  + "told you.")
         }
@@ -248,7 +248,7 @@ struct BBSDirectoryDetailScreen: View {
                     systemImage: "person.crop.circle",
                     title: "Select a callsign",
                     detail: "White pages hold a name, a location, a home BBS and a "
-                        + "ZIP code — the four fields every FBB mailbox has published "
+                        + "ZIP code: the four fields every FBB mailbox has published "
                         + "for decades, and deliberately no more.")
             }
         }

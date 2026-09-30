@@ -127,20 +127,20 @@ extension PersonalBBSListener.Decision {
         case .answer:
             "answering"
         case .weInitiated:
-            "outbound call — not a mailbox session"
+            "outbound call, not a mailbox session"
         case .radioNotServed:
-            "ignored — the mailbox is switched off on the radio this call came in on (Settings → Radios)"
+            "ignored: the mailbox is switched off on the radio this call came in on (Settings › Radios)"
         case .notArmed:
-            "ignored — the mailbox is not on air (Settings → BBS)"
+            "ignored: the mailbox is not on air (Settings › BBS)"
         case .addressSharedWithWinlink(let address):
-            "ignored — Winlink P2P also answers as \(address). Give the mailbox "
-            + "its own SSID (Settings → BBS) and both can run at once."
+            "ignored: Winlink P2P also answers as \(address). Give the mailbox "
+            + "its own SSID (Settings › BBS) and both can run at once."
         case .identityContested(let holder):
-            "ignored — \(holder) already holds this callsign on this TNC"
+            "ignored: \(holder) already holds this callsign on this TNC"
         case .wrongCallsign(let called, let expected):
-            "ignored — called \(called), mailbox answers as \(expected)"
+            "ignored: called \(called), mailbox answers as \(expected)"
         case .busy(let caller):
-            "refused — already serving \(caller)"
+            "refused: already serving \(caller)"
         }
     }
 }

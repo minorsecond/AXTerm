@@ -454,7 +454,7 @@ nonisolated final class B2FSessionEngine {
                             binaryStreamCorrupt = true  // nothing on hand can stitch
                             actions.append(contentsOf: failSession(
                                 "gateway resumed \(current.proposal.mid) from a "
-                                + "different compression of the body — the saved "
+                                + "different compression of the body. The saved "
                                 + "prefix cannot be stitched and has been discarded; "
                                 + "the next exchange downloads from zero"))
                             return Data()
@@ -877,13 +877,13 @@ nonisolated final class B2FSessionEngine {
         let mid = transfer.proposal.mid
         let total = transfer.proposal.compressedSize
         if transfer.prefix.isEmpty {
-            return "binary block checksum failure on \(mid) — the \(total)-byte body "
+            return "binary block checksum failure on \(mid): the \(total)-byte body "
                 + "arrived complete but its FBB checksum does not match, so some "
                 + "byte of it is wrong. Every AX.25 frame carries its own FCS, so "
                 + "this points at duplicate or out-of-order delivery rather than "
                 + "at radio noise. Nothing was saved; the next exchange restarts it."
         }
-        return "binary block checksum failure on \(mid) — \(transfer.prefix.count) bytes "
+        return "binary block checksum failure on \(mid): \(transfer.prefix.count) bytes "
             + "resumed from an earlier session plus this session's continuation do not "
             + "checksum to a valid \(total)-byte body. The saved prefix is the prime "
             + "suspect and has been discarded; the next exchange downloads from zero."
@@ -973,7 +973,7 @@ nonisolated final class B2FSessionEngine {
         body: Data
     ) -> String {
         var text = "failed to decode incoming message \(mid): \(error)"
-        text += " — \(body.count) bytes assembled"
+        text += ", \(body.count) bytes assembled"
         if declaredSize != body.count {
             text += " against \(declaredSize) proposed"
         }
@@ -983,7 +983,7 @@ nonisolated final class B2FSessionEngine {
                 + "first suspect and has been discarded"
         } else {
             text += "; nothing was resumed, so the corruption arrived in this "
-                + "session — FBB's 8-bit block sum is weak enough to pass a "
+                + "session; FBB's 8-bit block sum is weak enough to pass a "
                 + "damaged stream that CRC16 then catches"
         }
         if case LZHUF.DecodeError.decodedSizeMismatch = error {

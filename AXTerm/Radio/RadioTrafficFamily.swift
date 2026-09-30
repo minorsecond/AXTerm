@@ -39,15 +39,15 @@ nonisolated enum RadioTrafficFamily: String, CaseIterable, Sendable, Hashable {
     var help: String {
         switch self {
         case .aprs:
-            return "This radio has *heard* APRS \u{2014} UI frames carrying a position, "
+            return "This radio has *heard* APRS: UI frames carrying a position, "
                 + "weather report, object or message. It says nothing about whether this "
                 + "radio transmits APRS, which is the separate switch in Settings \u{203a} "
                 + "Radios. A receive-only badge is the useful one here: the APRS layers "
                 + "decide what is drawn for stations, and what is drawn depends on what "
                 + "arrives."
         case .ax25:
-            return "This radio has heard connected-mode or NET/ROM traffic \u{2014} sessions "
-                + "and node broadcasts. Stations here are placed from what is known about the "
+            return "This radio has heard connected-mode or NET/ROM traffic (sessions "
+                + "and node broadcasts). Stations here are placed from what is known about the "
                 + "callsign, because packet-network stations do not beacon a position."
         }
     }

@@ -85,8 +85,8 @@ struct BBSStatusHeader: View {
               + "address with the station. Switching it off stops both: callers get no "
               + "answer at all."
             : "Switch on to answer calls while AXTerm is running. Answering means "
-              + "transmitting with nobody present, which in the US is automatic control "
-              + "— which is why it is off until you say otherwise."
+              + "transmitting with nobody present, which in the US is automatic control. "
+              + "That is why it is off until you say otherwise."
     }
 
     private var subtitle: String {

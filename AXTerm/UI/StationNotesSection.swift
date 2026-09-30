@@ -185,7 +185,7 @@ struct StationNotesSection: View {
                         .font(.callout)
                 }
                 .buttonStyle(.borderless)
-                .help("Terrain forecasts currently assume a height for this station. If you know the real one, recording it here makes every forecast on paths to this station worth trusting \u{2014} height is what decides Fresnel clearance.")
+                .help("Terrain forecasts currently assume a height for this station. If you know the real one, recording it here makes every forecast on paths to this station worth trusting. Height is what decides Fresnel clearance.")
             }
         }
     }

@@ -193,7 +193,7 @@ struct WinlinkScopeWindow: View {
         let bearing = GreatCircle.bearingDegrees(from: observer, to: point)
 
         var lines = [
-            "\(callsign) — \(grid.uppercased())",
+            "\(callsign), \(grid.uppercased())",
             String(format: "%@ at %.0f° (%@)",
                    DistanceDisplay.string(kilometres: kilometres,
                                           inMiles: distanceUnitIsMiles),
@@ -207,10 +207,10 @@ struct WinlinkScopeWindow: View {
                 lines.append(WinlinkAirtimeEstimate.rateText(rate) + " measured")
             }
             if !quality.appliesHere {
-                lines.append("Measured from a different location — shown as context, not a prediction.")
+                lines.append("Measured from a different location. Shown as context, not a prediction.")
             }
         } else {
-            lines.append("Never worked from here — position from the directory, quality unknown.")
+            lines.append("Never worked from here. Position from the directory, quality unknown.")
         }
         lines.append("")
         lines.append("Plotted from the grid square in the station cache. No network needed.")
@@ -249,7 +249,7 @@ struct WinlinkScopeWindow: View {
             .help("Map draws real geography and needs tiles, which need the network. Scope plots bearing and range from the grid squares already cached, and keeps working with everything else down.")
             Toggle("Show unworked", isOn: $showsUnworked)
                 .platformCheckboxToggle()
-                .help("Include gateways this station has never worked. They are positioned from the directory, so their place is known but their quality is not — they draw faded and gray.")
+                .help("Include gateways this station has never worked. They are positioned from the directory, so their place is known but their quality is not, so they draw faded and gray.")
         }
         .padding(12)
     }
@@ -263,7 +263,7 @@ struct WinlinkScopeWindow: View {
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
-        .help("Color is measured from this station's own session log — how often the gateway actually answered — not what the directory advertises.")
+        .help("Color is measured from this station's own session log (how often the gateway actually answered), not what the directory advertises.")
     }
 
     private func legendDot(_ color: Color, _ label: String) -> some View {
@@ -310,14 +310,14 @@ struct WinlinkScopeWindow: View {
         contentUnavailable(
             symbol: "location.slash",
             title: "No position known",
-            message: "The map plots everything by bearing and range from your station, so it needs to know where you are. Use \u{201C}Use My Current Position\u{201D} in Settings \u{2192} Winlink, or set a grid square.")
+            message: "The map plots everything by bearing and range from your station, so it needs to know where you are. Use \u{201C}Use My Current Position\u{201D} in Settings \u{203A} Winlink, or set a grid square.")
     }
 
     private var noStations: some View {
         contentUnavailable(
             symbol: "antenna.radiowaves.left.and.right.slash",
             title: "No gateways cached",
-            message: "Refresh the station list on the Stations tab. Gateways are plotted from their grid squares, which the cache already holds \u{2014} but the cache has to be filled once while a path exists.")
+            message: "Refresh the station list on the Stations tab. Gateways are plotted from their grid squares, which the cache already holds, but the cache has to be filled once while a path exists.")
     }
 
     private func contentUnavailable(symbol: String, title: String, message: String) -> some View {

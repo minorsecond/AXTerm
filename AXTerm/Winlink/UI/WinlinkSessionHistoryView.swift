@@ -116,7 +116,7 @@ struct WinlinkSessionHistoryView: View {
                     if let k = solar.kIndex {
                         LabeledContent("Kp (day max)") {
                             Text(SolarConditions.geomagneticDescription(kIndex: k)
-                                    .map { "\(String(format: "%.1f", k)) — \($0)" }
+                                    .map { "\(String(format: "%.1f", k)) (\($0))" }
                                  ?? String(format: "%.1f", k))
                         }
                     }

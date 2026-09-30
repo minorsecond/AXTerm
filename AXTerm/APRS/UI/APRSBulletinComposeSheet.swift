@@ -39,7 +39,7 @@ struct APRSBulletinComposeSheet: View {
     /// edit here anyway.
     private var slotFooter: String {
         let base = "Goes out as \u{201C}\(slot)\u{201D}. Sending this slot again replaces what "
-            + "you last put in it, on every station that hears it \u{2014} that is how a "
+            + "you last put in it, on every station that hears it. That is how a "
             + "correction is made."
         guard isAnnouncement else { return base }
         return base + " An announcement is the same frame; the convention is that it stays up "

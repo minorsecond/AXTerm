@@ -195,7 +195,7 @@ struct MapLayerToggles: View {
                   help: "On: place a station at the position it beaconed over the air, and draw "
                       + "its APRS symbol on the marker. Off: place it at its license or registry "
                       + "address instead, as a plain dot. Only stations heard on a radio that "
-                      + "carries APRS are affected \u{2014} a packet channel's stations never "
+                      + "carries APRS are affected. A packet channel's stations never "
                       + "beacon a position and are always drawn at whatever point they have.")
 
             // APRS mode: choose which classes of transmitted station to draw.
@@ -208,13 +208,13 @@ struct MapLayerToggles: View {
             if prefersTransmittedPosition, expandedTypes {
                 typeToggle("Digipeaters", "antenna.radiowaves.left.and.right",
                            isOn: $showsTypeDigipeater,
-                           help: "Show fixed relay infrastructure \u{2014} digipeaters, i-gates, gateways, repeaters (indigo).")
+                           help: "Show fixed relay infrastructure: digipeaters, i-gates, gateways, repeaters (indigo).")
                 typeToggle("Weather", "cloud.sun.fill", isOn: $showsTypeWeather,
                            help: "Show weather stations (teal).")
                 typeToggle("Vehicles", "car.fill", isOn: $showsTypeVehicle,
-                           help: "Show movers \u{2014} anything wearing a vehicle symbol or reporting course and speed (orange).")
+                           help: "Show movers: anything wearing a vehicle symbol or reporting course and speed (orange).")
                 typeToggle("Fixed / home", "house.fill", isOn: $showsTypeFixed,
-                           help: "Show fixed stations that are not infrastructure \u{2014} typically home stations (gray).")
+                           help: "Show fixed stations that are not infrastructure, typically home stations (gray).")
             }
 
             layer("Movement Trails", "point.topleft.down.to.point.bottomright.curvepath",
@@ -281,7 +281,7 @@ struct MapLayerToggles: View {
                 .help("Barometric tendency over the last three hours, from the weather "
                       + "stations this radio has heard. The change is used rather than the "
                       + "pressure itself because a station's altitude and its sea-level "
-                      + "reduction cancel out of a difference \u{2014} absolute readings "
+                      + "reduction cancel out of a difference. Absolute readings "
                       + "across this much terrain would mostly map who has configured their "
                       + "station correctly. Falling pressure means unsettled weather "
                       + "approaching; a fall past about 3.5 mb in three hours usually brings "
@@ -296,7 +296,7 @@ struct MapLayerToggles: View {
                   enabled: status.weatherFieldCaption != nil,
                   help: (status.weatherFieldUnavailableReason.map {
                       "Unavailable: \($0.lowercased()). A field is built only from readings "
-                          + "under an hour old, and needs two of them \u{2014} one station is "
+                          + "under an hour old, and needs two of them. One station is "
                           + "a reading, not a field, and coloring a map from it would paint "
                           + "one thermometer across a county. Stations whose readings have "
                           + "aged out are still drawn; it is the interpolation that stops. "
@@ -304,7 +304,7 @@ struct MapLayerToggles: View {
                       + "A wash inferred from the weather stations you have heard. For "
                       + "temperature their heights are removed first, the differences that are "
                       + "left are blended by distance, and the local ground height is added "
-                      + "back \u{2014} so a mountain reads colder than the plain beside it. It "
+                      + "back, so a mountain reads colder than the plain beside it. It "
                       + "fades out where no station is near enough to say, and it is an "
                       + "inference from a handful of points, never an observation.")
 
@@ -323,8 +323,8 @@ struct MapLayerToggles: View {
                 .pickerStyle(.menu)
                 .controlSize(.mini)
                 .padding(.leading, 22)
-                .help("Pressure is the one that interpolates honestly over a sparse network "
-                      + "\u{2014} it varies smoothly over hundreds of kilometers, which is why "
+                .help("Pressure is the one that interpolates honestly over a sparse network: "
+                      + "it varies smoothly over hundreds of kilometers, which is why "
                       + "hand-drawn isobars worked for a century, and a falling barometer is a "
                       + "forecast you can act on with nothing else working. Rainfall is "
                       + "deliberately not offered: rain cells are kilometers across and gauges "
@@ -349,7 +349,7 @@ struct MapLayerToggles: View {
                   isOn: $showsObjects,
                   caption: status.objectCaption,
                   help: "Points other operators have placed about somewhere other than "
-                      + "themselves \u{2014} fires, road closures, shelters, aid stations, "
+                      + "themselves: fires, road closures, shelters, aid stations, "
                       + "landing zones. This is how incident information moves when nothing "
                       + "upstream is working, so each one names who reported it and when it "
                       + "was last heard. An object nobody has repeated for six hours stops "
@@ -386,7 +386,7 @@ struct MapLayerToggles: View {
                   help: status.hasTerrain
                       ? "Where the stored terrain says a signal would cross between stations "
                         + "never heard talking. A forecast from ground elevation and Fresnel "
-                        + "geometry \u{2014} not a measurement, which is why it is drawn differently."
+                        + "geometry, not a measurement, which is why it is drawn differently."
                       : "Needs terrain data. Download the elevation tiles for this area from "
                         + "the map's Terrain menu first.")
 
@@ -440,7 +440,7 @@ struct MapLayerToggles: View {
                   help: "Folds ordinary stations into a count when they are too close together "
                       + "to tell apart at this zoom, and breaks them back out as you zoom in. "
                       + "Your own station, and anything a person placed as an object or a "
-                      + "hazard, are never folded in \u{2014} those are the reasons the page is "
+                      + "hazard, are never folded in. Those are the reasons the page is "
                       + "open. Switch it off to draw every station at its own position at every "
                       + "zoom: denser, but it hides nothing.")
 

@@ -34,18 +34,18 @@ enum APRSPingPresentation {
         case .waiting:
             return ping.heardUs
                 ? "It repeated our frame, so it hears us. Waiting for a reply\u{2026}"
-                : "Pinged \(ping.query)\(ping.reach == .wide ? " via my APRS path" : "") "
-                + "— waiting for a reply\u{2026}"
+                : "Pinged \(ping.query)\(ping.reach == .wide ? " via my APRS path" : ""). "
+                + "Waiting for a reply\u{2026}"
         case .confirmed:
             // A message arriving during a broadcast-answered query is the
             // station talking to us, not the answer. Saying "answered" there
             // credits the question with evidence it did not produce.
             if ping.reply == .addressedUs {
                 return ping.reach == .wide
-                    ? "It sent us a message, so it is reachable over my APRS path "
-                    + "\u{2014} but that is not an answer to \(ping.query), and digipeaters "
+                    ? "It sent us a message, so it is reachable over my APRS path, "
+                    + "but that is not an answer to \(ping.query), and digipeaters "
                     + "may have carried it either way."
-                    : "It sent us a message directly, so it hears us \u{2014} but that is "
+                    : "It sent us a message directly, so it hears us, but that is "
                     + "not an answer to \(ping.query)."
             }
             // What an answer proves depends entirely on how the question
@@ -54,19 +54,19 @@ enum APRSPingPresentation {
             // stations can be nowhere near each other; saying "directly"
             // there claims a measurement nobody made.
             return ping.reach == .wide
-                ? "Answered. It is reachable over my APRS path \u{2014} digipeaters may "
+                ? "Answered. It is reachable over my APRS path. Digipeaters may "
                 + "have carried the question or the answer, so this is not proof of earshot."
                 : "Answered us directly. It heard the ping."
         case .likely:
             return ping.heardUs
                 ? "It repeated our frame, and transmitted right after the ping."
-                : "Transmitted right after the ping — probably an answer."
+                : "Transmitted right after the ping, so probably an answer."
         case .silent:
             // The case the operator hits most often, and the one bare silence
             // described worst: a digipeater proves it hears us by repeating
             // us, and then never answers a query in its life.
             let heard = ping.heardUs
-                ? "It hears us — it repeated our frame — but did not answer. "
+                ? "It hears us (it repeated our frame) but did not answer. "
                 : "No answer. "
             // A query answered with a message narrows the explanations:
             // silence can no longer be "it answered and we could not tell",
@@ -109,13 +109,13 @@ enum APRSPingPresentation {
         case .confirmed:
             if ping.reply == .addressedUs {
                 return "The station sent a message addressed to this one, which is proof it "
-                    + "hears us \u{2014} the only unambiguous kind APRS offers. It is not an "
+                    + "hears us, and the only unambiguous kind APRS offers. It is not an "
                     + "answer to \(ping.query) though: that query is answered with an ordinary "
                     + "broadcast position, never with a message, so what arrived was this "
                     + "station saying something of its own."
             }
             return "The station sent a message addressed to this one, which is how \(ping.query) "
-                + "is answered. That is proof it heard the ping \u{2014} the only unambiguous "
+                + "is answered. That is proof it heard the ping, and the only unambiguous "
                 + "kind APRS offers."
         case .likely:
             return "The station transmitted far sooner than its own beacon interval predicts. "
@@ -127,11 +127,11 @@ enum APRSPingPresentation {
             // the absence of that evidence says nothing.
             let reach = ping.reach == .direct
                 ? " This one went direct, with no digipeater path, so there was nothing for a "
-                    + "digipeater to repeat \u{2014} send it via your APRS path if you want that "
+                    + "digipeater to repeat. Send it via your APRS path if you want that "
                     + "evidence."
                 : ""
-            return "Nothing attributable arrived. Plenty of stations \u{2014} most trackers and "
-                + "many digipeaters \u{2014} never answer queries at all, so silence is not "
+            return "Nothing attributable arrived. Plenty of stations (most trackers and "
+                + "many digipeaters) never answer queries at all, so silence is not "
                 + "proof they cannot hear you." + reach
         }
     }

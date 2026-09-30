@@ -162,7 +162,7 @@ nonisolated enum GraphCopy {
             tf.isEmpty ? "Linked" : "Linked (\(tf))"
         }
         static func isolationReductionTooltip(_ tf: String) -> String {
-            "C3: Share of heard stations that have at least one observed link — higher is better. 100 means none are isolated. Formula: 100 - (% stations with no links). Based on \(tf.isEmpty ? "selected timeframe" : tf)."
+            "C3: Share of heard stations that have at least one observed link. Higher is better. 100 means none are isolated. Formula: 100 - (% stations with no links). Based on \(tf.isEmpty ? "selected timeframe" : tf)."
         }
 
         static let topRelayShareLabel = "Top Relay"
@@ -179,7 +179,7 @@ nonisolated enum GraphCopy {
         static let activeStationsTooltip = "A1: Stations heard in the last 10 minutes. The activity score uses this as a share of all stations in the selected timeframe."
 
         static let packetRateLabel = "Rate (10m)"
-        static let packetRateTooltip = "A2: Packets per minute over the last 10 minutes. Scores 100 from 1 to 30 pkt/min, then declines — beyond ~30 pkt/min a shared 1200-baud channel approaches saturation."
+        static let packetRateTooltip = "A2: Packets per minute over the last 10 minutes. Scores 100 from 1 to 30 pkt/min, then declines, because beyond ~30 pkt/min a shared 1200-baud channel approaches saturation."
 
         // MARK: Other
 
@@ -264,9 +264,9 @@ nonisolated enum GraphCopy {
         static let sourceLabel = "Source"
         static let sourceTooltip = "Choose where graph relationships come from."
         static let packetSourceLabel = "Packets"
-        static let packetSourceTooltip = "Who was HEARD talking to whom. Edges come from observed AX.25 frames — the actual RF activity on the channel, whether or not anyone can route through it."
+        static let packetSourceTooltip = "Who was HEARD talking to whom. Edges come from observed AX.25 frames: the actual RF activity on the channel, whether or not anyone can route through it."
         static let netRomSourceLabel = "NET/ROM"
-        static let netRomSourceTooltip = "Who can ROUTE to whom. Edges come from the NET/ROM routing layer — broadcast NODES tables and inferred routes — so this is reachability, not who was overheard."
+        static let netRomSourceTooltip = "Who can ROUTE to whom. Edges come from the NET/ROM routing layer (broadcast NODES tables and inferred routes), so this is reachability, not who was overheard."
 
         static let connectivityLabel = "Direct"
         static let connectivityDescription = "Direct RF evidence + direct peer links"

@@ -154,11 +154,11 @@ extension WindowSawtoothView {
         .init(swatch: .line(.blue), label: "In flight",
               help: "Frames we have sent and not yet had acknowledged."),
         .init(swatch: .dashedLine(.secondary), label: "Window K",
-              help: "The configured window size — the ceiling on frames in flight."),
+              help: "The configured window size, the ceiling on frames in flight."),
         .init(swatch: .dot(.orange), label: "REJ",
               help: "A reject we sent: a gap appeared in the peer's stream."),
         .init(swatch: .dot(.red), label: "T1",
-              help: "Our own retransmission timeout — no ack arrived in time."),
+              help: "Our own retransmission timeout: no ack arrived in time."),
     ]
 }
 
@@ -225,7 +225,7 @@ struct ThroughputChartView: View {
 extension ThroughputChartView {
     static let legend: [ChartLegend.Item] = [
         .init(swatch: .fill(.green.opacity(0.45)), label: "Goodput",
-              help: "Bytes delivered in order — the part of the channel that did useful work."),
+              help: "Bytes delivered in order: the part of the channel that did useful work."),
         .init(swatch: .fill(.orange.opacity(0.25)), label: "Retransmits",
               help: "Channel bytes burned on repeated copies. The gap above the green line is the overhead."),
     ]
@@ -333,14 +333,14 @@ struct ChannelAirtimeLanesView: View {
         let lanes = Array(monitor.lanes.prefix(maxLanes))
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("Channel activity — last \(Int(window / 60)) min")
+                Text("Channel activity (last \(Int(window / 60)) min)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text(String(format: "%.1f%% busy", monitor.utilization(now: now) * 100))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .help("Fraction of the window the channel carried a frame from any station — shared-frequency etiquette at a glance.")
+                    .help("Fraction of the window the channel carried a frame from any station, which shows shared-frequency etiquette at a glance.")
             }
             if lanes.isEmpty {
                 Text("No frames heard yet.")

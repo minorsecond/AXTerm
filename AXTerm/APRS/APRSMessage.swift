@@ -234,7 +234,7 @@ nonisolated enum APRSGeneralQuery: String, CaseIterable, Identifiable, Sendable 
         switch self {
         case .all:
             return "Sends \(rawValue). Every APRS station in earshot answers with whatever it "
-                + "is set to give \u{2014} usually a position and a status line."
+                + "is set to give, usually a position and a status line."
         case .position:
             return "Sends \(rawValue). Asks every station for a position report, which fills in "
                 + "the map for anyone heard but not yet placed."
@@ -247,7 +247,7 @@ nonisolated enum APRSGeneralQuery: String, CaseIterable, Identifiable, Sendable 
                 + "operators put what they are doing and what they can offer."
         case .objects:
             return "Sends \(rawValue). Asks stations to re-send the objects and items they are "
-                + "running \u{2014} hazards, shelters, closures. Worth doing after a restart, "
+                + "running (hazards, shelters, closures). Worth doing after a restart, "
                 + "when this receiver has heard none of them yet."
         case .directHeard:
             return "Sends \(rawValue). Asks each station which stations it is hearing directly, "

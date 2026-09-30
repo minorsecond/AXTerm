@@ -186,7 +186,7 @@ struct WinlinkExchangeDashboardView: View {
                 }
             } else {
                 Text(runner.isRunning
-                     ? "Handshaking — no body transfer in progress."
+                     ? "Handshaking. No body transfer in progress."
                      : "No transfer in progress.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -280,7 +280,7 @@ struct WinlinkExchangeDashboardView: View {
         """
         The message currently on the air.
 
-        Teal is what a previous, interrupted attempt already delivered — \
+        Teal is what a previous, interrupted attempt already delivered; \
         those bytes are on disk and are not being re-downloaded. Only the \
         blue portion is crossing the air now, and the rate and time \
         remaining are computed from it alone.
@@ -289,7 +289,7 @@ struct WinlinkExchangeDashboardView: View {
 
     private var throughputHelp: String {
         """
-        Bytes per second over time. Green is goodput — payload delivered in \
+        Bytes per second over time. Green is goodput: payload delivered in \
         order to the application. Orange behind it is every byte the channel \
         carried, including duplicate copies of frames we already had.
 

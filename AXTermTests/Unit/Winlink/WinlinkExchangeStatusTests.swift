@@ -32,7 +32,7 @@ final class WinlinkExchangeStatusTests: XCTestCase {
         XCTAssertEqual(status.kind, .succeeded)
         // An empty exchange is the commonest success and the one most often
         // misread as a failure.
-        XCTAssertEqual(status.detail, "Nothing queued either way — the mailbox is up to date.")
+        XCTAssertEqual(status.detail, "Nothing queued either way. The mailbox is up to date.")
     }
 
     func testCompletionCountsAreSingularWhenOne() {

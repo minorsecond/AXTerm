@@ -113,14 +113,14 @@ nonisolated enum APRSDirectedQuery: String, CaseIterable, Identifiable, Sendable
         case .position:
             return "Sends \(token). Fills in the map for a station heard but not yet placed. "
                 + "The reply is a plain broadcast beacon, so nothing in it says it was an "
-                + "answer \u{2014} only its timing can suggest that."
+                + "answer. Only its timing can suggest that."
         case .trace:
             return "Sends \(token) (also written ?PING?). The station replies with the path "
                 + "your query traveled to reach it, which is the one query that tells you how "
                 + "the network got you there rather than only that it did."
         case .version:
             return "Sends \(token). The station names its software. Answered with a message "
-                + "addressed to you, so a reply is proof it heard you \u{2014} the cleanest "
+                + "addressed to you, so a reply is proof it heard you, which makes this the cleanest "
                 + "reachability test APRS offers."
         case .directs:
             return "Sends \(token). The station lists what it hears with no digipeater in "
@@ -130,11 +130,11 @@ nonisolated enum APRSDirectedQuery: String, CaseIterable, Identifiable, Sendable
                 + "are doing and what they can offer. Broadcast, not addressed to you."
         case .objects:
             return "Sends \(token). Asks the station to re-broadcast its objects and items "
-                + "\u{2014} hazards, shelters, closures. Worth doing after a restart, when "
+                + "(hazards, shelters, closures). Worth doing after a restart, when "
                 + "this receiver has heard none of them yet."
         case .messages:
             return "Sends \(token). Asks the station to re-send any messages it is holding for "
-                + "you. Rarely implemented \u{2014} Xastir does not."
+                + "you. Rarely implemented (Xastir does not)."
         }
     }
 }

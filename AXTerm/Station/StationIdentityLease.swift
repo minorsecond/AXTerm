@@ -132,7 +132,7 @@ nonisolated enum StationIdentityLeaseResolver {
         return """
         \(holder.deviceName) is already using \(own.callsign) on \(own.endpoint).
 
-        Two stations answering to one address on one channel breaks AX.25: both reply to a SABM, both acknowledge I-frames, and each one's DISC tears down the other's session. Nothing reports an error — links just drop.
+        Two stations answering to one address on one channel breaks AX.25: both reply to a SABM, both acknowledge I-frames, and each one's DISC tears down the other's session. Nothing reports an error. Links just drop.
 
         Unattended transmission is held off on this device while that is true: it will not answer inbound Winlink calls and will not send queued mail on a timer. You can still transmit deliberately.
 

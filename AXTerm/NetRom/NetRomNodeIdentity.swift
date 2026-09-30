@@ -26,7 +26,7 @@ nonisolated enum NetRomNodeIdentity: String, Codable, CaseIterable, Sendable {
     var explanation: String {
         switch self {
         case .unified:
-            return "The station callsign and alias are the node, announced from every radio under that radio's own callsign — the way BPQ runs one node over several ports. Stations on either frequency reach the same node."
+            return "The station callsign and alias are the node, announced from every radio under that radio's own callsign, the way BPQ runs one node over several ports. Stations on either frequency reach the same node."
         case .perRadio:
             return "Each radio's callsign is its own node with its own alias. The nodes do not forward to each other, so a station on one frequency cannot reach the other through this station."
         }

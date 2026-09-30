@@ -193,7 +193,7 @@ struct OfflineMapsView: View {
                     Label("Download Terrain for This Area", systemImage: "mountain.2")
                 }
                 .disabled(estimate.tileCount == 0)
-                .help("Fetches USGS 3DEP elevation for the box you drew \u{2014} public-domain federal data, no account needed. Tiles are one degree square, so the download covers whole tiles wherever the box crosses them.")
+                .help("Fetches USGS 3DEP elevation for the box you drew (public-domain federal data, no account needed). Tiles are one degree square, so the download covers whole tiles wherever the box crosses them.")
 
                 Text(terrainSummary(estimate))
                     .font(.caption)
@@ -211,13 +211,13 @@ struct OfflineMapsView: View {
                     Label("Download Terrain Around My Station", systemImage: "mountain.2")
                 }
                 .disabled(estimate.tileCount == 0)
-                .help("Fetches USGS 3DEP elevation for the ground within about 120 km of your station \u{2014} public-domain federal data, no account needed. That radius is deliberate: it is the range beyond which path forecasts stop looking, so anything further answers no question the app asks. To choose a different area, draw one on the map with the Download tool.")
+                .help("Fetches USGS 3DEP elevation for the ground within about 120 km of your station (public-domain federal data, no account needed). That radius is deliberate: it is the range beyond which path forecasts stop looking, so anything further answers no question the app asks. To choose a different area, draw one on the map with the Download tool.")
 
                 Text(terrainSummary(estimate))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("Set your grid square first \u{2014} terrain is fetched around your station, so it needs to know where that is.")
+                Text("Set your grid square first. Terrain is fetched around your station, so it needs to know where that is.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -251,13 +251,13 @@ struct OfflineMapsView: View {
         guard estimate.wasCapped else { return base }
         return base + " That area covers \(estimate.requestedTileCount) tiles, "
             + "more than the \(ElevationStorage.maximumTilesPerRequest) one request "
-            + "will fetch \u{2014} the nearest part is downloaded, so draw a smaller "
+            + "will fetch. The nearest part is downloaded, so draw a smaller "
             + "box for the rest."
     }
 
     private var importSection: some View {
         Section("Import a map file") {
-            Text("An .mbtiles file holds a whole region's tiles in one file. Use this for coverage AXTerm cannot fetch itself — outside the US, or a basemap you generated yourself.\n\nMust be raster tiles (PNG or JPEG). Vector files — anything described as vector tiles, PMTiles or OpenMapTiles — are refused rather than imported blank.")
+            Text("An .mbtiles file holds a whole region's tiles in one file. Use this for coverage AXTerm cannot fetch itself: outside the US, or a basemap you generated yourself.\n\nMust be raster tiles (PNG or JPEG). Vector files (anything described as vector tiles, PMTiles or OpenMapTiles) are refused rather than imported blank.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -318,7 +318,7 @@ struct OfflineMapsView: View {
                         .font(.caption)
                         .monospacedDigit()
                 }
-                .explain("An estimate from an average tile size, not a measurement — the real total depends on how much detail is in the area. Empty country is far smaller than a city.")
+                .explain("An estimate from an average tile size, not a measurement. The real total depends on how much detail is in the area. Empty country is far smaller than a city.")
             }
 
             Button {
@@ -358,7 +358,7 @@ struct OfflineMapsView: View {
             Section { Label("Importing…", systemImage: "square.and.arrow.down") }
         case .finished(let tiles, _):
             Section {
-                Label(tiles == 0 ? "Already stored — nothing new to fetch."
+                Label(tiles == 0 ? "Already stored. Nothing new to fetch."
                                  : "Stored \(tiles.formatted()) tiles.",
                       systemImage: "checkmark.circle")
                     .foregroundStyle(.green)

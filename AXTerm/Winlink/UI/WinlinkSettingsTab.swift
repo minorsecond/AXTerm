@@ -91,22 +91,22 @@ struct WinlinkSettingsTab: View {
                     Text(settings.callsignLookupEnabled ? "On" : "Off")
                         .foregroundStyle(.secondary)
                 }
-                Text("Controlled in General settings — it gates every automatic position lookup in the app, not just Winlink\u{2019}s.")
+                Text("Controlled in General settings. It gates every automatic position lookup in the app, not just Winlink\u{2019}s.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section("Unified mailbox") {
                 Toggle("Sync mail across my devices via iCloud", isOn: $settings.mailboxSyncEnabled)
-                    .help("Shares this mailbox with your other devices signed into the same Apple Account, so mail worked on the home rig is readable on a handheld and read flags follow you.\n\nOff by default: sync sends your Winlink traffic to Apple's servers, which is a decision to make deliberately rather than inherit from an upgrade. It goes to your private database, which only you can read.\n\nMessages, read flags, folders, contacts, starred catalog products and callsign lookups travel. Digipeater paths, the gateway ladder, session logs and grid square do NOT \u{2014} those describe this antenna at this location, and are wrong anywhere else.")
+                    .help("Shares this mailbox with your other devices signed into the same Apple Account, so mail worked on the home rig is readable on a handheld and read flags follow you.\n\nOff by default: sync sends your Winlink traffic to Apple's servers, which is a decision to make deliberately rather than inherit from an upgrade. It goes to your private database, which only you can read.\n\nMessages, read flags, folders, contacts, starred catalog products and callsign lookups travel. Digipeater paths, the gateway ladder, session logs and grid square do NOT: those describe this antenna at this location, and are wrong anywhere else.")
 
                 if settings.mailboxSyncEnabled {
                     Toggle("Share my terminal history", isOn: $settings.shareTerminalSessions)
-                        .explain("Sends the transcripts of connected-mode sessions this device finishes in the last week to your other devices, where they appear in the Terminal\u{2019}s History under this device\u{2019}s name when \u{201C}Other devices\u{201D} is switched on there.\n\nWhat arrives is never mixed into a device\u{2019}s own history: it sits in its own section, every row says which station and device it came from, and it cannot be tagged or annotated \u{2014} those stay with the device that made them.\n\nOff by default: a transcript says who this station talked to and what was said. Takes effect after the next launch.")
+                        .explain("Sends the transcripts of connected-mode sessions this device finishes in the last week to your other devices, where they appear in the Terminal\u{2019}s History under this device\u{2019}s name when \u{201C}Other devices\u{201D} is switched on there.\n\nWhat arrives is never mixed into a device\u{2019}s own history: it sits in its own section, every row says which station and device it came from, and it cannot be tagged or annotated; those stay with the device that made them.\n\nOff by default: a transcript says who this station talked to and what was said. Takes effect after the next launch.")
                     Toggle("Share my packet mailbox", isOn: $settings.shareBBSMailbox)
-                        .explain("Sends this device\u{2019}s BBS \u{2014} the messages callers left and the callers log \u{2014} to your other devices, where they appear in the BBS screen under this mailbox\u{2019}s name when \u{201C}Other mailboxes\u{201D} is switched on there.\n\nEach mailbox keeps its own message numbers, which were promised to callers over the air, so nothing is merged: other mailboxes\u{2019} mail sits in its own section, labeled, and is never answered to callers here.\n\nOff by default: callers\u{2019} mail is theirs. Takes effect after the next launch.")
+                        .explain("Sends this device\u{2019}s BBS (the messages callers left and the callers log) to your other devices, where they appear in the BBS screen under this mailbox\u{2019}s name when \u{201C}Other mailboxes\u{201D} is switched on there.\n\nEach mailbox keeps its own message numbers, which were promised to callers over the air, so nothing is merged: other mailboxes\u{2019} mail sits in its own section, labeled, and is never answered to callers here.\n\nOff by default: callers\u{2019} mail is theirs. Takes effect after the next launch.")
                     Toggle("Share what this station hears", isOn: $settings.shareStationActivity)
-                        .explain("Publishes a summary of the stations this receiver hears \u{2014} callsign, how often, how much airtime \u{2014} so your other stations can see what this one worked while they were away. It appears there under \u{201C}Other Stations\u{201D}, labeled with the station and grid square that heard it.\n\nIt is never merged into routing metrics. A packet this antenna heard says nothing about what a handheld across town can reach, and folding the two together would produce link quality describing neither.\n\nOff by default: it tells iCloud which stations you can hear, which is a rough statement about where you are and when you are on the air.")
+                        .explain("Publishes a summary of the stations this receiver hears (callsign, how often, how much airtime) so your other stations can see what this one worked while they were away. It appears there under \u{201C}Other Stations\u{201D}, labeled with the station and grid square that heard it.\n\nIt is never merged into routing metrics. A packet this antenna heard says nothing about what a handheld across town can reach, and folding the two together would produce link quality describing neither.\n\nOff by default: it tells iCloud which stations you can hear, which is a rough statement about where you are and when you are on the air.")
                 }
 
                 if settings.mailboxSyncEnabled, let sync {
@@ -116,9 +116,9 @@ struct WinlinkSettingsTab: View {
 
             Section("Peer-to-peer (grid-down)") {
                 Toggle("Answer inbound Winlink calls", isOn: $settings.p2pListenEnabled)
-                    .help("Lets other stations connect directly to you and exchange mail with no gateway, no CMS, and no internet — the mode that still works when infrastructure is gone.\n\nOff by default: an armed station accepts mail from anyone who calls and transmits in reply with no operator present. Arm it for an activation, not for everyday operating.")
+                    .help("Lets other stations connect directly to you and exchange mail with no gateway, no CMS, and no internet. It is the mode that still works when infrastructure is gone.\n\nOff by default: an armed station accepts mail from anyone who calls and transmits in reply with no operator present. Arm it for an activation, not for everyday operating.")
                 if settings.p2pListenEnabled {
-                    Label("Armed \u{2014} this station answers inbound Winlink calls and will transmit in reply.",
+                    Label("Armed: this station answers inbound Winlink calls and will transmit in reply.",
                           systemImage: "antenna.radiowaves.left.and.right")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -128,7 +128,7 @@ struct WinlinkSettingsTab: View {
                                            : stationCallsign.uppercased()))
                         .font(.system(.body, design: .monospaced))
                     Text("Leave empty to answer as \(stationCallsign.isEmpty ? "your station callsign" : stationCallsign.uppercased()). "
-                         + "Give the listener its own SSID to share the radio with another service — "
+                         + "Give the listener its own SSID to share the radio with another service, such as "
                          + "the mailbox, or a node on this host. Callers pick a service by the "
                          + "callsign they dial.\n\nThis is an address, not an identity: your Winlink "
                          + "account and the callsign carried in the mail exchange are unchanged.")
@@ -178,7 +178,7 @@ struct WinlinkSettingsTab: View {
                         Text("\(settings.historyHours) h").foregroundStyle(.secondary)
                     }
                 }
-                .help("Filters the station list to gateways that reported to the CMS within this window — silent gateways are probably off the air.")
+                .help("Filters the station list to gateways that reported to the CMS within this window. Silent gateways are probably off the air.")
             } header: {
                 Text("Station")
             }
@@ -192,7 +192,7 @@ struct WinlinkSettingsTab: View {
             } header: {
                 Text("Operator")
             } footer: {
-                Text("Auto-fills Winlink forms (ICS-213 sender, Check-in contact, Severe WX reporting party…) and signatures. Your Winlink account password is only a credential — the network never shares identity details, so these fields are the source of truth.")
+                Text("Auto-fills Winlink forms (ICS-213 sender, Check-in contact, Severe WX reporting party…) and signatures. Your Winlink account password is only a credential. The network never shares identity details, so these fields are the source of truth.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -246,7 +246,7 @@ struct WinlinkSettingsTab: View {
                     }
                     .disabled(isVerifyingPassword
                               || passwordDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .help("Asks the CMS whether this is the password on the account — the same question the ;PR: handshake asks on the air, answered here in a sentence instead of a disconnect.")
+                    .help("Asks the CMS whether this is the password on the account. It is the same question the ;PR: handshake asks on the air, answered here in a sentence instead of a disconnect.")
                 }
 
                 if let note = passwordStatusNote {
@@ -274,7 +274,7 @@ struct WinlinkSettingsTab: View {
                         }
                     }
                     .disabled(isVerifyingKey || apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .help("Checks the key against the Winlink catalog service — the operation that needs a personal key.")
+                    .help("Checks the key against the Winlink catalog service, the operation that needs a personal key.")
                 }
 
                 if let verification = keyVerification {
@@ -283,7 +283,7 @@ struct WinlinkSettingsTab: View {
                         .foregroundStyle(verification.ok ? .green : .red)
                 }
 
-                Text("Both are stored in the macOS Keychain, never in preferences. A personal key unlocks the internet catalog refresh (the built-in community key only covers the station list) — request one from the Winlink development team, ideally together with registering AXTerm as a client type.")
+                Text("Both are stored in the macOS Keychain, never in preferences. A personal key unlocks the internet catalog refresh (the built-in community key only covers the station list). Request one from the Winlink development team, ideally together with registering AXTerm as a client type.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -292,7 +292,7 @@ struct WinlinkSettingsTab: View {
 
             Section {
                 if settings.gatewayLadder.isEmpty {
-                    Text("No gateways yet — add stations from the Stations tab (star button) or type a callsign below.")
+                    Text("No gateways yet. Add stations from the Stations tab (star button) or type a callsign below.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
@@ -301,7 +301,7 @@ struct WinlinkSettingsTab: View {
                             Image(systemName: index == 0 ? "star.fill" : "\(index + 1).circle")
                                 .foregroundStyle(index == 0 ? .yellow : .secondary)
                                 .frame(width: 20)
-                                .help(index == 0 ? "Primary gateway — tried first." : "Rung #\(index + 1).")
+                                .help(index == 0 ? "Primary gateway, tried first." : "Rung #\(index + 1).")
                             Text(entry.callsign)
                                 .font(.body.monospaced())
                             if let hz = entry.frequencyHz {
@@ -319,7 +319,7 @@ struct WinlinkSettingsTab: View {
                                       systemImage: "exclamationmark.triangle")
                                     .font(.caption2)
                                     .foregroundStyle(.orange)
-                                    .help("This gateway is \(Int(miles)) miles away — likely added for a trip. It stays in the ladder until removed, and every exchange from here will spend an attempt on it.")
+                                    .help("This gateway is \(Int(miles)) miles away, likely added for a trip. It stays in the ladder until removed, and every exchange from here will spend an attempt on it.")
                             }
                             if !entry.path.isEmpty {
                                 Text("via \(entry.path)")
@@ -363,7 +363,7 @@ struct WinlinkSettingsTab: View {
                     Text("Pat (registered client)").tag("Pat")
                 }
                 .frame(maxWidth: 280)
-                .help("The client name sent in the B2F handshake. The production Winlink CMS only accepts registered client types — until AXTerm is registered with the Winlink development team, gateways will reply 'Unknown client types are not allowed' and disconnect. Selecting Pat (an open-source client with the same B2F feature set) is the community's usual workaround while a registration request is pending.")
+                .help("The client name sent in the B2F handshake. The production Winlink CMS only accepts registered client types. Until AXTerm is registered with the Winlink development team, gateways will reply 'Unknown client types are not allowed' and disconnect. Selecting Pat (an open-source client with the same B2F feature set) is the community's usual workaround while a registration request is pending.")
 
                 Toggle("Ask which messages to download", isOn: $settings.askBeforeDownloading)
                     .help("A gateway proposes its mail before sending it. With this on, you see the subjects, senders and airtime and choose; with it off, everything it offers comes down.")
@@ -378,7 +378,7 @@ struct WinlinkSettingsTab: View {
                     }
                     .help("Applied only when the picker times out unanswered.")
 
-                    Text("You get \(WinlinkSettings.inboundSelectionTimeout) seconds to choose, with the link open. Unanswered, messages under the size above download and the rest stay on the server — emergency traffic is small, and an unattended station should not commit a shared channel to a bulletin. Nothing you skip is ever lost; the gateway offers it again.")
+                    Text("You get \(WinlinkSettings.inboundSelectionTimeout) seconds to choose, with the link open. Unanswered, messages under the size above download and the rest stay on the server. Emergency traffic is small, and an unattended station should not commit a shared channel to a bulletin. Nothing you skip is ever lost; the gateway offers it again.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -459,7 +459,7 @@ struct WinlinkSettingsTab: View {
 
         let callsign = accountCallsign
         guard !callsign.isEmpty else {
-            passwordStatus = .unknown("Set the station callsign first — the CMS checks a password against an account.")
+            passwordStatus = .unknown("Set the station callsign first. The CMS checks a password against an account.")
             return
         }
 
@@ -483,15 +483,15 @@ struct WinlinkSettingsTab: View {
                     passwordStatus = .refused("The CMS says this is not the password on \(callsign). This is exactly what a session would hit: “Secure login failed - account password does not match”. Note it is case-sensitive. Reset it at winlink.org if you are unsure.")
                 case .noSuchAccount:
                     settings.markPasswordUnverified()
-                    passwordStatus = .refused("Winlink has no account for \(callsign). Check the station callsign — an SSID is ignored here, accounts belong to the base call.")
+                    passwordStatus = .refused("Winlink has no account for \(callsign). Check the station callsign. An SSID is ignored here; accounts belong to the base call.")
                 case .accountBlocked:
                     settings.markPasswordUnverified()
                     passwordStatus = .refused("The Winlink account \(callsign) is locked out. Sort that out at winlink.org; no client can log in until it is.")
                 }
             } catch let WinlinkCMSError.serviceError(message) {
-                passwordStatus = .unknown("The CMS would not answer: \(message). The password is stored — this says nothing about whether it is right.")
+                passwordStatus = .unknown("The CMS would not answer: \(message). The password is stored, but this says nothing about whether it is right.")
             } catch {
-                passwordStatus = .unknown("Could not reach the CMS: \(RMSStationsViewModel.describe(error)). The password is stored — this says nothing about whether it is right.")
+                passwordStatus = .unknown("Could not reach the CMS: \(RMSStationsViewModel.describe(error)). The password is stored, but this says nothing about whether it is right.")
             }
         }
     }
@@ -513,25 +513,25 @@ struct WinlinkSettingsTab: View {
     private var passwordStatusIcon: (symbol: String, tint: Color, help: String)? {
         if passwordIsDirty {
             return ("pencil.circle", .secondary,
-                    "Not saved yet — press Return, or click outside the field.")
+                    "Not saved yet. Press Return, or click outside the field.")
         }
         switch passwordStatus {
         case .idle:
             return nil
         case .stored:
             return ("questionmark.circle", .secondary,
-                    "Stored in the Keychain. Nobody has asked Winlink whether it is right — press Verify.")
+                    "Stored in the Keychain. Nobody has asked Winlink whether it is right. Press Verify.")
         case .storeFailed:
             return ("exclamationmark.triangle.fill", .red,
-                    "The Keychain refused to store or return the password — see below.")
+                    "The Keychain refused to store or return the password (see below).")
         case .verified:
             return ("checkmark.circle.fill", .green,
                     "The CMS confirmed this is the password on the account.")
         case .refused:
-            return ("xmark.circle.fill", .red, "The CMS refused this password — see below.")
+            return ("xmark.circle.fill", .red, "The CMS refused this password (see below).")
         case .unknown:
             return ("questionmark.circle", .orange,
-                    "Stored, but the CMS could not be asked — see below.")
+                    "Stored, but the CMS could not be asked (see below).")
         }
     }
 
@@ -541,7 +541,7 @@ struct WinlinkSettingsTab: View {
         case .idle:
             return nil
         case .stored:
-            return ("Stored in the Keychain, but never checked against Winlink. Press Verify — a wrong password only shows up as a refused session otherwise.", .secondary)
+            return ("Stored in the Keychain, but never checked against Winlink. Press Verify: a wrong password only shows up as a refused session otherwise.", .secondary)
         case .storeFailed:
             return ("The password could not be saved to the Keychain (or was saved but can't be read back). This usually happens with development builds after re-signing. Try: quit and relaunch AXTerm, then re-enter it. If it persists, delete the old entry in Keychain Access (search “com.axterm.winlink”) and enter the password again.", .red)
         case .verified(let date):
@@ -564,7 +564,7 @@ struct WinlinkSettingsTab: View {
             defer { isVerifyingKey = false }
             do {
                 let items = try await WinlinkCMSClient(accessKey: key).inquiriesCatalog()
-                keyVerification = (true, "Key accepted — catalog access works (\(items.count) items).")
+                keyVerification = (true, "Key accepted. Catalog access works (\(items.count) items).")
             } catch let WinlinkCMSError.serviceError(message) {
                 keyVerification = (false, "The CMS rejected the key: \(message)")
             } catch {

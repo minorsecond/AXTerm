@@ -46,13 +46,13 @@ nonisolated enum PathHopVerdict: Equatable, Sendable {
     var explanation: String {
         switch self {
         case .provenDigi(let repeats):
-            return "Has repeated your own frames (\(repeats) observed repeats) — this hop is proven from your station."
+            return "Has repeated your own frames (\(repeats) observed repeats), so this hop is proven from your station."
         case .observedDigi(let repeats):
-            return "Observed digipeating other stations (\(repeats) repeats), but never your frames — plausible, unproven from your QTH."
+            return "Observed digipeating other stations (\(repeats) repeats), but never your frames: plausible, unproven from your QTH."
         case .nodeNotDigi:
-            return "NET/ROM node with no observed digipeat evidence. Many nodes have digipeating disabled \u{2014} it may still work, but connecting to the node and continuing from its prompt is the proven route."
+            return "NET/ROM node with no observed digipeat evidence. Many nodes have digipeating disabled. It may still work, but connecting to the node and continuing from its prompt is the proven route."
         case .unproven:
-            return "No evidence this station digipeats — frames sent via it will likely be lost."
+            return "No evidence this station digipeats. Frames sent via it will likely be lost."
         }
     }
 }
@@ -89,7 +89,7 @@ nonisolated enum PathHopReachability: Equatable, Sendable {
         case .heardDirect(let frames):
             return "Heard direct (\(frames) frame\(frames == 1 ? "" : "s")) but no direct session observed yet."
         case .notHeardDirect:
-            return "Never heard direct from your station \u{2014} your RF may not reach it."
+            return "Never heard direct from your station. Your RF may not reach it."
         }
     }
 }
@@ -232,10 +232,10 @@ nonisolated enum GraphPathDrafter {
 
         var warnings: [String] = []
         if let firstKey = chain.first, firstHopReachability == .notHeardDirect {
-            warnings.append("\(context.display(for: firstKey)): never heard direct from your station \u{2014} the first hop must be reachable by your own RF or nothing else in the path matters.")
+            warnings.append("\(context.display(for: firstKey)): never heard direct from your station. The first hop must be reachable by your own RF or nothing else in the path matters.")
         }
         if viaHops.count > recommendedMaxVias {
-            warnings.append("\(viaHops.count) digi hops: throughput roughly halves per hop and every retry re-traverses the whole path — 2 or fewer is strongly recommended.")
+            warnings.append("\(viaHops.count) digi hops: throughput roughly halves per hop and every retry re-traverses the whole path. Two or fewer is strongly recommended.")
         }
         for hop in viaHops where hop.verdict.isWarning {
             warnings.append("\(hop.displayCallsign): \(hop.verdict.explanation)")

@@ -26,7 +26,7 @@ struct FilterPopoverView: View {
                 
                 Toggle("UI Frames", isOn: $filters.showUI)
                     .disabled(!hasPackets)
-                    .help("Unnumbered information — beacons, IDs, APRS. Where most of the readable traffic on a channel is.")
+                    .help("Unnumbered information: beacons, IDs, APRS. Where most of the readable traffic on a channel is.")
                 Toggle("I Frames", isOn: $filters.showI)
                     .disabled(!hasPackets)
                     .help("Information frames inside a connected session: the actual conversation with a BBS or node.")
@@ -36,12 +36,12 @@ struct FilterPopoverView: View {
                     // doing.
                     .disabled(!hasPackets || !filters.frameTypeSwitchesApply)
                     .help(filters.frameTypeSwitchesApply
-                          ? "Supervisory frames — RR, RNR, REJ. No payload, and about two thirds of a busy channel, but they are how a stalled or retrying link shows itself."
+                          ? "Supervisory frames: RR, RNR, REJ. No payload, and about two thirds of a busy channel, but they are how a stalled or retrying link shows itself."
                           : "Payload Only already excludes supervisory frames.")
                 Toggle("U Frames", isOn: $filters.showU)
                     .disabled(!hasPackets || !filters.frameTypeSwitchesApply)
                     .help(filters.frameTypeSwitchesApply
-                          ? "Unnumbered control — SABM, UA, DM, DISC. The handshakes that open and close a connection."
+                          ? "Unnumbered control: SABM, UA, DM, DISC. The handshakes that open and close a connection."
                           : "Payload Only already excludes unnumbered control frames.")
             }
             

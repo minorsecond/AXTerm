@@ -193,7 +193,7 @@ struct NodeDirectoryView: View {
             Button("Keep It", role: .cancel) { confirmForgetNode = nil }
         } message: {
             Text("Removes its directory entry and every claim it made about "
-                 + "other stations — under both of its names. Its next "
+                 + "other stations, under both of its names. Its next "
                  + "announcement re-learns it from scratch.")
         }
         .confirmationDialog(
@@ -254,7 +254,7 @@ struct NodeDirectoryView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Showing only what \(node) listed. Others may list the same "
-                      + "stations — click to drop the restriction and see every "
+                      + "stations. Click to drop the restriction and see every "
                       + "node's table.")
 
                 Button { confirmForgetNode = node } label: {
@@ -279,7 +279,7 @@ struct NodeDirectoryView: View {
             if routeFilter == nil {
                 Toggle("Only ones I can reach", isOn: $reachableOnly)
                     .help("Hides entries no node has offered a route to. They still "
-                          + "resolve names on the map and in via paths — there is just "
+                          + "resolve names on the map and in via paths. There is just "
                           + "nowhere to connect to get to them.")
             }
 
@@ -296,7 +296,7 @@ struct NodeDirectoryView: View {
                 // The count is the whole point of the page: it is the answer
                 // to "is this being saved" that no other screen gives.
                 .help("Aliases learned from node tables, ID frames and beacons. "
-                      + "Names, not routes — see Routes for paths this station can reach.")
+                      + "Names, not routes. See Routes for paths this station can reach.")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -466,7 +466,7 @@ struct NodeDirectoryView: View {
                 .font(.system(.body, design: .monospaced))
                 .frame(width: 208, alignment: .leading)
                 .textSelection(.enabled)
-                .help("One station, two names — not a route. \(entry.alias) is "
+                .help("One station with two names, not a route. \(entry.alias) is "
                       + "the name the network answers to (what you type at a "
                       + "node prompt); \(entry.callsign) is the licensed "
                       + "station behind it.")
@@ -504,7 +504,7 @@ struct NodeDirectoryView: View {
                           + "The node claims a path; whether the hops beyond it are "
                           + "RF or internet links is not something this station can "
                           + "observe. On a VHF channel a path to another country "
-                          + "almost certainly includes an internet link — on "
+                          + "almost certainly includes an internet link. On "
                           + "long-haul HF it may well be radio the whole way.")
             }
 
@@ -611,7 +611,7 @@ struct NodeDirectoryView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("\(entry.alias):\(entry.callsign)")
                 .font(.system(.headline, design: .monospaced))
-            Text("Announced \(entry.announcements) time\(entry.announcements == 1 ? "" : "s") \u{2014} "
+            Text("Announced \(entry.announcements) time\(entry.announcements == 1 ? "" : "s"), "
                  + "last \(entry.heardAt.formatted(date: .abbreviated, time: .shortened))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -636,7 +636,7 @@ struct NodeDirectoryView: View {
                 }
             }
             Divider()
-            Text("Everything here was heard over the air \u{2014} a node's table "
+            Text("Everything here was heard over the air. A node's table "
                  + "is its claim, not a route this station has measured.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
@@ -654,7 +654,7 @@ struct NodeDirectoryView: View {
         let stamp = entry.heardAt.formatted(date: .abbreviated, time: .shortened)
         let corroboration = entry.announcements == 1
             ? "Announced once."
-            : "Announced \(entry.announcements) separate times — repetition is the "
+            : "Announced \(entry.announcements) separate times. Repetition is the "
               + "only corroboration available for a claim no directory can check."
         return "Last announced \(stamp). \(corroboration)"
     }
@@ -663,7 +663,7 @@ struct NodeDirectoryView: View {
         let lines = entry.reachableVia.map { teller -> String in
             let when = entry.tellers[teller]?.formatted(
                 .relative(presentation: .numeric)) ?? "unknown"
-            return "\(teller) — listed it \(when)"
+            return "\(teller), listed it \(when)"
         }
         let heading = lines.count == 1
             ? "Connect to this node and ask for \(entry.alias):"

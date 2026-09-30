@@ -121,7 +121,7 @@ extension AdaptiveParams {
     /// now — trial in progress, streak building, or waiting for evidence.
     var learningNarrative: String {
         if let remaining = probationFramesRemaining {
-            return "Upgrade on trial — \(remaining) clean frame\(remaining == 1 ? "" : "s") to confirm (any retransmit rolls it back)"
+            return "Upgrade on trial: \(remaining) clean frame\(remaining == 1 ? "" : "s") to confirm (any retransmit rolls it back)"
         }
         if successStreak > 0 {
             return "\(successStreak) of \(upgradeStreakRequirement) clean frames toward the next upgrade"

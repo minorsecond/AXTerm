@@ -229,7 +229,7 @@ struct WinlinkStationsScreen: View {
         if quality.appliesHere {
             return "Answered \(percent)% of \(quality.attempts) from here"
         }
-        return "Answered \(percent)% elsewhere — not a prediction here"
+        return "Answered \(percent)% elsewhere, not a prediction here"
     }
 
     /// Says why the row reads the way it does, per CLAUDE.md §11.
@@ -238,7 +238,7 @@ struct WinlinkStationsScreen: View {
         var lines = ["\(station.callsign) on \(frequency(station.frequencyHz)), grid \(station.gridSquare)."]
 
         guard let quality else {
-            lines.append("This station has never worked this gateway, so there is no measurement. Gray means unknown, which is not the same as bad — an unworked gateway may answer perfectly.")
+            lines.append("This station has never worked this gateway, so there is no measurement. Gray means unknown, which is not the same as bad. An unworked gateway may answer perfectly.")
             return lines.joined(separator: "\n\n")
         }
 
@@ -250,7 +250,7 @@ struct WinlinkStationsScreen: View {
         case .nearby(let km):
             lines.append(String(format: "Measured %.1f km from here. Probably the same path, but terrain can change it completely across a ridge.", km))
         case .elsewhere(let grid, let km):
-            lines.append(String(format: "Measured in %@, %.0f km away. Shown as history, not as a prediction — that was a different link.", grid, km))
+            lines.append(String(format: "Measured in %@, %.0f km away. Shown as history, not as a prediction; that was a different link.", grid, km))
         case .unknown:
             lines.append("These samples carry no position, so whether they describe the path from here is unknown.")
         }

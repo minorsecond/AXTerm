@@ -83,7 +83,7 @@ struct NodeProfileMiniMap: View {
         case .exact:
             return "A position this station reported."
         case .gridSquare:
-            return "The center of a grid square, about 8 km across — the shaded area "
+            return "The center of a grid square, about 8 km across. The shaded area "
                 + "is where the antenna could be, not a margin of error on the pin."
         case .inferredFromOperator:
             return "The operator's license address, not the node. Nodes usually sit on "

@@ -148,7 +148,7 @@ nonisolated final class SoftModemLink: KISSLink, @unchecked Sendable {
         if let audio = error as? ModemAudioError {
             switch audio {
             case .deviceNotFound(let uid): return "audio device not found (\(uid))"
-            case .permissionDenied: return "microphone access denied — allow AXTerm under System Settings › Privacy & Security › Microphone"
+            case .permissionDenied: return "microphone access denied. Allow AXTerm under System Settings › Privacy & Security › Microphone"
             case .unsupportedFormat(let detail): return "unsupported audio format: \(detail)"
             case .system(let code, let stage): return "CoreAudio error \(code) while \(stage)"
             case .notConnected(let why): return why

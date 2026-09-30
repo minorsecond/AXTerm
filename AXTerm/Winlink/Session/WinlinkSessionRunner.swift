@@ -56,13 +56,13 @@ final class WinlinkSessionRunner: ObservableObject {
         guard pendingSelection != nil else { return }
         pendingSelection = nil
         log(.event, mids.isEmpty
-            ? "Downloading nothing this session — everything stays on the server"
+            ? "Downloading nothing this session. Everything stays on the server"
             : "Downloading \(mids.count) of the offered messages")
         // The question is answered, so the status must stop asking it. The
         // first `receiveProgress` is far too late to do this: on a 20 B/s
         // link the first body byte can be a minute after the FS line.
         statusText = mids.isEmpty
-            ? "Declined — nothing downloaded"
+            ? "Declined, nothing downloaded"
             : "Requesting \(mids.count) message\(mids.count == 1 ? "" : "s")…"
         dispatch(.inboundSelectionResolved(acceptedMIDs: mids))
     }
@@ -160,8 +160,8 @@ final class WinlinkSessionRunner: ObservableObject {
             transcript.removeAll()
         }
         log(.event, role == .answering
-            ? "Answering \(gatewayName) — \(transportName)"
-            : "Exchange started — \(transportName) via \(gatewayName)")
+            ? "Answering \(gatewayName) (\(transportName))"
+            : "Exchange started: \(transportName) via \(gatewayName)")
 
         // Compress queued mail off the main actor — LZHUF is CPU work.
         let queued = (try? await worker.queuedOutboundMessages()) ?? []
@@ -189,7 +189,7 @@ final class WinlinkSessionRunner: ObservableObject {
                 data: $0.data, compressedSize: $0.compressedSize))
         })
         for partial in partials {
-            log(.event, "Holding \(partial.data.count) of \(partial.compressedSize) bytes of \(partial.mid) — will ask to resume")
+            log(.event, "Holding \(partial.data.count) of \(partial.compressedSize) bytes of \(partial.mid); will ask to resume")
         }
 
         let engine = B2FSessionEngine(config: .init(
@@ -318,9 +318,9 @@ final class WinlinkSessionRunner: ObservableObject {
             // ignore.
             if kind == .selection, let stale = pendingSelection {
                 let threshold = ByteCount.string(Int64(stale.autoAcceptUnderBytes))
-                log(.event, "No answer in time — taking what is under \(threshold), "
+                log(.event, "No answer in time. Taking what is under \(threshold); "
                     + "the rest stays on the server")
-                statusText = "No answer in time — taking what is under \(threshold)"
+                statusText = "No answer in time. Taking what is under \(threshold)"
                 pendingSelection = nil
             }
 
@@ -328,7 +328,7 @@ final class WinlinkSessionRunner: ObservableObject {
             let total = offers.reduce(0) { $0 + $1.bytesOnTheAir }
             log(.event, "\(offers.count) message\(offers.count == 1 ? "" : "s") offered, "
                 + "\(ByteCount.string(Int64(total))) "
-                + "(about \(sessionAirtime.airtimeTextOnTheAir(compressedBytes: total)) on the air) — waiting for a choice")
+                + "(about \(sessionAirtime.airtimeTextOnTheAir(compressedBytes: total)) on the air). Waiting for a choice")
             statusText = "Choose which messages to download…"
             pendingSelection = InboundSelectionRequest(
                 id: UUID(),
@@ -360,9 +360,9 @@ final class WinlinkSessionRunner: ObservableObject {
             statusText = "Waiting for the link to drain \(mid)…"
 
         case .outboundRejected(let mid):
-            log(.event, "Gateway declined \(mid) — it usually means the CMS already has this message")
+            log(.event, "Gateway declined \(mid). It usually means the CMS already has this message")
             Task { [worker] in
-                try? await worker.markFailed(mid: mid, error: "declined by the gateway (FS N) — usually the CMS already received this message on an earlier attempt")
+                try? await worker.markFailed(mid: mid, error: "declined by the gateway (FS N); usually the CMS already received this message on an earlier attempt")
             }
 
         case .outboundDeferred(let mid):
@@ -378,7 +378,7 @@ final class WinlinkSessionRunner: ObservableObject {
             // (key-gated) web service.
             let catalogItems = WinlinkCatalogListReply.parse(message)
             if let catalogItems {
-                log(.event, "Catalog index received \u{2014} \(catalogItems.count) products cached")
+                log(.event, "Catalog index received: \(catalogItems.count) products cached")
             }
             Task { [worker] in
                 // Discarded deliberately: a failed save must not abort the
@@ -402,7 +402,7 @@ final class WinlinkSessionRunner: ObservableObject {
             }
 
         case .savePartialBody(let mid, let compressedSize, let data):
-            log(.event, "Keeping \(data.count) of \(compressedSize) bytes of \(mid) — the next exchange will resume there")
+            log(.event, "Keeping \(data.count) of \(compressedSize) bytes of \(mid). The next exchange will resume there")
             Task { [worker] in
                 try? await worker.savePartialBody(mid: mid, compressedSize: compressedSize, data: data)
             }
@@ -415,13 +415,13 @@ final class WinlinkSessionRunner: ObservableObject {
         case .captureCorruptBody(let mid, let resumedFrom, let declaredSize, let data):
             if let url = Self.writeCorruptBody(
                 mid: mid, resumedFrom: resumedFrom, declaredSize: declaredSize, data: data) {
-                log(.event, "Saved the undecodable body to \(url.path) — "
+                log(.event, "Saved the undecodable body to \(url.path): "
                     + "\(data.count) bytes, \(resumedFrom) of them resumed. "
                     + "Attach this file to a bug report; it is the only copy.")
             } else {
                 // Silence here would look identical to "no failure happened".
                 log(.event, "Could not save the undecodable body for \(mid) "
-                    + "(\(data.count) bytes) — check that AXTerm can write to "
+                    + "(\(data.count) bytes). Check that AXTerm can write to "
                     + "your Downloads folder.")
             }
 
@@ -429,7 +429,7 @@ final class WinlinkSessionRunner: ObservableObject {
             transport?.close()
 
         case .complete(let summary):
-            log(.event, "Exchange complete — sent \(summary.sentMIDs.count), received \(summary.receivedMIDs.count)")
+            log(.event, "Exchange complete: sent \(summary.sentMIDs.count), received \(summary.receivedMIDs.count)")
             resolve(with: summary)
 
         case .fail(let reason):
@@ -615,7 +615,7 @@ final class WinlinkSessionRunner: ObservableObject {
 
     private func describeTransportError(_ error: Error) -> String {
         switch error {
-        case WinlinkTransportError.sessionBusy(let detail): return "session busy — \(detail)"
+        case WinlinkTransportError.sessionBusy(let detail): return "session busy: \(detail)"
         case WinlinkTransportError.connectRefused(let station): return "\(station) refused the connection"
         case WinlinkTransportError.connectTimeout(let station): return "no response from \(station)"
         case WinlinkTransportError.loginFailed(let detail): return detail

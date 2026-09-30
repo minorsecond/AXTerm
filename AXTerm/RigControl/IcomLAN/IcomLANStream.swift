@@ -21,7 +21,7 @@ nonisolated enum IcomLANError: Error, Equatable, Sendable {
         // (2026-09-17).
         case .timeout(let what):
             return "the radio did not answer (\(what)). It keeps one session at a time and can "
-                + "hold the last one for a few seconds \u{2014} the next attempt usually gets in. "
+                + "hold the last one for a few seconds. The next attempt usually gets in. "
                 + "If it keeps failing, check the radio's WLAN and that Network Control is on."
         case .badCredentials: return "the radio refused the username or password. Check the radio's Network User name and its password (on an IC-705: Menu \u{203A} Set \u{203A} Network), and that they match what you entered here."
         case .rejected(let why): return why

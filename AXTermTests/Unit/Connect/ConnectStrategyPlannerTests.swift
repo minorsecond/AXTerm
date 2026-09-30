@@ -56,7 +56,7 @@ final class ConnectStrategyPlannerTests: XCTestCase {
             advertiseSelf: true))
 
         XCTAssertEqual(kinds(ladder).first, .directL2)
-        XCTAssertEqual(ladder.steps.first?.reason, "Direct — heard 4 min ago with no digis.")
+        XCTAssertEqual(ladder.steps.first?.reason, "Direct: heard 4 min ago with no digis.")
     }
 
     /// The headline case from the field: an hour-old teller claim through a

@@ -94,7 +94,7 @@ struct WinlinkInboundSelectionSheet: View {
     private var deadlineExplanation: String {
         let threshold = ByteCount.string(Int64(request.autoAcceptUnderBytes))
         return "Unanswered, anything under \(threshold) downloads and the rest stays on the server. "
-            + "Nothing you leave unticked is lost — the gateway offers it again next exchange."
+            + "Nothing you leave unticked is lost. The gateway offers it again next exchange."
     }
 
     // MARK: - Offers
@@ -158,7 +158,7 @@ struct WinlinkInboundSelectionSheet: View {
     private var selectionSummary: some View {
         Group {
             if selected.isEmpty {
-                Text("Nothing selected — everything stays on the server.")
+                Text("Nothing selected. Everything stays on the server.")
                     .foregroundStyle(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 2) {
@@ -239,7 +239,7 @@ private struct OfferRow: View {
 
                 if offer.resumeFrom > 0 {
                     Label(
-                        "Resuming — \(byteText(offer.resumeFrom)) already held, \(byteText(offer.bytesOnTheAir)) to go",
+                        "Resuming: \(byteText(offer.resumeFrom)) already held, \(byteText(offer.bytesOnTheAir)) to go",
                         systemImage: "arrow.clockwise")
                         .font(.caption)
                         .foregroundStyle(.blue)
@@ -280,7 +280,7 @@ private struct OfferRow: View {
     /// the reverse of how the line reads. See `B2FPendingAdvisory`.
     private var correspondents: String {
         guard let advisory = offer.advisory else {
-            return "\(offer.mid) — the gateway sent no description"
+            return "\(offer.mid): the gateway sent no description"
         }
         return "From \(advisory.origin) · to \(advisory.destination)"
     }
@@ -288,11 +288,11 @@ private struct OfferRow: View {
     private var estimateTooltip: String {
         let size = byteText(offer.bytesOnTheAir)
         var text = """
-        \(size) compressed, which is what actually crosses the air — \
-        the proposal states it exactly, so nothing here is guessed from \
+        \(size) compressed, which is what actually crosses the air. \
+        The proposal states it exactly, so nothing here is guessed from \
         the \(byteText(offer.uncompressedSize)) of decoded text.
 
-        \(size) ÷ \(WinlinkAirtimeEstimate.rateText(airtime.compressedBytesPerSecond)) — \(airtime.provenance).
+        \(size) ÷ \(WinlinkAirtimeEstimate.rateText(airtime.compressedBytesPerSecond)) (\(airtime.provenance)).
         """
         if offer.resumeFrom > 0 {
             text += "\n\nAn interrupted session already left \(byteText(offer.resumeFrom)) here; only the remainder is requested."

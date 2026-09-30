@@ -302,7 +302,7 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
     var lossCaveat: String? {
         guard diffractionLossDb != nil else { return nil }
         guard lossIsAFloor else { return nil }
-        return "\(obstructionCount) separate obstructions — a single-edge model, "
+        return "\(obstructionCount) separate obstructions, measured with a single-edge model, "
             + "so this is the least it costs, not the most."
     }
 
@@ -348,13 +348,13 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
         let decibels = "\(Int(loss.rounded())) dB"
         switch severity {
         case .negligible:
-            return loss < 0.5 ? "Clear path" : "Clear \u{2014} terrain costs about \(decibels)"
+            return loss < 0.5 ? "Clear path" : "Clear: terrain costs about \(decibels)"
         case .noticeable:
-            return "Workable \u{2014} terrain costs about \(decibels)"
+            return "Workable: terrain costs about \(decibels)"
         case .severe:
-            return "Marginal \u{2014} terrain costs about \(decibels)"
+            return "Marginal: terrain costs about \(decibels)"
         case .blocking:
-            return "Blocked \u{2014} terrain costs about \(decibels)"
+            return "Blocked: terrain costs about \(decibels)"
         case .unknown:
             return "No terrain data"
         }
@@ -445,7 +445,7 @@ nonisolated extension TerrainProfile.Verdict {
         case .clear:
             "Clear path"
         case .marginal:
-            "Marginal — Fresnel zone obstructed"
+            "Marginal: Fresnel zone obstructed"
         case .obstructed(let by, let at):
             // Where, not only how much. "Blocked by 4 m" on a 43 km path
             // reads as a wall; the same 4 m a kilometer from the operator's
@@ -466,12 +466,12 @@ nonisolated extension TerrainProfile.Verdict {
             return """
             Line of sight is clear, and the first Fresnel zone is \(clearance) clear at its worst point.
 
-            Terrain is not what is limiting this path at \(band). If the gateway does not answer, look elsewhere — wrong frequency, station off the air, or a receiver problem at one end.
+            Terrain is not what is limiting this path at \(band). If the gateway does not answer, look elsewhere: wrong frequency, station off the air, or a receiver problem at one end.
             """
 
         case .marginal(let ratio, let at):
             return """
-            There is line of sight, but the first Fresnel zone is only \(String(format: "%.0f%%", ratio * 100)) clear at \(Self.distanceText(at)) along the path — below the 60% that behaves like a clear path.
+            There is line of sight, but the first Fresnel zone is only \(String(format: "%.0f%%", ratio * 100)) clear at \(Self.distanceText(at)) along the path, below the 60% that behaves like a clear path.
 
             Expect a link that connects and struggles: retries, slow throughput, and a station that answers sometimes. That is a terrain-limited path, not a broken one.
 
@@ -482,7 +482,7 @@ nonisolated extension TerrainProfile.Verdict {
             return """
             Terrain rises \(Int(by.rounded())) m above the line between the two antennas, \(Self.distanceText(at)) along the path. There is no line of sight at \(band).
 
-            A direct contact is unlikely regardless of power. Use a digipeater or a gateway with a path around the obstruction — the map shows which stations you have actually worked from here.
+            A direct contact is unlikely regardless of power. Use a digipeater or a gateway with a path around the obstruction. The map shows which stations you have actually worked from here.
 
             Raising an antenna by \(Int(by.rounded())) m or more would clear it geometrically, which is usually impractical but tells you the scale of the problem.
             """

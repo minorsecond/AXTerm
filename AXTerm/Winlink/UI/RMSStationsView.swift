@@ -21,7 +21,7 @@ struct RMSStationsView: View {
             if let blocker = viewModel.refreshBlocker, viewModel.stations.isEmpty {
                 notice(blocker, systemImage: "mappin.slash")
             } else if viewModel.stations.isEmpty {
-                notice("No cached stations — refresh to query the Winlink CMS.",
+                notice("No cached stations. Refresh to query the Winlink CMS.",
                        systemImage: "antenna.radiowaves.left.and.right.slash")
             } else {
                 stationsTable
@@ -49,7 +49,7 @@ struct RMSStationsView: View {
                 Text("\(visibleStations.count) of \(viewModel.stations.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .help("\(hiddenCount) link\(hiddenCount == 1 ? " is" : "s are") filtered out. Nothing is deleted \u{2014} hidden links stay cached and keep accumulating link quality.")
+                    .help("\(hiddenCount) link\(hiddenCount == 1 ? " is" : "s are") filtered out. Nothing is deleted: hidden links stay cached and keep accumulating link quality.")
             }
             Spacer()
             if !viewModel.ladderSummary.isEmpty {
@@ -57,7 +57,7 @@ struct RMSStationsView: View {
                     .font(.caption)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help("Your gateway ladder. Connect & Exchange tries these stations top-down until one completes a session. Manage the order here or in Settings → Winlink.")
+                    .help("Your gateway ladder. Connect & Exchange tries these stations top-down until one completes a session. Manage the order here or in Settings › Winlink.")
             }
             Button {
                 Task { await viewModel.refresh() }
@@ -173,8 +173,8 @@ struct RMSStationsView: View {
                         .menuStyle(.borderlessButton)
                         .fixedSize()
                         .help(rank == 1
-                              ? "Your primary gateway — first rung of the ladder."
-                              : "Rung #\(rank) of your gateway ladder — tried after \(rank - 1) other gateway\(rank == 2 ? "" : "s").")
+                              ? "Your primary gateway, the first rung of the ladder."
+                              : "Rung #\(rank) of your gateway ladder, tried after \(rank - 1) other gateway\(rank == 2 ? "" : "s").")
                     } else {
                         Button {
                             viewModel.addToLadder(station)
@@ -244,7 +244,7 @@ struct RMSStationsView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Show only the frequencies your radio is actually on. Hidden links are filtered from this table only \u{2014} they stay cached and keep accumulating link quality.")
+        .help("Show only the frequencies your radio is actually on. Hidden links are filtered from this table only. They stay cached and keep accumulating link quality.")
     }
 
     private var filterLabel: String {
@@ -318,7 +318,7 @@ struct RMSStationsView: View {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(isHoveringPath == key ? Color.primary.opacity(0.06) : .clear))
             .help(path.isEmpty
-                  ? "Direct \u{2014} no digipeaters. Click to set a path for \(station.callsign) on \(formatFrequency(station.frequencyHz)); it is remembered and used every time you exchange with this link."
+                  ? "Direct, no digipeaters. Click to set a path for \(station.callsign) on \(formatFrequency(station.frequencyHz)); it is remembered and used every time you exchange with this link."
                   : "Digipeated via \(path.replacingOccurrences(of: ",", with: " then ")). Stored for this callsign *and frequency*, so the same gateway on another band keeps its own path. Click to change; clear it for direct.")
         }
     }

@@ -131,7 +131,7 @@ struct NWSTabularForecastView: View {
         if let popDay = cell.popDay, let popNight = cell.popNight {
             parts.append("Chance of precipitation \(popDay)% by day and \(popNight)% overnight; the row shows the higher of the two.")
         }
-        parts.append("Straight from the product — nothing here is interpolated.")
+        parts.append("Straight from the product. Nothing here is interpolated.")
         return parts.joined(separator: " ")
     }
 
@@ -165,7 +165,7 @@ struct NWSTabularForecastView: View {
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2)
                     Spacer(minLength: 0)
-                    Text("\(places.count) places")
+                    Text(CountPhrase.of(places.count, "place"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -314,7 +314,7 @@ struct NWSTabularForecastView: View {
                          place: String) -> String {
         var lines: [String] = []
         if let day {
-            lines.append("\(place.capitalized) \u{2014} \(day.weekday) \(day.date)")
+            lines.append("\(place.capitalized), \(day.weekday) \(day.date)")
         } else {
             lines.append(place.capitalized)
         }
@@ -350,7 +350,7 @@ struct NWSTabularForecastView: View {
             Text("Raw product text")
                 .font(.caption)
         }
-        .help("The product exactly as it arrived over the air. The table above is derived from it \u{2014} if the two ever disagree, this is the one that is right.")
+        .help("The product exactly as it arrived over the air. The table above is derived from it. If the two ever disagree, this is the one that is right.")
     }
 }
 

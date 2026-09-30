@@ -460,7 +460,7 @@ final class WinlinkSettings: ObservableObject {
         //
         // Note this does send mail to Apple's servers. An operator who has
         // already turned it off keeps it off — the default applies only where
-        // no decision exists yet — and Settings → Winlink turns it off again.
+        // no decision exists yet — and Settings › Winlink turns it off again.
         mailboxSyncEnabled = defaults.object(forKey: Self.mailboxSyncEnabledKey) == nil
             ? true
             : defaults.bool(forKey: Self.mailboxSyncEnabledKey)

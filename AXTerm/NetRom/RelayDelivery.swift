@@ -96,7 +96,7 @@ nonisolated struct RelayDelivery: Equatable, Sendable {
         case .inFlight:
             return "Handed to the radio; \(firstHop) has not acknowledged it yet."
         case .atFirstHop where isRelayed:
-            return "\(firstHop) acknowledged the frame — that is the only hop AX.25 "
+            return "\(firstHop) acknowledged the frame. That is the only hop AX.25 "
                 + "acknowledges. The nodes between here and \(destination) send no "
                 + "receipt, so there is nothing further to report until "
                 + "\(destination) replies."

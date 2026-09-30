@@ -91,7 +91,7 @@ struct WinlinkMessageDetail: View {
                             Text("MID \(message.mid)")
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
-                                .help("Winlink message ID — unique across the whole network; used for de-duplication.")
+                                .help("Winlink message ID, unique across the whole network. Used for de-duplication.")
                             WinlinkDeliveryBadge(
                                 state: stored.state.state ?? .received,
                                 error: stored.state.lastError)
@@ -106,7 +106,7 @@ struct WinlinkMessageDetail: View {
                                         .font(.caption)
                                 }
                                 .buttonStyle(.borderless)
-                                .help("Show the exchange that carried this message — how long it took, "
+                                .help("Show the exchange that carried this message: how long it took, "
                                     + "on what frequency, and what else it brought.")
                             }
                         }
@@ -124,7 +124,7 @@ struct WinlinkMessageDetail: View {
                                 Label("Open in Window", systemImage: "macwindow")
                             }
                             .keyboardShortcut("o", modifiers: .command)
-                            .help("Open this message in its own window (\u{2318}O). Wide products — tabular forecasts, station lists — need more width than a reading pane has.")
+                            .help("Open this message in its own window (\u{2318}O). Wide products (tabular forecasts, station lists) need more width than a reading pane has.")
                         }
                     }
                     .labelStyle(.iconOnly)
@@ -278,7 +278,7 @@ struct WinlinkMessageDetail: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity)
-                    .help("\(attachment.name) — \(ByteCount.string(Int64(attachment.data.count))) as received. Right-click the chip above to save it.")
+                    .help("\(attachment.name): \(ByteCount.string(Int64(attachment.data.count))) as received. Right-click the chip above to save it.")
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 12)

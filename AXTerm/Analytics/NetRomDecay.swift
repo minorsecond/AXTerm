@@ -558,13 +558,13 @@ nonisolated enum FreshnessTooltips {
         100% = just seen; declines toward 0% as the neighbor approaches its
         stale TTL (configurable in Settings, 6 hours by default).
         Freshness measures knowledge age, so it keeps declining while the app
-        is closed — the network can change while you are not listening.
+        is closed. The network can change while you are not listening.
         """
 
     /// Tooltip for the Routes freshness column.
     static let routes = """
         Route freshness shows how recently this path was advertised or reinforced.
-        It declines toward 0% at the route's TTL — adaptive per origin once the
+        It declines toward 0% at the route's TTL, which is adaptive per origin once the
         broadcast interval is learned, otherwise the global stale TTL from Settings.
         """
 

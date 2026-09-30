@@ -290,7 +290,7 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
             case .absent: return "Enter the radio's network password."
             case .unreadable(let status):
                 return KeychainStore.ReadOutcome.unreadable(status).operatorAdvice
-                    ?? "The saved password could not be read \u{2014} re-enter it once."
+                    ?? "The saved password could not be read. Re-enter it once."
             }
         }
         if radio.audioInputDeviceUID.isEmpty || radio.audioOutputDeviceUID.isEmpty {

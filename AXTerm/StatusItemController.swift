@@ -152,7 +152,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             guard radios.count > 1 else {
                 let radio = radios.first
                 let status = statusTitle(for: radio?.status ?? .disconnected)
-                return "\(status) \u{2014} \(radio?.endpoint ?? "") \u{2022} \(packets)"
+                return "\(status): \(radio?.endpoint ?? "") \u{2022} \(packets)"
             }
             let connected = radios.filter { $0.status == .connected }.count
             if connected == radios.count {
@@ -187,7 +187,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // are up, with one submenu per radio below.
         let headerTitle = radios.count > 1
             ? MenuModel.headerTitle(radios: radios, packetCount: client.packets.count)
-            : "\(status) — \(endpoint) • \(client.packets.count) packets"
+            : "\(status): \(endpoint) • \(client.packets.count) packets"
         let header = NSMenuItem(title: headerTitle, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
@@ -200,7 +200,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         if radios.count > 1 {
             for radio in radios {
                 let submenu = NSMenu()
-                let state = NSMenuItem(title: "\(MenuModel.statusTitle(for: radio.status)) — \(radio.endpoint)",
+                let state = NSMenuItem(title: "\(MenuModel.statusTitle(for: radio.status)): \(radio.endpoint)",
                                        action: nil, keyEquivalent: "")
                 state.isEnabled = false
                 submenu.addItem(state)

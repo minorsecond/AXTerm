@@ -582,7 +582,7 @@ struct WinlinkMailboxScreen: View {
                 TextField("Comment", text: $positionComment,
                           prompt: Text("e.g. POTA K-1234, portable"))
             } footer: {
-                Text("Sent with the report and remembered between reports — an activation reference stays the same all day.")
+                Text("Sent with the report and remembered between reports. An activation reference stays the same all day.")
             }
         }
         .navigationTitle("Report Position")
@@ -695,7 +695,7 @@ struct WinlinkMailboxScreen: View {
         // was indistinguishable from a dead button. Whatever the cause, the
         // operator needs to see that the app declined rather than failed.
         guard let runner = context.runner else {
-            exchangeAlert = "The mailbox is not ready yet \u{2014} the Winlink store failed to open on this device. Reopening the app usually clears it."
+            exchangeAlert = "The mailbox is not ready yet: the Winlink store failed to open on this device. Reopening the app usually clears it."
             return
         }
         guard !runner.isRunning else {
@@ -718,8 +718,8 @@ struct WinlinkMailboxScreen: View {
                 // need opposite things from the operator, and the second is
                 // what actually happens after a rebuild.
                 exchangeAlert = context.settings.passwordReadOutcome.operatorAdvice
-                    ?? "No Winlink password found — the CMS requires secure login, so "
-                    + "the exchange was not started. Enter your password in Settings → Winlink."
+                    ?? "No Winlink password found. The CMS requires secure login, so "
+                    + "the exchange was not started. Enter your password in Settings › Winlink."
                 return
             }
 
@@ -752,7 +752,7 @@ struct WinlinkMailboxScreen: View {
 
         let rungs = gatewayOverride.map { [$0] } ?? context.settings.gatewayLadder
         guard !rungs.isEmpty else {
-            exchangeAlert = "Add an RMS gateway to your ladder in Settings → Winlink first."
+            exchangeAlert = "Add an RMS gateway to your ladder in Settings › Winlink first."
             return
         }
         guard client.status == .connected else {

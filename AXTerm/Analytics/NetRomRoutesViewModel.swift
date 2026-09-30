@@ -239,7 +239,7 @@ struct RouteDisplayInfo: Identifiable, Hashable {
             return "How traffic from \(destination) reached you: \(heardPathSummary)"
         }
         if sourceType == "harvested" {
-            return "Read from \(nextHop)'s own ROUTES listing during a connected session — \(nextHop)'s claim about its link to \(destination), scaled by this station's link to \(nextHop). Never advertised onward."
+            return "Read from \(nextHop)'s own ROUTES listing during a connected session. It is \(nextHop)'s claim about its link to \(destination), scaled by this station's link to \(nextHop). Never advertised onward."
         }
         return "Last explicit routing advertisement heard from \(nextHop)"
     }
@@ -400,7 +400,7 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
         let drText = drEstimate.map { String(format: "dr=%.2f", $0) } ?? "dr unobserved (assumed 0.99)"
         lines.append("\(dfText), \(drText)")
         if let etx {
-            lines.append(String(format: "ETX=%.2f — expected transmissions per delivered frame", etx))
+            lines.append(String(format: "ETX=%.2f (expected transmissions per delivered frame)", etx))
         }
         lines.append("Duplicates/retries observed: \(duplicateCount)")
         lines.append("quality = 255 / ETX, where ETX = 1 / (df × dr)")

@@ -61,11 +61,11 @@ nonisolated enum APRSWeatherTrend {
         /// instrument. "−4.2 mb/3h" is precise and tells an operator nothing.
         var summary: String {
             switch self {
-            case .rapidFall: return "falling fast \u{2014} deteriorating, wind likely"
-            case .falling:   return "falling \u{2014} unsettled weather approaching"
+            case .rapidFall: return "falling fast, weather deteriorating, wind likely"
+            case .falling:   return "falling, unsettled weather approaching"
             case .steady:    return "steady"
-            case .rising:    return "rising \u{2014} clearing"
-            case .rapidRise: return "rising fast \u{2014} clearing, wind likely"
+            case .rising:    return "rising, clearing"
+            case .rapidRise: return "rising fast, clearing, wind likely"
             }
         }
 

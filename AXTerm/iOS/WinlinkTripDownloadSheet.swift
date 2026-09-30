@@ -34,7 +34,7 @@ struct WinlinkTripDownloadSheet: View {
                 Text("Gateways for a region you are traveling to, kept separately from the ones near home. An ordinary refresh will not delete them.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text("Do this while you still have a path to the internet — there is no way to fetch it from the field.")
+                Text("Do this while you still have a path to the internet. There is no way to fetch it from the field.")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
@@ -45,7 +45,7 @@ struct WinlinkTripDownloadSheet: View {
                         HStack {
                             Text(entry.field).font(.body.monospaced())
                             Spacer()
-                            Text("\(entry.count) gateways")
+                            Text(CountPhrase.of(entry.count, "gateway"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -102,7 +102,7 @@ struct WinlinkTripDownloadSheet: View {
             } header: {
                 Text("Regions")
             } footer: {
-                Text("A Maidenhead field is roughly 10\u{00B0} of latitude by 20\u{00B0} of longitude — a few hundred miles across. It is the only geography the gateway list carries, so it is what regions are made of here.")
+                Text("A Maidenhead field is roughly 10\u{00B0} of latitude by 20\u{00B0} of longitude, a few hundred miles across. It is the only geography the gateway list carries, so it is what regions are made of here.")
             }
 
             if let result {

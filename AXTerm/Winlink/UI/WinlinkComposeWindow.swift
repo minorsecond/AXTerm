@@ -76,7 +76,7 @@ struct WinlinkComposeWindow: View {
                         .keyboardType(.emailAddress)
                         #endif
                 }
-                .explain("Recipients: callsigns (W1AW) or internet addresses (name@example.com — sent through the Winlink internet gateway).",
+                .explain("Recipients: callsigns (W1AW) or internet addresses (name@example.com, sent through the Winlink internet gateway).",
                          showsIndicator: false)
                 addressSuggestions(for: .to)
 
@@ -121,7 +121,7 @@ struct WinlinkComposeWindow: View {
                                         + ByteCount.string(Int64(item.data.count)))
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
-                                        .help("Zipped before sending — LZHUF (the only compression "
+                                        .help("Zipped before sending. LZHUF (the only compression "
                                               + "Winlink puts on the wire) has a 2 KB window and "
                                               + "barely dents a file this size. The recipient opens "
                                               + "the zip with any tool. Right-click to send the "
@@ -164,7 +164,7 @@ struct WinlinkComposeWindow: View {
                 } label: {
                     Label("Attach…", systemImage: "paperclip")
                 }
-                .explain("Attach a file. Keep it small — see the size budget.",
+                .explain("Attach a file. Keep it small (see the size budget).",
                          showsIndicator: false)
                 .fileImporter(isPresented: $isPickingAttachment,
                               allowedContentTypes: [.item],
@@ -216,7 +216,7 @@ struct WinlinkComposeWindow: View {
                         dismiss()
                     }
                 }
-                .help("Keep editing later — drafts live in the Drafts folder.")
+                .help("Keep editing later. Drafts live in the Drafts folder.")
 
                 Button("Queue for Sending") {
                     if viewModel.queueForSending() != nil {

@@ -93,7 +93,7 @@ nonisolated enum StationSSIDSuggestion {
         if !others.isEmpty {
             lines.append("Already in use: \(others.joined(separator: ", ")).")
         }
-        lines.append("Two radios answering to one callsign-SSID on the same channel breaks AX.25 — both reply to a connect request, and sessions drop for no visible reason. Any unused SSID keeps them separate.")
+        lines.append("Two radios answering to one callsign-SSID on the same channel breaks AX.25: both reply to a connect request, and sessions drop for no visible reason. Any unused SSID keeps them separate.")
         return lines.joined(separator: "\n\n")
     }
 }

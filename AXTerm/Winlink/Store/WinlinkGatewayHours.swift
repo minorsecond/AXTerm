@@ -99,7 +99,7 @@ nonisolated struct WinlinkGatewayHours: Equatable, Sendable {
             return "No sessions logged yet."
         }
         guard !isTooThin else {
-            return "Only \(totalAttempts) session\(totalAttempts == 1 ? "" : "s") logged \u{2014} not enough to show a pattern yet."
+            return "Only \(totalAttempts) session\(totalAttempts == 1 ? "" : "s") logged, not enough to show a pattern yet."
         }
         guard let best = rankedHours.first, let rate = best.answerRate, rate > 0 else {
             return "\(totalAttempts) sessions logged, none answered."

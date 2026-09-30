@@ -223,7 +223,7 @@ struct ConnectBarView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
 
-            Text("\(viewModel.viaHopCount) hops")
+            Text(CountPhrase.of(viewModel.viaHopCount, "hop"))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(viewModel.viaHopCount > 2 ? .orange : .secondary)
                 .padding(.horizontal, 8)

@@ -38,7 +38,7 @@ struct WinlinkContactsView: View {
                         .font(.system(size: 30))
                         .foregroundStyle(.secondary)
                     Text(viewModel.searchText.isEmpty
-                         ? "No contacts yet — add people you exchange mail with."
+                         ? "No contacts yet. Add people you exchange mail with."
                          : "No matches")
                         .foregroundStyle(.secondary)
                 }
@@ -146,7 +146,7 @@ struct WinlinkContactsView: View {
                         .foregroundStyle(contact.favorite ? .yellow : .secondary)
                 }
                 .buttonStyle(.plain)
-                .help(contact.favorite ? "Favorite — shown first in suggestions" : "Mark as favorite")
+                .help(contact.favorite ? "Favorite, shown first in suggestions" : "Mark as favorite")
             }
             .width(24)
 

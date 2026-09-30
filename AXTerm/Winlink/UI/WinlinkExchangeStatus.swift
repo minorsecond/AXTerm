@@ -115,7 +115,7 @@ nonisolated struct WinlinkExchangeStatus: Equatable {
         if sent == 0 && received == 0 {
             // The commonest real outcome, and the one most likely to be read
             // as a failure if it is not named plainly.
-            return "Nothing queued either way — the mailbox is up to date."
+            return "Nothing queued either way. The mailbox is up to date."
         }
         var parts: [String] = []
         if sent > 0 { parts.append("Sent \(sent) message\(sent == 1 ? "" : "s")") }
@@ -262,13 +262,13 @@ struct WinlinkExchangeStatusHeader: View {
         case .idle:
             return "No session is open with \(gatewayName). Nothing is being transmitted."
         case .failed:
-            return "The session with \(gatewayName) ended early. The transcript below holds the gateway's own words for why — the last few lines are usually the reason."
+            return "The session with \(gatewayName) ended early. The transcript below holds the gateway's own words for why; the last few lines are usually the reason."
         case .succeeded:
             return "The session with \(gatewayName) finished cleanly and the link was closed. Counts are messages that changed hands, not bytes."
         case .working:
             var lines = ["A session with \(gatewayName) is open and \(status.title.lowercased())."]
             if status.fraction != nil {
-                lines.append("The bar measures compressed bytes — what actually crosses the air — so it advances slower than the message's own size would suggest.")
+                lines.append("The bar measures compressed bytes (what actually crosses the air), so it advances slower than the message's own size would suggest.")
             } else {
                 lines.append("The size is not known yet, so the bar shows only that the link is live.")
             }

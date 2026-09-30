@@ -187,7 +187,7 @@ struct DiagnosticsView: View {
 
             Spacer()
 
-            Text("\(model.events.count) events")
+            Text(CountPhrase.of(model.events.count, "event"))
                 .foregroundStyle(.secondary)
                 .font(.caption)
 

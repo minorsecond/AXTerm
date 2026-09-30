@@ -75,7 +75,7 @@ nonisolated enum APRSObjectPlacement {
     /// not a local delete, and an operator who thinks otherwise will be
     /// surprised by which map it disappears from.
     static func removalExplanation(_ placed: APRSObjectStore.Placed) -> String {
-        "Transmits a kill for \u{201C}\(placed.report.name)\u{201D} \u{2014} it disappears "
+        "Transmits a kill for \u{201C}\(placed.report.name)\u{201D}. It disappears "
             + "from every station on the channel that hears it, not just from this map."
     }
 }

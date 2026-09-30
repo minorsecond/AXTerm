@@ -99,7 +99,7 @@ final class RadioPresentationTests: XCTestCase {
         let failed = RadioStatusSummary.fixture(name: "IC-705", status: .failed,
                                                 lastError: "Connection refused")
         XCTAssertEqual(RadioPresentation.dotHelp(failed),
-                       "IC-705: Failed \u{b7} 192.168.3.218:8001 \u{b7} K0EPI-7 \u{2014} Connection refused")
+                       "IC-705: Failed \u{b7} 192.168.3.218:8001 \u{b7} K0EPI-7 (Connection refused)")
         let recovered = RadioStatusSummary.fixture(name: "IC-705", status: .connected,
                                                    lastError: "Connection refused")
         XCTAssertFalse(RadioPresentation.dotHelp(recovered).contains("refused"))

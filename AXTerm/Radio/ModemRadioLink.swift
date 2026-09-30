@@ -295,7 +295,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                 // The radio is keeping the stream alive and still says
                 // nothing, so it is reachable and refusing to talk.
                 return opening + nothingAnswered
-                    + "The CI-V stream itself is alive — the radio is sending on it — so it is "
+                    + "The CI-V stream itself is alive (the radio is sending on it), so it is "
                     + "reachable and CI-V is switched off at the radio. Turn CI-V Transceive on "
                     + "and check the radio's CI-V address."
             case .some:
@@ -303,7 +303,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                 // reconnect too soon after a disconnect will do.
                 return opening
                     + "Nothing is arriving on the CI-V stream at all, so it never came up. The "
-                    + "radio holds one session for tens of seconds after a disconnect — wait, then "
+                    + "radio holds one session for tens of seconds after a disconnect. Wait, then "
                     + "connect again."
             case .none:
                 return opening + nothingAnswered
@@ -417,7 +417,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                         let why = (error as? CIVError)?.message ?? error.localizedDescription
                         deliver { [weak self] in
                             self?._delegate?.linkDidError(
-                                "The radio did not take its packet settings — \(why). Check that it "
+                                "The radio did not take its packet settings: \(why). Check that it "
                                 + "shows \(shows)-D and not \(shows): the \(input) audio only reaches "
                                 + "the transmitter in data mode, so in plain \(shows) it will key and "
                                 + "unkey normally and put nothing on the air.")
@@ -745,7 +745,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                 try await rig.apply(correction, mode: mode)
                 done.append(finding.title)
             } catch {
-                done.append("\(finding.title) — the radio refused")
+                done.append("\(finding.title) (the radio refused)")
             }
         }
         if !done.isEmpty { _ = await refreshRigStatus() }

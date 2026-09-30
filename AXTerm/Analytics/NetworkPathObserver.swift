@@ -44,7 +44,7 @@ nonisolated struct NetworkPath: Equatable, Sendable, Identifiable {
         var explanation: String {
             switch self {
             case .transitive:
-                return "Both ends have a working link to the same digipeater, so this path is plausible — but nothing has been observed traveling it."
+                return "Both ends have a working link to the same digipeater, so this path is plausible, but nothing has been observed traveling it."
             case .heardDirect:
                 return "A frame was overheard passing directly between these stations."
             case .heardDigipeated:

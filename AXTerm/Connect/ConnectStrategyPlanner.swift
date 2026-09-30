@@ -124,14 +124,14 @@ nonisolated enum ConnectStrategyPlanner {
         default:
             skipped.append(.init(
                 familyLabel: "direct",
-                reason: "last direct sighting was \(ageText(age)) ago — too stale to bet a timeout on"))
+                reason: "last direct sighting was \(ageText(age)) ago, too stale to bet a timeout on"))
             return
         }
         steps.append(ConnectStrategyStep(
             kind: .directL2,
             score: score,
             provenance: .init(source: .heardDirect, evidenceAge: age),
-            reason: "Direct — heard \(ageText(age)) ago with no digis.",
+            reason: "Direct: heard \(ageText(age)) ago with no digis.",
             budget: directBudget))
     }
 
@@ -154,7 +154,7 @@ nonisolated enum ConnectStrategyPlanner {
                 kind: .ax25ViaDigis(path.digis),
                 score: 0.9 * path.score,
                 provenance: .init(source: .digiPath(path.source), evidenceAge: nil),
-                reason: "Via \(path.digis.joined(separator: " → ")) — \(digiSourceText(path.source)).",
+                reason: "Via \(path.digis.joined(separator: " → ")): \(digiSourceText(path.source)).",
                 budget: digiBudget))
         }
     }
@@ -184,7 +184,7 @@ nonisolated enum ConnectStrategyPlanner {
         guard !evidence.nativeCircuitCoolingDown else {
             skipped.append(.init(
                 familyLabel: "native circuit",
-                reason: "a native circuit failed here recently — retrying after the hold expires"))
+                reason: "a native circuit failed here recently; retrying after the hold expires"))
             return
         }
         // A route anchored on a proven non-router is not a route; if every
@@ -223,10 +223,10 @@ nonisolated enum ConnectStrategyPlanner {
             // the CONACK; the rung stays worth one try, but a dampened one,
             // and the reason says what would fix it.
             score *= 0.6
-            caveats.append("this station is not advertising itself, so the reply may have no route home — turn on Announce this station to fix that")
+            caveats.append("this station is not advertising itself, so the reply may have no route home: turn on Announce this station to fix that")
         }
 
-        var reason = "NET/ROM circuit via \(best.origin) — \(routeSourceText(best.sourceType)) route, quality \(best.quality), \(ageText(age)) old."
+        var reason = "NET/ROM circuit via \(best.origin): \(routeSourceText(best.sourceType)) route, quality \(best.quality), \(ageText(age)) old."
         if !caveats.isEmpty {
             reason += " (" + caveats.joined(separator: "; ") + ".)"
         }
@@ -280,7 +280,7 @@ nonisolated enum ConnectStrategyPlanner {
             kind: .nodePromptRelay(teller: claim.teller),
             score: score,
             provenance: .init(source: .directoryClaim(teller: claim.teller), evidenceAge: age),
-            reason: "Node-prompt relay via \(claim.teller) — \(claimText).",
+            reason: "Node-prompt relay via \(claim.teller): \(claimText).",
             budget: relayBudget))
     }
 

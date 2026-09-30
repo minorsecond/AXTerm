@@ -44,7 +44,7 @@ nonisolated enum MapOverlayExport {
             case .geoJSON:
                 "Plain text. Compresses well, so it is the format to send over the air. Opens in QGIS, ArcGIS, Google Earth and most web tools."
             case .shapefile:
-                "Four files in a zip — what older GIS software expects. Several times larger than GeoJSON and mostly incompressible, so it is a poor choice for a radio link."
+                "Four files in a zip, which is what older GIS software expects. Several times larger than GeoJSON and mostly incompressible, so it is a poor choice for a radio link."
             }
         }
     }
@@ -78,7 +78,7 @@ nonisolated enum MapOverlayExport {
         var advice: String
         if impractical {
             advice = """
-            This is \(ByteCount.string(Int64(byteCount))) — about \(airtime.airtimeText(bytes: byteCount)) of airtime\(sessions > 1 ? ", across roughly \(sessions) sessions" : "").
+            This is \(ByteCount.string(Int64(byteCount))), about \(airtime.airtimeText(bytes: byteCount)) of airtime\(sessions > 1 ? ", across roughly \(sessions) sessions" : "").
 
             That is not a reasonable thing to put on a shared channel. The channel is occupied for the whole of it, and any interruption starts a session again.
 
@@ -86,7 +86,7 @@ nonisolated enum MapOverlayExport {
             """
         } else if sessions > 1 {
             advice = """
-            About \(airtime.airtimeText(bytes: byteCount)) of airtime, which will not fit in one session — expect roughly \(sessions), resuming where each leaves off.
+            About \(airtime.airtimeText(bytes: byteCount)) of airtime, which will not fit in one session. Expect roughly \(sessions), resuming where each leaves off.
 
             Workable, but the channel is busy for the duration.
             """

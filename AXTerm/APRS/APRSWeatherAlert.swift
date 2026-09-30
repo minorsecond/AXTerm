@@ -56,7 +56,7 @@ nonisolated struct APRSWeatherAlert: Equatable, Sendable {
     /// The line that must appear wherever the alert does.
     func provenance(now: Date = Date()) -> String {
         let age = heard.formatted(.relative(presentation: .named))
-        let base = "Relayed by \(source) \(age) \u{2014} originally from an internet feed"
+        let base = "Relayed by \(source) \(age), originally from an internet feed"
         return isStale(now: now)
             ? base + ". No update since; treat as possibly out of date."
             : base + "."

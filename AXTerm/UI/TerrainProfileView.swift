@@ -466,7 +466,7 @@ struct TerrainProfileView: View {
         .help(assumed
               ? "No antenna height recorded for \(callsign), so the forecast uses the "
                 + "assumed height from Settings. This is the number the verdict is most "
-                + "sensitive to \u{2014} a node on a tower reads as blocked at a default "
+                + "sensitive to: a node on a tower reads as blocked at a default "
                 + "height. Record one on this page to sharpen it."
               : "Antenna height above ground for \(callsign).")
     }

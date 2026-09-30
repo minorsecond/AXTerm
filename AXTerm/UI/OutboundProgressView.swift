@@ -75,7 +75,7 @@ struct OutboundProgressView: View {
             }
             .foregroundStyle(.indigo)
             .help(progress.hasAcks
-                  ? "\(progress.relayedDigis.joined(separator: ", ")) retransmitted your frame — awaiting acknowledgment from \(progress.destination)"
+                  ? "\(progress.relayedDigis.joined(separator: ", ")) retransmitted your frame. Awaiting acknowledgment from \(progress.destination)."
                   : "\(progress.relayedDigis.joined(separator: ", ")) retransmitted your frame. Datagram sends carry no acknowledgment, so this is the strongest confirmation available.")
 
         case .sentDatagram:

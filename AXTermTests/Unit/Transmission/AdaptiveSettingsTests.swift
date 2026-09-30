@@ -243,7 +243,7 @@ final class AdaptiveSettingsTests: XCTestCase {
         XCTAssertTrue(settings.paclen.adaptiveReason?.contains("Our frames losing") ?? false,
                       settings.paclen.adaptiveReason ?? "nil")
         XCTAssertEqual(settings.windowSize.adaptiveReason,
-                       "Our frames losing 30% — stop-and-wait")
+                       "Our frames losing 30%: stop-and-wait")
     }
 
     /// Spec 4.2/4.4: parameters must not move on a single good sample — the

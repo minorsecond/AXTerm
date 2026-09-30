@@ -46,7 +46,7 @@ struct WinlinkFormsSheet: View {
             HStack {
                 Text("Winlink Forms")
                     .font(.headline)
-                    .help("Standard Winlink templates rendered natively. Recipients running Winlink Express (or any client) see the official form — AXTerm sends the same body and form data attachment.")
+                    .help("Standard Winlink templates rendered natively. Recipients running Winlink Express (or any client) see the official form; AXTerm sends the same body and form data attachment.")
                 Spacer()
                 if isPreparing { ProgressView().controlSize(.small) }
                 Button("Close") { dismiss() }

@@ -36,7 +36,7 @@ nonisolated enum ZipReader {
             case .corrupt(let detail):
                 "The archive is damaged: \(detail)"
             case .truncated:
-                "The archive ends early — it was probably cut short in transfer."
+                "The archive ends early. It was probably cut short in transfer."
             case .checksumMismatch(let entry):
                 "\(entry) failed its checksum. The archive arrived damaged; ask for it again."
             }

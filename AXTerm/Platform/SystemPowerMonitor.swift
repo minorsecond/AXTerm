@@ -50,7 +50,7 @@ nonisolated enum PowerInterruption {
                               formatter: DateFormatter? = nil) -> String {
         let clock = formatter ?? Self.clockFormatter
         let seconds = max(0, to.timeIntervalSince(from))
-        return "Off the air \(clock.string(from: from))–\(clock.string(from: to)) (\(duration(seconds))) — this machine was asleep."
+        return "Off the air \(clock.string(from: from))–\(clock.string(from: to)) (\(duration(seconds))). This machine was asleep."
     }
 
     /// Plain words, because "5880s" is not something anyone wants to divide.

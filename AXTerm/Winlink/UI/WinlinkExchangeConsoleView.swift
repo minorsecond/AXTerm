@@ -37,7 +37,7 @@ struct WinlinkExchangeConsoleView: View {
             if mode == .activity {
                 activityPane
             } else if runner.transcript.isEmpty {
-                Text("No exchange yet — the conversation with the gateway will appear here.")
+                Text("No exchange yet. The conversation with the gateway will appear here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -144,7 +144,7 @@ struct WinlinkExchangeConsoleView: View {
             }
             .buttonStyle(.borderless)
             .disabled(runner.transcript.isEmpty)
-            .help("Replay this session as a sequence diagram — every line of the conversation drawn as arrows between your station and the gateway, with binary transfers collapsed.")
+            .help("Replay this session as a sequence diagram: every line of the conversation drawn as arrows between your station and the gateway, with binary transfers collapsed.")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -178,7 +178,7 @@ struct WinlinkExchangeConsoleView: View {
                         .frame(width: 110)
                 }
             } else {
-                Text("No link activity yet — start an exchange to see the transfer live.")
+                Text("No link activity yet. Start an exchange to see the transfer live.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -108,7 +108,7 @@ nonisolated enum UniversalSearchIndex {
                         id: "dir-\(entry.alias)",
                         title: "\(entry.alias):\(entry.callsign)",
                         subtitle: via.isEmpty
-                            ? "resolves the name only — no route offered"
+                            ? "resolves the name only, no route offered"
                             : "reachable via \(via)",
                         destination: .nodes(query: entry.alias))
                 })

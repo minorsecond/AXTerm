@@ -318,7 +318,7 @@ nonisolated struct NodeCapabilityDirectory: Equatable, Sendable, Codable {
         guard let verdict = family(for: callsign) else {
             let kinds = Set(entry.observations.map(\.kind))
             if !kinds.isDisjoint(with: Self.bpqKinds), !kinds.isDisjoint(with: Self.kaKinds) {
-                return "Its output shows both BPQ and KA-Node fingerprints — no verdict until it sends something decisive (like a NODES broadcast)."
+                return "Its output shows both BPQ and KA-Node fingerprints. There is no verdict until it sends something decisive (like a NODES broadcast)."
             }
             return nil
         }

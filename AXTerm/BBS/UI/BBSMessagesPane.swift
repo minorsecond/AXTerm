@@ -249,7 +249,7 @@ struct BBSMessagesPane: View {
                 .foregroundStyle(.secondary)
 
                 if let killedAt = message.killedAt {
-                    Label("Killed \(killedAt.formatted(date: .abbreviated, time: .shortened)) — hidden from callers",
+                    Label("Killed \(killedAt.formatted(date: .abbreviated, time: .shortened)) (hidden from callers)",
                           systemImage: "trash")
                         .font(.caption)
                         .foregroundStyle(.orange)

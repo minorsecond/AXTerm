@@ -94,7 +94,7 @@ nonisolated enum RadioPresentation {
             if let mode = radio.modeLabel { line += " \(mode)" }
         }
         if radio.status == .failed, let error = radio.lastError, !error.isEmpty {
-            line += " \u{2014} \(error)"
+            line += " (\(error))"
         }
         return line
     }

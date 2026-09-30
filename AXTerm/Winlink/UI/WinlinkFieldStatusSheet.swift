@@ -165,10 +165,10 @@ struct WinlinkFieldStatusSheet: View {
 
     private func hourTooltip(_ hour: WinlinkGatewayHours.Hour) -> String {
         guard hour.attempts > 0 else {
-            return "\(hour.label) — never attempted."
+            return "\(hour.label): never attempted."
         }
         let percent = Int(((hour.answerRate ?? 0) * 100).rounded())
-        return "\(hour.label) — answered \(hour.answered) of \(hour.attempts) attempts (\(percent)%)."
+        return "\(hour.label): answered \(hour.answered) of \(hour.attempts) attempts (\(percent)%)."
     }
 
     // A `guard`/`return` inside the closure stopped it being a ViewBuilder,
@@ -221,7 +221,7 @@ struct WinlinkFieldStatusSheet: View {
             }
             .font(.callout)
             .foregroundStyle(.secondary)
-            .help("Mean-synodic approximation — good enough for whether there will be light to pack up by, not for an almanac.")
+            .help("Mean-synodic approximation. Good enough for whether there will be light to pack up by, not for an almanac.")
 
             if !solar.grayLineWindows().isEmpty {
                 Text("Gray line: " + solar.grayLineWindows()
@@ -232,7 +232,7 @@ struct WinlinkFieldStatusSheet: View {
                     .help("HF paths open along the terminator, so a marginal band is most likely workable in these windows.")
             }
 
-            Text("Computed locally from \(location.gridSquare) — no network, gateway, or radio involved.")
+            Text("Computed locally from \(location.gridSquare), with no network, gateway, or radio involved.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }

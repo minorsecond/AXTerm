@@ -36,7 +36,7 @@ struct StationDirectoryView: View {
         if let loadError {
             message(loadError, systemImage: "exclamationmark.triangle")
         } else if listings.isEmpty {
-            message("Nothing heard yet. Stations announce what they run in ID and beacon frames \u{2014} this fills in as they do, and keeps what it learns between launches.",
+            message("Nothing heard yet. Stations announce what they run in ID and beacon frames. This fills in as they do, and keeps what it learns between launches.",
                     systemImage: "antenna.radiowaves.left.and.right")
         } else if filtered.isEmpty {
             message("No station here matches that.", systemImage: "magnifyingglass")
@@ -126,8 +126,8 @@ struct StationDirectoryView: View {
                                     : Color.secondary.opacity(0.15),
                                     in: Capsule())
                         .help(entry.confidence == .demonstrated
-                              ? "Observed doing this \u{2014} it repeated a frame while we were listening. Only digipeating can be proven this way; nothing a node or BBS does is visible in a frame header."
-                              : "The station said so in an ID or beacon. Its own word, which is the only announcement most services ever make \u{2014} but it may describe something it used to run.")
+                              ? "Observed doing this: it repeated a frame while we were listening. Only digipeating can be proven this way; nothing a node or BBS does is visible in a frame header."
+                              : "The station said so in an ID or beacon. Its own word, which is the only announcement most services ever make, but it may describe something it used to run.")
                     Spacer(minLength: 0)
                     Text("\(entry.timesHeard)\u{00D7}")
                         .font(.caption.monospacedDigit())

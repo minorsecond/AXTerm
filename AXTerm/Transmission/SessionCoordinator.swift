@@ -1619,7 +1619,7 @@ final class SessionCoordinator: ObservableObject {
             // shows every transmission.
             packetEngine?.appendSystemNotification(
                 "Object \u{201C}\(trimmed)\u{201D} stood down\(radioSuffix([radio.id]))"
-                + " \u{2014} repeating \(APRSObjectKillRepeat.ladder.count)\u{d7} over the "
+                + ", repeating \(APRSObjectKillRepeat.ladder.count)\u{d7} over the "
                 + "next few minutes so it lands.")
             scheduleKillRepeats(name: name, latitude: latitude, longitude: longitude,
                                 symbolTable: symbolTable, symbolCode: symbolCode,
@@ -2267,7 +2267,7 @@ final class SessionCoordinator: ObservableObject {
                     {
                         let ttlMinutes = Int(Self.adaptiveByScopeTTLSeconds / 60)
                         self.packetEngine?.appendSystemNotification(
-                            "Adaptive: Session ended — learned parameters kept \(ttlMinutes) min for reconnect (\(dest) \(pathDesc))"
+                            "Adaptive: Session ended, learned parameters kept \(ttlMinutes) min for reconnect (\(dest) \(pathDesc))"
                         )
                     } else {
                         self.packetEngine?.appendSystemNotification(
@@ -4263,7 +4263,7 @@ final class SessionCoordinator: ObservableObject {
         let weWereHeard = session.stateMachine.sequenceState.va > 0
         let detail = weWereHeard
             ? "\(display) (\(route)) acknowledged what you sent but has not answered "
-              + "in \(polls) polls. The link is good — the far end is not replying."
+              + "in \(polls) polls. The link is good. The far end is not replying."
             : "\(display) (\(route)) is connected and polling, but nothing has passed "
               + "in either direction. The far end may not be answering on this path."
         TxLog.warning(.session, "Link connected but carrying nothing", [

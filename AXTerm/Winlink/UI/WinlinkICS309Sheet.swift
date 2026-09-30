@@ -45,7 +45,7 @@ struct WinlinkICS309Sheet: View {
                 Spacer()
             }
             .padding(12)
-            .help("The message log a served agency asks for after an activation. Built from traffic already stored — unlike almost everything else, this cannot be reconstructed later, so it is worth exporting while the incident is fresh.")
+            .help("The message log a served agency asks for after an activation. Built from traffic already stored. Unlike almost everything else, this cannot be reconstructed later, so it is worth exporting while the incident is fresh.")
             Divider()
 
             Form {
@@ -105,7 +105,7 @@ struct WinlinkICS309Sheet: View {
             Button("Copy") {
                 ClipboardWriter.copy(log.renderPlainText())
             }
-            .explain("Copies the log as plain text — the shape that survives being pasted into a message.",
+            .explain("Copies the log as plain text, the shape that survives being pasted into a message.",
                      showsIndicator: false)
             Button("Save CSV\u{2026}") { save(text: log.renderCSV(), extension: "csv") }
                 .explain("Comma-separated, RFC 4180 quoted, for spreadsheets and agency ingest.",

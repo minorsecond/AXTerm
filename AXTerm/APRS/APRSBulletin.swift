@@ -52,7 +52,7 @@ nonisolated enum APRSBulletin {
             case .badGroup:
                 return "A group is up to \(maxGroupLength) letters or digits, or nothing at all."
             case .reservedCharacter(let c):
-                return "APRS reserves \u{201C}\(c)\u{201D} in message text \u{2014} it would be "
+                return "APRS reserves \u{201C}\(c)\u{201D} in message text. It would be "
                     + "read as part of the protocol rather than as what you wrote."
             }
         }

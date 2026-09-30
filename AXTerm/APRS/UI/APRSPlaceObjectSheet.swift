@@ -259,7 +259,7 @@ struct APRSPlaceObjectSheet: View {
                APRSObjectReport.wireName(name).trimmingCharacters(in: .whitespaces)
                 != name.trimmingCharacters(in: .whitespaces) {
                 Label("Goes out as \u{201C}\(APRSObjectReport.wireName(name).trimmingCharacters(in: .whitespaces))\u{201D} "
-                      + "\u{2014} object names are nine characters.",
+                      + "(object names are nine characters).",
                       systemImage: "scissors")
                     .font(.caption)
                     .foregroundStyle(.secondary)

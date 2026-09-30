@@ -55,7 +55,7 @@ nonisolated enum NetRomRelayPlan {
         /// packet menus are there (2026-08-27).
         var operatorSummary: String {
             let route = (chain + [destination]).joined(separator: " → ")
-            let method = "Each node's own menus will appear below — this asks them at "
+            let method = "Each node's own menus will appear below. This asks them at "
                 + "their command prompts rather than opening a NET/ROM circuit."
             return intermediateHops.isEmpty
                 ? "Asking \(linkTarget) to connect to \(destination). \(method)"

@@ -154,7 +154,7 @@ struct WinlinkCatalogSheet: View {
             .frame(width: 300)
             .labelsHidden()
             .help(source == .catalog ? WinlinkCopy.catalogTooltip
-                  : "SailDocs is a free email robot reachable through the Winlink internet gateway — it mails back web pages, forecasts, and weather data. The unofficial way to pull internet data over packet radio.")
+                  : "SailDocs is a free email robot reachable through the Winlink internet gateway. It mails back web pages, forecasts, and weather data. The unofficial way to pull internet data over packet radio.")
 
             if source == .catalog, !viewModel.groups.isEmpty {
                 searchField
@@ -166,7 +166,7 @@ struct WinlinkCatalogSheet: View {
                 Text("Updated \(fetchedAt.formatted(.relative(presentation: .named)))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .help("When this catalog index was cached — from the CMS web service, or from an inquiry-server LIST reply received by radio.")
+                    .help("When this catalog index was cached, either from the CMS web service or from an inquiry-server LIST reply received by radio.")
             }
             Button {
                 Task { await viewModel.refresh() }
@@ -203,7 +203,7 @@ struct WinlinkCatalogSheet: View {
         .padding(.vertical, 4)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
         .frame(width: 260)
-        .help("Searches every product's subject, its ID, and its category — including the friendly category name, so \"alaska\" finds WX_AK_COAST even though neither the subject nor the code says Alaska.")
+        .help("Searches every product's subject, its ID, and its category, including the friendly category name, so \"alaska\" finds WX_AK_COAST even though neither the subject nor the code says Alaska.")
     }
 
     // MARK: - Browser
@@ -252,7 +252,7 @@ struct WinlinkCatalogSheet: View {
                 sidebarRow(.favorites, title: "Favorites",
                            systemImage: "star",
                            count: count(for: .favorites))
-                    .help("Products you starred. Favorites are kept in their own table, so a catalog refresh never clears them — and a star survives even if a later index drops the product.")
+                    .help("Products you starred. Favorites are kept in their own table, so a catalog refresh never clears them, and a star survives even if a later index drops the product.")
                 sidebarRow(.outageKit, title: "Outage Kit",
                            systemImage: "shippingbox",
                            count: count(for: .outageKit))
@@ -265,11 +265,11 @@ struct WinlinkCatalogSheet: View {
                                    title: category.title,
                                    systemImage: nil,
                                    count: category.items.count)
-                            .help("\(category.rawCategory) — \(category.items.count) product\(category.items.count == 1 ? "" : "s"), \(airtime.tooltip(bytes: category.totalBytes))")
+                            .help("\(category.rawCategory): \(category.items.count) product\(category.items.count == 1 ? "" : "s"), \(airtime.tooltip(bytes: category.totalBytes))")
                     }
                 } header: {
                     Label(family.title, systemImage: family.systemImage)
-                        .help("\(family.itemCount) products across \(family.categories.count) categories. Sections come from the gateway's own category codes — see Docs/Winlink.md.")
+                        .help("\(family.itemCount) products across \(family.categories.count) categories. Sections come from the gateway's own category codes (see Docs/Winlink.md).")
                 }
             }
         }
@@ -307,14 +307,14 @@ struct WinlinkCatalogSheet: View {
         """
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         text += operatorState.isEmpty
-            ? ", and — once your state is set in Settings → Winlink — local forecasts."
+            ? ", and local forecasts once your state is set in Settings › Winlink."
             : ", and forecasts for \(operatorState.uppercased())."
         if !outageKit.isEmpty {
             text += "\n\n\(outageKit.count) products, "
             text += "\(ByteCount.string(Int64(bytes))), "
             text += "\u{2248}\(airtime.airtimeText(bytes: bytes)) of airtime."
         }
-        text += "\n\nBulk weather — radar, fax — is deliberately excluded: too large, and stale within the hour."
+        text += "\n\nBulk weather (radar, fax) is deliberately excluded: too large, and stale within the hour."
         return text
     }
 
@@ -414,7 +414,7 @@ struct WinlinkCatalogSheet: View {
                 }
                 .help(allScopedSelected
                       ? "Removes these \(scopedItems.count) products from the request."
-                      : "Adds all \(scopedItems.count) products shown — ≈\(airtime.airtimeText(bytes: scopedBytes)) of airtime.")
+                      : "Adds all \(scopedItems.count) products shown, ≈\(airtime.airtimeText(bytes: scopedBytes)) of airtime.")
             }
         }
         .padding(.horizontal, 14)
@@ -457,12 +457,12 @@ struct WinlinkCatalogSheet: View {
         case .outageKit:
             return viewModel.groups.isEmpty
                 ? "The catalog index has to be cached before a kit can be built"
-                : "Nothing in this index matches the outage kit. Set your state in Settings \u{2192} Winlink to include local forecasts."
+                : "Nothing in this index matches the outage kit. Set your state in Settings \u{203A} Winlink to include local forecasts."
         case .favorites:
             // Distinguish "you have not starred anything" from "the
             // products you starred are gone from this index".
             guard !viewModel.favorites.isEmpty else {
-                return "No favorites yet \u{2014} star a product to keep it here"
+                return "No favorites yet. Star a product to keep it here"
             }
             let count = viewModel.favorites.count
             return "Your \(count) starred product\(count == 1 ? " is" : "s are") not in this catalog index. They are still remembered, and reappear if a later index carries them."
@@ -495,7 +495,7 @@ struct WinlinkCatalogSheet: View {
             } label: {
                 Label("Request Catalog by Radio", systemImage: "antenna.radiowaves.left.and.right")
             }
-            .help("Queues a LIST inquiry to INQUIRY in your Outbox — no internet or access key needed.")
+            .help("Queues a LIST inquiry to INQUIRY in your Outbox. No internet or access key needed.")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -526,7 +526,7 @@ struct WinlinkCatalogSheet: View {
                         // A gateway that hangs up at 17 minutes will cut
                         // a 45-minute request off twice however good the
                         // path is — that is not visible from the clock.
-                        Label("Needs about \(sessions) exchanges — \(airtime.gateway ?? "this gateway") has never held a session longer than \(WinlinkAirtimeEstimate.durationText(airtime.sessionCapSeconds ?? 0))",
+                        Label("Needs about \(sessions) exchanges: \(airtime.gateway ?? "this gateway") has never held a session longer than \(WinlinkAirtimeEstimate.durationText(airtime.sessionCapSeconds ?? 0))",
                               systemImage: "arrow.triangle.2.circlepath")
                             .foregroundStyle(.orange)
                     }
@@ -568,7 +568,7 @@ struct WinlinkCatalogSheet: View {
     private var sailDocsPane: some View {
         Form {
             Section {
-                Text("SailDocs (saildocs.com) answers email commands with web pages, forecasts, and weather data — through the Winlink internet gateway, that means over the radio. Requests queue in your Outbox; replies arrive as mail at a later exchange. Keep responses small: 10 kB is roughly two minutes of airtime at 1200 baud.")
+                Text("SailDocs (saildocs.com) answers email commands with web pages, forecasts, and weather data. Through the Winlink internet gateway, that means over the radio. Requests queue in your Outbox; replies arrive as mail at a later exchange. Keep responses small: 10 kB is roughly two minutes of airtime at 1200 baud.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -583,7 +583,7 @@ struct WinlinkCatalogSheet: View {
                     }
                     .disabled(sailDocsURL.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                .help("SailDocs strips the page to plain text before mailing it back — 'send <url>'.")
+                .help("SailDocs strips the page to plain text before mailing it back ('send <url>').")
             }
 
             if locationService != nil {
@@ -604,7 +604,7 @@ struct WinlinkCatalogSheet: View {
                         }
                     }
                     .disabled(isFetchingSpot)
-                    .help("Requests a SailDocs text spot forecast ('send spot:lat,lon') for your current position — GPS when available, otherwise your grid square.")
+                    .help("Requests a SailDocs text spot forecast ('send spot:lat,lon') for your current position: GPS when available, otherwise your grid square.")
                 }
             }
 
@@ -619,7 +619,7 @@ struct WinlinkCatalogSheet: View {
                     }
                     .disabled(sailDocsCustom.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                .help("Any SailDocs command line (see saildocs.com for the full list). GRIB requests return binary attachments — mind the airtime.")
+                .help("Any SailDocs command line (see saildocs.com for the full list). GRIB requests return binary attachments, so mind the airtime.")
             }
         }
         .formStyle(.grouped)
@@ -683,6 +683,6 @@ struct WinlinkCatalogSheet: View {
         .buttonStyle(.plain)
         .help(isFavorite
               ? "Remove from Favorites."
-              : "Add to Favorites \u{2014} kept across catalog refreshes, and reachable from the sidebar.")
+              : "Add to Favorites. Kept across catalog refreshes, and reachable from the sidebar.")
     }
 }

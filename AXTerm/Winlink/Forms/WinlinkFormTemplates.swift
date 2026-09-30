@@ -22,7 +22,7 @@ nonisolated enum WinlinkFormTemplates {
         [
             WinlinkFormField(id: "MsgTo", label: "To", autoFill: nil,
                              placeholder: "Net control / tactical address",
-                             help: "Where the \(kind) goes — a net control callsign or tactical address.",
+                             help: "Where the \(kind) goes: a net control callsign or tactical address.",
                              required: true, section: "Header"),
             WinlinkFormField(id: "Newsubject", label: "Subject",
                              autoFill: .custom { "Winlink \(kind): \($0.callsign)" },
@@ -169,7 +169,7 @@ nonisolated enum WinlinkFormTemplates {
 
             WinlinkFormField(id: "Safetyneed", label: "Emergent / life-safety need",
                              kind: .choice(["NO", "YES"]), autoFill: .fixed("NO"),
-                             help: "YES flags this report as carrying an immediate life-safety need — say what is needed below.",
+                             help: "YES flags this report as carrying an immediate life-safety need. Say what is needed below.",
                              required: true, section: "Life safety"),
             WinlinkFormField(id: "Comm0", label: "Life-safety needs", kind: .multiline, section: "Life safety"),
 

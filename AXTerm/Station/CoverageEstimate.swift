@@ -127,7 +127,7 @@ nonisolated enum CoverageEstimate {
             return String(
                 format: "%@, %@. Inner ring: half of them are within %@. "
                 + "Outer ring: the farthest %@ came from %@ at %@. Measurements, not a "
-                + "propagation model \u{2014} terrain will bend both.%@",
+                + "propagation model. Terrain will bend both.%@",
                 evidence.isTransmit ? "Estimated coverage" : "Estimated receive range",
                 source, typical,
                 farthestLabel,

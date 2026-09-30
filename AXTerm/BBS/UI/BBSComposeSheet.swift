@@ -155,7 +155,7 @@ struct BBSComposeSheet: View {
             } header: {
                 Text("Message")
             } footer: {
-                Text("100 lines or 8 KB, whichever comes first — the same bound a "
+                Text("100 lines or 8 KB, whichever comes first: the same bound a "
                      + "caller gets, because this goes in the same mailbox.")
             }
         }

@@ -10,7 +10,7 @@ The app reads DSN in this precedence order:
 1. `SENTRY_DSN` environment variable
 2. `SENTRY_DSN` Info.plist key
 
-### In-app toggles (Settings → Sentry)
+### In-app toggles (Settings › Sentry)
 
 - **Enable Sentry reporting**: master switch (default OFF).
 - **Send connection details (host/port tags)**: controls `kiss_host` / `kiss_port` tags (default OFF).

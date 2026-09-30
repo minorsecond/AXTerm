@@ -103,7 +103,7 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
         guard !call.isEmpty, call != "NOCALL" else {
             return Check(id: "callsign", title: "Callsign", status: .blocked,
                          detail: "Not set",
-                         remedy: "Settings \u{2192} General. Nothing can be sent without it.")
+                         remedy: "Settings \u{203A} General. Nothing can be sent without it.")
         }
         return Check(id: "callsign", title: "Callsign", status: .ready, detail: call)
     }
@@ -115,7 +115,7 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
         case (0, false):
             return Check(id: "reach", title: "Someone to talk to", status: .blocked,
                          detail: "No gateways in the ladder, and P2P answering is off",
-                         remedy: "Add a gateway in Stations, or arm P2P in Settings \u{2192} Winlink for grid-down operating.")
+                         remedy: "Add a gateway in Stations, or arm P2P in Settings \u{203A} Winlink for grid-down operating.")
         case (0, true):
             return Check(id: "reach", title: "Someone to talk to", status: .warning,
                          detail: "P2P armed, but no gateway ladder",
@@ -131,14 +131,14 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
         guard input.hasPassword else {
             return Check(id: "password", title: "Winlink password", status: .warning,
                          detail: "Not saved in the Keychain",
-                         remedy: "Settings \u{2192} Winlink. CMS sessions will be refused without it; P2P does not need one.")
+                         remedy: "Settings \u{203A} Winlink. CMS sessions will be refused without it; P2P does not need one.")
         }
         // Stored is not the same as right. An unchecked password looks
         // identical to a correct one until a session is refused mid-net.
         guard input.passwordVerifiedAt != nil else {
             return Check(id: "password", title: "Winlink password", status: .warning,
                          detail: "Saved, but never checked against Winlink",
-                         remedy: "Settings \u{2192} Winlink \u{2192} Verify. Better to find out here than at a refused session.")
+                         remedy: "Settings \u{203A} Winlink \u{203A} Verify. Better to find out here than at a refused session.")
         }
         return Check(id: "password", title: "Winlink password", status: .ready,
                      detail: "Verified against the CMS")
@@ -153,13 +153,13 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
         guard !grid.isEmpty, Maidenhead.isValid(grid) else {
             return Check(id: "position", title: "Position", status: .warning,
                          detail: grid.isEmpty ? "No grid square set" : "\(grid) is not a valid locator",
-                         remedy: "Settings \u{2192} Winlink. Needed for the station list, position reports, and link-quality placement.")
+                         remedy: "Settings \u{203A} Winlink. Needed for the station list, position reports, and link-quality placement.")
         }
         // Four characters is 60 km of uncertainty — enough that link
         // measurements taken here will not count as "from here".
         if grid.count <= 4 {
             return Check(id: "position", title: "Position", status: .warning,
-                         detail: "\(grid.uppercased()) \u{2014} 4-character grid, \u{00B1}60 km",
+                         detail: "\(grid.uppercased()) (4-character grid, \u{00B1}60 km)",
                          remedy: "Six characters (e.g. \(grid.uppercased())lr) lets measured link quality apply to your location.")
         }
         return Check(id: "position", title: "Position", status: .ready,
@@ -170,7 +170,7 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
         guard input.catalogItemCount > 0, let fetchedAt = input.catalogFetchedAt else {
             return Check(id: "catalog", title: "Catalog index", status: .warning,
                          detail: "Not cached",
-                         remedy: "Request it by radio from the Catalog sheet \u{2014} it is the index of everything requestable.")
+                         remedy: "Request it by radio from the Catalog sheet. It is the index of everything requestable.")
         }
         let age = input.now.timeIntervalSince(fetchedAt)
         let days = Int(age / 86400)
@@ -187,7 +187,7 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
         guard input.outageKitCount > 0 else {
             return Check(id: "outageKit", title: "Outage kit", status: .warning,
                          detail: "Nothing identified to stage",
-                         remedy: "Cache the catalog and set your state in Settings \u{2192} Winlink.")
+                         remedy: "Cache the catalog and set your state in Settings \u{203A} Winlink.")
         }
         let size = ByteCount.string(Int64(input.outageKitBytes))
         return Check(id: "outageKit", title: "Outage kit", status: .ready,

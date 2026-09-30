@@ -384,7 +384,7 @@ extension WinlinkSyncController.Status {
                 "Pulled \(report.pulled) record(s) from other devices, applied \(report.applied), pushed \(report.pushed).",
             ]
             if report.unreadable > 0 {
-                lines.append("\(report.unreadable) record(s) could not be read \u{2014} likely written by a newer version. The rest of the mailbox was unaffected.")
+                lines.append("\(report.unreadable) record(s) could not be read, likely written by a newer version. The rest of the mailbox was unaffected.")
             }
             if report.refused > 0 {
                 lines.append("\(report.refused) source(s) were refused by policy: state that describes this radio at this place never leaves the device.")
@@ -392,7 +392,7 @@ extension WinlinkSyncController.Status {
             if report.wasReset {
                 lines.append("The server discarded this device's position, so the pass re-read everything rather than risk missing changes in between.")
             }
-            lines.append("Messages, read flags, folders, contacts and callsign lookups sync. What your other stations heard and connected to arrives labeled with the station that did it. Digipeater paths, the gateway ladder, session logs and grid square do not \u{2014} they describe this antenna at this location.")
+            lines.append("Messages, read flags, folders, contacts and callsign lookups sync. What your other stations heard and connected to arrives labeled with the station that did it. Digipeater paths, the gateway ladder, session logs and grid square do not, since they describe this antenna at this location.")
             return lines.joined(separator: "\n\n")
         }
     }

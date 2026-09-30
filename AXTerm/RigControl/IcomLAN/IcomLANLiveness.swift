@@ -60,7 +60,7 @@ nonisolated enum IcomLANLiveness {
     /// Why the link should be failed, or nil while it is healthy.
     static func complaint(silentFor: TimeInterval, limit: TimeInterval = silenceLimit) -> String? {
         guard silentFor >= limit else { return nil }
-        return "the radio stopped answering — nothing received for "
+        return "the radio stopped answering: nothing received for "
             + String(Int(silentFor.rounded()))
             + " seconds. Check that it is still on, still on the network, and "
             + "that this Mac is allowed to reach devices on the local network."

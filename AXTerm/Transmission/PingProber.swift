@@ -323,7 +323,7 @@ nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
             }
         }
 
-        onNote?(String(format: "%@ answered in %.1f s (%@) — it hears this station.",
+        onNote?(String(format: "%@ answered in %.1f s (%@), so it hears this station.",
                        key, rtt, uType.rawValue))
         return true
     }

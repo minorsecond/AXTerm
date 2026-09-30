@@ -194,7 +194,7 @@ struct BBSAreaListScreen: View {
                             .controlSize(.small)
                     }
                     if box.isFull {
-                        Label("The inbox is full — uploads are refused until you move "
+                        Label("The inbox is full. Uploads are refused until you move "
                               + "something out of it.",
                               systemImage: "exclamationmark.triangle")
                             .font(.caption)

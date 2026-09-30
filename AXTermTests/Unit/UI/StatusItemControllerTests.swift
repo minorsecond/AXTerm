@@ -145,7 +145,7 @@ final class StatusItemControllerTests: XCTestCase {
     func testOneRadioKeepsTheHeaderItAlwaysHad() {
         let title = StatusItemController.MenuModel.headerTitle(
             radios: [.fixture(status: .connected)], packetCount: 42)
-        XCTAssertEqual(title, "Connected \u{2014} 192.168.3.218:8001 \u{2022} 42 packets")
+        XCTAssertEqual(title, "Connected: 192.168.3.218:8001 \u{2022} 42 packets")
         XCTAssertEqual(StatusItemController.MenuModel.connectionAction(for: [.connected]), "Disconnect")
         XCTAssertEqual(StatusItemController.MenuModel.connectionAction(for: [.failed]), "Connect")
     }

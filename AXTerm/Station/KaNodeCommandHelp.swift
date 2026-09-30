@@ -38,10 +38,10 @@ nonisolated enum KaNodeCommandHelp {
         "B": Command(letter: "B", name: "Bye",
                      summary: "Disconnect from this node."),
         "C": Command(letter: "C", name: "Connect",
-                     summary: "Ask this node to connect you onward — `C <callsign>`. "
+                     summary: "Ask this node to connect you onward with `C <callsign>`. "
                             + "The far station's own prompts appear here afterwards."),
         "J": Command(letter: "J", name: "JHeard",
-                     summary: "Stations this node heard directly on RF — one hop from "
+                     summary: "Stations this node heard directly on RF, one hop from "
                             + "its own antenna, so it measures what this node can reach."),
         "N": Command(letter: "N", name: "Nodes",
                      summary: "Other nodes this node knows of, by alias and callsign. "
@@ -128,10 +128,10 @@ nonisolated struct KaNodePromptCoach: Sendable {
         // a transcript that blurs the two is a transcript you cannot trust.
         var lines = ["\(key) is a KA-Node. Its prompt offers:"]
         for command in explanation.commands {
-            lines.append("  \(command.letter) — \(command.name): \(command.summary)")
+            lines.append("  \(command.letter) (\(command.name)): \(command.summary)")
         }
         if !explanation.unrecognised.isEmpty {
-            lines.append("  \(explanation.unrecognised.joined(separator: ", ")) — "
+            lines.append("  \(explanation.unrecognised.joined(separator: ", ")): "
                        + "offered by this node, but AXTerm does not know what it does.")
         }
         return lines.joined(separator: "\n")

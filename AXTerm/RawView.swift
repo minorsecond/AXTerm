@@ -35,7 +35,7 @@ struct RawView: View {
 
                     Spacer()
 
-                    Text("\(filteredChunks.count) chunks")
+                    Text(CountPhrase.of(filteredChunks.count, "chunk"))
                         .foregroundStyle(.secondary)
                         .font(.caption)
 

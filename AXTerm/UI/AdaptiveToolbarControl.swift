@@ -80,7 +80,7 @@ private struct AdaptivePopoverContent: View {
             LazyVGrid(columns: gridColumns, spacing: 8) {
                 metricCard(
                     label: "ETX",
-                    info: "Expected transmissions per successful frame, smoothed (EWMA, newest sample weighted 0.3). This is the value the controller's thresholds compare against — ≤1.5 allows window upgrades, >2.0 forces 64-byte frames. Lower is better.",
+                    info: "Expected transmissions per successful frame, smoothed (EWMA, newest sample weighted 0.3). This is the value the controller's thresholds compare against: ≤1.5 allows window upgrades, >2.0 forces 64-byte frames. Lower is better.",
                     value: adaptive.map { format($0.smoothedEtx ?? $0.etx) } ?? "—",
                     emphasized: true
                 )
@@ -247,14 +247,14 @@ private struct AdaptivePopoverContent: View {
                     RTTChartView(samples: viz.rttHistory)
                         .frame(height: 140)
                 } else {
-                    chartPlaceholder("No RTT samples yet — connect a session.")
+                    chartPlaceholder("No RTT samples yet. Connect a session.")
                 }
             case .window:
                 if let viz = currentLinkViz, viz.windowHistory.count >= 3 {
                     WindowSawtoothView(samples: viz.windowHistory)
                         .frame(height: 140)
                 } else {
-                    chartPlaceholder("No window activity yet — connect a session.")
+                    chartPlaceholder("No window activity yet. Connect a session.")
                 }
             }
         }

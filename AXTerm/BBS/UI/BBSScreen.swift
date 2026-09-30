@@ -454,7 +454,7 @@ struct BBSScreen: View {
                 systemImage: "phone.badge.waveform",
                 title: "Nobody is connected",
                 detail: "A call in progress shows here as the caller types, both "
-                    + "directions — the fastest way to find out that a banner reads "
+                    + "directions. It is the fastest way to find out that a banner reads "
                     + "badly or a command confuses people.")
             .navigationTitle("Live Call")
             .navigationBarTitleDisplayMode(.inline)

@@ -451,9 +451,9 @@ final class ConnectBarViewModel: ObservableObject {
         guard mode != .netrom else { return }
         setMode(.netrom, for: activeDraftContext)
         applyInlineNote(hasRoute
-            ? "Routed via NET/ROM — a route to \(destination) is known."
-            : "\(destination) is only known through node directories — "
-              + "connecting through the node chain.")
+            ? "Routed via NET/ROM: a route to \(destination) is known."
+            : "\(destination) is only known through node directories. "
+              + "Connecting through the node chain.")
     }
 
     func applyInlineNote(_ note: String?) {
@@ -856,7 +856,7 @@ final class ConnectBarViewModel: ObservableObject {
         if nextHopSelection != Self.autoNextHopID && !nextHopSelection.isEmpty {
             let hasKnownOverride = routeHintsByDestinationAndNextHop[destination]?[nextHopSelection] != nil
             if !hasKnownOverride {
-                routeOverrideWarning = "No known route via \(nextHopSelection) — attempt may fail."
+                routeOverrideWarning = "No known route via \(nextHopSelection). The attempt may fail."
             } else {
                 routeOverrideWarning = nil
             }

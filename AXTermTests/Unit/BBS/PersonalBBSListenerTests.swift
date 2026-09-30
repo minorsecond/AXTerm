@@ -32,7 +32,7 @@ final class PersonalBBSListenerTests: XCTestCase {
         let decision = sut.decide(called: "K0EPI-2", isInitiator: false)
         XCTAssertEqual(decision, .radioNotServed)
         XCTAssertEqual(decision.explanation,
-                       "ignored — the mailbox is switched off on the radio this call came in on (Settings → Radios)")
+                       "ignored: the mailbox is switched off on the radio this call came in on (Settings › Radios)")
     }
 
     func testMatchIgnoresCaseAndWhitespace() {

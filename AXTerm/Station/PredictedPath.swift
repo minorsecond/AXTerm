@@ -37,7 +37,7 @@ nonisolated struct PredictedPath: Equatable, Sendable, Identifiable {
             case .promising(let ratio):
                 return String(format: "Line of sight with %.0f%% of the first Fresnel zone clear. This path has never been tried, but nothing on the ground is in the way.", min(ratio, 2) * 100)
             case .marginal(let ratio):
-                return String(format: "Line of sight exists, but terrain intrudes into the Fresnel zone — only %.0f%% of it is clear, against the 60%% a path needs to behave like an open one. Expect a link that works and struggles.", max(ratio, 0) * 100)
+                return String(format: "Line of sight exists, but terrain intrudes into the Fresnel zone. Only %.0f%% of it is clear, against the 60%% a path needs to behave like an open one. Expect a link that works and struggles.", max(ratio, 0) * 100)
             case .blocked(let metres, let at):
                 return String(format: "Terrain rises %.0f m above the line %.1f km along the path. There is no line of sight; anything getting through would be diffraction.", metres, at / 1000)
             }

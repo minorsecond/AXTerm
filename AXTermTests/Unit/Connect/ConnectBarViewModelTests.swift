@@ -123,7 +123,7 @@ final class ConnectBarViewModelTests: XCTestCase {
         vm.applyNetRomPrefill(destination: "N0HI-7", routeHint: hint, suggestedPreview: nil, nextHopOverride: "NBR1")
         await waitForSuggestions()
 
-        XCTAssertEqual(vm.routeOverrideWarning, "No known route via NBR1 — attempt may fail.")
+        XCTAssertEqual(vm.routeOverrideWarning, "No known route via NBR1. The attempt may fail.")
     }
 
     func testContextModePersistence() {

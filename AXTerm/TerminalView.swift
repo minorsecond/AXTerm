@@ -1270,7 +1270,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                 // The chain moved: this node greeted and has now been asked
                 // for the next thing. Its answer gets its own budget.
                 noteRelayProgress(waitingOn: speaker)
-                onRelayNotice?("\(speaker) answered — asking it to connect to \(ask.uppercased()). "
+                onRelayNotice?("\(speaker) answered. Asking it to connect to \(ask.uppercased()). "
                                + "Anything below is a node talking, not \(destination.uppercased()).")
                 sendRelayConnectCommand(destination: ask)
                 TxLog.outbound(.session, "Node-prompt relay: banner received, C command sent", [
@@ -1500,8 +1500,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             // The frame that taught us the SSID also explains the "stranger"
             // now in the station list — say so once, while it is on screen.
             let node = (relayAskedNode ?? nextHop).uppercased()
-            onRelayNotice?("\(leg) is \(node) dialing \(hop) on your behalf — "
-                           + "a node connects onward as the operator, under a "
+            onRelayNotice?("\(leg) is \(node) dialing \(hop) on your behalf. "
+                           + "A node connects onward as the operator, under a "
                            + "borrowed SSID of your own callsign.")
             onRelayLegIdentified?(leg, node, hop)
         }
@@ -1511,12 +1511,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             // Said out loud because it contradicts what the operator can see:
             // the node has not announced anything, and the transcript will
             // look stalled right up until this line.
-            onRelayNotice?("\(hop) answered \(nextHop.uppercased())'s call with UA — "
-                           + "the hop is up. Read off the air, not from \(nextHop.uppercased()).")
+            onRelayNotice?("\(hop) answered \(nextHop.uppercased())'s call with UA, "
+                           + "so the hop is up. Read off the air, not from \(nextHop.uppercased()).")
             advanceRelayPastHop(destination: destination, nextHop: nextHop,
                                 remaining: remaining, evidence: "UA on \(nextHop)'s outward link")
         case let .refused(hop):
-            failRelay(detail: "\(hop) answered with DM — it is not accepting connections.",
+            failRelay(detail: "\(hop) answered with DM. It is not accepting connections.",
                       destination: destination, nextHop: nextHop,
                       evidence: "DM on \(nextHop)'s outward link")
         }
@@ -1981,8 +1981,8 @@ struct TerminalView: View {
                            let destination = txViewModel.relayHandshakeDestination {
                             client.appendSystemNotification(
                                 "Link to \(hop.uppercased()) is up. Waiting for its prompt "
-                                + "before asking it to connect to \(destination.uppercased()) "
-                                + "— not connected to \(destination.uppercased()) yet.")
+                                + "before asking it to connect to \(destination.uppercased()). "
+                                + "Not connected to \(destination.uppercased()) yet.")
                         }
                         // The link to the node is up; its banner is what starts
                         // the handshake. DRLNOD accepted the connect at 17:52:41
@@ -3156,7 +3156,7 @@ struct TerminalView: View {
         if txViewModel.relayIsHandshaking {
             let hop = (txViewModel.netRomRelayNextHop ?? "the node").uppercased()
             client.appendSystemNotification(
-                "Not sent — still waiting for \(hop) to make the circuit. "
+                "Not sent: still waiting for \(hop) to make the circuit. "
                 + "Your message is still in the box.")
             return
         }
@@ -3330,7 +3330,7 @@ struct TerminalView: View {
         connectBarViewModel.beginAutoAttempting()
 
         client.appendSystemNotification(
-            "Auto-routing to \(destination) — \(ladder.steps.count) "
+            "Auto-routing to \(destination): \(ladder.steps.count) "
             + "way\(ladder.steps.count == 1 ? "" : "s") known, best evidence first.")
         for skip in ladder.skipped {
             client.appendSystemNotification("Skipping \(skip.familyLabel): \(skip.reason).")
@@ -3443,13 +3443,13 @@ struct TerminalView: View {
             connectBarViewModel.markFailed(reason: .connectRejected, detail: detail)
             updateActiveSessionRecordState("Failed")
             client.appendSystemNotification(
-                "\(destination) answered and declined (\(detail)) — stopping rather than knocking on other doors.")
+                "\(destination) answered and declined (\(detail)). Stopping rather than knocking on other doors.")
         case .exhausted:
             connectBarViewModel.endAutoAttempting()
             if case .failed = connectBarViewModel.barState {} else {
                 connectBarViewModel.markFailed(
                     reason: .timeout,
-                    detail: "Tried every way this station knows (\(rungCount)) — none got through.")
+                    detail: "Tried every way this station knows (\(rungCount)). None got through.")
             }
         case .cancelled:
             connectBarViewModel.endAutoAttempting()
@@ -3703,7 +3703,7 @@ struct TerminalView: View {
             if announceFallback {
                 client.appendSystemNotification(
                     reason.operatorText
-                    + " Asking a node to connect on our behalf instead — its menus will "
+                    + " Asking a node to connect on our behalf instead. Its menus will "
                     + "appear below, because that method talks to node command prompts.")
             } else {
                 client.appendSystemNotification(reason.operatorText)
@@ -3785,11 +3785,11 @@ struct TerminalView: View {
             // operator can only act on it if someone says so.
             let advice = driver.advertisesItself ? ""
                 : " No node advertises a route back to this station, so a reply may "
-                    + "have nowhere to go — turn on \"Announce this station to the "
+                    + "have nowhere to go. Turn on \"Announce this station to the "
                     + "network\" under Settings › Packet Node if you want circuits to "
                     + "work here."
             let fallbackText = announceFallback
-                ? " Asking a node to connect on our behalf instead — its menus will appear below."
+                ? " Asking a node to connect on our behalf instead. Its menus will appear below."
                 : ""
             client.appendSystemNotification(
                 "\(intent.normalizedTo.uppercased()) did not answer as a NET/ROM node "
@@ -3968,8 +3968,8 @@ struct TerminalView: View {
         if !hopPath.isEmpty {
             connectBarViewModel.viaDigipeaters = hopPath
             client.appendSystemNotification(
-                "Reaching \(linkTarget.uppercased()) via \(hopPath.joined(separator: " → ")) "
-                + "— that is how this station last heard it.")
+                "Reaching \(linkTarget.uppercased()) via \(hopPath.joined(separator: " → ")). "
+                + "That is how this station last heard it.")
         }
         syncLegacyFieldsFromConnectBar()
         let nodeIntent = connectBarViewModel.buildIntent(sourceContext: intent.sourceContext)
@@ -4179,11 +4179,11 @@ struct TerminalView: View {
         // the app did what they asked.
         switch intent.kind {
         case .ax25Direct:
-            client.appendSystemNotification("Connecting to \(intent.normalizedTo) — direct.")
+            client.appendSystemNotification("Connecting to \(intent.normalizedTo) directly.")
             connectAX25AndRecord(intent: intent)
         case .ax25ViaDigis:
             let digis = connectBarViewModel.viaDigipeaters.joined(separator: ", ")
-            client.appendSystemNotification("Connecting to \(intent.normalizedTo) — digipeating via \(digis).")
+            client.appendSystemNotification("Connecting to \(intent.normalizedTo), digipeating via \(digis).")
             connectAX25AndRecord(intent: intent)
         case let .netrom(nextHopOverride):
             // Deliberately no "NET/ROM circuit through X" line here any
@@ -4327,7 +4327,7 @@ struct TerminalView: View {
             switch txViewModel.nudgeStalledRelay() {
             case .clearedGap:
                 client.appendSystemNotification(
-                    "\(silent)'s greeting was incomplete — a frame was lost on air and it "
+                    "\(silent)'s greeting was incomplete. A frame was lost on air and it "
                     + "did not resend. Reading the rest and carrying on.")
             case .prompted:
                 client.appendSystemNotification(
@@ -4362,12 +4362,12 @@ struct TerminalView: View {
             // own data loss as somebody else's silence.
             client.appendSystemNotification(
                 txViewModel.relayLostFrames
-                ? "\(hop)'s answer was cut short — a frame was lost on air and it did "
+                ? "\(hop)'s answer was cut short. A frame was lost on air and it did "
                   + "not resend, so whether that hop was made is unknowable from here. "
                   + "Dropping the link to \(linkPeer) to start over on a clean one."
                 : "\(hop) did not answer with a node prompt, even after being asked, so "
                   + "the circuit was not made. Dropping the link to \(linkPeer) so the next "
-                  + "attempt starts clean — a node only greets on a fresh connect.")
+                  + "attempt starts clean. A node only greets on a fresh connect.")
             // The link to tear down is always the L2 peer. `hop` may be a
             // node further along the chain, which we hold no session to —
             // disconnecting *that* name is a no-op that leaves the real

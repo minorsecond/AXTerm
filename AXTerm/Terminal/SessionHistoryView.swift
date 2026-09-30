@@ -243,7 +243,7 @@ struct SessionHistoryView: View {
                 Text(attribution)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .explain("Sessions this device's counterpart finished in the last week, recorded by that radio with its antenna at the grid shown. Every row here says which station and device it came from, and none can be tagged or annotated on this device \u{2014} those stay with the device that made them. Nothing in this section is ever mixed into this device's own history or its link measurements.")
+                    .explain("Sessions this device's counterpart finished in the last week, recorded by that radio with its antenna at the grid shown. Every row here says which station and device it came from, and none can be tagged or annotated on this device. Those stay with the device that made them. Nothing in this section is ever mixed into this device's own history or its link measurements.")
             }
         }
         .textCase(nil)

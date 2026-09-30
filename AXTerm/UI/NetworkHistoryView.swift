@@ -78,7 +78,7 @@ struct NetworkHistoryView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
-                        .explain("\(entry.callsign) was heard \(entry.frameCount) times by \(entry.provenance.station), not by this station. Airtime \(String(format: "%.1f", entry.airtimeSeconds))s. Reference only — it is not evidence about what this radio can reach.",
+                        .explain("\(entry.callsign) was heard \(entry.frameCount) times by \(entry.provenance.station), not by this station. Airtime \(String(format: "%.1f", entry.airtimeSeconds))s. Reference only. It is not evidence about what this radio can reach.",
                                  showsIndicator: false)
                     }
                 }

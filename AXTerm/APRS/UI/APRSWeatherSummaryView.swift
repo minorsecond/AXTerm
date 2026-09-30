@@ -98,7 +98,7 @@ struct APRSWeatherSummaryView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .help("Weather goes stale invisibly \u{2014} an old temperature looks exactly "
+                    .help("Weather goes stale invisibly: an old temperature looks exactly "
                           + "like a current one, so its age is named once it is no longer current.")
             }
         }

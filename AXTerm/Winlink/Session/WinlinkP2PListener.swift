@@ -86,15 +86,15 @@ extension WinlinkP2PListener.Decision {
         case .answer:
             "answering"
         case .notArmed:
-            "ignored — Winlink P2P is not armed (Settings → Winlink)"
+            "ignored: Winlink P2P is not armed (Settings › Winlink)"
         case .wrongCallsign(let called, let expected):
-            "ignored — the call was to \(called), this station answers as \(expected)"
+            "ignored: the call was to \(called), this station answers as \(expected)"
         case .identityContested(let holder):
-            "ignored \u{2014} \(holder) is already answering as this callsign on this TNC. Two stations on one address would both reply to the caller."
+            "ignored: \(holder) is already answering as this callsign on this TNC. Two stations on one address would both reply to the caller."
         case .weInitiated:
             "not an inbound call"
         case .busy:
-            "ignored — an exchange is already running"
+            "ignored: an exchange is already running"
         }
     }
 }

@@ -114,7 +114,7 @@ nonisolated enum BBSMessageFilter: String, CaseIterable, Identifiable, Hashable,
     func emptyDetail(sysop: String) -> String {
         switch self {
         case .mine: "Callers leave mail with S \(sysop) at the prompt."
-        case .bulletins: "Post one with New Message addressed to ALL — every caller can read it."
+        case .bulletins: "Post one with New Message addressed to ALL. Every caller can read it."
         case .all: "Nothing has been left here yet."
         case .killed: "Killed messages stay here so a mistaken K can be undone."
         }
@@ -206,8 +206,8 @@ nonisolated enum BBSRemoteMailbox {
         "Messages and calls another of your devices\u{2019} mailboxes recorded, sent here "
         + "when that device has \u{201C}Share my packet mailbox\u{201D} switched on.\n\n"
         + "Nothing here is merged into this mailbox. Message numbers belong to the mailbox "
-        + "that issued them \u{2014} two mailboxes can both hold a \u{201C}Message 12\u{201D} "
-        + "and they are different messages \u{2014} and the callers log stays that station\u{2019}s "
+        + "that issued them (two mailboxes can both hold a \u{201C}Message 12\u{201D} "
+        + "and they are different messages), and the callers log stays that station\u{2019}s "
         + "log. Rows from elsewhere are read-only: reading one marks nothing, and it cannot be "
         + "killed or restored from here, because that history belongs to the mailbox that made it."
 

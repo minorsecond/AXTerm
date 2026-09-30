@@ -51,11 +51,11 @@ nonisolated enum MapDrawingMode: String, CaseIterable, Identifiable, Sendable {
         case .point:
             "Tap the map to drop a mark and name it. Marks are saved on this device and can be exported or sent."
         case .line:
-            "Tap to add each point of a line — a route, a path, a boundary that is not closed. Needs at least two points."
+            "Tap to add each point of a line: a route, a path, a boundary that is not closed. Needs at least two points."
         case .area:
-            "Tap to add each corner of an area — a zone, a search sector, a coverage estimate. Needs at least three corners; the shape closes itself."
+            "Tap to add each corner of an area: a zone, a search sector, a coverage estimate. Needs at least three corners; the shape closes itself."
         case .download:
-            "Tap the corners of the area you want available offline, then finish — the map tiles and the elevation data for exactly that box get downloaded. Nothing is saved as a feature; the shape is only a way of saying where."
+            "Tap the corners of the area you want available offline, then finish. The map tiles and the elevation data for exactly that box get downloaded. Nothing is saved as a feature; the shape is only a way of saying where."
         }
     }
 }
@@ -112,9 +112,9 @@ nonisolated struct MapDrawingSession: Equatable, Sendable {
         let needed = Self.minimumVertices(for: mode)
         if vertices.count < needed {
             let remaining = needed - vertices.count
-            return "\(vertices.count) of \(needed) — tap \(remaining) more"
+            return "\(vertices.count) of \(needed). Tap \(remaining) more"
         }
-        return "\(vertices.count) points — tap Done to finish"
+        return "\(vertices.count) points. Tap Done to finish"
     }
 
     mutating func begin(_ mode: MapDrawingMode) {

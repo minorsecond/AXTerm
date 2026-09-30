@@ -35,13 +35,13 @@ nonisolated enum ShapefileReader {
             case .tooShort:
                 return "The file is too short to be a shapefile."
             case .notAShapefile(let magic):
-                return "That is not a shapefile — its header starts with \(magic) rather than the expected 9994. A shapefile is usually distributed as a .zip containing .shp, .dbf and .prj files; the .shp is the one to open."
+                return "That is not a shapefile: its header starts with \(magic) rather than the expected 9994. A shapefile is usually distributed as a .zip containing .shp, .dbf and .prj files; the .shp is the one to open."
             case .unsupportedShapeType(let code, let name):
                 return "This shapefile contains \(name) (type \(code)), which AXTerm does not draw. Points, lines and polygons are supported."
             case .truncatedRecord(let index):
                 return "The file ends part-way through record \(index). It may have been truncated in transfer."
             case .unsupportedProjection(let name):
-                return "This shapefile is projected as \(name). AXTerm reads unprojected latitude/longitude (WGS 84) only — reproject it, or ask for the WGS 84 version."
+                return "This shapefile is projected as \(name). AXTerm reads unprojected latitude/longitude (WGS 84) only. Reproject it, or ask for the WGS 84 version."
             }
         }
     }

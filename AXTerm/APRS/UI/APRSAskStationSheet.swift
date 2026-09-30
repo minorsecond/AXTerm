@@ -202,7 +202,7 @@ struct APRSAskStationSheet: View {
             .foregroundStyle(proof ? Color.green : Color.secondary)
             .help(proof
                   ? "Answered with a message addressed to you. A reply is proof it heard the "
-                    + "query \u{2014} the only unambiguous evidence APRS offers."
+                    + "query. That is the only unambiguous evidence APRS offers."
                   : "Answered with an ordinary broadcast that carries no reference to the "
                     + "query. Only its timing can suggest it was an answer.")
     }
@@ -228,7 +228,7 @@ struct APRSAskStationSheet: View {
                         Label("Something else", systemImage: "character.cursor.ibeam")
                             .font(.callout.weight(.medium))
                         if !usingCustom {
-                            Text("Type any query token \u{2014} the spec has more than this list.")
+                            Text("Type any query token. The spec has more than this list.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -288,7 +288,7 @@ struct APRSAskStationSheet: View {
             Image(systemName: "info.circle")
                 .foregroundStyle(.secondary)
             Text("A station can repeat your frame and still never answer a query. Digipeating "
-                 + "is AX.25 \u{2014} match a callsign in the path, retransmit, never read the "
+                 + "is AX.25: match a callsign in the path, retransmit, never read the "
                  + "payload. Answering is an APRS application reading the message and finding "
                  + "its own name in it. Much digipeater software does only the first.")
                 .fixedSize(horizontal: false, vertical: true)

@@ -57,8 +57,8 @@ struct StationRowView: View {
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
-                            .help("\(station.call) is also known as \(alsoKnownAs) — "
-                                  + "one of the two is a tactical node alias, the other the "
+                            .help("\(station.call) is also known as \(alsoKnownAs). "
+                                  + "One of the two is a tactical node alias, the other the "
                                   + "license behind it. Learned from node tables and beacons; "
                                   + "see Nodes for who announced it.")
                     }

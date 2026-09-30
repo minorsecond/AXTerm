@@ -71,14 +71,14 @@ nonisolated enum NetRomCircuitSession {
             return .circuit(summary.id)
         case .connecting:
             return .circuitNotReady(
-                "Not sent — \(summary.destination.display) has not accepted the circuit yet. "
+                "Not sent: \(summary.destination.display) has not accepted the circuit yet. "
                 + "Your message is still in the box.")
         case .disconnecting:
             return .circuitNotReady(
-                "Not sent — the circuit to \(summary.destination.display) is closing.")
+                "Not sent: the circuit to \(summary.destination.display) is closing.")
         case .disconnected:
             return .circuitNotReady(
-                "Not sent — the circuit to \(summary.destination.display) is closed.")
+                "Not sent: the circuit to \(summary.destination.display) is closed.")
         }
     }
 

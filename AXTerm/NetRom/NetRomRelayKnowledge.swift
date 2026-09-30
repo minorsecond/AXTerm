@@ -82,7 +82,7 @@ struct NetRomRelayKnowledge {
         for name in names {
             if let origin = anyRouteOrigin(name) {
                 return (origin, "A measured route reaches \(name) through "
-                        + "\(origin.uppercased()) — stale by TTL, but the relay "
+                        + "\(origin.uppercased()). It is stale by TTL, but the relay "
                         + "proves every hop live before going further.")
             }
         }
@@ -90,7 +90,7 @@ struct NetRomRelayKnowledge {
         if let teller = NetRomRelayPlan.tellerFallback(
             for: key, claims: tellerClaims(key), canRouteNetRom: canRouteNetRom) {
             return (teller, "\(teller.uppercased()) lists \(key) in its node "
-                    + "directory — hearsay until the hop is made.")
+                    + "directory (hearsay until the hop is made).")
         }
         return nil
     }

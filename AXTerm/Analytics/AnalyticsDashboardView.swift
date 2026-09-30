@@ -585,7 +585,7 @@ struct AnalyticsDashboardView: View {
                             bucket: viewModel.resolvedBucket,
                             uncoveredIntervals: viewModel.uncoveredWindowIntervals
                         )
-                        .help("REJ and SREJ supervisory frames per interval — peers asking for retransmits. Sustained nonzero values indicate RF loss on connected links.")
+                        .help("REJ and SREJ supervisory frames per interval: peers asking for retransmits. Sustained nonzero values indicate RF loss on connected links.")
                     } else {
                         ChartLoadingPlaceholder(label: "Loading link stress")
                     }
@@ -597,7 +597,7 @@ struct AnalyticsDashboardView: View {
                             profile: viewModel.activityByHourProfile,
                             hourCoverageFractions: viewModel.hourCoverageFractions
                         )
-                            .help("When your network is alive, by local hour over the selected timeframe, split by traffic kind. Gray-shaded hours are ones the app barely listened to — quiet there means downtime, not a dead channel. Chat = connected data between regular stations; BBS/Node = connected data touching an inferred Node or BBS (role-based inference from routing broadcasts, mail announcements, and SID software banners — not message content); Beacons = unconnected UI frames; Routing = NET/ROM broadcasts; Control = supervisory frames.")
+                            .help("When your network is alive, by local hour over the selected timeframe, split by traffic kind. Gray-shaded hours are ones the app barely listened to, so quiet there means downtime, not a dead channel. Chat = connected data between regular stations; BBS/Node = connected data touching an inferred Node or BBS (role-based inference from routing broadcasts, mail announcements, and SID software banners, not message content); Beacons = unconnected UI frames; Routing = NET/ROM broadcasts; Control = supervisory frames.")
                     } else {
                         ChartLoadingPlaceholder(label: "Loading hourly profile")
                     }
@@ -606,7 +606,7 @@ struct AnalyticsDashboardView: View {
                 ChartCard(title: "Top airtime consumers") {
                     if viewModel.hasLoadedGraph {
                         AirtimeListView(entries: viewModel.airtimeRanking)
-                            .help("Estimated transmit airtime per station over the selected timeframe (sender plus every digipeater that repeated the frame; 1200 baud, ~300 ms per-frame overhead). Airtime is the honest measure of channel load — long data frames cost far more than short polls.")
+                            .help("Estimated transmit airtime per station over the selected timeframe (sender plus every digipeater that repeated the frame; 1200 baud, ~300 ms per-frame overhead). Airtime is the honest measure of channel load: long data frames cost far more than short polls.")
                     } else {
                         ChartLoadingPlaceholder(label: "Loading airtime")
                     }
@@ -1586,19 +1586,19 @@ extension AnalyticsDashboardView {
         let netromSource = "NET/ROM: who can route to whom."
         switch viewModel.graphViewMode {
         case .connectivity:
-            return "\(packetSource) Direct — direct peer traffic and direct-heard RF evidence only."
+            return "\(packetSource) Direct: direct peer traffic and direct-heard RF evidence only."
         case .routing:
-            return "\(packetSource) Routed — digipeater-mediated paths plus direct peers."
+            return "\(packetSource) Routed: digipeater-mediated paths plus direct peers."
         case .all:
             return viewModel.includeViaDigipeaters
-                ? "\(packetSource) Combined — all packet-derived relationship evidence."
-                : "\(packetSource) Combined — digipeater-mediated paths omitted while that toggle is off."
+                ? "\(packetSource) Combined: all packet-derived relationship evidence."
+                : "\(packetSource) Combined: digipeater-mediated paths omitted while that toggle is off."
         case .netromClassic:
-            return "\(netromSource) Classic — broadcast NODES tables with direct neighbors."
+            return "\(netromSource) Classic: broadcast NODES tables with direct neighbors."
         case .netromInferred:
-            return "\(netromSource) Inferred — routes discovered passively from observed traffic."
+            return "\(netromSource) Inferred: routes discovered passively from observed traffic."
         case .netromHybrid:
-            return "\(netromSource) Hybrid — broadcast NODES tables merged with inferred routes."
+            return "\(netromSource) Hybrid: broadcast NODES tables merged with inferred routes."
         }
     }
 
@@ -2182,7 +2182,7 @@ private struct PathDraftHUD: View {
                 )
                 .help(firstHopHelp(
                     base: draft.destinationIsInfrastructure
-                        ? "Destination is a node or BBS — continue to further stations from its prompt after connecting."
+                        ? "Destination is a node or BBS. Continue to further stations from its prompt after connecting."
                         : "Destination station.",
                     isFirst: draft.viaHops.isEmpty
                 ))
@@ -2258,7 +2258,7 @@ private struct StationDirectoryCard: View {
                                 .foregroundStyle(badgeColor(badge))
                         }
                         Spacer()
-                        Text("\(entry.frameCount) frames")
+                        Text(CountPhrase.of(entry.frameCount, "frame"))
                             .font(.caption2)
                             .monospacedDigit()
                             .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
@@ -2904,7 +2904,7 @@ private struct HistogramChartTooltip: View {
             Text("\(bin.lowerBound)–\(bin.upperBound) bytes")
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-            Text("\(bin.count) packets")
+            Text(CountPhrase.of(bin.count, "packet"))
                 .font(.caption.weight(.medium))
         }
         .padding(6)

@@ -437,7 +437,7 @@ struct NetRomRoutesView: View {
                                     requestRouteConnect(route, action: .netrom)
                                 }
                                 .help("Connects to the next-hop node and drives its "
-                                      + "command prompt — the proven path on this network.")
+                                      + "command prompt. This is the proven path on this network.")
                                 Button("Connect Direct (AX.25)") {
                                     requestRouteConnect(route, action: .ax25Direct)
                                 }
@@ -454,7 +454,7 @@ struct NetRomRoutesView: View {
                                 .help("Opens a NET/ROM circuit through the best route, and "
                                       + "if that one goes unanswered, tries the next-best "
                                       + "automatically. A station that answers 'no' ends it.")
-                                .help("Speaks the NET/ROM transport itself — one connect "
+                                .help("Speaks the NET/ROM transport itself: one connect "
                                       + "request the network routes, instead of typing at a "
                                       + "node's prompt. New; not yet proven against these nodes.")
                             }
@@ -868,7 +868,7 @@ struct SourceTypeBadge: View {
         case "broadcast":
             return "Broadcast: Received via NET/ROM routing broadcast"
         case "harvested":
-            return "Harvested: Read from a node's own ROUTES table during a session. Second-hand — used for this station's routing, never advertised."
+            return "Harvested: Read from a node's own ROUTES table during a session. Second-hand: used for this station's routing, never advertised."
         default:
             return "Source type: \(sourceType)"
         }

@@ -11,12 +11,12 @@ nonisolated enum WinlinkCopy {
 
     static let deliveryStateTooltip = """
     Delivery state of this message:
-    • Draft — editable, not yet queued
-    • Queued — frozen, will be offered at the next exchange
-    • Sending — proposed to the gateway in the current session
-    • Sent — accepted by a gateway and handed to the Winlink network
-    • Failed — the gateway rejected it (see the error); it stays in the Outbox
-    • Received — inbound mail delivered to you
+    • Draft: editable, not yet queued
+    • Queued: frozen, will be offered at the next exchange
+    • Sending: proposed to the gateway in the current session
+    • Sent: accepted by a gateway and handed to the Winlink network
+    • Failed: the gateway rejected it (see the error); it stays in the Outbox
+    • Received: inbound mail delivered to you
     """
 
     static let connectExchangeTooltip = """
@@ -33,7 +33,7 @@ nonisolated enum WinlinkCopy {
     static let attachmentBudgetTooltip = """
     Winlink limits a message (body + attachments, before compression) to
     about 120 kB. Over packet radio at 1200 baud, every 10 kB takes
-    roughly two minutes of airtime — keep attachments small.
+    roughly two minutes of airtime, so keep attachments small.
     """
 
     // MARK: - Stations
@@ -48,7 +48,7 @@ nonisolated enum WinlinkCopy {
 
     static let stationLastSeenTooltip = """
     When the gateway last reported to the Winlink CMS. A stale timestamp
-    can mean the station is off the air — prefer recently seen gateways.
+    can mean the station is off the air. Prefer recently seen gateways.
     """
 
     static let stationRefreshTooltip = """
@@ -80,9 +80,9 @@ nonisolated enum WinlinkCopy {
 
     static let gridSquareTooltip = "Your Maidenhead locator (e.g. DM79lr), set under General › Station position. Used to find nearby RMS gateways and compute distances. 4, 6, or 8 characters."
 
-    static let antennaHeightTooltip = "How far your antenna is above the ground beneath it \u{2014} not above sea level, which the terrain data already supplies. This is the single number that most often decides whether a path is workable: 60% Fresnel clearance over 13 km at 145 MHz needs roughly 49 m, and the same path from 10 m clears about 9% of the zone. Height, not gain, is what terrain analysis uses."
+    static let antennaHeightTooltip = "How far your antenna is above the ground beneath it, not above sea level, which the terrain data already supplies. This is the single number that most often decides whether a path is workable: 60% Fresnel clearance over 13 km at 145 MHz needs roughly 49 m, and the same path from 10 m clears about 9% of the zone. Height, not gain, is what terrain analysis uses."
 
-    static let assumedHeightTooltip = "Used for any station whose height nobody has recorded \u{2014} which is most of them, since neither the license directory nor the Winlink CMS carries antenna height. Record a real one on a station's page when you know it. Forecasts built on this assumption say so."
+    static let assumedHeightTooltip = "Used for any station whose height nobody has recorded, which is most of them, since neither the license directory nor the Winlink CMS carries antenna height. Record a real one on a station's page when you know it. Forecasts built on this assumption say so."
 
     static let passwordTooltip = """
     Your Winlink account password, used for secure login (;PQ/;PR
@@ -98,8 +98,8 @@ nonisolated enum WinlinkCopy {
 
     static let transportTooltip = """
     How mail exchanges connect:
-    • Packet (AX.25) — over your TNC to an RMS gateway on the air
-    • Telnet — direct internet connection to the Winlink CMS (no radio);
+    • Packet (AX.25): over your TNC to an RMS gateway on the air
+    • Telnet: direct internet connection to the Winlink CMS (no radio);
       useful for testing and when you're away from the station
     """
 }

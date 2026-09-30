@@ -330,7 +330,7 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
         } else {
             onOperatorNote?(
                 "Opening a NET/ROM circuit to \(resolution.displayName) through "
-                + "\(neighbor.display) — that is this station's best known route.")
+                + "\(neighbor.display), this station's best known route.")
         }
         return .success(id)
     }
@@ -500,7 +500,7 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
 
         if hops.count > 1 {
             onOperatorNote?(
-                "Trying \(resolution.displayName) — \(hops.count) routes known, "
+                "Trying \(resolution.displayName). \(hops.count) routes known, "
                 + "best first: \(hops.map(\.display).joined(separator: ", ")).")
         }
         return advanceCampaign(campaign)
@@ -821,7 +821,7 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
         case .reset:
             return "The circuit to \(destination) was reset by the far end."
         case .timedOut:
-            return "\(destination) never answered — the circuit timed out."
+            return "\(destination) never answered. The circuit timed out."
         case .transportFailure(let detail):
             return "Could not carry the circuit to \(destination): \(detail)."
         case .protocolError(let detail):

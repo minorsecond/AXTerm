@@ -28,7 +28,7 @@ nonisolated enum GeoTIFFReader {
             case .sizeMismatch(let width, let height, let expected):
                 "The elevation tile is \(width)×\(height) rather than the \(expected)×\(expected) that was requested."
             case .truncated:
-                "The elevation tile ended early — it was probably cut short in transfer."
+                "The elevation tile ended early. It was probably cut short in transfer."
             }
         }
     }

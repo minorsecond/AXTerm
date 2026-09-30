@@ -59,14 +59,14 @@ struct DirectionalHealthView: View {
 
                             Every REJ is us telling the gateway a frame never \
                             arrived, so this is direct evidence of loss on the \
-                            way in — the direction a download depends on.
+                            way in, the direction a download depends on.
                             """)
                 }
 
                 Divider()
                 etxRow(snapshot)
             } else {
-                Text("No frames yet — both directions need traffic before they can be measured.")
+                Text("No frames yet. Both directions need traffic before they can be measured.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -122,8 +122,8 @@ struct DirectionalHealthView: View {
             Expected transmissions to get one frame across and acknowledged:
             ETX = 1 / (df × dr), clamped to 1–20.
 
-            Both directions are separate terms. Using df for both — the \
-            symmetric shortcut — reports a clean link whenever we happen to \
+            Both directions are separate terms. Using df for both (the \
+            symmetric shortcut) reports a clean link whenever we happen to \
             be the quiet end, which during a download is always.
             """)
     }
@@ -133,14 +133,14 @@ struct DirectionalHealthView: View {
         guard let etx = snapshot.etx else { return "" }
         let forward = snapshot.df ?? 1
         let reverse = snapshot.dr ?? 1
-        if etx < 1.1 { return "— both directions clean" }
+        if etx < 1.1 { return "Both directions clean" }
         let asymmetric = abs(forward - reverse) > 0.1
         let worse = forward < reverse ? "outbound" : "inbound"
         if asymmetric {
-            return String(format: "— %@ is the weak direction; %.0f%% of capacity is going to repeats",
+            return String(format: "Weak direction: %@; %.0f%% of capacity is going to repeats",
                           worse, (1 - 1 / etx) * 100)
         }
-        return String(format: "— both directions lossy; %.0f%% of capacity is going to repeats",
+        return String(format: "Both directions lossy; %.0f%% of capacity is going to repeats",
                       (1 - 1 / etx) * 100)
     }
 
@@ -290,12 +290,12 @@ struct SessionBudgetView: View {
         let remainingText = ByteCount.string(Int64(bytesRemaining))
 
         guard let secondsToCap, let bytesBeforeCap else {
-            return "\(remainingText) to go — about \(Self.clock(secondsNeeded)) at "
+            return "\(remainingText) to go. About \(Self.clock(secondsNeeded)) at "
                 + "\(Int(bytesPerSecond.rounded())) B/s. No session cap observed for this gateway yet."
         }
 
         if secondsNeeded <= secondsToCap {
-            return "\(remainingText) to go — about \(Self.clock(secondsNeeded)) at "
+            return "\(remainingText) to go. About \(Self.clock(secondsNeeded)) at "
                 + "\(Int(bytesPerSecond.rounded())) B/s, finishing with "
                 + "\(Self.clock(secondsToCap - secondsNeeded)) of session budget to spare."
         }
@@ -305,7 +305,7 @@ struct SessionBudgetView: View {
             + "\(ByteCount.string(Int64(bytesBeforeCap))) "
             + "fits before the cap. The remaining "
             + "\(ByteCount.string(Int64(carried))) "
-            + "will be saved and resumed on the next exchange — not re-downloaded."
+            + "will be saved and resumed on the next exchange, not re-downloaded."
     }
 
     static func clock(_ seconds: Double) -> String {
@@ -326,7 +326,7 @@ struct AdaptiveSummaryView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let params {
                 HStack(spacing: 14) {
-                    stat("K", "\(params.k)", "Window — frames allowed in flight at once.")
+                    stat("K", "\(params.k)", "Window: frames allowed in flight at once.")
                     stat("PACLEN", "\(params.p)", "Bytes of payload per I-frame. Smaller frames survive a lossy channel better but carry more overhead.")
                     stat("N2", "\(params.n2)", "Retries before the link is declared dead.")
                     if let rto = params.currentRto {

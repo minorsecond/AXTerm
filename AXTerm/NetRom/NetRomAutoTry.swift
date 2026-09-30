@@ -70,7 +70,7 @@ nonisolated enum NetRomAutoTryPolicy {
                 + "and this station knows no other way there."
         default:
             return "Could not reach \(destination). Tried "
-                + attempted.joined(separator: ", ") + " — every route this station knows."
+                + attempted.joined(separator: ", ") + " (every route this station knows)."
         }
     }
 }

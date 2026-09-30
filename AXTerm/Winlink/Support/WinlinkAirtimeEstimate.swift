@@ -152,7 +152,7 @@ nonisolated struct WinlinkAirtimeEstimate: Equatable, Sendable {
         \(size) of text, roughly \(airtimeText(bytes: bytes)) of airtime.
 
         Estimated as \(size) ÷ \(ratio) (B2F compresses text about \
-        \(ratio):1) ÷ \(Self.rateText(compressedBytesPerSecond)) — \(rateProvenance).
+        \(ratio):1) ÷ \(Self.rateText(compressedBytesPerSecond)), \(rateProvenance).
         """
         if let capNote = capNote(bytes: bytes) {
             text += "\n\n" + capNote
@@ -188,8 +188,8 @@ nonisolated struct WinlinkAirtimeEstimate: Equatable, Sendable {
             if let kilometres {
                 return """
                 an assumed rate for a healthy 1200-baud path. \(gateway) has \
-                been measured at \(sample), but elsewhere — \
-                \(Self.distanceText(kilometres)) from here — and RF \
+                been measured at \(sample), but elsewhere (\
+                \(Self.distanceText(kilometres)) from here), and RF \
                 reachability does not travel with the operator, so that figure \
                 is context, not a prediction.
                 """
@@ -210,7 +210,7 @@ nonisolated struct WinlinkAirtimeEstimate: Equatable, Sendable {
         let who = gateway ?? "This gateway"
         return """
         \(who) has never held a session longer than \(Self.durationText(cap)), \
-        so this needs at least \(sessions) exchanges — the transfer resumes \
+        so this needs at least \(sessions) exchanges. The transfer resumes \
         where it left off each time.
         """
     }

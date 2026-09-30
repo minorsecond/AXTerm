@@ -219,7 +219,7 @@ final class OfflineRegionDownloader: ObservableObject {
                 // worst possible outcome. Refuse with an explanation instead.
                 if let format = try source.metadata("format"),
                    MapTileStore.vectorFormats.contains(format.lowercased()) {
-                    state = .failed("That is a vector tile file (format: \(format)). AXTerm draws raster tiles \u{2014} PNG or JPEG images \u{2014} and cannot render vector tiles. Look for a raster .mbtiles, or download a region from USGS instead.")
+                    state = .failed("That is a vector tile file (format: \(format)). AXTerm draws raster tiles (PNG or JPEG images) and cannot render vector tiles. Look for a raster .mbtiles, or download a region from USGS instead.")
                     return
                 }
                 try copyTiles(from: source)

@@ -41,7 +41,7 @@ nonisolated enum WinlinkSyncPolicy {
         case .message:
             .synced("Immutable once delivered, and MIDs are globally unique, so merging is a union with no conflicts.")
         case .messageState:
-            .synced("Read flags and folders are what a unified mailbox is for. Merged by rule — see WinlinkStateMerge.")
+            .synced("Read flags and folders are what a unified mailbox is for. Merged by rule (see WinlinkStateMerge).")
         case .messageDeletion:
             // Deletion is the one mailbox operation that cannot ride on
             // `messageState`: the message is gone, so there is no state row
@@ -64,14 +64,14 @@ nonisolated enum WinlinkSyncPolicy {
             // see `callsignSSID` below.
             .synced("A license callsign identifies the operator, not the radio, so it is the same on every device they own.")
         case .operatorProfile:
-            .synced("Name, organization, phone, address — the operator, not the equipment. ICS forms want these and retyping them per device is friction with no upside.")
+            .synced("Name, organization, phone, address: the operator, not the equipment. ICS forms want these and retyping them per device is friction with no upside.")
 
         case .callsignSSID:
             // The one piece of the callsign that must not travel. Two devices
             // on one callsign-SSID is exactly the collision that
             // StationIdentityMonitor detects and StationIdentityLease refuses
             // to transmit into.
-            .deviceLocal("An SSID identifies a station, not an operator. Copying it to a second radio puts two stations on one address, which breaks AX.25 — each device picks a free one instead. See StationSSIDSuggestion.")
+            .deviceLocal("An SSID identifies a station, not an operator. Copying it to a second radio puts two stations on one address, which breaks AX.25. Each device picks a free one instead. See StationSSIDSuggestion.")
 
         case .stationLease:
             // The one piece of device-specific state that *must* travel. It
@@ -90,7 +90,7 @@ nonisolated enum WinlinkSyncPolicy {
         case .sessionLog:
             .deviceLocal("Link quality is measured from one place with one antenna. WinlinkLinkQuality already refuses to treat a measurement taken elsewhere as a prediction; copying another device's log would smuggle exactly that in.")
         case .stationActivity:
-            .attributed("What another station heard is real evidence and worth reading when away from it — but it was measured by a different antenna in a different place. Shown as that station's observations, never merged into this one's routing metrics, which CLAUDE.md requires to stay packet-derived from *this* receiver.")
+            .attributed("What another station heard is real evidence and worth reading when away from it, but it was measured by a different antenna in a different place. Shown as that station's observations, never merged into this one's routing metrics, which CLAUDE.md requires to stay packet-derived from *this* receiver.")
         case .terminalSession:
             // The line against `sessionLog`: a Winlink session log is a
             // measurement of the link and stays home; a terminal transcript
@@ -98,7 +98,7 @@ nonisolated enum WinlinkSyncPolicy {
             // any device — but it was said by a different radio in a
             // different place, so it arrives labeled with that device and
             // sits in its own table, never among this device's own history.
-            .attributed("A transcript is what was said over the air, not a measurement of the air — that is why it may travel where a session log may not. It was still said from a different radio in a different place, so it is shown under that device's name and kept apart from this device's own history. Frame counts in it are that link's, never folded into this one's metrics.")
+            .attributed("A transcript is what was said over the air, not a measurement of the air. That is why it may travel where a session log may not. It was still said from a different radio in a different place, so it is shown under that device's name and kept apart from this device's own history. Frame counts in it are that link's, never folded into this one's metrics.")
         case .bbsMessage:
             // Not `.synced`, although mail is immutable: a mailbox's message
             // numbers are promises made to callers over the air ("Message 12

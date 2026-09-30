@@ -380,7 +380,7 @@ final class BBSService: ObservableObject {
         switch effect {
         case .store(let message):
             perform { try $0.store(message) }
-            note("left mail for \(message.to) — \"\(message.subject)\"")
+            note("left mail for \(message.to): \"\(message.subject)\"")
         case .kill(let id, let at):
             perform { try $0.kill(id: id, at: at) }
             note("killed \(id)")
@@ -613,7 +613,7 @@ final class BBSService: ObservableObject {
         append(.note, "noted \(what) from \(peer)")
         // On screen, where the operator is. A finding surfaced only where they
         // are not is a finding they never see.
-        announce("White pages from \(peer) — \(what). Review in BBS → Directory.")
+        announce("White pages from \(peer): \(what). Review in BBS → Directory.")
     }
 
     func acceptSuggestion(_ candidate: BBSDirectoryHarvester.Candidate) {

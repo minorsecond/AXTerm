@@ -341,7 +341,7 @@ struct NodeProfileView: View {
         .help("The connect walks this chain left to right: an AX.25 link to the "
               + "first node, then each node is asked at its own command prompt to "
               + "connect onward to the next. Built from the nodes' claims and this "
-              + "station's route table — a plan, not a measured path.")
+              + "station's route table. It is a plan, not a measured path.")
     }
 
     /// The chain the relay planner computed, falling back to the bare
@@ -375,7 +375,7 @@ struct NodeProfileView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Not a station", systemImage: "signpost.right.and.left")
                 .font(.headline)
-            Text("\(profile.callsign) is a destination address, not a licensed station. Frames are sent *to* it — \(endpointPurpose) — and nobody answers a connect request there.")
+            Text("\(profile.callsign) is a destination address, not a licensed station. Frames are sent *to* it (\(endpointPurpose)), and nobody answers a connect request there.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -424,9 +424,9 @@ struct NodeProfileView: View {
             return "Asking the callsign directory about \(profile.baseCallsign). Nothing has been heard from this station directly, so a license record is all there is to find."
         }
         if lookupEnabled {
-            return "This callsign has been seen on the air but nothing else is known. The directory had no record for \(profile.baseCallsign) \u{2014} unlicensed, unlisted, or a tactical alias \u{2014} and nothing has been heard from the station itself, only addressed to it."
+            return "This callsign has been seen on the air but nothing else is known. The directory had no record for \(profile.baseCallsign) (unlicensed, unlisted, or a tactical alias), and nothing has been heard from the station itself, only addressed to it."
         }
-        return "This callsign has been seen on the air but nothing else about it is known \u{2014} no directory record, no position, and no routing history. Turning on callsign lookup in Settings would let AXTerm ask the directory who holds it."
+        return "This callsign has been seen on the air but nothing else about it is known: no directory record, no position, and no routing history. Turning on callsign lookup in Settings would let AXTerm ask the directory who holds it."
     }
 
     // MARK: - Sections
@@ -887,7 +887,7 @@ struct NodeProfileView: View {
                     Label("Forget This Station\u{2026}", systemImage: "trash")
                 }
                 Text("Removes \(profile.callsign)'s directory entry and every claim it made "
-                     + "about reaching other stations. Those other stations stay — only what "
+                     + "about reaching other stations. Those other stations stay. Only what "
                      + "this one said about them goes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -967,7 +967,7 @@ struct NodeProfileView: View {
         case .exact:
             return "An exact coordinate, consistent with everything else known about this station."
         case .gridSquare:
-            return "The center of a registered grid square — about 8 km across, so the pin describes the square rather than the antenna."
+            return "The center of a registered grid square. It is about 8 km across, so the pin describes the square rather than the antenna."
         case .inferredFromOperator:
             return "Inferred from the operator's license address, not from the node itself. Nodes usually sit on a hilltop or repeater site rather than at the operator's house, so treat this as a lead."
         }
@@ -1101,7 +1101,7 @@ struct NodeProfileView: View {
                     format: "ETX=%.2f follows from them: 1 / (df \u{00D7} dr), so about %.1f transmissions per delivered frame.", etx, etx))
             }
         } else {
-            lines.append("Delivery probabilities are not known yet — they need frames in both directions to estimate.")
+            lines.append("Delivery probabilities are not known yet. They need frames in both directions to estimate.")
         }
         if link.duplicates > 0 {
             lines.append("\(link.duplicates) duplicate frame(s) seen, which usually means acknowledgments are being lost rather than data.")
@@ -1136,7 +1136,7 @@ struct NodeProfileView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                     }
-                    .help("Removing this station from the observed graph disconnects it into \(topology.partitionsWithoutIt.count) pieces of \(topology.partitionsWithoutIt.map(String.init).joined(separator: ", ")) stations. Nothing else that has been heard bridges those pieces \u{2014} which does not prove no other path exists, only that none has been observed.")
+                    .help("Removing this station from the observed graph disconnects it into \(topology.partitionsWithoutIt.count) pieces of \(topology.partitionsWithoutIt.map(String.init).joined(separator: ", ")) stations. Nothing else that has been heard bridges those pieces. That does not prove no other path exists, only that none has been observed.")
                 }
 
                 if !topology.communityMembers.isEmpty {
@@ -1211,7 +1211,7 @@ struct NodeProfileView: View {
                     // says the station is nearby and audible — not that it
                     // runs NET/ROM.
                     Text(profile.netRomDeclaration == nil
-                         ? "Measured from traffic heard directly, which is why it appears here. That is not a claim that this station runs NET/ROM — it has not said so."
+                         ? "Measured from traffic heard directly, which is why it appears here. That is not a claim that this station runs NET/ROM. It has not said so."
                          : "Measured from traffic heard directly between this station and ours.")
                         .font(.caption)
                         .foregroundStyle(.secondary)

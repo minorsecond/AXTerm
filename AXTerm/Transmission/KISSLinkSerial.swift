@@ -481,7 +481,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 self.serialQueue.async {
                     self.cleanupOpenAttempt(success: false)
                     self.setState(.failed)
-                    self.notifyError("Bluetooth connection timed out — try power-cycling the TNC")
+                    self.notifyError("Bluetooth connection timed out. Try power-cycling the TNC")
                     self.scheduleReconnectIfEnabled(initialDelay: 5.0)
                 }
                 return

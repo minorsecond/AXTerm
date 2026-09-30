@@ -105,13 +105,13 @@ extension WinlinkLinkQuality {
 
         if let rate = effectiveBytesPerSecond {
             let bytes = ByteCount.string(Int64(bytesSent + bytesReceived))
-            lines.append("Goodput \(Int(rate.rounded())) B/s — \(bytes) of mail over "
+            lines.append("Goodput \(Int(rate.rounded())) B/s: \(bytes) of mail over "
                          + "\(Self.durationText(measuredSeconds)) connected. "
                          + "That is payload divided by wall-clock link time, so "
                          + "retries, ACK waits, and a busy channel are all counted "
                          + "against it.")
         } else if answered > 0 {
-            lines.append("Too little traffic so far to state a rate — a few seconds "
+            lines.append("Too little traffic so far to state a rate. A few seconds "
                          + "of link time is not a measurement.")
         }
 
@@ -132,7 +132,7 @@ extension WinlinkLinkQuality {
             // in the record says which of its frequencies was used.
             lines.append("")
             lines.append("These sessions predate per-frequency logging, so they may "
-                         + "describe any of this callsign's frequencies — and a 9600-baud "
+                         + "describe any of this callsign's frequencies, and a 9600-baud "
                          + "link behaves nothing like a 1200-baud one. Future sessions "
                          + "are recorded per frequency.")
         }
@@ -154,7 +154,7 @@ extension WinlinkLinkQuality {
         case .elsewhere(let grid, let km):
             let where_ = grid.isEmpty ? "" : " (\(grid))"
             return String(
-                format: "Measured %.0f km away%@ — a different link. Whether a "
+                format: "Measured %.0f km away%@, which is a different link. Whether a "
                     + "gateway is reachable depends on both endpoints, so this is "
                     + "shown for reference and predicts nothing about what you "
                     + "will get from here.", km, where_)
