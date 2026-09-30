@@ -209,10 +209,9 @@ nonisolated enum RigReceiveAudit {
                           + "\(modemMode.title).",
                     fix: "Either sideband decodes, as long as the station you are working is "
                        + "on the same one: the tones invert with the sideband and NRZI does "
-                       + "not care which is which. But while \u{201C}Set the radio for packet "
-                       + "when connecting\u{201D} is on, AXTerm puts this back to "
-                       + "\(wantedMode.label) at every connect, so a sideband set by hand will "
-                       + "not survive a reconnect.",
+                       + "not care which is which. But while \u{201C}Set up the radio for packet "
+                       + "while connected\u{201D} is on, AXTerm sets \(wantedMode.label) at every "
+                       + "connect, so a sideband set by hand lasts only until the next one.",
                     severity: .suggestion))
             } else {
                 out.append(Finding(
@@ -352,6 +351,54 @@ nonisolated enum RigReceiveAudit {
     static func newFindings(from old: [Finding], to new: [Finding]) -> [Finding] {
         let known = Set(old.map(\.title))
         return new.filter { !known.contains($0.title) }
+    }
+
+    /// Receive settings that went wrong during the session, held until they
+    /// are fixed or put right by hand.
+    ///
+    /// `newFindings` compares two audits; this remembers what it found, so
+    /// the radio page can offer a fix for a change made minutes ago and
+    /// stop offering it once the setting is back. A change is announced
+    /// once, when it first appears, and never again while it stands.
+    struct DriftWatch: Equatable, Sendable {
+        /// The audit everything is compared against; nil before the first.
+        private(set) var baseline: [Finding]?
+        /// What changed and is still wrong, oldest first.
+        private(set) var pending: [Finding] = []
+
+        init() {}
+
+        /// Take a fresh audit. Returns what is newly wrong, to announce.
+        ///
+        /// The first audit only sets the baseline: what the radio was like
+        /// when AXTerm connected is not a change during the session.
+        mutating func observe(_ now: [Finding]) -> [Finding] {
+            guard let before = baseline else {
+                baseline = now
+                return []
+            }
+            let new = RigReceiveAudit.newFindings(from: before, to: now)
+            baseline = now
+            let standing = Set(now.map(\.title))
+            pending = pending.filter { standing.contains($0.title) }
+            for finding in new where !pending.contains(where: { $0.title == finding.title }) {
+                pending.append(finding)
+            }
+            return new
+        }
+
+        /// These were fixed; stop offering them.
+        mutating func resolve(_ titles: Set<String>) {
+            pending.removeAll { titles.contains($0.title) }
+            baseline = baseline?.filter { !titles.contains($0.title) }
+        }
+    }
+
+    /// What the link knows about the radio's receive settings, for the
+    /// status surfaces: the latest audit, and what changed since connecting.
+    struct Report: Equatable, Sendable {
+        var findings: [Finding] = []
+        var drift: [Finding] = []
     }
 
     /// One line for a status row, or nil when there is nothing to say.

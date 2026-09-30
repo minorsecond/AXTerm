@@ -243,10 +243,24 @@ nonisolated final class CIVClient: @unchecked Sendable {
             answered: anyAnswer)
     }
 
-    /// Make one correction the audit asked for. Each is a setting whose right
-    /// value for packet is a fact rather than a preference — see
-    /// `RigReceiveAudit.Correction`.
-    func apply(_ correction: RigReceiveAudit.Correction, mode: RigMode) async throws {
+    /// Make one correction the audit asked for, and say what changed.
+    ///
+    /// Each is a setting whose right value for packet is a fact rather than
+    /// a preference (see `RigReceiveAudit.Correction`). The setting is read
+    /// first, so the change can be recorded and put back later. The entry is
+    /// nil when nothing needed changing, or when the radio would not say what
+    /// it held and the change was made blind.
+    func applyCorrection(_ correction: RigReceiveAudit.Correction,
+                         mode fallbackMode: RigMode) async throws -> RigPrepSnapshot.Entry? {
+        let setting = RigPrep.setting(for: correction)
+        if let current = await readPrepValue(setting) {
+            guard let target = RigPrep.target(for: correction, current: current), target != current else { return nil }
+            try await writePrepValue(setting, target)
+            return RigPrepSnapshot.Entry(setting: setting, original: current, applied: target)
+        }
+        // The radio would not report the setting. Make the change the way
+        // this always did, without a record: a correction the operator asked
+        // for should not fail because a read timed out.
         let r = radioAddress, c = controllerAddress
         let command: CIVFrame
         switch correction {
@@ -255,20 +269,89 @@ nonisolated final class CIVClient: @unchecked Sendable {
         case .squelchOpen:       command = CIVCommand.setSquelchLevel(0, radio: r, controller: c)
         case .noiseReductionOff: command = CIVCommand.setNoiseReduction(false, radio: r, controller: c)
         case .noiseBlankerOff:   command = CIVCommand.setNoiseBlanker(false, radio: r, controller: c)
-        case .widestFilter:      command = CIVCommand.setMode(mode, filter: 1, radio: r, controller: c)
+        case .widestFilter:      command = CIVCommand.setMode(fallbackMode, filter: 1, radio: r, controller: c)
         case .autoNotchOff:      command = CIVCommand.setAutoNotch(false, radio: r, controller: c)
         case .manualNotchOff:    command = CIVCommand.setManualNotch(false, radio: r, controller: c)
         case .toneSquelchReceiveOff:
             // Which value keeps the transmit tone depends on what is set now,
-            // so read it; a radio that will not say is not guessed at.
-            guard let raw = try await request(CIVCommand.readToneSquelchFunction(radio: r, controller: c),
-                                              expecting: .reply(command: 0x16, subcommand: 0x5D)).data.first,
-                  let function = RigReceiveAudit.ToneSquelchFunction(rawValue: raw) else {
-                throw CIVError.unexpectedResponse(command: 0x16)
-            }
-            command = CIVCommand.setToneSquelchFunction(function.withoutReceiveDecoder.rawValue, radio: r, controller: c)
+            // and that is exactly what the radio would not say.
+            throw CIVError.unexpectedResponse(command: 0x16)
         }
         _ = try await request(command, expecting: .acknowledgement)
+        return nil
+    }
+
+    // MARK: - Settings as raw values (prepare and restore)
+
+    /// What the radio holds for one setting, as raw CI-V data; nil when it
+    /// did not answer, refused, or answered with something malformed.
+    func readPrepValue(_ setting: RigPrepSetting) async -> [UInt8]? {
+        await readPrepValueNoting(setting).value
+    }
+
+    /// `readPrepValue`, and whether the radio simply did not answer, which
+    /// is different from refusing: a radio that lacks a setting says NG at
+    /// once, while one that is not answering costs a full timeout per read.
+    private func readPrepValueNoting(_ setting: RigPrepSetting) async -> (value: [UInt8]?, unanswered: Bool) {
+        var replies: [CIVFrame] = []
+        for frame in setting.readFrames(radio: radioAddress, controller: controllerAddress) {
+            do {
+                replies.append(try await request(
+                    frame, expecting: .reply(command: frame.command, subcommand: frame.subcommand)))
+            } catch CIVError.timeout {
+                return (nil, true)
+            } catch {
+                return (nil, false)
+            }
+        }
+        return (setting.decode(replies), false)
+    }
+
+    /// Put a raw value on the radio. Every frame must be acknowledged.
+    func writePrepValue(_ setting: RigPrepSetting, _ value: [UInt8]) async throws {
+        let frames = setting.writeFrames(value, radio: radioAddress, controller: controllerAddress)
+        guard !frames.isEmpty else {
+            throw CIVError.transport("refused to send a malformed value for \(setting.label)")
+        }
+        for frame in frames {
+            _ = try await request(frame, expecting: .acknowledgement)
+        }
+    }
+
+    /// Put back what the snapshot says AXTerm changed.
+    ///
+    /// Reads every setting, plans (`RigPrepRestore.plan`), then writes the
+    /// originals in reverse order. Stops where `deadline` passes, so a quit
+    /// is never held up by a radio that has stopped answering; anything not
+    /// reached is reported as not attempted and stays owed.
+    func restore(_ snapshot: RigPrepSnapshot, deadline: Date) async -> RigPrepRestore.Outcome {
+        var outcome = RigPrepRestore.Outcome()
+        var current: [RigPrepSetting: [UInt8]] = [:]
+        var reached = RigPrepSnapshot()
+        for entry in snapshot.entries {
+            guard Date() < deadline else { break }
+            if let value = await readPrepValue(entry.setting) { current[entry.setting] = value }
+            reached.record(entry)
+        }
+        let plan = RigPrepRestore.plan(reached, current: current)
+        outcome.changedByOperator = plan.changedByOperator
+        outcome.alreadyBack = plan.alreadyBack
+        for entry in plan.writes {
+            guard Date() < deadline else {
+                outcome.notAttempted.append(entry)
+                continue
+            }
+            do {
+                try await writePrepValue(entry.setting, entry.original)
+                outcome.restored.append(entry)
+            } catch {
+                outcome.failed.append(entry)
+            }
+        }
+        // Never read before time ran out, so never planned: still owed.
+        let planned = Set(reached.settings)
+        outcome.notAttempted += snapshot.entries.reversed().filter { !planned.contains($0.setting) }
+        return outcome
     }
 
     /// The radio's audio output level, 0-255, as CI-V reports it.
@@ -406,20 +489,48 @@ nonisolated final class CIVClient: @unchecked Sendable {
         case wlan = 0x03
     }
 
+    /// What preparing the radio did: the changes in the operator's words,
+    /// the record of each one for putting it back, and the error that
+    /// stopped it, if one did. A failure part-way still reports what was
+    /// already changed, because those changes are still owed back.
+    struct PrepReport: Sendable {
+        var changed: [String] = []
+        var entries: [RigPrepSnapshot.Entry] = []
+        var failure: CIVError?
+    }
+
     /// - Parameter quietTheBus: whether to switch CI-V Transceive off.
     ///   Worth it on a shared serial bus, where the radio's unsolicited
     ///   broadcasts collide with replies. Over the network there is no bus —
     ///   the session is point to point — and the setting is persistent, so
     ///   leaving it off is a change to the operator's radio that outlives
-    ///   AXTerm and that nothing here ever undoes (2026-09-17).
+    ///   AXTerm (2026-09-17).
     /// Returns the settings this actually changed, so the operator can be
     /// told rather than having their radio quietly rewritten.
     @discardableResult
     func configureForPacket(_ mode: ModemMode, dataMod: DataModSource = .usb,
                             quietTheBus: Bool = true) async throws -> [String] {
-        var changed: [String] = []
+        let report = await prepareForPacket(mode, dataMod: dataMod, quietTheBus: quietTheBus)
+        if let failure = report.failure { throw failure }
+        return report.changed
+    }
+
+    /// `configureForPacket`, recording the original of every setting it
+    /// writes, and optionally clearing the receive settings whose right
+    /// value for packet is a fact.
+    ///
+    /// - Parameter clearsReceive: also turn the attenuator, NR, NB and both
+    ///   notches off, RF gain full, squelch open, and (where confirmed) the
+    ///   receive tone squelch off. Each is read first and written only when
+    ///   wrong; one the radio will not report is left alone, because a change
+    ///   whose original is unknown is a change that cannot be put back.
+    func prepareForPacket(_ mode: ModemMode, dataMod: DataModSource = .usb,
+                          quietTheBus: Bool = true, clearsReceive: Bool = false,
+                          toneSquelchFunction: Bool = false) async -> PrepReport {
+        var report = PrepReport()
         // Cleared the first time a read goes unanswered; see setMenuItemIfNeeded.
         var readable = true
+        let r = radioAddress, c = controllerAddress
 
         // Read before writing. This used to write all ten settings at every
         // connect, which meant reconnecting — after a sleep, a dropped link, a
@@ -428,52 +539,113 @@ nonisolated final class CIVClient: @unchecked Sendable {
         // sideband by hand between overs had it taken back without being told.
         // Now only what is actually wrong is written, and the caller is told
         // what changed.
-        let current = try? await readMode()
+        let modeReply = try? await request(CIVCommand.readMode(radio: r, controller: c),
+                                           expecting: .reply(command: 0x04, subcommand: nil))
+        let current: (mode: RigMode, filter: UInt8)? = modeReply.flatMap { reply in
+            guard let raw = reply.data.first, let m = RigMode(rawValue: raw) else { return nil }
+            return (m, reply.data.count > 1 ? reply.data[1] : 1)
+        }
         if current == nil { readable = false }
-        if current?.mode != mode.expectedRigMode || current?.filter != 1 {
-            try await setMode(mode.expectedRigMode, filter: 1)
-            let was = current.map { "\($0.mode.label) to " } ?? ""
-            changed.append("mode \(was)\(mode.expectedRigMode.label), widest filter")
+        // Data mode is read before the mode is set, because setting the mode
+        // clears it: read afterwards it says nothing about what the operator
+        // had.
+        let dataReply = try? await request(CIVCommand.readDataMode(radio: r, controller: c),
+                                           expecting: .reply(command: 0x1A, subcommand: 0x06))
+        let modeBefore: [UInt8]? = {
+            guard let modeReply, let dataReply else { return nil }
+            return RigPrepSetting.mode.decode([modeReply, dataReply])
+        }()
+        let dataWasOn = dataReply?.data.first == 0x01
+        let expected = mode.expectedRigMode
+        let modeApplied: [UInt8] = [expected.rawValue, 0x01, 0x01, 0x01]
+        func noteMode(_ applied: [UInt8]) {
+            if let modeBefore, modeBefore != applied {
+                report.entries.append(.init(setting: .mode, original: modeBefore, applied: applied))
+            }
         }
 
-        // Not conditional, and deliberately. `setMode` clears the data flag on
-        // an Icom, so this has to follow it whether or not the mode changed,
-        // and a radio that silently lost data mode is the one failure here
-        // that is invisible on receive and fatal on transmit.
-        let dataWasOn = (try? await readDataMode()) ?? false
-        try await setDataModeChecked(filter: 1)
-        if !dataWasOn { changed.append("data mode on") }
+        do {
+            if current?.mode != expected || current?.filter != 1 {
+                try await setMode(expected, filter: 1)
+                let was = current.map { "\($0.mode.label) to " } ?? ""
+                report.changed.append("mode \(was)\(expected.label), widest filter")
+            }
+            // Not conditional, and deliberately. `setMode` clears the data
+            // flag on an Icom, so this has to follow it whether or not the
+            // mode changed, and a radio that silently lost data mode is the
+            // one failure here that is invisible on receive and fatal on
+            // transmit.
+            do {
+                try await setDataModeChecked(filter: 1)
+            } catch {
+                // The mode may have moved already; record where it landed so
+                // it can still be put back.
+                noteMode(await readPrepValue(.mode) ?? [expected.rawValue, 0x01, 0x00, 0x00])
+                throw error
+            }
+            if !dataWasOn { report.changed.append("data mode on") }
+            noteMode(modeApplied)
 
-        if try await setMenuItemIfNeeded(.dataMod, [dataMod.rawValue], readable: &readable) {
-            changed.append("DATA MOD \(dataMod == .wlan ? "WLAN" : "USB")")
+            func menu(_ item: CIVCommand.MenuItem, _ data: [UInt8], _ description: String) async throws -> Bool {
+                let result = try await setMenuItemIfNeeded(item, data, readable: &readable)
+                guard result.wrote else { return false }
+                report.changed.append(description)
+                if let original = result.original {
+                    report.entries.append(.init(setting: .menuItem(item.rawValue), original: original, applied: data))
+                }
+                return true
+            }
+            _ = try await menu(.dataMod, [dataMod.rawValue], "DATA MOD \(dataMod == .wlan ? "WLAN" : "USB")")
+            _ = try await menu(.usbAFSquelch, [0x00], "USB AF squelch off")
+            _ = try await menu(.usbSend, [0x00], "USB SEND off")
+            if quietTheBus, try await menu(.civTransceive, [0x00], "CI-V transceive off") {
+                try await setTransceive(false)
+            }
+            for item in [CIVCommand.MenuItem.txDelayHF, .txDelay50M, .txDelay144M, .txDelay430M] {
+                _ = try await menu(item, [0x00], "TX delay off")
+            }
+        } catch {
+            report.failure = (error as? CIVError) ?? .transport(String(describing: error))
+            return report
         }
-        if try await setMenuItemIfNeeded(.usbAFSquelch, [0x00], readable: &readable) { changed.append("USB AF squelch off") }
-        if try await setMenuItemIfNeeded(.usbSend, [0x00], readable: &readable) { changed.append("USB SEND off") }
-        if quietTheBus, try await setMenuItemIfNeeded(.civTransceive, [0x00], readable: &readable) {
-            try await setTransceive(false)
-            changed.append("CI-V transceive off")
+
+        guard clearsReceive else { return report }
+        for correction in RigPrep.receiveClears(toneSquelchFunction: toneSquelchFunction) {
+            let setting = RigPrep.setting(for: correction)
+            let read = await readPrepValueNoting(setting)
+            // A radio that is not answering at all would cost a timeout per
+            // setting on every connect; one silence is enough to stop asking.
+            if read.unanswered { break }
+            guard let now = read.value,
+                  let target = RigPrep.target(for: correction, current: now), target != now else { continue }
+            do {
+                try await writePrepValue(setting, target)
+                report.entries.append(.init(setting: setting, original: now, applied: target))
+                report.changed.append(RigPrep.describe(setting, from: now, to: target))
+            } catch {
+                // One refused receive setting is not a reason to fail the
+                // connect; the audit will name it.
+                TxLog.debug(.modem, "CI-V: could not clear a receive setting",
+                            ["setting": setting.label, "error": String(describing: error)])
+            }
         }
-        for item in [CIVCommand.MenuItem.txDelayHF, .txDelay50M, .txDelay144M, .txDelay430M] {
-            if try await setMenuItemIfNeeded(item, [0x00], readable: &readable) { changed.append("TX delay off") }
-        }
-        return changed
+        return report
     }
 
     /// Write a menu item only when the radio does not already hold that value.
     ///
-    /// Returns whether anything was written. A read that fails tells us
-    /// nothing, so the write goes ahead — the setting mattering more than the
-    /// tidiness, and the alternative being a radio left misconfigured because
-    /// one read timed out.
-    @discardableResult
+    /// Returns whether anything was written, and what the radio held before
+    /// when it said. A read that fails tells us nothing, so the write goes
+    /// ahead — the setting mattering more than the tidiness, and the
+    /// alternative being a radio left misconfigured because one read timed
+    /// out. That write has no original to put back.
     private func setMenuItemIfNeeded(_ item: CIVCommand.MenuItem, _ data: [UInt8],
-                                     readable: inout Bool) async throws -> Bool {
+                                     readable: inout Bool) async throws -> (wrote: Bool, original: [UInt8]?) {
+        var original: [UInt8]?
         if readable {
-            if let reply = try? await request(
-                CIVCommand.readMenuItem(item, radio: radioAddress, controller: controllerAddress),
-                expecting: .reply(command: 0x1A, subcommand: 0x05)) {
-                // The reply echoes the two item bytes before the value.
-                if Array(reply.data.dropFirst(2)) == data { return false }
+            if let value = await readPrepValue(.menuItem(item.rawValue)) {
+                if value == data { return (false, value) }
+                original = value
             } else {
                 // Stop asking. Each unanswered read costs a full CI-V timeout,
                 // and ten of them would be five seconds added to every connect
@@ -482,7 +654,7 @@ nonisolated final class CIVClient: @unchecked Sendable {
             }
         }
         try await setMenuItem(item, data)
-        return true
+        return (true, original)
     }
 
     // MARK: - Request/response

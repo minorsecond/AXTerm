@@ -374,6 +374,7 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         c.followsRadioFrequency = followsRadioFrequency
         c.setsRadioModeOnConnect = setsRadioModeOnConnect
         c.maxTransmitSeconds = maxTransmitSeconds
+        c.radioID = id
         return c
     }
 

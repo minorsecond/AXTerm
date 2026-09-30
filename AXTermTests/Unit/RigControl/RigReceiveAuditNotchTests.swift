@@ -1,8 +1,9 @@
 import XCTest
 @testable import AXTerm
 
-/// The notch and tone squelch checks, and every combination of everything
-/// the audit can see.
+/// The notch and tone squelch checks, every combination of everything the
+/// audit can see, and the watch that turns a change during the session into
+/// one notice and a fix.
 ///
 /// Written after 2026-09-30: an IC-705 with its notch on by accident
 /// decoded about one APRS frame a minute on a busy channel, and the audit
@@ -128,5 +129,65 @@ final class RigReceiveAuditNotchTests: XCTestCase {
                 if expected.isEmpty { XCTAssertTrue(found.isEmpty, label) }
             }
         }
+    }
+
+    // MARK: - The drift watch
+
+    private func finding(_ title: String) -> RigReceiveAudit.Finding {
+        .init(title: title, detail: "", fix: "", severity: .blocking, correction: .autoNotchOff)
+    }
+
+    func testTheFirstAuditIsTheBaselineNotAChange() {
+        var watch = RigReceiveAudit.DriftWatch()
+        XCTAssertEqual(watch.observe([finding("The attenuator is on")]), [])
+        XCTAssertEqual(watch.pending, [], "how the radio was at connect is not drift")
+    }
+
+    func testANewFindingSurfacesOnce() {
+        var watch = RigReceiveAudit.DriftWatch()
+        _ = watch.observe([])
+        let notch = finding("The auto notch is on")
+        XCTAssertEqual(watch.observe([notch]), [notch], "announced when it appears")
+        XCTAssertEqual(watch.observe([notch]), [], "and not again while it stands")
+        XCTAssertEqual(watch.observe([notch]), [])
+        XCTAssertEqual(watch.pending, [notch], "still offered for fixing")
+    }
+
+    func testAFindingPutRightByHandIsNoLongerOffered() {
+        var watch = RigReceiveAudit.DriftWatch()
+        _ = watch.observe([])
+        _ = watch.observe([finding("The auto notch is on")])
+        _ = watch.observe([])
+        XCTAssertEqual(watch.pending, [])
+    }
+
+    func testAFixedFindingIsResolvedAndCanSurfaceAgain() {
+        var watch = RigReceiveAudit.DriftWatch()
+        _ = watch.observe([])
+        let notch = finding("The auto notch is on")
+        _ = watch.observe([notch])
+        watch.resolve([notch.title])
+        XCTAssertEqual(watch.pending, [])
+        XCTAssertEqual(watch.observe([]), [], "fixed, and the radio agrees")
+        XCTAssertEqual(watch.observe([notch]), [notch], "turned on again later: a new change")
+    }
+
+    func testResolvingBeforeTheNextAuditStillAnnouncesARepeat() {
+        var watch = RigReceiveAudit.DriftWatch()
+        _ = watch.observe([])
+        let notch = finding("The auto notch is on")
+        _ = watch.observe([notch])
+        watch.resolve([notch.title])
+        // The operator turns it back on before the next audit ran.
+        XCTAssertEqual(watch.observe([notch]), [notch])
+    }
+
+    func testSeveralChangesAccumulateInOrder() {
+        var watch = RigReceiveAudit.DriftWatch()
+        _ = watch.observe([])
+        let a = finding("The auto notch is on"), b = finding("Noise reduction is on")
+        _ = watch.observe([a])
+        _ = watch.observe([a, b])
+        XCTAssertEqual(watch.pending, [a, b])
     }
 }

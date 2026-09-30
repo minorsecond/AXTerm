@@ -273,7 +273,8 @@ final class RigReceiveAuditTests: XCTestCase {
         XCTAssertTrue(notice.contains("LSB"), notice)
         XCTAssertTrue(notice.contains("USB"), notice)
         XCTAssertTrue(notice.contains("data mode on"), notice)
-        XCTAssertTrue(notice.contains("Set the radio for packet when connecting"), notice)
+        XCTAssertTrue(notice.contains(ModemRadioLink.prepToggleTitle), notice)
+        XCTAssertTrue(notice.contains("puts these back when you disconnect or quit"), notice)
     }
 
     /// A reconnect that found the radio already set up says nothing. Before

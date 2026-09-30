@@ -28,11 +28,31 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     private(set) var rigModel: String?
 
     var onRigStatus: (@Sendable (RigStatus) -> Void)?
-    /// A receive setting became wrong while we were running.
-    var onReceiveDrift: (@Sendable ([RigReceiveAudit.Finding]) -> Void)?
-    /// What the last audit found, so the watch can report changes rather than
-    /// the standing state.
-    private var lastAudit: [RigReceiveAudit.Finding] = []
+    /// What the radio's receive settings look like: the latest audit, and
+    /// whatever went wrong during the session and has not been fixed. Sent
+    /// after every audit and every fix. (This replaced `onReceiveDrift`,
+    /// which nothing listened to, so a notch turned on mid-session reached
+    /// the console as one line and nowhere that offered to fix it.)
+    var onRigReceive: (@Sendable (RigReceiveAudit.Report) -> Void)?
+    /// Compares each audit with the last, so the watch reports changes
+    /// rather than the standing state. Under `lock`.
+    private var driftWatch = RigReceiveAudit.DriftWatch()
+    private var latestFindings: [RigReceiveAudit.Finding] = []
+
+    // MARK: Prepare and restore
+    // What AXTerm changed on the radio, owed back at close. Stored per radio
+    // so it survives a dropped link and a crash; a link with no radio ID (a
+    // test, a throwaway identify) keeps it in memory instead. See RigPrep.
+    private let prepStore: RigPrepStore
+    private var memorySnapshot = RigPrepSnapshot()
+    /// Between `close()` and the radio's port shutting, which is when a
+    /// restore runs. Under `lock`. The quit path waits on it.
+    private var _closingRig = false
+    /// How long a restore may take. Inside the quit grace
+    /// (`AXTermAppDelegate.applicationShouldTerminate`) with room to spare,
+    /// and ample for a radio that answers: a dozen settings read and written
+    /// is a few dozen CI-V round trips of tens of milliseconds each.
+    static let restoreBudget: TimeInterval = 4
     var onTelemetry: (@Sendable (ModemTelemetry) -> Void)? {
         didSet { modem.engine.onTelemetry = onTelemetry }
     }
@@ -90,10 +110,12 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
          makeSession: @escaping (IcomLANSession.Configuration) -> IcomLANSession = { IcomLANSession(configuration: $0) },
          scheduling: ModemEngine.Scheduling = .dedicatedThread,
          stableConnectionSeconds: TimeInterval = 12,
+         prepStore: RigPrepStore = RigPrepStore(),
          deliver: @escaping SoftModemLink.Deliver = { work in
              DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
          }) {
         self.config = config
+        self.prepStore = prepStore
         self.makeTransport = makeTransport
         self.makeSession = makeSession
         self.deliver = deliver
@@ -250,9 +272,99 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// Pure so the wording can be read back in a test.
     static func settingsChangeNotice(_ changed: [String], mode: ModemMode) -> String? {
         guard !changed.isEmpty else { return nil }
-        return "Set the radio for \(mode.title): " + changed.joined(separator: ", ")
-            + ". Turn off \u{201C}Set the radio for packet when connecting\u{201D} to leave "
-            + "the radio's own settings alone."
+        return "Set the radio up for \(mode.title): " + changed.joined(separator: ", ")
+            + ". AXTerm puts these back when you disconnect or quit. Turn off "
+            + "\u{201C}\(Self.prepToggleTitle)\u{201D} to leave the radio's own settings alone."
+    }
+
+    /// The switch's name, as the settings page shows it, so the notices and
+    /// the page cannot drift apart.
+    static let prepToggleTitle = "Set up the radio for packet while connected"
+
+    /// Whether this radio's tone squelch function can be read at `16 5D`.
+    private var confirmsToneSquelchFunction: Bool {
+        RigPrep.confirmsToneSquelchFunction(model: rigModel, address: config.civAddress)
+    }
+
+    // MARK: - The snapshot
+
+    /// What is owed back to the radio.
+    var prepSnapshot: RigPrepSnapshot {
+        lock.withLock {
+            guard let id = config.radioID else { return memorySnapshot }
+            return prepStore.load(id) ?? RigPrepSnapshot()
+        }
+    }
+
+    /// Whether anything is owed back to the radio, so a quit knows to wait
+    /// for the restore.
+    var hasPreparedRadio: Bool { !prepSnapshot.isEmpty }
+
+    /// Whether a close is still running (unkeying, restoring, shutting the
+    /// port).
+    var isClosingRig: Bool { lock.withLock { _closingRig } }
+
+    private func saveSnapshot(_ snapshot: RigPrepSnapshot) {
+        lock.withLock {
+            if let id = config.radioID { prepStore.save(snapshot, for: id) } else { memorySnapshot = snapshot }
+        }
+    }
+
+    /// Add changes to what is owed. Each setting keeps the original it had
+    /// the first time AXTerm changed it (`RigPrepSnapshot.record`), so a
+    /// reconnect that finds the radio still prepared does not take AXTerm's
+    /// own values for the operator's.
+    private func recordPrep(_ entries: [RigPrepSnapshot.Entry]) {
+        guard !entries.isEmpty else { return }
+        var snapshot = prepSnapshot
+        snapshot.record(contentsOf: entries)
+        saveSnapshot(snapshot)
+    }
+
+    /// Prepare the radio and record what changed. Says what changed, and
+    /// says plainly if data mode did not take.
+    private func prepareRadio(_ rig: CIVClient) async {
+        let report = await rig.prepareForPacket(
+            config.mode,
+            dataMod: config.rigLink == .lan ? .wlan : .usb,
+            quietTheBus: config.rigLink != .lan,
+            clearsReceive: true,
+            toneSquelchFunction: confirmsToneSquelchFunction)
+        // Recorded before anything else, a failure included: whatever did
+        // change is owed back either way.
+        recordPrep(report.entries)
+        // `prepareForPacket` reads each setting and writes only what is
+        // wrong, so this list is empty on a reconnect that found the radio
+        // already right, and the operator hears nothing, which is the point.
+        if let notice = Self.settingsChangeNotice(report.changed, mode: config.mode) {
+            deliver { [weak self] in self?._delegate?.linkDidError(notice) }
+        }
+        if let failure = report.failure {
+            let input = config.rigLink == .lan ? "WLAN" : "USB"
+            let shows = config.mode.expectedRigMode.label
+            deliver { [weak self] in
+                self?._delegate?.linkDidError(
+                    "The radio did not take its packet settings: \(failure.message). Check that it "
+                    + "shows \(shows)-D and not \(shows): the \(input) audio only reaches "
+                    + "the transmitter in data mode, so in plain \(shows) it will key and "
+                    + "unkey normally and put nothing on the air.")
+            }
+        }
+    }
+
+    /// Put back what AXTerm changed, where the radio still holds AXTerm's
+    /// value, and say what happened. What could not be put back stays owed.
+    private func restoreRadio(_ rig: CIVClient) async {
+        let snapshot = prepSnapshot
+        guard !snapshot.isEmpty, rig.isOpen else { return }
+        let outcome = await rig.restore(snapshot, deadline: Date().addingTimeInterval(Self.restoreBudget))
+        saveSnapshot(RigPrepRestore.remaining(snapshot, after: outcome))
+        TxLog.debug(.modem, "Radio settings restored", [
+            "restored": outcome.restored.count, "operatorChanged": outcome.changedByOperator.count,
+            "failed": outcome.failed.count, "notAttempted": outcome.notAttempted.count])
+        if let notice = RigPrepRestore.notice(outcome) {
+            deliver { [weak self] in self?._delegate?.linkDidError(notice) }
+        }
     }
 
     /// - Parameter sourcePortMismatched: the CI-V stream bound a different
@@ -395,34 +507,12 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                 // advising the operator to turn on a setting it switched off
                 // at every connect.
                 if config.setsRadioModeOnConnect {
-                    // Not `try?`. Swallowing this leaves the radio part-way
-                    // configured, and the part most likely to be missing is
-                    // data mode — the one setting whose absence is silent on
-                    // receive and fatal on transmit. See `setDataModeChecked`.
-                    do {
-                        // `configureForPacket` reads each setting and writes
-                        // only what is wrong, so this list is empty on a
-                        // reconnect that found the radio already right — and
-                        // the operator hears nothing, which is the point.
-                        let changed = try await rig.configureForPacket(
-                            config.mode,
-                            dataMod: config.rigLink == .lan ? .wlan : .usb,
-                            quietTheBus: config.rigLink != .lan)
-                        if let notice = Self.settingsChangeNotice(changed, mode: config.mode) {
-                            deliver { [weak self] in self?._delegate?.linkDidError(notice) }
-                        }
-                    } catch {
-                        let input = config.rigLink == .lan ? "WLAN" : "USB"
-                        let shows = config.mode.expectedRigMode.label
-                        let why = (error as? CIVError)?.message ?? error.localizedDescription
-                        deliver { [weak self] in
-                            self?._delegate?.linkDidError(
-                                "The radio did not take its packet settings: \(why). Check that it "
-                                + "shows \(shows)-D and not \(shows): the \(input) audio only reaches "
-                                + "the transmitter in data mode, so in plain \(shows) it will key and "
-                                + "unkey normally and put nothing on the air.")
-                        }
-                    }
+                    // A failure here is reported, not swallowed: it leaves
+                    // the radio part-way configured, and the part most likely
+                    // to be missing is data mode, the one setting whose
+                    // absence is silent on receive and fatal on transmit. See
+                    // `setDataModeChecked`.
+                    await prepareRadio(rig)
                 }
                 let answered = await refreshRigStatus()
                 // Over the WLAN identify is allowed to fail, so nothing above
@@ -475,9 +565,9 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                     self.scheduleBackoffResetIfStable()
                     // Baseline the watch, so the first pass reports what
                     // changed rather than the state we connected to.
+                    self.lock.withLock { self.driftWatch = RigReceiveAudit.DriftWatch() }
                     Task { [weak self] in
-                        guard let self else { return }
-                        self.lastAudit = await self.auditReceive().findings
+                        await self?.watchForReceiveDrift()
                     }
                 }
             } catch {
@@ -551,10 +641,31 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     }
 
     /// The modem stops first (it asks for PTT off), then the radio is told
-    /// PTT off once more on the still-open port, and only then does the
-    /// port close. A close that raced the unkey would leave the radio
-    /// transmitting; this order cannot.
+    /// PTT off once more on the still-open port, then what AXTerm changed on
+    /// the radio is put back, and only then does the port close. A close
+    /// that raced the unkey would leave the radio transmitting; this order
+    /// cannot, and the restore never runs on a keyed radio.
+    ///
+    /// This is the operator's close: a disconnect, the radio disabled or
+    /// removed, the app quitting. A dropped link does not come through here
+    /// (see `rigDied`) and neither does a reopen for a settings change, so
+    /// neither restores; the snapshot waits for the real close.
     func close() {
+        close(restoringRadio: config.setsRadioModeOnConnect)
+    }
+
+    /// The machine is going to sleep and the link will reopen when it wakes:
+    /// a pause, not a disconnect, so nothing is put back. What is owed stays
+    /// in the snapshot.
+    func suspend() {
+        close(restoringRadio: false)
+    }
+
+    func resume() {
+        open()
+    }
+
+    private func close(restoringRadio: Bool) {
         wantsOpen = false
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -568,6 +679,9 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         guard let rig else { return }
         let ptt = pttController
         let method = config.pttMethod
+        lock.withLock { _closingRig = true }
+        // Holds the link strongly on purpose: a radio being removed drops its
+        // last other reference right here, and the restore still has to run.
         closeTask = Task {
             switch method {
             case .civ:
@@ -577,7 +691,9 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
             case .none:
                 break
             }
+            if restoringRadio { await self.restoreRadio(rig) }
             rig.close()
+            self.lock.withLock { self._closingRig = false }
         }
     }
 
@@ -593,9 +709,12 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         let old = config
         guard new != old else { return }
         config = new
+        let prepSwitchedOff = old.setsRadioModeOnConnect && !new.setsRadioModeOnConnect
         if new.requiresReopen(from: old) {
             let wasOpen = state == .connected || state == .connecting
-            close()
+            // A reopen for a new port or mode is not a disconnect, so nothing
+            // is put back, unless the same change switched preparing off.
+            close(restoringRadio: prepSwitchedOff)
             if new.rigLink == .lan {
                 let session = makeSession(new.lanConfiguration)
                 lanSession = session
@@ -613,6 +732,22 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
             if wasOpen { open() }
         } else {
             modem.update(configuration: new.softModemConfiguration)
+            // The switch flipped while connected: act on it now rather than
+            // at the next connect. Off puts the radio back; on sets it up.
+            if old.setsRadioModeOnConnect != new.setsRadioModeOnConnect, state == .connected,
+               let rig, rig.isOpen {
+                let preparing = new.setsRadioModeOnConnect
+                Task { [weak self] in
+                    guard let self else { return }
+                    if preparing {
+                        await self.prepareRadio(rig)
+                        await self.refreshRigStatus()
+                    } else {
+                        await self.restoreRadio(rig)
+                        await self.refreshRigStatus()
+                    }
+                }
+            }
         }
     }
 
@@ -719,42 +854,72 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         // still returns an empty finding list. That would read as "nothing is
         // wrong", which is the one thing it must not say — so the reads are
         // required to have produced at least one answer.
-        // `16 5D` is the IC-705's tone squelch command. The radio answers
-        // from `A4` by default and a LAN login names it; either is enough.
-        let isIC705 = config.civAddress == CIVCommand.ic705 || (rigModel?.contains("705") ?? false)
         let settings = await rig.readReceiveSettings(mode: status.mode ?? .fm,
                                                      filter: Int(status.filter ?? 1),
                                                      dataMode: status.dataMode ?? true,
-                                                     toneSquelchFunction: isIC705)
+                                                     toneSquelchFunction: confirmsToneSquelchFunction)
         guard settings.answered else {
             return .unavailable("the radio did not answer any of them.")
         }
-        return .checked(RigReceiveAudit.findings(settings, for: config.mode))
+        let findings = RigReceiveAudit.findings(settings, for: config.mode)
+        lock.withLock { latestFindings = findings }
+        publishReceiveReport()
+        return .checked(findings)
     }
 
     /// Make the corrections the audit asked for, and report what changed.
     ///
     /// Only settings whose right value for packet is a fact: the attenuator,
     /// RF gain, squelch, the noise processing, the notches, the receive tone
-    /// squelch and the filter. The mode and
-    /// the preamp are named by the audit and deliberately left alone — the
-    /// operator may be in USB on purpose, and whether a preamp helps is a
-    /// judgment about the band.
+    /// squelch and the filter. The mode and the preamp are named by the
+    /// audit and deliberately left alone — the operator may be in USB on
+    /// purpose, and whether a preamp helps is a judgment about the band.
+    ///
+    /// While AXTerm is setting the radio up for packet, a change made here
+    /// joins the snapshot and is put back at close with the rest: the fix is
+    /// for this session, and the radio is still the operator's afterward.
     func applyReceiveCorrections(_ findings: [RigReceiveAudit.Finding]) async -> [String] {
         guard let rig, rig.isOpen else { return [] }
         let mode = rigStatus.mode ?? .fm
         var done: [String] = []
+        var fixed: Set<String> = []
+        var entries: [RigPrepSnapshot.Entry] = []
         for finding in findings {
             guard let correction = finding.correction else { continue }
             do {
-                try await rig.apply(correction, mode: mode)
+                if let entry = try await rig.applyCorrection(correction, mode: mode) { entries.append(entry) }
                 done.append(finding.title)
+                fixed.insert(finding.title)
             } catch {
                 done.append("\(finding.title) (the radio refused)")
             }
         }
+        if config.setsRadioModeOnConnect { recordPrep(entries) }
+        if !fixed.isEmpty {
+            lock.withLock {
+                driftWatch.resolve(fixed)
+                latestFindings.removeAll { fixed.contains($0.title) }
+            }
+            publishReceiveReport()
+        }
         if !done.isEmpty { _ = await refreshRigStatus() }
         return done
+    }
+
+    /// Fix whatever went wrong during the session: the one-click Fix beside
+    /// the drift notice.
+    func fixReceiveDrift() async -> [String] {
+        let drift = lock.withLock { driftWatch.pending }
+        return await applyReceiveCorrections(drift)
+    }
+
+    /// What the status surfaces show about the radio's receive settings.
+    var receiveReport: RigReceiveAudit.Report {
+        lock.withLock { RigReceiveAudit.Report(findings: latestFindings, drift: driftWatch.pending) }
+    }
+
+    private func publishReceiveReport() {
+        onRigReceive?(receiveReport)
     }
 
     /// What the level loop concluded.
@@ -812,20 +977,25 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         return .adjusted(from: startedAt, to: level, peakDBFS: modem.telemetry.rxPeakDBFS)
     }
 
-    /// Every five seconds while the modem is idle; once only when the
-    /// operator does not want the frequency followed.
+    /// Every five seconds while the modem is idle: the frequency and mode
+    /// when the operator wants them followed, and the receive audit every
+    /// two minutes either way.
+    ///
+    /// The audit used to live behind the follow-frequency switch, so a
+    /// station with that switch off never had its receive settings checked
+    /// after connecting, and a notch turned on mid-session went unnoticed.
     private func startPolling() {
         pollTask?.cancel()
-        guard config.followsRadioFrequency else { return }
+        guard rig != nil else { return }
         pollTask = Task { [weak self] in
             var sinceAudit = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard let self, !Task.isCancelled else { return }
                 if self.modem.telemetry.ptt { continue }
-                await self.refreshRigStatus()
-                // The receive audit is six CI-V reads, so it runs on its own
-                // slower beat — often enough to catch a setting changed by
+                if self.config.followsRadioFrequency { await self.refreshRigStatus() }
+                // The receive audit is a dozen CI-V reads, so it runs on its
+                // own slower beat — often enough to catch a setting changed by
                 // hand, rarely enough not to sit on the bus.
                 sinceAudit += 1
                 if sinceAudit >= 24 {
@@ -837,16 +1007,20 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     }
 
     /// Re-audit, and report only what is newly wrong.
-    private func watchForReceiveDrift() async {
+    ///
+    /// The change is not undone here. It is the operator's radio, and a
+    /// notch turned on during a session may be deliberate; they are told once,
+    /// and the radio page offers the fix (`fixReceiveDrift`).
+    func watchForReceiveDrift() async {
         let result = await auditReceive()
         guard case .checked(let now) = result else { return }
-        let new = RigReceiveAudit.newFindings(from: lastAudit, to: now)
-        lastAudit = now
+        let new = lock.withLock { driftWatch.observe(now) }
+        publishReceiveReport()
         guard !new.isEmpty else { return }
         let notice = "The radio changed under us: "
-            + new.map { $0.title.lowercased() }.joined(separator: ", ") + "."
+            + new.map { $0.title.lowercased() }.joined(separator: ", ")
+            + ". The radio's page offers to fix it."
         deliver { [weak self] in self?._delegate?.linkDidError(notice) }
-        onReceiveDrift?(new)
     }
 }
 
