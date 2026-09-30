@@ -525,11 +525,10 @@ final class LiveDirewolfTests: XCTestCase {
         XCTAssertTrue(gotResponse, "Should receive response to NODES command")
     }
 
-    // MARK: - KISS Transport Helpers
+    // MARK: - Connection Helpers
 
-    /// Live Direwolf tests use SimulatorClient for now since KISSTransport
-    /// API is primarily designed for outbound frame queueing, not bidirectional communication.
-    /// For true live Direwolf testing, use SimulatorClient configured with the Direwolf host.
+    /// Live Direwolf tests speak KISS over TCP through SimulatorClient,
+    /// pointed at the Direwolf host.
     private func connectToDirewolf() async throws -> SimulatorClient {
         let client = SimulatorClient(host: direwolfHost, port: direwolfPort, stationName: "Direwolf")
         try await client.connect()
@@ -542,39 +541,6 @@ final class LiveDirewolfTests: XCTestCase {
 
     private func waitForFrame(transport: SimulatorClient, timeout: TimeInterval) async throws -> Data {
         return try await transport.waitForFrame(timeout: timeout)
-    }
-
-    // Keep KISSTransport helper for backward compatibility
-    private func connectToKISSTransport() async throws -> KISSTransport {
-        let transport = KISSTransport(host: direwolfHost, port: direwolfPort)
-
-        return try await withCheckedThrowingContinuation { continuation in
-            class Delegate: KISSTransportDelegate {
-                var continuation: CheckedContinuation<KISSTransport, Error>?
-                var transport: KISSTransport?
-
-                func transportDidSend(frameId: UUID, result: Result<Void, Error>) {}
-
-                func transportDidChangeState(_ state: KISSTransportState) {
-                    guard let cont = continuation, let trans = transport else { return }
-                    continuation = nil
-                    switch state {
-                    case .connected:
-                        cont.resume(returning: trans)
-                    case .failed:
-                        cont.resume(throwing: TestError.connectionFailed)
-                    default:
-                        break
-                    }
-                }
-            }
-
-            let delegate = Delegate()
-            delegate.continuation = continuation
-            delegate.transport = transport
-            transport.delegate = delegate
-            transport.connect()
-        }
     }
 
     // MARK: - Frame Building Helpers

@@ -233,8 +233,12 @@ final class SimulatorClient: @unchecked Sendable {
 
     private func handleReceivedData(_ data: Data) {
         lock.lock()
-        let frames = parser.feed(data)
-        // Buffer all received frames
+        // Buffer the AX.25 frames. The parser also returns TNC telemetry and
+        // other KISS commands, which this client never waits for.
+        let frames = parser.feed(data).compactMap { output -> Data? in
+            if case .ax25(let frame) = output { return frame }
+            return nil
+        }
         receivedFrames.append(contentsOf: frames)
         lock.unlock()
     }
