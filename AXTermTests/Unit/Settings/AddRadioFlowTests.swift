@@ -87,7 +87,7 @@ final class AddRadioFlowTests: XCTestCase {
         XCTAssertEqual(settings.radio(id)?.host, "10.0.0.9")
     }
 
-    func testTheStepsRunInOrderAndBackStopsAtTheEnds() {
+    func testTheStepsRunInOrderAndBackStopsAtTheStart() {
         let settings = store("AddRadioSteps")
         let flow = AddRadioFlow(settings: settings, mode: .new)
         XCTAssertEqual(flow.step, .connect)
@@ -100,9 +100,15 @@ final class AddRadioFlowTests: XCTestCase {
         XCTAssertEqual(flow.step, .channel)
         flow.next(); flow.next(); flow.next()
         XCTAssertEqual(flow.step, .done)
-        XCTAssertFalse(flow.canGoBack)
         flow.next()
-        XCTAssertEqual(flow.step, .done)
+        XCTAssertEqual(flow.step, .done, "nothing after Done")
+        XCTAssertTrue(flow.canGoBack, "the summary can send the operator back to change something")
+        flow.back()
+        XCTAssertEqual(flow.step, .basics)
+        flow.back(); flow.back(); flow.back()
+        XCTAssertEqual(flow.step, .connect)
+        flow.back()
+        XCTAssertEqual(flow.step, .connect, "nothing before Connect")
         flow.cancel()
     }
 

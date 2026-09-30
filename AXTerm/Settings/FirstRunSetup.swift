@@ -192,16 +192,12 @@ struct FirstRunSetupView: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 8)
-            if done {
-                Button("Edit\u{2026}") {
-                    radioFlow = AddRadioFlow(settings: settings, mode: .configure(radio.id))
-                }
-            } else {
-                Button("Set Up\u{2026}") {
-                    radioFlow = AddRadioFlow(settings: settings, mode: .configure(radio.id))
-                }
-                .buttonStyle(.borderedProminent)
+            // One button in the same place either way: filled in the accent
+            // color until the radio is set up, then a bordered Edit.
+            Button(done ? "Edit\u{2026}" : "Set Up\u{2026}") {
+                radioFlow = AddRadioFlow(settings: settings, mode: .configure(radio.id))
             }
+            .buttonStyle(RadioRowButtonStyle(prominent: !done))
             if canRemove {
                 Button {
                     configured.remove(radio.id)
@@ -233,8 +229,12 @@ struct FirstRunSetupView: View {
 
     @ViewBuilder
     private var buttons: some View {
-        Button("Skip Setup") { finish(radio: nil) }
-            .keyboardShortcut(.cancelAction)
+        // On the last step Done finishes, so a second way out beside it
+        // would only ask the operator to choose between two exits.
+        if stage != .radio {
+            Button("Skip Setup") { finish(radio: nil) }
+                .keyboardShortcut(.cancelAction)
+        }
         Spacer()
         if stage != .callsign {
             Button("Back") { stage = stage == .radio ? .position : .callsign }
@@ -257,5 +257,18 @@ struct FirstRunSetupView: View {
     private func finish(radio: RadioID?) {
         settings.defaults.set(true, forKey: FirstRunSetup.dismissedKey)
         onClose(radio)
+    }
+}
+
+/// The action button on a first-run radio row.
+private struct RadioRowButtonStyle: PrimitiveButtonStyle {
+    let prominent: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        if prominent {
+            Button(configuration).buttonStyle(.borderedProminent).tint(.accentColor)
+        } else {
+            Button(configuration).buttonStyle(.bordered)
+        }
     }
 }

@@ -123,15 +123,11 @@ struct AddRadioSheet: View {
     @ViewBuilder
     private var connectStep: some View {
         let choices = RadioLinkChoice.selectable(including: linkBinding.wrappedValue)
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
-                                 count: min(max(choices.count, 1), 3)),
-                  spacing: 8) {
-            ForEach(choices) { choice in
-                SetupTile(symbol: Self.symbol(for: choice), title: Self.shortTitle(for: choice),
-                          detail: Self.tagline(for: choice),
-                          selected: linkBinding.wrappedValue == choice) {
-                    linkBinding.wrappedValue = choice
-                }
+        SetupTileRows(items: choices, columns: min(max(choices.count, 1), 3)) { choice in
+            SetupTile(symbol: Self.symbol(for: choice), title: Self.shortTitle(for: choice),
+                      detail: Self.tagline(for: choice),
+                      selected: linkBinding.wrappedValue == choice) {
+                linkBinding.wrappedValue = choice
             }
         }
 
@@ -240,6 +236,8 @@ struct AddRadioSheet: View {
                         + "and APRS messages. The node and mailbox stay off.",
                       selected: channel == .aprs) { flow.setChannel(.aprs) }
         }
+        // The two tiles match in height whichever description wraps further.
+        .fixedSize(horizontal: false, vertical: true)
         Text("A radio is one or the other. You can change it later on the radio's page.")
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -333,7 +331,7 @@ struct AddRadioSheet: View {
             ? "used by another radio"
             : SSIDConvention.detail(ssid: ssid, family: channel == .aprs ? .aprs : nil, usage: [:])
         if let detail {
-            Text("\(call)  \u{2014}  \(detail)")
+            Text("\(call)  \u{00B7}  \(detail)")
         } else {
             Text(call)
         }

@@ -81,7 +81,9 @@ final class AddRadioFlow: ObservableObject, Identifiable {
         settings.radio(radioID) ?? RadioProfile(id: radioID, name: "")
     }
 
-    var canGoBack: Bool { step > .connect && step < .done }
+    /// Back works from every step after the first, Done included, so the
+    /// operator can change something they see on the summary.
+    var canGoBack: Bool { step > .connect }
 
     func next() {
         guard let following = Step(rawValue: step.rawValue + 1) else { return }

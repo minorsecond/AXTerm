@@ -134,30 +134,44 @@ struct SetupGlyph: View {
 
 /// Numbered steps joined by a rule: done ones ticked, the current one
 /// filled, the rest outlined.
+///
+/// A label is never cut short. The rules between steps give up their width
+/// first, down to a few points; if the labels still don't fit, only the
+/// current step keeps its name and the others show just their numbers.
 struct SetupStepStrip: View {
     let steps: [String]
     let current: Int
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            strip(showsAllLabels: true)
+            strip(showsAllLabels: false)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Step \(current + 1) of \(steps.count): \(steps.indices.contains(current) ? steps[current] : "")")
+    }
+
+    private func strip(showsAllLabels: Bool) -> some View {
         HStack(spacing: 6) {
             ForEach(Array(steps.enumerated()), id: \.offset) { index, title in
                 HStack(spacing: 5) {
                     marker(index)
-                    Text(title)
-                        .font(.caption.weight(index == current ? .semibold : .regular))
-                        .foregroundStyle(index <= current ? .primary : .secondary)
-                        .lineLimit(1)
+                    if showsAllLabels || index == current {
+                        Text(title)
+                            .font(.caption.weight(index == current ? .semibold : .regular))
+                            .foregroundStyle(index <= current ? .primary : .secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                 }
                 if index < steps.count - 1 {
                     Rectangle()
                         .fill(index < current ? Color.accentColor : Color(platform: .platformSeparator))
                         .frame(height: 1)
-                        .frame(minWidth: 8, maxWidth: .infinity)
+                        .frame(minWidth: 6, maxWidth: .infinity)
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Step \(current + 1) of \(steps.count): \(steps.indices.contains(current) ? steps[current] : "")")
     }
 
     @ViewBuilder
@@ -276,13 +290,44 @@ struct SetupTile: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(10)
-            .frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
+            // Fills the height its row offers, so tiles side by side match
+            // (see SetupTileRow).
+            .frame(maxWidth: .infinity, minHeight: 84, maxHeight: .infinity, alignment: .topLeading)
             .background(SetupSurface(highlighted: selected))
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// Tiles side by side, all as tall as the tallest, in rows of `columns`.
+/// A short last row keeps the column width, so its tiles line up with the
+/// ones above.
+struct SetupTileRows<Item: Identifiable, Tile: View>: View {
+    let items: [Item]
+    var columns = 3
+    @ViewBuilder var tile: (Item) -> Tile
+
+    var body: some View {
+        let perRow = max(columns, 1)
+        let rows = stride(from: 0, to: items.count, by: perRow).map {
+            Array(items[$0..<min($0 + perRow, items.count)])
+        }
+        VStack(spacing: 8) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 8) {
+                    ForEach(row) { tile($0) }
+                    ForEach(0..<(perRow - row.count), id: \.self) { _ in
+                        Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
+                    }
+                }
+                // Measured at the tallest tile's height, then each tile is
+                // offered that height and fills it.
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

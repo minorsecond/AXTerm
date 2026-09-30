@@ -231,10 +231,16 @@ struct SetupPositionStep: View {
         HStack(spacing: 8) {
             Text("Coordinates")
             Spacer(minLength: 8)
-            TextField("Latitude", text: $manualLatitude)
-                .frame(width: 110)
-            TextField("Longitude", text: $manualLongitude)
-                .frame(width: 110)
+            // Only the numbers are monospace; the row's label stays in the
+            // form's own font like every other row.
+            Group {
+                TextField("Latitude", text: $manualLatitude)
+                    .frame(width: 110)
+                TextField("Longitude", text: $manualLongitude)
+                    .frame(width: 110)
+            }
+            .textFieldStyle(.roundedBorder)
+            .font(.system(.body, design: .monospaced))
             if !manualLatitude.isEmpty || !manualLongitude.isEmpty {
                 Button {
                     manualLatitude = ""
@@ -245,10 +251,9 @@ struct SetupPositionStep: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
                 .help("Clear the coordinate")
+                .accessibilityLabel("Clear coordinate")
             }
         }
-        .textFieldStyle(.roundedBorder)
-        .font(.system(.body, design: .monospaced))
     }
 
     private var addressRow: some View {
