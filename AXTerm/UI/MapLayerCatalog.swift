@@ -18,6 +18,12 @@ nonisolated struct MapLayer: Hashable, Sendable {
     /// The traffic family this layer means anything for, or nil when it
     /// applies to the map as a whole.
     let family: RadioTrafficFamily?
+    /// True when the layer draws only from what its family's radios collect,
+    /// so it can never show anything on a station where no radio can carry
+    /// that family. It is left out of the rows there instead of sitting as a
+    /// switch that does nothing, and its stored value is kept for when such
+    /// a radio is added. See `RadioTrafficClassifier.possibleFamilies`.
+    var needsCarrier = false
     /// What it reads when the operator has never touched it, so a summary is
     /// right on a fresh install rather than reporting everything off. Taken
     /// from `MapLayerDefaults` rather than restated, so this cannot drift
@@ -36,13 +42,18 @@ nonisolated enum MapLayerCatalog {
         MapLayer(title: "Weather Field", storageKey: "stations.showsWeatherField",
                  family: .aprs),
         MapLayer(title: "APRS Coverage Rings", storageKey: "stations.showsAPRSCoverageRing",
-                 family: .aprs),
+                 family: .aprs, needsCarrier: true),
         MapLayer(title: "Objects & Hazards", storageKey: "stations.showsObjects",
                  family: .aprs),
 
         // AX.25: what a connected-mode network draws.
+        // Built from answers to our own connects and from stations heard
+        // direct on packet radios. A radio on an APRS channel never opens a
+        // session and never counts toward it.
         MapLayer(title: "Packet Coverage Rings", storageKey: "stations.showsCoverageRing",
-                 family: .ax25),
+                 family: .ax25, needsCarrier: true),
+        // Digipeated APRS paths are observed paths too, so this one stays on
+        // an APRS-only station.
         MapLayer(title: "Observed Paths", storageKey: "stations.showsPaths",
                  family: .ax25),
         MapLayer(title: "Predicted Paths", storageKey: "stations.showsPredictedPaths",
@@ -57,15 +68,32 @@ nonisolated enum MapLayerCatalog {
                  family: nil),
     ]
 
-    /// The layers a scope draws, in the order the rows appear.
-    static func layers(in scope: MapLayerScope) -> [MapLayer] {
-        all.filter { scope.includes($0.family) }
+    /// The layers a scope draws, in the order the rows appear, leaving out
+    /// any that need a carrier outside `possible`.
+    static func layers(in scope: MapLayerScope,
+                       possible: Set<RadioTrafficFamily> = Set(RadioTrafficFamily.allCases))
+        -> [MapLayer] {
+        all.filter { scope.includes($0.family) && isOffered($0, possible: possible) }
+    }
+
+    /// Whether a layer's switch is shown when only `possible` can be carried.
+    static func isOffered(_ layer: MapLayer, possible: Set<RadioTrafficFamily>) -> Bool {
+        guard layer.needsCarrier, let family = layer.family else { return true }
+        return possible.contains(family)
+    }
+
+    /// `isOffered` by the key the switch binds to. A key not in the catalog
+    /// is always offered.
+    static func isOffered(storageKey: String, possible: Set<RadioTrafficFamily>) -> Bool {
+        guard let layer = all.first(where: { $0.storageKey == storageKey }) else { return true }
+        return isOffered(layer, possible: possible)
     }
 
     /// How many of a scope's layers are switched on, and how many there are.
     static func summary(in scope: MapLayerScope,
+                        possible: Set<RadioTrafficFamily> = Set(RadioTrafficFamily.allCases),
                         defaults: UserDefaults = .standard) -> (on: Int, total: Int) {
-        let layers = layers(in: scope)
+        let layers = layers(in: scope, possible: possible)
         let on = layers.count { layer in
             defaults.object(forKey: layer.storageKey) as? Bool ?? layer.defaultOn
         }
@@ -74,8 +102,9 @@ nonisolated enum MapLayerCatalog {
 
     /// The one-line state of a collapsed group.
     static func summaryText(in scope: MapLayerScope,
+                            possible: Set<RadioTrafficFamily> = Set(RadioTrafficFamily.allCases),
                             defaults: UserDefaults = .standard) -> String {
-        let counts = summary(in: scope, defaults: defaults)
+        let counts = summary(in: scope, possible: possible, defaults: defaults)
         guard counts.total > 0 else { return "No layers" }
         // "3 of 5 on" rather than the names: a fixed shape the eye can read
         // without parsing, and it does not change width as layers are toggled.

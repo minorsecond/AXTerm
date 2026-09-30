@@ -830,6 +830,7 @@ struct AXTermiOSRootView: View {
                 ownCallsigns: ownAddresses,
                 ownTransmittedAddresses: ownTransmittedAddresses,
                 aprsChannelRadios: Set(settings.activeRadios.filter(\.aprsEnabled).map(\.id)),
+                possibleFamilies: RadioTrafficClassifier.possibleFamilies(of: settings.activeRadios),
                 lookup: callsignLookup,
                 aliases: nodeAliases,
                 settings: context.settings,

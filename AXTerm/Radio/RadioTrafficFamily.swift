@@ -94,6 +94,34 @@ nonisolated enum RadioTrafficClassifier {
         return result
     }
 
+    /// The families some radio on this station could carry on the map.
+    ///
+    /// A radio on an APRS channel carries APRS and nothing else
+    /// (`mapFamilies`). Any other radio could carry either, whatever it has
+    /// heard so far: a packet radio that has heard nothing yet is "not known
+    /// yet", and hiding its layers for that would leave nothing to switch on
+    /// when its traffic arrives. So a family is ruled out only when every
+    /// radio is held away from it, which today means every radio is on an
+    /// APRS channel and AX.25 is out.
+    ///
+    /// With no radios at all nothing is ruled out.
+    static func possibleFamilies(radios: [RadioID],
+                                 aprsChannels: Set<RadioID>) -> Set<RadioTrafficFamily> {
+        let everything = Set(RadioTrafficFamily.allCases)
+        guard !radios.isEmpty else { return everything }
+        let held = mapFamilies(heard: [:], aprsChannels: aprsChannels)
+        return radios.reduce(into: Set<RadioTrafficFamily>()) { result, radio in
+            result.formUnion(held[radio] ?? everything)
+        }
+    }
+
+    /// `possibleFamilies` for a set of radio profiles, reading each one's
+    /// Channel setting.
+    static func possibleFamilies(of radios: [RadioProfile]) -> Set<RadioTrafficFamily> {
+        possibleFamilies(radios: radios.map(\.id),
+                         aprsChannels: Set(radios.filter(\.aprsEnabled).map(\.id)))
+    }
+
     /// Whether a frame's addresses could have come from a real station.
     ///
     /// AX.25 addresses are upper-case letters and digits, one to six of them.

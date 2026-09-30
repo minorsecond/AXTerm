@@ -53,6 +53,10 @@ struct StationsMapView: View {
     /// APRS for the map whatever else they have heard; see
     /// `RadioTrafficClassifier.mapFamilies`.
     var aprsChannelRadios: Set<RadioID> = []
+    /// The families some radio could carry. A coverage ring whose family no
+    /// radio can carry is not drawn, whatever its stored switch says, since
+    /// the switch itself is not offered; see `MapLayer.needsCarrier`.
+    var possibleFamilies: Set<RadioTrafficFamily> = Set(RadioTrafficFamily.allCases)
     @ObservedObject var lookup: CallsignLookupService
     @ObservedObject var aliases: NodeAliasStore
     /// Owned rather than copied so the "no positions" banner can turn
@@ -925,6 +929,12 @@ struct StationsMapView: View {
     /// question.
     private var coverageRings: [CoverageEstimate.Ring] {
         guard let observer else { return [] }
+        let showsCoverageRing = self.showsCoverageRing
+            && MapLayerCatalog.isOffered(storageKey: "stations.showsCoverageRing",
+                                         possible: possibleFamilies)
+        let showsAPRSCoverageRing = self.showsAPRSCoverageRing
+            && MapLayerCatalog.isOffered(storageKey: "stations.showsAPRSCoverageRing",
+                                         possible: possibleFamilies)
         let answered = showsCoverageRing
             ? CoverageEstimate.ring(
                 paths: networkPaths,
@@ -1786,8 +1796,14 @@ struct StationsMapView: View {
                 Text("\(placedDirectoryCount) drawn · \(mergedNodeBoxCount) folded "
                      + "into heard stations · \(aliases.directory.allEntries.count) known")
             }
-            Toggle("Packet Coverage Rings", isOn: $showsCoverageRing)
-            Toggle("APRS Coverage Rings", isOn: $showsAPRSCoverageRing)
+            if MapLayerCatalog.isOffered(storageKey: "stations.showsCoverageRing",
+                                         possible: possibleFamilies) {
+                Toggle("Packet Coverage Rings", isOn: $showsCoverageRing)
+            }
+            if MapLayerCatalog.isOffered(storageKey: "stations.showsAPRSCoverageRing",
+                                         possible: possibleFamilies) {
+                Toggle("APRS Coverage Rings", isOn: $showsAPRSCoverageRing)
+            }
 
             Divider()
             Menu {

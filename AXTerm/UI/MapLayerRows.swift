@@ -33,10 +33,13 @@ struct MapLayerRows: View {
     /// is right for a single-radio station: there is no second network to
     /// separate it from.
     var scope: MapLayerScope = .everything
+    /// The families some radio could carry. A layer that needs a carrier
+    /// outside this is not shown; see `MapLayer.needsCarrier`.
+    var possibleFamilies: Set<RadioTrafficFamily> = Set(RadioTrafficFamily.allCases)
 
     var body: some View {
         Section("Layers") {
-            MapLayerToggles(status: status, scope: scope)
+            MapLayerToggles(status: status, scope: scope, possibleFamilies: possibleFamilies)
 
             if let radioScope {
                 Text(radioScope)
@@ -91,13 +94,16 @@ struct CollapsibleMapLayerToggles: View {
     /// Remembered per radio, so opening one radio's layers does not open the
     /// other's and the choice survives a relaunch.
     var expansionKey: String
+    var possibleFamilies: Set<RadioTrafficFamily>
 
     @AppStorage private var isExpanded: Bool
 
-    init(status: MapLayerStatus, scope: MapLayerScope, expansionKey: String) {
+    init(status: MapLayerStatus, scope: MapLayerScope, expansionKey: String,
+         possibleFamilies: Set<RadioTrafficFamily> = Set(RadioTrafficFamily.allCases)) {
         self.status = status
         self.scope = scope
         self.expansionKey = expansionKey
+        self.possibleFamilies = possibleFamilies
         _isExpanded = AppStorage(wrappedValue: false, expansionKey)
     }
 
@@ -113,7 +119,7 @@ struct CollapsibleMapLayerToggles: View {
                     .font(.caption)
                 Spacer(minLength: 4)
                 if !isExpanded {
-                    Text(MapLayerCatalog.summaryText(in: scope))
+                    Text(MapLayerCatalog.summaryText(in: scope, possible: possibleFamilies))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -125,7 +131,7 @@ struct CollapsibleMapLayerToggles: View {
               + "its layers are switched on.")
 
         if isExpanded {
-            MapLayerToggles(status: status, scope: scope)
+            MapLayerToggles(status: status, scope: scope, possibleFamilies: possibleFamilies)
                 .padding(.leading, 12)
         }
     }
@@ -137,6 +143,9 @@ struct MapLayerToggles: View {
 
     @ObservedObject var status: MapLayerStatus
     var scope: MapLayerScope = .everything
+    /// The families some radio could carry. A layer that needs a carrier
+    /// outside this is left out, and its stored switch is left as it was.
+    var possibleFamilies: Set<RadioTrafficFamily> = Set(RadioTrafficFamily.allCases)
 
     @AppStorage("stations.showsPaths") private var showsPaths = MapLayerDefaults.showsPaths
     @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = MapLayerDefaults.showsPredictedPaths
@@ -324,15 +333,17 @@ struct MapLayerToggles: View {
                       + "measured it.")
             }
 
-            layer("APRS Coverage Rings", "circle.dashed",
-                  isOn: $showsAPRSCoverageRing,
-                  help: "Both directions of the APRS radios' reach. Purple is how far you are "
-                      + "heard: the digipeaters that put your own beacons back on the air, "
-                      + "which proves they decoded you. Teal is how far you hear: the "
-                      + "stations you decoded with no digipeater in the path, on radios "
-                      + "carrying APRS. They are rarely the same distance, and the purple "
-                      + "one fills in on its own with every beacon. Measurements, not a "
-                      + "propagation model.")
+            if offers("stations.showsAPRSCoverageRing") {
+                layer("APRS Coverage Rings", "circle.dashed",
+                      isOn: $showsAPRSCoverageRing,
+                      help: "Both directions of the APRS radios' reach. Purple is how far you are "
+                          + "heard: the digipeaters that put your own beacons back on the air, "
+                          + "which proves they decoded you. Teal is how far you hear: the "
+                          + "stations you decoded with no digipeater in the path, on radios "
+                          + "carrying APRS. They are rarely the same distance, and the purple "
+                          + "one fills in on its own with every beacon. Measurements, not a "
+                          + "propagation model.")
+            }
 
             layer("Objects & Hazards", "exclamationmark.triangle.fill",
                   isOn: $showsObjects,
@@ -346,15 +357,20 @@ struct MapLayerToggles: View {
         }
 
         if scope.includes(.ax25) {
-            layer("Packet Coverage Rings", "circle.dashed",
-                  isOn: $showsCoverageRing,
-                  help: "Both directions of the packet radios' reach. Blue is how far you are "
-                      + "heard: the stations that answered you directly, since a UA, DM or "
-                      + "FRMR to your frames proves they decoded you. It only grows where "
-                      + "you went looking for someone to talk to. Teal is how far you hear: "
-                      + "the stations you decoded with no digipeater in the path, on radios "
-                      + "carrying packet traffic. A radio marked as on an APRS channel never "
-                      + "counts here. Measurements, not a propagation model.")
+            // Not offered when every radio is on an APRS channel: none of them
+            // opens a session or counts toward the packet receive ring, so the
+            // switch could never draw anything.
+            if offers("stations.showsCoverageRing") {
+                layer("Packet Coverage Rings", "circle.dashed",
+                      isOn: $showsCoverageRing,
+                      help: "Both directions of the packet radios' reach. Blue is how far you are "
+                          + "heard: the stations that answered you directly, since a UA, DM or "
+                          + "FRMR to your frames proves they decoded you. It only grows where "
+                          + "you went looking for someone to talk to. Teal is how far you hear: "
+                          + "the stations you decoded with no digipeater in the path, on radios "
+                          + "carrying packet traffic. A radio marked as on an APRS channel never "
+                          + "counts here. Measurements, not a propagation model.")
+            }
 
             layer("Observed Paths", "point.topleft.down.to.point.bottomright.curvepath",
                   isOn: $showsPaths,
@@ -436,6 +452,10 @@ struct MapLayerToggles: View {
                       + "internet-bridged station on the far coast stretches the zoom until every "
                       + "local station is a single cluster.")
         }
+    }
+
+    private func offers(_ storageKey: String) -> Bool {
+        MapLayerCatalog.isOffered(storageKey: storageKey, possible: possibleFamilies)
     }
 
     /// Named even when the filter is off, so the operator meets the feature

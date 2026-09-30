@@ -1395,7 +1395,8 @@ struct ContentView: View {
                         CollapsibleMapLayerToggles(
                             status: mapLayerStatus,
                             scope: .families(families),
-                            expansionKey: "stations.expandedRadioLayers." + radio.id.rawValue)
+                            expansionKey: "stations.expandedRadioLayers." + radio.id.rawValue,
+                            possibleFamilies: possibleMapFamilies)
                             .padding(.leading, 14)
                             .toggleStyle(.switch)
                             .controlSize(.mini)
@@ -1439,6 +1440,13 @@ struct ContentView: View {
     private var mapRadioFamilies: [RadioID: Set<RadioTrafficFamily>] {
         RadioTrafficClassifier.mapFamilies(heard: radioFamilies,
                                            aprsChannels: aprsChannelRadios)
+    }
+
+    /// The families some radio could carry. On a station whose radios are all
+    /// on APRS channels this leaves out AX.25, and with it the packet coverage
+    /// ring's switch. See `RadioTrafficClassifier.possibleFamilies`.
+    private var possibleMapFamilies: Set<RadioTrafficFamily> {
+        RadioTrafficClassifier.possibleFamilies(of: settings.activeRadios)
     }
 
     /// Every address this station has put a frame on the air as, from the
@@ -1608,7 +1616,8 @@ struct ContentView: View {
                 MapLayerRows(status: mapLayerStatus, radioScope: radioScopeNote,
                              scope: settings.hasMultipleRadios && mapLayerPlan.isGrouped
                                  ? .shared(mapLayerPlan.orphans)
-                                 : .everything)
+                                 : .everything,
+                             possibleFamilies: possibleMapFamilies)
             case .mailFolders:
                 WinlinkFolderRows(viewModel: mailboxVM)
             case .bbsPanes:
@@ -2040,6 +2049,7 @@ struct ContentView: View {
             ownCallsigns: ownAddresses,
             ownTransmittedAddresses: ownTransmittedAddresses,
             aprsChannelRadios: aprsChannelRadios,
+            possibleFamilies: possibleMapFamilies,
             lookup: callsignLookup,
             aliases: nodeAliases,
             settings: winlinkContext.settings,

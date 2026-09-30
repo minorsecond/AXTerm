@@ -83,6 +83,35 @@ destination `;Q,C*B-6`) decoded as an I frame. `StationTracker.trafficEvidence`
 now requires both addresses to be well formed (one to six upper-case letters
 and digits) before a frame counts as session evidence.
 
+### Layers no radio can feed
+
+Some layers draw only from what their own family's radios collect
+(`MapLayer.needsCarrier`): the Packet Coverage Rings and the APRS Coverage
+Rings. When no radio on the station can carry that family, the layer's switch
+is left out of the sidebar, out of the collapsed "n of m on" count, and out of
+the iOS Layers menu, and the map does not draw that ring even if the stored
+switch is on. The stored value itself is not touched, so the switch comes back
+as it was when a suitable radio is added.
+
+Which families are possible comes from the Channel setting, through the same
+rule as `mapFamilies` (`RadioTrafficClassifier.possibleFamilies`). A radio on
+an APRS channel carries APRS alone. Any other radio could carry either, even
+before it has heard anything, since "not known yet" must not hide a control.
+In practice AX.25 is ruled out only when every radio is on an APRS channel;
+with no radios at all nothing is ruled out, and APRS is never ruled out today.
+
+| Station | Packet Coverage Rings switch |
+|---|---|
+| one radio, APRS channel | hidden |
+| two radios, both APRS channel | hidden |
+| one APRS-channel radio and one packet radio | shown |
+| one packet radio, nothing heard yet | shown |
+
+The other packet-network layers stay on an APRS-only station. Observed Paths
+draws digipeated APRS paths as well as connected-mode ones, Predicted Paths is
+a terrain forecast between any placed stations, and the Node Directory can be
+filled from a BPQ node or from what an earlier packet radio harvested.
+
 ### Rings on the map
 
 Two rings built from the same measurement are drawn once
@@ -130,6 +159,9 @@ and two-carriers cases.
 
 `AXTermTests/Unit/Radio/APRSChannelMapFamiliesTests.swift` — the APRS-channel
 rule, its effect on coverage evidence, and the malformed-address guard.
+`AXTermTests/Unit/UI/CarrierOnlyMapLayerTests.swift` — which families are
+possible, which layers are offered, the collapsed count, and the Settings
+cases: one APRS radio, two APRS radios, and an APRS radio with a packet radio.
 `AXTermTests/Unit/Station/CoverageRingLabelTests.swift` — ring dedupe, chip
 labels, legend qualifiers. `MapEntryVisibilityTests`, `OwnStationOnTheMapTests`
 and `StationRowTextTests` cover the station list.
