@@ -714,7 +714,8 @@ nonisolated enum RadioServiceNotes {
         var text = "These say which services use this radio."
         if !off.isEmpty {
             text += " For the station as a whole, " + off.joined(separator: " and ")
-                + ", so switching them on here does nothing until that changes under Packet Node."
+                + ", so switching them on here does nothing until that changes in the NET/ROM "
+                + "Node and Ping sections on this page."
         }
         return text
     }

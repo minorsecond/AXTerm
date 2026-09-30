@@ -96,12 +96,12 @@ final class RadioServiceSwitchTests: XCTestCase {
     func testTheFooterSaysWhenTheStationHasAServiceOff() {
         let radio = RadioProfile(id: RadioID(rawValue: "a"), name: "Base")
         let allOn = RadioServiceNotes.packetFooter(radio: radio, advertises: true, pingEnabled: true)
-        XCTAssertFalse(allOn.contains("Packet Node"))
+        XCTAssertFalse(allOn.contains("NET/ROM Node"))
 
         let bothOff = RadioServiceNotes.packetFooter(radio: radio, advertises: false, pingEnabled: false)
         XCTAssertTrue(bothOff.contains("does not announce"), bothOff)
         XCTAssertTrue(bothOff.contains("ping is off"), bothOff)
-        XCTAssertTrue(bothOff.contains("Packet Node"), bothOff)
+        XCTAssertTrue(bothOff.contains("NET/ROM Node and Ping"), bothOff)
 
         var quiet = radio
         quiet.pings = false
