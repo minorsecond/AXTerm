@@ -94,6 +94,17 @@ nonisolated enum TransferCopy {
         }
     }
 
+    /// Under the empty Transfers list: where a received file goes, so the
+    /// operator knows before the first one arrives.
+    static func receivedFilesNote(for device: TransferDevice) -> String {
+        switch device {
+        case .mac:
+            return "Files you receive are saved in Downloads › \(ReceivedFileStore.folderName)."
+        case .iPad, .iPhone:
+            return "Files you receive are saved in the Files app, in AXTerm › \(ReceivedFileStore.folderName)."
+        }
+    }
+
     /// Where an accepted file will end up, in the words each device uses.
     static func saveLocation(for device: TransferDevice) -> String {
         switch device {

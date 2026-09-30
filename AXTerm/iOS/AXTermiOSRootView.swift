@@ -448,6 +448,8 @@ struct AXTermiOSRootView: View {
             }
         }
         .task { applyKeepAwake() }
+        // So "AXTerm Transfers" is in the Files app before the first file.
+        .task { ReceivedFileStore.prepareFolder() }
         // Files from other apps: "Open in AXTerm", the share sheet's AXTerm
         // entry, a drop on the app. They arrive as file URLs; the app has no
         // URL scheme of its own, so anything else is ignored.

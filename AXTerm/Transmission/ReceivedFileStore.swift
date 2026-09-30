@@ -56,6 +56,18 @@ nonisolated enum ReceivedFileStore {
                documents: fileManager.urls(for: .documentDirectory, in: .userDomainMask).first)
     }
 
+    /// Creates this device's folder ahead of the first file, so on iOS
+    /// "AXTerm Transfers" is already in the Files app when the operator goes
+    /// looking. The Mac's Downloads is left alone until a file arrives.
+    @discardableResult
+    static func prepareFolder(fileManager: FileManager = .default,
+                              platform: Platform = .current) -> URL? {
+        guard platform == .iOS, let folder = defaultFolder(fileManager: fileManager, platform: platform)
+        else { return nil }
+        try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
     /// A safe local name for a file name that came from another station.
     ///
     /// The name is untrusted: it is whatever the far end typed or its

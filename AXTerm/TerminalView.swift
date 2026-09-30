@@ -2990,6 +2990,7 @@ struct TerminalView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
                 } else if let call = stationFilter {
                     Text("No traffic for \(call)")
                         .font(.headline)

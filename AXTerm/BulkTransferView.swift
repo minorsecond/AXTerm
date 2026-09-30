@@ -633,11 +633,18 @@ struct BulkTransferListView: View {
                         .foregroundStyle(.secondary)
 
                     Text("No file transfers")
-                        .foregroundStyle(.secondary)
+                        .font(.headline)
 
                     Text(TransferCopy.emptyStateHint(for: TransferDevice.current))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    Text(TransferCopy.receivedFilesNote(for: TransferDevice.current))
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 360)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding()

@@ -146,3 +146,19 @@ final class ReceivedFileStoreTests: XCTestCase {
         }
     }
 }
+
+/// The folder made ready at launch, and the note that names it.
+final class ReceivedFileFolderPrepTests: XCTestCase {
+    func testTheMacsDownloadsIsLeftAloneUntilAFileArrives() {
+        XCTAssertNil(ReceivedFileStore.prepareFolder(platform: .macOS))
+    }
+
+    func testTheNoteNamesTheFolderInEachDevicesWords() {
+        XCTAssertTrue(TransferCopy.receivedFilesNote(for: .mac).contains("Downloads › AXTerm Transfers"))
+        for device in [TransferDevice.iPhone, .iPad] {
+            let note = TransferCopy.receivedFilesNote(for: device)
+            XCTAssertTrue(note.contains("Files app"), note)
+            XCTAssertTrue(note.contains(ReceivedFileStore.folderName), note)
+        }
+    }
+}
