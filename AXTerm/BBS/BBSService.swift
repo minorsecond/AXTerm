@@ -845,6 +845,10 @@ final class BBSService: ObservableObject {
         append(.note, "sending \(file.name) by YAPP"
                + (peerSupportsAXDP(caller) ? " (the caller runs AXTerm)" : ""))
         startWatchdog()
+        // Anything typed after the D, in the same frame, is not a command
+        // now; left here it would be glued to the first line after the
+        // transfer, and would hide an AXDP message arriving later.
+        inputBuffer = Data()
 
         // The announcement goes out before the first protocol byte does.
         flushLines()
