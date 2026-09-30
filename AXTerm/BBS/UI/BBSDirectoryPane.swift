@@ -111,6 +111,7 @@ struct BBSDirectoryPane: View {
             VStack(spacing: 6) {
                 HStack(spacing: 6) {
                     TextField("Add callsign", text: $newCallsign)
+                        .callsignInput($newCallsign)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                         .onSubmit(addEntry)
@@ -226,11 +227,12 @@ struct BBSDirectoryPane: View {
             // drafts were seeded — a license lookup, a caller telling us their
             // name — showed as "not on file" while the list row beside it
             // showed the truth.
-            TextField(key.label,
-                      text: Binding(
-                        get: { editing == key ? (drafts[key] ?? "") : (entry.value(key) ?? "") },
-                        set: { drafts[key] = $0 }),
-                      prompt: Text("not on file"))
+            let text = Binding(
+                get: { editing == key ? (drafts[key] ?? "") : (entry.value(key) ?? "") },
+                set: { drafts[key] = $0 })
+            TextField(key.label, text: text, prompt: Text("not on file"))
+                // A home BBS is a callsign; the other fields are words.
+                .callsignInput(text, isEnabled: key == .homeBBS)
                 .focused($editing, equals: key)
                 .onSubmit {
                     service.sysopSetDirectoryField(

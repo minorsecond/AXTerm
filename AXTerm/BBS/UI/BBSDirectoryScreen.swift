@@ -84,8 +84,7 @@ struct BBSDirectoryListScreen: View {
         }
         .alert("Add a callsign", isPresented: $showingAdd) {
             TextField("Callsign", text: $newCallsign)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
+                .callsignInput($newCallsign)
             Button("Cancel", role: .cancel) { newCallsign = "" }
             Button("Add") { addEntry() }
         } message: {
@@ -325,14 +324,15 @@ struct BBSDirectoryDetailScreen: View {
             // drafts were seeded — a license lookup, a caller telling us their
             // name — showed as "not on file" while the row beside it showed
             // the truth.
-            TextField(key.label,
-                      text: Binding(
-                        get: { editing == key ? (drafts[key] ?? "") : (entry.value(key) ?? "") },
-                        set: { drafts[key] = $0 }),
-                      prompt: Text("not on file"))
-                .focused($editing, equals: key)
-                .autocorrectionDisabled(key == .homeBBS)
+            let text = Binding(
+                get: { editing == key ? (drafts[key] ?? "") : (entry.value(key) ?? "") },
+                set: { drafts[key] = $0 })
+            // A home BBS is a callsign; the other fields are words. The
+            // keyboard hint nearest the field wins, so it goes first.
+            TextField(key.label, text: text, prompt: Text("not on file"))
                 .textInputAutocapitalization(key == .homeBBS ? .characters : .words)
+                .callsignInput(text, isEnabled: key == .homeBBS)
+                .focused($editing, equals: key)
                 .onSubmit {
                     commit(key, entry: entry)
                     editing = nil

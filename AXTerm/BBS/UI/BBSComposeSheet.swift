@@ -52,11 +52,7 @@ struct BBSComposeSheet: View {
     private var recipientField: some View {
         TextField("To", text: $to, prompt: Text("Callsign, or ALL for a bulletin"))
             .font(.system(.body, design: .monospaced))
-            .autocorrectionDisabled()
-            #if os(iOS)
-            .textInputAutocapitalization(.characters)
-            .keyboardType(.asciiCapable)
-            #endif
+            .callsignInput($to)
     }
 
     /// Said once, where the decision is made: a bulletin is readable by every
