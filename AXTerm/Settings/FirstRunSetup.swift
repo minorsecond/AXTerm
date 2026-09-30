@@ -81,10 +81,12 @@ struct FirstRunSetupView: View {
     /// Called when setup closes, with the radio that was set up, if one was.
     let onClose: (RadioID?) -> Void
 
-    enum Stage: Equatable {
+    enum Stage: Int, Equatable {
         case callsign
         case position
         case radio
+
+        var index: Int { rawValue }
     }
 
     @State private var stage: Stage
@@ -110,41 +112,22 @@ struct FirstRunSetupView: View {
                     if let radio { finish(radio: radio) }
                 }
             } else {
-                VStack(spacing: 0) {
-                    header
-                    Divider()
-                    Form { stageContent }
-                        .formStyle(.grouped)
-                    Divider()
+                SetupFrame(title: "Set Up AXTerm", subtitle: stageSubtitle,
+                           steps: ["Callsign", "Position", "Radio"], current: stage.index) {
+                    stageContent
+                } buttons: {
                     buttons
                 }
-                #if os(macOS)
-                .frame(width: 560, height: 580)
-                #endif
             }
         }
         .interactiveDismissDisabled()
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Set Up AXTerm")
-                .font(.title2.weight(.semibold))
-            Text(stageSubtitle)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-    }
-
     private var stageSubtitle: String {
         switch stage {
-        case .callsign: return "Three short steps: your callsign, where your station is, and your radio."
-        case .position: return "Where the station is. The map, distances and APRS beacons start here."
-        case .radio: return "How AXTerm reaches your radio."
+        case .callsign: return "Who this station is. Three short steps, and you can change any of it later."
+        case .position: return "Where the station is. The map, distances, terrain and APRS beacons start here."
+        case .radio: return "How AXTerm reaches your radio, what its channel is for, and its SSID."
         }
     }
 
@@ -152,17 +135,10 @@ struct FirstRunSetupView: View {
     private var stageContent: some View {
         switch stage {
         case .callsign:
-            Section {
-                StationCallsignField(settings: settings)
-            } header: {
-                Text("Your callsign")
-            } footer: {
-                Text("Without an SSID, such as K0EPI. Each radio adds its own SSID, chosen when "
-                     + "you set the radio up.")
-            }
+            SetupCallsignStep(settings: settings)
         case .position:
-            StationPositionSettings(settings: settings, winlinkSettings: winlinkSettings,
-                                    locationService: locationService)
+            SetupPositionStep(settings: settings, winlinkSettings: winlinkSettings,
+                              locationService: locationService)
         case .radio:
             radioStage
         }
@@ -171,53 +147,68 @@ struct FirstRunSetupView: View {
     @ViewBuilder
     private var radioStage: some View {
         let radios = settings.activeRadios
-        Section {
-            ForEach(radios) { radio in
-                LabeledContent(RadioDetailView.title(for: radio)) {
-                    Text(radio.displayEndpoint).foregroundStyle(.secondary)
+        SetupCard(title: radios.count == 1 ? "Your radio" : "Your radios",
+                  note: radios.count == 1
+                    ? "Set it up to choose how it is reached, its channel and its SSID. You can "
+                        + "also leave it and change it later under Settings \u{203A} Radios."
+                    : "Your radios are set up already. Each has its own page under Settings \u{203A} Radios.") {
+            ForEach(Array(radios.enumerated()), id: \.element.id) { index, radio in
+                if index > 0 { Divider() }
+                HStack(alignment: .firstTextBaseline) {
+                    SetupReadout(rows: [
+                        ("Radio", RadioDetailView.title(for: radio)),
+                        ("Reached by", radio.displayEndpoint),
+                        ("Channel", RadioChannel.of(radio).title),
+                        ("On air as", Self.onAir(radio, station: settings.myCallsign)),
+                    ])
+                    Spacer(minLength: 0)
                 }
             }
-            if radios.count == 1, let only = radios.first {
-                Button("Set Up \(RadioDetailView.title(for: only))\u{2026}") {
-                    radioFlow = AddRadioFlow(settings: settings, mode: .configure(only.id))
-                }
-            }
-            Button("Add a Radio\u{2026}") {
-                radioFlow = AddRadioFlow(settings: settings, mode: .new)
-            }
-        } header: {
-            Text(radios.count == 1 ? "Your radio" : "Your radios")
-        } footer: {
-            Text(radios.count == 1
-                 ? "Set it up to choose how it is reached, its channel and its SSID, or keep it "
-                    + "as it is and change it later under Settings \u{203A} Radios."
-                 : "Your radios are set up already. Each has its own page under Settings \u{203A} Radios.")
         }
+        HStack(spacing: 10) {
+            if radios.count == 1, let only = radios.first {
+                Button {
+                    radioFlow = AddRadioFlow(settings: settings, mode: .configure(only.id))
+                } label: {
+                    Label("Set Up This Radio\u{2026}", systemImage: "slider.horizontal.3")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            Button {
+                radioFlow = AddRadioFlow(settings: settings, mode: .new)
+            } label: {
+                Label(radios.count == 1 ? "Add Another Radio\u{2026}" : "Add a Radio\u{2026}",
+                      systemImage: "plus")
+            }
+        }
+        .controlSize(.large)
     }
 
+    private static func onAir(_ radio: RadioProfile, station: String) -> String {
+        let call = radio.resolvedCallsign(station: station)
+        return call.isEmpty ? "\u{2014}" : call
+    }
+
+    @ViewBuilder
     private var buttons: some View {
-        HStack {
-            Button("Skip Setup") { finish(radio: nil) }
-                .keyboardShortcut(.cancelAction)
-            Spacer()
-            if stage != .callsign {
-                Button("Back") { stage = stage == .radio ? .position : .callsign }
-            }
-            switch stage {
-            case .callsign:
-                Button("Continue") { stage = .position }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!CallsignValidator.isValidCallsign(settings.myCallsign))
-            case .position:
-                Button("Continue") { stage = .radio }
-                    .keyboardShortcut(.defaultAction)
-            case .radio:
-                Button("Done") { finish(radio: nil) }
-                    .keyboardShortcut(.defaultAction)
-            }
+        Button("Skip Setup") { finish(radio: nil) }
+            .keyboardShortcut(.cancelAction)
+        Spacer()
+        if stage != .callsign {
+            Button("Back") { stage = stage == .radio ? .position : .callsign }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        switch stage {
+        case .callsign:
+            Button("Continue") { stage = .position }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!CallsignValidator.isValidCallsign(settings.myCallsign))
+        case .position:
+            Button("Continue") { stage = .radio }
+                .keyboardShortcut(.defaultAction)
+        case .radio:
+            Button("Done") { finish(radio: nil) }
+                .keyboardShortcut(.defaultAction)
+        }
     }
 
     /// Setup is over, finished or skipped: it does not offer itself again.

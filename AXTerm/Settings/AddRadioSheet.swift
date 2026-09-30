@@ -30,17 +30,14 @@ struct AddRadioSheet: View {
     private var channel: RadioChannel { RadioChannel.of(radio) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            Form { stepContent }
-                .formStyle(.grouped)
-            Divider()
+        SetupFrame(title: flow.mode == .new ? "Add a Radio" : "Set Up Your Radio",
+                   subtitle: stepSubtitle,
+                   steps: AddRadioFlow.Step.allCases.map(\.title),
+                   current: flow.step.rawValue) {
+            stepContent
+        } buttons: {
             buttons
         }
-        #if os(macOS)
-        .frame(width: 560, height: 580)
-        #endif
         .interactiveDismissDisabled()
         .onAppear {
             viewModel.onAppear()
@@ -61,57 +58,40 @@ struct AddRadioSheet: View {
 
     // MARK: - Frame
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(flow.mode == .new ? "Add a Radio" : "Set Up Your Radio")
-                .font(.title2.weight(.semibold))
-            HStack(spacing: 6) {
-                ForEach(AddRadioFlow.Step.allCases, id: \.self) { step in
-                    Text(step.title)
-                        .font(.caption.weight(step == flow.step ? .semibold : .regular))
-                        .foregroundStyle(step == flow.step ? .primary : .secondary)
-                    if step != .done {
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Step \(flow.step.rawValue + 1) of \(AddRadioFlow.Step.allCases.count): \(flow.step.title)")
+    private var stepSubtitle: String {
+        switch flow.step {
+        case .connect: return "How AXTerm reaches the TNC or radio. Nothing is transmitted while you set it up."
+        case .channel: return "What this radio's frequency is for. It decides which services run on it."
+        case .identity: return "The address this radio goes on the air with."
+        case .basics: return "The few settings this channel needs. Everything else is on the radio's page."
+        case .done: return "Check it over. Done switches the radio on."
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
     }
 
+    @ViewBuilder
     private var buttons: some View {
-        HStack {
-            Button("Cancel", role: .cancel) {
-                flow.cancel()
-                viewModel.suspendAutoReconnect(false)
-                onClose(nil)
-            }
-            .keyboardShortcut(.cancelAction)
-            Spacer()
-            if flow.canGoBack {
-                Button("Back") { flow.back() }
-            }
-            if flow.step == .done {
-                Button("Done") {
-                    let id = flow.finish()
-                    viewModel.suspendAutoReconnect(false)
-                    onClose(id)
-                }
-                .keyboardShortcut(.defaultAction)
-            } else {
-                Button("Next") { flow.next() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canContinue)
-            }
+        Button("Cancel", role: .cancel) {
+            flow.cancel()
+            viewModel.suspendAutoReconnect(false)
+            onClose(nil)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .keyboardShortcut(.cancelAction)
+        Spacer()
+        if flow.canGoBack {
+            Button("Back") { flow.back() }
+        }
+        if flow.step == .done {
+            Button("Done") {
+                let id = flow.finish()
+                viewModel.suspendAutoReconnect(false)
+                onClose(id)
+            }
+            .keyboardShortcut(.defaultAction)
+        } else {
+            Button("Next") { flow.next() }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canContinue)
+        }
     }
 
     /// The one step that can hold the operator back is Identity with no
@@ -142,66 +122,127 @@ struct AddRadioSheet: View {
 
     @ViewBuilder
     private var connectStep: some View {
-        Section {
-            DraftTextField("Name", text: $viewModel.name, prompt: RadioProfile.defaultName(for: radio))
-            Picker("Reached by", selection: linkBinding) {
-                ForEach(RadioLinkChoice.selectable(including: linkBinding.wrappedValue)) { choice in
-                    Text(choice.title).tag(choice)
+        let choices = RadioLinkChoice.selectable(including: linkBinding.wrappedValue)
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
+                                 count: min(max(choices.count, 1), 3)),
+                  spacing: 8) {
+            ForEach(choices) { choice in
+                SetupTile(symbol: Self.symbol(for: choice), title: Self.shortTitle(for: choice),
+                          detail: Self.tagline(for: choice),
+                          selected: linkBinding.wrappedValue == choice) {
+                    linkBinding.wrappedValue = choice
                 }
             }
-            Text(linkBinding.wrappedValue.summary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        SetupCard(title: linkBinding.wrappedValue.title, note: linkBinding.wrappedValue.summary) {
+            LabeledContent("Name") {
+                DraftTextField("Name", text: $viewModel.name, prompt: RadioProfile.defaultName(for: radio))
+                    .labelsHidden()
+                    .frame(maxWidth: 240)
+            }
+            Divider()
             switch viewModel.selectedTransport {
             case .network: NetworkSettingsContent(viewModel: viewModel)
             case .serial: SerialSettingsContent(viewModel: viewModel)
             case .ble: BLESettingsContent(viewModel: viewModel)
             case .modem: ModemSettingsContent(viewModel: viewModel)
             }
-        } header: {
-            Text("How is this radio reached?")
         }
 
-        Section {
-            ConnectionStatusView(status: viewModel.radioConnectionStatus)
+        SetupCard(note: "Connects now to check the TNC answers. Nothing goes out on the air, and "
+                    + "you can skip this and connect later from the radio's page.") {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(Self.ledColor(viewModel.radioConnectionStatus))
+                    .frame(width: 9, height: 9)
+                    .shadow(color: Self.ledColor(viewModel.radioConnectionStatus).opacity(0.6), radius: 3)
+                Text(Self.statusText(viewModel.radioConnectionStatus))
+                    .font(.callout.weight(.medium))
+                Spacer()
+                if !viewModel.radioConnected, viewModel.radioConnectionStatus != .connecting {
+                    Button("Test the Link") {
+                        flow.testLink { viewModel.connectThisRadio() }
+                    }
+                    .disabled(viewModel.radioUnavailableReason != nil)
+                } else if viewModel.radioConnectionStatus == .connecting {
+                    ProgressView().controlSize(.small)
+                }
+            }
             if !viewModel.radioConnected, let reason = viewModel.radioUnavailableReason {
                 Label(reason, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            if !viewModel.radioConnected, viewModel.radioConnectionStatus != .connecting {
-                Button("Test the Link") {
-                    flow.testLink { viewModel.connectThisRadio() }
-                }
-                .disabled(viewModel.radioUnavailableReason != nil)
-            }
-        } footer: {
-            Text("Connects to the TNC or radio now, to check it answers. Nothing goes out on "
-                 + "the air. You can skip this and connect later from the radio's page.")
+        }
+    }
+
+    private static func symbol(for choice: RadioLinkChoice) -> String {
+        switch choice {
+        case .ble: return "dot.radiowaves.left.and.right"
+        case .serial: return "cable.connector"
+        case .network: return "network"
+        case .modemUSB: return "waveform"
+        case .modemWiFi: return "wifi"
+        }
+    }
+
+    private static func shortTitle(for choice: RadioLinkChoice) -> String {
+        switch choice {
+        case .ble: return "Bluetooth LE"
+        case .serial: return "Serial / USB"
+        case .network: return "Network KISS"
+        case .modemUSB: return "Sound modem"
+        case .modemWiFi: return "Icom over Wi\u{2011}Fi"
+        }
+    }
+
+    private static func tagline(for choice: RadioLinkChoice) -> String {
+        switch choice {
+        case .ble: return "Mobilinkd TNC4 and other BLE TNCs"
+        case .serial: return "A KISS TNC on a serial or USB port"
+        case .network: return "Direwolf, BPQ or a TNC on TCP"
+        case .modemUSB: return "AXTerm's modem through the radio's USB audio"
+        case .modemWiFi: return "AXTerm's modem over Icom's LAN protocol"
+        }
+    }
+
+    private static func ledColor(_ status: ConnectionStatus) -> Color {
+        switch status {
+        case .connected: return .green
+        case .connecting: return .yellow
+        case .failed: return .red
+        case .disconnected: return Color.secondary.opacity(0.5)
+        }
+    }
+
+    private static func statusText(_ status: ConnectionStatus) -> String {
+        switch status {
+        case .connected: return "Connected"
+        case .connecting: return "Connecting\u{2026}"
+        case .failed: return "Couldn't connect"
+        case .disconnected: return "Not tested"
         }
     }
 
     // MARK: - 2. Channel
 
+    @ViewBuilder
     private var channelStep: some View {
-        Section {
-            Picker("Channel", selection: Binding(get: { channel }, set: { flow.setChannel($0) })) {
-                ForEach(RadioChannel.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            Text(channel == .aprs
-                 ? "A shared APRS frequency such as 144.390 MHz: position beacons, APRS "
-                    + "messages and the map's Ping. The node, ping and the mailbox stay off here."
-                 : "A node, BBS or keyboard-to-keyboard frequency: connected sessions, the "
-                    + "NET/ROM node and the mailbox. No APRS goes out on it.")
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-        } header: {
-            Text("What is this radio's frequency for?")
-        } footer: {
-            Text("A radio is one or the other. You can change it later on the radio's page.")
+        HStack(spacing: 10) {
+            SetupTile(symbol: "mappin.and.ellipse", title: "APRS",
+                      detail: "A shared APRS frequency such as 144.390 MHz: position beacons, "
+                        + "messages and the map's Ping. Node, ping and mailbox stay off.",
+                      selected: channel == .aprs) { flow.setChannel(.aprs) }
+            SetupTile(symbol: "point.3.connected.trianglepath.dotted", title: "Packet",
+                      detail: "A node, BBS or keyboard frequency: connected sessions, the NET/ROM "
+                        + "node and the mailbox. No APRS goes out on it.",
+                      selected: channel == .packet) { flow.setChannel(.packet) }
         }
+        Text("A radio is one or the other. You can change it later on the radio's page.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     // MARK: - 3. Identity
@@ -211,25 +252,58 @@ struct AddRadioSheet: View {
     @ViewBuilder
     private var identityStep: some View {
         let taken = SSIDSuggestion.taken(by: settings, except: flow.radioID)
-        if stationCallsign.isEmpty {
-            Section {
-                Text("Set your callsign under General first, or give this radio a callsign of its own below.")
+        let onAir = radio.resolvedCallsign(station: settings.myCallsign)
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("ON THE AIR AS")
+                    .font(.caption2.weight(.semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(.secondary)
+                Text(onAir.isEmpty ? "N0CALL" : onAir)
+                    .font(.system(size: 30, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(onAir.isEmpty ? .secondary : .primary)
+                    .contentTransition(.numericText())
+            }
+            Spacer(minLength: 0)
+            if let ssid = flow.ssid, !usesOwnCallsign,
+               let meaning = SSIDConvention.detail(ssid: ssid, family: channel == .aprs ? .aprs : nil, usage: [:]) {
+                Text(meaning)
                     .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 220, alignment: .trailing)
+            }
+        }
+        .padding(12)
+        .background(SetupSurface())
+
+        if stationCallsign.isEmpty {
+            SetupCard(note: "Set your callsign under General first, or give this radio a callsign of its own.") {
                 CallsignField(title: "Callsign", text: $viewModel.callsign)
-            } header: {
-                Text("Identity")
             }
         } else {
-            Section {
-                HStack {
+            SetupCard(title: "SSID",
+                      note: channel == .aprs
+                        ? "APRS software reads the SSID: 0 is a fixed home station, 9 a mobile, 7 a "
+                            + "handheld. Each of your radios needs its own."
+                        : "Packet has no standard for SSIDs. Pick one none of your other radios uses, "
+                            + "so callers can reach this radio in particular.") {
+                HStack(spacing: 6) {
+                    Text("Suggested")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     ForEach(SSIDSuggestion.suggest(for: channel, taken: taken), id: \.self) { ssid in
                         Button(ssid == 0 ? stationCallsign : "\(stationCallsign)-\(ssid)") {
                             usesOwnCallsign = false
                             flow.setSSID(ssid)
                         }
+                        .font(.system(.callout, design: .monospaced))
+                        .buttonStyle(.bordered)
+                        .tint(flow.ssid == ssid && !usesOwnCallsign ? .accentColor : nil)
                     }
                 }
-                Picker("SSID", selection: ssidBinding) {
+                Divider()
+                Picker("All SSIDs", selection: ssidBinding) {
                     ForEach(Array(SSIDConvention.range), id: \.self) { ssid in
                         ssidRow(ssid, taken: taken).tag(Optional(ssid))
                     }
@@ -238,14 +312,6 @@ struct AddRadioSheet: View {
                 if ssidBinding.wrappedValue == nil {
                     CallsignField(title: stationCallsign, text: $viewModel.callsign)
                 }
-            } header: {
-                Text("What does this radio go on the air as?")
-            } footer: {
-                Text(channel == .aprs
-                     ? "APRS software reads the SSID: 0 is a fixed home station, 9 a mobile, 7 a "
-                        + "handheld. Each of your radios needs its own."
-                     : "Packet has no standard for SSIDs. Pick one none of your other radios uses, "
-                        + "so callers can reach this radio in particular.")
             }
         }
     }
@@ -293,37 +359,43 @@ struct AddRadioSheet: View {
 
     @ViewBuilder
     private var aprsBasics: some View {
-        Section {
+        SetupCard(title: "Position beacon",
+                  note: "The beacon uses the station position from General. A fixed position, a "
+                    + "comment and the rest are on the radio's page.") {
             LabeledContent("Symbol") {
                 HStack(spacing: 8) {
+                    Text("\(String(symbol.table))\(String(symbol.code))")
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(.secondary)
                     Text(symbol.label).lineLimit(1)
-                    Spacer()
                     Button("Choose\u{2026}") { showingSymbolPicker = true }
                 }
             }
+            Divider()
             Toggle("Send a position beacon", isOn: radioBinding(\.beacon.enabled))
             if radio.beacon.enabled {
-                Stepper("Every \(radio.beacon.intervalMinutes) min",
-                        value: radioBinding(\.beacon.intervalMinutes), in: 5...240, step: 5)
+                Stepper(value: radioBinding(\.beacon.intervalMinutes), in: 5...240, step: 5) {
+                    HStack {
+                        Text("Every")
+                        Text("\(radio.beacon.intervalMinutes) min")
+                            .font(.system(.body, design: .monospaced))
+                    }
+                }
             }
-        } header: {
-            Text("Position beacon")
-        } footer: {
-            Text("The beacon uses the station position from General. You can give this radio a "
-                 + "fixed position, a comment and more on its page.")
         }
-        Section {
+        SetupCard(title: "APRS path") {
             RadioAPRSPathRow(path: Binding(
                 get: { radio.effectiveAPRSPath },
                 set: { value in settings.updateRadio(flow.radioID) { $0.aprsPath = value.uppercased() } }))
-        } header: {
-            Text("APRS path")
         }
     }
 
     @ViewBuilder
     private var packetBasics: some View {
-        Section {
+        SetupCard(title: "Services on this radio",
+                  note: "Whether the node and the mailbox are on the air at all is set for the whole "
+                    + "station under Packet Node and BBS. Leave the digipeater off unless this radio "
+                    + "should repeat other people's traffic.") {
             Toggle("Announce the NET/ROM node", isOn: radioBinding(\.announcesNode))
             if settings.netRomNodeIdentity == .perRadio, radio.announcesNode {
                 LabeledContent("Node alias on this radio") {
@@ -331,17 +403,15 @@ struct AddRadioSheet: View {
                               text: Binding(
                                 get: { radio.netRomAlias },
                                 set: { value in settings.updateRadio(flow.radioID) { $0.netRomAlias = value.uppercased() } }))
-                        .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: 160)
                 }
             }
+            Divider()
             Toggle("Answer mailbox calls", isOn: radioBinding(\.answersMailbox))
+            Divider()
             Toggle("Digipeat on this radio", isOn: radioBinding(\.digi.enabled))
-        } header: {
-            Text("Services on this radio")
-        } footer: {
-            Text("Whether the node announces itself and the mailbox is on the air at all is set "
-                 + "for the whole station under Packet Node and BBS. The digipeater stays off "
-                 + "unless you want this radio repeating other people's traffic.")
         }
     }
 
@@ -354,16 +424,26 @@ struct AddRadioSheet: View {
     // MARK: - Done
 
     private var doneStep: some View {
-        Section {
-            LabeledContent("Name", value: RadioDetailView.title(for: radio))
-            LabeledContent("Reached by", value: radio.displayEndpoint)
-            LabeledContent("On the air as", value: radio.resolvedCallsign(station: settings.myCallsign))
-            LabeledContent("Channel", value: channel.title)
-        } header: {
-            Text("Ready")
-        } footer: {
-            Text("Done switches this radio on and opens its page, where its timing, beacon and "
-                 + "everything else are.")
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 10) {
+                SetupReadout(rows: [
+                    ("Radio", RadioDetailView.title(for: radio)),
+                    ("Link", radio.displayEndpoint),
+                    ("Call", radio.resolvedCallsign(station: settings.myCallsign)),
+                    ("Channel", channel.title),
+                ])
+                Text("Done switches this radio on and opens its page, where its timing, beacon "
+                     + "and everything else live.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
         }
+        .padding(12)
+        .background(SetupSurface())
     }
 }
