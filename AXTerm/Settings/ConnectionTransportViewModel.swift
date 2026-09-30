@@ -308,6 +308,10 @@ final class ConnectionTransportViewModel: ObservableObject {
         if modemRigLink != profile.modemRigLink { modemRigLink = profile.modemRigLink }
         if lanHost != profile.lanHost { lanHost = profile.lanHost }
         if lanControlPort != profile.lanControlPort { lanControlPort = profile.lanControlPort }
+        let serialText = profile.lanSerialPort.map(String.init) ?? ""
+        if lanSerialPortText != serialText { lanSerialPortText = serialText }
+        let audioText = profile.lanAudioPort.map(String.init) ?? ""
+        if lanAudioPortText != audioText { lanAudioPortText = audioText }
         if lanUsername != profile.lanUsername { lanUsername = profile.lanUsername }
         // Show "stored" only when this build can actually read the password.
         // The profile's flag remembers that one was set; a rebuild can leave
@@ -780,6 +784,20 @@ final class ConnectionTransportViewModel: ObservableObject {
             update { $0.lanControlPort = lanControlPort }
         }
     }
+    /// The CI-V and audio port overrides as typed. Empty, or anything that
+    /// isn't a port, means automatic: the ports the radio announces.
+    @Published var lanSerialPortText: String = "" {
+        didSet { update { $0.lanSerialPort = Self.portOverride(lanSerialPortText) } }
+    }
+    @Published var lanAudioPortText: String = "" {
+        didSet { update { $0.lanAudioPort = Self.portOverride(lanAudioPortText) } }
+    }
+
+    nonisolated static func portOverride(_ text: String) -> Int? {
+        guard let port = Int(text.trimmingCharacters(in: .whitespaces)), (1...65535).contains(port) else { return nil }
+        return port
+    }
+
     @Published var lanUsername: String = "" {
         didSet { update { $0.lanUsername = lanUsername.trimmingCharacters(in: .whitespaces) } }
     }

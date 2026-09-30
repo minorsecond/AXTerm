@@ -366,5 +366,41 @@ final class IcomLANMediaPortTests: XCTestCase {
         radio.lanControlPort = 50100
         XCTAssertEqual(radio.lanConfiguration.serialPort, 50101)
         XCTAssertEqual(radio.lanConfiguration.audioPort, 50102)
+        XCTAssertFalse(radio.lanConfiguration.pinnedSerialPort, "automatic: the announcement can replace it")
+        XCTAssertFalse(radio.lanConfiguration.pinnedAudioPort)
+    }
+
+    /// A typed port wins over both the announcement and the default, for
+    /// a radio behind port forwarding.
+    func testATypedPortIsPinned() {
+        var radio = ModemLinkConfig()
+        radio.lanHost = "radio.example.net"
+        radio.lanControlPort = 60001
+        radio.lanSerialPort = 60012
+        let c = radio.lanConfiguration
+        XCTAssertEqual(c.serialPort, 60012)
+        XCTAssertTrue(c.pinnedSerialPort)
+        XCTAssertEqual(c.audioPort, 60003, "the other still defaults")
+        XCTAssertFalse(c.pinnedAudioPort)
+    }
+
+    func testOldProfilesWithoutOverridesDecodeAsAutomatic() throws {
+        let radio = RadioProfile(id: RadioID(rawValue: "r"), name: "705")
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(radio)) as! [String: Any]
+        json.removeValue(forKey: "lanSerialPort")
+        json.removeValue(forKey: "lanAudioPort")
+        let decoded = try JSONDecoder().decode(RadioProfile.self,
+                                               from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(decoded.lanSerialPort)
+        XCTAssertNil(decoded.lanAudioPort)
+    }
+
+    func testTypedPortTextIsParsedOrTreatedAsAutomatic() {
+        XCTAssertEqual(ConnectionTransportViewModel.portOverride("50101"), 50101)
+        XCTAssertEqual(ConnectionTransportViewModel.portOverride(" 50102 "), 50102)
+        XCTAssertNil(ConnectionTransportViewModel.portOverride(""))
+        XCTAssertNil(ConnectionTransportViewModel.portOverride("0"))
+        XCTAssertNil(ConnectionTransportViewModel.portOverride("70000"))
+        XCTAssertNil(ConnectionTransportViewModel.portOverride("auto"))
     }
 }

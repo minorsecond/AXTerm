@@ -78,6 +78,12 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     /// Keychain under this radio's id; the profile only says whether one is set.
     var lanHost: String = ""
     var lanControlPort: Int = 50001
+    /// CI-V and audio ports typed by the operator. Nil, the usual case,
+    /// means take them from the radio's status packet. Set only when
+    /// something between here and the radio (port forwarding) makes the
+    /// ports it announces unreachable.
+    var lanSerialPort: Int?
+    var lanAudioPort: Int?
     var lanUsername: String = ""
     var hasLANPassword: Bool = false
     var civSerialPath: String = ""
@@ -238,6 +244,8 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         modemRigLink = try c.decodeIfPresent(ModemRigLink.self, forKey: .modemRigLink) ?? .usb
         lanHost = try c.decodeIfPresent(String.self, forKey: .lanHost) ?? ""
         lanControlPort = try c.decodeIfPresent(Int.self, forKey: .lanControlPort) ?? 50001
+        lanSerialPort = try c.decodeIfPresent(Int.self, forKey: .lanSerialPort)
+        lanAudioPort = try c.decodeIfPresent(Int.self, forKey: .lanAudioPort)
         lanUsername = try c.decodeIfPresent(String.self, forKey: .lanUsername) ?? ""
         hasLANPassword = try c.decodeIfPresent(Bool.self, forKey: .hasLANPassword) ?? false
         civSerialPath = try c.decodeIfPresent(String.self, forKey: .civSerialPath) ?? ""
@@ -344,6 +352,8 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         c.rigLink = modemRigLink
         c.lanHost = lanHost
         c.lanControlPort = UInt16(clamping: lanControlPort)
+        c.lanSerialPort = lanSerialPort.map { UInt16(clamping: $0) }
+        c.lanAudioPort = lanAudioPort.map { UInt16(clamping: $0) }
         c.lanUsername = lanUsername
         c.lanPassword = hasLANPassword ? RadioSecrets.lanPassword(for: id) ?? "" : ""
         c.civSerialPath = civSerialPath

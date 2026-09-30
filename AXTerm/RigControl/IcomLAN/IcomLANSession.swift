@@ -16,6 +16,10 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         var controlPort: UInt16 = IcomLAN.controlPort
         var serialPort: UInt16 = IcomLAN.serialPort
         var audioPort: UInt16 = IcomLAN.audioPort
+        /// True when the operator typed the port: the radio's announcement
+        /// doesn't replace it.
+        var pinnedSerialPort = false
+        var pinnedAudioPort = false
         var username: String
         var password: String
         /// What the login names us as; the radio shows it and echoes it back.
@@ -83,8 +87,12 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     /// The CI-V and audio ports the radio announced in a status packet.
     /// Nil until one arrives, when the configured ports are used.
     private var announcedMediaPorts: (serial: UInt16, audio: UInt16)?
-    private var serialPort: UInt16 { announcedMediaPorts?.serial ?? configuration.serialPort }
-    private var audioPort: UInt16 { announcedMediaPorts?.audio ?? configuration.audioPort }
+    private var serialPort: UInt16 {
+        configuration.pinnedSerialPort ? configuration.serialPort : announcedMediaPorts?.serial ?? configuration.serialPort
+    }
+    private var audioPort: UInt16 {
+        configuration.pinnedAudioPort ? configuration.audioPort : announcedMediaPorts?.audio ?? configuration.audioPort
+    }
     private var connectionOpened = false
     /// True while the login ladder is running. A refusal that arrives as
     /// a status packet belongs to the ladder, not to `handleControl`.

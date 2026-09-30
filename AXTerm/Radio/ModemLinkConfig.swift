@@ -61,6 +61,9 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
     var civSerialPath = ""
     var lanHost = ""
     var lanControlPort: UInt16 = 50001
+    /// Operator overrides for the CI-V and audio ports; nil means automatic.
+    var lanSerialPort: UInt16?
+    var lanAudioPort: UInt16?
     var lanUsername = ""
     /// Runtime only: read from the Keychain, never on the profile.
     var lanPassword = ""
@@ -114,8 +117,10 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
         // Icom's layout: CI-V and audio sit one and two above control (50001,
         // 50002, 50003 on the radio itself; 50100, 50101, 50102 on Warbler).
         // A status packet that names the ports overrides this.
-        c.serialPort = lanControlPort &+ 1
-        c.audioPort = lanControlPort &+ 2
+        c.serialPort = lanSerialPort ?? lanControlPort &+ 1
+        c.audioPort = lanAudioPort ?? lanControlPort &+ 2
+        c.pinnedSerialPort = lanSerialPort != nil
+        c.pinnedAudioPort = lanAudioPort != nil
         return c
     }
 
@@ -181,6 +186,8 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
         rigLink != old.rigLink
             || lanHost != old.lanHost
             || lanControlPort != old.lanControlPort
+            || lanSerialPort != old.lanSerialPort
+            || lanAudioPort != old.lanAudioPort
             || lanUsername != old.lanUsername
             || lanPassword != old.lanPassword
             || audioInputDeviceUID != old.audioInputDeviceUID

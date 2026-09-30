@@ -49,6 +49,17 @@ struct ModemSettingsContent: View {
     }
 
     #if os(macOS)
+    private func portOverrideField(_ text: Binding<String>, automatic: Int) -> some View {
+        TextField("Port", text: text, prompt: Text("Auto (\(automatic))"))
+            .labelsHidden()
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 110)
+            #if os(iOS)
+            .keyboardType(.numberPad)
+            #endif
+            .help("Empty means automatic: the radio says which port to use when you connect.")
+    }
+
     @ViewBuilder
     private var lanFields: some View {
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 10) {
@@ -74,6 +85,31 @@ struct ModemSettingsContent: View {
                     .keyboardType(.numberPad)
                     #endif
                     .help("The control port. 50001 for the radio itself. A program that stands in for the radio, such as Warbler on this Mac, uses its own; Warbler's is 50100.")
+            }
+            GridRow {
+                Text("")
+                DisclosureGroup("Stream ports") {
+                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 8) {
+                        GridRow {
+                            Text("CI-V").foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                            portOverrideField($viewModel.lanSerialPortText,
+                                              automatic: viewModel.lanControlPort + 1)
+                        }
+                        GridRow {
+                            Text("Audio").foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                            portOverrideField($viewModel.lanAudioPortText,
+                                              automatic: viewModel.lanControlPort + 2)
+                        }
+                    }
+                    .padding(.top, 4)
+                    Text("Leave empty to use the ports the radio announces when you connect. "
+                         + "Set them only when something in between, such as port forwarding "
+                         + "on a router, makes those ports unreachable.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.callout)
             }
             GridRow {
                 Text("Username")
