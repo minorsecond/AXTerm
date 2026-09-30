@@ -43,8 +43,26 @@ struct NetworkSettingsContent: View {
                     .keyboardType(.numberPad)
                     #endif
             }
+            #if os(iOS)
+            // Nothing that speaks KISS runs on this device, so localhost is
+            // never the answer here, though it is the Mac's default.
+            if NetworkSettingsContent.isLoopback(viewModel.host) {
+                GridRow {
+                    Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                    Text("Direwolf can't run on this device. Enter the address of the computer that runs it, such as 192.168.1.20.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            #endif
         }
         .padding(.vertical, 4)
+    }
+
+    nonisolated static func isLoopback(_ host: String) -> Bool {
+        let h = host.trimmingCharacters(in: .whitespaces).lowercased()
+        return h == "localhost" || h == "::1" || h.hasPrefix("127.")
     }
 }
 

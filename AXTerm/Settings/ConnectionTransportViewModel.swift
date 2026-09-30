@@ -25,7 +25,7 @@ enum TransportSelection: String, CaseIterable, Identifiable {
         #if os(macOS)
         return allCases
         #else
-        return allCases.filter { $0 != .modem || current == .modem }
+        return allCases.filter { ($0 != .modem && $0 != .serial) || $0 == current }
         #endif
     }
 }
@@ -82,7 +82,11 @@ enum RadioLinkChoice: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .network:
+            #if os(macOS)
             "A TNC reached over TCP, such as Direwolf on this Mac or on another machine."
+            #else
+            "A TNC reached over TCP, such as Direwolf on a computer on your network."
+            #endif
         case .serial:
             "A hardware TNC on a serial or USB port."
         case .ble:
@@ -104,13 +108,14 @@ enum RadioLinkChoice: String, CaseIterable, Identifiable {
     }
 
     /// What the picker offers. The sound modem needs a Mac's sound devices
-    /// and serial ports; elsewhere it shows only for a radio that already is
-    /// one, so the operator can see and change it.
+    /// and serial ports, and iOS has no serial port for a TNC (a serial radio
+    /// there quietly fell back to TCP); elsewhere each shows only for a radio
+    /// that already is one, so the operator can see and change it.
     static func selectable(including current: RadioLinkChoice) -> [RadioLinkChoice] {
         #if os(macOS)
         return allCases
         #else
-        return allCases.filter { $0.transport != .modem || $0 == current }
+        return allCases.filter { ($0.transport != .modem && $0 != .serial) || $0 == current }
         #endif
     }
 }

@@ -932,8 +932,22 @@ struct AXTermiOSRootView: View {
                 if horizontalSizeClass != .regular {
                     Section {
                         NavigationLink(value: SettingsDestination.bbs) {
-                            Label("BBS", systemImage: "tray.full")
-                                .badge(bbsService.suggestions.count)
+                            // The on-air line belongs to the BBS row. As the
+                            // section's footer it sat under Messages and read
+                            // as being about them.
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("BBS")
+                                    Text(bbsSettings.onAir
+                                         ? "On air as \(bbsSettings.effectiveCallsign(stationCallsign: settings.primaryCallsign))"
+                                         : "Off air")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: "tray.full")
+                            }
+                            .badge(bbsService.suggestions.count)
                         }
                         .accessibilityHint("The personal mailbox: mail callers left, who called, the directory and shared files")
                         if client.aprsMessaging != nil {
@@ -943,10 +957,6 @@ struct AXTermiOSRootView: View {
                             }
                             .accessibilityHint("APRS text messages, and a probe for who can hear you")
                         }
-                    } footer: {
-                        Text(bbsSettings.onAir
-                             ? "On air as \(bbsSettings.effectiveCallsign(stationCallsign: settings.primaryCallsign)). Callers can connect and leave mail."
-                             : "Off air. Switch it on inside to answer calls.")
                     }
                 }
 
@@ -982,7 +992,7 @@ struct AXTermiOSRootView: View {
                     }
                     .accessibilityHint("The NET/ROM node, ping, the AX.25 link layer and AXDP")
                     NavigationLink(value: SettingsDestination.mailbox) {
-                        Label("Mailbox", systemImage: "tray.full")
+                        Label("BBS", systemImage: "tray.full")
                     }
                     .accessibilityHint("What the BBS answers as, its greeting, and what it shares")
                     NavigationLink(value: SettingsDestination.winlink) {
@@ -1146,7 +1156,7 @@ struct AXTermiOSRootView: View {
                           stationCallsign: settings.primaryCallsign,
                           isWinlinkP2PArmed: context.settings.p2pListenEnabled,
                           runsOn: ServiceRadios.mailbox(settings.activeRadios))
-            .navigationTitle("Mailbox")
+            .navigationTitle("BBS Settings")
             .navigationBarTitleDisplayMode(.inline)
     }
 

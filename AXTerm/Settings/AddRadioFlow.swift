@@ -71,6 +71,7 @@ final class AddRadioFlow: ObservableObject, Identifiable {
             }
             radioID = added.id
             original = nil
+            settings.noteRadioDraft(added.id)
         case .configure(let id):
             radioID = id
             original = settings.radio(id)
@@ -129,7 +130,10 @@ final class AddRadioFlow: ObservableObject, Identifiable {
     func finish() -> RadioID {
         guard !isClosed else { return radioID }
         isClosed = true
-        if mode == .new { settings.updateRadio(radioID) { $0.enabled = true } }
+        if mode == .new {
+            settings.updateRadio(radioID) { $0.enabled = true }
+            settings.noteRadioDraft(nil)
+        }
         SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
         return radioID
     }
@@ -141,6 +145,7 @@ final class AddRadioFlow: ObservableObject, Identifiable {
         switch mode {
         case .new:
             settings.discardRadio(radioID, linkWasUp: linkWasUp)
+            settings.noteRadioDraft(nil)
         case .configure:
             if let original, settings.radio(radioID) != original {
                 settings.updateRadio(radioID) { $0 = original }

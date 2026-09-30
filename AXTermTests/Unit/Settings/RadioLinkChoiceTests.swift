@@ -75,6 +75,21 @@ final class RadioLinkChoiceTests: XCTestCase {
         // so its operator can see and change it.
         XCTAssertFalse(RadioLinkChoice.selectable(including: .network).contains(.modemUSB))
         XCTAssertTrue(RadioLinkChoice.selectable(including: .modemWiFi).contains(.modemWiFi))
+        // No serial port for a TNC either, unless the radio already is one.
+        XCTAssertFalse(RadioLinkChoice.selectable(including: .network).contains(.serial))
+        XCTAssertTrue(RadioLinkChoice.selectable(including: .serial).contains(.serial))
         #endif
+    }
+}
+
+/// The iOS note under a loopback host.
+final class NetworkHostLoopbackTests: XCTestCase {
+    func testLoopbackHostsAreRecognized() {
+        for host in ["localhost", "LOCALHOST", " localhost ", "127.0.0.1", "127.1.2.3", "::1"] {
+            XCTAssertTrue(NetworkSettingsContent.isLoopback(host), host)
+        }
+        for host in ["192.168.1.20", "ham-pi.local", "", "10.0.0.127", "localhost.example.com"] {
+            XCTAssertFalse(NetworkSettingsContent.isLoopback(host), host)
+        }
     }
 }

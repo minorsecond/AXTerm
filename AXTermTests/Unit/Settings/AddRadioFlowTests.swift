@@ -161,4 +161,81 @@ final class AddRadioFlowTests: XCTestCase {
         XCTAssertFalse(FirstRunSetup.offersItself(callsign: "", dismissed: false, isTestInstance: true),
                        "a test instance starts empty on purpose")
     }
+
+    // MARK: A sheet the app quit in the middle of
+
+    /// The app quit with the sheet open and the link never tested: on the
+    /// next launch the half-added radio is gone, as if canceled.
+    func testAnInterruptedUntestedDraftIsRemovedAtNextLaunch() {
+        let defaults = TestDefaults.make("AddRadioInterrupted")
+        let first = AppSettingsStore(defaults: defaults)
+        first.myCallsign = "K0EPI"
+        let before = first.activeRadios.count
+        let draft = AddRadioFlow(settings: first, mode: .new).radioID
+        XCTAssertEqual(first.activeRadios.count, before + 1)
+
+        let relaunched = AppSettingsStore(defaults: defaults)
+        XCTAssertNil(relaunched.radio(draft), "never switched on, so removed outright")
+        XCTAssertEqual(relaunched.activeRadios.count, before)
+        XCTAssertNil(defaults.string(forKey: AppSettingsStore.radioDraftKey))
+    }
+
+    /// Switched on for a link test before the quit: archived, since frames
+    /// may already be stored against it.
+    func testAnInterruptedTestedDraftIsArchivedAtNextLaunch() throws {
+        let defaults = TestDefaults.make("AddRadioInterruptedTested")
+        let first = AppSettingsStore(defaults: defaults)
+        first.myCallsign = "K0EPI"
+        let flow = AddRadioFlow(settings: first, mode: .new)
+        flow.testLink {}
+
+        let relaunched = AppSettingsStore(defaults: defaults)
+        let radio = try XCTUnwrap(relaunched.radio(flow.radioID))
+        XCTAssertTrue(radio.archived)
+        XCTAssertFalse(radio.enabled)
+        XCTAssertFalse(relaunched.activeRadios.contains { $0.id == flow.radioID })
+    }
+
+    /// Finishing or canceling closes the draft, so a later launch leaves the
+    /// radios alone.
+    func testAClosedSheetLeavesNothingForTheNextLaunch() throws {
+        let defaults = TestDefaults.make("AddRadioClosed")
+        let first = AppSettingsStore(defaults: defaults)
+        first.myCallsign = "K0EPI"
+        let kept = AddRadioFlow(settings: first, mode: .new)
+        kept.finish()
+        XCTAssertNil(defaults.string(forKey: AppSettingsStore.radioDraftKey))
+        let dropped = AddRadioFlow(settings: first, mode: .new)
+        dropped.cancel()
+        XCTAssertNil(defaults.string(forKey: AppSettingsStore.radioDraftKey))
+
+        let relaunched = AppSettingsStore(defaults: defaults)
+        let radio = try XCTUnwrap(relaunched.radio(kept.radioID))
+        XCTAssertTrue(radio.enabled)
+        XCTAssertFalse(radio.archived)
+    }
+
+    /// Editing an existing radio is not a draft; a quit mid-edit removes
+    /// nothing.
+    func testEditingAnExistingRadioIsNotADraft() throws {
+        let defaults = TestDefaults.make("AddRadioEditNotDraft")
+        let first = AppSettingsStore(defaults: defaults)
+        let id = try XCTUnwrap(first.activeRadios.first?.id)
+        _ = AddRadioFlow(settings: first, mode: .configure(id))
+        XCTAssertNil(defaults.string(forKey: AppSettingsStore.radioDraftKey))
+        let relaunched = AppSettingsStore(defaults: defaults)
+        XCTAssertNotNil(relaunched.radio(id))
+    }
+
+    /// The last radio is never taken, even as a stale draft.
+    func testAStaleDraftNamingTheOnlyRadioIsIgnored() throws {
+        let defaults = TestDefaults.make("AddRadioStaleOnly")
+        let first = AppSettingsStore(defaults: defaults)
+        let only = try XCTUnwrap(first.activeRadios.first?.id)
+        defaults.set(only.rawValue, forKey: AppSettingsStore.radioDraftKey)
+        let relaunched = AppSettingsStore(defaults: defaults)
+        XCTAssertNotNil(relaunched.radio(only))
+        XCTAssertEqual(relaunched.activeRadios.count, 1)
+        XCTAssertNil(defaults.string(forKey: AppSettingsStore.radioDraftKey))
+    }
 }

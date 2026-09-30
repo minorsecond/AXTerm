@@ -300,7 +300,7 @@ struct RadioDetailView: View {
 
     private var identitySection: some View {
         Section {
-            Picker("SSID", selection: ssidBinding) {
+            Picker("On the air as", selection: ssidBinding) {
                 ForEach(Array(SSIDConvention.range), id: \.self) { ssid in
                     ssidRow(ssid).tag(Optional(ssid))
                 }

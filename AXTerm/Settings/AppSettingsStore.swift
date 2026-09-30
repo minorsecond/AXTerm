@@ -1366,6 +1366,34 @@ final class AppSettingsStore: ObservableObject {
         // else runs, and the old keys are never consulted again.
         if migratedRadios || clearedDefaultNames || seededBeaconOntoRadio || seededAPRS
             || splitStation.radiosChanged { persistRadios() }
+
+        discardInterruptedRadioDraft()
+    }
+
+    // MARK: - An Add Radio sheet that never closed
+
+    /// The radio an open Add Radio sheet is setting up, recorded while the
+    /// sheet is open so a quit or crash in the middle does not leave it
+    /// behind as a second "Direwolf" in every list.
+    static let radioDraftKey = "radios.addDraft.v1"
+
+    func noteRadioDraft(_ id: RadioID?) {
+        if let id {
+            defaults.set(id.rawValue, forKey: Self.radioDraftKey)
+        } else {
+            defaults.removeObject(forKey: Self.radioDraftKey)
+        }
+    }
+
+    /// Take back the radio of a sheet that was open when the app last quit,
+    /// the way Cancel would have: removed when it was never switched on for a
+    /// link test, archived when it was, since frames may be stored against it.
+    func discardInterruptedRadioDraft() {
+        guard let raw = defaults.string(forKey: Self.radioDraftKey) else { return }
+        noteRadioDraft(nil)
+        let id = RadioID(rawValue: raw)
+        guard let draft = radio(id), !draft.archived else { return }
+        discardRadio(id, linkWasUp: draft.enabled)
     }
 
 
