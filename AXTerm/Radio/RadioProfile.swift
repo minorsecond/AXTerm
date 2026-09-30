@@ -15,7 +15,7 @@ nonisolated enum RadioTransportKind: String, Codable, CaseIterable, Sendable {
 /// One radio: a TNC port on a link, operating under a callsign.
 ///
 /// Flat rather than an enum with associated values, on purpose. The
-/// Connection pane has always kept every transport's fields at once — switch
+/// radio's page has always kept every transport's fields at once — switch
 /// from TCP to serial and back and the host is still there — and a profile
 /// that forgot the host on the way through serial would be a regression the
 /// operator felt. The link layer reads the one transport that is current
@@ -90,16 +90,20 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     var txTailMs: Int = 100
     var persistence: Int = 63
     var slotTimeMs: Int = 100
+    /// Whether AXTerm sends the timing above to a network or plain serial TNC.
+    /// Off by default, so such a TNC keeps the timing it was configured with
+    /// (direwolf.conf, for Direwolf); see `timingDelivery`.
+    var sendsKISSTiming: Bool = false
     var txAudioLevel: Int = 85
     var followsRadioFrequency: Bool = true
     var setsRadioModeOnConnect: Bool = false
     var maxTransmitSeconds: Int = 30
 
     // MARK: Services on this radio
-    // All on by default, so one radio behaves exactly as it always has; the
-    // switches are only shown once there are two. "Two of your radios on one
-    // frequency should not both beacon" is the case they exist for.
-    var sendsBeacons: Bool = true
+    // All on by default, so one radio behaves exactly as it always has. The
+    // switches sit on the radio's page, under its Packet channel. An older
+    // build also stored `sendsBeacons` here; it never had a control or a
+    // reader, and decoding ignores it.
     var pings: Bool = true
     var announcesNode: Bool = true
     var answersMailbox: Bool = true
@@ -245,11 +249,11 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         txTailMs = try c.decodeIfPresent(Int.self, forKey: .txTailMs) ?? 100
         persistence = try c.decodeIfPresent(Int.self, forKey: .persistence) ?? 63
         slotTimeMs = try c.decodeIfPresent(Int.self, forKey: .slotTimeMs) ?? 100
+        sendsKISSTiming = try c.decodeIfPresent(Bool.self, forKey: .sendsKISSTiming) ?? false
         txAudioLevel = try c.decodeIfPresent(Int.self, forKey: .txAudioLevel) ?? 85
         followsRadioFrequency = try c.decodeIfPresent(Bool.self, forKey: .followsRadioFrequency) ?? true
         setsRadioModeOnConnect = try c.decodeIfPresent(Bool.self, forKey: .setsRadioModeOnConnect) ?? false
         maxTransmitSeconds = try c.decodeIfPresent(Int.self, forKey: .maxTransmitSeconds) ?? 30
-        sendsBeacons = try c.decodeIfPresent(Bool.self, forKey: .sendsBeacons) ?? true
         pings = try c.decodeIfPresent(Bool.self, forKey: .pings) ?? true
         announcesNode = try c.decodeIfPresent(Bool.self, forKey: .announcesNode) ?? true
         answersMailbox = try c.decodeIfPresent(Bool.self, forKey: .answersMailbox) ?? true
@@ -368,6 +372,42 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
             mobilinkdConfig: MobilinkdConfig(settings: tnc4),
             timing: kissTiming)
     }
+
+    /// How this radio's timing reaches the air.
+    enum TimingDelivery: Equatable, Sendable {
+        /// The built-in sound modem keys the radio and uses the values itself.
+        case modem
+        /// The link sends them every time it comes up, and again when they
+        /// change: every Bluetooth LE TNC (`KISSLinkBLE.sendKISSInit`) and a
+        /// serial Mobilinkd (`KISSLinkSerial.sendKISSInit`).
+        case sentByLink
+        /// A network TNC or a plain serial one, which the link opens and
+        /// listens to without a word. The values are sent only when the
+        /// operator asks (`sendsKISSTiming`), by `RadioManager`.
+        case optional
+    }
+
+    var timingDelivery: TimingDelivery {
+        switch kind {
+        case .modem: return .modem
+        case .ble: return .sentByLink
+        case .tcp: return .optional
+        case .serial:
+            // A serial profile on iOS reaches its TNC over the network.
+            #if os(macOS)
+            return mobilinkdEnabled ? .sentByLink : .optional
+            #else
+            return .optional
+            #endif
+        }
+    }
+
+    /// Whether `RadioManager` has to send the timing itself, because the
+    /// link will not.
+    var managerSendsTiming: Bool { timingDelivery == .optional && sendsKISSTiming }
+
+    /// Whether the timing on this radio's page reaches the TNC or modem at all.
+    var timingReachesTNC: Bool { timingDelivery != .optional || sendsKISSTiming }
 
     /// The KISS timing a hardware TNC on this radio is sent when it connects.
     var kissTiming: KISSTimingParameters {

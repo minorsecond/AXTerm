@@ -376,14 +376,10 @@ struct ContentView: View {
             coordinator.localCallsign = settings.primaryCallsign
         }
         coordinator.appSettings = settings
-        // An APRS position beacon set to "use GPS" reads the last known fix
-        // (or the manual grid-square position) at send time.
-        let locationService = winlinkContext.locationService
-        coordinator.aprsLocationProvider = { [weak locationService] in
-            guard let loc = locationService?.lastLocation ?? locationService?.manualLocation()
-            else { return nil }
-            return (loc.latitude, loc.longitude)
-        }
+        // An APRS position beacon that follows the station reads the station
+        // position at send time, from the same resolver the map uses.
+        coordinator.aprsLocationProvider = StationPositionResolver.beaconProvider(
+            defaults: settings.defaults, locationService: winlinkContext.locationService)
         // Restore the operator's NET/ROM node policy. Both switches
         // default off, so on a station that has never enabled them this
         // does nothing at all; on one that has, it resumes announcing at

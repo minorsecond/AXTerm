@@ -86,6 +86,10 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     /// reported. See `LinkOutageWatch` for why this exists at all.
     private var outages = LinkOutageWatch()
     private var outageTimer: Timer?
+    /// The KISS timing last sent to each radio whose link does not send it
+    /// by itself (`RadioProfile.managerSendsTiming`), so a settings write
+    /// that leaves the timing alone sends nothing.
+    private var sentTiming: [RadioID: KISSTimingParameters] = [:]
 
     weak var delegate: RadioManagerDelegate?
     private let linkFactory: LinkFactory
@@ -214,7 +218,31 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         modemTelemetry = modemTelemetry.filter { live.contains($0.key) }
         rigStatus = rigStatus.filter { live.contains($0.key) }
         refreshRadioStates()
+        for radio in desired { sendTimingIfNeeded(radio) }
         return created
+    }
+
+    // MARK: - KISS timing for links that do not send it
+
+    /// Sends a radio's timing to its TNC when the operator has asked for it
+    /// and the link would not do it by itself: a network TNC such as
+    /// Direwolf, or a plain serial one (`RadioProfile.timingDelivery`).
+    ///
+    /// On the radio's own KISS port, so two radios sharing one Direwolf each
+    /// set their own channel. Sent when the link comes up and whenever the
+    /// values change while it is up; switching the option off sends nothing,
+    /// and the TNC keeps what it was last told until it restarts.
+    private func sendTimingIfNeeded(_ radio: RadioProfile, force: Bool = false) {
+        guard radio.managerSendsTiming else {
+            sentTiming.removeValue(forKey: radio.id)
+            return
+        }
+        guard let session = session(for: radio.id), session.state == .connected else { return }
+        let timing = radio.kissTiming
+        guard force || sentTiming[radio.id] != timing else { return }
+        sentTiming[radio.id] = timing
+        let frames = timing.frames(port: radio.kissPort).reduce(Data(), +)
+        session.send(frames) { _ in }
     }
 
     /// Why a radio can have no link here, in the operator's words; nil when
@@ -396,6 +424,13 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     func linkSession(_ session: LinkSession, didChangeState state: KISSLinkState, from previous: KISSLinkState) {
         outages.observe(session.key, isUp: state == .connected, now: Date())
         refreshRadioStates()
+        // A fresh connection is a TNC that may have restarted: tell it again.
+        let carried = radios(onLink: session.key)
+        if state == .connected {
+            for id in carried { if let radio = profile(id) { sendTimingIfNeeded(radio, force: true) } }
+        } else {
+            for id in carried { sentTiming.removeValue(forKey: id) }
+        }
         delegate?.radioManager(self, link: session, didChangeState: state, from: previous)
     }
 

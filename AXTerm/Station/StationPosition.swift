@@ -54,6 +54,14 @@ nonisolated struct StationPosition: Equatable, Sendable {
     }
 }
 
+/// Where General's Station position section stores this station's own
+/// position sources. The grid square is `WinlinkSettings.gridSquareKey`.
+nonisolated enum StationPositionKeys {
+    static let useDeviceLocation = "station.useDeviceLocation"
+    static let manualLatitude = "station.manualLatitude"
+    static let manualLongitude = "station.manualLongitude"
+}
+
 /// Choosing the best position available for a station.
 nonisolated enum StationPositionResolver {
 
@@ -136,6 +144,40 @@ extension StationPositionResolver {
                                                      longitude: fix.longitude)
         }
         return resolve(candidates)
+    }
+
+    /// This station's position from the settings as stored: the same three
+    /// sources, read from the keys General's Station position section
+    /// writes (`StationPositionKeys`, and Winlink's grid square key, which is
+    /// the one grid square).
+    @MainActor
+    static func ownStation(defaults: UserDefaults,
+                           deviceLocation: StationLocation?) -> StationPosition? {
+        ownStation(gridSquare: defaults.string(forKey: WinlinkSettings.gridSquareKey) ?? "",
+                   manualLatitude: defaults.string(forKey: StationPositionKeys.manualLatitude) ?? "",
+                   manualLongitude: defaults.string(forKey: StationPositionKeys.manualLongitude) ?? "",
+                   usesDeviceLocation: defaults.bool(forKey: StationPositionKeys.useDeviceLocation),
+                   deviceLocation: deviceLocation)
+    }
+
+    /// What an APRS position beacon that follows the station sends, as
+    /// `SessionCoordinator.aprsLocationProvider` wants it.
+    ///
+    /// Both shells install this, so a beacon goes out from the position the
+    /// map draws: the exact coordinate when one is set, else this device's
+    /// fix when that is switched on, else the grid centre. It used to
+    /// read the device's last location, or the grid centre when there was
+    /// none, and ignored the exact coordinate altogether. The iOS shell
+    /// installed nothing, so there a beacon following the station never went
+    /// out at all.
+    @MainActor
+    static func beaconProvider(defaults: UserDefaults,
+                               locationService: StationLocationService?)
+    -> () -> (latitude: Double, longitude: Double)? {
+        { [weak locationService] in
+            ownStation(defaults: defaults, deviceLocation: locationService?.lastLocation)
+                .map { ($0.point.latitude, $0.point.longitude) }
+        }
     }
 
     /// The device's last location, and only when it is genuinely a fix.

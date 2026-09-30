@@ -1368,7 +1368,7 @@ final class SessionCoordinator: ObservableObject {
     /// announcing has just been switched on.
     ///
     /// It used to broadcast on every call, and every field in the
-    /// Transmission settings screen called it on change — so typing a
+    /// Transmission settings screen (now Packet Node) called it on change, so typing a
     /// six-character node alias put six NODES broadcasts on the air, each
     /// carrying a different prefix of the word (field capture 2026-08-27,
     /// eight frames in two seconds). Every neighbour that heard them wrote
@@ -1509,16 +1509,16 @@ final class SessionCoordinator: ObservableObject {
             }
             return nil
         case .aprsPosition:
-            guard let aprs = radio.beacon.aprs else {
-                return "This beacon has no position settings yet."
-            }
+            // No position settings at all is a beacon nobody has edited yet,
+            // which follows the station like a new one does.
+            let aprs = radio.beacon.aprs ?? .followingStation
             if aprs.useGPS {
                 guard aprsLocationProvider?() != nil else {
-                    return "No position fix yet, so there is nothing to beacon. "
-                        + "Turn off \"Use GPS position\" to send a fixed one."
+                    return "No station position yet, so there is nothing to beacon. Set one "
+                        + "under General \u{203A} Station position, or give this radio a fixed position."
                 }
             } else if aprs.latitude == nil || aprs.longitude == nil {
-                return "Set a latitude and longitude, or switch on \"Use GPS position\"."
+                return "Set a latitude and longitude for this radio, or use the station position."
             }
             return nil
         }
@@ -1652,7 +1652,7 @@ final class SessionCoordinator: ObservableObject {
     func beaconObstacle(_ settings: AppSettingsStore) -> String? {
         let radios = settings.activeRadios.filter { $0.enabled && $0.beacon.enabled }
         guard !radios.isEmpty else {
-            return "No radio has a beacon switched on. Settings > Radios > Beacon."
+            return "No radio has a beacon switched on. Each radio's beacon is on its page under Settings › Radios."
         }
         let obstacles = radios.compactMap { beaconObstacle(for: $0.id, settings: settings) }
         return obstacles.count == radios.count ? obstacles.first : nil
@@ -1709,13 +1709,14 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// The last known station position for an APRS beacon, when `useGPS`.
-    /// Wired by the app from the location service; a fixed lat/lon needs no
-    /// provider. Returns nil when there is no fix yet.
+    /// The station position for an APRS beacon that follows the station
+    /// (`APRSPositionConfig.useGPS`, shown as "Station position"). Both shells
+    /// install `StationPositionResolver.beaconProvider`, the resolver the map
+    /// uses; a fixed position needs no provider. Nil when no position is set.
     var aprsLocationProvider: (() -> (latitude: Double, longitude: Double)?)?
 
     private func buildAPRSBeaconFrame(for radio: RadioProfile) -> (OutboundFrame, String)? {
-        guard let aprs = radio.beacon.aprs else { return nil }
+        let aprs = radio.beacon.aprs ?? .followingStation
         let coordinate: (latitude: Double, longitude: Double)?
         if aprs.useGPS {
             coordinate = aprsLocationProvider?()
@@ -1867,14 +1868,10 @@ final class SessionCoordinator: ObservableObject {
         let isConnected: (RadioID) -> Bool = { [weak self] in
             self?.packetEngine?.radioManager.state(of: $0) == .connected
         }
-        let enabled = appSettings.activeRadios.filter(\.enabled)
-        // With one radio there is no other channel to confuse it with, and the
-        // per-radio APRS toggle isn't even shown, so the lone radio is the APRS
-        // radio by definition. With several, only the ones flagged APRS.
-        let eligible = appSettings.hasMultipleRadios
-            ? enabled.filter(\.handlesAPRS)
-            : enabled
-        return eligible.map(\.id).filter(isConnected)
+        // With one radio there is no other channel to confuse it with, so the
+        // lone radio carries APRS messages whatever its channel. With several,
+        // only the ones on an APRS channel. See `RadioChannel.aprsRadios`.
+        return RadioChannel.aprsRadios(in: appSettings.radios).map(\.id).filter(isConnected)
     }
 
     /// Our current APRS position info field, taken from the first radio
@@ -1920,7 +1917,13 @@ final class SessionCoordinator: ObservableObject {
         func serviceRadios(_ uses: (RadioProfile) -> Bool) -> [RadioID] {
         guard let appSettings else { return [.primary] }
         let enabled = appSettings.activeRadios.filter(\.enabled)
-        guard enabled.count > 1 else { return [enabled.first?.id ?? .primary] }
+        // One radio answers to its own switches too: they are on its page,
+        // and Ping stations switched off there means no pinging. It used to
+        // be used whatever its switches said, when they were not shown.
+        guard enabled.count > 1 else {
+            guard let only = enabled.first else { return [.primary] }
+            return uses(only) ? [only.id] : []
+        }
         return enabled
             .filter(uses)
             .filter { packetEngine?.radioManager.state(of: $0.id) == .connected }

@@ -1433,6 +1433,26 @@ final class AppSettingsStore: ObservableObject {
         return radio
     }
 
+    /// Takes back a radio the Add Radio sheet added, when the operator
+    /// cancels it.
+    ///
+    /// Removed outright when its link never came up, so a cancelled sheet
+    /// leaves nothing behind. Archived instead when it did: frames heard
+    /// during the test may already be stored against its id, and an archived
+    /// radio keeps those rows resolving to a name while staying out of every
+    /// list. Refused for the last radio, like `archiveRadio`.
+    func discardRadio(_ id: RadioID, linkWasUp: Bool) {
+        guard activeRadios.count > 1, radios.contains(where: { $0.id == id }) else { return }
+        if linkWasUp {
+            updateRadio(id) {
+                $0.archived = true
+                $0.enabled = false
+            }
+        } else {
+            radios.removeAll { $0.id == id }
+        }
+    }
+
     /// Archives a radio. Refused for the last one: a station with no radio
     /// is not a state the rest of the app has an answer for.
     func archiveRadio(_ id: RadioID) {
@@ -1458,8 +1478,13 @@ final class AppSettingsStore: ObservableObject {
         radios = active + archived
     }
 
+    /// Sorted keys, so the same radios always write the same text. The
+    /// encoder's key order otherwise shifts from one write to the next, and a
+    /// launch that changed nothing looked as if it had rewritten the list.
     private func persistRadios() {
-        if let data = try? JSONEncoder().encode(radios),
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let data = try? encoder.encode(radios),
            let json = String(data: data, encoding: .utf8) {
             defaults.set(json, forKey: Self.radiosKey)
         }

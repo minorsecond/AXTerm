@@ -101,7 +101,8 @@ final class RadioProfileTests: XCTestCase {
         XCTAssertTrue(radios[0].enabled)
         XCTAssertFalse(radios[0].archived)
         // Every station-wide service runs on a radio unless switched off.
-        XCTAssertTrue(radios[0].sendsBeacons)
+        XCTAssertFalse(radios[0].sendsKISSTiming,
+                       "a network TNC keeps its own timing unless the operator asks")
         XCTAssertTrue(radios[0].pings)
         XCTAssertTrue(radios[0].announcesNode)
         XCTAssertTrue(radios[0].answersMailbox)

@@ -219,6 +219,10 @@ struct AXTermiOSRootView: View {
         // `SessionCoordinator.localCallsign`.
         coordinator.applyLocalCallsign(settings.primaryCallsign)
         coordinator.appSettings = settings
+        // As on the Mac: a position beacon that follows the station reads the
+        // position the map draws. Missing here, such a beacon never went out.
+        coordinator.aprsLocationProvider = StationPositionResolver.beaconProvider(
+            defaults: settings.defaults, locationService: context.locationService)
         coordinator.subscribeToPackets(from: client)
         // APRS messaging, wired exactly as the Mac wires it.
         if let aprs = client.aprsMessaging {
