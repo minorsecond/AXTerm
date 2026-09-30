@@ -202,18 +202,17 @@ struct StationCallsignField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // Trimmed here, upper-cased by callsignInput; see there for why
+            // the setter leaves the case alone.
             TextField("My Callsign", text: Binding(
                 get: { draft },
                 set: { typed in
-                    draft = CallsignValidator.normalize(typed)
+                    draft = typed.trimmingCharacters(in: .whitespacesAndNewlines)
                     settings.myCallsign = draft
                 }
             ))
             .textFieldStyle(.roundedBorder)
-            .disableAutocorrection(true)
-            #if os(iOS)
-            .textInputAutocapitalization(.characters)
-            #endif
+            .callsignInput($draft)
             .focused($focused)
             .onAppear { draft = settings.myCallsign }
             .onChange(of: focused) { _, isFocused in

@@ -8,7 +8,8 @@
 import SwiftUI
 
 /// A specialized TextField for entering an amateur radio callsign.
-/// Handles auto-capitalization, validation feedback, and SSID formatting.
+/// Upper-cases as the operator types (see `callsignInput`) and flags a
+/// value that is not a callsign.
 struct CallsignField: View {
     let title: String
     @Binding var text: String
@@ -16,18 +17,15 @@ struct CallsignField: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+             // The setter only trims; callsignInput upper-cases, which
+             // it cannot do from here without iOS keeping the lower case
+             // on screen.
              TextField(title, text: Binding(
                  get: { text },
-                 set: { text = CallsignValidator.normalize($0) }
+                 set: { text = $0.trimmingCharacters(in: .whitespacesAndNewlines) }
              ))
              .textFieldStyle(.roundedBorder)
-             .disableAutocorrection(true)
-             #if os(iOS)
-             .textInputAutocapitalization(.characters)
-             #endif
-             .onChange(of: text) { _, newValue in
-                 // Additional side-effects if needed
-             }
+             .callsignInput($text)
              
              if !text.isEmpty && !CallsignValidator.isValidCallsign(text) {
                  HStack(spacing: 4) {

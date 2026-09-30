@@ -41,10 +41,18 @@ final class RadioRoleBindingsTests: XCTestCase {
 
     // MARK: APRS path
 
-    func testThePathIsStoredUppercase() {
+    /// The field upper-cases as it is typed (callsignInput, tested in
+    /// CallsignInputPublishTests), and it can only redraw that on iOS if the
+    /// binding lets the lower case through. The beacon reads it upper-case
+    /// either way.
+    func testThePathIsStoredAsTypedAndSentUpperCase() {
         bindings(first).aprsPath.wrappedValue = "wide1-1,wide2-1"
-        XCTAssertEqual(profile(first).aprsPath, "WIDE1-1,WIDE2-1")
-        XCTAssertEqual(bindings(first).aprsPath.wrappedValue, "WIDE1-1,WIDE2-1")
+        XCTAssertEqual(profile(first).aprsPath, "wide1-1,wide2-1")
+        XCTAssertEqual(bindings(first).aprsPath.wrappedValue, "wide1-1,wide2-1")
+        guard case let .success(digis) = BeaconPlan.planPath(profile(first).effectiveAPRSPath) else {
+            return XCTFail("a lower-case path is still a path")
+        }
+        XCTAssertEqual(digis, ["WIDE1-1", "WIDE2-1"])
     }
 
     func testAnEmptyPathIsStoredAsDirectAndNotAsMissing() {
@@ -213,9 +221,12 @@ final class RadioRoleBindingsTests: XCTestCase {
         XCTAssertTrue(bindings(RadioID(rawValue: "gone")).service(\.pings).wrappedValue)
     }
 
-    func testTheNodeAliasIsStoredUppercase() {
+    /// Stored as typed for the reason given above the path test; the node
+    /// announces it upper-case.
+    func testTheNodeAliasIsStoredAsTypedAndAnnouncedUpperCase() {
         bindings(first).netRomAlias.wrappedValue = "epinod"
-        XCTAssertEqual(profile(first).netRomAlias, "EPINOD")
+        XCTAssertEqual(profile(first).netRomAlias, "epinod")
+        XCTAssertEqual(SessionCoordinator.nodeAlias(profile(first).netRomAlias), "EPINOD")
         bindings(first).netRomAlias.wrappedValue = ""
         XCTAssertEqual(profile(first).netRomAlias, "", "empty falls back to the station alias")
     }
@@ -238,11 +249,12 @@ final class RadioRoleBindingsTests: XCTestCase {
 
     func testDigipeaterAliasesSplitOnCommasAndSpaces() {
         let aliases = bindings(first).digiAliases
-        aliases.wrappedValue = "club, wide1 ,  drl"
-        XCTAssertEqual(profile(first).digi.aliases, ["CLUB", "WIDE1", "DRL"])
-        XCTAssertEqual(aliases.wrappedValue, "CLUB, WIDE1, DRL")
+        aliases.wrappedValue = "CLUB, wide1 ,  DRL"
+        XCTAssertEqual(profile(first).digi.aliases, ["CLUB", "wide1", "DRL"],
+                       "case is the field's job, as for the path")
+        XCTAssertEqual(aliases.wrappedValue, "CLUB, wide1, DRL")
 
-        aliases.wrappedValue = "a b,,c"
+        aliases.wrappedValue = "A B,,C"
         XCTAssertEqual(profile(first).digi.aliases, ["A", "B", "C"], "empty pieces are dropped")
 
         aliases.wrappedValue = "  ,  "

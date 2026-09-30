@@ -396,7 +396,7 @@ struct AddRadioSheet: View {
         SetupCard(title: "APRS path") {
             RadioAPRSPathRow(path: Binding(
                 get: { radio.effectiveAPRSPath },
-                set: { value in settings.updateRadio(flow.radioID) { $0.aprsPath = value.uppercased() } }))
+                set: { value in settings.updateRadio(flow.radioID) { $0.aprsPath = value } }))
         }
     }
 
@@ -410,9 +410,8 @@ struct AddRadioSheet: View {
             if settings.netRomNodeIdentity == .perRadio, radio.announcesNode {
                 LabeledContent("Node alias on this radio") {
                     TextField(settings.netRomNodeAlias.isEmpty ? "e.g. UHFNOD" : settings.netRomNodeAlias,
-                              text: Binding(
-                                get: { radio.netRomAlias },
-                                set: { value in settings.updateRadio(flow.radioID) { $0.netRomAlias = value.uppercased() } }))
+                              text: radioBinding(\.netRomAlias))
+                        .callsignInput(radioBinding(\.netRomAlias))
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                         .frame(maxWidth: 160)

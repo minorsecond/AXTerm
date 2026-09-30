@@ -234,9 +234,7 @@ struct StationPositionSettings: View {
         if let winlinkSettings {
             LabeledContent {
                 HStack(spacing: 6) {
-                    TextField("DM79po", text: Binding(
-                        get: { winlinkSettings.gridSquare },
-                        set: { winlinkSettings.gridSquare = $0.uppercased() }))
+                    GridSquareTextField(winlinkSettings: winlinkSettings)
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 110)
@@ -376,5 +374,19 @@ struct StationPositionSettings: View {
         } catch {
             geocodeError = "Lookup failed: \(error.localizedDescription)"
         }
+    }
+}
+
+/// The station's grid square, typed in the conventional case (DM79po).
+///
+/// A view of its own so it observes the store: the pages it sits on hold
+/// `WinlinkSettings` without observing it, and `gridSquareInput` only sees
+/// an edit when the view holding the field is redrawn by it.
+struct GridSquareTextField: View {
+    @ObservedObject var winlinkSettings: WinlinkSettings
+
+    var body: some View {
+        TextField("DM79po", text: $winlinkSettings.gridSquare)
+            .gridSquareInput($winlinkSettings.gridSquare)
     }
 }

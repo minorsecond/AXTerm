@@ -271,6 +271,7 @@ struct RadioPacketSections: View {
                 LabeledContent("Node alias on this radio") {
                     TextField("Node alias on this radio", text: bind.netRomAlias,
                               prompt: Text(settings.netRomNodeAlias.isEmpty ? "e.g. UHFNOD" : settings.netRomNodeAlias))
+                        .callsignInput(bind.netRomAlias)
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
                 }
@@ -311,6 +312,7 @@ struct RadioPacketSections: View {
                 LabeledContent("Also answer to") {
                     TextField("Also answer to", text: bind.digiAliases,
                               prompt: Text("aliases (comma-separated)"))
+                        .callsignInput(bind.digiAliases)
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
                 }
@@ -371,6 +373,7 @@ struct RadioPacketSections: View {
         }
         LabeledContent("Via digipeaters") {
             TextField("Via digipeaters", text: bind.beacon(\.path), prompt: Text("direct"))
+                .callsignInput(bind.beacon(\.path))
                 .labelsHidden()
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 160)
@@ -486,11 +489,16 @@ struct RadioRoleBindings {
 
     /// This radio's APRS path, resolving an older build's beacon path on
     /// first read so an upgrade never silently shortens a station's reach.
+    ///
+    /// This and the alias bindings below store what they are given. The
+    /// fields upper-case with `callsignInput`, which needs to see the
+    /// lower case to redraw it on iOS, and the beacon, the node and the
+    /// digipeater upper-case what they read anyway.
     var aprsPath: Binding<String> {
         Binding(
             get: { settings.radio(radioID)?.effectiveAPRSPath ?? "" },
             set: { value in
-                settings.updateRadio(radioID) { $0.aprsPath = value.uppercased() }
+                settings.updateRadio(radioID) { $0.aprsPath = value }
                 apply()
             })
     }
@@ -579,7 +587,7 @@ struct RadioRoleBindings {
         Binding(
             get: { settings.radio(radioID)?.netRomAlias ?? "" },
             set: { value in
-                settings.updateRadio(radioID) { $0.netRomAlias = value.uppercased() }
+                settings.updateRadio(radioID) { $0.netRomAlias = value }
                 apply()
             })
     }
@@ -600,7 +608,7 @@ struct RadioRoleBindings {
             get: { (settings.radio(radioID)?.digi.aliases ?? []).joined(separator: ", ") },
             set: { text in
                 let aliases = text.split(whereSeparator: { $0 == "," || $0.isWhitespace })
-                    .map { $0.uppercased() }
+                    .map(String.init)
                 settings.updateRadio(radioID) { $0.digi.aliases = aliases }
                 apply()
             })
@@ -625,6 +633,7 @@ struct RadioAPRSPathRow: View {
                     // shows as a second label, and "direct" sat beside a
                     // field that said WIDE1-1,WIDE2-1.
                     TextField("Path", text: $path, prompt: Text("direct"))
+                        .callsignInput($path)
                         .labelsHidden()
                         .multilineTextAlignment(.leading)
                         .textFieldStyle(.roundedBorder)
