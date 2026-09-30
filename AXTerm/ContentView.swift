@@ -2739,6 +2739,13 @@ struct ContentView: View {
             if let finding = client.receiveLevel.finding(for: radio.id, now: now) {
                 lines.append(finding.message)
             }
+            // A sound-modem radio whose receive settings changed while
+            // connected (the notch turned on by hand, say). The radio's page
+            // has the Fix.
+            if let drift = client.radioManager.rigReceive[radio.id]?.drift, !drift.isEmpty {
+                lines.append("The radio changed while connected: "
+                             + drift.map { $0.title.lowercased() }.joined(separator: ", ") + ".")
+            }
             if !lines.isEmpty { warnings[radio.id] = lines.joined(separator: "\n") }
         }
         return warnings

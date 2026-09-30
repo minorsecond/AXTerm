@@ -409,8 +409,11 @@ struct ModemRadioSection: View {
         Section {
             Toggle("Follow the radio's frequency", isOn: $viewModel.followsRadioFrequency)
                 .help("Read the frequency and mode every few seconds while idle, so the sidebar and the radio agree after you tune.")
-            Toggle("Set the radio for packet when connecting", isOn: $viewModel.setsRadioModeOnConnect)
-                .help("Push the settings below each time this radio connects. Off by default: the radio is yours.")
+            Toggle(ModemRadioLink.prepToggleTitle, isOn: $viewModel.setsRadioModeOnConnect)
+                .help("When this radio connects, AXTerm sets the mode, the data input and the receive settings "
+                      + "packet needs (attenuator, notches, noise reduction and the like off, squelch open). "
+                      + "It puts back what it changed when you disconnect or quit, except anything you "
+                      + "changed yourself in the meantime. Off by default: the radio is yours.")
             LabeledContent {
                 Button("Set radio for packet\u{2026}") { confirmingSetup = true }
                     .disabled(!viewModel.radioConnected || viewModel.civSerialPath.isEmpty)
@@ -528,11 +531,45 @@ struct ModemReceiveFindingRow: View {
     }
 }
 
+/// A receive setting that changed on the radio while connected, with a
+/// one-click Fix. The same shape as a TNC4's receive-level finding
+/// (`ReceiveLevelFindingRows`): said where the operator is already looking,
+/// fixed from the same place.
+struct ModemReceiveDriftRows: View {
+    @ObservedObject var viewModel: ConnectionTransportViewModel
+
+    var body: some View {
+        if !viewModel.receiveDrift.isEmpty {
+            Label("The radio changed while connected: "
+                  + viewModel.receiveDrift.map { $0.title.lowercased() }.joined(separator: ", ") + ".",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .help(viewModel.receiveDrift.map { "\($0.title): \($0.detail) \($0.fix)" }.joined(separator: "\n"))
+            if viewModel.receiveDrift.contains(where: { $0.correction != nil }) {
+                Button(viewModel.fixingReceiveDrift ? "Fixing\u{2026}" : "Fix") { viewModel.fixReceiveDrift() }
+                    .disabled(viewModel.fixingReceiveDrift)
+                    .help(viewModel.setsRadioModeOnConnect
+                          ? "Changes these settings back for packet. AXTerm puts them back as they were when you disconnect."
+                          : "Changes these settings back for packet.")
+            }
+        }
+        if let message = viewModel.receiveDriftMessage {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 /// The connected modem's vital signs, in the status section.
 struct ModemStatusRows: View {
     @ObservedObject var viewModel: ConnectionTransportViewModel
 
     var body: some View {
+        ModemReceiveDriftRows(viewModel: viewModel)
         if let telemetry = viewModel.modemTelemetry {
             LabeledContent("Channel") {
                 HStack(spacing: 12) {

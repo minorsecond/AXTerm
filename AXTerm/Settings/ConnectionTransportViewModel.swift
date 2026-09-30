@@ -421,6 +421,11 @@ final class ConnectionTransportViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .map { [radioID] in $0[radioID] }
             .assign(to: &$rigStatus)
+        packetEngine.radioManager.$rigReceive
+            .receive(on: RunLoop.main)
+            .map { [radioID] in $0[radioID]?.drift ?? [] }
+            .removeDuplicates()
+            .assign(to: &$receiveDrift)
     }
     
     private func handleSerialDevicesUpdate(_ discovered: [SerialDevice]) {
@@ -832,6 +837,13 @@ final class ConnectionTransportViewModel: ObservableObject {
     /// button that produced it, which reads as nothing having happened.
     @Published private(set) var receiveActionMessage: String?
     @Published private(set) var auditingReceive = false
+    /// Receive settings that went wrong while connected (the notch turned on
+    /// by hand, say) and have not been fixed. Shown with a Fix button in the
+    /// status section, the way a TNC4's receive-level drift is.
+    @Published private(set) var receiveDrift: [RigReceiveAudit.Finding] = []
+    /// What the last Fix did, beside the button that did it.
+    @Published private(set) var receiveDriftMessage: String?
+    @Published private(set) var fixingReceiveDrift = false
     /// The radio's frequency and mode, while CI-V is up.
     @Published private(set) var rigStatus: RigStatus?
     /// The last answer to Identify, or the reason there was none.
@@ -1042,6 +1054,27 @@ final class ConnectionTransportViewModel: ObservableObject {
             self?.receiveActionMessage = done.isEmpty
                 ? "Nothing here is ours to change."
                 : "Changed: " + done.joined(separator: ", ") + ". " + after.summary
+        }
+        #endif
+    }
+
+    /// Fix what changed on the radio during the session. While AXTerm is
+    /// setting the radio up for packet, the fix is put back at disconnect
+    /// with everything else.
+    func fixReceiveDrift() {
+        #if os(macOS)
+        guard let link = modemLink, link.state == .connected else {
+            receiveDriftMessage = "Connect the radio first."
+            return
+        }
+        fixingReceiveDrift = true
+        receiveDriftMessage = nil
+        Task { [weak self] in
+            let done = await link.fixReceiveDrift()
+            self?.fixingReceiveDrift = false
+            self?.receiveDriftMessage = done.isEmpty
+                ? "Nothing here is ours to change."
+                : "Changed: " + done.joined(separator: ", ") + "."
         }
         #endif
     }

@@ -12,11 +12,15 @@ protocol LinkSessionDelegate: AnyObject {
     func linkSession(_ session: LinkSession, didError message: String)
     func linkSession(_ session: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry)
     func linkSession(_ session: LinkSession, didUpdateRigStatus status: RigStatus, model: String?)
+    /// The radio's receive settings: the latest audit and what changed
+    /// during the session.
+    func linkSession(_ session: LinkSession, didUpdateRigReceive report: RigReceiveAudit.Report)
 }
 
 extension LinkSessionDelegate {
     func linkSession(_ session: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry) {}
     func linkSession(_ session: LinkSession, didUpdateRigStatus status: RigStatus, model: String?) {}
+    func linkSession(_ session: LinkSession, didUpdateRigReceive report: RigReceiveAudit.Report) {}
 }
 
 /// One byte stream to one TNC: a `KISSLink` and the parser that reassembles
@@ -80,6 +84,12 @@ final class LinkSession: KISSLinkDelegate {
                     guard let self else { return }
                     self.rigStatus = status
                     self.delegate?.linkSession(self, didUpdateRigStatus: status, model: modem.rigModel)
+                }
+            }
+            modem.onRigReceive = { [weak self] report in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.delegate?.linkSession(self, didUpdateRigReceive: report)
                 }
             }
         }

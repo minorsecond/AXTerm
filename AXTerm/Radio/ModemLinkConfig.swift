@@ -100,8 +100,13 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
     var txAudioLevel = 85
 
     var followsRadioFrequency = true
+    /// Set the radio up for packet while connected, and put back what was
+    /// changed at disconnect or quit (see `RigPrep`).
     var setsRadioModeOnConnect = false
     var maxTransmitSeconds = 30
+    /// The radio this link belongs to, for keeping what AXTerm changed on it
+    /// (`RigPrepStore`). Nil keeps that record in memory only.
+    var radioID: RadioID?
 
     init() {}
 

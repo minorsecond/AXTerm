@@ -152,6 +152,52 @@ nonisolated enum CIVCommand {
         frame(radio, controller, 0x11, nil, [0x00])
     }
 
+    /// Attenuator, `11 <value>`, where the value is what `11` read back:
+    /// `00` off, `20` for 20 dB on the IC-705. For putting a reading back.
+    static func setAttenuator(_ value: UInt8, radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x11, nil, [value])
+    }
+
+    // The notch and tone squelch functions. Each code is in the IC-705 CI-V
+    // Reference Guide (Icom, 2020 edition, command table p. 4) and agrees
+    // with hamlib (`rigs/icom/icom_defs.h`: S_FUNC_ANF 0x41, S_FUNC_MN 0x48,
+    // both in the IC-705's function set in `ic7300.c`) and with wfview's
+    // IC-705 rig file ("Auto Notch" 16 41, "Manual Notch" 16 48, "Tone
+    // Squelch Type" 16 5D). Not here: VSC (`16 4C` on other Icoms), which
+    // the IC-705 guide does not list, and the separate tone squelch and DTCS
+    // switches (`16 43`, `16 4B`), since `16 5D` reports both along with
+    // which direction each applies to.
+
+    /// Auto notch on/off, `16 41` (00 OFF, 01 ON).
+    static func readAutoNotch(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x41)
+    }
+
+    static func setAutoNotch(_ on: Bool, radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x41, [on ? 0x01 : 0x00])
+    }
+
+    /// Manual notch on/off, `16 48` (00 OFF, 01 ON).
+    static func readManualNotch(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x48)
+    }
+
+    static func setManualNotch(_ on: Bool, radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x48, [on ? 0x01 : 0x00])
+    }
+
+    /// Tone squelch function, `16 5D`, one byte; see
+    /// `RigReceiveAudit.ToneSquelchFunction` for the values. The IC-705's
+    /// code. Other Icoms put this elsewhere or split it, so the caller asks
+    /// only a radio known to be an IC-705.
+    static func readToneSquelchFunction(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x5D)
+    }
+
+    static func setToneSquelchFunction(_ value: UInt8, radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x16, 0x5D, [value])
+    }
+
     static func readSMeter(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
         frame(radio, controller, 0x15, 0x02)
     }

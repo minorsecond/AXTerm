@@ -35,10 +35,75 @@ nonisolated enum RigReceiveAudit {
         /// 1 = wide, 2 = mid, 3 = narrow.
         var filter: Int
         var dataMode: Bool
+        /// Automatic notch filter (ANF), `16 41`.
+        var autoNotch: Bool = false
+        /// Manual notch, `16 48`.
+        var manualNotch: Bool = false
+        /// The tone squelch function, `16 5D`. Read only where that command
+        /// is confirmed for the radio (see `CIVCommand.readToneSquelchFunction`);
+        /// elsewhere it stays `.off`, which judges nothing.
+        var toneSquelch: ToneSquelchFunction = .off
         /// Whether the radio answered anything at all. A settings struct full
         /// of benign defaults because every read timed out must not be judged
         /// as a healthy radio.
         var answered: Bool = true
+    }
+
+    /// What the radio does with CTCSS tones and DTCS codes, as the IC-705
+    /// reports it in `16 5D`.
+    ///
+    /// Values from the IC-705 CI-V Reference Guide (Icom, 2020 edition,
+    /// command table p. 4): 00 OFF, 01 TONE, 02 TSQL, 03 DTCS, 06 DTCS(T),
+    /// 07 TONE(T)/DTCS(R), 08 DTCS(T)/TSQL(R), 09 TONE(T)/TSQL(R). wfview's
+    /// IC-705 rig file lists the same command as "Tone Squelch Type", 0-9.
+    ///
+    /// "(T)" is transmit only and "(R)" receive only; TSQL and DTCS on their
+    /// own do both, sending the tone and muting everything that lacks it.
+    /// Only the receive half is a receive problem. A repeater tone on
+    /// transmit changes nothing about what the modem hears, so the fix keeps
+    /// whatever the radio sends and drops only the decoder.
+    enum ToneSquelchFunction: UInt8, Sendable, Equatable {
+        case off = 0x00
+        case tone = 0x01
+        case tsql = 0x02
+        case dtcs = 0x03
+        case dtcsTransmit = 0x06
+        case toneTransmitDTCSReceive = 0x07
+        case dtcsTransmitTSQLReceive = 0x08
+        case toneTransmitTSQLReceive = 0x09
+
+        /// Whether the receiver stays muted for a station that does not send
+        /// the right tone or code.
+        var mutesReceive: Bool {
+            switch self {
+            case .off, .tone, .dtcsTransmit: return false
+            case .tsql, .dtcs, .toneTransmitDTCSReceive, .dtcsTransmitTSQLReceive,
+                 .toneTransmitTSQLReceive: return true
+            }
+        }
+
+        /// The same transmit behavior with the receive decoder off.
+        var withoutReceiveDecoder: ToneSquelchFunction {
+            switch self {
+            case .off, .tone, .dtcsTransmit: return self
+            case .tsql, .toneTransmitDTCSReceive, .toneTransmitTSQLReceive: return .tone
+            case .dtcs, .dtcsTransmitTSQLReceive: return .dtcsTransmit
+            }
+        }
+
+        /// The radio's own name for the setting.
+        var label: String {
+            switch self {
+            case .off: return "OFF"
+            case .tone: return "TONE"
+            case .tsql: return "TSQL"
+            case .dtcs: return "DTCS"
+            case .dtcsTransmit: return "DTCS(T)"
+            case .toneTransmitDTCSReceive: return "TONE(T)/DTCS(R)"
+            case .dtcsTransmitTSQLReceive: return "DTCS(T)/TSQL(R)"
+            case .toneTransmitTSQLReceive: return "TONE(T)/TSQL(R)"
+            }
+        }
     }
 
     enum Severity: Int, Comparable, Sendable {
@@ -65,6 +130,10 @@ nonisolated enum RigReceiveAudit {
         case noiseReductionOff
         case noiseBlankerOff
         case widestFilter
+        case autoNotchOff
+        case manualNotchOff
+        /// Tone squelch off for receive, keeping any tone the radio sends.
+        case toneSquelchReceiveOff
     }
 
     struct Finding: Equatable, Sendable, Identifiable {
@@ -140,10 +209,9 @@ nonisolated enum RigReceiveAudit {
                           + "\(modemMode.title).",
                     fix: "Either sideband decodes, as long as the station you are working is "
                        + "on the same one: the tones invert with the sideband and NRZI does "
-                       + "not care which is which. But while \u{201C}Set the radio for packet "
-                       + "when connecting\u{201D} is on, AXTerm puts this back to "
-                       + "\(wantedMode.label) at every connect, so a sideband set by hand will "
-                       + "not survive a reconnect.",
+                       + "not care which is which. But while \u{201C}Set up the radio for packet "
+                       + "while connected\u{201D} is on, AXTerm sets \(wantedMode.label) at every "
+                       + "connect, so a sideband set by hand lasts only until the next one.",
                     severity: .suggestion))
             } else {
                 out.append(Finding(
@@ -191,6 +259,38 @@ nonisolated enum RigReceiveAudit {
                 fix: "Turn NB off. It punches holes in the audio, and a hole inside a "
                    + "frame costs the whole frame.",
                 severity: .degrading, correction: .noiseBlankerOff))
+        }
+
+        // Found live on 2026-09-30: an IC-705 on a busy 144.390 decoded about
+        // one APRS frame a minute with the notch on by accident, and fourteen
+        // in three minutes with it off, while Direwolf on the same audio
+        // decoded seventeen. Nothing in this audit looked at the notch.
+        if s.autoNotch {
+            out.append(Finding(
+                title: "The auto notch is on",
+                detail: "ANF is enabled.",
+                fix: "Turn the auto notch off. It hunts for steady tones and removes them, "
+                   + "and AFSK is two steady tones. On the IC-705 it cut decoding on a "
+                   + "busy APRS channel to a handful of frames.",
+                severity: .blocking, correction: .autoNotchOff))
+        }
+        if s.manualNotch {
+            out.append(Finding(
+                title: "The manual notch is on",
+                detail: "The manual notch is enabled.",
+                fix: "Turn the manual notch off. It cuts a slot out of the audio, and "
+                   + "wherever it sits near \(modemMode.ridesOnSSB ? "1600 or 1800" : "1200 or 2200") Hz "
+                   + "it takes one of the two tones with it.",
+                severity: .degrading, correction: .manualNotchOff))
+        }
+        if s.toneSquelch.mutesReceive {
+            out.append(Finding(
+                title: "Tone squelch is on",
+                detail: "Set to \(s.toneSquelch.label).",
+                fix: "Turn the receive tone squelch off. It keeps the audio muted for every "
+                   + "station that does not send the matching tone, and packet stations "
+                   + "almost never do. AXTerm leaves any tone you transmit alone.",
+                severity: .blocking, correction: .toneSquelchReceiveOff))
         }
 
         if s.preamp == 0 {
@@ -251,6 +351,54 @@ nonisolated enum RigReceiveAudit {
     static func newFindings(from old: [Finding], to new: [Finding]) -> [Finding] {
         let known = Set(old.map(\.title))
         return new.filter { !known.contains($0.title) }
+    }
+
+    /// Receive settings that went wrong during the session, held until they
+    /// are fixed or put right by hand.
+    ///
+    /// `newFindings` compares two audits; this remembers what it found, so
+    /// the radio page can offer a fix for a change made minutes ago and
+    /// stop offering it once the setting is back. A change is announced
+    /// once, when it first appears, and never again while it stands.
+    struct DriftWatch: Equatable, Sendable {
+        /// The audit everything is compared against; nil before the first.
+        private(set) var baseline: [Finding]?
+        /// What changed and is still wrong, oldest first.
+        private(set) var pending: [Finding] = []
+
+        init() {}
+
+        /// Take a fresh audit. Returns what is newly wrong, to announce.
+        ///
+        /// The first audit only sets the baseline: what the radio was like
+        /// when AXTerm connected is not a change during the session.
+        mutating func observe(_ now: [Finding]) -> [Finding] {
+            guard let before = baseline else {
+                baseline = now
+                return []
+            }
+            let new = RigReceiveAudit.newFindings(from: before, to: now)
+            baseline = now
+            let standing = Set(now.map(\.title))
+            pending = pending.filter { standing.contains($0.title) }
+            for finding in new where !pending.contains(where: { $0.title == finding.title }) {
+                pending.append(finding)
+            }
+            return new
+        }
+
+        /// These were fixed; stop offering them.
+        mutating func resolve(_ titles: Set<String>) {
+            pending.removeAll { titles.contains($0.title) }
+            baseline = baseline?.filter { !titles.contains($0.title) }
+        }
+    }
+
+    /// What the link knows about the radio's receive settings, for the
+    /// status surfaces: the latest audit, and what changed since connecting.
+    struct Report: Equatable, Sendable {
+        var findings: [Finding] = []
+        var drift: [Finding] = []
     }
 
     /// One line for a status row, or nil when there is nothing to say.

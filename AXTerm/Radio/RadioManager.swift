@@ -74,6 +74,10 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     @Published private(set) var modemTelemetry: [RadioID: ModemTelemetry] = [:]
     /// What the radio reports about itself over CI-V, per radio.
     @Published private(set) var rigStatus: [RadioID: RigStatus] = [:]
+    /// The radio's receive settings over CI-V, per radio: the latest audit
+    /// and what changed during the session. Only for a connected radio
+    /// with CI-V; a radio without it has no entry.
+    @Published private(set) var rigReceive: [RadioID: RigReceiveAudit.Report] = [:]
 
     private(set) var sessions: [String: LinkSession] = [:]
     /// linkKey → port → radio.
@@ -217,6 +221,7 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         let live = Set(desired.map(\.id))
         modemTelemetry = modemTelemetry.filter { live.contains($0.key) }
         rigStatus = rigStatus.filter { live.contains($0.key) }
+        rigReceive = rigReceive.filter { live.contains($0.key) }
         refreshRadioStates()
         for radio in desired { sendTimingIfNeeded(radio) }
         return created
@@ -459,6 +464,9 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
             for id in carried { if let radio = profile(id) { sendTimingIfNeeded(radio, force: true) } }
         } else {
             for id in carried { sentTiming.removeValue(forKey: id) }
+            // A radio that is not connected has no receive settings to show;
+            // an old drift notice would offer a fix nothing can apply.
+            for id in carried { rigReceive.removeValue(forKey: id) }
         }
         delegate?.radioManager(self, link: session, didChangeState: state, from: previous)
     }
@@ -475,6 +483,33 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     func linkSession(_ session: LinkSession, didUpdateRigStatus status: RigStatus, model: String?) {
         for radio in radios(onLink: session.key) { rigStatus[radio] = status }
         delegate?.radioManager(self, link: session, didUpdateRigStatus: status, model: model)
+    }
+
+    func linkSession(_ session: LinkSession, didUpdateRigReceive report: RigReceiveAudit.Report) {
+        guard session.state == .connected else { return }
+        for radio in radios(onLink: session.key) where rigReceive[radio] != report { rigReceive[radio] = report }
+    }
+
+    // MARK: - Radios AXTerm has set up
+
+    /// Whether any link owes its radio settings back, so a quit knows to
+    /// give the restore time (see `ModemRadioLink.close()`).
+    var hasPreparedRadios: Bool {
+        #if os(macOS)
+        return sessions.values.contains { ($0.link as? ModemRadioLink)?.hasPreparedRadio == true }
+        #else
+        return false
+        #endif
+    }
+
+    /// Whether any link is still closing: unkeying, putting its radio back,
+    /// shutting its port.
+    var isClosingRigs: Bool {
+        #if os(macOS)
+        return sessions.values.contains { ($0.link as? ModemRadioLink)?.isClosingRig == true }
+        #else
+        return false
+        #endif
     }
 
     private func refreshRadioStates() {

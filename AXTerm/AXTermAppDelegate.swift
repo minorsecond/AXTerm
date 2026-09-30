@@ -152,12 +152,37 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
         // until it was power-cycled.
         let engine = coordinator?.packetEngine
         let restoresTNC4 = (settings?.radios ?? []).contains { engine?.mobilinkdControl(for: $0.id) != nil }
+        // A sound-modem radio that AXTerm set up for packet is put back over
+        // CI-V as its link closes (after PTT off, before the port shuts; see
+        // ModemRadioLink.close). That takes a round trip per setting, so wait
+        // for the closes to finish rather than guessing a delay, up to the
+        // link's own restore budget plus a margin.
+        let restoresRig = radioManager?.hasPreparedRadios ?? false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             radioManager?.closeAll()
-            DispatchQueue.main.asyncAfter(deadline: .now() + (restoresTNC4 ? 0.8 : 0.3), execute: replyOnce)
+            if restoresRig {
+                Self.whenRigsHaveClosed(radioManager, then: replyOnce)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + (restoresTNC4 ? 0.8 : 0.3), execute: replyOnce)
+            }
         }
         // Backstop: reply no later than this regardless of how the close goes.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (restoresTNC4 ? 2.5 : 1.5), execute: replyOnce)
+        let backstop: TimeInterval = restoresRig
+            ? ModemRadioLink.restoreBudget + 2
+            : (restoresTNC4 ? 2.5 : 1.5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + backstop, execute: replyOnce)
         return .terminateLater
+    }
+
+    /// Call `done` once no link is still closing, checking every tenth of a
+    /// second, then a short moment more for the last datagrams to leave.
+    private static func whenRigsHaveClosed(_ radioManager: RadioManager?, then done: @escaping () -> Void) {
+        guard let radioManager, radioManager.isClosingRigs else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: done)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            whenRigsHaveClosed(radioManager, then: done)
+        }
     }
 }

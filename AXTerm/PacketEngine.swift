@@ -385,6 +385,11 @@ final class PacketEngine: ObservableObject {
     /// for `ReceiveHealth`. Cleared when the link goes down.
     @Published private(set) var connectedAtByRadio: [RadioID: Date] = [:]
     @Published private(set) var txSinceConnectByRadio: [RadioID: Int] = [:]
+    /// A sound-modem radio's transmissions heard against frames decoded,
+    /// over the last ten minutes, for `ReceiveHealth.decodeRatio`. Not
+    /// published: it moves with every telemetry report, and the warning is
+    /// read on a 30 s clock.
+    private var carrierLedgerByRadio: [RadioID: ReceiveHealth.CarrierLedger] = [:]
 
     /// The radios the operator has switched off in the sidebar. Empty — the
     /// default, and the only state a one-radio station can be in — shows
@@ -3185,6 +3190,11 @@ extension PacketEngine: RadioManagerDelegate {
         // Only the transitions are worth a line: PTT and carrier.
         let previous = lastModemTelemetry[link.key]
         lastModemTelemetry[link.key] = telemetry
+        let now = Date()
+        for radio in manager.radios(onLink: link.key) {
+            carrierLedgerByRadio[radio, default: .init()].record(
+                at: now, carriers: telemetry.carriersHeard, decoded: telemetry.framesDecoded)
+        }
         if previous?.ptt != telemetry.ptt {
             LinkDebugLog.shared.recordStateChange(from: previous?.ptt == true ? "PTT on" : "PTT off",
                                                   to: telemetry.ptt ? "PTT on" : "PTT off",
@@ -3316,6 +3326,7 @@ extension PacketEngine: RadioManagerDelegate {
         for radio in radioManager.radios(carriedBy: link) {
             connectedAtByRadio[radio] = nil
             txSinceConnectByRadio[radio] = nil
+            carrierLedgerByRadio[radio] = nil
         }
     }
 
@@ -3325,11 +3336,20 @@ extension PacketEngine: RadioManagerDelegate {
     func receiveHealth(for radio: RadioID, now: Date = Date()) -> ReceiveHealth.Verdict? {
         guard radioManager.state(of: radio) == .connected else { return nil }
         let onAPRS = radioManager.profiles.first { $0.id == radio }?.aprsEnabled ?? false
-        return ReceiveHealth.assess(connectedAt: connectedAtByRadio[radio],
-                                    lastRx: lastRxByRadio[radio],
-                                    transmittedSinceConnect: txSinceConnectByRadio[radio] ?? 0,
-                                    now: now,
-                                    quietAfter: ReceiveHealth.quietAfter(onAPRS: onAPRS))
+        if let verdict = ReceiveHealth.assess(connectedAt: connectedAtByRadio[radio],
+                                              lastRx: lastRxByRadio[radio],
+                                              transmittedSinceConnect: txSinceConnectByRadio[radio] ?? 0,
+                                              now: now,
+                                              quietAfter: ReceiveHealth.quietAfter(onAPRS: onAPRS)) {
+            return verdict
+        }
+        // Hearing traffic and decoding little: sound-modem radios only, the
+        // one kind that has the audio to count transmissions in. When the
+        // radio has CI-V, its own audit says what to look at.
+        guard let counts = carrierLedgerByRadio[radio]?.counts(now: now) else { return nil }
+        let radioSays = radioManager.rigReceive[radio].map { $0.findings.map(\.title) }
+        return ReceiveHealth.decodeRatio(carriers: counts.carriers, decoded: counts.decoded,
+                                         minutes: max(1, counts.minutes), radioSays: radioSays)
     }
 
     /// Recompute the top connection banner from the links that are failed
