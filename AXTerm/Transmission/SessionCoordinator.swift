@@ -932,9 +932,22 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Clear all learned adaptive settings, per-route cache, and per-station overrides; reset to defaults.
+    /// Clear all learned adaptive settings, per-route cache, and per-station overrides.
+    ///
+    /// What the operator chose stays: manual PACLEN, K and N2, and the AXDP
+    /// switches. Only what was learned goes back to the defaults. Resetting
+    /// the whole struct used to switch AXDP back on and drop manual values.
     func clearAllLearned() {
-        globalAdaptiveSettings = TxAdaptiveSettings()
+        let kept = globalAdaptiveSettings
+        var fresh = AX25LinkTuning(kept).applied(to: TxAdaptiveSettings())
+        fresh.axdpVersion = kept.axdpVersion
+        fresh.axdpExtensionsEnabled = kept.axdpExtensionsEnabled
+        fresh.autoNegotiateCapabilities = kept.autoNegotiateCapabilities
+        fresh.compressionEnabled = kept.compressionEnabled
+        fresh.compressionAlgorithm = kept.compressionAlgorithm
+        fresh.maxDecompressedPayload = kept.maxDecompressedPayload
+        fresh.showAXDPDecodeDetails = kept.showAXDPDecodeDetails
+        globalAdaptiveSettings = fresh
         useDefaultConfigForDestinations.removeAll()
         adaptiveByScope.removeAll()
         syncSessionManagerConfigFromAdaptive()

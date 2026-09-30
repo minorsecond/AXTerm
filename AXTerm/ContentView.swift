@@ -363,6 +363,9 @@ struct ContentView: View {
             }
             adaptive.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
             adaptive.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
+            // The operator's manual PACLEN, K and N2, which were never kept
+            // past a relaunch.
+            adaptive = settings.ax25LinkTuning.applied(to: adaptive)
             coordinator.globalAdaptiveSettings = adaptive
             coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
             coordinator.syncSessionManagerConfigFromAdaptive()

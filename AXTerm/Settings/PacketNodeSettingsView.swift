@@ -289,8 +289,7 @@ struct PacketNodeSettingsView: View {
                             Button("Clear All Learned Data") {
                                 if let coordinator = SessionCoordinator.shared {
                                     coordinator.clearAllLearned()
-                                    txAdaptiveSettings = TxAdaptiveSettings()
-                                    syncAdaptiveSettingsToSessionCoordinator()
+                                    seedAdaptiveSettings()
                                 }
                             }
                         }
@@ -450,6 +449,11 @@ struct PacketNodeSettingsView: View {
     }
 
     private func seedAdaptiveSettings() {
+        // Start from the live settings, or the stored choices when there is
+        // no coordinator yet. Starting from a blank copy and syncing it back
+        // reset manual K and N2 to their defaults on every visit.
+        txAdaptiveSettings = SessionCoordinator.shared?.globalAdaptiveSettings
+            ?? settings.ax25LinkTuning.applied(to: TxAdaptiveSettings())
         txAdaptiveSettings.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
         txAdaptiveSettings.autoNegotiateCapabilities = settings.axdpAutoNegotiateCapabilities
         txAdaptiveSettings.compressionEnabled = settings.axdpCompressionEnabled
@@ -503,6 +507,7 @@ struct PacketNodeSettingsView: View {
         settings.axdpCompressionAlgorithmRaw = txAdaptiveSettings.compressionAlgorithm.rawValue
         settings.axdpMaxDecompressedPayload = Int(txAdaptiveSettings.maxDecompressedPayload)
         settings.axdpShowDecodeDetails = txAdaptiveSettings.showAXDPDecodeDetails
+        settings.ax25LinkTuning = AX25LinkTuning(txAdaptiveSettings)
 
         var updatedSettings = coordinator.globalAdaptiveSettings
         updatedSettings.axdpExtensionsEnabled = txAdaptiveSettings.axdpExtensionsEnabled
@@ -511,6 +516,7 @@ struct PacketNodeSettingsView: View {
         updatedSettings.compressionAlgorithm = txAdaptiveSettings.compressionAlgorithm
         updatedSettings.maxDecompressedPayload = txAdaptiveSettings.maxDecompressedPayload
         updatedSettings.showAXDPDecodeDetails = txAdaptiveSettings.showAXDPDecodeDetails
+        updatedSettings.paclen = txAdaptiveSettings.paclen
         updatedSettings.windowSize = txAdaptiveSettings.windowSize
         updatedSettings.maxRetries = txAdaptiveSettings.maxRetries
         updatedSettings.rtoMin = txAdaptiveSettings.rtoMin
