@@ -8,7 +8,7 @@
 //  frame table rather than designed here:
 //
 //      SI  Send_Init    ENQ 01
-//      RI  Rcv_Init     ACK 01
+//      RR  Rcv_Rdy      ACK 01
 //      HD  Send_Hdr     SOH len filename NUL size NUL [date time NUL]
 //      RF  Rcv_File     ACK 02
 //      RT  Rcv_TPK      ACK ACK            (YAPPC: send checksums)
@@ -22,9 +22,10 @@
 //      CN  Cancel       CAN len reason
 //      CA  Ack_Cancel   ACK 05
 //      TX  Text         DLE len text
+//      RI  Rcv_Init     ENQ 02 ...        (server mode; not supported here)
 //
 //  YAPP has no per-block acknowledgment. The sender streams data blocks and
-//  leans on AX.25 for delivery; the only handshakes are at the start (SI/RI,
+//  leans on AX.25 for delivery; the only handshakes are at the start (SI/RR,
 //  HD/RF) and the end (EF/AF, ET/AT). The YAPPC checksum is the sum of the
 //  data bytes modulo 256, and is only sent after the receiver asked for it
 //  with RT.
@@ -57,7 +58,7 @@ nonisolated enum YAPPControlChar: UInt8 {
 /// One decoded YAPP frame.
 nonisolated enum YAPPFrame: Equatable, Sendable {
     case sendInit
-    case receiveInit
+    case receiveReady
     /// `size` is nil when the header's size field is not a number.
     case header(name: String, size: Int?)
     case receiveFile
@@ -83,7 +84,7 @@ nonisolated enum YAPPFrame: Equatable, Sendable {
 /// Builds frames exactly as the frame table lays them out.
 nonisolated enum YAPPEncoder {
     static func sendInit() -> Data { Data([0x05, 0x01]) }
-    static func receiveInit() -> Data { Data([0x06, 0x01]) }
+    static func receiveReady() -> Data { Data([0x06, 0x01]) }
     static func receiveFile() -> Data { Data([0x06, 0x02]) }
     static func receiveFileWithChecksum() -> Data { Data([0x06, 0x06]) }
     static func ackEndFile() -> Data { Data([0x06, 0x03]) }
@@ -203,7 +204,7 @@ nonisolated struct YAPPFrameParser: Sendable {
     private func twoByteFrame(_ lead: UInt8, _ code: UInt8) -> YAPPFrame {
         switch (lead, code) {
         case (0x05, 0x01): return .sendInit
-        case (0x06, 0x01): return .receiveInit
+        case (0x06, 0x01): return .receiveReady
         case (0x06, 0x02): return .receiveFile
         case (0x06, 0x03): return .ackEndFile
         case (0x06, 0x04): return .ackEndTransmission
@@ -249,7 +250,7 @@ nonisolated struct YAPPFrameParser: Sendable {
 /// Where the sending side is in the handshake.
 nonisolated enum YAPPSenderPhase: Equatable, Sendable {
     case idle
-    case awaitingReceiveInit
+    case awaitingReceiveReady
     case awaitingReceiveFile
     case streaming
     case awaitingEndFileAck
@@ -380,7 +381,7 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
         totalBytes = fileData.count
         bytesTransferred = 0
         sendOffset = 0
-        senderPhase = .awaitingReceiveInit
+        senderPhase = .awaitingReceiveReady
         setState(.waitingForAccept)
         send(YAPPEncoder.sendInit())
         armTimer(responseTimeout)
@@ -498,7 +499,7 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
 
     private func handleAsSender(_ frame: YAPPFrame) {
         switch (senderPhase, frame) {
-        case (.awaitingReceiveInit, .receiveInit):
+        case (.awaitingReceiveReady, .receiveReady):
             senderPhase = .awaitingReceiveFile
             send(YAPPEncoder.header(name: fileName, size: totalBytes))
             armTimer(responseTimeout)
@@ -513,7 +514,7 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
             // word, clamped to what exists.
             startStreaming(from: min(max(0, received), fileData.count))
 
-        case (.awaitingReceiveInit, .notReady(let reason)), (.awaitingReceiveFile, .notReady(let reason)):
+        case (.awaitingReceiveReady, .notReady(let reason)), (.awaitingReceiveFile, .notReady(let reason)):
             finish(.failed(reason: refusal(reason)), error: refusal(reason))
 
         case (.awaitingEndFileAck, .ackEndFile):
@@ -547,7 +548,7 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
         switch (receiverPhase, frame) {
         case (.idle, .sendInit), (.awaitingHeader, .sendInit):
             receiverPhase = .awaitingHeader
-            send(YAPPEncoder.receiveInit())
+            send(YAPPEncoder.receiveReady())
             armTimer(responseTimeout)
 
         case (.awaitingHeader, .header(let name, let size)):

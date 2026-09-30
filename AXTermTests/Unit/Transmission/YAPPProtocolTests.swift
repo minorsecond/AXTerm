@@ -18,7 +18,7 @@ final class YAPPProtocolTests: XCTestCase {
 
     func testHandshakeFramesMatchTheFrameTable() {
         XCTAssertEqual(YAPPEncoder.sendInit(), Data([0x05, 0x01]), "SI is ENQ 01")
-        XCTAssertEqual(YAPPEncoder.receiveInit(), Data([0x06, 0x01]), "RI is ACK 01")
+        XCTAssertEqual(YAPPEncoder.receiveReady(), Data([0x06, 0x01]), "RR is ACK 01")
         XCTAssertEqual(YAPPEncoder.receiveFile(), Data([0x06, 0x02]), "RF is ACK 02")
         XCTAssertEqual(YAPPEncoder.ackEndFile(), Data([0x06, 0x03]), "AF is ACK 03")
         XCTAssertEqual(YAPPEncoder.ackEndTransmission(), Data([0x06, 0x04]), "AT is ACK 04")
@@ -79,7 +79,7 @@ final class YAPPProtocolTests: XCTestCase {
         var parser = YAPPFrameParser()
         var stream = Data()
         stream += YAPPEncoder.sendInit()
-        stream += YAPPEncoder.receiveInit()
+        stream += YAPPEncoder.receiveReady()
         stream += YAPPEncoder.header(name: "A.BIN", size: 3)
         stream += YAPPEncoder.receiveFile()
         stream += YAPPEncoder.receiveFileWithChecksum()
@@ -94,7 +94,7 @@ final class YAPPProtocolTests: XCTestCase {
         stream += YAPPEncoder.ackCancel()
         stream += Data([0x10, 0x02, 0x68, 0x69])  // TX "hi"
         XCTAssertEqual(parser.feed(stream), [
-            .sendInit, .receiveInit, .header(name: "A.BIN", size: 3), .receiveFile,
+            .sendInit, .receiveReady, .header(name: "A.BIN", size: 3), .receiveFile,
             .receiveFileWithChecksum, .data(Data([1, 2, 3])), .endFile, .ackEndFile,
             .endTransmission, .ackEndTransmission, .notReady(reason: "busy"),
             .resume(receivedBytes: 100), .cancel(reason: "bye"), .ackCancel, .text("hi")
@@ -169,7 +169,7 @@ final class YAPPProtocolTests: XCTestCase {
         XCTAssertEqual(spy.sent.last, YAPPEncoder.sendInit())
         XCTAssertEqual(yapp.state, .waitingForAccept)
 
-        yapp.handleIncomingData(YAPPEncoder.receiveInit())
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
         XCTAssertEqual(spy.sent.last, YAPPEncoder.header(name: "F.BIN", size: 6))
 
         yapp.handleIncomingData(YAPPEncoder.receiveFile())
@@ -195,7 +195,7 @@ final class YAPPProtocolTests: XCTestCase {
         let spy = YAPPSpy()
         yapp.delegate = spy
         try yapp.startSending(fileName: "F", fileData: Data([7, 8]))
-        yapp.handleIncomingData(YAPPEncoder.receiveInit())
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
         yapp.handleIncomingData(YAPPEncoder.receiveFileWithChecksum())
         XCTAssertTrue(spy.sent.contains(YAPPEncoder.data(Data([7, 8]), checksum: true)))
     }
@@ -206,7 +206,7 @@ final class YAPPProtocolTests: XCTestCase {
         yapp.delegate = spy
         yapp.blockSize = 10
         try yapp.startSending(fileName: "F", fileData: Data(0..<20))
-        yapp.handleIncomingData(YAPPEncoder.receiveInit())
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
         yapp.handleIncomingData(Data([0x15, 0x05, 0x52, 0x00, 0x31, 0x35, 0x00]))  // RE at 15
         XCTAssertTrue(spy.sent.contains(YAPPEncoder.data(Data(15..<20), checksum: false)))
         XCTAssertFalse(spy.sent.contains(YAPPEncoder.data(Data(0..<10), checksum: false)))
@@ -217,7 +217,7 @@ final class YAPPProtocolTests: XCTestCase {
         let spy = YAPPSpy()
         yapp.delegate = spy
         try yapp.startSending(fileName: "F", fileData: Data([1]))
-        yapp.handleIncomingData(YAPPEncoder.receiveInit())
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
         yapp.handleIncomingData(YAPPEncoder.notReady(reason: "Disk full"))
         XCTAssertEqual(spy.completion?.ok, false)
         XCTAssertEqual(spy.completion?.error, "The other station refused the file: Disk full")
@@ -236,7 +236,7 @@ final class YAPPProtocolTests: XCTestCase {
             return true
         }
         try yapp.startSending(fileName: "F", fileData: Data([1, 2, 3, 4, 5, 6]))
-        yapp.handleIncomingData(YAPPEncoder.receiveInit())
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
         yapp.handleIncomingData(YAPPEncoder.receiveFile())
         XCTAssertEqual(spy.dataBlocks, 1, "one block while the link had room for one")
         room = 1
@@ -256,7 +256,7 @@ final class YAPPProtocolTests: XCTestCase {
         var room = 1
         yapp.readyForData = { defer { room = max(0, room - 1) }; return room > 0 }
         try yapp.startSending(fileName: "F", fileData: Data([1, 2, 3]))
-        yapp.handleIncomingData(YAPPEncoder.receiveInit())
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
         yapp.handleIncomingData(YAPPEncoder.receiveFile())
         yapp.pause()
         XCTAssertEqual(yapp.state, .paused)
@@ -352,7 +352,7 @@ final class YAPPProtocolTests: XCTestCase {
         yapp.delegate = spy
 
         yapp.handleIncomingData(YAPPEncoder.sendInit())
-        XCTAssertEqual(spy.sent.last, YAPPEncoder.receiveInit())
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.receiveReady())
 
         yapp.handleIncomingData(YAPPEncoder.header(name: "R.BIN", size: 3))
         XCTAssertEqual(spy.offered?.fileName, "R.BIN")

@@ -28,11 +28,11 @@ put binary AXDP frames into the BBS's command prompt.
 ### YAPP on the wire
 
 `YAPPProtocol.swift` follows the published frame table (WA7MBL, with the
-YAPPC checksum extension). SI is ENQ 01, RI is ACK 01, a header is SOH, a
+YAPPC checksum extension). SI is ENQ 01, RR is ACK 01, a header is SOH, a
 length, the name and size as NUL-terminated ASCII; data blocks are STX, a
 length (0 meaning 256) and the data. There is no per-block acknowledgment:
 the sender streams blocks and AX.25 carries them, and the handshakes happen
-only at the start (SI/RI, HD/RF) and the end (EF/AF, ET/AT). A receiver that
+only at the start (SI/RR, HD/RF) and the end (EF/AF, ET/AT). A receiver that
 answers RT instead of RF asks for YAPPC checksums, and AXTerm adds them when
 sending. AXTerm answers RF as a receiver.
 
@@ -64,7 +64,7 @@ when:
 
 A BBS sends SI as a packet of its own, and ENQ never appears in text, so
 those two bytes inside a line of text, or followed by anything, stay text
-and reach the terminal unchanged. AXTerm answers RI, the header names the
+and reach the terminal unchanged. AXTerm answers RR, the header names the
 file, and the offer goes through the same rules and prompt as an AXDP offer.
 
 ## Offers
