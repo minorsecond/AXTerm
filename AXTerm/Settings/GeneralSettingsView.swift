@@ -33,7 +33,9 @@ struct GeneralSettingsView: View {
             PreferencesSection("Identity") {
                 CallsignField(title: "My Callsign", text: $settings.myCallsign)
                 
-                Text("Used to highlight your node in the graph and identify you in sessions.")
+                Text(settings.hasMultipleRadios
+                     ? "Your base callsign. Each radio picks its SSID on its own page in Settings \u{203A} Radios."
+                     : "Your callsign as it goes on the air, with an SSID if you use one, such as K0EPI-5.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
