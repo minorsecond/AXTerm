@@ -595,6 +595,62 @@ struct AXTermiOSRootView: View {
         }
     }
 
+    // MARK: - Map layers by Winlink
+
+    /// Nil without a mailbox, which hides the map's send action rather than
+    /// offering one that cannot work. As on the Mac.
+    private var layerSendAction: ((MapOverlayLayer, MapOverlayExport.Format) -> Void)? {
+        guard context.store != nil else { return nil }
+        return { layer, format in sendLayerViaWinlink(layer, format: format) }
+    }
+
+    /// Turns a map layer into a Winlink draft and opens compose on it.
+    ///
+    /// The same draft the Mac builds (`ContentView.sendLayerViaWinlink`):
+    /// the operator picks the recipient and sees the size before anything is
+    /// queued. The Mac lands in the mailbox with the draft in Drafts; here
+    /// compose opens on it straight away, since on a phone the mailbox is a
+    /// stack of screens away from the draft.
+    private func sendLayerViaWinlink(_ layer: MapOverlayLayer, format: MapOverlayExport.Format) {
+        guard let store = context.store else { return }
+        do {
+            let data: Data
+            switch format {
+            case .geoJSON: data = try GeoJSONWriter.data(for: layer)
+            case .shapefile: data = try ShapefileWriter.zippedShapefile(layer: layer)
+            }
+            let airtime = WinlinkAirtimeEstimate.forGateway(
+                callsign: context.settings.gatewayCallsign,
+                frequencyHz: nil,
+                quality: context.mapLinkQuality)
+            let assessment = MapOverlayExport.assess(byteCount: data.count, airtime: airtime)
+            let draft = MapOverlayMessage.draft(
+                layer: layer, format: format, attachment: data,
+                assessment: assessment,
+                operatorCallsign: settings.myCallsign,
+                generatedAt: Date())
+            let message = WinlinkB2Message(
+                mid: WinlinkB2Message.generateMID(callsign: settings.myCallsign),
+                date: Date(),
+                type: .privateMessage,
+                from: settings.myCallsign,
+                to: [],
+                cc: [],
+                subject: draft.subject,
+                mbo: settings.myCallsign,
+                body: Data(draft.body.utf8),
+                attachments: [.init(name: draft.attachmentName, data: draft.attachment)])
+            try store.saveDraft(message)
+            context.refreshUnread()
+            selection = .mail
+            composeRequest = WinlinkComposeRequest(draftMID: message.mid)
+        } catch let error as ShapefileWriter.WriteError {
+            fileProblem = error.explanation
+        } catch {
+            fileProblem = "Could not prepare \(layer.name) for sending: \(error.localizedDescription)"
+        }
+    }
+
     private func applyKeepAwake() {
         keepAwake.update(
             policy: settings.keepAwakePolicy,
@@ -993,6 +1049,7 @@ struct AXTermiOSRootView: View {
                 focusCallsign: $mapFocusCallsign,
                 elevation: elevation,
                 overlayStore: overlayStore,
+                onSendLayer: layerSendAction,
                 onBeacon: { sessionCoordinator.sendBeacon(settings) },
                 onPlaceObject: { name, live, latitude, longitude, table, code, comment in
                     sessionCoordinator.sendAPRSObject(
