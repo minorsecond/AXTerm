@@ -49,7 +49,7 @@ final class TransferProtocolRegistryTests: XCTestCase {
 
     func testDetectYAPPProtocol() {
         let registry = TransferProtocolRegistry.shared
-        let yappData = Data([0x01, 0x01])  // SOH, 0x01 = Send Init
+        let yappData = Data([0x05, 0x01])  // ENQ 01 = Send Init (SI)
 
         let detected = registry.detectProtocol(from: yappData)
 
@@ -98,7 +98,7 @@ final class TransferProtocolRegistryTests: XCTestCase {
 
     func testDetectAndCreateYAPP() {
         let registry = TransferProtocolRegistry.shared
-        let yappData = Data([0x01, 0x01])  // Send Init
+        let yappData = Data([0x05, 0x01])  // ENQ 01 = Send Init (SI)
 
         let proto = registry.detectAndCreate(from: yappData)
 
