@@ -140,6 +140,39 @@ form's meter and status rows through `LinkSession → RadioManager →
 ConnectionTransportViewModel`, and PTT and carrier transitions go to the
 link debug log.
 
+### Transmissions heard, decodable or not (`NoiseQuietingDetector`)
+
+On 2026-09-30 an IC-705 with its notch on by accident decoded about one APRS
+frame a minute on a busy 144.390. Nothing on screen was wrong: the link was
+up, the level was in range, and a frame arrived now and then. With the notch
+off the modem decoded 14 frames in 3 minutes, to Direwolf's 17 on the same
+audio. The only sign was the gap between how much the receiver heard and how
+little the modem decoded, and carrier detect cannot measure that gap because
+it judges from the tones, which are what a notch or a filter removes.
+
+With the squelch open an FM receiver plays loud hiss, and a carrier quiets
+it. AFSK sits at 1200 and 2200 Hz, so 3.5 to 6 kHz is nearly all receiver
+noise. `NoiseQuietingDetector` measures that band on 4096-sample frames
+(85 ms at 48 kHz) and counts a transmission when a frame's energy falls at
+least 6 dB under the running median of the last 128 frames (about 11 s) and
+stays there for at least 0.3 s. These are the numbers the offline analysis of
+the 2026-09-30 recording used. The band is cut with four high-pass sections
+and one low-pass per sample: a single section passes the 2200 Hz tone only
+9 dB down, and on a loud signal that tone alone fills the band. Silence (a
+closed squelch) has no hiss to quiet and never counts. The detector pauses
+while we transmit and through the receive mute after.
+
+The count is `carriersHeard` in the telemetry. `ReceiveHealth` keeps a
+ten-minute ledger of it against `framesDecoded` per radio
+(`ReceiveHealth.CarrierLedger`, a sample every 5 s), and with at least 10
+carriers and fewer than a quarter as many frames decoded it warns: "Heard 23
+transmissions in 10 min but decoded 3 frames." Without CI-V the warning
+suggests the notch, noise reduction, filters and audio level; with CI-V it
+names what the radio's own audit found. The warning shows wherever the
+quiet-receiver warning does. An idle channel never has 10 carriers, a healthy
+one decodes far more than a quarter, and a hardware TNC is never judged,
+having no audio to count.
+
 ### Slicers, and why there are five
 
 The demodulator decides mark-versus-space from a *ratio* of the two tones'
@@ -252,17 +285,44 @@ years. The radio was ruled out first: squelch fully open, FM-D, not narrow.
 ### Why can't I hear anybody? (`RigReceiveAudit`)
 
 The other half of that answer is in the radio, and the radio will tell us. The
-modem's CI-V link reads the receive path's settings — attenuator, preamp, RF
-gain, squelch level, noise blanker, noise reduction, mode and filter — and
-`RigReceiveAudit` judges each against what a soundmodem needs. Settings →
-Radios → the modem radio → **Check reception**.
+modem's CI-V link reads the receive path's settings (attenuator, preamp, RF
+gain, squelch level, noise blanker, noise reduction, auto and manual notch,
+tone squelch, mode and filter) and `RigReceiveAudit` judges each against what
+a soundmodem needs. Settings → Radios → the modem radio → **Check reception**.
 
 Findings are ranked. *Blocking* is sensitivity thrown away before the modem
 ever sees it — an attenuator left on, RF gain backed off, a squelch that is not
-open, a narrow filter. *Degrading* is audio the demodulator then has to fight:
+open, a narrow filter, the auto notch (it hunts for steady tones and removes
+them, and AFSK is two steady tones), a tone squelch that mutes every station
+not sending the tone. *Degrading* is audio the demodulator then has to fight:
 NR smears the tone transitions, NB punches holes and a hole inside a frame costs
-the frame. *Suggestion* is the preamp being off, which is the right choice on a
+the frame, a manual notch cuts a slot that takes a tone with it wherever it sits
+near one. *Suggestion* is the preamp being off, which is the right choice on a
 crowded band and free margin on a quiet one.
+
+The notch and tone squelch checks came from the 2026-09-30 failure described
+under `NoiseQuietingDetector`. Their codes are in the IC-705 CI-V Reference
+Guide (2020 edition, command table p. 4) and agree with hamlib
+(`rigs/icom/icom_defs.h` S_FUNC_ANF 0x41 and S_FUNC_MN 0x48, both in the
+IC-705's function set in `ic7300.c`) and wfview's IC-705 rig file:
+
+| Setting | Read / write | Values |
+|---|---|---|
+| Auto notch | `16 41` | `00` off, `01` on |
+| Manual notch | `16 48` | `00` off, `01` on |
+| Tone squelch function (IC-705) | `16 5D` | `00` OFF, `01` TONE, `02` TSQL, `03` DTCS, `06` DTCS(T), `07` TONE(T)/DTCS(R), `08` DTCS(T)/TSQL(R), `09` TONE(T)/TSQL(R) |
+
+`16 5D` is asked only of a radio at address `A4` or one whose LAN login names
+it an IC-705; other Icoms split the function across `16 42`, `16 43` and
+`16 4B` or put it elsewhere. A transmit-only tone (TONE, DTCS(T)) is a
+repeater tone and not a receive problem, so it is never a finding, and the fix
+for a receive tone squelch drops only the decoder: TSQL becomes TONE, DTCS
+becomes DTCS(T), and the tone the radio sends is kept. VSC (`16 4C` on other
+Icoms) is not checked: the IC-705 guide does not list it.
+
+Two unanswered reads in a row end the audit's reads for that pass, so a radio
+that has stopped answering costs two timeouts rather than nine. A radio that
+lacks a setting answers NG at once and does not count.
 
 The audit is judged against the modem mode, not against 1200-baud FM. Until
 2026-09-19 it was not: the mode check was a literal `.fm`, so a 300 bd HF
@@ -277,13 +337,27 @@ and the audit, so the two cannot drift apart again.
 On an SSB mode the opposite sideband is a suggestion rather than a fault. The
 tones invert with the sideband and NRZI encodes transitions rather than levels,
 so LSB decodes as well as USB — provided the far end agrees. What the operator
-does need telling is that `setsRadioModeOnConnect` puts the sideband back at
-every connect, which it now says when it changes the mode.
+does need telling is that `setsRadioModeOnConnect` sets the sideband at every
+connect, which it says when it changes the mode.
 
-It is deliberately read-only — what to do about a finding is the operator's
-call, on their radio — and it judges only the standard, well-documented Icom
-subcommands. A subcommand whose meaning on this radio is uncertain is not worth
-a wrong answer about why nobody can be heard.
+**Check reception** is read-only; **Fix these** beside it changes only the
+settings whose right value for packet is a fact, never the mode or the preamp.
+The audit judges only documented Icom subcommands. A subcommand whose meaning
+on this radio is uncertain is not worth a wrong answer about why nobody can be
+heard.
+
+**During the session.** The audit also runs every two minutes while the radio
+is connected and idle, whether or not the frequency is followed (it used to sit
+behind that switch, so a station with it off was never checked after
+connecting). `RigReceiveAudit.DriftWatch` compares each pass with the last: the
+first pass is the baseline, a finding that appears later is announced once in
+the console ("The radio changed under us: the auto notch is on") and held
+until it is fixed or put right by hand. The change is not reverted silently;
+the radio is the operator's. The radio page's status section shows it with a
+**Fix** button (`ModemReceiveDriftRows`), the way a TNC4's receive-level drift
+is shown, and the toolbar's receive warnings list it. A fix made while AXTerm
+is setting the radio up for packet joins the snapshot below and is put back at
+close with everything else.
 
 ### Modes
 
@@ -348,14 +422,66 @@ What the app sends, byte for byte, is pinned in `CIVFrameTests`:
 | DATA MOD = USB | `1A 05 01 19 01` |
 | USB AF squelch open | `1A 05 01 11 00` |
 | TX Delay HF/50/144/430 off | `1A 05 00 38/39/41/42 00` |
+| Attenuator (read / set) | `11` / `11 <value>` (`00` off, `20` 20 dB) |
+| RF gain, squelch level | `14 02`, `14 03` + two BCD bytes, 0000-0255 |
+| NB, NR, auto notch, manual notch | `16 22`, `16 40`, `16 41`, `16 48` + `00`/`01` |
+| Tone squelch function (IC-705) | `16 5D <value>` |
 
-**On connect** AXTerm only identifies, switches Transceive off and reads.
-**"Set radio for packet"** (a confirmed button, or `setsRadioModeOnConnect`)
-pushes exactly: the mode with data on, DATA MOD = USB, AF squelch open,
-USB SEND off, Transceive off, the radio's four TX Delay menus off. It never
-touches the frequency. The confirmation sheet lists the same items
-(`ModemRadioSection.setupDescription`); if the two ever disagree, the code
-is wrong.
+**On connect**, with the switch off, AXTerm only identifies and reads.
+**"Set radio for packet…"** is a confirmed one-shot that pushes exactly: the
+mode with data on, DATA MOD (USB, or WLAN over Wi-Fi), AF squelch open, USB
+SEND off, Transceive off (over a cable), the radio's four TX Delay menus off.
+It never touches the frequency, and it is a permanent change the operator
+asked for, so it is not put back. The confirmation sheet lists the same items
+(`ModemRadioSection.setupDescription`); if the two ever disagree, the code is
+wrong.
+
+### Setting the radio up, and putting it back (`RigPrep`)
+
+Until 2026-09-30 AXTerm wrote the operator's radio at every connect and never
+undid any of it: after a session the radio sat in FM-D with its TX delays gone
+and CI-V Transceive off. The TNC4 has been treated better since 2026-09-29 (the
+link records what the TNC held and puts it back on disconnect), and this is the
+same promise for a radio on CI-V.
+
+With **Set up the radio for packet while connected** on
+(`setsRadioModeOnConnect`), each connect runs `CIVClient.prepareForPacket`: the
+one-shot's recipe, then the receive settings whose packet value is a fact,
+namely attenuator off, RF gain full, squelch open, NR off, NB off, auto notch
+off, manual notch off and, on an IC-705, the receive tone squelch off. The
+preamp stays the operator's. Every setting is read first and written only when
+wrong. A receive setting the radio will not report is left alone, because a
+change whose original is unknown cannot be put back.
+
+Every write is recorded in a `RigPrepSnapshot`: per setting, the original and
+the value applied, in the order applied. The mode, filter and data flag are one
+setting (`[mode, filter, data, dataFilter]`), because `06` clears the data flag
+and restoring them separately could leave a radio that was in USB-D in plain
+USB. The snapshot is written to `AppEnvironment.defaults` under
+`rigPrep.v1.<radio ID>` (`RigPrepStore`) the moment a change is made, so it
+survives a dropped link, an auto-reconnect, a sleep and a crash. A later
+change to a setting already in it keeps the stored original, so a connect that
+finds the radio still prepared (after a crash, say) never takes AXTerm's own
+values for the operator's. A damaged entry is dropped on load and the rest kept.
+
+**Putting it back.** `ModemRadioLink.close()` is the operator's close: a
+disconnect, the radio disabled or removed, the app quitting. After PTT off on
+the still-open port and before the port shuts, `CIVClient.restore` reads every
+recorded setting, plans with `RigPrepRestore.plan` and writes the originals in
+reverse order. A setting that no longer holds AXTerm's value was changed by the
+operator during the session and is left alone; one already back is skipped; one
+the radio did not report is restored anyway, since silence is no evidence of a
+change. What fails, or what the 4 s budget does not reach, stays in the
+snapshot for the next close. One console line says what was put back, what was
+left and what could not be. A dropped link (`rigDied`), a sleep (`suspend`) and
+a reopen for a settings change restore nothing; the snapshot waits for the real
+close, and a reconnect started before a close finished waits for its restore.
+
+Switching the option off while connected restores at once; switching it on
+prepares at once. On quit, `applicationShouldTerminate` sees that a link owes
+its radio settings (`RadioManager.hasPreparedRadios`), closes the links, and
+replies once no link is still closing (`isClosingRigs`), with a backstop of the
+restore budget plus 2 s. The PTT-off-first order is unchanged.
 
 **Follow the radio's frequency**: every 5 s while the modem is idle,
 frequency, mode and data mode are read into `RigStatus`, republished per
@@ -396,10 +522,13 @@ On the Mac, the Transport picker gains **Sound Modem**. The form:
   path), and the max transmission watchdog. TXDELAY, TXTAIL, persistence and
   slot time are the radio page's Timing section, the same one every radio
   has, each with help that says what it is for.
-- **Radio**: follow frequency, set-on-connect, **Set radio for packet…**
-  with the confirmation above.
-- **Status** while connected: carrier and PTT dots, decoded / failed / sent
-  counts, audio format and dropouts, the radio's model · frequency · mode.
+- **Radio**: follow frequency, **Set up the radio for packet while
+  connected** (prepare on connect, put back on disconnect or quit),
+  **Set radio for packet…** with the confirmation above, **Check reception**
+  and **Fix these**.
+- **Status** while connected: a receive setting changed during the session,
+  with **Fix**; carrier and PTT dots, decoded / failed / sent counts, audio
+  format and dropouts, the radio's model · frequency · mode.
 
 On iOS the segment is hidden unless the profile already is a modem; the
 form then says the sound modem needs a Mac. `RadioManager` records the

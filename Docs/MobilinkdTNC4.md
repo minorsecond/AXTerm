@@ -265,6 +265,10 @@ A radio that has just connected is never flagged. On 2026-09-30 a TNC4 heard
 nothing for 40 minutes because of the radio's antenna and nothing on screen
 said so; this is the rule that says so now.
 
+A sound-modem radio has a third rule, hearing traffic and decoding little of
+it, which needs the audio and so never applies to a TNC4 (see
+`NoiseQuietingDetector` in `Docs/SoundModem.md`).
+
 ### What the operator sees
 
 Findings show on the radio page's status section, in the TNC pill's tooltip
