@@ -472,7 +472,9 @@ reverse order. A setting that no longer holds AXTerm's value was changed by the
 operator during the session and is left alone; one already back is skipped; one
 the radio did not report is restored anyway, since silence is no evidence of a
 change. What fails, or what the 4 s budget does not reach, stays in the
-snapshot for the next close. One console line says what was put back, what was
+snapshot for the next close. Whatever is owed is paid at close even if the
+switch has since been turned off, so a snapshot left by a crash is never
+stranded. One console line says what was put back, what was
 left and what could not be. A dropped link (`rigDied`), a sleep (`suspend`) and
 a reopen for a settings change restore nothing; the snapshot waits for the real
 close, and a reconnect started before a close finished waits for its restore.

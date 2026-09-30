@@ -337,6 +337,21 @@ final class ModemRadioLinkPrepTests: XCTestCase {
         XCTAssertEqual(transport.written.filter(isWrite).map(hex), ["FE FE A4 E0 1C 00 00 FD"], "only PTT off")
     }
 
+    /// A crash left a snapshot, and the switch was turned off before the
+    /// next session. Nothing is prepared, but what is owed is still paid at
+    /// close.
+    func testWhatIsOwedIsPaidEvenWithTheSwitchOff() async {
+        let radio = FakeIcomRadio(FakeIcomRadio.packetSetup())
+        store.save(RigPrepSnapshot(entries: [.init(setting: .autoNotch, original: [0x01], applied: [0x00])]),
+                   for: radioID)
+        let (link, _, spy) = makeLink(config(prepares: false), radio: radio)
+        await connect(link, spy)
+        XCTAssertEqual(radio["1641"], [0x00], "not prepared, and not restored while connected")
+        await closeAndWait(link)
+        XCTAssertEqual(radio["1641"], [0x01])
+        XCTAssertNil(store.load(radioID))
+    }
+
     /// A fix made with the switch off is the operator's own change and is
     /// not recorded for putting back.
     func testAFixWithTheSwitchOffIsNotRecorded() async {

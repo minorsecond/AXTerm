@@ -650,8 +650,12 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// removed, the app quitting. A dropped link does not come through here
     /// (see `rigDied`) and neither does a reopen for a settings change, so
     /// neither restores; the snapshot waits for the real close.
+    ///
+    /// Whatever is owed is put back even with the switch now off: a snapshot
+    /// left by a crash, with the switch turned off before the next session,
+    /// would otherwise never be paid.
     func close() {
-        close(restoringRadio: config.setsRadioModeOnConnect)
+        close(restoringRadio: true)
     }
 
     /// The machine is going to sleep and the link will reopen when it wakes:
