@@ -34,6 +34,24 @@ final class BBSService: ObservableObject {
         var callId: Int64
     }
 
+    /// A file on its way to or from the caller, for the operator's view.
+    ///
+    /// The transcript only says a transfer started and how it ended; forty
+    /// minutes of YAPP in between look like nothing is happening. This is
+    /// what the live call panel draws its progress bar from.
+    nonisolated struct TransferStatus: Equatable, Sendable {
+        enum Direction: Equatable, Sendable { case download, upload }
+        var direction: Direction
+        var caller: String
+        /// Nil for an upload until the caller's header names the file.
+        var fileName: String?
+        var protocolName: String
+        var bytesDone: Int
+        /// Zero until known, which for an upload is until the header arrives.
+        var totalBytes: Int
+        var startedAt: Date
+    }
+
     @Published private(set) var messages: [BBSMessage] = []
     @Published private(set) var calls: [BBSCall] = []
     /// The white pages directory, sorted by callsign.
@@ -49,6 +67,9 @@ final class BBSService: ObservableObject {
     /// mailbox that is quiet for a bad reason says which reason.
     @Published private(set) var lastRefusal: String?
     @Published private(set) var storeError: String?
+    /// The transfer running right now, or nil. Set for exactly as long as the
+    /// session's bytes belong to a transfer protocol.
+    @Published private(set) var transfer: TransferStatus?
 
     /// Beyond this the oldest lines are dropped: a caller who pastes a book
     /// should not grow the window without bound.
@@ -71,9 +92,17 @@ final class BBSService: ObservableObject {
     private let heardStations: () -> [BBSShell.HeardStation]
     /// The catalog and the bytes behind it. Nil when there is no database.
     private let library: BBSFileLibrary?
-    /// Whether a peer has answered a capability probe, which is what decides
-    /// between AXDP and YAPP for a download.
+    /// Whether a peer has answered an AXDP capability probe.
+    ///
+    /// No longer decides the download protocol: every binary download goes
+    /// by YAPP (see `sendFile` for why). It only tells the operator, in the
+    /// transcript, that the caller runs AXTerm.
     private let peerSupportsAXDP: (String) -> Bool
+    /// How long a transfer may go without a byte from the caller before it
+    /// is stopped. YAPP's own retries give up after about five minutes; this
+    /// ends it sooner and, unlike YAPP, frees the mailbox for the next
+    /// command however the protocol got stuck.
+    private let transferStallTimeout: TimeInterval
     /// Throughput used for the TIME column and the long-transfer warning.
     ///
     /// Defaults to 90 B/s: 1200 baud is 150 bytes/s of raw channel, and after
@@ -108,13 +137,47 @@ final class BBSService: ObservableObject {
     private var inputBuffer = Data()
     private var lastActivity: Date = .distantPast
     private var idleTask: Task<Void, Never>?
-    private var activeTransfer: FileTransferProtocol?
     /// Armed by `U`, until the caller's first recognizable protocol frame.
     private var awaitingUpload = false
     private var uploadsThisCall = 0
-    private var transferBridge: BBSTransferBridge?
     /// When this caller was last here, fixed for the duration of the call.
     private var callerLastVisit: Date?
+
+    /// The transfer that owns the session's bytes, if any.
+    ///
+    /// Everything about one transfer lives in one value with one id, so
+    /// ending it is a single assignment, and a callback from a transfer that
+    /// has already ended (a cancel's own "canceled" report, say) can be told
+    /// apart from the current one and ignored.
+    private struct RunningTransfer {
+        let id: UUID
+        let driver: FileTransferProtocol
+        /// Held here because the driver's delegate reference is weak.
+        let bridge: BBSTransferBridge
+        let direction: TransferStatus.Direction
+        /// How the caller is told about it: the file name, or "the upload".
+        var what: String
+        /// `AREA/name` for the call log, empty for an upload.
+        var logName: String
+        /// The size the upload's header promised and the policy accepted.
+        var acceptedBytes: Int?
+        /// Set once an upload has been written to the inbox.
+        var stored = false
+        var framing = YAPPFrameAssembler()
+        /// Text the caller typed during the transfer, kept only to spot `A`.
+        var typed = Data()
+    }
+    private var running: RunningTransfer?
+    private var lastTransferActivity: Date = .distantPast
+    private var watchdog: Task<Void, Never>?
+    /// An AXDP message arriving in pieces, collected until it can be read.
+    private var axdpBuffer = Data()
+    /// Text written while a command is being answered, sent as one batch so
+    /// a reply costs one burst of frames rather than one per line.
+    private var pendingLines: [String]?
+
+    /// Whether a transfer holds the session. For tests and the UI.
+    var isTransferring: Bool { running != nil }
 
     init(store: BBSMessageStore?,
          settings: BBSSettings,
@@ -126,6 +189,7 @@ final class BBSService: ObservableObject {
          heardStations: @escaping () -> [BBSShell.HeardStation] = { [] },
          library: BBSFileLibrary? = nil,
          peerSupportsAXDP: @escaping (String) -> Bool = { _ in false },
+         transferStallTimeout: TimeInterval = 180,
          linkBytesPerSecond: @escaping () -> Double = { 90 },
          licenceRecord: @escaping (String) -> CallsignRecord? = { _ in nil },
          announce: @escaping (String) -> Void = { _ in },
@@ -142,6 +206,7 @@ final class BBSService: ObservableObject {
         self.heardStations = heardStations
         self.library = library
         self.peerSupportsAXDP = peerSupportsAXDP
+        self.transferStallTimeout = transferStallTimeout
         self.linkBytesPerSecond = linkBytesPerSecond
         self.licenceRecord = licenceRecord
         self.announce = announce
@@ -198,6 +263,10 @@ final class BBSService: ObservableObject {
     /// tell that from a bad path. Saying goodbye costs one frame.
     func shutdown(reason: String = "closing") {
         guard let session else { return }
+        // A goodbye typed into the middle of a YAPP stream would be read as a
+        // corrupt block. Cancel first, so the caller's software knows the
+        // transfer is over before the text arrives.
+        stopTransfer(tellCaller: nil, log: "transfer stopped: mailbox \(reason)")
         write(["", "*** \(reason) — 73"])
         if let disc = coordinator.sessionManager.disconnect(session: session) {
             sendFrames([disc])
@@ -331,8 +400,17 @@ final class BBSService: ObservableObject {
         // A running transfer owns the byte stream. Feeding these to the line
         // assembler would both corrupt the protocol and scatter binary through
         // the transcript.
-        if let activeTransfer {
-            activeTransfer.handleIncomingData(data)
+        if running != nil {
+            feedTransfer(data)
+            return
+        }
+
+        // An AXTerm caller's own protocol. Recognized wherever it turns up,
+        // not only after `U`: a caller who pressed Send in their transfer
+        // window without typing `U` first is otherwise left waiting for an
+        // acceptance that never comes.
+        if !axdpBuffer.isEmpty || (inputBuffer.isEmpty && AXDP.hasMagic(data)) {
+            receiveAXDP(data)
             return
         }
 
@@ -342,6 +420,10 @@ final class BBSService: ObservableObject {
         if awaitingUpload, startReceiving(data) { return }
         awaitingUpload = false
 
+        receiveText(data)
+    }
+
+    private func receiveText(_ data: Data) {
         inputBuffer.append(data)
 
         // Callers terminate with CR; some software sends CRLF and a few send
@@ -361,14 +443,36 @@ final class BBSService: ObservableObject {
     }
 
     private func process(line: String) {
-        guard var shell, session != nil else { return }
+        // A line after a transfer began (a caller who typed ahead of their
+        // YAPP software, say) is not a command: those bytes belong to the
+        // transfer now, and answering them would type into its stream.
+        guard var shell, session != nil, running == nil else { return }
         append(.fromCaller, line)
 
-        let output = shell.handle(line: line, mailbox: currentMailbox(), now: now())
+        var output = shell.handle(line: line, mailbox: currentMailbox(), now: now())
         self.shell = shell
 
+        // Where the refusal is already knowable, say it instead of "Ready",
+        // rather than telling the caller to start and then that they cannot.
+        if output.effects.contains(.beginUpload), let reason = uploadRefusal() {
+            output.lines = ["Sorry — \(reason)."]
+            output.effects.removeAll { $0 == .beginUpload }
+        }
+
+        // What the shell said goes first, so "Sending x" arrives before x
+        // does. Everything written while the effects run joins it in one
+        // batch, and the batch is flushed early only when a transfer is
+        // about to put protocol bytes on the link.
+        pendingLines = []
+        write(output.lines)
         for effect in output.effects { apply(effect) }
-        emit(output)
+        // A transfer writes its own prompt when it ends, and a caller who has
+        // just been told to start an upload is not at a prompt.
+        if running == nil, !awaitingUpload, let prompt = output.prompt {
+            write([prompt])
+        }
+        flushLines()
+
         if output.effects.contains(.disconnect) {
             disconnectCurrent()
         } else {
@@ -409,7 +513,7 @@ final class BBSService: ObservableObject {
             beginUpload()
         case .abortTransfer:
             awaitingUpload = false
-            abandonTransfer()
+            stopTransfer(tellCaller: nil, log: nil)
         case .disconnect:
             break
         }
@@ -424,8 +528,31 @@ final class BBSService: ObservableObject {
     }
 
     private func write(_ lines: [String]) {
-        guard let session, !lines.isEmpty else { return }
-        for line in lines { append(.toCaller, line) }
+        guard !lines.isEmpty else { return }
+        if pendingLines != nil {
+            for line in lines { append(.toCaller, line) }
+            pendingLines?.append(contentsOf: lines)
+            return
+        }
+        send(lines, logged: false)
+    }
+
+    /// Sends what `process` collected while answering a command.
+    private func flushLines() {
+        guard let lines = pendingLines else { return }
+        pendingLines = nil
+        // Already in the transcript: `write` logs a line when it queues it.
+        send(lines, logged: true)
+    }
+
+    private func send(_ lines: [String], logged: Bool) {
+        // Never to a link that is not up: sending on a disconnected session
+        // makes the session layer dial the peer, and a mailbox must not call
+        // a caller back.
+        guard let session, session.state == .connected, !lines.isEmpty else { return }
+        if !logged {
+            for line in lines { append(.toCaller, line) }
+        }
 
         // CR, not CRLF: the packet convention every terminal on the channel
         // already expects, and half the bytes.
@@ -451,7 +578,15 @@ final class BBSService: ObservableObject {
     }
 
     private func endCall(unexpected: Bool) {
-        abandonTransfer()
+        // Nothing is sent: the link is gone or going, and a CAN written now
+        // would either be lost or, on a disconnected session, make the
+        // session layer dial the caller back to deliver it.
+        stopTransfer(tellCaller: nil,
+                     log: unexpected ? "transfer stopped: link dropped" : nil,
+                     notifyPeer: false)
+        awaitingUpload = false
+        axdpBuffer = Data()
+        pendingLines = nil
         idleTask?.cancel()
         idleTask = nil
         if let claim { coordinator.sessionManager.releaseDelivery(claim) }
@@ -644,32 +779,42 @@ final class BBSService: ObservableObject {
 
     // MARK: - Files
 
-    /// Types a text file down the session.
+    /// A text file as the lines to type down the session, or nil when it
+    /// cannot be read.
     ///
     /// The cheapest way to move a file on this link: no negotiation, no
     /// framing, no protocol the caller has to have. Most of what a packet
     /// file area actually holds is text, so this is the common path rather
-    /// than the fallback.
+    /// than the fallback. Shared with NET/ROM circuit callers, whose link
+    /// carries lines and nothing else.
+    fileprivate func textLines(for file: BBSSharedFile) -> [String]? {
+        guard let data = library?.data(for: file) else { return nil }
+        let text = String(decoding: data, as: UTF8.self)
+        return ["--- \(file.name) ---"]
+            + text.components(separatedBy: .newlines)
+            + ["--- end of \(file.name) ---"]
+    }
+
     private func viewFile(_ file: BBSSharedFile) {
-        guard let data = library?.data(for: file) else {
+        guard let lines = textLines(for: file) else {
             write(["\(file.name) could not be read."])
             return
         }
-        let text = String(decoding: data, as: UTF8.self)
-        write(["--- \(file.name) ---"]
-              + text.components(separatedBy: .newlines)
-              + ["--- end of \(file.name) ---"])
+        write(lines)
         note("read \(file.area)/\(file.name)")
     }
 
-    /// Hands the session to a transfer protocol for the duration.
+    /// Hands the session to YAPP for the duration of one download.
     ///
-    /// AXDP when the caller has answered a capability probe — it compresses,
-    /// resumes and retransmits selectively, all of which is airtime saved.
-    /// YAPP otherwise, because it is what every other packet terminal on the
-    /// band actually implements.
+    /// YAPP for every caller, AXTerm stations included. AXTerm's own AXDP
+    /// sender lives in `SessionCoordinator` and cannot run on a mailbox
+    /// session: the mailbox holds the session's delivery claim (it has to, or
+    /// the caller's typing would land in the operator's terminal), so the
+    /// caller's AXDP acknowledgments would never reach the coordinator, and
+    /// its transfer would wait for an acceptance it cannot see. YAPP is a
+    /// byte stream the mailbox can own end to end.
     private func sendFile(_ file: BBSSharedFile) {
-        guard activeTransfer == nil else {
+        guard running == nil else {
             write(["A transfer is already running."])
             return
         }
@@ -677,57 +822,122 @@ final class BBSService: ObservableObject {
             write(["\(file.name) could not be read."])
             return
         }
+        // The catalog never lists an empty file, but one can be emptied
+        // between the scan and the D. YAPP would send its header and then
+        // wait forever for a first block that does not exist.
+        guard !data.isEmpty else {
+            write(["\(file.name) is empty, so there is nothing to send."])
+            return
+        }
 
-        let type: TransferProtocolType =
-            peerSupportsAXDP(live?.callsign ?? "") ? .axdp : .yapp
-        let driver = TransferProtocolRegistry.shared.createProtocol(type: type)
-
-        let bridge = makeBridge(what: file.name)
+        let caller = live?.callsign ?? ""
+        let driver = YAPPProtocol()
+        let id = UUID()
+        let bridge = makeBridge(id: id)
         driver.delegate = bridge
+        running = RunningTransfer(id: id, driver: driver, bridge: bridge,
+                                  direction: .download, what: file.name,
+                                  logName: "\(file.area)/\(file.name)")
+        transfer = TransferStatus(direction: .download, caller: caller,
+                                  fileName: file.name, protocolName: "YAPP",
+                                  bytesDone: 0, totalBytes: data.count,
+                                  startedAt: now())
+        append(.note, "sending \(file.name) by YAPP"
+               + (peerSupportsAXDP(caller) ? " (the caller runs AXTerm)" : ""))
+        startWatchdog()
+        // Anything typed after the D, in the same frame, is not a command
+        // now; left here it would be glued to the first line after the
+        // transfer, and would hide an AXDP message arriving later.
+        inputBuffer = Data()
 
+        // The announcement goes out before the first protocol byte does.
+        flushLines()
         do {
             try driver.startSending(fileName: file.name, fileData: data)
-            transferBridge = bridge
-            activeTransfer = driver
-            append(.note, "sending \(file.name) by \(type.displayName)")
-            note("downloaded \(file.area)/\(file.name)")
         } catch {
+            clearTransfer()
             write(["\(file.name) could not be sent: \(error.localizedDescription)"])
         }
     }
 
-    private func makeBridge(what: String) -> BBSTransferBridge {
+    private func makeBridge(id: UUID) -> BBSTransferBridge {
+        // Weak in the bridge, which the driver can outlive; the inner
+        // closures run at once and may hold the service for that long.
         BBSTransferBridge(
             send: { [weak self] bytes in
-                Task { @MainActor [weak self] in self?.writeRaw(bytes) }
+                guard let self else { return }
+                BBSTransferBridge.onMain { self.writeRaw(bytes) }
             },
             finish: { [weak self] ok, error in
-                Task { @MainActor [weak self] in
-                    self?.finishTransfer(ok: ok, error: error, what: what)
-                }
+                guard let self else { return }
+                BBSTransferBridge.onMain { self.finishTransfer(id: id, ok: ok, error: error) }
             },
             confirm: { [weak self] metadata in
-                Task { @MainActor [weak self] in self?.decideUpload(metadata) }
+                guard let self else { return }
+                BBSTransferBridge.onMain { self.decideUpload(id: id, metadata) }
             },
             received: { [weak self] data, metadata in
-                Task { @MainActor [weak self] in self?.storeUpload(data, metadata) }
+                guard let self else { return }
+                BBSTransferBridge.onMain { self.storeUpload(id: id, data, metadata) }
+            },
+            progress: { [weak self] bytes in
+                guard let self else { return }
+                BBSTransferBridge.onMain { self.transferProgressed(id: id, bytes: bytes) }
             })
     }
 
-    private func finishTransfer(ok: Bool, error: String?, what: String) {
-        activeTransfer = nil
-        transferBridge = nil
+    /// The protocol reported the end. Ignored unless it is the current
+    /// transfer: a transfer the mailbox stopped itself has already been
+    /// cleared and explained, and its own "canceled" report is noise.
+    private func finishTransfer(id: UUID, ok: Bool, error: String?) {
+        guard let run = running, run.id == id else { return }
+        clearTransfer()
         guard session != nil else { return }
-        write(ok
-              ? ["\(what) done."]
-              : ["\(what) failed: \(error ?? "no reason given")"])
-        write([BBSShell.commandPrompt])
+
+        switch run.direction {
+        case .download:
+            if ok {
+                write(["\(run.what) sent.", BBSShell.commandPrompt])
+                note("downloaded \(run.logName)")
+            } else {
+                let reason = error ?? "no reason given"
+                write(["\(run.what) was not sent: \(reason).", BBSShell.commandPrompt])
+                note("download of \(run.logName) stopped: \(reason)")
+            }
+        case .upload:
+            // A stored upload has already been announced by `storeUpload`.
+            if !ok {
+                let reason = error ?? "no reason given"
+                write(["The upload stopped: \(reason).", BBSShell.commandPrompt])
+                note("upload stopped: \(reason)")
+            } else if !run.stored {
+                write(["The upload ended without a file.", BBSShell.commandPrompt])
+            } else {
+                write([BBSShell.commandPrompt])
+            }
+        }
+    }
+
+    private func transferProgressed(id: UUID, bytes: Int) {
+        guard let run = running, run.id == id else { return }
+        transfer?.bytesDone = bytes
+        // The header said how big the file is, and that is what the policy
+        // agreed to. A caller who keeps sending past it is not sending that
+        // file, and the inbox quota was checked against the smaller number.
+        if run.direction == .upload, let accepted = run.acceptedBytes, bytes > accepted {
+            stopTransfer(tellCaller: "The upload was larger than its header said, "
+                         + "so it was stopped.",
+                         log: "upload stopped: larger than its header said")
+        }
     }
 
     /// Bytes a transfer protocol produced, straight onto the session with no
     /// line discipline — the payload is framed by the protocol, not by us.
     private func writeRaw(_ data: Data) {
-        guard let session else { return }
+        // Text queued for this reply goes first, so the stream stays in the
+        // order it was written.
+        flushLines()
+        guard let session, session.state == .connected else { return }
         let frames = coordinator.sessionManager.sendData(
             data,
             to: session.remoteAddress,
@@ -738,13 +948,139 @@ final class BBSService: ObservableObject {
         sendFrames(frames)
     }
 
-    /// Abandons a transfer whose session went away, so the next caller is not
-    /// refused by a protocol nobody is listening to.
-    private func abandonTransfer() {
-        activeTransfer?.cancel()
-        activeTransfer = nil
-        transferBridge = nil
-        awaitingUpload = false
+    /// Caller bytes while a transfer holds the session.
+    private func feedTransfer(_ data: Data) {
+        guard var run = running else { return }
+        lastTransferActivity = now()
+        let pieces = run.framing.push(data)
+        running?.framing = run.framing
+
+        for piece in pieces {
+            // A frame can end the transfer (the last ACK, a CAN); whatever
+            // follows it in the same I-frame is not the transfer's business.
+            guard let current = running, current.id == run.id else { return }
+            run = current
+            switch piece {
+            case .frame(let frame):
+                dispatch(frame, to: run)
+            case .text(let text):
+                typedDuringTransfer(text)
+            case .malformed:
+                stopTransfer(tellCaller: "The transfer stopped: a YAPP block announced "
+                             + "a size no real block has.",
+                             log: "transfer stopped: malformed YAPP block")
+            }
+        }
+    }
+
+    private func dispatch(_ frame: Data, to run: RunningTransfer) {
+        switch run.direction {
+        case .upload:
+            run.driver.handleIncomingData(frame)
+        case .download:
+            // The sender only ever hears replies. Receive-init and ACK move
+            // it on; NAK and CAN are retries and refusals.
+            switch frame.first.flatMap(YAPPControlChar.init(rawValue:)) {
+            case .ack, .soh:
+                run.driver.handleAck(data: frame)
+            case .nak, .can:
+                run.driver.handleNak(data: frame)
+            default:
+                break
+            }
+        }
+    }
+
+    /// A caller whose software does not speak YAPP sees the protocol bytes
+    /// as noise and does the natural thing, which is to type `A`. Listening
+    /// for it is what gets them back to a prompt without waiting out every
+    /// retry.
+    private func typedDuringTransfer(_ text: Data) {
+        guard var typed = running?.typed else { return }
+        typed.append(text)
+        if typed.count > 256 { typed = Data(typed.suffix(256)) }
+        running?.typed = typed
+
+        let lines = String(decoding: typed, as: UTF8.self)
+            .components(separatedBy: CharacterSet(charactersIn: "\r\n"))
+            .dropLast()  // the part after the last line end is still being typed
+            .map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
+        if lines.contains(where: { $0 == "A" || $0 == "ABORT" }) {
+            stopTransfer(tellCaller: "Stopped.", log: "transfer stopped by the caller")
+        }
+    }
+
+    /// Ends the current transfer from this side: the caller typed `A`, the
+    /// sysop pressed Stop, the link went quiet, or the call is ending.
+    ///
+    /// Cleared before the protocol is told, so the cancel it reports back
+    /// finds nothing to finish. The protocol still sends its CAN when
+    /// `notifyPeer` is set, because the caller's software is otherwise left
+    /// waiting for the next block.
+    private func stopTransfer(tellCaller message: String?, log: String?,
+                              notifyPeer: Bool = true) {
+        guard let run = running else { return }
+        clearTransfer()
+        if !notifyPeer { run.driver.delegate = nil }
+        run.driver.cancel()
+        // Nothing more from this driver reaches the link: a receiver in the
+        // middle of a block would otherwise ACK it after its own CAN.
+        run.driver.delegate = nil
+        if let log { note(log) }
+        if let message, session != nil {
+            write([message, BBSShell.commandPrompt])
+        }
+    }
+
+    private func clearTransfer() {
+        running = nil
+        transfer = nil
+        stopWatchdog()
+    }
+
+    /// The sysop's Stop button.
+    func sysopStopTransfer() {
+        stopTransfer(tellCaller: "The sysop stopped the transfer.",
+                     log: "transfer stopped by the sysop")
+    }
+
+    // MARK: - Stalls
+
+    private func startWatchdog() {
+        lastTransferActivity = now()
+        watchdog?.cancel()
+        let timeout = transferStallTimeout
+        // Often enough that a stall is caught within a fifth of the limit,
+        // rarely enough to cost nothing.
+        let interval = min(5, max(0.02, timeout / 5))
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard !Task.isCancelled, let self, self.running != nil else { return }
+                if self.now().timeIntervalSince(self.lastTransferActivity) >= timeout {
+                    self.transferStalled()
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopWatchdog() {
+        watchdog?.cancel()
+        watchdog = nil
+    }
+
+    private func transferStalled() {
+        let span: String
+        if transferStallTimeout < 60 {
+            let seconds = Int(transferStallTimeout.rounded(.up))
+            span = "\(seconds) second\(seconds == 1 ? "" : "s")"
+        } else {
+            let minutes = Int((transferStallTimeout / 60).rounded(.up))
+            span = "\(minutes) minute\(minutes == 1 ? "" : "s")"
+        }
+        stopTransfer(tellCaller: "The transfer stopped: nothing was heard from you for \(span).",
+                     log: "transfer stopped: nothing heard for \(span)")
     }
 
     // MARK: - Uploads
@@ -759,59 +1095,137 @@ final class BBSService: ObservableObject {
             uploadsThisCall: uploadsThisCall)
     }
 
+    /// Why `U` would be refused before the caller sends anything, or nil.
+    /// Asked with a probe file, so only the reasons that do not depend on
+    /// the file itself (switched off, no inbox, too many this call) show.
+    private func uploadRefusal() -> String? {
+        if case .reject(let reason) = uploadPolicy().decide(filename: "probe.bin", size: 1) {
+            return reason
+        }
+        return nil
+    }
+
     private func beginUpload() {
-        guard activeTransfer == nil else {
+        guard running == nil else {
             write(["A transfer is already running."])
             return
         }
-        // Refused up front where the reason is already knowable, rather than
-        // after the caller has spent airtime sending a header.
-        let policy = uploadPolicy()
-        if case .reject(let reason) = policy.decide(filename: "probe.bin", size: 1) {
+        if let reason = uploadRefusal() {
             write(["Sorry — \(reason)."])
             return
         }
         awaitingUpload = true
     }
 
-    /// Picks the protocol from the caller's own first bytes.
+    /// Starts a YAPP receive on the caller's own first bytes.
     ///
-    /// The mailbox cannot know in advance what the caller's software speaks,
-    /// and the registry already recognizes each protocol's opening frame.
+    /// Only a send-init opens an upload. Anything else after `U` is most
+    /// likely the caller typing, and falls through to the command line.
     private func startReceiving(_ data: Data) -> Bool {
-        guard let driver = TransferProtocolRegistry.shared.detectAndCreate(from: data) else {
-            return false
-        }
-        driver.delegate = makeBridge(what: "the upload")
-        transferBridge = driver.delegate as? BBSTransferBridge
-        activeTransfer = driver
+        guard data.first == YAPPControlChar.soh.rawValue else { return false }
+
+        let driver = YAPPProtocol()
+        let id = UUID()
+        let bridge = makeBridge(id: id)
+        driver.delegate = bridge
+        running = RunningTransfer(id: id, driver: driver, bridge: bridge,
+                                  direction: .upload, what: "the upload", logName: "")
+        transfer = TransferStatus(direction: .upload, caller: live?.callsign ?? "",
+                                  fileName: nil, protocolName: "YAPP",
+                                  bytesDone: 0, totalBytes: 0, startedAt: now())
         awaitingUpload = false
-        driver.handleIncomingData(data)
+        append(.note, "receiving an upload by YAPP")
+        startWatchdog()
+        feedTransfer(data)
         return true
     }
 
-    private func decideUpload(_ metadata: TransferFileMetadata) {
+    private func decideUpload(id: UUID, _ metadata: TransferFileMetadata) {
+        guard let run = running, run.id == id else { return }
         switch uploadPolicy().decide(filename: metadata.fileName, size: metadata.fileSize) {
-        case .accept:
-            activeTransfer?.acceptTransfer()
+        case .accept(let safe):
+            running?.acceptedBytes = metadata.fileSize
+            running?.what = safe
+            transfer?.fileName = safe
+            transfer?.totalBytes = metadata.fileSize
+            run.driver.acceptTransfer()
         case .reject(let reason):
-            activeTransfer?.rejectTransfer(reason: reason)
-            write(["Upload refused — \(reason)."])
-            abandonTransfer()
+            // `rejectTransfer` sends the CAN but reports no completion, so
+            // the mailbox ends the transfer itself.
+            clearTransfer()
+            run.driver.rejectTransfer(reason: reason)
+            write(["Upload refused — \(reason).", BBSShell.commandPrompt])
+            note("refused an upload: \(reason)")
         }
     }
 
-    private func storeUpload(_ data: Data, _ metadata: TransferFileMetadata) {
+    private func storeUpload(id: UUID, _ data: Data, _ metadata: TransferFileMetadata) {
+        guard running?.id == id else { return }
         guard let safe = BBSUploadPolicy.sanitize(metadata.fileName),
               let saved = library?.saveUpload(name: safe, data: data) else {
             write(["That file could not be saved."])
+            note("an upload could not be saved")
             return
         }
+        running?.stored = true
         uploadsThisCall += 1
         write(["Received \(saved) (\(BBSFileIndex.size(data.count)))."])
         // Named in the call log because an unattended station accepting files
         // is exactly the thing the operator wants to read about afterwards.
         note("uploaded \(saved)")
+    }
+
+    // MARK: - AXDP from an AXTerm caller
+
+    /// Reads an AXDP message the caller's AXTerm sent over the session.
+    ///
+    /// Two kinds matter. A FILE_META is the caller's transfer window offering
+    /// a file: the mailbox takes uploads by YAPP only, so it is declined the
+    /// way AXTerm declines any offer, with a NACK the caller's software
+    /// understands, and a line saying what to do instead. A CHAT message is
+    /// a typed line from a caller with AXDP switched on, and is read as one.
+    private func receiveAXDP(_ data: Data) {
+        axdpBuffer.append(data)
+        while !axdpBuffer.isEmpty {
+            guard let (message, consumed) = AXDP.Message.decode(from: axdpBuffer) else {
+                // Not readable yet. Past this size it never will be, and the
+                // command line gets the session back.
+                if axdpBuffer.count > 2048 {
+                    axdpBuffer = Data()
+                    append(.note, "dropped an AXDP message that could not be read")
+                }
+                return
+            }
+            let rest = Data(axdpBuffer.dropFirst(consumed))
+            // A remainder that is not another message is the tail of this
+            // one still arriving.
+            if !rest.isEmpty, !AXDP.hasMagic(rest), axdpBuffer.count <= 2048 { return }
+            axdpBuffer = AXDP.hasMagic(rest) ? rest : Data()
+
+            switch message.type {
+            case .fileMeta:
+                declineAXDPUpload(message)
+            case .chat:
+                if let payload = message.payload, !payload.isEmpty {
+                    receiveText(payload + Data([0x0D]))
+                }
+            default:
+                append(.note, "ignored an AXDP \(message.type) message")
+            }
+        }
+    }
+
+    private func declineAXDPUpload(_ message: AXDP.Message) {
+        awaitingUpload = false
+        // The same NACK `SessionCoordinator.declineIncomingTransfer` sends,
+        // so the caller's transfer ends as "declined" instead of waiting.
+        let nack = AXDP.Message(type: .nack, sessionId: message.sessionId, messageId: 1)
+        writeRaw(nack.encode())
+        let name = message.fileMeta?.filename ?? "that file"
+        write(["This mailbox takes uploads by YAPP only, so \(name) was declined.",
+               "Type U, then send it again with YAPP as the protocol.",
+               BBSShell.commandPrompt])
+        note("declined an AXDP upload of \(name)")
     }
 
     // MARK: - Transcript
@@ -841,15 +1255,33 @@ nonisolated final class BBSTransferBridge: FileTransferProtocolDelegate {
     private let finished: @Sendable (Bool, String?) -> Void
     private let confirmUpload: @Sendable (TransferFileMetadata) -> Void
     private let receivedFile: @Sendable (Data, TransferFileMetadata) -> Void
+    private let progressed: @Sendable (Int) -> Void
 
     init(send: @escaping @Sendable (Data) -> Void,
          finish: @escaping @Sendable (Bool, String?) -> Void,
          confirm: @escaping @Sendable (TransferFileMetadata) -> Void = { _ in },
-         received: @escaping @Sendable (Data, TransferFileMetadata) -> Void = { _, _ in }) {
+         received: @escaping @Sendable (Data, TransferFileMetadata) -> Void = { _, _ in },
+         progress: @escaping @Sendable (Int) -> Void = { _ in }) {
         self.sendBytes = send
         self.finished = finish
         self.confirmUpload = confirm
         self.receivedFile = received
+        self.progressed = progress
+    }
+
+    /// Runs `work` on the main actor, synchronously when already there.
+    ///
+    /// YAPP is driven from the main thread (the mailbox feeds it there and its
+    /// retry timer is on the main run loop), so in practice every callback
+    /// arrives on it. Running them in place keeps protocol bytes and the text
+    /// around them in the order they were produced; a hop through a task
+    /// would let a prompt overtake the last block it was meant to follow.
+    static func onMain(_ work: @escaping @MainActor @Sendable () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { work() }
+        } else {
+            Task { @MainActor in work() }
+        }
     }
 
     func transferProtocol(_ transfer: FileTransferProtocol, needsToSend data: Data) {
@@ -866,14 +1298,17 @@ nonisolated final class BBSTransferBridge: FileTransferProtocolDelegate {
         receivedFile(data, metadata)
     }
 
-    /// Where an upload is accepted or refused — before a byte is written.
+    /// Where an upload is accepted or refused, before a byte is written.
     func transferProtocol(_ transfer: FileTransferProtocol,
                           requestsConfirmation metadata: TransferFileMetadata) {
         confirmUpload(metadata)
     }
 
     func transferProtocol(_ transfer: FileTransferProtocol,
-                          didUpdateProgress progress: Double, bytesSent: Int) {}
+                          didUpdateProgress progress: Double, bytesSent: Int) {
+        progressed(bytesSent)
+    }
+
     func transferProtocol(_ transfer: FileTransferProtocol,
                           stateChanged newState: TransferProtocolState) {}
 }
@@ -885,12 +1320,18 @@ extension BBSService {
     /// One mailbox caller arriving over a NET/ROM circuit instead of an
     /// AX.25 link. Same shell, same store, same effects — but its own
     /// state, because circuits multiplex where the AX.25 listener serves
-    /// one caller at a time. File transfer protocols are declined
-    /// honestly for now: they own a byte stream, and a circuit caller's
-    /// bytes are owned by the node host.
+    /// one caller at a time.
+    ///
+    /// The node host hands this session lines and sends back lines
+    /// (`NodeMailboxSession`), so text is all it can carry. NET/ROM itself
+    /// would carry binary, but no byte stream reaches the mailbox to run a
+    /// transfer protocol on. So text files are typed out as on a direct
+    /// call, listings work unchanged, and binaries and uploads are refused
+    /// by the shell with the callsign to connect to instead.
     // nonisolated class, MainActor methods — see NodeMailboxSession.
     nonisolated final class CircuitSession: NodeMailboxSession {
         private var shell: BBSShell
+        private let caller: String
         // weak, not unowned: an unowned stored property in a FAILABLE
         // init corrupts the heap when the guard returns nil (the
         // partially-initialized object's teardown double-releases it) —
@@ -901,12 +1342,15 @@ extension BBSService {
         fileprivate init?(service: BBSService, caller: String) {
             guard service.settings.onAir else { return nil }
             self.service = service
+            self.caller = caller
             self.shell = BBSShell(
                 caller: caller,
                 sysop: service.answeringCallsign,
                 banner: service.settings.banner,
                 publishesHeardList: service.settings.publishHeardList,
-                publishesWhitePages: service.settings.publishWhitePages)
+                publishesWhitePages: service.settings.publishWhitePages,
+                bytesPerSecond: service.linkBytesPerSecond(),
+                linesOnlyDirectCall: service.answeringCallsign)
         }
 
         @MainActor
@@ -928,10 +1372,23 @@ extension BBSService {
                 switch effect {
                 case .store, .kill, .markRead, .learnWhitePages:
                     service.apply(effect)
-                case .viewFile, .sendFile, .beginUpload, .abortTransfer:
-                    output.lines.append(
-                        "File transfers are not available over a NET/ROM "
-                        + "circuit yet — sorry.")
+                case .viewFile(let file):
+                    // Text is what this link carries, so a text file is
+                    // typed out here exactly as it is on a direct call.
+                    if let lines = service.textLines(for: file) {
+                        output.lines.append(contentsOf: lines)
+                        service.append(.note, "\(caller) read \(file.area)/\(file.name) over NET/ROM")
+                    } else {
+                        output.lines.append("\(file.name) could not be read.")
+                    }
+                case .sendFile, .beginUpload:
+                    // The shell refuses these itself in lines-only mode; this
+                    // is the backstop if that ever changes.
+                    output.lines = ["That needs a direct connection to "
+                                    + "\(service.answeringCallsign)."]
+                case .abortTransfer:
+                    // Nothing can be running here; the shell's "Stopped." is true.
+                    break
                 case .disconnect:
                     closed = true
                 }

@@ -398,7 +398,12 @@ rather than being discovered later from a caller complaining.
 
 **The live session.** The caller's transcript as it happens, both directions.
 It is also the fastest way to find out a banner reads badly or a command
-confuses people: you watch somebody hit it.
+confuses people: you watch somebody hit it. While a file is on its way the
+panel shows it above the transcript, on both platforms: who, which file,
+bytes and percent, the protocol and the time so far, with a Stop button
+(`BBSService.transfer`, drawn by `BBSTransferRowModel`). The transcript only
+says that a transfer began and how it ended, and a half-hour download looks
+like nothing is happening otherwise.
 
 **The callers log.** The operator is asleep for most of what the mailbox does.
 "W0ARP, 03:12, 2:10 — read 7, left mail for K0EPI" is the question a sysop
@@ -492,9 +497,12 @@ Three things are deliberately different, and only three:
 - **Sheets and importers are singular.** Reply is offered in the reader and New
   Message in the list, but there is one compose sheet, held by `BBSScreen`:
   two `.sheet` modifiers on one view leave only the last one working, silently.
-  The Files screen picks a shared folder and an upload inbox through one
-  `fileImporter` for the same reason — what the folder is *for* is state, not a
-  second presenter.
+  Each Files screen, on both platforms, has one `fileImporter` for the same
+  reason: what the pick is *for* (share a folder, choose the upload inbox,
+  choose a missing area's folder again, add files) is a
+  `BBSFilePickPurpose`, which also decides what the importer accepts. The Mac
+  pane once had two importers on one view, and one of its buttons did
+  nothing.
 - **Links are destination links, never `NavigationLink(value:)`.** The shell
   pushes the mailbox into a `NavigationStack(path:)` typed to its own settings
   route, and a typed path accepts only that type: a value link carrying a
@@ -563,7 +571,26 @@ says so rather than returning an empty list.
 - `BBSFileLibraryTests` — sharing a folder end to end against a real one on
   disk: flat, no symlinks, no hidden files, the size cap, descriptions that
   live in the database rather than in the operator's folder, and an inbox that
-  is counted but never served.
+  is counted but never served. Also a renamed folder followed and its stale
+  bookmark replaced, a deleted folder listed as unreachable and chosen again,
+  a missing inbox, and adding files: copies, collisions, what the scan would
+  never offer, and names that are paths.
+- `BBSTransferTests` — the file area driven end to end by a simulated caller
+  (`BBSSimulatedCaller`) over the real session layer, acknowledging I-frames
+  as a real peer does and sending in 128-byte frames: listings, a text file in
+  order, binaries from 1 byte to one under the cap checked byte for byte at
+  `YAPPProtocol`'s own receiver, an emptied file, YAPP uploads, collisions,
+  path names, policy refusals, a header that lies about its size, AXDP offers
+  declined (whole and in pieces), AXDP chat, the operator's progress, and
+  every way a transfer ends followed by a D that works.
+- `YAPPFrameAssemblerTests` — every YAPP frame whole, split at every byte,
+  joined, byte at a time, typed text between frames, and a block announcing
+  an impossible size.
+- `BBSCircuitSessionTests` — the mailbox over a NET/ROM circuit: text files
+  typed out, listings, binaries and uploads refused with the callsign to
+  connect to.
+- `BBSFilePickingTests` — what each importer purpose accepts and does, and
+  the note after adding files. `BBSTransferRowModelTests` — the progress row.
 - `SQLiteBBSMessageStoreTests` — promised message numbers, kill/restore,
   read-flag monotonicity, the call log, file areas, last-visit, and the white
   pages merge rule as the store applies it.
@@ -609,23 +636,68 @@ way to deliver:
   caller has to have, and fewer bytes than any framing would cost. Most of
   what a packet file area holds is text, so this is the common path rather
   than the fallback.
-- **Everything else runs a transfer** — **AXDP** when the caller has answered
-  a capability probe (compression, resume and selective retransmit are all
-  airtime saved) and **YAPP** otherwise, because that is what every other
-  packet terminal on the band actually implements.
+- **Everything else goes by YAPP**, to every caller, AXTerm stations
+  included. AXTerm's own AXDP sender lives in `SessionCoordinator` and cannot
+  run on a mailbox session: the mailbox holds the session's delivery claim
+  (it has to, or the caller's typing would land in the operator's terminal),
+  so the caller's AXDP acknowledgments never reach the coordinator, and its
+  transfer would wait for an acceptance it cannot see. YAPP is a byte stream
+  the mailbox can own end to end. An earlier version chose AXDP for callers
+  that had answered a capability probe and handed them to a placeholder that
+  sent nothing; that placeholder is gone.
 
 Above five minutes of estimated airtime, `D` quotes the cost and waits to be
 asked again. Confirmation is per file, so agreeing to one does not agree to
 the next. Asking once costs a line; finding out forty minutes in costs the
-frequency. `A` stops it.
+frequency.
+
+The shell's own line ("Sending roster.bin (3m).") goes out before the first
+protocol byte, and a text file's "sending it as text" line before the text.
+Each reply is sent as one batch, so a command costs one burst of frames.
 
 While a transfer runs it owns the session's byte stream; the line assembler
-gets it back when the protocol finishes.
+gets it back when the transfer ends. `YAPPFrameAssembler` sits in front of
+the protocol, because AX.25 carries bytes and not frames: a 254-byte YAPP
+block over a 128-byte paclen arrives as two I-frames, and `YAPPProtocol`
+NAKs anything short. Replies from the caller go to the sender's ACK and NAK
+handlers.
+
+A transfer ends, and the mailbox is at its prompt again, in every one of
+these cases:
+
+| Ends when | What the caller is told |
+|---|---|
+| the file is through | `roster.bin sent.` |
+| the caller's software cancels or gives up | `roster.bin was not sent:` and the reason |
+| the caller types `A` (the natural reaction when their software has no YAPP and the bytes arrive as noise) | `Stopped.`, after a CAN |
+| the sysop presses Stop in the live call panel | `The sysop stopped the transfer.`, after a CAN |
+| nothing arrives from the caller for three minutes | `The transfer stopped: nothing was heard from you for 3 minutes.` |
+| the link drops | nothing: no CAN is sent, because sending on a disconnected session makes the session layer dial the caller back |
+
+Every transfer carries an id, and a report from one that has already ended
+(a cancel's own "canceled", say) is ignored, so a late callback can never
+clear the next transfer or leave "A transfer is already running" standing.
+The mailbox never sends on a link that is not up.
+
+A zero-byte file is never listed. If one is emptied between the scan and the
+`D`, the caller is told it is empty rather than sent a YAPP header for a file
+with no first block.
 
 ### Uploads
 
-`U` arms the receiver; the protocol is recognized from the caller's own first
-bytes, so they use whatever their software speaks.
+`U` arms the receiver, and the caller's YAPP send-init starts the upload. The
+mailbox says "Ready" and then waits without a prompt; a caller who types a
+command instead gets an answer to it. Where the refusal is already knowable
+(uploads off, no inbox, too many this call) `U` says so at once instead of
+"Ready".
+
+**YAPP only.** An AXTerm caller who offers a file from their transfer window
+sends an AXDP FILE_META. The mailbox declines it with the same NACK
+`SessionCoordinator.declineIncomingTransfer` sends, so the caller's transfer
+ends as "declined" instead of waiting, and tells them to type `U` and send
+again with YAPP. This happens whether or not they typed `U` first. An AXDP
+chat message (what AXTerm sends for a typed line when AXDP is switched on)
+is read as the line it carries.
 
 **Off by default, separately from downloads.** Sharing files out and accepting
 files in are different decisions with different risks, and this one writes to
@@ -660,6 +732,11 @@ packet link.
 has is a way to change what the station serves, so a collision becomes
 `name-2.ext`, matched case-insensitively because the filesystem usually is.
 
+**The header is held to.** The policy judged the size the header promised. A
+caller who keeps sending past it is stopped ("The upload was larger than its
+header said"), because the inbox quota was checked against the smaller
+number.
+
 Every upload is named in the call log. An unattended station accepting files
 is exactly what an operator wants to read about afterwards.
 
@@ -681,7 +758,44 @@ share. Hidden files are skipped, and so is anything over 5 MB.
 
 The app is sandboxed, so each area keeps a **security-scoped bookmark**.
 Without one the area would work until the operator quit and then quietly serve
-nothing.
+nothing. When a scan finds a bookmark stale (the folder was moved or renamed
+and the bookmark followed it), a fresh one is minted and stored at once,
+while the old one still resolves; the upload inbox is treated the same way.
+
+A folder that can no longer be found (deleted, on a drive that is not
+mounted, moved past what the bookmark follows) is listed in
+`BBSFileLibrary.unreachableAreas`. A bookmark that resolves to where the
+folder used to be counts as missing too, because an empty listing there
+would read as a folder the operator emptied. The area stays in the list,
+marked, with **Choose Folder Again**, which keeps its name, its description
+and its files' descriptions.
+
+### Adding files from inside the app
+
+The operator can put a file in an area without going to Finder or Files:
+**Add Files** in the Mac pane and on the iOS area screen, or a drop from
+Finder, the Files app or another app onto the file list. Files are copied
+into the area's folder (the originals stay where they were), which is the
+one time the app writes into a shared folder, and only on the operator's
+say-so. `BBSFileLibrary.addFiles` never replaces a file (`ROSTER.TXT` becomes
+`ROSTER-2.TXT`, since callers may have fetched the old one by name), refuses
+a name that is a path, `.`/`..`, hidden or holds control characters, and says
+up front when a file is empty, over the size limit, a folder, or bound for
+an area whose folder cannot be reached. A note under the list says what
+happened to each file.
+
+### Over a NET/ROM circuit
+
+A caller who reaches the mailbox through the node (`BBS` at the node prompt)
+gets the same shell over a circuit. The node host hands the mailbox lines and
+sends lines back, so text is all that link can carry. NET/ROM itself would
+carry binary, but no byte stream reaches the mailbox to run YAPP on. So:
+
+- `W`, `WN` and their aliases work unchanged.
+- `D` of a text file under 8 KB types it out, exactly as on a direct call.
+- `D` of anything else, and `U`, are refused by the shell up front, with the
+  callsign to connect to directly, before any airtime confirmation for a
+  file that cannot be sent.
 
 ## 15. Known limits
 
@@ -693,6 +807,16 @@ nothing.
   and views both use.
 - **No forwarding, by choice** (§1). White pages are learned locally and never
   exchanged with other BBSs, which is the other half of that decision.
+- **YAPP interoperability is unverified.** `YAPPProtocol` frames a transfer
+  its own way (send-init `SOH 01`, receive-init `SOH 02`, two-byte block
+  lengths with an XOR checksum, single-byte ACK/NAK). The YAPP most packet
+  terminals implement uses `ENQ 01` to start, `ACK 01`..`ACK 05` replies, and
+  one-byte block lengths. Until the two are reconciled, mailbox downloads and
+  uploads should be expected to work between AXTerm stations, and a caller
+  running other software will see the transfer fail or can type `A`. It also
+  needs the caller's AXTerm to receive YAPP in the terminal.
+- **No AXDP downloads or resume.** See §14 for why a mailbox session cannot
+  use the coordinator's AXDP sender. A stopped download starts over.
 - **Areas are flat.** Subfolders are not scanned, which keeps `D <name>`
   unambiguous without teaching a path syntax over a link where the caller
   cannot see what they are typing.

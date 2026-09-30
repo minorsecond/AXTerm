@@ -33,6 +33,11 @@ final class BBSFileLibrary: ObservableObject {
 
     @Published private(set) var index = BBSFileIndex()
     @Published private(set) var lastScanError: String?
+    /// Areas whose folder could not be found at the last scan: moved to a
+    /// drive that is not mounted, deleted, or renamed past what the bookmark
+    /// can follow. Listed so the Files screen can offer to choose each one
+    /// again instead of only printing an error.
+    @Published private(set) var unreachableAreas: Set<String> = []
 
     private let store: BBSMessageStore?
     private let maxFileBytes: Int
@@ -50,25 +55,56 @@ final class BBSFileLibrary: ObservableObject {
     /// a security-scoped bookmark is what survives, and without one the file
     /// area works until the operator quits and then quietly serves nothing.
     func addArea(name: String, about: String, url: URL) {
-        // The scope has to be *open* while the bookmark is minted. On iOS a
-        // URL from the document picker arrives scoped-but-closed, and a
-        // bookmark taken outside the scope resolves to a URL that reads
-        // nothing — the area would list zero files with no error to explain
-        // it. Harmless on macOS, where an open-panel URL is already usable
-        // and `startAccessing` simply answers false.
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
-            let bookmark = try url.bookmarkData(
-                options: Self.bookmarkOptions,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil)
+            let bookmark = try Self.mintBookmark(for: url)
             try store?.saveFileArea(
                 BBSFileArea(name: name, about: about, bookmark: bookmark))
             rescan()
         } catch {
             lastScanError = "Could not share \(url.lastPathComponent): \(error.localizedDescription)"
         }
+    }
+
+    /// Points an existing area at a folder chosen again, keeping its name and
+    /// description, and the descriptions of the files in it.
+    func relocateArea(name: String, url: URL) {
+        let key = BBSFileArea.normalize(name)
+        let about = ((try? store?.fileAreas()) ?? [])
+            .first { $0.name == key }?.about ?? ""
+        addArea(name: key, about: about, url: url)
+    }
+
+    /// A bookmark for a folder the operator picked.
+    ///
+    /// The scope has to be *open* while the bookmark is minted. On iOS a URL
+    /// from the document picker arrives scoped-but-closed, and a bookmark
+    /// taken outside the scope resolves to a URL that reads nothing: the area
+    /// would list zero files with no error to explain it. Harmless on macOS,
+    /// where an open-panel URL is already usable and `startAccessing` simply
+    /// answers false.
+    nonisolated static func mintBookmark(for url: URL) throws -> Data {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        return try url.bookmarkData(options: bookmarkOptions,
+                                    includingResourceValuesForKeys: nil,
+                                    relativeTo: nil)
+    }
+
+    /// Resolves a bookmark and, when the system calls it stale (the folder
+    /// was moved or renamed and the bookmark followed it), returns a fresh
+    /// one to store in its place.
+    ///
+    /// A stale bookmark works today but may not survive the next move, and
+    /// re-minting it is cheap and needs nothing from the operator. Left
+    /// alone, it goes on resolving until one day it does not, and the area
+    /// quietly serves nothing.
+    nonisolated static func resolveBookmark(_ bookmark: Data) -> (url: URL, refreshed: Data?)? {
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: bookmark,
+                                 options: resolutionOptions,
+                                 relativeTo: nil,
+                                 bookmarkDataIsStale: &stale) else { return nil }
+        return (url, stale ? try? mintBookmark(for: url) : nil)
     }
 
     func removeArea(name: String) {
@@ -93,14 +129,32 @@ final class BBSFileLibrary: ObservableObject {
 
         var files: [BBSSharedFile] = []
         var errors: [String] = []
+        var unreachable: Set<String> = []
+        var current: [BBSFileArea] = []
 
-        for area in areas {
-            guard let url = resolve(area) else {
+        for var area in areas {
+            let url = resolve(&area)
+            // Held with the fresh bookmark if one was minted, so reading a
+            // file later does not find the stale one and mint again.
+            current.append(area)
+            guard let url else {
                 errors.append("\(area.name): folder is no longer reachable")
+                unreachable.insert(area.name)
                 continue
             }
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+            // A bookmark can resolve to where the folder used to be. An
+            // empty listing there would read as a folder the operator
+            // emptied, so it is reported as the missing folder it is.
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                errors.append("\(area.name): folder is no longer reachable")
+                unreachable.insert(area.name)
+                continue
+            }
 
             do {
                 files.append(contentsOf: try scan(area: area, at: url,
@@ -110,7 +164,8 @@ final class BBSFileLibrary: ObservableObject {
             }
         }
 
-        index = BBSFileIndex(areas: areas, files: files)
+        index = BBSFileIndex(areas: current, files: files)
+        unreachableAreas = unreachable
         lastScanError = errors.isEmpty ? nil : errors.joined(separator: "\n")
         refreshInbox()
     }
@@ -152,17 +207,21 @@ final class BBSFileLibrary: ObservableObject {
         .sorted { $0.name < $1.name }
     }
 
-    private func resolve(_ area: BBSFileArea) -> URL? {
-        guard let bookmark = area.bookmark else { return nil }
-        var stale = false
-        guard let url = try? URL(resolvingBookmarkData: bookmark,
-                                 options: Self.resolutionOptions,
-                                 relativeTo: nil,
-                                 bookmarkDataIsStale: &stale) else { return nil }
-        // A stale bookmark still resolves; it just wants rewriting. Serving
-        // from it is correct, and re-minting is the operator's next open
-        // panel rather than something to do behind their back.
+    /// Resolves an area's folder, storing a fresh bookmark in place of a
+    /// stale one and updating `area` to match.
+    private func resolve(_ area: inout BBSFileArea) -> URL? {
+        guard let bookmark = area.bookmark,
+              let (url, refreshed) = Self.resolveBookmark(bookmark) else { return nil }
+        if let refreshed {
+            area.bookmark = refreshed
+            try? store?.saveFileArea(area)
+        }
         return url
+    }
+
+    private func resolve(_ area: BBSFileArea) -> URL? {
+        var copy = area
+        return resolve(&copy)
     }
 
     // MARK: - Uploads
@@ -177,6 +236,10 @@ final class BBSFileLibrary: ObservableObject {
     @Published private(set) var inboxName: String?
     @Published private(set) var inboxBytes = 0
     @Published private(set) var inboxCount = 0
+    /// An inbox was chosen but its folder cannot be found. Uploads are
+    /// refused until it is chosen again, and the Files screen says so rather
+    /// than showing the "choose a folder" it shows before one ever was.
+    @Published private(set) var inboxUnreachable = false
 
     var hasInbox: Bool { inboxName != nil }
 
@@ -186,15 +249,8 @@ final class BBSFileLibrary: ObservableObject {
             refreshInbox()
             return
         }
-        // Same reason as `addArea`: minted inside the scope or not at all.
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
-            let bookmark = try url.bookmarkData(
-                options: Self.bookmarkOptions,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil)
-            try store?.setUploadInbox(bookmark)
+            try store?.setUploadInbox(try Self.mintBookmark(for: url))
             refreshInbox()
         } catch {
             lastScanError = "Could not use \(url.lastPathComponent): \(error.localizedDescription)"
@@ -203,11 +259,14 @@ final class BBSFileLibrary: ObservableObject {
 
     func refreshInbox() {
         guard let url = inboxURL() else {
+            let chosen = ((try? store?.uploadInbox()) ?? nil) != nil
             inboxName = nil
             inboxBytes = 0
             inboxCount = 0
+            inboxUnreachable = chosen
             return
         }
+        inboxUnreachable = false
         inboxName = url.lastPathComponent
 
         let scoped = url.startAccessingSecurityScopedResource()
@@ -231,12 +290,17 @@ final class BBSFileLibrary: ObservableObject {
     private func inboxURL() -> URL? {
         // `try?` on a throwing function returning `Data?` flattens to `Data?`,
         // so one unwrap covers both the throw and the empty case.
-        guard let store, let bookmark = try? store.uploadInbox() else { return nil }
-        var stale = false
-        return try? URL(resolvingBookmarkData: bookmark,
-                        options: Self.resolutionOptions,
-                        relativeTo: nil,
-                        bookmarkDataIsStale: &stale)
+        guard let store, let bookmark = try? store.uploadInbox(),
+              let (url, refreshed) = Self.resolveBookmark(bookmark) else { return nil }
+        if let refreshed { try? store.setUploadInbox(refreshed) }
+        // As for an area: a bookmark that resolves to where the folder used
+        // to be is not an inbox, and writing there would recreate nothing.
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return url
     }
 
     /// Writes an accepted upload, never over something already there.
@@ -260,6 +324,105 @@ final class BBSFileLibrary: ObservableObject {
 
         refreshInbox()
         return final
+    }
+
+    // MARK: - Adding files
+
+    /// What became of one file the operator asked to share.
+    nonisolated enum AddOutcome: Equatable, Sendable {
+        case added(name: String)
+        /// A file of that name was already in the folder, and nothing is
+        /// ever replaced: callers may have fetched the old one by name.
+        case renamed(from: String, to: String)
+        case refused(name: String, reason: String)
+    }
+
+    /// Copies files into an area's folder, from a picker or a drop.
+    ///
+    /// Copied, never moved: the originals are the operator's and stay where
+    /// they were. This is the one place the app writes into a shared folder,
+    /// and only on the operator's own say-so.
+    func addFiles(_ urls: [URL], to areaName: String) -> [AddOutcome] {
+        let outcomes = urls.map { url -> AddOutcome in
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let name = url.lastPathComponent
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            if values?.isDirectory == true {
+                return .refused(name: name, reason: "folders are not shared, only the files in them")
+            }
+            return place(name, size: values?.fileSize ?? 0, in: areaName) { destination in
+                try FileManager.default.copyItem(at: url, to: destination)
+            }
+        }
+        rescan()
+        return outcomes
+    }
+
+    /// Writes bytes into an area's folder under a name that came with them,
+    /// for drops that deliver data rather than a file URL.
+    func addFile(named name: String, data: Data, to areaName: String) -> AddOutcome {
+        let outcome = place(name, size: data.count, in: areaName) { destination in
+            try data.write(to: destination, options: .withoutOverwriting)
+        }
+        rescan()
+        return outcome
+    }
+
+    /// The name as a file in a shared folder, or nil when it cannot be one.
+    ///
+    /// A drop can carry a name its source chose, so this refuses anything
+    /// that is not a plain leaf: a path, `.` or `..`, a hidden name (which
+    /// the scan would skip anyway, so it would be shared and never offered),
+    /// or control characters. Otherwise the operator's own name is kept:
+    /// unlike an upload's, it was not chosen by a stranger.
+    nonisolated static func acceptableSharedName(_ name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != ".", trimmed != "..",
+              !trimmed.hasPrefix("."),
+              !trimmed.contains("/"), !trimmed.contains("\\"), !trimmed.contains(":"),
+              !trimmed.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        else { return nil }
+        return trimmed
+    }
+
+    private func place(_ name: String, size: Int, in areaName: String,
+                       write: (URL) throws -> Void) -> AddOutcome {
+        guard let leaf = Self.acceptableSharedName(name) else {
+            return .refused(name: name, reason: "that name cannot be used for a shared file")
+        }
+        // The same rules the scan applies, said now instead of the file
+        // silently never appearing.
+        guard size > 0 else {
+            return .refused(name: leaf, reason: "it is empty")
+        }
+        guard size <= maxFileBytes else {
+            return .refused(name: leaf, reason: "it is over the \(BBSFileIndex.size(maxFileBytes)) "
+                            + "limit, so callers would never see it")
+        }
+        let key = BBSFileArea.normalize(areaName)
+        guard let area = ((try? store?.fileAreas()) ?? []).first(where: { $0.name == key }),
+              let base = resolve(area) else {
+            return .refused(name: leaf, reason: "the \(key) folder cannot be reached")
+        }
+        let scoped = base.startAccessingSecurityScopedResource()
+        defer { if scoped { base.stopAccessingSecurityScopedResource() } }
+
+        let taken = Set((try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? [])
+        let final = BBSUploadPolicy.uniqueName(leaf, taken: taken)
+        let destination = base.appendingPathComponent(final)
+        // The name is a checked leaf, but a write outside the folder must be
+        // impossible even if that ever stops being true.
+        guard destination.deletingLastPathComponent().standardizedFileURL
+                == base.standardizedFileURL else {
+            return .refused(name: leaf, reason: "that name cannot be used for a shared file")
+        }
+        do {
+            try write(destination)
+        } catch {
+            return .refused(name: leaf, reason: error.localizedDescription)
+        }
+        return final == leaf ? .added(name: final) : .renamed(from: leaf, to: final)
     }
 
     // MARK: - Reading

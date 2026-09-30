@@ -171,6 +171,12 @@ nonisolated struct BBSShell {
     let maxInlineViewBytes: Int
     /// Above this many seconds, `D` asks before holding the channel.
     let longTransferSeconds: Double
+    /// Nil where the link can run a transfer protocol. Otherwise the
+    /// callsign to connect to directly, because this caller's link carries
+    /// typed lines only (a NET/ROM circuit handed over by the node host).
+    /// `D` still types text out; binaries and `U` are refused up front,
+    /// before any airtime-cost confirmation for a file that cannot be sent.
+    let linesOnlyDirectCall: String?
 
     private(set) var state: State = .command
     /// The file id `D` has quoted a time for and is waiting to be asked about
@@ -190,7 +196,8 @@ nonisolated struct BBSShell {
          maxListRows: Int = 40,
          bytesPerSecond: Double = 100,
          maxInlineViewBytes: Int = 8 * 1024,
-         longTransferSeconds: Double = 300) {
+         longTransferSeconds: Double = 300,
+         linesOnlyDirectCall: String? = nil) {
         self.caller = caller
         self.sysop = sysop
         self.banner = banner
@@ -204,6 +211,7 @@ nonisolated struct BBSShell {
         self.bytesPerSecond = bytesPerSecond
         self.maxInlineViewBytes = maxInlineViewBytes
         self.longTransferSeconds = longTransferSeconds
+        self.linesOnlyDirectCall = linesOnlyDirectCall
     }
 
     // MARK: - Entry
@@ -321,6 +329,10 @@ nonisolated struct BBSShell {
         case "D", "DOWNLOAD":
             return download(rest, mailbox: mailbox)
         case "U", "UPLOAD":
+            if let direct = linesOnlyDirectCall {
+                return Output(lines: ["Uploads need a direct connection: this link carries "
+                                      + "typed lines only. Connect to \(direct) to send a file."])
+            }
             return Output(lines: ["Ready — start your upload now."],
                           effects: [.beginUpload])
         case "A", "ABORT":
@@ -838,6 +850,13 @@ nonisolated struct BBSShell {
                 pendingDownload = nil
                 return Output(lines: ["\(file.name) is text — sending it as text (\(time))."],
                               effects: [.viewFile(file)])
+            }
+
+            if let direct = linesOnlyDirectCall {
+                pendingDownload = nil
+                return Output(lines: ["\(file.name) needs a transfer protocol, and this link "
+                                      + "carries typed lines only. Connect to \(direct) "
+                                      + "to download it."])
             }
 
             // A long transfer holds the channel against everyone else on it.

@@ -44,11 +44,16 @@ nonisolated final class TransferProtocolRegistry: @unchecked Sendable {
 
     /// Create a protocol instance for the specified type
     /// - Parameter type: The protocol type to create
-    /// - Returns: A new protocol instance
-    func createProtocol(type: TransferProtocolType) -> FileTransferProtocol {
+    /// - Returns: A new protocol instance, or nil for AXDP
+    ///
+    /// AXDP has no instance to hand out. Its sender and receiver are
+    /// `SessionCoordinator`'s own (`startTransfer` and the FILE_META/ACK
+    /// handlers), and an adapter that only changed state here once left a
+    /// mailbox caller waiting for a file that was never sent.
+    func createProtocol(type: TransferProtocolType) -> FileTransferProtocol? {
         switch type {
         case .axdp:
-            return AXDPTransferProtocol()
+            return nil
         case .yapp:
             return YAPPProtocol()
         case .sevenPlus:
@@ -68,7 +73,7 @@ nonisolated final class TransferProtocolRegistry: @unchecked Sendable {
         for protocolType in registeredProtocols {
             switch protocolType {
             case .axdp:
-                if AXDPTransferProtocol.canHandle(data: data) {
+                if AXDP.hasMagic(data) {
                     return .axdp
                 }
             case .yapp:
@@ -91,6 +96,7 @@ nonisolated final class TransferProtocolRegistry: @unchecked Sendable {
     /// Detect and create a protocol handler for incoming data
     /// - Parameter data: Incoming frame data
     /// - Returns: A protocol instance configured to handle the data, or nil
+    ///   when the data is unrecognized or is AXDP (see `createProtocol`)
     func detectAndCreate(from data: Data) -> FileTransferProtocol? {
         guard let type = detectProtocol(from: data) else {
             return nil
@@ -162,91 +168,5 @@ nonisolated final class TransferProtocolRegistry: @unchecked Sendable {
         TransferProtocolType.allCases.map { type in
             (type: type, name: type.displayName, description: type.shortDescription)
         }
-    }
-}
-
-// MARK: - AXDP Transfer Protocol Adapter
-
-/// Adapter to wrap existing AXDP implementation in FileTransferProtocol interface
-nonisolated final class AXDPTransferProtocol: FileTransferProtocol {
-    let protocolType: TransferProtocolType = .axdp
-
-    weak var delegate: FileTransferProtocolDelegate?
-
-    private(set) var state: TransferProtocolState = .idle
-    private(set) var bytesTransferred: Int = 0
-    private(set) var totalBytes: Int = 0
-
-    // Transfer state
-    private var fileName: String = ""
-    private var fileData: Data = Data()
-    private var receivedData: Data = Data()
-    private var receivedMetadata: TransferFileMetadata?
-
-    static func canHandle(data: Data) -> Bool {
-        // AXDP messages start with "AXT1" magic
-        guard data.count >= 4 else { return false }
-        let magic = String(data: data.prefix(4), encoding: .ascii)
-        return magic == "AXT1"
-    }
-
-    func startSending(fileName: String, fileData: Data) throws {
-        self.fileName = fileName
-        self.fileData = fileData
-        self.totalBytes = fileData.count
-        self.bytesTransferred = 0
-
-        state = .waitingForAccept
-        delegate?.transferProtocol(self, stateChanged: state)
-
-        // The actual AXDP sending is handled by SessionCoordinator's existing logic
-        // This adapter mainly provides the unified interface
-    }
-
-    func handleAck(data: Data) {
-        // AXDP handles this through SACK bitmaps in the message flow
-    }
-
-    func handleNak(data: Data) {
-        // AXDP handles this through the message flow
-    }
-
-    func pause() {
-        if state == .transferring {
-            state = .paused
-            delegate?.transferProtocol(self, stateChanged: state)
-        }
-    }
-
-    func resume() {
-        if state == .paused {
-            state = .transferring
-            delegate?.transferProtocol(self, stateChanged: state)
-        }
-    }
-
-    func cancel() {
-        state = .cancelled
-        delegate?.transferProtocol(self, stateChanged: state)
-        delegate?.transferProtocol(self, didComplete: false, error: "Canceled by user")
-    }
-
-    func handleIncomingData(_ data: Data) -> Bool {
-        guard Self.canHandle(data: data) else { return false }
-        // AXDP incoming data is handled by SessionCoordinator
-        // This is a placeholder for the unified interface
-        return true
-    }
-
-    func acceptTransfer() {
-        if state == .waitingForAccept {
-            state = .transferring
-            delegate?.transferProtocol(self, stateChanged: state)
-        }
-    }
-
-    func rejectTransfer(reason: String) {
-        state = .cancelled
-        delegate?.transferProtocol(self, stateChanged: state)
     }
 }

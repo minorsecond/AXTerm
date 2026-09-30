@@ -471,6 +471,87 @@ nonisolated struct BBSUploadInboxModel: Equatable, Sendable {
     }
 }
 
+/// What the operator is told after adding files to an area.
+///
+/// Every file gets its outcome said, because the two that need saying are
+/// the ones a summary count would hide: a file that went in under another
+/// name (callers will have to ask for that name) and one that did not go in
+/// at all.
+nonisolated enum BBSAddFilesSummary {
+    static func message(for outcomes: [BBSFileLibrary.AddOutcome], area: String) -> String? {
+        guard !outcomes.isEmpty else { return nil }
+        var added = 0
+        var lines: [String] = []
+        for outcome in outcomes {
+            switch outcome {
+            case .added:
+                added += 1
+            case .renamed(let from, let to):
+                added += 1
+                lines.append("\(from) was added as \(to), because \(area) already has a "
+                             + "file called \(from).")
+            case .refused(let name, let reason):
+                lines.append("\(name) was not added: \(reason).")
+            }
+        }
+        if added > 0 {
+            lines.insert("Added \(added) file\(added == 1 ? "" : "s") to \(area).", at: 0)
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - Transfers
+
+/// The transfer running on the live call, as the operator's panel shows it.
+///
+/// The transcript says a transfer started and how it ended. Everything in
+/// between is this row: who, which file, how far, and by what, because a
+/// half-hour YAPP download looks like nothing is happening otherwise.
+nonisolated struct BBSTransferRowModel: Equatable, Sendable {
+    /// "Sending roster.zip to W0ARP-1"
+    var title: String
+    /// "12K of 40K · 30% · YAPP · 1:05"
+    var detail: String
+    /// Nil until the size is known, which for an upload is until its header
+    /// arrives. The bar is indeterminate until then.
+    var fraction: Double?
+    var systemImage: String
+
+    static func make(_ status: BBSService.TransferStatus, now: Date) -> BBSTransferRowModel {
+        let name = status.fileName
+        let title: String
+        switch status.direction {
+        case .download:
+            title = "Sending \(name ?? "a file") to \(status.caller)"
+        case .upload:
+            title = name.map { "Receiving \($0) from \(status.caller)" }
+                ?? "Waiting for \(status.caller)'s upload to begin"
+        }
+
+        var parts: [String] = []
+        var fraction: Double?
+        if status.totalBytes > 0 {
+            let done = min(max(status.bytesDone, 0), status.totalBytes)
+            let share = Double(done) / Double(status.totalBytes)
+            fraction = share
+            parts.append("\(BBSFileIndex.size(done)) of \(BBSFileIndex.size(status.totalBytes))")
+            parts.append("\(Int((share * 100).rounded(.down)))%")
+        } else if status.bytesDone > 0 {
+            parts.append(BBSFileIndex.size(status.bytesDone))
+        }
+        parts.append(status.protocolName)
+        parts.append(BBSElapsed.format(from: status.startedAt, to: now))
+
+        return BBSTransferRowModel(
+            title: title,
+            detail: parts.joined(separator: " · "),
+            fraction: fraction,
+            systemImage: status.direction == .download
+                ? "arrow.down.doc" : "arrow.up.doc")
+    }
+}
+
 // MARK: - Directory
 
 /// How this station knows one field of a directory entry, in words.
