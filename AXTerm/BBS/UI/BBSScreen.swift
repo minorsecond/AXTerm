@@ -491,10 +491,12 @@ struct BBSEmptyState: View {
             Image(systemName: systemImage)
                 .font(.system(size: 30))
                 .foregroundStyle(.tertiary)
-            Text(title).font(.headline).foregroundStyle(.secondary)
+            // The same weight as the other tabs' empty states. Dimmed a
+            // step further, "No mail for you" read as a disabled control.
+            Text(title).font(.headline)
             Text(detail)
                 .font(.subheadline)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
         }

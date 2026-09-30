@@ -215,6 +215,9 @@ struct WinlinkMailboxScreen: View {
         WinlinkMessageList(viewModel: mailbox)
             .navigationTitle(currentFolderName)
             .navigationBarTitleDisplayMode(.inline)
+            // Wide enough for the folder's name beside the three toolbar
+            // buttons; at the default width "Inbox" read "In...".
+            .navigationSplitViewColumnWidth(min: 320, ideal: 360, max: 460)
             // Opening a message marks it read inside the view model, which
             // the tab badge does not observe. Without this the badge stayed
             // lit until some unrelated action happened to call refresh().
