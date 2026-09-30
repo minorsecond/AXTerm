@@ -80,6 +80,11 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     private var gotReplyID = false
     private var authOK = false
     private var requestSent = false
+    /// The CI-V and audio ports the radio announced in a status packet.
+    /// Nil until one arrives, when the configured ports are used.
+    private var announcedMediaPorts: (serial: UInt16, audio: UInt16)?
+    private var serialPort: UInt16 { announcedMediaPorts?.serial ?? configuration.serialPort }
+    private var audioPort: UInt16 { announcedMediaPorts?.audio ?? configuration.audioPort }
     private var connectionOpened = false
     /// True while the login ladder is running. A refusal that arrives as
     /// a status packet belongs to the ladder, not to `handleControl`.
@@ -304,11 +309,11 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         guard includeMedia else { return endpoints }
         if let port = serial.boundPort {
             endpoints.append(.init(localID: serial.localID, remoteID: serial.remoteID,
-                                   sourcePort: port, radioPort: configuration.serialPort))
+                                   sourcePort: port, radioPort: serialPort))
         }
         if let port = audio.boundPort {
             endpoints.append(.init(localID: audio.localID, remoteID: audio.remoteID,
-                                   sourcePort: port, radioPort: configuration.audioPort))
+                                   sourcePort: port, radioPort: audioPort))
         }
         return endpoints
     }
@@ -551,6 +556,10 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         }
         if let status = IcomLAN.parseStatus(d) {
             control.trace("status packet -> " + String(describing: status))
+            if !connectionOpened, let ports = IcomLAN.statusPorts(d) {
+                announcedMediaPorts = ports
+                control.trace("radio announces CI-V on \(ports.serial), audio on \(ports.audio)")
+            }
             // Before the connection opens, an auth-failed status is fatal;
             // afterwards the radio still emits periodic status and only a
             // clean radio-disconnect ends the session.
@@ -574,8 +583,8 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         let c = configuration
         var request = IcomLAN.ConnectionRequest(radioName: radioName.isEmpty ? "IC-705" : radioName, username: c.username)
         request.sampleRate = c.sampleRate
-        request.serialPort = c.serialPort
-        request.audioPort = c.audioPort
+        request.serialPort = serialPort
+        request.audioPort = audioPort
         request.txBufferMs = c.txBufferMs
         let packet = IcomLAN.connectionRequest(request, local: control.localID, remote: control.remoteID,
                                                innerSequence: nextInner(), authID: authID, replyID: replyID ?? [])
@@ -589,11 +598,11 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         let c = configuration
         Task { [self] in
             do {
-                try await serial.connect(host: c.host, port: c.serialPort, timeout: c.timeout)
+                try await serial.connect(host: c.host, port: serialPort, timeout: c.timeout)
                 serial.startKeepalive(pingSequence: 1, idlePackets: true)
                 serial.sendTracked(IcomLAN.serialOpen(true, sendSequence: nextSerialSequence(),
                                                       local: serial.localID, remote: serial.remoteID))
-                try await audio.connect(host: c.host, port: c.audioPort, timeout: c.timeout)
+                try await audio.connect(host: c.host, port: audioPort, timeout: c.timeout)
                 audio.startKeepalive(pingSequence: 1, idlePackets: false)
                 startRenewals()
                 startReorderTicks()

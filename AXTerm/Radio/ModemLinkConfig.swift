@@ -111,6 +111,11 @@ nonisolated struct ModemLinkConfig: Equatable, Sendable {
         var c = IcomLANSession.Configuration(host: Self.lanDialHost(lanHost), username: lanUsername,
                                              password: lanPassword)
         c.controlPort = lanControlPort
+        // Icom's layout: CI-V and audio sit one and two above control (50001,
+        // 50002, 50003 on the radio itself; 50100, 50101, 50102 on Warbler).
+        // A status packet that names the ports overrides this.
+        c.serialPort = lanControlPort &+ 1
+        c.audioPort = lanControlPort &+ 2
         return c
     }
 

@@ -223,6 +223,19 @@ nonisolated enum IcomLAN {
         return parseStatus(d) == .authFailed
     }
 
+    /// The CI-V and audio ports a status packet announces, big-endian at
+    /// offsets 66 and 70. A real IC-705 announces 50002 and 50003; a program
+    /// standing in for it (Warbler) announces its own. Nil for a refusal or
+    /// a packet with no ports in it.
+    static func statusPorts(_ d: Data) -> (serial: UInt16, audio: UInt16)? {
+        guard parseStatus(d) == .other else { return nil }
+        let b = [UInt8](d)
+        let serial = UInt16(b[66]) << 8 | UInt16(b[67])
+        let audio = UInt16(b[70]) << 8 | UInt16(b[71])
+        guard serial != 0 || audio != 0 else { return nil }
+        return (serial, audio)
+    }
+
     static func parseStatus(_ d: Data) -> Status? {
         guard d.count == 80, d[d.startIndex] == 0x50 else { return nil }
         let b = [UInt8](d)

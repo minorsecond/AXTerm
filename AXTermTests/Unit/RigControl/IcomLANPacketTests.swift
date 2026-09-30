@@ -330,3 +330,41 @@ final class IcomLANWiFiRegressionTests: XCTestCase {
         XCTAssertEqual(CIVClient.DataModSource.micAndUSB.rawValue, 0x02)
     }
 }
+
+/// A radio, or a program standing in for one, names its CI-V and audio
+/// ports in the status packet. Warbler's stand-in IC-705 uses 50101 and
+/// 50102; AXTerm used to open 50002 and 50003 whatever it was told.
+final class IcomLANMediaPortTests: XCTestCase {
+
+    private func statusPacket(serial: UInt16, audio: UInt16, refusal: Bool = false) -> Data {
+        var b = [UInt8](repeating: 0, count: 80)
+        b[0] = 0x50
+        if refusal { b[48] = 0xFF; b[49] = 0xFF; b[50] = 0xFF }
+        b[66] = UInt8(serial >> 8); b[67] = UInt8(serial & 0xFF)
+        b[70] = UInt8(audio >> 8); b[71] = UInt8(audio & 0xFF)
+        return Data(b)
+    }
+
+    func testTheStatusPacketsPortsAreRead() {
+        let ports = IcomLAN.statusPorts(statusPacket(serial: 50101, audio: 50102))
+        XCTAssertEqual(ports?.serial, 50101)
+        XCTAssertEqual(ports?.audio, 50102)
+    }
+
+    func testARefusalOrAPortlessStatusNamesNoPorts() {
+        XCTAssertNil(IcomLAN.statusPorts(statusPacket(serial: 50101, audio: 50102, refusal: true)))
+        XCTAssertNil(IcomLAN.statusPorts(statusPacket(serial: 0, audio: 0)))
+        XCTAssertNil(IcomLAN.statusPorts(Data(repeating: 0, count: 16)))
+    }
+
+    func testMediaPortsDefaultToOneAndTwoAboveControl() {
+        var radio = ModemLinkConfig()
+        radio.lanHost = "192.168.3.34"
+        radio.lanControlPort = 50001
+        XCTAssertEqual(radio.lanConfiguration.serialPort, 50002)
+        XCTAssertEqual(radio.lanConfiguration.audioPort, 50003)
+        radio.lanControlPort = 50100
+        XCTAssertEqual(radio.lanConfiguration.serialPort, 50101)
+        XCTAssertEqual(radio.lanConfiguration.audioPort, 50102)
+    }
+}
