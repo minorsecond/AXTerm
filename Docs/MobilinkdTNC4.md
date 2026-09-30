@@ -47,13 +47,15 @@ the set fields when the radio connects and restores the TNC4's own values when
 it disconnects. None of this is written to the TNC4's flash, so another radio,
 or another app, finds the TNC4 as its owner left it.
 
-The settings page (a radio's settings, under Transport) shows:
+The radio's page (Settings › Radios), under Connection, shows:
 
 - The TNC4's model, firmware, serial number and battery.
 - Receive audio: a live level meter, input gain and twist, and "Find the right
   gain".
 - Transmit audio: output level and twist, and test tones.
-- Radio interface: PTT style, modem type, TX delay, persistence and slot time.
+- Radio interface: PTT style and modem type. TX delay, persistence, slot time
+  and TX tail are the page's Timing section, sent on every connect and again
+  when changed while connected.
 - Save, which writes what the TNC4 is using now into its flash. It asks first,
   because the TNC4 then starts with those settings with every radio. A radio
   with its own settings in AXTerm still gets them on connect.

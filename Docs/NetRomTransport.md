@@ -276,7 +276,7 @@ transmitter far more than the network deserves.
 ### Defaults, and why
 
 `netRomAdvertiseSelf` and `netRomForwarding` both default **off** and
-live in Settings → Transmission → NET/ROM Node. Announcing writes this
+live in Settings › Packet Node › NET/ROM Node. Announcing writes this
 station into other operators' routing tables; forwarding commits this
 transmitter to other people's packets. Neither should arrive as a side
 effect of an app update. Auto-try is an explicit operator action on the

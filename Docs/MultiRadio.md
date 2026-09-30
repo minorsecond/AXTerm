@@ -75,33 +75,30 @@ Two radios cannot both hold one link and port (`RadioProfileIssue
 (`.duplicateCallsign`) — legal on different frequencies, a hazard on the
 same one. The Radios list says so under the rows.
 
-## The Connection pane, and the Radios pane
+## The Radios pane
 
-`SettingsTab.radios` is one tab with two faces, and the face is decided by
-`AppSettingsStore.hasMultipleRadios`.
+`SettingsTab.radios` is always **Radios**, and always a list: status dot,
+name, channel · callsign · endpoint, drag to reorder, and "Add Radio…", which
+opens the guided Add Radio sheet. Each radio's page is pushed over it and is
+the same page whether the station has one radio or five, titled with the
+radio's name. With one radio the Mac pane opens straight onto that page, with
+the list behind it for the back button. Deep links
+(`SettingsRouter.navigate(to: .radioConnection, radio:)` and the other radio
+sections) land on the named radio's page, scrolled to the section, with the
+list beneath. Remove is refused for the last radio: a station needs one.
 
-**One radio**: the tab is called **Connection**, carries the cable icon, and
-shows that radio's form directly: its Identity section (the SSID picker) at
-the top, then the same segmented transport picker, the same per-transport
-content, the same link status and TNC identification the Connection pane
-always had. No list, no back button, no name to edit, no Remove. The only
-other new thing is a quiet **"Add a second radio…"** row at the bottom.
-Nothing says "radios" until the operator has two.
+The page holds everything that belongs to one radio: its connection and the
+TNC's own sections, its identity, its channel (APRS or Packet), what runs on
+that channel, and its timing. Settings.md describes it section by section, and
+the Add Radio sheet and first-run setup.
 
-**Several radios**: the tab becomes **Radios**, and shows a list — status
-dot, name, callsign · endpoint, drag to reorder, "Add Radio…" — with a form
-per radio pushed over it: name, enabled, the transport, the link status, and
-Remove (refused for the last radio: a station needs one). Deep links
-(`SettingsRouter.navigate(to: .radios, radio:)`) land on the named radio's
-form with the list beneath for the back button.
-
-The form shows **only controls the code acts on**. The KISS port and
+The page shows **only controls the code acts on**. The KISS port and
 auto-connect are in the profile and appear as the layers that give them
 effect land. A switch that changes nothing teaches the operator to stop
 trusting switches.
 
-On iOS the same two faces sit behind the More screen's row, which is likewise
-"Connection" or "Radios" (`SettingsDestination.radios` / `.radio(id)`).
+On iOS the Radios row of the More screen shows the same list
+(`SettingsDestination.radios` / `.radio(id)`).
 
 ## The link layer
 
@@ -157,17 +154,15 @@ them, and with one radio it was a second place to set the same thing.
 - **The General field refuses an SSID.** The setter keeps the part before
   the hyphen (`StationCallsignRules.base`). While the operator is typing, the
   field keeps what they typed and says under it that only the base is kept
-  and where the SSID goes (`StationCallsignRules.ssidGuidance`): with one
-  radio, "pick 5 under Identity on the Connection page"; with several, the
-  radio's page under Radios.
+  and where the SSID goes (`StationCallsignRules.ssidGuidance`): Identity on
+  the radio's page under Radios.
 - **Every radio has an Identity section**, a single radio included. It is an
   SSID picker under the station's base call, annotated from
   `SSIDConvention.detail`, plus "Another callsign…" for a club or tactical
   call. Choosing an SSID writes the whole callsign into
-  `RadioProfile.callsign` (K0EPI-5), so the stored shape is unchanged. With
-  one radio the section is the first thing on the Connection page; with
-  several it is on the radio's On the Air page
-  (`RadioDetailView.showsIdentity`).
+  `RadioProfile.callsign` (K0EPI-5), so the stored shape is unchanged. It is
+  the second section of the radio's page, after Connection, whatever the
+  number of radios.
 - **Radios follow a corrected base.** Changing the station callsign moves
   every radio set to an SSID under the old base onto the new one, SSID kept
   (`StationCallsignRules.rebase`). A club or tactical callsign is left
@@ -409,12 +404,15 @@ by radio, so schema and code land together.
 ## Services across radios
 
 Every station-wide service runs on every radio unless the operator switches
-it off for one. The switches live on the radio profile — `sendsBeacons`,
-`pings`, `announcesNode`, `answersMailbox` — all on by default, shown only
-when there are two radios. `SessionCoordinator.serviceRadios(_:)` is the one
-rule: with one radio it returns that radio, connected or not, exactly as
-before radios existed; with several it returns the enabled radios that have
-the service on and whose link is up.
+it off for one. The switches live on the radio profile (`pings`,
+`announcesNode`, `answersMailbox`), all on by default, and on every radio's
+page under its Packet channel, one radio included. The service pages (Packet
+Node, BBS, APRS) say which radios a service runs on and do not repeat the
+switches. `SessionCoordinator.serviceRadios(_:)` is the one rule: with one
+radio it returns that radio, connected or not, when the service is on for it;
+with several it returns the enabled radios that have the service on and whose
+link is up. An older build also stored `sendsBeacons`; nothing read it, and it
+is ignored on decode.
 
 **Stagger.** When one announcement leaves several radios, the k-th radio
 waits k × 2 s (`SessionCoordinator.radioStagger`). Two radios on one
@@ -638,8 +636,8 @@ Every "only when there is more than one" decision hangs off one predicate,
 - the iOS status strip says exactly what it said, and reads the same aloud;
 - no Radio column, no "· on <radio>" in session labels, no "on <radio>" in
   the packet status line;
-- Settings shows the Connection pane it always showed — same name, same
-  icon, same form — with one added row, "Add a second radio…".
+- Settings shows the same radio page a second radio would get, reached from
+  the Radios list, which the Mac pane opens past on its own.
 
 These are pinned literally in `RadioPresentationTests`,
 `TNCStatusStripTests`, `StatusItemControllerTests`,

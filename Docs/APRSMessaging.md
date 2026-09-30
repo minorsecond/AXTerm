@@ -53,7 +53,7 @@ Outgoing numbered messages are retried on a conservative ladder —
 ACK never revives a failed or already-acked message. Everything persists in
 the `aprs_messages` table (`APRSMessageStore`, migrations v32 + v33).
 
-### Auto-reply modes (Settings → Transmission → APRS Messaging)
+### Auto-reply modes (Settings › APRS › Messaging)
 
 Because replies transmit **under your callsign**, the behaviour is an
 operator-owned, persisted choice, read live:
@@ -78,10 +78,10 @@ the same reachability picture.
 never on a node/BBS frequency. So the flood (and an APRS message with no route
 of its own) goes out only radios that carry APRS: `SessionCoordinator.connectedAPRSRadios()`
 = the enabled, connected radios where `RadioProfile.handlesAPRS` is true.
-`handlesAPRS` is the per-radio **APRS** toggle (Settings ▸ Radios ▸ Services),
-or automatically true when the radio beacons an APRS position — so a typical
-APRS radio needs no setup. A single-radio station has no other channel to
-confuse it with, so its one radio always counts. When no APRS radio is
+`handlesAPRS` is `aprsEnabled`, which the radio's **Channel** control sets
+(APRS or Packet, on the radio's page under Settings › Radios). A single-radio
+station has no other channel to confuse it with, so its one radio always
+counts, whatever its channel (`RadioChannel.aprsRadios`). When no APRS radio is
 connected, the probe doesn't pretend to listen: it reports *"Couldn't transmit
 — no connected radio has APRS turned on."*
 

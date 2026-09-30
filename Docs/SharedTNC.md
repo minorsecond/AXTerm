@@ -62,10 +62,9 @@ dismissed reflexively.
 The warning names the fix, because "something is wrong" costs the operator
 the afternoon this exists to save:
 
-> Give one of them a different SSID (the radio's Identity section, under
-> Settings → Connection, or the radio under Settings → Radios). Any unused
-> SSID will do; the two are then separate stations and both can share the TNC
-> safely.
+> Give one of them a different SSID (the Identity section on the radio's
+> page, under Settings › Radios). Any unused SSID will do; the two are then
+> separate stations and both can share the TNC safely.
 
 The SSID is a radio setting; the callsign under General is the base call
 alone (see MultiRadio.md, "Station callsign and SSIDs"). "Us" here is every

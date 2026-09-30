@@ -740,8 +740,9 @@ callsign, since looking up "DRLNOD" would fail.
   bodies are validated as ISO-8859-1 with CRLF endings.
 - Stations tab: cache-first CMS proximity list with Set Gateway /
   Exchange actions.
-- Settings → Winlink: grid square (validated Maidenhead), Keychain-backed
-  password + API key, search radius, transport preference.
+- Settings › Winlink: the grid square read-only (it is set under
+  General › Station position), Keychain-backed password + API key, search
+  radius, transport preference.
 - All metric/tooltip copy is centralized in `WinlinkCopy.swift`
   (CLAUDE.md §11).
 

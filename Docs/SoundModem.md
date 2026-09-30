@@ -393,8 +393,9 @@ On the Mac, the Transport picker gains **Sound Modem**. The form:
 - **Transmit**: level slider, **Test tone (2 s)** (a steady 1200 Hz mark
   through the same CSMA and PTT path a frame takes), **Send test frame** (a
   UI frame to TEST from this radio's callsign through the normal send
-  path), TXDELAY / TXTAIL / persistence / slot time / max transmission, each
-  with help that says what it is for.
+  path), and the max transmission watchdog. TXDELAY, TXTAIL, persistence and
+  slot time are the radio page's Timing section, the same one every radio
+  has, each with help that says what it is for.
 - **Radio**: follow frequency, set-on-connect, **Set radio for packet…**
   with the confirmation above.
 - **Status** while connected: carrier and PTT dots, decoded / failed / sent
@@ -523,8 +524,9 @@ row beside a Direwolf and a USB radio.
    Function = OFF.
 2. **Mac.** `ls /dev/cu.usbmodem*` shows two ports; the lower suffix is Port
    A. System Settings › Sound lists "USB Audio CODEC" in and out at 48 kHz.
-3. **AXTerm.** Settings › Radios › Add Radio › Sound Modem. Audio in and
-   out = USB Audio CODEC, CI-V port = Port A, keying = CI-V command.
+3. **AXTerm.** Settings › Radios › Add Radio…, Reached by = Sound modem, USB
+   cable. Audio in and out = USB Audio CODEC; after Done, on the radio's page,
+   CI-V port = Port A, keying = CI-V command.
    **Identify** answers "IC-705 (A4) · <frequency> <mode>". Allow the
    microphone prompt: AXTerm listens to the radio through the codec; nothing
    is recorded and no audio leaves the Mac.

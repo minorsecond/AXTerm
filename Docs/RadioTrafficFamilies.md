@@ -68,7 +68,7 @@ identical rows in one list.
 
 ### APRS-channel radios
 
-A radio marked "on an APRS channel" in Settings (`RadioProfile.aprsEnabled`)
+A radio whose Channel is APRS in Settings (`RadioProfile.aprsEnabled`)
 counts as APRS for the map and nothing else, whatever it has heard
 (`RadioTrafficClassifier.mapFamilies`). Packet services are locked off on such
 a radio, so it can never collect the answers the packet ring is built from,

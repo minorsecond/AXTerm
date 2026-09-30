@@ -161,11 +161,13 @@ special-cased:
   shared views did nothing at all. Worse, `GeneralSettingsView` — the only
   place `myCallsign` can be edited — was not reachable from anywhere in the
   iOS shell, so the transmit gate pointed at a screen that did not exist. The
-  More tab now has an **Identity** row, and `openAction` pushes the screen
-  matching `SettingsRouter.selectedTab` instead of merely switching tabs;
-  switching tabs alone drops the operator on a menu and is visibly nothing at
-  all if they are already on it. The transmit gate names its destination
-  (`navigate(to: .general)`) rather than opening whatever was last used.
+  More tab now has a **General** row (first called Identity), and
+  `openAction` pushes the screen matching `SettingsRouter.selectedTab` instead
+  of merely switching tabs; switching tabs alone drops the operator on a menu
+  and is visibly nothing at all if they are already on it. It adds to the More
+  stack rather than replacing it (`SettingsDeepLink.path`, see Settings.md).
+  With no callsign the transmit gate opens first-run setup, which works on iOS
+  as a sheet, as does Add Radio.
 - **Mail could be written but never sent.** The bigger absence behind the
   missing Compose button: iOS had no **Connect & Exchange**, so queued mail
   had no way off the device — the point of a Winlink client. The exchange
