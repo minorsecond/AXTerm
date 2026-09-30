@@ -130,9 +130,12 @@ final class ElevationStoreCodecTests: XCTestCase {
     /// format mistake would actually bite, so the round trip is checked
     /// there and not only in the codec.
     func testAStoredTileComesBackUnchanged() throws {
-        let url = FileManager.default.temporaryDirectory
+        let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("elev-\(UUID().uuidString)")
-            .appendingPathComponent("elevation.sqlite")
+        let url = folder.appendingPathComponent("elevation.sqlite")
+        // The store makes the folder, so the folder is what has to go. Left
+        // behind, one per run piled up in the container's tmp.
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
         let store = try ElevationStore(url: url)
 
         let samples = 64

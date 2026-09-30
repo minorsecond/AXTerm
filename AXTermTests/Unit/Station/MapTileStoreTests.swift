@@ -255,6 +255,13 @@ final class OfflineRegionDownloaderTests: XCTestCase {
     private func makeStore() throws -> MapTileStore {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("axterm-dl-\(UUID().uuidString).mbtiles")
+        // Nothing removed these, and a few hundred had collected in the
+        // container's tmp.
+        addTeardownBlock {
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                try? FileManager.default.removeItem(atPath: url.path + suffix)
+            }
+        }
         return try MapTileStore(url: url)
     }
 
