@@ -133,9 +133,27 @@ struct AXTermiOSRootView: View {
         VStack(spacing: 0) {
             content
             // Summaries for one radio too: they know the transport, and the
-            // profile's host is only meaningful for a TCP radio.
-            TNCStatusStrip(radios: client.radioSummaries)
+            // profile's host is only meaningful for a TCP radio. Re-read every
+            // 30 seconds: a deaf receiver brings no frames that would redraw it.
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                TNCStatusStrip(radios: client.radioSummaries,
+                               receiveWarning: receiveWarning(now: context.date))
+            }
         }
+    }
+
+    /// The first connected radio with a receive problem: a receive-level
+    /// finding (ReceiveLevelMonitor) or a deaf receiver (ReceiveHealth).
+    private func receiveWarning(now: Date) -> TNCStatusStrip.ReceiveWarning? {
+        for radio in client.radioSummaries where radio.status == .connected {
+            if let finding = client.receiveLevel.finding(for: radio.id, now: now) {
+                return .init(radio: radio.id, text: finding.message)
+            }
+            if let verdict = client.receiveHealth(for: radio.id, now: now) {
+                return .init(radio: radio.id, text: ReceiveHealth.message(verdict))
+            }
+        }
+        return nil
     }
 
     /// Says what the station is currently set up as, so the section is not

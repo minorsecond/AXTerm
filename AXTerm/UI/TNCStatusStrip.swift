@@ -27,6 +27,15 @@ struct TNCStatusStrip: View {
     /// Every radio, when there are several; the one-radio init leaves this
     /// empty and the strip reads exactly as it always has.
     var radios: [RadioStatusSummary] = []
+    /// A connected radio that looks deaf or whose receive level has moved
+    /// (ReceiveHealth, ReceiveLevelMonitor), and the line to show for it.
+    /// Shown only while nothing more urgent is.
+    var receiveWarning: ReceiveWarning?
+
+    struct ReceiveWarning: Equatable {
+        let radio: RadioID
+        let text: String
+    }
 
     init(status: ConnectionStatus, host: String, port: Int) {
         self.status = status
@@ -35,11 +44,17 @@ struct TNCStatusStrip: View {
     }
 
     /// One dot per radio, one line about whichever needs attention.
-    init(radios: [RadioStatusSummary]) {
+    init(radios: [RadioStatusSummary], receiveWarning: ReceiveWarning? = nil) {
         self.radios = radios
+        self.receiveWarning = receiveWarning
         self.status = RadioPresentation.aggregateStatus(radios.map(\.status))
         self.host = radios.first?.host ?? ""
         self.port = radios.first?.port ?? 0
+    }
+
+    /// The receive warning, when the link itself is fine.
+    private var shownReceiveWarning: ReceiveWarning? {
+        needsAttention ? nil : receiveWarning
     }
 
     var body: some View {
@@ -70,10 +85,23 @@ struct TNCStatusStrip: View {
                 Text("Connection")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.tint)
+            } else if let warning = shownReceiveWarning {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+                Text(warning.text)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+                Spacer(minLength: 4)
+                Text("Radio")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tint)
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, needsAttention ? 6 : 3)
+        .padding(.vertical, needsAttention || shownReceiveWarning != nil ? 6 : 3)
         .frame(maxWidth: .infinity, alignment: .leading)
         // A plain background.
         //
@@ -85,10 +113,16 @@ struct TNCStatusStrip: View {
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
         .contentShape(Rectangle())
-        .onTapGesture { SettingsRouter.shared.navigate(to: .radios) }
+        .onTapGesture {
+            if let warning = shownReceiveWarning {
+                SettingsRouter.shared.navigate(to: .radioReceiveAudio, radio: warning.radio)
+            } else {
+                SettingsRouter.shared.navigate(to: .radios)
+            }
+        }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityText)
-        .accessibilityHint("Opens Radio settings")
+        .accessibilityLabel(shownReceiveWarning.map { "\(accessibilityText). \($0.text)" } ?? accessibilityText)
+        .accessibilityHint(shownReceiveWarning == nil ? "Opens Radio settings" : "Opens the radio's receive audio settings")
         .animation(.easeInOut(duration: 0.2), value: status)
     }
 

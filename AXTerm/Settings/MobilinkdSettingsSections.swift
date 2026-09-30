@@ -14,6 +14,8 @@ struct MobilinkdSettingsSections: View {
     let radioID: RadioID
     @ObservedObject var client: PacketEngine
     @ObservedObject var viewModel: ConnectionTransportViewModel
+    /// The radio is on an APRS channel, where calibration may send a beacon.
+    var onAPRS = false
 
     @State private var tone: MobilinkdTestTone = .both
     @State private var confirmingTone = false
@@ -98,6 +100,9 @@ struct MobilinkdSettingsSections: View {
     private var receiveSection: some View {
         Section {
             levelMeter
+            ReceiveLevelTuningRows(radioID: radioID, onAPRS: onAPRS, connected: connected,
+                                   blocked: measuring || toneEndsAt != nil || assistant.running,
+                                   monitor: client.receiveLevel)
             if connected { levelAssistant }
             ManagedTNC4Setting(title: "Input gain for this radio", value: $viewModel.tnc4.inputGain,
                                tncValue: device.inputGain, fallback: 0, describe: Self.gainText) { binding in
@@ -118,7 +123,7 @@ struct MobilinkdSettingsSections: View {
         } header: {
             Text("Receive audio")
         } footer: {
-            Text("Measure with the radio's squelch open on a quiet channel, and aim for a level that never touches either end. For the same level, less gain and more radio volume recovers faster after transmitting. Twist is usually 6 dB for a radio's speaker output and 0 dB for flat audio.")
+            Text("Calibrating measures real packets, which is the level that matters. The meter and \u{201C}Find the right gain\u{201D} measure noise: use them with the radio's squelch open on a quiet channel, and aim for a level that never touches either end. For the same level, less gain and more radio volume recovers faster after transmitting. Twist is usually 6 dB for a radio's speaker output and 0 dB for flat audio.")
         }
         .id(SettingsSection.radioReceiveAudio)
     }

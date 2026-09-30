@@ -195,6 +195,10 @@ struct RadioDetailView: View {
             }
 
             receiveHealthRows
+            ReceiveLevelFindingRows(radioID: radioID, now: max(healthClock, Date()),
+                                    monitor: client.receiveLevel) {
+                router.navigate(to: .radioReceiveAudio, radio: radioID)
+            }
 
             if viewModel.selectedTransport == .modem, viewModel.radioConnected {
                 ModemStatusRows(viewModel: viewModel)
@@ -298,7 +302,8 @@ struct RadioDetailView: View {
     /// sound modem's rig control, transmit level and radio setup.
     @ViewBuilder
     private var tncSections: some View {
-        MobilinkdSettingsSections(radioID: radioID, client: client, viewModel: viewModel)
+        MobilinkdSettingsSections(radioID: radioID, client: client, viewModel: viewModel,
+                                  onAPRS: channel == .aprs)
 
         #if os(macOS)
         if viewModel.selectedTransport == .modem {

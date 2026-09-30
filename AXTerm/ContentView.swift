@@ -2730,11 +2730,27 @@ struct ContentView: View {
     private func receiveWarnings(now: Date) -> [RadioID: String] {
         var warnings: [RadioID: String] = [:]
         for radio in client.radioSummaries where radio.status == .connected {
+            var lines: [String] = []
             if let verdict = client.receiveHealth(for: radio.id, now: now) {
-                warnings[radio.id] = ReceiveHealth.message(verdict)
+                lines.append(ReceiveHealth.message(verdict))
             }
+            // A TNC4 radio whose receive audio has moved since calibration,
+            // or whose usual digipeaters have gone quiet (ReceiveLevelMonitor).
+            if let finding = client.receiveLevel.finding(for: radio.id, now: now) {
+                lines.append(finding.message)
+            }
+            if !lines.isEmpty { warnings[radio.id] = lines.joined(separator: "\n") }
         }
         return warnings
+    }
+
+    /// The warnings with the evidence behind any receive-level finding, for
+    /// the tooltip.
+    private func receiveWarningHelp(_ warnings: [RadioID: String]) -> String {
+        warnings.keys.sorted(by: RadioID.deterministicOrder).map { radio in
+            let evidence = client.receiveLevel.finding(for: radio)?.evidence ?? []
+            return ([warnings[radio] ?? ""] + evidence).joined(separator: "\n")
+        }.joined(separator: "\n\n")
     }
 
     /// The pill's warning glyph, shown only when a radio looks deaf.
@@ -2744,7 +2760,7 @@ struct ContentView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))
                 .foregroundStyle(.orange)
-                .help(warnings.values.sorted().joined(separator: "\n"))
+                .help(receiveWarningHelp(warnings))
                 .accessibilityLabel("Receive warning")
         }
     }
@@ -2755,6 +2771,23 @@ struct ContentView: View {
     private func receiveWarningItems(_ radio: RadioID, warning: String?) -> some View {
         if let warning {
             Text(warning)
+            if let finding = client.receiveLevel.finding(for: radio) {
+                switch finding.retune {
+                case .calibrate, .turnVolume(_, thenCalibrate: true):
+                    Button("Retune Receive Level") {
+                        client.receiveLevel.calibrate(radio)
+                        SettingsRouter.shared.navigate(to: .radioReceiveAudio, radio: radio)
+                    }
+                    .disabled(client.receiveLevel.isBusy(radio)
+                              || client.receiveLevel.nextCalibrationAllowed(radio) != nil)
+                case .useGain(let gain):
+                    Button("Use \(ReceiveGainAdvice.gainText(gain)) Input Gain") {
+                        client.receiveLevel.useGain(gain, for: radio)
+                    }
+                case .levelMeter, .turnVolume(_, thenCalibrate: false):
+                    EmptyView()
+                }
+            }
             if client.mobilinkdControl(for: radio) != nil {
                 Button("Check Receive Level\u{2026}") {
                     SettingsRouter.shared.navigate(to: .radioReceiveAudio, radio: radio)
@@ -2838,7 +2871,7 @@ struct ContentView: View {
             }
             .menuStyle(.borderlessButton)
             .help(warnings.isEmpty ? "Radio connection actions"
-                  : "Radio connection actions\n\n" + warnings.values.sorted().joined(separator: "\n"))
+                  : "Radio connection actions\n\n" + receiveWarningHelp(warnings))
         }
         .toolbarPill()
     }
@@ -2925,7 +2958,7 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .medium))
             }
             .menuStyle(.borderlessButton)
-            .help(warning.map { "TNC connection actions\n\n\($0)" } ?? "TNC connection actions")
+            .help(warning == nil ? "TNC connection actions" : "TNC connection actions\n\n" + receiveWarningHelp(warnings))
         }
         .toolbarPill()
     }
