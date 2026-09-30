@@ -134,7 +134,7 @@ struct SettingsView: View {
             EmptyView()
             #endif
         case .aprs:
-            APRSSettingsView(settings: settings)
+            APRSSettingsView(settings: settings, client: client)
         case .advanced:
             AdvancedSettingsView(
                 settings: settings,

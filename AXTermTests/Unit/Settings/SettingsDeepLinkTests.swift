@@ -82,6 +82,35 @@ final class SettingsDeepLinkTests: XCTestCase {
         XCTAssertEqual(SettingsSection.radioConnection.tab, .radios, "TNC Settings, Radio Settings")
         XCTAssertEqual(SettingsSection.radioChannel.tab, .radios, "the packet services' APRS note")
         XCTAssertEqual(SettingsSection.netRomNode.tab, .packetNode)
+        XCTAssertEqual(SettingsSection.aprsRadios.tab, .aprs, "the radio page's Open in APRS")
+        XCTAssertEqual(SettingsSection.packetRadios.tab, .packetNode, "the radio page's Open in Packet Node")
+    }
+
+    // MARK: - A radio's sections on a service page
+
+    func testALinkToARadiosSectionsOpensTheServicePageAndNamesTheRadio() {
+        let router = SettingsRouter.shared
+        let id = RadioID(rawValue: "base")
+        router.navigate(to: .aprsRadios, radio: id)
+        XCTAssertEqual(router.selectedTab, .aprs)
+        XCTAssertEqual(router.highlightSection, .aprsRadios)
+        XCTAssertEqual(router.pendingRadio, id)
+
+        router.navigate(to: .packetRadios, radio: id)
+        XCTAssertEqual(router.selectedTab, .packetNode)
+        XCTAssertEqual(router.highlightSection, .packetRadios)
+    }
+
+    /// The service page takes the radio along with the section, so the
+    /// Radios pane does not open that radio on a later visit.
+    func testTheServicePageTakesTheRadioWithTheSection() {
+        let router = SettingsRouter.shared
+        let id = RadioID(rawValue: "base")
+        router.navigate(to: .aprsRadios, radio: id)
+        XCTAssertEqual(router.consume([.aprsMessaging, .aprsRadios]), .aprsRadios)
+        XCTAssertEqual(router.consumeRadio(), id)
+        XCTAssertNil(router.pendingRadio, "nothing left for the Radios pane")
+        XCTAssertNil(router.consumeRadio())
     }
 
     func testTheCallsignBannerOpensSetup() {

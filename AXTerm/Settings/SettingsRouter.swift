@@ -33,9 +33,11 @@ class SettingsRouter: ObservableObject {
     /// again later does not jump.
     @Published var highlightSection: SettingsSection?
 
-    /// The radio a deep link wants opened inside the Radios pane. The pane
-    /// consumes it on arrival, so the operator lands on that radio's form
-    /// rather than on a list they then have to pick from.
+    /// The radio a deep link names. The Radios pane consumes it on arrival,
+    /// so the operator lands on that radio's form rather than on a list they
+    /// then have to pick from. APRS and Packet Node take it for a link to
+    /// their per-radio sections (`consumeRadio()`), so it does not wait for
+    /// a later visit to Radios.
     @Published var pendingRadio: RadioID?
 
     /// Set to show first-run setup (callsign, position, a radio). The main
@@ -49,7 +51,8 @@ class SettingsRouter: ObservableObject {
     /// - Parameters:
     ///   - tab: The destination page.
     ///   - section: The section to scroll to, which must be on `tab`.
-    ///   - radio: For the Radios page, the radio whose page to open.
+    ///   - radio: For the Radios page, the radio whose page to open; for
+    ///     APRS or Packet Node, the radio whose sections to scroll to.
     @MainActor
     func navigate(to tab: SettingsTab, section: SettingsSection? = nil, radio: RadioID? = nil) {
         if let radio { pendingRadio = radio }
@@ -77,6 +80,16 @@ class SettingsRouter: ObservableObject {
         guard let section = highlightSection, sections.contains(section) else { return nil }
         highlightSection = nil
         return section
+    }
+
+    /// Take the pending radio, clearing it. A page with a section per radio
+    /// calls this when it lands a link to those sections, so the Radios pane
+    /// does not open that radio when it is next shown.
+    @MainActor
+    func consumeRadio() -> RadioID? {
+        guard let radio = pendingRadio else { return nil }
+        pendingRadio = nil
+        return radio
     }
 
     /// Show first-run setup: the callsign, the station's position and a radio.

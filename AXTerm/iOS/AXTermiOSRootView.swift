@@ -464,7 +464,9 @@ struct AXTermiOSRootView: View {
                 let destination = SettingsDestination(router.selectedTab)
                 // A link into the Radios pane lands on the radio it names, or
                 // on the only radio there is, with the list beneath it for
-                // the back button.
+                // the back button. A radio named by a link to APRS or Packet
+                // Node is left for that page, which takes it when it scrolls
+                // to the radio's sections.
                 var target = [destination]
                 if destination == .radios {
                     let radio = router.pendingRadio
@@ -1090,7 +1092,7 @@ struct AXTermiOSRootView: View {
                 .environmentObject(SettingsRouter.shared)
                 .navigationBarTitleDisplayMode(.inline)
         case .aprsSettings:
-            APRSSettingsView(settings: settings)
+            APRSSettingsView(settings: settings, client: client)
                 .environmentObject(SettingsRouter.shared)
                 .navigationTitle("APRS")
                 .navigationBarTitleDisplayMode(.inline)

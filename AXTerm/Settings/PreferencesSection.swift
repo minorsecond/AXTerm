@@ -44,13 +44,20 @@ struct PreferencesSection<Content: View>: View {
 /// the next turn of the run loop because the router is an `ObservableObject`,
 /// and clearing it from inside the update that showed the page is what
 /// SwiftUI reports as publishing during a view update.
+///
+/// A page with a section per radio passes `radios`. A link to that landing
+/// scrolls to the section of the radio it names, and the form takes the
+/// router's `pendingRadio` as well.
 struct SettingsForm<Content: View>: View {
     let sections: Set<SettingsSection>
+    let radios: RadioLanding?
     @EnvironmentObject private var router: SettingsRouter
     @ViewBuilder let content: Content
 
-    init(landing sections: Set<SettingsSection>, @ViewBuilder content: () -> Content) {
-        self.sections = sections
+    init(landing sections: Set<SettingsSection>, radios: RadioLanding? = nil,
+         @ViewBuilder content: () -> Content) {
+        self.sections = sections.union(radios.map { [$0.section] } ?? [])
+        self.radios = radios
         self.content = content()
     }
 
@@ -66,11 +73,23 @@ struct SettingsForm<Content: View>: View {
     private func land(_ proxy: ScrollViewProxy) {
         DispatchQueue.main.async {
             guard let section = router.consume(sections) else { return }
+            var target = AnyHashable(section)
+            if let radios, section == radios.section {
+                target = radios.anchor(router.consumeRadio())
+            }
             // One more turn so a page that has just been pushed has laid out
             // the section before it is asked to scroll there.
             DispatchQueue.main.async {
-                withAnimation { proxy.scrollTo(section, anchor: .top) }
+                withAnimation { proxy.scrollTo(target, anchor: .top) }
             }
         }
     }
+}
+
+/// How a page with a section per radio lands a link that names a radio.
+struct RadioLanding {
+    /// The landing that stands for the per-radio sections.
+    let section: SettingsSection
+    /// The id to scroll to for the radio a link names, or for none.
+    let anchor: (RadioID?) -> AnyHashable
 }

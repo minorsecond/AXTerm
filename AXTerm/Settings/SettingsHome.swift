@@ -7,6 +7,11 @@
 //  this table, so "open the setting" and "where the setting is" cannot drift
 //  apart, and a test checks that nothing is registered twice.
 //
+//  A radio's page holds its hardware and identity. What the radio does on
+//  the air (its APRS path and position beacon, its packet services,
+//  digipeater and ID beacon) is on the service page for its channel, in a
+//  section of its own.
+//
 
 import Foundation
 
@@ -26,14 +31,13 @@ nonisolated enum SettingsSection: String, Hashable, Sendable, CaseIterable {
     case radioReceiveAudio
     case radioIdentity
     case radioChannel
-    case radioAPRSPath
-    case radioBeacon
-    case radioPacketServices
-    case radioDigipeater
     case radioTiming
 
     // Packet Node
     case netRomNode
+    /// One set of sections per packet radio: its services, digipeater and
+    /// ID beacon. A link that names a radio lands on that radio's sections.
+    case packetRadios
     case ping
     case linkLayer
     case adaptiveTransmission
@@ -42,18 +46,21 @@ nonisolated enum SettingsSection: String, Hashable, Sendable, CaseIterable {
 
     // APRS
     case aprsMessaging
+    /// One section per APRS radio: its path and position beacon. A link
+    /// that names a radio lands on that radio's section.
+    case aprsRadios
 
     /// The page this section is on.
     var tab: SettingsTab {
         switch self {
         case .stationIdentity, .stationPosition, .display, .online, .system:
             return .general
-        case .radioConnection, .radioReceiveAudio, .radioIdentity, .radioChannel, .radioAPRSPath,
-             .radioBeacon, .radioPacketServices, .radioDigipeater, .radioTiming:
+        case .radioConnection, .radioReceiveAudio, .radioIdentity, .radioChannel, .radioTiming:
             return .radios
-        case .netRomNode, .ping, .linkLayer, .adaptiveTransmission, .axdpProtocol, .fileTransfer:
+        case .netRomNode, .packetRadios, .ping, .linkLayer, .adaptiveTransmission, .axdpProtocol,
+             .fileTransfer:
             return .packetNode
-        case .aprsMessaging:
+        case .aprsMessaging, .aprsRadios:
             return .aprs
         }
     }
@@ -76,6 +83,33 @@ enum SettingsHome {
 
     static func section(of setting: String) -> SettingsSection? {
         entries.first { $0.setting == setting }?.section
+    }
+
+    /// A radio setting whose home depends on the radio's channel.
+    struct ChannelEntry: Sendable {
+        let setting: String
+        let aprs: SettingsSection
+        let packet: SettingsSection
+
+        func section(on channel: RadioChannel) -> SettingsSection {
+            channel == .aprs ? aprs : packet
+        }
+    }
+
+    /// The beacon's switch and interval. One stored beacon per radio, sent
+    /// as a position beacon on an APRS channel and an ID beacon on a packet
+    /// channel, so these two have a home on each service page and appear
+    /// in the radio's section on whichever page its channel names. They
+    /// are kept out of `entries`, which holds settings with one home.
+    static let byChannel: [ChannelEntry] = [
+        ChannelEntry(setting: "radio.beacon.enabled", aprs: .aprsRadios, packet: .packetRadios),
+        ChannelEntry(setting: "radio.beacon.intervalMinutes", aprs: .aprsRadios, packet: .packetRadios),
+    ]
+
+    /// Where a setting is for a radio on `channel`: its one home, or the
+    /// channel's home for a setting in `byChannel`.
+    static func section(of setting: String, channel: RadioChannel) -> SettingsSection? {
+        byChannel.first { $0.setting == setting }?.section(on: channel) ?? section(of: setting)
     }
 
     static func settings(on tab: SettingsTab) -> [String] {
@@ -122,30 +156,8 @@ enum SettingsHome {
         Entry(setting: "radio.maxTransmitSeconds", section: .radioConnection),
         Entry(setting: "radio.callsign", section: .radioIdentity),
         Entry(setting: "radio.aprsEnabled", section: .radioChannel),
-        Entry(setting: "radio.aprsPath", section: .radioAPRSPath),
-        // One beacon per radio. Its channel decides whether the section is
-        // the APRS position beacon or the ID beacon; it is the same section.
-        Entry(setting: "radio.beacon.enabled", section: .radioBeacon),
-        Entry(setting: "radio.beacon.kind", section: .radioBeacon),
-        Entry(setting: "radio.beacon.text", section: .radioBeacon),
-        Entry(setting: "radio.beacon.path", section: .radioBeacon),
-        Entry(setting: "radio.beacon.intervalMinutes", section: .radioBeacon),
-        Entry(setting: "radio.beacon.aprs.symbol", section: .radioBeacon),
-        Entry(setting: "radio.beacon.aprs.comment", section: .radioBeacon),
-        Entry(setting: "radio.beacon.aprs.useGPS", section: .radioBeacon),
-        Entry(setting: "radio.beacon.aprs.latitude", section: .radioBeacon),
-        Entry(setting: "radio.beacon.aprs.longitude", section: .radioBeacon),
-        Entry(setting: "radio.beacon.aprs.ambiguityDigits", section: .radioBeacon),
-        Entry(setting: "radio.beacon.aprs.compressed", section: .radioBeacon),
-        Entry(setting: "radio.announcesNode", section: .radioPacketServices),
-        Entry(setting: "radio.netRomAlias", section: .radioPacketServices),
-        Entry(setting: "radio.pings", section: .radioPacketServices),
-        Entry(setting: "radio.answersMailbox", section: .radioPacketServices),
-        Entry(setting: "radio.digi.enabled", section: .radioDigipeater),
-        Entry(setting: "radio.digi.fillIn", section: .radioDigipeater),
-        Entry(setting: "radio.digi.wideAreaMaxHops", section: .radioDigipeater),
-        Entry(setting: "radio.digi.aliases", section: .radioDigipeater),
-        Entry(setting: "radio.digi.dupeSeconds", section: .radioDigipeater),
+        // Set by the channel, which switches the beacon's kind with it.
+        Entry(setting: "radio.beacon.kind", section: .radioChannel),
         Entry(setting: "radio.txDelayMs", section: .radioTiming),
         Entry(setting: "radio.persistence", section: .radioTiming),
         Entry(setting: "radio.slotTimeMs", section: .radioTiming),
@@ -163,6 +175,18 @@ enum SettingsHome {
         Entry(setting: AppSettingsStore.netRomBroadcastMinutesKey, section: .netRomNode),
         Entry(setting: AppSettingsStore.netRomForwardingKey, section: .netRomNode),
         Entry(setting: AppSettingsStore.autoRouteMaxChainLengthKey, section: .netRomNode),
+        // Each packet radio's own sections.
+        Entry(setting: "radio.announcesNode", section: .packetRadios),
+        Entry(setting: "radio.netRomAlias", section: .packetRadios),
+        Entry(setting: "radio.pings", section: .packetRadios),
+        Entry(setting: "radio.answersMailbox", section: .packetRadios),
+        Entry(setting: "radio.digi.enabled", section: .packetRadios),
+        Entry(setting: "radio.digi.fillIn", section: .packetRadios),
+        Entry(setting: "radio.digi.wideAreaMaxHops", section: .packetRadios),
+        Entry(setting: "radio.digi.aliases", section: .packetRadios),
+        Entry(setting: "radio.digi.dupeSeconds", section: .packetRadios),
+        Entry(setting: "radio.beacon.text", section: .packetRadios),
+        Entry(setting: "radio.beacon.path", section: .packetRadios),
         Entry(setting: AppSettingsStore.pingEnabledKey, section: .ping),
         Entry(setting: AppSettingsStore.pingWindowStartKey, section: .ping),
         Entry(setting: AppSettingsStore.pingWindowEndKey, section: .ping),
@@ -191,5 +215,14 @@ enum SettingsHome {
 
     private static let aprs: [Entry] = [
         Entry(setting: AppSettingsStore.aprsAutoReplyKey, section: .aprsMessaging),
+        // Each APRS radio's own section.
+        Entry(setting: "radio.aprsPath", section: .aprsRadios),
+        Entry(setting: "radio.beacon.aprs.symbol", section: .aprsRadios),
+        Entry(setting: "radio.beacon.aprs.comment", section: .aprsRadios),
+        Entry(setting: "radio.beacon.aprs.useGPS", section: .aprsRadios),
+        Entry(setting: "radio.beacon.aprs.latitude", section: .aprsRadios),
+        Entry(setting: "radio.beacon.aprs.longitude", section: .aprsRadios),
+        Entry(setting: "radio.beacon.aprs.ambiguityDigits", section: .aprsRadios),
+        Entry(setting: "radio.beacon.aprs.compressed", section: .aprsRadios),
     ]
 }

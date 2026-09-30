@@ -2,8 +2,9 @@ import SwiftUI
 
 /// Which radios a station-wide service runs on, for the service pages.
 ///
-/// The switches themselves are on each radio's page. A service page only
-/// says where the service ends up running, so the one fact has one control.
+/// The switches themselves are in each radio's section (`RadioRoleSections`).
+/// A "Runs on" line only says where the service ends up running, so the one
+/// fact has one control.
 nonisolated enum ServiceRadios {
 
     /// The names of the enabled radios `runs` accepts, in list order.
@@ -52,7 +53,7 @@ struct RunsOnRow: View {
 
 /// Which node several radios make: one, or one each. Only shown with
 /// several radios, because with one the question has no content. A radio's
-/// own alias, when each radio is its own node, is set on that radio's page.
+/// own alias, when each radio is its own node, is set in its section below.
 struct NetRomNodeIdentityRows: View {
     @ObservedObject var settings: AppSettingsStore
     var onChange: (() -> Void)? = nil
@@ -69,7 +70,7 @@ struct NetRomNodeIdentityRows: View {
 
             Text(settings.netRomNodeIdentity == .perRadio
                  ? settings.netRomNodeIdentity.explanation
-                    + " Each radio's alias is set under Services on its page."
+                    + " Each radio's alias is set in its section below."
                  : settings.netRomNodeIdentity.explanation)
                 .font(.caption)
                 .foregroundStyle(.secondary)

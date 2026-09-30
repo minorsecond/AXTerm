@@ -49,9 +49,14 @@ struct RadiosSettingsView: View {
     }
 
     /// Open the radio a deep link names, or the only radio when it names none.
+    ///
+    /// A link from a radio's page to its sections under APRS or Packet Node
+    /// names the radio while this pane is still showing; that radio is the
+    /// other page's to take, so it is left alone once the tab has moved on.
     private func honourDeepLink() {
         guard let radio = router.pendingRadio else { return }
         DispatchQueue.main.async {
+            guard router.selectedTab == .radios else { return }
             router.pendingRadio = nil
             if settings.radio(radio) != nil { path = [radio] }
         }

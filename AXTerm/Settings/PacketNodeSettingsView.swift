@@ -2,11 +2,11 @@
 //  PacketNodeSettingsView.swift
 //  AXTerm
 //
-//  Services › Packet Node: the station-wide half of the packet services.
-//  Whether the node runs and announces itself, how ping is paced, the AX.25
-//  link layer, adaptive transmission, AXDP and file transfers. Which radios
-//  each service uses is set on the radios' own pages; this page says which
-//  they are and does not repeat the switches.
+//  Services › Packet Node: the packet services. Whether the node runs and
+//  announces itself, then a set of sections for each radio on a packet
+//  channel (which services use it, its digipeater and ID beacon), then how
+//  ping is paced, the AX.25 link layer, adaptive transmission, AXDP and file
+//  transfers.
 //
 
 import SwiftUI
@@ -26,7 +26,10 @@ struct PacketNodeSettingsView: View {
 
     var body: some View {
         SettingsForm(landing: [.netRomNode, .ping, .linkLayer, .adaptiveTransmission,
-                               .axdpProtocol, .fileTransfer]) {
+                               .axdpProtocol, .fileTransfer],
+                     radios: RadioLanding(section: .packetRadios) { radio in
+                         RadioRoleSections.landing(for: radio, among: packetRadios, on: .packet)
+                     }) {
             PreferencesSection("NET/ROM Node", id: .netRomNode) {
                 if settings.allRadiosOnAPRS { aprsLockNote }
                 Toggle("Run the node: answer callers with the node shell",
@@ -75,8 +78,8 @@ struct PacketNodeSettingsView: View {
                         .onSubmit { applyNetRomSettings() }
                 }
                 .help("Six characters, the mnemonic other nodes show beside this station's "
-                      + "callsign. BPQ calls it NODEALIAS. When each radio is its own node, a "
-                      + "radio's page can give it an alias of its own.")
+                      + "callsign. BPQ calls it NODEALIAS. When each radio is its own node, "
+                      + "each radio's section below can give it an alias of its own.")
 
                 Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
                     .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
@@ -89,7 +92,7 @@ struct PacketNodeSettingsView: View {
 
                 if settings.netRomAdvertiseSelf {
                     RunsOnRow(names: ServiceRadios.names(settings.activeRadios) { $0.mayAnnounceNode },
-                              none: "No radio announces the node. Switch it on under a packet radio's services.")
+                              none: "No radio announces the node. Switch it on for a packet radio below.")
                         .help("The radios that carry the NODES broadcast. Each radio's frame "
                               + "leaves under that radio's own callsign; several take turns two "
                               + "seconds apart.")
@@ -129,6 +132,8 @@ struct PacketNodeSettingsView: View {
                 }
             }
 
+            packetRadioSections
+
             PreferencesSection("Ping", id: .ping) {
                 Text("Asks stations whether they can hear this one, using a frame "
                      + "any AX.25 station answers, with no connection and nothing opened. "
@@ -145,7 +150,7 @@ struct PacketNodeSettingsView: View {
 
                 if settings.pingEnabled {
                     RunsOnRow(names: ServiceRadios.names(settings.activeRadios) { $0.mayPing },
-                              none: "No radio pings. Switch Ping stations on under a packet radio's services.")
+                              none: "No radio pings. Switch Ping stations on for a packet radio above.")
                         .help("A station is pinged on the radio that heard it. A radio with Ping "
                               + "stations off asks nobody, and stations heard only there are left "
                               + "alone. The hourly budget is the station's.")
@@ -384,6 +389,30 @@ struct PacketNodeSettingsView: View {
         .textEntryPrompt($prompt)
     }
     
+    // MARK: - Each packet radio
+
+    private var packetRadios: [RadioProfile] {
+        RadioRoleSections.radios(on: .packet, in: settings.activeRadios)
+    }
+
+    /// Each packet radio's services, digipeater and ID beacon, in list order.
+    @ViewBuilder
+    private var packetRadioSections: some View {
+        if packetRadios.isEmpty {
+            Section {
+                Text("No radio is on a packet channel. A radio's services, digipeater and ID "
+                     + "beacon appear here once its channel is Packet.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .id(SettingsSection.packetRadios)
+        } else {
+            ForEach(packetRadios) { radio in
+                RadioPacketSections(radioID: radio.id, settings: settings, client: client)
+            }
+        }
+    }
+
     // MARK: - Helpers
     
     // ... Copying existing helpers (seedAdaptiveSettings, syncAdaptiveSettingsToSessionCoordinator) ...

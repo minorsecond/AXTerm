@@ -6,9 +6,10 @@
 //  used to be bound straight to the router's @Published tab, and each click
 //  logged "Publishing changes from within view updates is not allowed" three
 //  to seven times. These host every page, the radio page on both channels
-//  with one radio and with two, each step of the Add Radio sheet and each
-//  step of first-run setup, off-screen, and count the runtime issues SwiftUI
-//  logs for this process.
+//  with one radio and with two, the APRS and Packet Node pages with a radio
+//  on each channel, each step of the Add Radio sheet and each step of
+//  first-run setup, off-screen, and count the runtime issues SwiftUI logs
+//  for this process.
 //
 
 #if os(macOS)
@@ -134,6 +135,10 @@ final class SettingsSidebarPublishTests: XCTestCase {
             spin(0.3)
             router.navigate(to: .radioTiming, radio: station.settings.activeRadios.first?.id)
             spin(0.5)
+            router.navigate(to: .packetRadios, radio: station.settings.activeRadios.first?.id)
+            spin(0.3)
+            router.navigate(to: .aprsRadios)
+            spin(0.3)
             router.navigate(to: .stationPosition)
             spin(0.3)
             XCTAssertEqual(try Self.publishWarnings(since: start), 0,
@@ -188,6 +193,94 @@ final class SettingsSidebarPublishTests: XCTestCase {
 
     func testTheRadioPageRendersOnBothChannelsWithTwoRadios() throws {
         try renderRadioPage(radios: 2)
+    }
+
+    // MARK: - Each radio's sections on the service pages
+
+    /// Two radios, the first on APRS and the second on packet, each with its
+    /// beacon on and the packet radio digipeating, so every per-radio row is
+    /// drawn.
+    private func stationOnBothChannels(_ label: String) throws
+        -> (station: Station, aprs: RadioID, packet: RadioID) {
+        let station = station(label, radios: 2)
+        let ids = station.settings.activeRadios.map(\.id)
+        let aprs = try XCTUnwrap(ids.first)
+        let packet = try XCTUnwrap(ids.last)
+        station.settings.updateRadio(aprs) {
+            RadioChannel.aprs.apply(to: &$0)
+            $0.beacon.enabled = true
+        }
+        station.settings.updateRadio(packet) {
+            RadioChannel.packet.apply(to: &$0)
+            $0.beacon.enabled = true
+            $0.digi.enabled = true
+        }
+        return (station, aprs, packet)
+    }
+
+    func testTheServicePagesRenderEachRadiosSections() throws {
+        try preservingRouter {
+            let (station, aprs, packet) = try stationOnBothChannels("SettingsServiceRadios")
+            let settings = station.settings
+            let pages: [(String, AnyView)] = [
+                ("APRS", AnyView(APRSSettingsView(settings: settings, client: station.client))),
+                ("Packet Node", AnyView(PacketNodeSettingsView(settings: settings, client: station.client))),
+            ]
+            for (name, page) in pages {
+                let window = host(page.environmentObject(SettingsRouter.shared), width: 700, height: 900)
+                spin(0.5)
+                let start = Date()
+                settings.updateRadio(aprs) { $0.beacon.aprs?.useGPS = false }
+                spin(0.3)
+                settings.updateRadio(packet) {
+                    $0.beacon.enabled = false
+                    $0.digi.enabled = false
+                }
+                spin(0.3)
+                // The channels swapped: each page loses one radio's sections
+                // and gains the other's.
+                settings.updateRadio(aprs) { RadioChannel.packet.apply(to: &$0) }
+                settings.updateRadio(packet) { RadioChannel.aprs.apply(to: &$0) }
+                spin(0.3)
+                XCTAssertEqual(try Self.publishWarnings(since: start), 0,
+                               "the \(name) page published from inside a view update")
+                window.close()
+                settings.updateRadio(aprs) { RadioChannel.aprs.apply(to: &$0) }
+                settings.updateRadio(packet) { RadioChannel.packet.apply(to: &$0) }
+            }
+        }
+    }
+
+    /// "Open in APRS" and "Open in Packet Node" from a radio's page: the
+    /// service page takes the section and the radio, so the Radios pane does
+    /// not open that radio on a later visit.
+    func testALinkToARadiosSectionsLeavesNothingForTheRadiosPane() throws {
+        try preservingRouter {
+            let router = SettingsRouter.shared
+            let (station, aprs, packet) = try stationOnBothChannels("SettingsOpenInService")
+            router.selectedTab = .radios
+            let window = host(settingsView(station))
+            defer { window.close() }
+            spin(0.5)
+
+            let start = Date()
+            router.navigate(to: .aprsRadios, radio: aprs)
+            spin(0.5)
+            XCTAssertEqual(router.selectedTab, .aprs)
+            XCTAssertNil(router.highlightSection, "the APRS page took the section")
+            XCTAssertNil(router.pendingRadio, "and the radio with it")
+
+            router.selectedTab = .radios
+            spin(0.3)
+            router.navigate(to: .packetRadios, radio: packet)
+            spin(0.5)
+            XCTAssertEqual(router.selectedTab, .packetNode)
+            XCTAssertNil(router.highlightSection, "the Packet Node page took the section")
+            XCTAssertNil(router.pendingRadio, "and the radio with it")
+
+            XCTAssertEqual(try Self.publishWarnings(since: start), 0,
+                           "landing on a radio's sections published from inside a view update")
+        }
     }
 
     // MARK: - Add Radio and first-run setup
