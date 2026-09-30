@@ -2,6 +2,14 @@ import SwiftUI
 import Charts
 
 struct AdaptiveToolbarControl: View {
+    /// Whether the toolbar shows the chip. Adaptive tuning adjusts
+    /// connected-mode sessions (K, PACLEN, N2), which never run on an APRS
+    /// channel, so with every enabled radio on APRS the chip would report on
+    /// something that cannot happen.
+    nonisolated static func isShown(adaptiveEnabled: Bool, linkUp: Bool, allRadiosOnAPRS: Bool) -> Bool {
+        adaptiveEnabled && linkUp && !allRadiosOnAPRS
+    }
+
     @ObservedObject var store: AdaptiveStatusStore
     var linkViz: LinkVizMonitor?
     var onOpenAnalytics: (() -> Void)?

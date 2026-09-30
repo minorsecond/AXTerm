@@ -2659,7 +2659,9 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            if sessionCoordinator.adaptiveTransmissionEnabled, client.status == .connected {
+            if AdaptiveToolbarControl.isShown(adaptiveEnabled: sessionCoordinator.adaptiveTransmissionEnabled,
+                                              linkUp: client.status == .connected,
+                                              allRadiosOnAPRS: settings.allRadiosOnAPRS) {
                 AdaptiveToolbarControl(
                     store: sessionCoordinator.adaptiveStatusStore,
                     linkViz: sessionCoordinator.linkVizMonitor,
