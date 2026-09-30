@@ -48,8 +48,20 @@ nonisolated enum HarvestedRoutePolicy {
         anchorCanRouteNetRom: Bool?,
         localCallsign: String
     ) -> Decision {
+        decide(rows: rows, anchorCanRouteNetRom: anchorCanRouteNetRom,
+               localCallsigns: [localCallsign])
+    }
+
+    /// The same, for a station whose radios transmit as several addresses.
+    /// A node lists us under the address it heard, SSID included, so each
+    /// one is "this station".
+    static func decide(
+        rows: [BpqRoutesScraper.HarvestedLink],
+        anchorCanRouteNetRom: Bool?,
+        localCallsigns: Set<String>
+    ) -> Decision {
         var decision = Decision(accepted: [], refused: [])
-        let local = localCallsign.trimmingCharacters(in: .whitespaces).uppercased()
+        let locals = Set(localCallsigns.map { $0.trimmingCharacters(in: .whitespaces).uppercased() })
 
         for row in rows {
             guard anchorCanRouteNetRom == true else {
@@ -63,7 +75,7 @@ nonisolated enum HarvestedRoutePolicy {
                 decision.refused.append(.init(neighbor: row.neighbor, reason: "a node is not a route to itself"))
                 continue
             }
-            guard row.neighbor != local else {
+            guard !locals.contains(row.neighbor) else {
                 decision.refused.append(.init(neighbor: row.neighbor, reason: "that neighbor is this station"))
                 continue
             }

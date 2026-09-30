@@ -117,10 +117,16 @@ nonisolated struct TerminalTxViewModel {
     /// Returns nil if state is invalid.
     /// Note: For connected mode, this builds a frame that the session manager
     /// will convert to proper I-frames with sequence numbers.
-    func buildOutboundFrame() -> OutboundFrame? {
+    ///
+    /// - Parameters:
+    ///   - radio: the radio the frame leaves on.
+    ///   - source: that radio's address. A frame's source must be the address
+    ///     of the radio carrying it, so the caller that picks the radio passes
+    ///     its address too; nil falls back to `sourceCall`.
+    func buildOutboundFrame(radio: RadioID = .primary, source sourceOverride: AX25Address? = nil) -> OutboundFrame? {
         guard canSend else { return nil }
 
-        let source = parseCallsign(sourceCall.isEmpty ? "NOCALL" : sourceCall)
+        let source = sourceOverride ?? parseCallsign(sourceCall.isEmpty ? "NOCALL" : sourceCall)
         let destination = parseCallsign(effectiveDestination)
         let path = parsePath(digiPath)
 
@@ -153,6 +159,7 @@ nonisolated struct TerminalTxViewModel {
         }
 
         return OutboundFrame(
+            radio: radio,
             destination: destination,
             source: source,
             path: path,
@@ -169,8 +176,8 @@ nonisolated struct TerminalTxViewModel {
     /// Enqueue the current message for transmission.
     /// Returns the frame ID if successful, nil if invalid.
     @discardableResult
-    mutating func enqueueCurrentMessage() -> UUID? {
-        guard let frame = buildOutboundFrame() else { return nil }
+    mutating func enqueueCurrentMessage(radio: RadioID = .primary, source: AX25Address? = nil) -> UUID? {
+        guard let frame = buildOutboundFrame(radio: radio, source: source) else { return nil }
 
         scheduler.enqueue(frame)
 

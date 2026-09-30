@@ -187,7 +187,7 @@ struct ContentView: View {
     private var ownAddresses: Set<String> {
         let answered = Set(sessionCoordinator.sessionManager.answeredAddresses
             .map { $0.display.uppercased() })
-        return answered.isEmpty ? [settings.myCallsign.uppercased()] : answered
+        return answered.isEmpty ? settings.onAirCallsigns : answered
     }
 
     private var macResolver: NodeProfileResolver {
@@ -208,7 +208,9 @@ struct ContentView: View {
 
         return NodeProfileResolver(
             maxChainLength: settings.autoRouteMaxChainLength,
-            localCallsign: settings.myCallsign,
+            // An exact address: link statistics are keyed by the callsign on
+            // the air, and NET/ROM inference runs under the primary radio's.
+            localCallsign: settings.primaryCallsign,
             aliases: nodeAliases.directory,
             heardEntries: heard + aliasEntries,
             directory: callsignLookup.records,
@@ -343,10 +345,10 @@ struct ContentView: View {
             // presentationLayer keeps the callsign in step; a change made
             // while no window was open catches up on the next turn of the
             // run loop, outside the update.
-            if existing.localCallsign != settings.myCallsign {
+            if existing.localCallsign != settings.primaryCallsign {
                 DispatchQueue.main.async { [weak existing, weak settings] in
                     guard let existing, let settings else { return }
-                    existing.applyLocalCallsign(settings.myCallsign)
+                    existing.applyLocalCallsign(settings.primaryCallsign)
                 }
             }
         } else {
@@ -369,7 +371,9 @@ struct ContentView: View {
             } else {
                 TxLog.adaptiveDisabled()
             }
-            coordinator.localCallsign = settings.myCallsign
+            // The primary radio's address, SSID included; see
+            // `SessionCoordinator.localCallsign`.
+            coordinator.localCallsign = settings.primaryCallsign
         }
         coordinator.appSettings = settings
         // An APRS position beacon set to "use GPS" reads the last known fix
@@ -408,7 +412,7 @@ struct ContentView: View {
                 // placed from a second radio's SSID is still ours.
                 let answered = Set((coordinator?.sessionManager.answeredAddresses ?? [])
                     .map { $0.display.uppercased() })
-                let ours = answered.isEmpty ? [settings.myCallsign.uppercased()] : Array(answered)
+                let ours = answered.isEmpty ? Array(settings.onAirCallsigns) : Array(answered)
                 let oursSet = Set(ours)
                 let asOf = Date()
                 return client.aprsObjects.live()
@@ -446,10 +450,14 @@ struct ContentView: View {
         let sendFrames: ([OutboundFrame]) -> Void = { [weak client] frames in
             for frame in frames { client?.send(frame: frame) }
         }
-        let stationCallsign: () -> String = { settings.myCallsign }
+        // What an empty mailbox or P2P callsign falls back to: the address
+        // the primary radio answers as, which is what the station callsign
+        // was before SSIDs moved to the radios. The bare base call would be
+        // a new address that no radio operates under.
+        let stationCallsign: () -> String = { settings.primaryCallsign }
         let winlinkArmed: () -> Bool = { winlinkContext.settings.p2pListenEnabled }
         let winlinkCallsign: () -> String = {
-            winlinkContext.settings.effectiveP2PCallsign(stationCallsign: settings.myCallsign)
+            winlinkContext.settings.effectiveP2PCallsign(stationCallsign: settings.primaryCallsign)
         }
         let contested: () -> String? = { winlinkContext.contestedIdentityHolder }
         let library = BBSFileLibrary(store: client.bbsMessages)
@@ -904,8 +912,8 @@ struct ContentView: View {
                 profileSheet(presentation)
             }
         }
-        .onChange(of: settings.myCallsign) { _, newValue in
-            sessionCoordinator.localCallsign = newValue
+        .onChange(of: settings.primaryCallsign) { _, newValue in
+            sessionCoordinator.applyLocalCallsign(newValue)
         }
         // Warm the in-memory directory from the on-disk cache the moment a
         // profile is requested. Without this, a station looked up weeks ago
@@ -1018,7 +1026,7 @@ struct ContentView: View {
                 let profile = macResolver.profile(for: presentation.callsign)
                 NodeProfileView(
                     profile: profile,
-                    localCallsign: settings.myCallsign,
+                    localCallsign: settings.primaryCallsign,
                     lookupEnabled: winlinkContext.settings.callsignLookupEnabled,
                     isLookingUp: lookingUpCallsign == presentation.callsign,
                     noteStore: client.stationNotes,
@@ -1155,8 +1163,10 @@ struct ContentView: View {
         host.identityProvider = { [weak settings] in
             let alias = settings?.netRomNodeAlias
                 .trimmingCharacters(in: .whitespaces).uppercased() ?? ""
+            // The node's callsign, which is the primary radio's address when
+            // every radio is one node (`SessionCoordinator.localCallsign`).
             return (alias.isEmpty ? "NODE" : alias,
-                    settings?.myCallsign.uppercased() ?? "N0CALL",
+                    settings?.primaryCallsign.uppercased() ?? "N0CALL",
                     "AXTerm")
         }
         host.snapshotProvider = { [weak client, weak nodeAliases, weak bbsSettings] in
@@ -1780,7 +1790,7 @@ struct ContentView: View {
     /// value, so the view can watch a single thing.
     private var serviceAddressSignature: String {
         let winlink = winlinkContext.settings
-        return [settings.myCallsign,
+        return [settings.primaryCallsign,
                 bbsSettings.onAir ? "1" : "0",
                 bbsSettings.callsign,
                 winlink.p2pListenEnabled ? "1" : "0",
@@ -1796,7 +1806,7 @@ struct ContentView: View {
 
         let winlink = winlinkContext.settings
         let address = winlink.p2pListenEnabled
-            ? winlink.effectiveP2PCallsign(stationCallsign: settings.myCallsign)
+            ? winlink.effectiveP2PCallsign(stationCallsign: settings.primaryCallsign)
             : ""
         sessionCoordinator.sessionManager.setServiceAddress(
             address.isEmpty ? nil : CallsignNormalizer.toAddress(address),
@@ -1982,7 +1992,7 @@ struct ContentView: View {
         parts.append(String(client.aprsAlerts.alerts.count))
         parts.append(String(callsignLookup.records.count))
         parts.append(String(nodeAliases.directory.allEntries.count))
-        parts.append(settings.myCallsign)
+        parts.append(settings.onAirCallsigns.sorted().joined(separator: ","))
         parts.append(winlinkContext.settings.gridSquare)
         if let pos = myPosition {
             parts.append("\(pos.point.latitude),\(pos.point.longitude)")
@@ -2004,7 +2014,7 @@ struct ContentView: View {
             announcedGrids: announcedGrids.grids,
             observerGrid: winlinkContext.settings.gridSquare,
             observerPosition: myPosition,
-            myCallsign: settings.myCallsign,
+            myCallsign: settings.primaryCallsign,
             ownCallsigns: ownAddresses,
             ownTransmittedAddresses: ownTransmittedAddresses,
             aprsChannelRadios: aprsChannelRadios,
@@ -2150,11 +2160,12 @@ struct ContentView: View {
             }
         }
         .sheet(item: $aprsComposeTarget) { target in
-            APRSComposeSheet(myCallsign: settings.myCallsign,
+            APRSComposeSheet(myCallsign: settings.primaryCallsign,
                              initialTo: target.call,
                              heardStations: aprsAddresseeSuggestions) { to, text in
                 client.aprsMessaging?.sendMessage(
-                    to: to, text: text, from: settings.myCallsign,
+                    to: to, text: text,
+                    from: sessionCoordinator.aprsCallsign(forRadio: nil, addressee: to),
                     path: sessionCoordinator.aprsPath(forRadio: nil), radioID: nil)
             }
         }
@@ -2173,13 +2184,16 @@ struct ContentView: View {
                     nodeCapabilities: nodeCapabilities,
                     // Held above the view so navigating away cannot reset
                     // what the UI knows about a live session.
+                    // The primary radio's address. The terminal model sets
+                    // the session manager's fallback address from it, so it
+                    // must be the same value the coordinator uses.
                     txViewModel: terminalModels.model(
-                        sourceCall: settings.myCallsign,
+                        sourceCall: settings.primaryCallsign,
                         make: {
                             ObservableTerminalTxViewModel(
                                 client: client,
                                 settings: settings,
-                                sourceCall: settings.myCallsign,
+                                sourceCall: settings.primaryCallsign,
                                 sessionManager: sessionCoordinator.sessionManager)
                         }),
                     onSessionText: { text, peer in
@@ -2208,7 +2222,7 @@ struct ContentView: View {
                             let decision = HarvestedRoutePolicy.decide(
                                 rows: [row],
                                 anchorCanRouteNetRom: nodeCapabilities.canRouteNetRom(peer),
-                                localCallsign: settings.myCallsign)
+                                localCallsigns: settings.onAirCallsigns)
                             if !decision.accepted.isEmpty {
                                 client.netRomIntegration?.harvestedRoutes(
                                     from: peer,
@@ -2278,14 +2292,14 @@ struct ContentView: View {
                     service: bbsService,
                     settings: bbsSettings,
                     library: bbsLibrary,
-                    stationCallsign: settings.myCallsign,
+                    stationCallsign: settings.primaryCallsign,
                     remoteMailbox: winlinkContext.bbsMailboxReplication,
                     pane: $bbsPane
                 )
             case .messages:
                 if let messaging = client.aprsMessaging {
                     APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
-                                     myCallsign: settings.myCallsign)
+                                     myCallsign: settings.primaryCallsign)
                 } else {
                     Text("APRS messaging is unavailable without a database.")
                         .foregroundStyle(.secondary)
@@ -2394,7 +2408,7 @@ struct ContentView: View {
     private func lastDirectConnection(to callsign: String) async -> Date? {
         guard let store = client.networkPaths else { return nil }
         let target = Callsign(callsign)?.base ?? callsign.uppercased()
-        let ours = CallsignValidator.normalize(settings.myCallsign)
+        let ours = Set(settings.onAirCallsigns.map(CallsignValidator.normalize))
         guard !ours.isEmpty else { return nil }
         let cutoff = Date().addingTimeInterval(-CoverageEstimate.evidenceWindow)
         // Off the main thread, like `stationStats`: this reads the path table
@@ -2406,7 +2420,7 @@ struct ContentView: View {
                 .filter { path in
                     guard path.via.isEmpty, path.evidence == .sessionEstablished else { return false }
                     let ends = [path.from, path.to].map { $0.uppercased() }
-                    guard ends.contains(ours) else { return false }
+                    guard ends.contains(where: ours.contains) else { return false }
                     return ends.contains { (Callsign($0)?.base ?? $0) == target }
                 }
                 .map(\.lastSeen)

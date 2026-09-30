@@ -189,7 +189,13 @@ final class SessionCoordinator: ObservableObject {
     /// Pending incoming transfers waiting for accept/decline
     @Published var pendingIncomingTransfers: [IncomingTransferRequest] = []
 
-    /// Local callsign (synced from settings)
+    /// The primary radio's callsign, SSID included (`AppSettingsStore.primaryCallsign`).
+    ///
+    /// The address this station answers as and transmits from when nothing
+    /// ties the traffic to one radio, and the NET/ROM node's callsign when
+    /// every radio is one node. Radios with an address of their own are in
+    /// `sessionManager.localAddresses`. Not the station's base callsign: that
+    /// carries no SSID and no radio need operate under it.
     @Published var localCallsign: String = "NOCALL" {
         didSet {
             updateSessionManagerCallsign()
@@ -220,18 +226,21 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Which radio each callsign belongs to, for addresses that exactly one
-    /// radio operates as. The station callsign, shared by every radio that
-    /// has not named its own, is deliberately absent: a call to it is
-    /// answered by whichever radio heard it.
+    /// radio operates as. The primary radio's address (`localCallsign`) is
+    /// deliberately absent: a call to it is answered by whichever radio
+    /// heard it, as a call to the station callsign was when radios inherited
+    /// it.
     private var radioOwners: [String: RadioID] = [:]
     private var radioAddressSubscription: AnyCancellable?
 
     private func observeRadioAddresses() {
         radioAddressSubscription?.cancel()
         guard let appSettings else { return }
-        // The station callsign arrives through `localCallsign`, whose setter
-        // re-resolves the radios' addresses; only the list needs watching.
-        radioAddressSubscription = appSettings.$radios
+        // The radios resolve against the base callsign, so both are watched;
+        // the primary's address, and with it `localCallsign`, is re-read from
+        // them each time.
+        radioAddressSubscription = appSettings.$radios.map { _ in () }
+            .merge(with: appSettings.myCallsignPublisher.map { _ in () })
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateRadioAddresses() }
     }
@@ -240,6 +249,15 @@ final class SessionCoordinator: ObservableObject {
     /// the station callsign change.
     private func updateRadioAddresses() {
         guard let appSettings else { return }
+        // The primary radio's address is the fallback every radio without an
+        // entry below answers as. When the primary's SSID changes, or another
+        // radio becomes primary, that is a new `localCallsign`, whose setter
+        // comes back here.
+        let primary = appSettings.primaryCallsign
+        if !primary.isEmpty, primary != localCallsign {
+            localCallsign = primary
+            return
+        }
         let station = CallsignNormalizer.toAddress(localCallsign)
         var addresses: [RadioID: AX25Address] = [:]
         var owners: [String: [RadioID]] = [:]
@@ -1799,6 +1817,14 @@ final class SessionCoordinator: ObservableObject {
     /// message sent with no path reaches only stations in direct earshot —
     /// which is what every one of ours did until this existed. A reply keeps
     /// the path the message arrived by and does not come through here.
+    /// The callsign an APRS message to `addressee` goes out under: the address
+    /// of the radio `sendAPRS` will pick for it. Stored with the message, so
+    /// the record names the call the far station saw.
+    func aprsCallsign(forRadio raw: String?, addressee: String = "") -> String {
+        let radio = aprsRadio(forRadio: raw, addressee: addressee) ?? primaryRadioID
+        return sessionManager.localAddress(for: radio).display
+    }
+
     func aprsPath(forRadio raw: String?, addressee: String = "") -> [String] {
         guard let rid = aprsRadio(forRadio: raw, addressee: addressee),
               let radio = appSettings?.radio(rid) else { return [] }
@@ -2372,10 +2398,12 @@ final class SessionCoordinator: ObservableObject {
         awaitingCapabilityExchange.insert(peerCallsign)
         scheduleCapabilityTimeout(for: peerCallsign)
 
-        // Send as UI frame — outside the connected-mode data flow
+        // Send as UI frame — outside the connected-mode data flow. From the
+        // session's own address, on the session's radio.
         let frame = OutboundFrame(
+            radio: session.radio,
             destination: session.remoteAddress,
-            source: sessionManager.localCallsign,
+            source: session.localAddress,
             path: session.path,
             payload: probeData,
             frameType: "ui",
@@ -2399,7 +2427,7 @@ final class SessionCoordinator: ObservableObject {
     /// Send a binary AXDP PING (with our capabilities) via UI frame.
     /// Used to complete the bidirectional exchange after receiving a PONG in response
     /// to our text probe.  The peer already proved AXDP support so binary is safe.
-    private func sendCapabilityPingViaUI(to address: AX25Address, path: DigiPath) {
+    private func sendCapabilityPingViaUI(to address: AX25Address, path: DigiPath, radio: RadioID? = nil) {
         let localCaps = AXDPCapability.defaultLocal()
         let pingMessage = AXDP.Message(
             type: .ping,
@@ -2407,9 +2435,11 @@ final class SessionCoordinator: ObservableObject {
             messageId: 2,  // Distinct from probe's messageId
             capabilities: localCaps
         )
+        let origin = uiOrigin(to: address, radio: radio)
         let frame = OutboundFrame(
+            radio: origin.radio,
             destination: address,
-            source: sessionManager.localCallsign,
+            source: origin.source,
             path: path,
             payload: pingMessage.encode(),
             frameType: "ui",
@@ -2460,9 +2490,11 @@ final class SessionCoordinator: ObservableObject {
             messageId: 1,
             capabilities: localCaps
         )
+        // From the address of the radio the probe arrived on, and out on it.
         let pongFrame = OutboundFrame(
+            radio: radio,
             destination: from,
-            source: sessionManager.localCallsign,
+            source: sessionManager.localAddress(for: radio),
             path: path,
             payload: pongMessage.encode(),
             frameType: "ui",
@@ -2570,7 +2602,8 @@ final class SessionCoordinator: ObservableObject {
 
     /// Send an AXDP PONG response to a received PING, always via UI frame.
     /// Keeps all capability negotiation out of the connected-mode I-frame stream.
-    private func sendCapabilityPong(to address: AX25Address, path: DigiPath, sessionId: UInt32, messageId: UInt32) {
+    private func sendCapabilityPong(to address: AX25Address, path: DigiPath, sessionId: UInt32, messageId: UInt32,
+                                    radio: RadioID? = nil) {
         let localCaps = AXDPCapability.defaultLocal()
         let pongMessage = AXDP.Message(
             type: .pong,
@@ -2580,9 +2613,11 @@ final class SessionCoordinator: ObservableObject {
         )
 
         // Always respond via UI frame — capability exchange stays outside connected-mode data flow
+        let origin = uiOrigin(to: address, radio: radio)
         let frame = OutboundFrame(
+            radio: origin.radio,
             destination: address,
-            source: sessionManager.localCallsign,
+            source: origin.source,
             path: path,
             payload: pongMessage.encode(),
             frameType: "ui",
@@ -2893,7 +2928,7 @@ final class SessionCoordinator: ObservableObject {
             // Text probes don't have AXDP magic, so handleAXDPMessage would skip them.
             handleInboundTextProbe(from: from, path: path, payload: packet.info, radio: radio)
             // UI frames can also contain binary AXDP messages (capability discovery, file transfers)
-            handleAXDPMessage(from: from, path: path, payload: packet.info)
+            handleAXDPMessage(from: from, path: path, payload: packet.info, radio: radio)
         default:
             break
         }
@@ -3112,7 +3147,8 @@ final class SessionCoordinator: ObservableObject {
     #endif
 
     /// Handle a fully decoded AXDP message (used after reassembly or single-frame).
-    private func handleAXDPMessageDecoded(from: AX25Address, path: DigiPath, message: AXDP.Message) {
+    private func handleAXDPMessageDecoded(from: AX25Address, path: DigiPath, message: AXDP.Message,
+                                          radio: RadioID? = nil) {
         debugAXDP("RX", [
             "type": String(describing: message.type),
             "from": from.display,
@@ -3127,7 +3163,7 @@ final class SessionCoordinator: ObservableObject {
 
         switch message.type {
         case .ping, .pong:
-            handleCapabilityMessage(message, from: from, path: path)
+            handleCapabilityMessage(message, from: from, path: path, radio: radio)
 
         case .fileMeta:
             handleFileMetaMessage(message, from: from, path: path)
@@ -3160,10 +3196,11 @@ final class SessionCoordinator: ObservableObject {
 
     /// Handle all AXDP messages from incoming packets (UI frames or single I-frame).
     /// Routes to appropriate handlers based on message type.
-    private func handleAXDPMessage(from: AX25Address, path: DigiPath, payload: Data) {
+    private func handleAXDPMessage(from: AX25Address, path: DigiPath, payload: Data,
+                                   radio: RadioID? = nil) {
         guard AXDP.hasMagic(payload) else { return }
         guard let (message, _) = AXDP.Message.decode(from: payload) else { return }
-        handleAXDPMessageDecoded(from: from, path: path, message: message)
+        handleAXDPMessageDecoded(from: from, path: path, message: message, radio: radio)
     }
 
     /// Handle peerAxdpEnabled: peer turned on their AXDP toggle; notify UI to show toast.
@@ -3195,7 +3232,8 @@ final class SessionCoordinator: ObservableObject {
 
     /// Handle PING/PONG capability messages
     /// This method is internal to allow testing
-    func handleCapabilityMessage(_ message: AXDP.Message, from: AX25Address, path: DigiPath) {
+    func handleCapabilityMessage(_ message: AXDP.Message, from: AX25Address, path: DigiPath,
+                                 radio: RadioID? = nil) {
         guard let caps = message.capabilities else { return }
 
         let peerCallsign = from.display.uppercased()
@@ -3227,7 +3265,7 @@ final class SessionCoordinator: ObservableObject {
             // the peer now has our PONG but not our capabilities.  Send our PING
             // (with capability TLVs) via UI frame so the peer learns our features too.
             if awaitingCapabilityExchange.remove(peerCallsign) != nil {
-                sendCapabilityPingViaUI(to: from, path: path)
+                sendCapabilityPingViaUI(to: from, path: path, radio: radio)
             }
         } else if message.type == .ping {
             TxLog.debug(.capability, "Detected AXDP capabilities via PING", [
@@ -3250,7 +3288,8 @@ final class SessionCoordinator: ObservableObject {
                 to: from,
                 path: path,
                 sessionId: message.sessionId,
-                messageId: message.messageId
+                messageId: message.messageId,
+                radio: radio
             )
         }
     }
@@ -3293,9 +3332,11 @@ final class SessionCoordinator: ObservableObject {
             return true
         }
 
+        let origin = uiOrigin(to: destination, radio: nil)
         let frame = OutboundFrame(
+            radio: origin.radio,
             destination: destination,
-            source: sessionManager.localCallsign,
+            source: origin.source,
             path: path,
             payload: payload,
             frameType: "ui",
@@ -3303,6 +3344,25 @@ final class SessionCoordinator: ObservableObject {
         )
         sendFrame(frame)
         return true
+    }
+
+    /// The radio an AXDP UI frame to `peer` leaves on, and the address it
+    /// carries as its source, which is that radio's.
+    ///
+    /// The radio the caller names when it has one (the radio a PING arrived
+    /// on); otherwise the radio of the session open with that peer; otherwise
+    /// the primary, as for anything no radio claims. The source always
+    /// belongs to the radio the frame goes out on, so the far station can
+    /// answer on the channel it heard us.
+    func uiOrigin(to peer: AX25Address, radio: RadioID?) -> (radio: RadioID, source: AX25Address) {
+        if let radio {
+            return (radio, sessionManager.localAddress(for: radio))
+        }
+        if let session = sessionManager.connectedSession(withPeer: peer) {
+            return (session.radio, session.localAddress)
+        }
+        let primary = primaryRadioID
+        return (primary, sessionManager.localAddress(for: primary))
     }
 
     // MARK: - AXDP Not Supported Cache

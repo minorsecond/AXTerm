@@ -176,8 +176,12 @@ nonisolated enum ConsoleVisibilityFilter {
         lines: [ConsoleLine],
         clearedAt: Date?,
         flags: ConsoleTypeFilterFlags,
-        localCallsign: String = ""
+        localCallsign: String = "",
+        ownCallsigns: Set<String> = []
     ) -> [ConsoleLine] {
+        // Echoes are recognised by every address our radios transmit as;
+        // without that set, by the one callsign given.
+        let echoCallsigns = ownCallsigns.isEmpty ? [localCallsign] : ownCallsigns
         let timeFiltered: [ConsoleLine]
         if let cutoff = clearedAt {
             timeFiltered = lines.filter { $0.timestamp > cutoff }
@@ -189,7 +193,7 @@ nonisolated enum ConsoleVisibilityFilter {
             // Digipeated echoes of our own frames are copies, not content — hidden
             // unless the operator opts in. Frames FROM other stations heard via a
             // digi are the session content itself and are never hidden here.
-            let isEcho = line.isDigipeatEcho(localCallsign: localCallsign)
+            let isEcho = line.isDigipeatEcho(localCallsigns: echoCallsigns)
             if !flags.showDigipeats, isEcho {
                 return false
             }
@@ -282,6 +286,10 @@ struct ConsoleView: View {
     /// Local station callsign, used to recognize digipeated copies of our own
     /// frames. Empty disables digipeat-echo handling (nothing is hidden).
     var localCallsign: String = ""
+    /// Every address this station's radios transmit as, SSIDs included. A
+    /// digipeated copy of a frame from any of them is our echo. Empty falls
+    /// back to `localCallsign`.
+    var ownCallsigns: Set<String> = []
     /// Tapping a callsign in a line asks who it is. Nil keeps the console
     /// read-only, which is what the Mac wants.
     var onIdentity: ((String) -> Void)?
@@ -354,7 +362,8 @@ struct ConsoleView: View {
             lines: lines,
             clearedAt: clearedAt,
             flags: currentFilterFlags,
-            localCallsign: localCallsign
+            localCallsign: localCallsign,
+            ownCallsigns: ownCallsigns
         )
     }
 
@@ -384,6 +393,7 @@ struct ConsoleView: View {
             .map { $0 ? "1" : "0" }.joined()
         return "\(lines.count)|\(lines.last?.id.uuidString ?? "-")|"
             + "\(clearedAt?.timeIntervalSince1970 ?? 0)|\(flags)|\(localCallsign)"
+            + "|\(ownCallsigns.sorted().joined(separator: ","))"
     }
 
     private func rebuildRenderedLines() {
@@ -504,6 +514,7 @@ struct ConsoleView: View {
                                         section.items, timestamp: \.primary.timestampString)
                                     ForEach(section.items) { group in
                                         ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                                             ownCallsigns: ownCallsigns,
                                                              timestampRun: runs[group.id] ?? .alone,
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu,
@@ -519,6 +530,7 @@ struct ConsoleView: View {
                             } else {
                                 ForEach(groupedLines) { group in
                                     ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                                             ownCallsigns: ownCallsigns,
                                                              timestampRun: timestampRunPositions[group.id] ?? .alone,
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu,
@@ -921,6 +933,7 @@ struct ConsoleLineGroupView: View {
     var fontSize: Double = 11
     let group: ConsoleLineGroup
     var localCallsign: String = ""
+    var ownCallsigns: Set<String> = []
     /// Where this row sits among the rows sharing one displayed time.
     var timestampRun: ConsoleTimestampRuler.RunPosition = .alone
     var onIdentity: ((String) -> Void)?
@@ -942,6 +955,7 @@ struct ConsoleLineGroupView: View {
                 duplicateCount: group.duplicateCount,
                 allViaPaths: group.allViaPaths,
                 localCallsign: localCallsign,
+                ownCallsigns: ownCallsigns,
                 onIdentity: onIdentity,
                 onIdentityMenu: onIdentityMenu,
                 radioNames: radioNames,
@@ -1043,6 +1057,12 @@ struct ConsoleLineView: View {
     var duplicateCount: Int = 0
     var allViaPaths: [[String]] = []
     var localCallsign: String = ""
+    /// See `ConsoleView.ownCallsigns`.
+    var ownCallsigns: Set<String> = []
+
+    private var echoCallsigns: Set<String> {
+        ownCallsigns.isEmpty ? [localCallsign] : ownCallsigns
+    }
     /// Tapping a callsign asks who it is. Nil leaves the text inert, which is
     /// what the Mac's console wants — there a callsign is something you copy.
     var onIdentity: ((String) -> Void)?
@@ -1073,7 +1093,7 @@ struct ConsoleLineView: View {
     /// A digipeated copy of our own frame — shown dimmed with a repeat marker
     /// so it reads as the digi's transmission, not new traffic.
     private var isDigipeatEcho: Bool {
-        line.isDigipeatEcho(localCallsign: localCallsign)
+        line.isDigipeatEcho(localCallsigns: echoCallsigns)
     }
 
     private func repeatHelp(_ attribution: ConsoleLine.RepeatAttribution) -> String {
@@ -1120,7 +1140,7 @@ struct ConsoleLineView: View {
             // identical text, and without this marker the two rows are the
             // same words — so "I hear KB5YZB-7" and "DRLNOD hears KB5YZB-7"
             // looked like a duplicate (2026-08-31).
-            if let attribution = line.repeatAttribution(localCallsign: localCallsign) {
+            if let attribution = line.repeatAttribution(localCallsigns: echoCallsigns) {
                 HStack(spacing: 3) {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(.system(size: 10, weight: .semibold))

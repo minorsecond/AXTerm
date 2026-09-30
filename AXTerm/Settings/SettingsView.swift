@@ -122,13 +122,13 @@ struct SettingsView: View {
             TransmissionSettingsView(settings: settings, client: client)
         case .winlink:
             WinlinkSettingsTab(settings: winlinkSettings, profile: stationProfile,
-                               stationCallsign: settings.myCallsign,
+                               stationCallsign: settings.primaryCallsign,
                                locationService: locationService, sync: winlinkSync)
         case .bbs:
             // The mailbox UI is macOS-only; see AXTerm/BBS/UI.
             #if os(macOS)
             BBSSettingsTab(settings: bbsSettings,
-                           stationCallsign: settings.myCallsign,
+                           stationCallsign: settings.primaryCallsign,
                            isWinlinkP2PArmed: winlinkSettings.p2pListenEnabled)
             #else
             EmptyView()

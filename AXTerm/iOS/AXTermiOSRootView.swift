@@ -215,7 +215,9 @@ struct AXTermiOSRootView: View {
             coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
             coordinator.syncSessionManagerConfigFromAdaptive()
         }
-        coordinator.applyLocalCallsign(settings.myCallsign)
+        // The primary radio's address, SSID included; see
+        // `SessionCoordinator.localCallsign`.
+        coordinator.applyLocalCallsign(settings.primaryCallsign)
         coordinator.appSettings = settings
         coordinator.subscribeToPackets(from: client)
         // APRS messaging, wired exactly as the Mac wires it.
@@ -238,7 +240,7 @@ struct AXTermiOSRootView: View {
                 // placed from a second radio's SSID is still ours.
                 let answered = Set((coordinator?.sessionManager.answeredAddresses ?? [])
                     .map { $0.display.uppercased() })
-                let ours = answered.isEmpty ? [settings.myCallsign.uppercased()] : Array(answered)
+                let ours = answered.isEmpty ? Array(settings.onAirCallsigns) : Array(answered)
                 let oursSet = Set(ours)
                 let asOf = Date()
                 return client.aprsObjects.live()
@@ -291,10 +293,12 @@ struct AXTermiOSRootView: View {
         let sendFrames: ([OutboundFrame]) -> Void = { [weak client] frames in
             for frame in frames { client?.send(frame: frame) }
         }
-        let stationCallsign: () -> String = { settings.myCallsign }
+        // An empty mailbox or P2P callsign answers as the primary radio, as
+        // on the Mac (see ContentView).
+        let stationCallsign: () -> String = { settings.primaryCallsign }
         let winlinkArmed: () -> Bool = { context.settings.p2pListenEnabled }
         let winlinkCallsign: () -> String = {
-            context.settings.effectiveP2PCallsign(stationCallsign: settings.myCallsign)
+            context.settings.effectiveP2PCallsign(stationCallsign: settings.primaryCallsign)
         }
         let contested: () -> String? = { context.contestedIdentityHolder }
         let library = BBSFileLibrary(store: client.bbsMessages)
@@ -349,7 +353,7 @@ struct AXTermiOSRootView: View {
         // than being set once and forgotten.
         // Settings can change the callsign after launch; without this the
         // coordinator keeps transmitting under the one it was born with.
-        .onChange(of: settings.myCallsign) { _, newValue in
+        .onChange(of: settings.primaryCallsign) { _, newValue in
             sessionCoordinator.applyLocalCallsign(newValue)
         }
         .onChange(of: settings.keepAwakePolicy) { _, _ in applyKeepAwake() }
@@ -504,7 +508,7 @@ struct AXTermiOSRootView: View {
                 let profile = resolver.profile(for: presentation.callsign)
                 NodeProfileView(
                     profile: profile,
-                    localCallsign: settings.myCallsign,
+                    localCallsign: settings.primaryCallsign,
                     lookupEnabled: context.settings.callsignLookupEnabled,
                     isLookingUp: lookingUpCallsign == presentation.callsign,
                     noteStore: client.stationNotes,
@@ -599,13 +603,15 @@ struct AXTermiOSRootView: View {
                 nodeCapabilities: nodeCapabilities,
                 // Same reason as the Mac shell: a tab the operator switches
                 // away from must not take the live session's state with it.
+                // The primary radio's address, the same value the coordinator
+                // gives the session manager.
                 txViewModel: terminalModels.model(
-                    sourceCall: settings.myCallsign,
+                    sourceCall: settings.primaryCallsign,
                     make: {
                         ObservableTerminalTxViewModel(
                             client: client,
                             settings: settings,
-                            sourceCall: settings.myCallsign,
+                            sourceCall: settings.primaryCallsign,
                             sessionManager: sessionCoordinator.sessionManager)
                     }),
                 onSessionText: { text, peer in
@@ -622,7 +628,7 @@ struct AXTermiOSRootView: View {
                         let decision = HarvestedRoutePolicy.decide(
                             rows: [row],
                             anchorCanRouteNetRom: nodeCapabilities.canRouteNetRom(peer),
-                            localCallsign: settings.myCallsign)
+                            localCallsigns: settings.onAirCallsigns)
                         if !decision.accepted.isEmpty {
                             client.netRomIntegration?.harvestedRoutes(
                                 from: peer,
@@ -728,7 +734,7 @@ struct AXTermiOSRootView: View {
         BBSScreen(service: bbsService,
                   settings: bbsSettings,
                   library: bbsLibrary,
-                  stationCallsign: settings.myCallsign,
+                  stationCallsign: settings.primaryCallsign,
                   isWinlinkP2PArmed: context.settings.p2pListenEnabled,
                   onOpenProfile: { profiles.openPage($0) },
                   remoteMailbox: context.bbsMailboxReplication)
@@ -740,7 +746,7 @@ struct AXTermiOSRootView: View {
     private var messages: some View {
         if let messaging = client.aprsMessaging {
             APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
-                             myCallsign: settings.myCallsign)
+                             myCallsign: settings.primaryCallsign)
         } else {
             Text("APRS messaging is unavailable without a database.")
                 .foregroundStyle(.secondary)
@@ -751,7 +757,7 @@ struct AXTermiOSRootView: View {
     /// change handler covers the callsign, the mailbox and Winlink P2P.
     private var serviceAddressSignature: String {
         let winlink = context.settings
-        return [settings.myCallsign,
+        return [settings.primaryCallsign,
                 bbsSettings.onAir ? "1" : "0",
                 bbsSettings.callsign,
                 winlink.p2pListenEnabled ? "1" : "0",
@@ -770,7 +776,7 @@ struct AXTermiOSRootView: View {
 
         let winlink = context.settings
         let address = winlink.p2pListenEnabled
-            ? winlink.effectiveP2PCallsign(stationCallsign: settings.myCallsign)
+            ? winlink.effectiveP2PCallsign(stationCallsign: settings.primaryCallsign)
             : ""
         sessionCoordinator.sessionManager.setServiceAddress(
             address.isEmpty ? nil : CallsignNormalizer.toAddress(address),
@@ -786,7 +792,7 @@ struct AXTermiOSRootView: View {
                 gatewayGrids: gatewayGrids,
                 observerGrid: context.settings.gridSquare,
                 observerPosition: myPosition,
-                myCallsign: settings.myCallsign,
+                myCallsign: settings.primaryCallsign,
                 ownCallsigns: ownAddresses,
                 ownTransmittedAddresses: ownTransmittedAddresses,
                 aprsChannelRadios: Set(settings.activeRadios.filter(\.aprsEnabled).map(\.id)),
@@ -870,7 +876,7 @@ struct AXTermiOSRootView: View {
                         }
                     } footer: {
                         Text(bbsSettings.onAir
-                             ? "On air as \(bbsSettings.effectiveCallsign(stationCallsign: settings.myCallsign)). Callers can connect and leave mail."
+                             ? "On air as \(bbsSettings.effectiveCallsign(stationCallsign: settings.primaryCallsign)). Callers can connect and leave mail."
                              : "Off air. Switch it on inside to answer calls.")
                     }
                 }
@@ -982,7 +988,7 @@ struct AXTermiOSRootView: View {
         case .winlink:
             WinlinkSettingsTab(settings: context.settings,
                                profile: context.profile,
-                               stationCallsign: settings.myCallsign,
+                               stationCallsign: settings.primaryCallsign,
                                locationService: context.locationService,
                                stationDistanceMiles: { callsign, hz in
                                    // Read straight from the cache: Settings has
@@ -1034,7 +1040,7 @@ struct AXTermiOSRootView: View {
     private var pushedMessagesScreen: some View {
         if let messaging = client.aprsMessaging {
             APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
-                             myCallsign: settings.myCallsign, presentation: .pushed)
+                             myCallsign: settings.primaryCallsign, presentation: .pushed)
         } else {
             Text("APRS messaging is unavailable without a database.")
                 .foregroundStyle(.secondary)
@@ -1067,7 +1073,7 @@ struct AXTermiOSRootView: View {
     // type checker past what it will solve in reasonable time.
     private var mailboxSettingsScreen: some View {
         BBSSettingsScreen(settings: bbsSettings,
-                          stationCallsign: settings.myCallsign,
+                          stationCallsign: settings.primaryCallsign,
                           isWinlinkP2PArmed: context.settings.p2pListenEnabled)
             .navigationTitle("Mailbox")
             .navigationBarTitleDisplayMode(.inline)
@@ -1078,7 +1084,7 @@ struct AXTermiOSRootView: View {
         BBSScreen(service: bbsService,
                   settings: bbsSettings,
                   library: bbsLibrary,
-                  stationCallsign: settings.myCallsign,
+                  stationCallsign: settings.primaryCallsign,
                   isWinlinkP2PArmed: context.settings.p2pListenEnabled,
                   onOpenProfile: { profiles.openPage($0) },
                   remoteMailbox: context.bbsMailboxReplication,
@@ -1124,7 +1130,7 @@ struct AXTermiOSRootView: View {
     private var ownAddresses: Set<String> {
         let answered = Set(sessionCoordinator.sessionManager.answeredAddresses
             .map { $0.display.uppercased() })
-        return answered.isEmpty ? [settings.myCallsign.uppercased()] : answered
+        return answered.isEmpty ? settings.onAirCallsigns : answered
     }
 
     /// Every address this station has transmitted as, so a beacon sent under
@@ -1155,7 +1161,9 @@ struct AXTermiOSRootView: View {
 
         return NodeProfileResolver(
             maxChainLength: settings.autoRouteMaxChainLength,
-            localCallsign: settings.myCallsign,
+            // An exact address, as on the Mac: link statistics are keyed by
+            // the callsign on the air.
+            localCallsign: settings.primaryCallsign,
             aliases: nodeAliases.directory,
             heardEntries: heard + aliasEntries,
             directory: callsignLookup.records,
@@ -1192,7 +1200,7 @@ struct AXTermiOSRootView: View {
     private func connectAction(to callsign: String) -> (() -> Void)? {
         let normalized = CallsignValidator.normalize(callsign)
         guard !normalized.isEmpty,
-              normalized != CallsignValidator.normalize(settings.myCallsign) else { return nil }
+              !settings.onAirCallsigns.contains(normalized) else { return nil }
 
         let profile = resolver.profile(for: callsign)
         let hasRoute = profile.netrom?.reachedVia != nil

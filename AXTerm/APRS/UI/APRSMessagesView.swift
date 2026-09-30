@@ -15,7 +15,9 @@ import SwiftUI
 struct APRSMessagesView: View {
     @ObservedObject var messaging: APRSMessagingService
     @ObservedObject var probe: APRSReachabilityProbe
-    /// Our callsign, stamped on outgoing messages.
+    /// Our callsign as the operator should read it: the primary radio's.
+    /// Outgoing messages are stamped with the address of the radio each one
+    /// actually leaves on (`outgoingCallsign`).
     var myCallsign: String
     /// How this view is embedded. Defaults to the split-view shell.
     var presentation: Presentation = .standalone
@@ -58,7 +60,7 @@ struct APRSMessagesView: View {
         }
         .sheet(isPresented: $showNewMessage) {
             APRSComposeSheet(myCallsign: myCallsign) { to, text in
-                messaging.sendMessage(to: to, text: text, from: myCallsign,
+                messaging.sendMessage(to: to, text: text, from: outgoingCallsign(to: to),
                                       path: outgoingPath(), radioID: nil)
                 selectedPeer = to.uppercased()
             }
@@ -66,7 +68,7 @@ struct APRSMessagesView: View {
         .sheet(isPresented: $showNewBulletin) {
             APRSBulletinComposeSheet(myCallsign: myCallsign) { identifier, group, text in
                 messaging.sendBulletin(identifier: identifier, group: group, text: text,
-                                       from: myCallsign, path: outgoingPath(), radioID: nil)
+                                       from: outgoingCallsign(to: ""), path: outgoingPath(), radioID: nil)
             }
         }
         .sheet(isPresented: $showProbe) {
@@ -470,10 +472,15 @@ struct APRSMessagesView: View {
         SessionCoordinator.shared?.aprsPath(forRadio: nil) ?? []
     }
 
+    /// The address a message to `peer` leaves under, which is the radio's.
+    private func outgoingCallsign(to peer: String) -> String {
+        SessionCoordinator.shared?.aprsCallsign(forRadio: nil, addressee: peer) ?? myCallsign
+    }
+
     private func send(to peer: String) {
         let text = String(draft.trimmingCharacters(in: .whitespaces).prefix(APRSMessage.maxTextLength))
         guard !text.isEmpty else { return }
-        messaging.sendMessage(to: peer, text: text, from: myCallsign,
+        messaging.sendMessage(to: peer, text: text, from: outgoingCallsign(to: peer),
                               path: outgoingPath(), radioID: nil)
         draft = ""
     }

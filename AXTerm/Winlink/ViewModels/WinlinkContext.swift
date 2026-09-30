@@ -137,9 +137,12 @@ final class WinlinkContext: ObservableObject {
                     let deviceID = WinlinkSyncDevice.identifier()
                     let deviceName = WinlinkSyncDevice.localName()
                     // The mailbox's own callsign is a BBS setting; empty
-                    // means it answers as the station.
+                    // means it answers as the primary radio (see
+                    // BBSService.answeringCallsign).
                     let mailbox: @Sendable () -> String = {
-                        defaults.string(forKey: BBSSettings.callsignKey) ?? ""
+                        let own = defaults.string(forKey: BBSSettings.callsignKey) ?? ""
+                        return own.trimmingCharacters(in: .whitespaces).isEmpty
+                            ? StationCallsignRules.storedPrimaryCallsign(defaults: defaults) : own
                     }
                     let station: @Sendable () -> String = {
                         defaults.string(forKey: AppSettingsStore.myCallsignKey) ?? ""

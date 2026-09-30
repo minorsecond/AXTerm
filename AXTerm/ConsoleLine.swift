@@ -218,9 +218,14 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
 
     /// Nil when the frame reached us directly, which needs no explanation.
     func repeatAttribution(localCallsign: String) -> RepeatAttribution? {
+        repeatAttribution(localCallsigns: [localCallsign])
+    }
+
+    /// The same, for a station whose radios transmit as several addresses.
+    func repeatAttribution(localCallsigns: Set<String>) -> RepeatAttribution? {
         let digis = repeatedDigis
         guard !digis.isEmpty else { return nil }
-        return isDigipeatEcho(localCallsign: localCallsign)
+        return isDigipeatEcho(localCallsigns: localCallsigns)
             ? .ourFrameEchoed(digis)
             : .heardVia(digis)
     }
@@ -230,10 +235,17 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
     /// new content (the TX-time line already shows the frame), but seeing them
     /// confirms the digipeater actually relayed us.
     func isDigipeatEcho(localCallsign: String) -> Bool {
+        isDigipeatEcho(localCallsigns: [localCallsign])
+    }
+
+    /// The same over every address this station's radios transmit as. Exact
+    /// addresses, SSID included: the operator's handheld on another SSID is
+    /// a different station, and its frames are not our echo.
+    func isDigipeatEcho(localCallsigns: Set<String>) -> Bool {
         guard heardViaDigipeater, let from else { return false }
-        let local = CallsignValidator.normalize(localCallsign)
-        guard !local.isEmpty else { return false }
-        return CallsignValidator.normalize(from) == local
+        let locals = Set(localCallsigns.map(CallsignValidator.normalize).filter { !$0.isEmpty })
+        guard !locals.isEmpty else { return false }
+        return locals.contains(CallsignValidator.normalize(from))
     }
 
     /// Hashed on identity alone.

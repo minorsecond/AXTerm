@@ -631,8 +631,10 @@ final class PacketEngine: ObservableObject {
             #endif
         }
 
-        // Initialize NET/ROM integration for passive route inference
-        let myCallsign = settings.myCallsign
+        // Initialize NET/ROM integration for passive route inference.
+        // Inference compares full addresses, SSID included, so "local" is the
+        // address our frames carry: the primary radio's.
+        let myCallsign = settings.primaryCallsign
         if !myCallsign.isEmpty {
             self.netRomIntegration = NetRomIntegration(
                 localCallsign: myCallsign,
@@ -869,7 +871,7 @@ final class PacketEngine: ObservableObject {
         // receive: priming only on receive reset it on the first frame heard,
         // which wiped the fingerprint of a transmission just recorded and made
         // our own echo of it look like a stranger.
-        syncIdentityMonitorCallsign()
+        syncIdentityMonitorCallsign(settings.onAirCallsigns)
         identityMonitor.recordTransmitted(
             source: frame.source.display,
             destination: frame.destination.display,
@@ -1249,13 +1251,11 @@ final class PacketEngine: ObservableObject {
         // Another station transmitting as us corrupts every AX.25 link this
         // station has, and produces no other error. Checked on every frame
         // because the offending one may be the only evidence. Every address
-        // this station operates as counts as "us": the station callsign and
-        // each radio's own.
-        syncIdentityMonitorCallsign()
-        var ownCallsigns: Set<String> = [settings.myCallsign]
-        for profile in settings.activeRadios where profile.enabled {
-            ownCallsigns.insert(profile.resolvedCallsign(station: settings.myCallsign))
-        }
+        // an enabled radio transmits as counts as "us". The bare station
+        // call only counts when a radio uses it: another of the operator's
+        // own devices on K0EPI is not a collision with a radio on K0EPI-5.
+        let ownCallsigns = settings.onAirCallsigns
+        syncIdentityMonitorCallsign(ownCallsigns)
 
         var isOwnEcho = false
         switch identityMonitor.classifyReceived(
@@ -1324,9 +1324,10 @@ final class PacketEngine: ObservableObject {
 
     /// Frames sent under an old identity are not evidence about the new one:
     /// a callsign change clears what the monitor remembers.
-    private func syncIdentityMonitorCallsign() {
-        guard identityMonitorCallsign != settings.myCallsign else { return }
-        identityMonitorCallsign = settings.myCallsign
+    private func syncIdentityMonitorCallsign(_ ownCallsigns: Set<String>) {
+        let key = ownCallsigns.sorted().joined(separator: ",")
+        guard identityMonitorCallsign != key else { return }
+        identityMonitorCallsign = key
         identityMonitor.reset()
         identityCollision = nil
     }
@@ -1573,9 +1574,11 @@ final class PacketEngine: ObservableObject {
             "via": via.joined(separator: ","),
             "currentLineCount": consoleLines.count
         ])
-        let toDisplay = settings.myCallsign
-        // Attributed to the session's radio, so the per-radio filter reaches
-        // connected-mode conversation the way it reaches monitored frames.
+        // The address the session runs under on its radio, which is what the
+        // far station sent to. Attributed to the session's radio, so the
+        // per-radio filter reaches connected-mode conversation the way it
+        // reaches monitored frames.
+        let toDisplay = settings.onAirCallsign(for: radioID)
         let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text, via: via,
                                       radioID: radioID)
         appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
@@ -1630,12 +1633,12 @@ final class PacketEngine: ObservableObject {
             return false
         }
 
-        let myCallDisplay = settings.myCallsign
-        guard !myCallDisplay.isEmpty else { return false }
-        let local = CallsignNormalizer.toAddress(myCallDisplay)
+        // Our end of a session carries a radio's address, SSID included.
+        let locals = settings.onAirCallsigns.map(CallsignNormalizer.toAddress)
+        guard !locals.isEmpty else { return false }
 
-        let isFromLocal = CallsignNormalizer.addressesMatch(from, local)
-        let isToLocal = CallsignNormalizer.addressesMatch(to, local)
+        let isFromLocal = locals.contains { CallsignNormalizer.addressesMatch(from, $0) }
+        let isToLocal = locals.contains { CallsignNormalizer.addressesMatch(to, $0) }
         guard isFromLocal || isToLocal else {
             return false
         }
@@ -1923,6 +1926,8 @@ final class PacketEngine: ObservableObject {
             // Handle Notification Triggers (Mail and Mentions)
             if !isDuplicate {
                 let textUpper = text.uppercased()
+                // The base call: mail lists and mentions name the operator,
+                // and "K0EPI" is found inside "K0EPI-5" as well.
                 let myCallUpper = settings.myCallsign.uppercased()
                 
                 if !myCallUpper.isEmpty {
@@ -1931,7 +1936,7 @@ final class PacketEngine: ObservableObject {
                     } else if settings.notifyOnMention {
                         let toCallUpper = packet.toDisplay.uppercased()
                         // Avoid spam if we are directly receiving this packet (we assume we're already engaged)
-                        if toCallUpper != myCallUpper && textUpper.contains(myCallUpper) {
+                        if !settings.onAirCallsigns.contains(toCallUpper) && textUpper.contains(myCallUpper) {
                             notificationScheduler?.scheduleMentionNotification(packet: packet)
                         }
                     }
@@ -1997,12 +2002,14 @@ final class PacketEngine: ObservableObject {
         svc.receive(parsed, context: context)
     }
 
-    /// Every callsign that names us for "is this message addressed to me" —
-    /// the station call and each radio's resolved call+SSID.
-    private func aprsOurCallsigns() -> [String] {
+    /// Every callsign that names us for "is this message addressed to me":
+    /// each radio's resolved call and SSID. The bare base call is only here
+    /// when a radio transmits as it. A message to K0EPI is for another of the
+    /// operator's stations when every radio here is K0EPI-something, and
+    /// acking it would answer for a station that is not listening.
+    func aprsOurCallsigns() -> [String] {
         var calls: Set<String> = []
         let station = settings.myCallsign
-        if !station.isEmpty { calls.insert(station.uppercased()) }
         for radio in settings.activeRadios {
             let call = radio.resolvedCallsign(station: station)
             if !call.isEmpty { calls.insert(call.uppercased()) }

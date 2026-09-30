@@ -892,7 +892,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     var isDraftingPath: Bool { pathDraft != nil }
 
     private var myStationIdentityKey: String {
-        let call = settingsStore?.myCallsign ?? ""
+        // The primary radio's address: in per-SSID mode the key is the exact
+        // address our frames carry, and the bare base call need not be one.
+        let call = settingsStore?.primaryCallsign ?? ""
         return CallsignParser.identityKey(for: call, mode: stationIdentityMode)
     }
 
@@ -933,7 +935,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func updatePathDraftContext(packets: [Packet], identityMode: StationIdentityMode) {
-        let myKey = CallsignParser.identityKey(for: settingsStore?.myCallsign ?? "", mode: identityMode)
+        let myKey = CallsignParser.identityKey(for: settingsStore?.primaryCallsign ?? "", mode: identityMode)
         var digiRepeats: [String: Int] = [:]
         var provenForMe: Set<String> = []
         var senderDisplayCounts: [String: [String: Int]] = [:]
@@ -988,7 +990,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 return lhs.key > rhs.key
             }?.key
         }
-        if let myCall = settingsStore?.myCallsign, !myCall.isEmpty {
+        if let myCall = settingsStore?.primaryCallsign, !myCall.isEmpty {
             preferred[myKey] = CallsignValidator.normalize(myCall)
         }
 

@@ -479,11 +479,13 @@ final class AX25SessionManager: ObservableObject {
         return parts.joined(separator: " ")
     }
 
-    /// Local callsign (from settings)
+    /// The address a radio with no entry in `localAddresses` operates as: the
+    /// primary radio's callsign, SSID included (see
+    /// `SessionCoordinator.localCallsign`).
     var localCallsign: AX25Address
 
-    /// The address each radio operates as, where it differs from the station
-    /// callsign. A radio absent here answers as `localCallsign`.
+    /// The address each radio operates as, where it differs from the primary
+    /// radio's. A radio absent here answers as `localCallsign`.
     ///
     /// Two radios on one licence are two stations on the air — an HF and a
     /// VHF station, say — and each may carry its own SSID so a remote
@@ -1408,14 +1410,15 @@ final class AX25SessionManager: ObservableObject {
                 peerXIDStatus[peerKey] = .supported(parsed)
             }
             debugTrace("RX XID command", ["peer": peerKey, "srej": ours.supportsSREJ ? 1 : 0])
+            // Answered from the address this radio operates as, and on it.
             return [AX25FrameBuilder.buildXID(
-                from: localCallsign,
+                from: localAddress(for: radio),
                 to: source,
                 via: path,
                 parameters: ours,
                 isCommand: false,
                 pf: pf
-            )]
+            ).onRadio(radio)]
         }
 
         debugTrace("RX XID response", ["peer": peerKey, "parsed": parsed != nil ? 1 : 0])
@@ -1699,7 +1702,9 @@ final class AX25SessionManager: ObservableObject {
             TxLog.debug(.session, "SABME refused with DM; this station is modulo 8 only", [
                 "peer": source.display
             ])
-            return AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path, pf: pf)
+            // From the address the peer called, the way a UA would be.
+            return AX25FrameBuilder.buildDM(from: destination, to: source, via: path, pf: pf)
+                .onRadio(radio)
         }
         debugTrace("SABM received", [
             "from": source.display,
@@ -2071,12 +2076,12 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("DISC with no session -> DM", [
                 "from": source.display
             ])
-            // No session - respond with DM
+            // No session - respond with DM, from this radio's address.
             return AX25FrameBuilder.buildDM(
-                from: localCallsign,
+                from: localAddress(for: radio),
                 to: source,
                 via: path
-            )
+            ).onRadio(radio)
         }
 
         let oldState = session.state

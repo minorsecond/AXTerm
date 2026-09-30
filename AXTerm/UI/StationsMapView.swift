@@ -541,8 +541,8 @@ struct StationsMapView: View {
     /// know it; every other station's is a note because they usually do not.
     private var antennaHeights: [String: Double] {
         var heights = (try? noteStore?.antennaHeights()) ?? [:]
-        let me = myCallsign.trimmingCharacters(in: .whitespaces).uppercased()
-        if !me.isEmpty {
+        // Every address our radios transmit as is this antenna farm.
+        for me in ownAddresses where !me.isEmpty {
             heights[me] = settings.antennaHeightMetres
         }
         return heights
@@ -928,7 +928,7 @@ struct StationsMapView: View {
         let answered = showsCoverageRing
             ? CoverageEstimate.ring(
                 paths: networkPaths,
-                ownAddresses: [myCallsign],
+                ownAddresses: Array(ownAddresses),
                 positions: networkPositions,
                 observer: observer)
             : nil
@@ -1019,8 +1019,9 @@ struct StationsMapView: View {
         for entry in entriesCache.coreVisible where entry.isPlaced {
             positions[entry.callsign.uppercased()] = entry.position
         }
-        if let observer, !myCallsign.isEmpty {
-            positions[myCallsign.uppercased()] = observer
+        // A path ends at whichever of our addresses it was heard with.
+        if let observer {
+            for me in ownAddresses where !me.isEmpty { positions[me] = observer }
         }
         return positions
     }

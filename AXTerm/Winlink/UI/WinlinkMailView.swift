@@ -602,7 +602,7 @@ struct WinlinkMailView: View {
                 let listener = WinlinkP2PListener(
                     isArmed: winlinkSettings.p2pListenEnabled,
                     myCallsign: winlinkSettings.effectiveP2PCallsign(
-                        stationCallsign: appSettings.myCallsign),
+                        stationCallsign: appSettings.primaryCallsign),
                     isExchangeRunning: context.runner?.isRunning ?? true,
                     // Refuses to answer when another of the operator's devices
                     // already holds this callsign on this TNC — otherwise both

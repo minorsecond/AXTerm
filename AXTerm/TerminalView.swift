@@ -1570,7 +1570,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     }
 
     func enqueueCurrentMessage() {
-        viewModel.enqueueCurrentMessage()
+        // A datagram leaves on the radio the picker (or the route) names, and
+        // carries that radio's address as its source.
+        let dest = parseCallsign(viewModel.effectiveDestination)
+        let path = parsePath(viewModel.digiPath)
+        let radio = radio(for: dest, path: path)
+        viewModel.enqueueCurrentMessage(radio: radio, source: sessionManager.localAddress(for: radio))
     }
 
     func clearCompose() {
@@ -2894,7 +2899,10 @@ struct TerminalView: View {
                 lines: lines,
                 showDaySeparators: settings.showConsoleDaySeparators,
                 clearedAt: $settings.terminalClearedAt,
+                // The base call for "mine", which matches every SSID of it;
+                // the radios' own addresses for recognising our echoes.
                 localCallsign: settings.myCallsign,
+                ownCallsigns: settings.onAirCallsigns,
                 onIdentity: onIdentity,
                 onIdentityMenu: onIdentityMenu,
                 // Empty with one radio, so the badge appears only when there is
@@ -3024,7 +3032,9 @@ struct TerminalView: View {
         sessionCoordinator.netRomDriver.send(payload, on: circuitID)
         let circuitRadio = (sessionCoordinator.netRomDriver.circuit(for: circuitID)?.destination)
             .flatMap { sessionCoordinator.radioOwning($0) }
-        client.appendSessionChatLine(from: settings.myCallsign, text: text, radioID: circuitRadio)
+        // The circuit carries the node's user address, not the base call.
+        client.appendSessionChatLine(from: sessionCoordinator.netRomDriver.localUser.display,
+                                     text: text, radioID: circuitRadio)
         txViewModel.clearCompose()
     }
 
@@ -4741,7 +4751,9 @@ struct TerminalViewModifiers: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: settings.myCallsign) { _, newValue in
+            // The primary radio's address, which is also the session
+            // manager's fallback: the two must not disagree.
+            .onChange(of: settings.primaryCallsign) { _, newValue in
                 txViewModel.updateSourceCall(newValue)
             }
             .sheet(isPresented: $showingTransferSheet) {
@@ -4822,7 +4834,7 @@ struct TerminalViewModifiers: ViewModifier {
         txViewModel: ObservableTerminalTxViewModel(
             client: client,
             settings: settings,
-            sourceCall: settings.myCallsign,
+            sourceCall: settings.primaryCallsign,
             sessionManager: coordinator.sessionManager),
         searchModel: searchModel
     )
