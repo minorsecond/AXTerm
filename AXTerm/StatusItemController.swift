@@ -180,14 +180,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         let radios = client.radioSummaries
         let status = MenuModel.statusTitle(for: client.status)
-        let primary = settings.primaryRadio
-        let host = client.connectedHost ?? primary?.host ?? AppSettingsStore.defaultHost
-        let port = client.connectedPort.map(String.init) ?? String(primary?.port ?? AppSettingsStore.defaultPort)
+        // The radio's own endpoint for its transport: host and port for
+        // TCP, the device name for Bluetooth, the path for serial.
+        let endpoint = radios.first?.endpoint ?? "No radio"
         // One radio: the line the menu has always shown. Several: how many
         // are up, with one submenu per radio below.
         let headerTitle = radios.count > 1
             ? MenuModel.headerTitle(radios: radios, packetCount: client.packets.count)
-            : "\(status) — \(host):\(port) • \(client.packets.count) packets"
+            : "\(status) — \(endpoint) • \(client.packets.count) packets"
         let header = NSMenuItem(title: headerTitle, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)

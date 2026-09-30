@@ -2904,18 +2904,12 @@ struct ContentView: View {
         }
     }
     
+    /// Built from the radio summaries, which know each radio's transport.
+    /// This used to read the profile's `host` whatever the transport, and a
+    /// Bluetooth or serial radio keeps the TCP default there, so a TNC4 on
+    /// Bluetooth showed as "TNC: localhost".
     private var tncCapsuleLabel: String {
-        switch client.status {
-        case .connected:
-            let host = client.connectedHost ?? settings.primaryRadio?.host ?? AppSettingsStore.defaultHost
-            return "TNC: \(host)"
-        case .connecting:
-            return "TNC Connecting\u{2026}"
-        case .disconnected:
-            return "TNC Disconnected"
-        case .failed:
-            return "TNC Failed"
-        }
+        RadioPresentation.capsuleLabel(client.radioSummaries)
     }
 
     private var connectionEndpointLabel: String {

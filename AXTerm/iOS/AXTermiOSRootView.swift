@@ -130,13 +130,9 @@ struct AXTermiOSRootView: View {
     private func withTNCStrip<Content: View>(_ content: Content) -> some View {
         VStack(spacing: 0) {
             content
-            if settings.hasMultipleRadios {
-                TNCStatusStrip(radios: client.radioSummaries)
-            } else {
-                TNCStatusStrip(status: client.status,
-                               host: settings.primaryRadio?.host ?? "",
-                               port: settings.primaryRadio?.port ?? 0)
-            }
+            // Summaries for one radio too: they know the transport, and the
+            // profile's host is only meaningful for a TCP radio.
+            TNCStatusStrip(radios: client.radioSummaries)
         }
     }
 

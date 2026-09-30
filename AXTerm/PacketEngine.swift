@@ -740,7 +740,7 @@ final class PacketEngine: ObservableObject {
             SentryManager.shared.captureConnectionFailure("Connection failed: invalid port \(port)")
             return
         }
-        var radio = settings.primaryRadio ?? RadioProfile(id: .primary, name: "Direwolf")
+        var radio = settings.primaryRadio ?? RadioProfile(id: .primary, name: "")
         radio.kind = .tcp
         radio.host = host
         radio.port = Int(port)
@@ -1713,9 +1713,13 @@ final class PacketEngine: ObservableObject {
                 id: radio.id, name: radio.name.isEmpty ? RadioProfile.defaultName(for: radio) : radio.name,
                 callsign: radio.resolvedCallsign(station: station),
                 status: Self.connectionStatus(for: state),
-                endpoint: radio.displayEndpoint,
-                host: radio.kind == .tcp ? radio.host : "",
-                port: radio.kind == .tcp ? radio.port : nil,
+                endpoint: radio.kind == .tcp
+                    ? session?.tcpEndpoint.map { "\($0.host):\($0.port)" } ?? radio.displayEndpoint
+                    : radio.displayEndpoint,
+                // The live link's address first: under --test-mode the rig
+                // can point a TCP radio somewhere other than its profile.
+                host: radio.kind == .tcp ? (session?.tcpEndpoint?.host ?? radio.host) : "",
+                port: radio.kind == .tcp ? (session?.tcpEndpoint.map { Int($0.port) } ?? radio.port) : nil,
                 lastError: session?.lastError ?? radioManager.unavailableReasons[radio.id],
                 lastRx: lastRxByRadio[radio.id],
                 lastTx: lastTxByRadio[radio.id],

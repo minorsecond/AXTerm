@@ -30,6 +30,15 @@ final class RadioPresentationTests: XCTestCase {
         XCTAssertEqual(RadioPresentation.capsuleLabel([serial]), "TNC: /dev/cu.usbserial-1420")
     }
 
+    /// A Bluetooth TNC shows its device name. The toolbar once read the
+    /// profile's host for every transport and showed "TNC: localhost".
+    func testABluetoothRadioShowsItsDeviceName() {
+        let ble = RadioStatusSummary.fixture(
+            status: .connected, host: "", port: nil, endpoint: "TNC4 Mobilinkd")
+        XCTAssertEqual(RadioPresentation.capsuleLabel([ble]), "TNC: TNC4 Mobilinkd")
+        XCTAssertEqual(TNCStatusStrip.Presentation.spoken([ble]), "Connected to the TNC at TNC4 Mobilinkd")
+    }
+
     func testNoRadiosReadsAsDisconnected() {
         XCTAssertEqual(RadioPresentation.capsuleLabel([]), "TNC Disconnected")
         XCTAssertEqual(RadioPresentation.aggregateStatus([]), .disconnected)

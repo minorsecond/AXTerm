@@ -1109,11 +1109,19 @@ final class AppSettingsStore: ObservableObject {
         // before anything else runs.
         var storedRadios: [RadioProfile]
         let migratedRadios: Bool
+        var clearedDefaultNames = false
         if let json = defaults.string(forKey: Self.radiosKey),
            let data = json.data(using: .utf8),
            let decoded = try? JSONDecoder().decode([RadioProfile].self, from: data),
            !decoded.isEmpty {
-            storedRadios = decoded
+            // A name the app wrote in (the migration used to store
+            // "Direwolf") is cleared so the default follows the transport.
+            storedRadios = decoded.map { radio in
+                var radio = radio
+                if radio.hasDefaultName() { radio.name = "" }
+                return radio
+            }
+            clearedDefaultNames = storedRadios != decoded
             migratedRadios = false
         } else {
             migratedRadios = true
@@ -1277,7 +1285,7 @@ final class AppSettingsStore: ObservableObject {
         // The first launch after the update: the list was read off the old
         // keys above; write it now so the migration is over before anything
         // else runs, and the old keys are never consulted again.
-        if migratedRadios || seededBeaconOntoRadio || seededAPRS { persistRadios() }
+        if migratedRadios || clearedDefaultNames || seededBeaconOntoRadio || seededAPRS { persistRadios() }
     }
 
 
@@ -1329,6 +1337,7 @@ final class AppSettingsStore: ObservableObject {
         guard let index = radios.firstIndex(where: { $0.id == id }) else { return }
         var radio = radios[index]
         change(&radio)
+        if radio.hasDefaultName(previous: radios[index]) { radio.name = "" }
         guard radio != radios[index] else { return }
         radios[index] = radio
     }

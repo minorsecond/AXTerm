@@ -39,6 +39,49 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
         XCTAssertTrue(settings.allRadiosOnAPRS, "a switched-off radio runs nothing")
     }
 
+    // MARK: - Names
+
+    /// A radio saved with the stock "Direwolf" name and later moved to
+    /// Bluetooth showed "Direwolf" everywhere. Loading clears it.
+    func testAStoredStockNameIsClearedOnLoad() throws {
+        var radio = RadioProfile(id: .primary, name: "Direwolf")
+        radio.kind = .ble
+        radio.blePeripheralName = "TNC4 Mobilinkd"
+        var named = RadioProfile(id: RadioID(rawValue: "b"), name: "Shack HT")
+        named.kind = .ble
+        let json = String(data: try JSONEncoder().encode([radio, named]), encoding: .utf8)
+        defaults.set(json, forKey: AppSettingsStore.radiosKey)
+
+        let store = AppSettingsStore(defaults: defaults)
+        XCTAssertEqual(store.radio(.primary)?.name, "")
+        XCTAssertEqual(store.radio(RadioID(rawValue: "b"))?.name, "Shack HT", "a typed name stays")
+        let saved = try XCTUnwrap(defaults.string(forKey: AppSettingsStore.radiosKey))
+        XCTAssertFalse(saved.contains("\"Direwolf\""), "the cleared name is saved")
+    }
+
+    /// Changing the transport drops a name that was only the old default.
+    func testChangingTransportDropsTheOldDefaultName() {
+        let store = AppSettingsStore(defaults: defaults)
+        let id = store.activeRadios[0].id
+        store.updateRadio(id) {
+            $0.kind = .serial
+            $0.serialDevicePath = "/dev/cu.usbmodem1420"
+        }
+        store.updateRadio(id) { $0.name = "Shack HT" }
+        store.updateRadio(id) { $0.kind = .ble }
+        XCTAssertEqual(store.radio(id)?.name, "Shack HT", "a typed name survives a transport change")
+
+        // A name that only repeats the default is stored as no name, so it
+        // can't outlive the device it came from.
+        store.updateRadio(id) {
+            $0.kind = .serial
+            $0.name = "usbmodem1420"
+        }
+        XCTAssertEqual(store.radio(id)?.name, "")
+        store.updateRadio(id) { $0.kind = .ble; $0.blePeripheralName = "TNC4 Mobilinkd" }
+        XCTAssertEqual(store.radio(id).map(RadioProfile.defaultName(for:)), "TNC4 Mobilinkd")
+    }
+
     // MARK: - Migration
 
     /// A station that had one TNC before this build has one radio after it,
@@ -54,7 +97,8 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
         XCTAssertEqual(radio.kind, .tcp)
         XCTAssertEqual(radio.host, "kiss.local")
         XCTAssertEqual(radio.port, 8010)
-        XCTAssertEqual(radio.name, "Direwolf")
+        XCTAssertEqual(radio.name, "", "the default follows the transport")
+        XCTAssertEqual(RadioProfile.defaultName(for: radio), "Direwolf")
         XCTAssertFalse(store.hasMultipleRadios)
         XCTAssertEqual(store.primaryRadio?.id, radio.id)
     }
@@ -104,7 +148,8 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
         XCTAssertEqual(store.radios[0].kind, .serial)
         XCTAssertEqual(store.radios[0].serialDevicePath, "/dev/cu.usbmodem1420")
         XCTAssertEqual(store.radios[0].serialBaudRate, 9600)
-        XCTAssertEqual(store.radios[0].name, "usbmodem1420")
+        XCTAssertEqual(store.radios[0].name, "")
+        XCTAssertEqual(RadioProfile.defaultName(for: store.radios[0]), "usbmodem1420")
     }
 
     /// The second launch finds the list and does not mint a second radio.

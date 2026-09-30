@@ -407,7 +407,9 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
                           mobilinkdEnabled: mobilinkdEnabled, mobilinkdModemType: mobilinkdModemType,
                           mobilinkdOutputGain: mobilinkdOutputGain, mobilinkdInputGain: mobilinkdInputGain,
                           capabilities: capabilities)
-        radio.name = Self.defaultName(for: radio)
+        // Left empty. Every surface falls back to `defaultName(for:)`, which
+        // follows the transport; writing it in froze "Direwolf" onto a radio
+        // that later moved to Bluetooth.
         return radio
     }
 
@@ -439,6 +441,21 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     /// one radio the name is never shown, so this only matters the moment a
     /// second is added — and then the operator is already in the pane that
     /// renames it.
+    /// Names `defaultName(for:)` gives some transport. A radio carrying one
+    /// was named by the app, not the operator.
+    static let stockNames: Set<String> = ["Direwolf", "Serial TNC", "Bluetooth TNC", "Sound Modem"]
+
+    /// True when the name only repeats a default: the one this radio would
+    /// get now, the one it had before `previous` was edited into it, or any
+    /// stock name. Such a name is cleared so the default can follow the
+    /// transport, and it never shows once the radio moves elsewhere.
+    func hasDefaultName(previous: RadioProfile? = nil) -> Bool {
+        guard !name.isEmpty else { return false }
+        if name == Self.defaultName(for: self) || Self.stockNames.contains(name) { return true }
+        if let previous, name == Self.defaultName(for: previous) { return true }
+        return false
+    }
+
     static func defaultName(for radio: RadioProfile) -> String {
         switch radio.kind {
         case .tcp:

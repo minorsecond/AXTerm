@@ -19,14 +19,37 @@ final class RadioProfileTests: XCTestCase {
 
     // MARK: - The migrated radio
 
-    /// Named for what it is, so the moment a second radio appears the first
-    /// already reads as something rather than "Radio 1".
-    func testTheMigratedRadioIsNamedForItsTransport() {
-        XCTAssertEqual(migrated(transport: "network").name, "Direwolf")
-        XCTAssertEqual(migrated(transport: "serial", serialPath: "/dev/cu.usbmodem1420").name, "usbmodem1420")
-        XCTAssertEqual(migrated(transport: "serial").name, "Serial TNC")
-        XCTAssertEqual(migrated(transport: "ble", bleName: "TNC4 Mobilinkd").name, "TNC4 Mobilinkd")
-        XCTAssertEqual(migrated(transport: "ble").name, "Bluetooth TNC")
+    /// The migrated radio has no stored name, and shows the default for its
+    /// transport. A stored default froze "Direwolf" onto a radio that later
+    /// moved to a Bluetooth TNC4.
+    func testTheMigratedRadioShowsTheDefaultForItsTransport() {
+        func shown(_ radio: RadioProfile) -> String {
+            XCTAssertEqual(radio.name, "", "nothing written into the name")
+            return RadioProfile.defaultName(for: radio)
+        }
+        XCTAssertEqual(shown(migrated(transport: "network")), "Direwolf")
+        XCTAssertEqual(shown(migrated(transport: "serial", serialPath: "/dev/cu.usbmodem1420")), "usbmodem1420")
+        XCTAssertEqual(shown(migrated(transport: "serial")), "Serial TNC")
+        XCTAssertEqual(shown(migrated(transport: "ble", bleName: "TNC4 Mobilinkd")), "TNC4 Mobilinkd")
+        XCTAssertEqual(shown(migrated(transport: "ble")), "Bluetooth TNC")
+    }
+
+    func testADefaultNameIsRecognisedAndATypedOneIsNot() {
+        var radio = migrated(transport: "ble", bleName: "TNC4 Mobilinkd")
+        radio.name = "TNC4 Mobilinkd"
+        XCTAssertTrue(radio.hasDefaultName(), "the name its transport would give it")
+        radio.name = "Direwolf"
+        XCTAssertTrue(radio.hasDefaultName(), "a stock name on a Bluetooth radio")
+        radio.name = "Shack HT"
+        XCTAssertFalse(radio.hasDefaultName())
+        radio.name = ""
+        XCTAssertFalse(radio.hasDefaultName(), "already empty")
+
+        var before = migrated(transport: "serial", serialPath: "/dev/cu.usbmodem1420")
+        before.name = "usbmodem1420"
+        var after = before
+        after.kind = .ble
+        XCTAssertTrue(after.hasDefaultName(previous: before), "the old transport's default")
     }
 
     /// The transport strings are the ones the scalar setting always stored.

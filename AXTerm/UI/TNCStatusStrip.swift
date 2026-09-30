@@ -186,6 +186,16 @@ struct TNCStatusStrip: View {
         static func spoken(_ radios: [RadioStatusSummary]) -> String {
             guard radios.count > 1 else {
                 let radio = radios.first
+                if let radio, radio.host.isEmpty {
+                    // Bluetooth, serial or the built-in modem: name the device.
+                    let endpoint = radio.endpoint.isEmpty ? "" : " at \(radio.endpoint)"
+                    switch radio.status {
+                    case .connected: return "Connected to the TNC\(endpoint)"
+                    case .connecting: return "Connecting to the TNC\(endpoint)"
+                    case .disconnected: return "Not connected to a TNC\(endpoint)"
+                    case .failed: return "TNC connection failed\(endpoint)"
+                    }
+                }
                 return spoken(radio?.status ?? .disconnected,
                               host: radio?.host ?? "", port: radio?.port ?? 0)
             }
