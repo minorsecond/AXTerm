@@ -184,7 +184,14 @@ final class SessionCoordinator: ObservableObject {
     weak var nodeAliases: NodeAliasStore?
 
     /// Bulk transfers in progress
-    @Published var transfers: [BulkTransfer] = []
+    ///
+    /// Every change is compared with what it replaced, so the moment a
+    /// transfer ends (however it ended) is seen in one place: that is where
+    /// the operator is notified and the per-transfer maps are emptied. See
+    /// `transfersDidChange(from:)`.
+    @Published var transfers: [BulkTransfer] = [] {
+        didSet { transfersDidChange(from: oldValue) }
+    }
 
     /// Pending incoming transfers waiting for accept/decline
     @Published var pendingIncomingTransfers: [IncomingTransferRequest] = []
@@ -295,19 +302,64 @@ final class SessionCoordinator: ObservableObject {
     private var packetSubscription: AnyCancellable?
 
     /// File data cache for active transfers (keyed by transfer ID)
-    private var transferFileData: [UUID: Data] = [:]
+    var transferFileData: [UUID: Data] = [:]
 
     /// Session IDs for AXDP transfers (keyed by transfer ID)
-    private var transferSessionIds: [UUID: UInt32] = [:]
+    var transferSessionIds: [UUID: UInt32] = [:]
 
     /// Inbound transfer states (keyed by AXDP session ID)
-    private var inboundTransferStates: [UInt32: InboundTransferState] = [:]
+    var inboundTransferStates: [UInt32: InboundTransferState] = [:]
 
     /// Map from AXDP session ID to BulkTransfer ID for UI updates
-    private var axdpToTransferId: [UInt32: UUID] = [:]
+    var axdpToTransferId: [UInt32: UUID] = [:]
 
     /// Track compression algorithm used for each transfer (for FILE_META and metrics)
-    private var transferCompressionAlgorithms: [UUID: AXDPCompression.Algorithm] = [:]
+    var transferCompressionAlgorithms: [UUID: AXDPCompression.Algorithm] = [:]
+
+    // MARK: File transfer bookkeeping (see SessionCoordinator+FileTransfers.swift)
+
+    /// Where each outbound AXDP transfer is going. Resume needs it to
+    /// restart the chunk loop, which pause stops.
+    var transferRoutes: [UUID: TransferRoute] = [:]
+
+    /// Transfers that ride a connected session, by the peer's callsign.
+    /// When that session drops, these fail at once with the reason, instead
+    /// of waiting out a timeout.
+    var sessionBoundTransferPeers: [UUID: String] = [:]
+
+    /// When each transfer last did anything. The watchdog fails a transfer
+    /// that has been quiet for too long; see `TransferWatchdog`.
+    var transferLastActivity: [UUID: Date] = [:]
+
+    /// Transfers this operator ended (canceled, declined, or declined by
+    /// rule). Their ending is not news to them, so no notification.
+    var transfersEndedLocally: Set<UUID> = []
+
+    /// YAPP transfers in progress, by transfer ID, and the ones still waiting
+    /// for a header (no transfer ID yet) by session key.
+    var yappTransfers: [UUID: YAPPSessionTransfer] = [:]
+    var yappAwaitingHeader: [SessionKey: YAPPSessionTransfer] = [:]
+
+    /// Data rates measured on finished transfers with each station, bytes
+    /// per second. The only rate the offer prompt quotes airtime from.
+    var measuredTransferRates: [String: Double] = [:]
+
+    /// How long each kind of wait may last. Tests shorten these.
+    var transferTimeouts = TransferTimeouts.standard
+
+    /// How often the watchdog looks. Tests shorten this.
+    var transferWatchdogInterval: TimeInterval = 5
+    var transferWatchdogTask: Task<Void, Never>?
+
+    /// Where received files are written. Nil means the platform folder,
+    /// `ReceivedFileStore.defaultFolder()`; tests point it at a temp folder.
+    var receivedFilesFolderOverride: URL?
+
+    /// How long YAPP waits for the other side. Tests shorten this.
+    var yappResponseTimeout: TimeInterval = 120
+
+    /// AXDP transfers with a chunk-loop turn already scheduled.
+    var chunkLoopScheduled: Set<UUID> = []
 
     /// Pending capability discovery requests (callsign -> timestamp)
     /// Used to track which stations we've sent PING to but haven't received PONG from
@@ -369,7 +421,7 @@ final class SessionCoordinator: ObservableObject {
 
     /// Transfers awaiting acceptance (AXDP session ID -> transfer ID)
     /// Used to map ACK/NACK responses to the correct transfer
-    private var transfersAwaitingAcceptance: [UInt32: UUID] = [:]
+    var transfersAwaitingAcceptance: [UInt32: UUID] = [:]
 
     #if DEBUG
     /// Test-only switch: when true, completion NACK + SACK handling will
@@ -2097,6 +2149,14 @@ final class SessionCoordinator: ObservableObject {
             self?.sendTextProbeIfNeeded(for: session)
         }
 
+        // A YAPP download starting on a terminal session: the BBS sends SI as
+        // a packet of its own after the operator asks for a binary file.
+        // Looked at before the terminal or AXDP see the bytes, so the two
+        // control bytes never reach the transcript.
+        sessionManager.onUnclaimedDelivery = { [weak self] session, data in
+            self?.interceptUnclaimedDelivery(session: session, data: data) ?? false
+        }
+
         sessionManager.onLinkQualitySample = { [weak self] session, sample in
             let scope = AdaptiveScope.route(radio: session.radio,
                                             destination: session.remoteAddress.display,
@@ -2226,6 +2286,10 @@ final class SessionCoordinator: ObservableObject {
             // This ensures we re-discover on next connection (station might switch software)
             // and prevents stale partial AXDP messages from corrupting future communications.
             if (oldState == .connected || oldState == .disconnecting) && (newState == .disconnected || newState == .error) {
+                // A transfer riding this session cannot finish now. Say so
+                // straight away rather than leaving it "Sending" until a
+                // timeout notices.
+                self.failTransfersOnLinkLoss(peer: session.remoteAddress, timedOut: newState == .error)
                 if newState == .error {
                     TxLog.linkFailure(
                         peer: session.remoteAddress.display,
@@ -2761,7 +2825,7 @@ final class SessionCoordinator: ObservableObject {
     ///   "Frame NOT transmitted", because this returned nothing and the
     ///   transport below assumed success.
     @discardableResult
-    private func sendFrame(_ frame: OutboundFrame) -> Bool {
+    func sendFrame(_ frame: OutboundFrame) -> Bool {
         // Outside tests this is a wiring fault, not a benign no-op: the state
         // machine believes it transmitted, so T1 keeps expiring against frames
         // that never reached the air and the session dies at N2 looking like a
@@ -3322,7 +3386,7 @@ final class SessionCoordinator: ObservableObject {
 
     /// Send AXDP payload via connected session if available, otherwise as UI.
     /// Returns true if frames were actually sent, false if window was full or packetEngine not set.
-    private func sendAXDPPayload(_ payload: Data, to destination: AX25Address, path: DigiPath, displayInfo: String?) -> Bool {
+    func sendAXDPPayload(_ payload: Data, to destination: AX25Address, path: DigiPath, displayInfo: String?) -> Bool {
         // Guard: don't send if packetEngine is not set (e.g., in tests)
         // CRITICAL: This prevents any frame creation or memory allocation when packetEngine is nil
         guard packetEngine != nil else {
@@ -3502,9 +3566,14 @@ final class SessionCoordinator: ObservableObject {
             sourceCallsign: from.display,
             fileName: fileMeta.filename,
             fileSize: Int(fileMeta.fileSize),
-            axdpSessionId: axdpSessionId
+            axdpSessionId: axdpSessionId,
+            estimatedAirtimeSeconds: estimatedAirtime(bytes: estimatedTransmissionSize, peer: from.display)
         )
+        if sessionManager.connectedSession(withPeer: from) != nil {
+            sessionBoundTransferPeers[transferId] = from.display.uppercased()
+        }
         pendingIncomingTransfers.append(request)
+        applyOfferPolicy(to: request)
 
         TxLog.debug(.axdp, "Created incoming transfer request", [
             "id": transferId.uuidString.prefix(8),
@@ -3746,7 +3815,7 @@ final class SessionCoordinator: ObservableObject {
                     TxLog.inbound(.axdp, "File transfer completed and saved", logData)
                 } else {
                     // File save failed
-                    transfer.status = .failed(reason: "Failed to save file to Downloads folder")
+                    transfer.status = .failed(reason: "The file arrived but could not be saved in \(ReceivedFileStore.folderName).")
 
                     TxLog.error(.axdp, "Transfer completed but file save failed", error: nil, [
                         "file": state.fileName
@@ -3857,73 +3926,24 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Save received file to Downloads folder (or Documents as fallback)
+    /// Saves a received file in the AXTerm Transfers folder under a safe,
+    /// unused name. See `ReceivedFileStore` for where that folder is on each
+    /// platform and why.
     /// - Returns: The path where the file was saved, or nil if save failed
-    private func saveReceivedFile(fileName: String, data: Data) -> String? {
-        let fileManager = FileManager.default
-        let safeFileName = sanitizedReceivedFileName(fileName)
-
-        // Try Downloads folder first, then Documents as fallback
-        var baseURL: URL?
-
-        // Try Downloads folder
-        if let downloadsURL = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first {
-            // For sandboxed apps, create an AXTerm subfolder
-            let axTermDownloads = downloadsURL.appendingPathComponent("AXTerm Transfers")
-            do {
-                try fileManager.createDirectory(at: axTermDownloads, withIntermediateDirectories: true)
-                baseURL = axTermDownloads
-                TxLog.debug(.axdp, "Using Downloads folder", ["path": axTermDownloads.path])
-            } catch {
-                TxLog.warning(.axdp, "Cannot create Downloads subfolder, trying Documents", ["error": error.localizedDescription])
-            }
-        }
-
-        // Fall back to Documents folder if Downloads failed
-        if baseURL == nil {
-            if let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
-                let axTermDocs = documentsURL.appendingPathComponent("AXTerm Transfers")
-                do {
-                    try fileManager.createDirectory(at: axTermDocs, withIntermediateDirectories: true)
-                    baseURL = axTermDocs
-                    TxLog.debug(.axdp, "Using Documents folder", ["path": axTermDocs.path])
-                } catch {
-                    TxLog.error(.axdp, "Cannot create Documents subfolder", error: error)
-                }
-            }
-        }
-
-        guard let downloadsURL = baseURL else {
-            TxLog.error(.axdp, "Cannot access any writable folder - check sandbox entitlements", error: nil)
-            return nil
-        }
-
-        var targetURL = downloadsURL.appendingPathComponent(safeFileName)
-
-        // Handle filename conflicts - append (1), (2), etc.
-        var counter = 1
-        let baseName = (safeFileName as NSString).deletingPathExtension
-        let ext = (safeFileName as NSString).pathExtension
-        while fileManager.fileExists(atPath: targetURL.path) {
-            let newName = ext.isEmpty ? "\(baseName) (\(counter))" : "\(baseName) (\(counter)).\(ext)"
-            targetURL = downloadsURL.appendingPathComponent(newName)
-            counter += 1
-        }
-
+    func saveReceivedFile(fileName: String, data: Data) -> String? {
+        let folder = receivedFilesFolderOverride ?? ReceivedFileStore.defaultFolder()
         do {
-            // Use atomic write for reliability
-            try data.write(to: targetURL, options: .atomic)
+            let url = try ReceivedFileStore.save(data, suggestedName: fileName, in: folder)
             TxLog.inbound(.axdp, "File saved successfully", [
-                "path": targetURL.path,
+                "path": url.path,
                 "size": data.count,
                 "sizeFormatted": ByteCount.string(Int64(data.count))
             ])
-            return targetURL.path
+            return url.path
         } catch {
             TxLog.error(.axdp, "Failed to save file", error: error, [
-                "path": targetURL.path,
-                "errorCode": (error as NSError).code,
-                "errorDomain": (error as NSError).domain
+                "file": fileName,
+                "folder": folder?.path ?? "none"
             ])
             return nil
         }
@@ -3932,15 +3952,7 @@ final class SessionCoordinator: ObservableObject {
     /// Sanitize untrusted remote file metadata into a safe local basename.
     /// This prevents path traversal when appending to our writable transfer folder.
     private func sanitizedReceivedFileName(_ fileName: String) -> String {
-        let normalizedSeparators = fileName.replacingOccurrences(of: "\\", with: "/")
-        let candidate = (normalizedSeparators as NSString).lastPathComponent
-        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if trimmed.isEmpty || trimmed == "." || trimmed == ".." {
-            return "received-file"
-        }
-
-        return trimmed
+        ReceivedFileStore.sanitize(fileName)
     }
 
     /// Handle ACK message (transfer accepted, chunk acknowledged, completion request, or transfer complete)
@@ -4132,6 +4144,8 @@ final class SessionCoordinator: ObservableObject {
                             )
                         }
 
+                        // The receiver is answering, so this is not a stall.
+                        transferLastActivity[transferId] = Date()
                         TxLog.outbound(.axdp, "Selective retransmit for missing/corrupt chunks", [
                             "file": transfer.fileName,
                             "session": axdpSessionId,
@@ -4204,14 +4218,44 @@ final class SessionCoordinator: ObservableObject {
             return
         }
 
-        // Legacy: check by session ID in transferSessionIds (for already-sending transfers)
-        // Never treat completion NACK (messageId == transferCompleteMessageId) as generic "declined"
-        if message.messageId != SessionCoordinator.transferCompleteMessageId,
-           let transferId = transferSessionIds.first(where: { $0.value == message.sessionId })?.key,
-           let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
-            transfers[transferIndex].status = .failed(reason: "Transfer declined by remote")
-            transferFileData.removeValue(forKey: transferId)
-            transferSessionIds.removeValue(forKey: transferId)
+        // Never treat completion NACK (messageId == transferCompleteMessageId) as a cancel.
+        guard message.messageId != SessionCoordinator.transferCompleteMessageId else { return }
+
+        // A NACK for a transfer already under way is the other side ending it.
+        // The spec has no separate abort message, and this is the message an
+        // older AXTerm sends when it declines, so a peer that stops a
+        // transfer sends the same thing. Older senders read it as "declined";
+        // newer ones as canceled.
+        if let transferId = transferSessionIds.first(where: { $0.value == message.sessionId })?.key,
+           let transferIndex = transfers.firstIndex(where: { $0.id == transferId }),
+           transfers[transferIndex].direction == .outbound {
+            transfers[transferIndex].status = .cancelled
+            TxLog.outbound(.axdp, "Transfer canceled by remote", [
+                "transfer": String(transferId.uuidString.prefix(8)),
+                "from": from.display
+            ])
+            packetEngine?.appendSystemNotification(
+                "\(from.display) canceled the transfer of \(transfers[transferIndex].fileName).")
+            return
+        }
+
+        // The sender canceled a file this station was receiving, or withdrew
+        // an offer still waiting for an answer.
+        if let state = inboundTransferStates[axdpSessionId],
+           CallsignNormalizer.addressMatchesDisplay(from, state.sourceCallsign),
+           let transferId = axdpToTransferId[axdpSessionId] {
+            pendingIncomingTransfers.removeAll { $0.id == transferId }
+            if let index = transfers.firstIndex(where: { $0.id == transferId }) {
+                transfers[index].status = .cancelled
+                packetEngine?.appendSystemNotification(
+                    "\(from.display) canceled the transfer of \(transfers[index].fileName).")
+            }
+            inboundTransferStates.removeValue(forKey: axdpSessionId)
+            axdpToTransferId.removeValue(forKey: axdpSessionId)
+            TxLog.inbound(.axdp, "Inbound transfer canceled by sender", [
+                "from": from.display,
+                "session": axdpSessionId
+            ])
         }
     }
 
@@ -4501,7 +4545,9 @@ final class SessionCoordinator: ObservableObject {
                     "dest": destination,
                     "protocol": transferProtocol.rawValue
                 ])
-                return "Cannot send file: \(destination) does not support AXDP. Try a legacy protocol (YAPP)."
+                let yappAvailable = availableProtocols(for: destination).contains(.yapp)
+                return TransferSendRoute.axdpUnsupportedMessage(destination: destination,
+                                                                yappAvailable: yappAvailable)
 
             case .confirmed:
                 // AXDP confirmed, good to go
@@ -4661,21 +4707,55 @@ final class SessionCoordinator: ObservableObject {
         transferProtocol: TransferProtocolType = .axdp,
         compressionSettings: TransferCompressionSettings = .useGlobal
     ) -> String? {
-        // Validate protocol requirements
+        // Validate before reading, so a refusal costs no disk read.
         if let error = validateProtocolRequirements(for: destination, protocol: transferProtocol) {
             return error
         }
 
-        guard let originalFileData = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else {
+        // Read the whole file now. The caller may hold a security scope only
+        // for the length of this call (a file picked on iOS), and a transfer
+        // that read lazily would fail partway through the send.
+        guard let originalFileData = try? Data(contentsOf: fileURL) else {
             TxLog.error(.session, "Failed to read file for transfer", error: nil, [
                 "file": fileURL.lastPathComponent
             ])
             return "Failed to read file"
         }
+        return startTransfer(to: destination, fileName: fileURL.lastPathComponent, data: originalFileData,
+                             path: path, transferProtocol: transferProtocol,
+                             compressionSettings: compressionSettings)
+    }
+
+    /// Starts a transfer of bytes already in memory, by the protocol the
+    /// operator chose. The choice is what goes on the air: AXDP sends
+    /// FILE_META and chunks, YAPP runs over the session's I-frame stream, and
+    /// a protocol with no sender is refused rather than swapped for another.
+    /// - Returns: Error message if transfer cannot start, nil on success
+    @discardableResult
+    func startTransfer(
+        to destination: String,
+        fileName: String,
+        data originalFileData: Data,
+        path: DigiPath = DigiPath(),
+        transferProtocol: TransferProtocolType = .axdp,
+        compressionSettings: TransferCompressionSettings = .useGlobal
+    ) -> String? {
+        if let error = validateProtocolRequirements(for: destination, protocol: transferProtocol) {
+            return error
+        }
+
+        switch TransferSendRoute.route(for: transferProtocol) {
+        case .unavailable(let reason):
+            return reason
+        case .yapp:
+            return startYAPPTransfer(to: destination, fileName: fileName, data: originalFileData, path: path)
+        case .axdp:
+            break
+        }
 
         var transfer = BulkTransfer(
             id: UUID(),
-            fileName: fileURL.lastPathComponent,
+            fileName: fileName,
             fileSize: originalFileData.count,
             destination: destination,
             direction: .outbound,
@@ -4689,7 +4769,7 @@ final class SessionCoordinator: ObservableObject {
         // Log compressibility result
         if let analysis = transfer.compressibilityAnalysis {
             TxLog.debug(.session, "File compressibility analyzed", [
-                "file": fileURL.lastPathComponent,
+                "file": fileName,
                 "category": analysis.fileCategory.rawValue,
                 "compressible": analysis.isCompressible ? "yes" : "no",
                 "reason": analysis.reason
@@ -4733,6 +4813,14 @@ final class SessionCoordinator: ObservableObject {
         let destCall = String(destParts.first ?? "")
         let destSSID = destParts.count > 1 ? Int(destParts[1]) ?? 0 : 0
         let destAddress = AX25Address(call: destCall, ssid: destSSID)
+
+        // Remembered so resume can restart the chunk loop, and so a dropped
+        // session can fail this transfer by name.
+        let riding = sessionManager.connectedSession(withPeer: destAddress) != nil
+        transferRoutes[transferId] = TransferRoute(destination: destAddress, path: path)
+        if riding {
+            sessionBoundTransferPeers[transferId] = destAddress.display.uppercased()
+        }
 
         // Compute SHA256 hash of ORIGINAL data (receiver will decompress and verify)
         let fileHash = computeSHA256(originalFileData)
@@ -4799,7 +4887,7 @@ final class SessionCoordinator: ObservableObject {
     private static let completionRequestIntervalSeconds: UInt64 = 2
 
     /// Send the next chunk for a transfer
-    private func sendNextChunk(for transferId: UUID, to destination: AX25Address, path: DigiPath, axdpSessionId: UInt32) {
+    func sendNextChunk(for transferId: UUID, to destination: AX25Address, path: DigiPath, axdpSessionId: UInt32) {
         guard let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) else { return }
         guard transfers[transferIndex].status == .sending else { return }
         guard let fileData = transferFileData[transferId] else { return }
@@ -4831,6 +4919,18 @@ final class SessionCoordinator: ObservableObject {
                 "axdpSession": axdpSessionId
             ])
             startAwaitingCompletionRequestTaskIfNeeded()
+            return
+        }
+
+        // The session queues whatever does not fit its window and sends it as
+        // acks come back, so nothing handed to it is lost. Hand it the next
+        // chunk only once the last one has left that queue. Offering chunks
+        // while the window was full used to queue the same chunk again every
+        // 200 ms, and every copy went on the air.
+        if let session = sessionManager.connectedSession(withPeer: destination),
+           !session.pendingDataQueue.isEmpty {
+            scheduleNextChunk(after: 200_000_000, for: transferId, to: destination, path: path,
+                              axdpSessionId: axdpSessionId)
             return
         }
 
@@ -4875,18 +4975,20 @@ final class SessionCoordinator: ObservableObject {
             displayInfo: "AXDP CHUNK \(nextChunk + 1)/\(transfers[transferIndex].totalChunks)"
         )
 
-        // Only mark chunk as sent if frames were actually sent (window wasn't full)
-        guard frameSent else {
+        // Queued behind a full window still counts as handed over: the
+        // session sends it when there is room. Only a payload that went
+        // nowhere (no link at all) is retried.
+        let handedOver = frameSent
+            || (packetEngine != nil && sessionManager.connectedSession(withPeer: destination) != nil)
+        guard handedOver else {
             // Window is full - mark chunk as needing retry and wait a bit longer before retrying
             var transfer = transfers[transferIndex]
             transfer.markChunkNeedsRetry(nextChunk)
             transfers[transferIndex] = transfer
             
             // Wait longer before retrying (200ms) to give window time to open
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 200_000_000)  // 200ms delay
-                sendNextChunk(for: transferId, to: destination, path: path, axdpSessionId: axdpSessionId)
-            }
+            scheduleNextChunk(after: 200_000_000, for: transferId, to: destination, path: path,
+                              axdpSessionId: axdpSessionId)
             return
         }
 
@@ -4909,8 +5011,18 @@ final class SessionCoordinator: ObservableObject {
         }
 
         // Schedule next chunk with a small delay to avoid overwhelming the TNC
+        scheduleNextChunk(after: 50_000_000, for: transferId, to: destination, path: path,
+                          axdpSessionId: axdpSessionId)
+    }
+
+    /// Runs the chunk loop again after a delay, remembering that a turn is
+    /// pending so resume does not start a second loop beside it.
+    private func scheduleNextChunk(after nanoseconds: UInt64, for transferId: UUID, to destination: AX25Address,
+                                   path: DigiPath, axdpSessionId: UInt32) {
+        chunkLoopScheduled.insert(transferId)
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms delay between chunks
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            chunkLoopScheduled.remove(transferId)
             sendNextChunk(for: transferId, to: destination, path: path, axdpSessionId: axdpSessionId)
         }
     }
@@ -4966,24 +5078,6 @@ final class SessionCoordinator: ObservableObject {
         return Data(hash)
     }
 
-    func pauseTransfer(_ id: UUID) {
-        if let index = transfers.firstIndex(where: { $0.id == id }) {
-            transfers[index].status = .paused
-        }
-    }
-
-    func resumeTransfer(_ id: UUID) {
-        if let index = transfers.firstIndex(where: { $0.id == id }) {
-            transfers[index].status = .sending
-        }
-    }
-
-    func cancelTransfer(_ id: UUID) {
-        if let index = transfers.firstIndex(where: { $0.id == id }) {
-            transfers[index].status = .cancelled
-        }
-    }
-
     func clearCompletedTransfers() {
         transfers.removeAll { transfer in
             switch transfer.status {
@@ -5000,6 +5094,12 @@ final class SessionCoordinator: ObservableObject {
     func acceptIncomingTransfer(_ id: UUID) {
         if let index = pendingIncomingTransfers.firstIndex(where: { $0.id == id }) {
             let request = pendingIncomingTransfers.remove(at: index)
+            transferLastActivity[id] = Date()
+
+            if request.transferProtocol == .yapp {
+                yappTransfers[id]?.accept()
+                return
+            }
 
             // Parse source callsign
             let sourceParts = request.sourceCallsign.uppercased().split(separator: "-")
@@ -5038,9 +5138,20 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    func declineIncomingTransfer(_ id: UUID) {
+    /// Refuses an offer. `reason`, when given, is what the row shows; an
+    /// operator pressing Decline needs no explanation, a rule doing it does.
+    func declineIncomingTransfer(_ id: UUID, reason: String? = nil) {
         if let index = pendingIncomingTransfers.firstIndex(where: { $0.id == id }) {
             let request = pendingIncomingTransfers.remove(at: index)
+            transfersEndedLocally.insert(id)
+
+            if request.transferProtocol == .yapp {
+                yappTransfers[id]?.decline(reason: reason ?? "Declined")
+                if let transferIndex = transfers.firstIndex(where: { $0.id == id }) {
+                    transfers[transferIndex].status = reason.map { .failed(reason: "Declined: \($0)") } ?? .cancelled
+                }
+                return
+            }
 
             // Parse source callsign
             let sourceParts = request.sourceCallsign.uppercased().split(separator: "-")
@@ -5070,7 +5181,7 @@ final class SessionCoordinator: ObservableObject {
             // Mark the inbound transfer as failed/declined
             if let transferId = axdpToTransferId[request.axdpSessionId],
                let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
-                transfers[transferIndex].status = .cancelled
+                transfers[transferIndex].status = reason.map { .failed(reason: "Declined: \($0)") } ?? .cancelled
                 inboundTransferStates.removeValue(forKey: request.axdpSessionId)
                 axdpToTransferId.removeValue(forKey: request.axdpSessionId)
             }
@@ -5095,13 +5206,21 @@ nonisolated struct IncomingTransferRequest: Identifiable, Equatable {
     let receivedAt: Date
     /// The AXDP session ID from the FILE_META message - MUST use this exact value in ACK/NACK responses
     let axdpSessionId: UInt32
+    /// How the file would arrive. A YAPP offer comes from a BBS answering a
+    /// download request; it has no AXDP session ID.
+    let transferProtocol: TransferProtocolType
+    /// How long the transfer would hold the channel, from a rate measured on
+    /// an earlier transfer with this station. Nil when no rate is known.
+    let estimatedAirtimeSeconds: TimeInterval?
 
     init(
         id: UUID = UUID(),
         sourceCallsign: String,
         fileName: String,
         fileSize: Int,
-        axdpSessionId: UInt32
+        axdpSessionId: UInt32,
+        transferProtocol: TransferProtocolType = .axdp,
+        estimatedAirtimeSeconds: TimeInterval? = nil
     ) {
         self.id = id
         self.sourceCallsign = sourceCallsign
@@ -5109,7 +5228,15 @@ nonisolated struct IncomingTransferRequest: Identifiable, Equatable {
         self.fileSize = fileSize
         self.receivedAt = Date()
         self.axdpSessionId = axdpSessionId
+        self.transferProtocol = transferProtocol
+        self.estimatedAirtimeSeconds = estimatedAirtimeSeconds
     }
+}
+
+/// Where an outbound AXDP transfer is going.
+nonisolated struct TransferRoute: Equatable, Sendable {
+    let destination: AX25Address
+    let path: DigiPath
 }
 
 // MARK: - Inbound Transfer State

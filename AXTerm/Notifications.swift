@@ -146,6 +146,24 @@ final class UserNotificationScheduler: NotificationScheduling {
         let request = UNNotificationRequest(identifier: "conn-\(callsign)-\(Date().timeIntervalSince1970)", content: content, trigger: nil)
         center.add(request)
     }
+
+    func scheduleTransferNotification(_ event: TransferNotificationEvent) {
+        guard TransferNotificationPolicy.shouldNotify(
+            event,
+            enabled: settings.notifyOnFileTransfers,
+            onlyWhenInactive: settings.notifyOnlyWhenInactive,
+            isFrontmost: appState.isFrontmost) else { return }
+
+        let text = TransferNotificationPolicy.content(for: event)
+        let content = UNMutableNotificationContent()
+        content.title = text.title
+        content.body = text.body
+        content.categoryIdentifier = NotificationAction.watchCategory
+        if settings.notifyPlaySound { content.sound = .default }
+
+        let request = UNNotificationRequest(identifier: "transfer-\(UUID().uuidString)", content: content, trigger: nil)
+        center.add(request)
+    }
 }
 
 final class NotificationAuthorizationManager {

@@ -478,14 +478,16 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
 
     // MARK: - State Checks
 
-    /// Whether transfer can be paused
+    /// Whether transfer can be paused. Only the sender can stop sending; a
+    /// receiver has no way to make the other station wait, so inbound rows
+    /// get no Pause button.
     var canPause: Bool {
-        status == .sending
+        status == .sending && direction == .outbound
     }
 
     /// Whether transfer can be resumed
     var canResume: Bool {
-        status == .paused
+        status == .paused && direction == .outbound
     }
 
     /// Whether transfer can be canceled

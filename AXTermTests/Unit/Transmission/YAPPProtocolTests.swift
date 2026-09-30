@@ -2,9 +2,11 @@
 //  YAPPProtocolTests.swift
 //  AXTermTests
 //
-//  TDD tests for YAPP (Yet Another Packet Protocol) implementation.
-//  Tests cover frame encoding/decoding, state machine transitions,
-//  checksum calculation, and error handling.
+//  YAPP as the published frame table defines it (WA7MBL, with the YAPPC
+//  checksum extension): the bytes of every frame, the stream parser that
+//  splits them back out of arbitrary I-frame boundaries, and both halves of
+//  the handshake. A YAPP that only talks to itself is worthless on the air,
+//  so the encoder tests pin exact bytes rather than round trips.
 //
 
 import XCTest
@@ -12,782 +14,557 @@ import XCTest
 
 final class YAPPProtocolTests: XCTestCase {
 
-    // MARK: - Frame Encoding Tests
+    // MARK: - Frame bytes, straight from the table
 
-    func testEncodeSendInit() {
+    func testHandshakeFramesMatchTheFrameTable() {
+        XCTAssertEqual(YAPPEncoder.sendInit(), Data([0x05, 0x01]), "SI is ENQ 01")
+        XCTAssertEqual(YAPPEncoder.receiveReady(), Data([0x06, 0x01]), "RR is ACK 01")
+        XCTAssertEqual(YAPPEncoder.receiveFile(), Data([0x06, 0x02]), "RF is ACK 02")
+        XCTAssertEqual(YAPPEncoder.ackEndFile(), Data([0x06, 0x03]), "AF is ACK 03")
+        XCTAssertEqual(YAPPEncoder.ackEndTransmission(), Data([0x06, 0x04]), "AT is ACK 04")
+        XCTAssertEqual(YAPPEncoder.ackCancel(), Data([0x06, 0x05]), "CA is ACK 05")
+        XCTAssertEqual(YAPPEncoder.receiveFileWithChecksum(), Data([0x06, 0x06]), "RT is ACK ACK")
+        XCTAssertEqual(YAPPEncoder.endFile(), Data([0x03, 0x01]), "EF is ETX 01")
+        XCTAssertEqual(YAPPEncoder.endTransmission(), Data([0x04, 0x01]), "ET is EOT 01")
+    }
+
+    func testHeaderIsSOHLengthNameNulSizeNul() {
+        let frame = YAPPEncoder.header(name: "TEST.TXT", size: 1234)
+        let payload = Array("TEST.TXT".utf8) + [0] + Array("1234".utf8) + [0]
+        XCTAssertEqual(frame, Data([0x01, UInt8(payload.count)] + payload))
+    }
+
+    func testHeaderReplacesNonASCIIAndStaysWithinOneLengthByte() {
+        let frame = YAPPEncoder.header(name: "café.txt", size: 5)
+        XCTAssertEqual(Array(frame.prefix(2)), [0x01, 11])
+        XCTAssertEqual(String(decoding: frame.dropFirst(2).prefix(8), as: UTF8.self), "caf_.txt")
+
+        let long = String(repeating: "N", count: 400) + ".zip"
+        let longFrame = YAPPEncoder.header(name: long, size: 99)
+        XCTAssertEqual(Int(longFrame[1]), longFrame.count - 2, "the length byte covers the payload")
+        XCTAssertLessThanOrEqual(longFrame.count - 2, 255)
+        var parser = YAPPFrameParser()
+        guard case .header(let name, let size)? = parser.feed(longFrame).first else {
+            return XCTFail("a shortened header still parses")
+        }
+        XCTAssertTrue(name.hasSuffix(".zip"), "the extension survives shortening")
+        XCTAssertEqual(size, 99)
+    }
+
+    func testDataBlockIsSTXLengthData() {
+        XCTAssertEqual(YAPPEncoder.data(Data([0xAA, 0xBB]), checksum: false), Data([0x02, 0x02, 0xAA, 0xBB]))
+    }
+
+    func testDataBlockOf256BytesIsSentWithLengthZero() {
+        let block = Data(repeating: 0x41, count: 256)
+        let frame = YAPPEncoder.data(block, checksum: false)
+        XCTAssertEqual(frame[1], 0)
+        XCTAssertEqual(frame.count, 258)
+    }
+
+    func testYAPPCChecksumIsTheSumOfDataBytesModulo256() {
+        let block = Data([0xFF, 0x02, 0x01])
+        XCTAssertEqual(YAPPEncoder.checksum(block), 0x02, "0xFF+0x02+0x01 wraps to 0x02")
+        XCTAssertEqual(YAPPEncoder.data(block, checksum: true), Data([0x02, 0x03, 0xFF, 0x02, 0x01, 0x02]))
+    }
+
+    func testNotReadyAndCancelCarryACountedReason() {
+        XCTAssertEqual(YAPPEncoder.notReady(reason: "No"), Data([0x15, 0x02, 0x4E, 0x6F]))
+        XCTAssertEqual(YAPPEncoder.cancel(reason: ""), Data([0x18, 0x00]))
+    }
+
+    // MARK: - Parser
+
+    func testParserReadsEveryFrameKind() {
+        var parser = YAPPFrameParser()
+        var stream = Data()
+        stream += YAPPEncoder.sendInit()
+        stream += YAPPEncoder.receiveReady()
+        stream += YAPPEncoder.header(name: "A.BIN", size: 3)
+        stream += YAPPEncoder.receiveFile()
+        stream += YAPPEncoder.receiveFileWithChecksum()
+        stream += YAPPEncoder.data(Data([1, 2, 3]), checksum: false)
+        stream += YAPPEncoder.endFile()
+        stream += YAPPEncoder.ackEndFile()
+        stream += YAPPEncoder.endTransmission()
+        stream += YAPPEncoder.ackEndTransmission()
+        stream += YAPPEncoder.notReady(reason: "busy")
+        stream += Data([0x15, 0x06, 0x52, 0x00, 0x31, 0x30, 0x30, 0x00])  // RE: R NUL 100 NUL
+        stream += YAPPEncoder.cancel(reason: "bye")
+        stream += YAPPEncoder.ackCancel()
+        stream += Data([0x10, 0x02, 0x68, 0x69])  // TX "hi"
+        XCTAssertEqual(parser.feed(stream), [
+            .sendInit, .receiveReady, .header(name: "A.BIN", size: 3), .receiveFile,
+            .receiveFileWithChecksum, .data(Data([1, 2, 3])), .endFile, .ackEndFile,
+            .endTransmission, .ackEndTransmission, .notReady(reason: "busy"),
+            .resume(receivedBytes: 100), .cancel(reason: "bye"), .ackCancel, .text("hi")
+        ])
+        XCTAssertEqual(parser.pendingByteCount, 0)
+    }
+
+    func testParserWaitsForTheRestOfASplitFrame() {
+        let block = Data((0..<200).map { UInt8($0 & 0xFF) })
+        let frame = YAPPEncoder.data(block, checksum: false)
+        var parser = YAPPFrameParser()
+        for byte in frame.dropLast() {
+            XCTAssertEqual(parser.feed(Data([byte])), [], "nothing until the block is whole")
+        }
+        XCTAssertEqual(parser.feed(Data([frame.last!])), [.data(block)])
+    }
+
+    func testParserSplitsFramesThatShareAPacket() {
+        var parser = YAPPFrameParser()
+        let two = YAPPEncoder.data(Data([9]), checksum: false) + YAPPEncoder.endFile()
+        XCTAssertEqual(parser.feed(two), [.data(Data([9])), .endFile])
+    }
+
+    func testParserChecksChecksumsOnlyWhenTold() {
+        let good = YAPPEncoder.data(Data([1, 2]), checksum: true)
+        var bad = good
+        bad[bad.count - 1] ^= 0xFF
+
+        var checking = YAPPFrameParser()
+        checking.checksummedData = true
+        XCTAssertEqual(checking.feed(good), [.data(Data([1, 2]))])
+        XCTAssertEqual(checking.feed(bad), [.corruptData])
+    }
+
+    func testParserReportsBytesThatAreNotYAPP() {
+        var parser = YAPPFrameParser()
+        XCTAssertEqual(parser.feed(Data("hello".utf8)), [.invalid(Data("hello".utf8))])
+        XCTAssertEqual(parser.feed(Data([0x06, 0x09])), [.invalid(Data([0x06, 0x09]))], "ACK 09 is no frame")
+    }
+
+    func testHeaderWithoutANumericSizeParsesWithNoSize() {
+        var parser = YAPPFrameParser()
+        let payload = Array("X".utf8) + [0] + Array("abc".utf8) + [0]
+        XCTAssertEqual(parser.feed(Data([0x01, UInt8(payload.count)] + payload)), [.header(name: "X", size: nil)])
+    }
+
+    // MARK: - Detection
+
+    func testOnlySendInitOpensATransfer() {
+        XCTAssertTrue(YAPPProtocol.canHandle(data: Data([0x05, 0x01])))
+        XCTAssertTrue(YAPPProtocol.canHandle(data: Data([0x05, 0x01, 0x41])))
+        XCTAssertFalse(YAPPProtocol.canHandle(data: Data([0x01, 0x01])), "SOH 01 was this file's old, invented SI")
+        XCTAssertFalse(YAPPProtocol.canHandle(data: Data([0x06, 0x01])))
+        XCTAssertFalse(YAPPProtocol.canHandle(data: Data([0x05])))
+        XCTAssertFalse(YAPPProtocol.canHandle(data: Data()))
+    }
+
+    func testASendInitPacketIsExactlyTheTwoBytes() {
+        XCTAssertTrue(YAPPProtocol.isSendInitPacket(Data([0x05, 0x01])))
+        XCTAssertFalse(YAPPProtocol.isSendInitPacket(Data([0x05, 0x01, 0x0D])))
+        XCTAssertFalse(YAPPProtocol.isSendInitPacket(Data("A\u{05}\u{01}".utf8)))
+    }
+
+    // MARK: - Sender
+
+    func testSenderWalksTheHandshake() throws {
         let yapp = YAPPProtocol()
-        let frame = yapp.encodeSendInit()
-
-        XCTAssertEqual(frame.count, 2)
-        XCTAssertEqual(frame[0], YAPPControlChar.soh.rawValue)
-        XCTAssertEqual(frame[1], 0x01)
-    }
-
-    func testEncodeReceiveInit() {
-        let yapp = YAPPProtocol()
-        let frame = yapp.encodeReceiveInit()
-
-        XCTAssertEqual(frame.count, 2)
-        XCTAssertEqual(frame[0], YAPPControlChar.soh.rawValue)
-        XCTAssertEqual(frame[1], 0x02)
-    }
-
-    func testEncodeHeader() {
-        let yapp = YAPPProtocol()
-        let frame = yapp.encodeHeader(fileName: "test.txt", fileSize: 1024)
-
-        // Header format: [SOH, len, filename\0, size\0, timestamp\0]
-        XCTAssertEqual(frame[0], YAPPControlChar.soh.rawValue)
-
-        // Verify filename is present
-        let frameString = String(data: frame.subdata(in: 2..<frame.count), encoding: .ascii)
-        XCTAssertNotNil(frameString)
-        XCTAssertTrue(frameString!.contains("test.txt"))
-        XCTAssertTrue(frameString!.contains("1024"))
-    }
-
-    func testEncodeHeaderWithTimestamp() {
-        let yapp = YAPPProtocol()
-        let timestamp = Date(timeIntervalSince1970: 1700000000)
-        let frame = yapp.encodeHeader(fileName: "test.txt", fileSize: 512, timestamp: timestamp)
-
-        let frameString = String(data: frame.subdata(in: 2..<frame.count), encoding: .ascii)
-        XCTAssertNotNil(frameString)
-        XCTAssertTrue(frameString!.contains("1700000000"))
-    }
-
-    func testEncodeDataBlock() {
-        let yapp = YAPPProtocol()
-        let testData = Data([0x01, 0x02, 0x03, 0x04, 0x05])
-        let frame = yapp.encodeDataBlock(data: testData)
-
-        // Data format: [STX, len_hi, len_lo, data..., checksum]
-        XCTAssertEqual(frame[0], YAPPControlChar.stx.rawValue)
-        XCTAssertEqual(frame[1], 0x00)  // len_hi
-        XCTAssertEqual(frame[2], 0x05)  // len_lo (5 bytes)
-
-        // Verify data
-        XCTAssertEqual(frame[3], 0x01)
-        XCTAssertEqual(frame[4], 0x02)
-        XCTAssertEqual(frame[5], 0x03)
-        XCTAssertEqual(frame[6], 0x04)
-        XCTAssertEqual(frame[7], 0x05)
-
-        // Verify checksum (XOR of all data bytes)
-        let expectedChecksum: UInt8 = 0x01 ^ 0x02 ^ 0x03 ^ 0x04 ^ 0x05
-        XCTAssertEqual(frame[8], expectedChecksum)
-    }
-
-    func testEncodeEndFile() {
-        let yapp = YAPPProtocol()
-        let frame = yapp.encodeEndFile()
-
-        XCTAssertEqual(frame.count, 2)
-        XCTAssertEqual(frame[0], YAPPControlChar.etx.rawValue)
-        XCTAssertEqual(frame[1], 0x01)
-    }
-
-    func testEncodeEndTransmission() {
-        let yapp = YAPPProtocol()
-        let frame = yapp.encodeEndTransmission()
-
-        XCTAssertEqual(frame.count, 1)
-        XCTAssertEqual(frame[0], YAPPControlChar.eot.rawValue)
-    }
-
-    func testEncodeAck() {
-        let yapp = YAPPProtocol()
-        let frame = yapp.encodeAck()
-
-        XCTAssertEqual(frame.count, 1)
-        XCTAssertEqual(frame[0], YAPPControlChar.ack.rawValue)
-    }
-
-    func testEncodeNak() {
-        let yapp = YAPPProtocol()
-        let frame = yapp.encodeNak()
-
-        XCTAssertEqual(frame.count, 1)
-        XCTAssertEqual(frame[0], YAPPControlChar.nak.rawValue)
-    }
-
-    func testEncodeCancel() {
-        let yapp = YAPPProtocol()
-        let frame = yapp.encodeCancel()
-
-        XCTAssertEqual(frame.count, 1)
-        XCTAssertEqual(frame[0], YAPPControlChar.can.rawValue)
-    }
-
-    // MARK: - Frame Parsing Tests
-
-    func testParseFrameTypeSendInit() {
-        let yapp = YAPPProtocol()
-        let frame = Data([YAPPControlChar.soh.rawValue, 0x01])
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .sendInit)
-    }
-
-    func testParseFrameTypeReceiveInit() {
-        let yapp = YAPPProtocol()
-        let frame = Data([YAPPControlChar.soh.rawValue, 0x02])
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .receiveInit)
-    }
-
-    func testParseFrameTypeHeader() {
-        let yapp = YAPPProtocol()
-        let frame = Data([YAPPControlChar.soh.rawValue, 0x10, 0x74, 0x65, 0x73, 0x74])  // "test"
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .header)
-    }
-
-    func testParseFrameTypeData() {
-        let yapp = YAPPProtocol()
-        let frame = Data([YAPPControlChar.stx.rawValue, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05, 0x05])
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .data)
-    }
-
-    func testParseFrameTypeEndFile() {
-        let yapp = YAPPProtocol()
-        let frame = Data([YAPPControlChar.etx.rawValue, 0x01])
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .endFile)
-    }
-
-    func testParseFrameTypeEndTransmission() {
-        let yapp = YAPPProtocol()
-        let frame = Data([YAPPControlChar.eot.rawValue])
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .endTransmission)
-    }
-
-    func testParseFrameTypeAck() {
-        let yapp = YAPPProtocol()
-        let frame = Data([YAPPControlChar.ack.rawValue])
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .ack)
-    }
-
-    func testParseFrameTypeNak() {
-        let yapp = YAPPProtocol()
-        let frame = Data([YAPPControlChar.nak.rawValue])
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .nak)
-    }
-
-    func testParseFrameTypeCancel() {
-        let yapp = YAPPProtocol()
-        let frame = Data([YAPPControlChar.can.rawValue])
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .cancel)
-    }
-
-    func testParseFrameTypeUnknown() {
-        let yapp = YAPPProtocol()
-        let frame = Data([0x99])  // Unknown control byte
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertEqual(frameType, .unknown)
-    }
-
-    func testParseFrameTypeEmptyData() {
-        let yapp = YAPPProtocol()
-        let frame = Data()
-        let frameType = yapp.parseFrameType(frame)
-
-        XCTAssertNil(frameType)
-    }
-
-    // MARK: - Header Parsing Tests
-
-    func testParseHeader() {
-        let yapp = YAPPProtocol()
-
-        // Build a header: [SOH, len, "test.txt\0", "1024\0", "\0"]
-        var frame = Data([YAPPControlChar.soh.rawValue])
-        var payload = Data()
-        payload.append("test.txt".data(using: .ascii)!)
-        payload.append(0x00)
-        payload.append("1024".data(using: .ascii)!)
-        payload.append(0x00)
-        payload.append(0x00)  // No timestamp
-
-        frame.append(UInt8(payload.count))
-        frame.append(payload)
-
-        let result = yapp.parseHeader(frame)
-
-        XCTAssertNotNil(result)
-        XCTAssertEqual(result?.fileName, "test.txt")
-        XCTAssertEqual(result?.fileSize, 1024)
-        XCTAssertNil(result?.timestamp)
-    }
-
-    func testParseHeaderWithTimestamp() {
-        let yapp = YAPPProtocol()
-
-        var frame = Data([YAPPControlChar.soh.rawValue])
-        var payload = Data()
-        payload.append("data.bin".data(using: .ascii)!)
-        payload.append(0x00)
-        payload.append("512".data(using: .ascii)!)
-        payload.append(0x00)
-        payload.append("1700000000".data(using: .ascii)!)
-        payload.append(0x00)
-
-        frame.append(UInt8(payload.count))
-        frame.append(payload)
-
-        let result = yapp.parseHeader(frame)
-
-        XCTAssertNotNil(result)
-        XCTAssertEqual(result?.fileName, "data.bin")
-        XCTAssertEqual(result?.fileSize, 512)
-        XCTAssertNotNil(result?.timestamp)
-        XCTAssertEqual(result?.timestamp?.timeIntervalSince1970, 1700000000)
-    }
-
-    func testParseHeaderInvalid() {
-        let yapp = YAPPProtocol()
-
-        // Invalid: wrong start byte
-        let frame = Data([0x99, 0x05, 0x74, 0x65, 0x73, 0x74, 0x00])
-        let result = yapp.parseHeader(frame)
-
-        XCTAssertNil(result)
-    }
-
-    func testParseHeaderTruncated() {
-        let yapp = YAPPProtocol()
-
-        // Truncated: length says 20 but only 5 bytes follow
-        let frame = Data([YAPPControlChar.soh.rawValue, 20, 0x74, 0x65, 0x73, 0x74, 0x00])
-        let result = yapp.parseHeader(frame)
-
-        XCTAssertNil(result)
-    }
-
-    // MARK: - Data Block Parsing Tests
-
-    func testParseDataBlock() {
-        let yapp = YAPPProtocol()
-
-        // Build a data block: [STX, 0x00, 0x05, data..., checksum]
-        let testData = Data([0x01, 0x02, 0x03, 0x04, 0x05])
-        let checksum: UInt8 = 0x01 ^ 0x02 ^ 0x03 ^ 0x04 ^ 0x05
-
-        var frame = Data([YAPPControlChar.stx.rawValue, 0x00, 0x05])
-        frame.append(testData)
-        frame.append(checksum)
-
-        let result = yapp.parseDataBlock(frame)
-
-        XCTAssertNotNil(result)
-        XCTAssertEqual(result, testData)
-    }
-
-    func testParseDataBlockChecksumMismatch() {
-        let yapp = YAPPProtocol()
-
-        // Build a data block with wrong checksum
-        let testData = Data([0x01, 0x02, 0x03, 0x04, 0x05])
-        let wrongChecksum: UInt8 = 0xFF
-
-        var frame = Data([YAPPControlChar.stx.rawValue, 0x00, 0x05])
-        frame.append(testData)
-        frame.append(wrongChecksum)
-
-        let result = yapp.parseDataBlock(frame)
-
-        XCTAssertNil(result)  // Should fail checksum verification
-    }
-
-    func testParseDataBlockTruncated() {
-        let yapp = YAPPProtocol()
-
-        // Truncated: length says 5 but only 3 bytes follow
-        let frame = Data([YAPPControlChar.stx.rawValue, 0x00, 0x05, 0x01, 0x02, 0x03])
-        let result = yapp.parseDataBlock(frame)
-
-        XCTAssertNil(result)
-    }
-
-    func testParseDataBlockWrongStartByte() {
-        let yapp = YAPPProtocol()
-
-        let frame = Data([0x99, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05, 0x05])
-        let result = yapp.parseDataBlock(frame)
-
-        XCTAssertNil(result)
-    }
-
-    // MARK: - Checksum Tests
-
-    func testCalculateChecksum() {
-        let yapp = YAPPProtocol()
-
-        let data1 = Data([0x01, 0x02, 0x03, 0x04, 0x05])
-        XCTAssertEqual(yapp.calculateChecksum(data1), 0x01 ^ 0x02 ^ 0x03 ^ 0x04 ^ 0x05)
-
-        let data2 = Data([0xFF, 0xFF])
-        XCTAssertEqual(yapp.calculateChecksum(data2), 0x00)  // XOR of same values is 0
-
-        let data3 = Data([0xAA])
-        XCTAssertEqual(yapp.calculateChecksum(data3), 0xAA)  // Single byte
-
-        let data4 = Data()
-        XCTAssertEqual(yapp.calculateChecksum(data4), 0x00)  // Empty data
-    }
-
-    // MARK: - Protocol Detection Tests
-
-    func testCanHandleSendInit() {
-        let frame = Data([YAPPControlChar.soh.rawValue, 0x01])
-        XCTAssertTrue(YAPPProtocol.canHandle(data: frame))
-    }
-
-    func testCanHandleData() {
-        let frame = Data([YAPPControlChar.stx.rawValue, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05, 0x05])
-        XCTAssertTrue(YAPPProtocol.canHandle(data: frame))
-    }
-
-    func testCanHandleAck() {
-        let frame = Data([YAPPControlChar.ack.rawValue])
-        XCTAssertTrue(YAPPProtocol.canHandle(data: frame))
-    }
-
-    func testCanHandleNonYAPP() {
-        let frame = Data([0x41, 0x58, 0x54, 0x31])  // "AXT1" - AXDP header
-        XCTAssertFalse(YAPPProtocol.canHandle(data: frame))
-    }
-
-    func testCanHandleEmpty() {
-        let frame = Data()
-        XCTAssertFalse(YAPPProtocol.canHandle(data: frame))
-    }
-
-    // MARK: - State Machine Tests
-
-    func testInitialState() {
-        let yapp = YAPPProtocol()
-        XCTAssertEqual(yapp.state, .idle)
-    }
-
-    func testStartSendingChangesState() throws {
-        let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        let testData = Data([0x01, 0x02, 0x03, 0x04])
-
-        try yapp.startSending(fileName: "test.txt", fileData: testData)
-
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.blockSize = 4
+        try yapp.startSending(fileName: "F.BIN", fileData: Data([1, 2, 3, 4, 5, 6]))
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.sendInit())
         XCTAssertEqual(yapp.state, .waitingForAccept)
-        XCTAssertEqual(yapp.totalBytes, 4)
-        XCTAssertEqual(yapp.bytesTransferred, 0)
 
-        // Should have sent SI frame
-        XCTAssertFalse(delegate.sentData.isEmpty)
-        XCTAssertEqual(delegate.sentData.first?[0], YAPPControlChar.soh.rawValue)
-        XCTAssertEqual(delegate.sentData.first?[1], 0x01)
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.header(name: "F.BIN", size: 6))
+
+        yapp.handleIncomingData(YAPPEncoder.receiveFile())
+        XCTAssertEqual(Array(spy.sent.suffix(3)), [
+            YAPPEncoder.data(Data([1, 2, 3, 4]), checksum: false),
+            YAPPEncoder.data(Data([5, 6]), checksum: false),
+            YAPPEncoder.endFile()
+        ], "blocks stream with no per-block acknowledgment, then EF")
+        XCTAssertEqual(yapp.state, .waitingForAck)
+
+        yapp.handleIncomingData(YAPPEncoder.ackEndFile())
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.endTransmission())
+        XCTAssertNil(spy.completion)
+
+        yapp.handleIncomingData(YAPPEncoder.ackEndTransmission())
+        XCTAssertEqual(yapp.state, .completed)
+        XCTAssertEqual(spy.completion?.ok, true)
+        XCTAssertEqual(yapp.bytesTransferred, 6)
     }
 
-    func testStartSendingFromNonIdleStateFails() throws {
+    func testSenderAddsChecksumsWhenTheReceiverAnswersRT() throws {
         let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        try yapp.startSending(fileName: "F", fileData: Data([7, 8]))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(YAPPEncoder.receiveFileWithChecksum())
+        XCTAssertTrue(spy.sent.contains(YAPPEncoder.data(Data([7, 8]), checksum: true)))
+    }
 
-        let testData = Data([0x01, 0x02, 0x03, 0x04])
+    func testSenderResumesFromTheOffsetInRE() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.blockSize = 10
+        try yapp.startSending(fileName: "F", fileData: Data(0..<20))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(Data([0x15, 0x05, 0x52, 0x00, 0x31, 0x35, 0x00]))  // RE at 15
+        XCTAssertTrue(spy.sent.contains(YAPPEncoder.data(Data(15..<20), checksum: false)))
+        XCTAssertFalse(spy.sent.contains(YAPPEncoder.data(Data(0..<10), checksum: false)))
+    }
 
-        // First call should succeed
-        try yapp.startSending(fileName: "test.txt", fileData: testData)
+    func testSenderStopsWhenRefusedWithNR() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        try yapp.startSending(fileName: "F", fileData: Data([1]))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(YAPPEncoder.notReady(reason: "Disk full"))
+        XCTAssertEqual(spy.completion?.ok, false)
+        XCTAssertEqual(spy.completion?.error, "The other station refused the file: Disk full")
+        guard case .failed = yapp.state else { return XCTFail("refused is a failure") }
+    }
 
-        // Second call should fail
-        XCTAssertThrowsError(try yapp.startSending(fileName: "test2.txt", fileData: testData)) { error in
-            XCTAssertTrue(error is FileTransferError)
+    func testSenderPacesBlocksToTheLink() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.blockSize = 2
+        var room = 1
+        yapp.readyForData = {
+            guard room > 0 else { return false }
+            room -= 1
+            return true
         }
+        try yapp.startSending(fileName: "F", fileData: Data([1, 2, 3, 4, 5, 6]))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(YAPPEncoder.receiveFile())
+        XCTAssertEqual(spy.dataBlocks, 1, "one block while the link had room for one")
+        room = 1
+        yapp.pumpData()
+        XCTAssertEqual(spy.dataBlocks, 2)
+        room = 10
+        yapp.pumpData()
+        XCTAssertEqual(spy.dataBlocks, 3)
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.endFile())
     }
 
-    /// The state case names keep the old `cancelled` spelling in code; the
-    /// text a user reads in an error or a log must say "canceled".
-    func testTransferTextASomeoneReadsSaysCanceled() {
-        XCTAssertEqual(FileTransferError.cancelled.errorDescription, "Transfer canceled")
-        XCTAssertEqual(FileTransferError.peerCancelled.errorDescription, "Transfer canceled by peer")
-        XCTAssertEqual(
-            FileTransferError.invalidState(expected: "idle",
-                                           actual: String(describing: YAPPSenderState.cancelled))
-                .errorDescription,
-            "Invalid state: expected idle, got canceled")
-        XCTAssertEqual(String(describing: BulkTransferStatus.cancelled), "canceled")
-        XCTAssertEqual(String(describing: BulkTransferStatus.failed(reason: "x")), "failed(reason: x)")
-    }
-
-    func testCancelChangesState() {
+    func testPauseHoldsBlocksAndResumeSendsTheRest() throws {
         let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        yapp.cancel()
-
-        XCTAssertEqual(yapp.state, .cancelled)
-        XCTAssertTrue(delegate.didComplete)
-        XCTAssertFalse(delegate.completedSuccessfully)
-    }
-
-    // MARK: - Round-Trip Encoding/Decoding Tests
-
-    func testDataBlockRoundTrip() {
-        let yapp = YAPPProtocol()
-        let originalData = Data((0..<256).map { UInt8($0) })
-
-        let encoded = yapp.encodeDataBlock(data: originalData)
-        let decoded = yapp.parseDataBlock(encoded)
-
-        XCTAssertEqual(decoded, originalData)
-    }
-
-    func testHeaderRoundTrip() {
-        let yapp = YAPPProtocol()
-        let fileName = "test_file.bin"
-        let fileSize = 123456
-
-        let encoded = yapp.encodeHeader(fileName: fileName, fileSize: fileSize)
-        let decoded = yapp.parseHeader(encoded)
-
-        XCTAssertNotNil(decoded)
-        XCTAssertEqual(decoded?.fileName, fileName)
-        XCTAssertEqual(decoded?.fileSize, fileSize)
-    }
-
-    // MARK: - Protocol Type Tests
-
-    func testProtocolType() {
-        let yapp = YAPPProtocol()
-        XCTAssertEqual(yapp.protocolType, .yapp)
-    }
-
-    func testProtocolTypeProperties() {
-        let type = TransferProtocolType.yapp
-
-        XCTAssertEqual(type.displayName, "YAPP")
-        XCTAssertTrue(type.requiresConnectedMode)
-        XCTAssertFalse(type.supportsCompression)
-        XCTAssertTrue(type.hasBuiltInAck)
-    }
-
-    // MARK: - Receiver State Machine Tests
-
-    func testReceiverHandlesSendInit() {
-        let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        // Receiver gets SI frame
-        let siFrame = Data([YAPPControlChar.soh.rawValue, 0x01])
-        let handled = yapp.handleIncomingData(siFrame)
-
-        XCTAssertTrue(handled)
-        // Should have sent RI (Receive Init) response
-        XCTAssertFalse(delegate.sentData.isEmpty)
-        XCTAssertEqual(delegate.sentData.first?[0], YAPPControlChar.soh.rawValue)
-        XCTAssertEqual(delegate.sentData.first?[1], 0x02)  // RI indicator
-    }
-
-    func testReceiverHandlesHeader() {
-        let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        // First send SI to get into receiving state
-        let siFrame = Data([YAPPControlChar.soh.rawValue, 0x01])
-        _ = yapp.handleIncomingData(siFrame)
-        delegate.sentData.removeAll()
-
-        // Now send header
-        let header = yapp.encodeHeader(fileName: "test.txt", fileSize: 1024)
-        let handled = yapp.handleIncomingData(header)
-
-        XCTAssertTrue(handled)
-        // Should request user confirmation
-        XCTAssertFalse(delegate.confirmationRequests.isEmpty)
-        XCTAssertEqual(delegate.confirmationRequests.first?.fileName, "test.txt")
-        XCTAssertEqual(delegate.confirmationRequests.first?.fileSize, 1024)
-    }
-
-    func testReceiverAcceptsTransfer() {
-        let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        // Setup: SI -> RI, Header -> confirmation request
-        let siFrame = Data([YAPPControlChar.soh.rawValue, 0x01])
-        _ = yapp.handleIncomingData(siFrame)
-        let header = yapp.encodeHeader(fileName: "test.txt", fileSize: 100)
-        _ = yapp.handleIncomingData(header)
-        delegate.sentData.removeAll()
-
-        // Accept the transfer
-        yapp.acceptTransfer()
-
-        // Should have sent ACK
-        XCTAssertFalse(delegate.sentData.isEmpty)
-        XCTAssertEqual(delegate.sentData.first, Data([YAPPControlChar.ack.rawValue]))
-        XCTAssertEqual(yapp.state, .transferring)
-    }
-
-    func testReceiverRejectsTransfer() {
-        let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        // Setup: SI -> RI, Header -> confirmation request
-        let siFrame = Data([YAPPControlChar.soh.rawValue, 0x01])
-        _ = yapp.handleIncomingData(siFrame)
-        let header = yapp.encodeHeader(fileName: "test.txt", fileSize: 100)
-        _ = yapp.handleIncomingData(header)
-        delegate.sentData.removeAll()
-
-        // Reject the transfer
-        yapp.rejectTransfer(reason: "File too large")
-
-        // Should have sent CAN
-        XCTAssertFalse(delegate.sentData.isEmpty)
-        XCTAssertEqual(delegate.sentData.first, Data([YAPPControlChar.can.rawValue]))
-        XCTAssertEqual(yapp.state, .cancelled)
-    }
-
-    func testReceiverHandlesDataBlock() {
-        let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        // Setup: complete handshake
-        _ = yapp.handleIncomingData(Data([YAPPControlChar.soh.rawValue, 0x01]))
-        _ = yapp.handleIncomingData(yapp.encodeHeader(fileName: "test.txt", fileSize: 100))
-        yapp.acceptTransfer()
-        delegate.sentData.removeAll()
-        delegate.progressUpdates.removeAll()
-
-        // Send a data block
-        let testData = Data([0x01, 0x02, 0x03, 0x04, 0x05])
-        let dataBlock = yapp.encodeDataBlock(data: testData)
-        let handled = yapp.handleIncomingData(dataBlock)
-
-        XCTAssertTrue(handled)
-        // Should have sent ACK
-        XCTAssertFalse(delegate.sentData.isEmpty)
-        XCTAssertEqual(delegate.sentData.first, Data([YAPPControlChar.ack.rawValue]))
-        // Should have progress update
-        XCTAssertFalse(delegate.progressUpdates.isEmpty)
-    }
-
-    func testReceiverHandlesCorruptDataBlock() {
-        let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        // Setup: complete handshake
-        _ = yapp.handleIncomingData(Data([YAPPControlChar.soh.rawValue, 0x01]))
-        _ = yapp.handleIncomingData(yapp.encodeHeader(fileName: "test.txt", fileSize: 100))
-        yapp.acceptTransfer()
-        delegate.sentData.removeAll()
-
-        // Send corrupt data block (bad checksum)
-        var dataBlock = yapp.encodeDataBlock(data: Data([0x01, 0x02, 0x03]))
-        dataBlock[dataBlock.count - 1] = 0xFF  // Corrupt checksum
-        let handled = yapp.handleIncomingData(dataBlock)
-
-        XCTAssertTrue(handled)
-        // Should have sent NAK
-        XCTAssertFalse(delegate.sentData.isEmpty)
-        XCTAssertEqual(delegate.sentData.first, Data([YAPPControlChar.nak.rawValue]))
-    }
-
-    func testReceiverHandlesCancel() {
-        let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        // Start a transfer
-        _ = yapp.handleIncomingData(Data([YAPPControlChar.soh.rawValue, 0x01]))
-        _ = yapp.handleIncomingData(yapp.encodeHeader(fileName: "test.txt", fileSize: 100))
-        yapp.acceptTransfer()
-
-        // Sender cancels
-        let cancelFrame = Data([YAPPControlChar.can.rawValue])
-        let handled = yapp.handleIncomingData(cancelFrame)
-
-        XCTAssertTrue(handled)
-        XCTAssertEqual(yapp.state, .cancelled)
-        XCTAssertTrue(delegate.didComplete)
-        XCTAssertFalse(delegate.completedSuccessfully)
-    }
-
-    // MARK: - Full Transfer Simulation Tests
-
-    func testFullTransferSmallFile() {
-        let sender = YAPPProtocol()
-        let receiver = YAPPProtocol()
-        let senderDelegate = MockYAPPDelegate()
-        let receiverDelegate = MockYAPPDelegate()
-        sender.delegate = senderDelegate
-        receiver.delegate = receiverDelegate
-
-        let originalData = Data([0x01, 0x02, 0x03, 0x04, 0x05])
-
-        // Sender starts
-        try? sender.startSending(fileName: "test.bin", fileData: originalData)
-
-        // Simulate message exchange
-        // Sender sent SI -> Receiver
-        if let siFrame = senderDelegate.sentData.first {
-            _ = receiver.handleIncomingData(siFrame)
-        }
-
-        // Receiver sent RI -> Sender (as ACK)
-        if let riFrame = receiverDelegate.sentData.first {
-            sender.handleAck(data: riFrame)
-        }
-
-        // Receiver gets header, accepts
-        if senderDelegate.sentData.count > 1 {
-            _ = receiver.handleIncomingData(senderDelegate.sentData[1])
-        }
-        receiver.acceptTransfer()
-
-        // This tests the basic flow - a complete simulation would need
-        // to handle all the data blocks and ACKs
-        XCTAssertEqual(receiver.state, .transferring)
-    }
-
-    // MARK: - Edge Case Tests
-
-    func testEmptyFileName() {
-        let yapp = YAPPProtocol()
-        let header = yapp.encodeHeader(fileName: "", fileSize: 100)
-        let parsed = yapp.parseHeader(header)
-
-        XCTAssertNotNil(parsed)
-        XCTAssertEqual(parsed?.fileName, "")
-        XCTAssertEqual(parsed?.fileSize, 100)
-    }
-
-    func testZeroSizeFile() {
-        let yapp = YAPPProtocol()
-        let header = yapp.encodeHeader(fileName: "empty.txt", fileSize: 0)
-        let parsed = yapp.parseHeader(header)
-
-        XCTAssertNotNil(parsed)
-        XCTAssertEqual(parsed?.fileSize, 0)
-    }
-
-    func testLargeDataBlock() {
-        let yapp = YAPPProtocol()
-        let largeData = Data(repeating: 0xAB, count: 250)
-
-        let encoded = yapp.encodeDataBlock(data: largeData)
-        let decoded = yapp.parseDataBlock(encoded)
-
-        XCTAssertEqual(decoded, largeData)
-    }
-
-    func testAllByteValuesChecksum() {
-        let yapp = YAPPProtocol()
-        let allBytes = Data((0...255).map { UInt8($0) })
-
-        let encoded = yapp.encodeDataBlock(data: allBytes)
-        let decoded = yapp.parseDataBlock(encoded)
-
-        XCTAssertEqual(decoded, allBytes)
-    }
-
-    func testPauseAndResumePreservesState() throws {
-        let yapp = YAPPProtocol()
-        let delegate = MockYAPPDelegate()
-        yapp.delegate = delegate
-
-        let testData = Data(repeating: 0x42, count: 1000)
-        try yapp.startSending(fileName: "test.bin", fileData: testData)
-
-        let initialTotalBytes = yapp.totalBytes
-
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.blockSize = 1
+        var room = 1
+        yapp.readyForData = { defer { room = max(0, room - 1) }; return room > 0 }
+        try yapp.startSending(fileName: "F", fileData: Data([1, 2, 3]))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(YAPPEncoder.receiveFile())
         yapp.pause()
         XCTAssertEqual(yapp.state, .paused)
-        XCTAssertEqual(yapp.totalBytes, initialTotalBytes)
-
+        room = 10
+        yapp.pumpData()
+        XCTAssertEqual(spy.dataBlocks, 1, "paused means no blocks, room or not")
         yapp.resume()
-        XCTAssertNotEqual(yapp.state, .paused)
-        XCTAssertEqual(yapp.totalBytes, initialTotalBytes)
+        XCTAssertEqual(spy.dataBlocks, 3)
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.endFile())
     }
 
-    func testProgressCalculation() throws {
+    func testLocalCancelSendsCNAndSaysCanceled() throws {
         let yapp = YAPPProtocol()
-        XCTAssertEqual(yapp.progress, 0.0)
-
-        // When totalBytes is 0, progress should be 0
-        XCTAssertEqual(yapp.totalBytes, 0)
-        XCTAssertEqual(yapp.progress, 0.0)
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        try yapp.startSending(fileName: "F", fileData: Data([1]))
+        yapp.cancel()
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.cancel(reason: "Canceled"))
+        XCTAssertEqual(yapp.state, .cancelled)
+        XCTAssertEqual(spy.completion?.error, "Canceled")
+        yapp.handleIncomingData(YAPPEncoder.ackCancel())
+        XCTAssertEqual(yapp.senderPhase, .finished)
     }
 
-    func testSpecialCharactersInFilename() {
-        let yapp = YAPPProtocol()
-        let specialName = "file with spaces & symbols!.txt"
-        let header = yapp.encodeHeader(fileName: specialName, fileSize: 100)
-        let parsed = yapp.parseHeader(header)
+    func testACancelSettlesWhenCAArrivesOrTheWaitRunsOut() throws {
+        let answered = YAPPProtocol()
+        var settled = 0
+        answered.onCancelSettled = { settled += 1 }
+        try answered.startSending(fileName: "F", fileData: Data([1]))
+        answered.cancel()
+        XCTAssertEqual(settled, 0, "not until CA")
+        answered.handleIncomingData(YAPPEncoder.ackCancel())
+        XCTAssertEqual(settled, 1)
 
-        XCTAssertNotNil(parsed)
-        XCTAssertEqual(parsed?.fileName, specialName)
+        let silent = YAPPProtocol()
+        silent.cancelAckTimeout = 0.05
+        var silentSettled = false
+        silent.onCancelSettled = { silentSettled = true }
+        try silent.startSending(fileName: "F", fileData: Data([1]))
+        silent.cancel()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(silentSettled, "no CA within the wait still settles")
+    }
+
+    func testAbandonStopsWithoutSendingAnything() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.responseTimeout = 0.05
+        try yapp.startSending(fileName: "F", fileData: Data([1]))
+        let sentBefore = spy.sent.count
+        yapp.abandon()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(spy.sent.count, sentBefore, "no CN into a link that is gone")
+        XCTAssertNil(spy.completion)
+        guard case .failed = yapp.state else { return XCTFail("abandoned is failed") }
+    }
+
+    func testPeerCancelIsAnsweredWithCA() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        try yapp.startSending(fileName: "F", fileData: Data([1]))
+        yapp.handleIncomingData(YAPPEncoder.cancel(reason: "user abort"))
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.ackCancel())
+        XCTAssertEqual(yapp.state, .cancelled)
+        XCTAssertEqual(spy.completion?.error, "Canceled by the other station: user abort")
+    }
+
+    func testSenderGivesUpWhenNobodyAnswers() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.responseTimeout = 0.05
+        try yapp.startSending(fileName: "F", fileData: Data([1]))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(spy.completion?.ok, false)
+        XCTAssertTrue(spy.completion?.error?.hasPrefix("No answer from the other station") == true)
+        XCTAssertTrue(spy.sent.last.map { $0.first == 0x18 } == true, "CN goes out on the way")
+    }
+
+    func testStartingTwiceIsRefused() throws {
+        let yapp = YAPPProtocol()
+        try yapp.startSending(fileName: "F", fileData: Data([1]))
+        XCTAssertThrowsError(try yapp.startSending(fileName: "G", fileData: Data([2])))
+    }
+
+    // MARK: - Receiver
+
+    func testReceiverWalksTheHandshakeAndDeliversTheFile() {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+
+        yapp.handleIncomingData(YAPPEncoder.sendInit())
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.receiveReady())
+
+        yapp.handleIncomingData(YAPPEncoder.header(name: "R.BIN", size: 3))
+        XCTAssertEqual(spy.offered?.fileName, "R.BIN")
+        XCTAssertEqual(spy.offered?.fileSize, 3)
+        XCTAssertEqual(spy.offered?.protocolType, .yapp)
+
+        yapp.acceptTransfer()
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.receiveFile())
+
+        yapp.handleIncomingData(YAPPEncoder.data(Data([9, 8, 7]), checksum: false) + YAPPEncoder.endFile())
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.ackEndFile())
+        XCTAssertEqual(spy.received?.data, Data([9, 8, 7]))
+
+        yapp.handleIncomingData(YAPPEncoder.endTransmission())
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.ackEndTransmission())
+        XCTAssertEqual(yapp.state, .completed)
+        XCTAssertEqual(spy.completion?.ok, true)
+    }
+
+    func testReceiverRefusalSendsNR() {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.handleIncomingData(YAPPEncoder.sendInit() + YAPPEncoder.header(name: "X", size: 1))
+        yapp.rejectTransfer(reason: "Too big")
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.notReady(reason: "Too big"))
+        XCTAssertEqual(yapp.state, .cancelled)
+    }
+
+    func testReceiverFailsAFileThatArrivesShort() {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.handleIncomingData(YAPPEncoder.sendInit() + YAPPEncoder.header(name: "X", size: 5))
+        yapp.acceptTransfer()
+        yapp.handleIncomingData(YAPPEncoder.data(Data([1, 2]), checksum: false) + YAPPEncoder.endFile())
+        XCTAssertNil(spy.received, "a short file is not handed over")
+        XCTAssertEqual(spy.completion?.ok, false)
+        XCTAssertEqual(spy.completion?.error, "The file arrived with 2 of the 5 bytes its header announced")
+    }
+
+    func testReceiverCancelsWhenAFileOutgrowsItsLimit() {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.maxReceiveBytes = 3
+        yapp.handleIncomingData(YAPPEncoder.sendInit() + YAPPEncoder.header(name: "X", size: 2))
+        yapp.acceptTransfer()
+        yapp.handleIncomingData(YAPPEncoder.data(Data([1, 2, 3, 4]), checksum: false))
+        XCTAssertEqual(spy.sent.last?.first, 0x18, "CN")
+        XCTAssertEqual(spy.completion?.error, "The file is larger than this station accepts")
+    }
+
+    func testReceiverTreatsGarbageMidTransferAsAProtocolError() {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.handleIncomingData(YAPPEncoder.sendInit() + YAPPEncoder.header(name: "X", size: 2))
+        yapp.acceptTransfer()
+        yapp.handleIncomingData(Data("*** Unknown command".utf8))
+        XCTAssertEqual(spy.completion?.ok, false)
+        XCTAssertEqual(spy.sent.last?.first, 0x18)
+    }
+
+    func testReceiverRefusesASecondFileInTheBatchButFinishesTheFirst() {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.handleIncomingData(YAPPEncoder.sendInit() + YAPPEncoder.header(name: "A", size: 1))
+        yapp.acceptTransfer()
+        yapp.handleIncomingData(YAPPEncoder.data(Data([1]), checksum: false) + YAPPEncoder.endFile())
+        yapp.handleIncomingData(YAPPEncoder.header(name: "B", size: 1))
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.notReady(reason: "One file at a time"))
+        yapp.handleIncomingData(YAPPEncoder.endTransmission())
+        XCTAssertEqual(yapp.state, .completed)
+        XCTAssertEqual(spy.received?.metadata.fileName, "A")
+    }
+
+    // MARK: - Two ends, one stream
+
+    /// A sender and a receiver wired back to back, with every write cut into
+    /// random pieces the way I-frames would cut it. What comes out must be
+    /// exactly what went in, for every size that exercises a boundary.
+    func testSenderAndReceiverAgreeOverAChoppedStream() throws {
+        var generator = SeededGenerator(seed: 0x5A5A)
+        let sizes = [0, 1, 124, 125, 126, 256, 257, 1000, 4096]
+        for size in sizes {
+            let file = Data((0..<size).map { _ in UInt8.random(in: 0...255, using: &generator) })
+            let sender = YAPPProtocol()
+            let receiver = YAPPProtocol()
+            sender.blockSize = 125
+            let pipe = YAPPPipe(sender: sender, receiver: receiver, generator: generator)
+            sender.delegate = pipe.senderSide
+            receiver.delegate = pipe.receiverSide
+            try sender.startSending(fileName: "S\(size).BIN", fileData: file)
+            pipe.run()
+            XCTAssertEqual(pipe.receiverSide.received?.data, file, "size \(size)")
+            XCTAssertEqual(sender.state, .completed, "size \(size)")
+            XCTAssertEqual(receiver.state, .completed, "size \(size)")
+        }
+    }
+
+    func testEveryByteValueSurvivesIncludingControlBytes() throws {
+        let file = Data((0..<1024).map { UInt8($0 & 0xFF) })
+        let sender = YAPPProtocol()
+        let receiver = YAPPProtocol()
+        let pipe = YAPPPipe(sender: sender, receiver: receiver, generator: SeededGenerator(seed: 7))
+        sender.delegate = pipe.senderSide
+        receiver.delegate = pipe.receiverSide
+        try sender.startSending(fileName: "ALL.BIN", fileData: file)
+        pipe.run()
+        XCTAssertEqual(pipe.receiverSide.received?.data, file)
+    }
+
+    func testProtocolIdentity() {
+        let yapp = YAPPProtocol()
+        XCTAssertEqual(yapp.protocolType, .yapp)
+        XCTAssertTrue(TransferProtocolType.yapp.requiresConnectedMode)
+        XCTAssertFalse(TransferProtocolType.yapp.supportsCompression)
+        XCTAssertNil(yapp.isSender)
     }
 }
 
-// MARK: - Mock Delegate
+// MARK: - Helpers
 
-/// Mock delegate for testing protocol events
-private class MockYAPPDelegate: FileTransferProtocolDelegate {
-    var sentData: [Data] = []
-    var progressUpdates: [(progress: Double, bytes: Int)] = []
-    var stateChanges: [TransferProtocolState] = []
-    var receivedFiles: [(data: Data, metadata: TransferFileMetadata)] = []
-    var confirmationRequests: [TransferFileMetadata] = []
+/// Records what a YAPP instance asked for.
+final class YAPPSpy: FileTransferProtocolDelegate {
+    var sent: [Data] = []
+    var completion: (ok: Bool, error: String?)?
+    var offered: TransferFileMetadata?
+    var received: (data: Data, metadata: TransferFileMetadata)?
+    var states: [TransferProtocolState] = []
+    var onSend: ((Data) -> Void)?
+    var autoAccept: ((YAPPProtocol) -> Void)?
 
-    var didComplete = false
-    var completedSuccessfully = false
-    var completionError: String?
+    var dataBlocks: Int { sent.filter { $0.first == 0x02 }.count }
 
-    func transferProtocol(_ proto: FileTransferProtocol, needsToSend data: Data) {
-        sentData.append(data)
+    func transferProtocol(_ transfer: FileTransferProtocol, needsToSend data: Data) {
+        sent.append(data)
+        onSend?(data)
+    }
+    func transferProtocol(_ transfer: FileTransferProtocol, didUpdateProgress progress: Double, bytesSent: Int) {}
+    func transferProtocol(_ transfer: FileTransferProtocol, didComplete successfully: Bool, error: String?) {
+        completion = (successfully, error)
+    }
+    func transferProtocol(_ transfer: FileTransferProtocol, didReceiveFile data: Data, metadata: TransferFileMetadata) {
+        received = (data, metadata)
+    }
+    func transferProtocol(_ transfer: FileTransferProtocol, requestsConfirmation metadata: TransferFileMetadata) {
+        offered = metadata
+        if let yapp = transfer as? YAPPProtocol { autoAccept?(yapp) }
+    }
+    func transferProtocol(_ transfer: FileTransferProtocol, stateChanged newState: TransferProtocolState) {
+        states.append(newState)
+    }
+}
+
+/// Carries bytes between two YAPP instances in randomly sized pieces.
+final class YAPPPipe {
+    let senderSide = YAPPSpy()
+    let receiverSide = YAPPSpy()
+    private var toReceiver: [Data] = []
+    private var toSender: [Data] = []
+    private let sender: YAPPProtocol
+    private let receiver: YAPPProtocol
+    private var generator: SeededGenerator
+
+    init(sender: YAPPProtocol, receiver: YAPPProtocol, generator: SeededGenerator) {
+        self.sender = sender
+        self.receiver = receiver
+        self.generator = generator
+        senderSide.onSend = { [unowned self] in self.toReceiver.append($0) }
+        receiverSide.onSend = { [unowned self] in self.toSender.append($0) }
+        receiverSide.autoAccept = { $0.acceptTransfer() }
     }
 
-    func transferProtocol(_ proto: FileTransferProtocol, didUpdateProgress progress: Double, bytesSent: Int) {
-        progressUpdates.append((progress, bytesSent))
+    func run() {
+        var guardCount = 0
+        while (!toReceiver.isEmpty || !toSender.isEmpty) && guardCount < 100_000 {
+            guardCount += 1
+            if !toReceiver.isEmpty {
+                let bytes = toReceiver.removeFirst()
+                for piece in chop(bytes) { receiver.handleIncomingData(piece) }
+            }
+            if !toSender.isEmpty {
+                let bytes = toSender.removeFirst()
+                for piece in chop(bytes) { sender.handleIncomingData(piece) }
+            }
+        }
     }
 
-    func transferProtocol(_ proto: FileTransferProtocol, didComplete successfully: Bool, error: String?) {
-        didComplete = true
-        completedSuccessfully = successfully
-        completionError = error
+    private func chop(_ data: Data) -> [Data] {
+        var pieces: [Data] = []
+        var index = data.startIndex
+        while index < data.endIndex {
+            let length = Int.random(in: 1...max(1, data.count), using: &generator)
+            let end = min(data.endIndex, index + length)
+            pieces.append(data.subdata(in: index..<end))
+            index = end
+        }
+        return pieces
     }
+}
 
-    func transferProtocol(_ proto: FileTransferProtocol, didReceiveFile data: Data, metadata: TransferFileMetadata) {
-        receivedFiles.append((data, metadata))
-    }
-
-    func transferProtocol(_ proto: FileTransferProtocol, requestsConfirmation metadata: TransferFileMetadata) {
-        confirmationRequests.append(metadata)
-    }
-
-    func transferProtocol(_ proto: FileTransferProtocol, stateChanged newState: TransferProtocolState) {
-        stateChanges.append(newState)
+/// Deterministic random numbers, so a failing chop can be reproduced.
+struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed == 0 ? 0x9E3779B97F4A7C15 : seed }
+    mutating func next() -> UInt64 {
+        state ^= state << 13
+        state ^= state >> 7
+        state ^= state << 17
+        return state
     }
 }

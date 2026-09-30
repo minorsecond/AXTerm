@@ -85,7 +85,7 @@ one-handed. The tabs are the same `NavigationItem` cases the Mac sidebar uses.
 
 | Tab | Built from |
 |---|---|
-| Terminal | `TerminalView` — the Mac's own, unchanged, including the compose bar, the routing control and file transfers. |
+| Terminal | `TerminalView` — the Mac's own, including the compose bar, the routing control and file transfers. See "File transfers on iOS" below. |
 | Packets | `PacketTableTouchView`, written for a narrow screen; the inspector is the Mac's `PacketInspectorView` in a sheet. |
 | Mail | `WinlinkMailboxScreen` wrapping the Mac's `WinlinkMailboxViewModel`, `WinlinkMessageList` and `WinlinkMessageDetail` in a `NavigationSplitView` — three columns on iPad, a stack on a phone, without being told which it is. |
 | Map | `StationsMapView` — the Mac's own, including offline tiles. |
@@ -108,6 +108,24 @@ as a SwiftUI popover from a long press — the touch equivalent of a right-click
 One finger drags the camera, pinch zooms, tap selects, long press opens the
 node's actions. All of the graph's actual behavior — hit testing, selection,
 camera — stays in one coordinator that neither platform reimplements.
+
+### File transfers on iOS
+
+Packet file transfers (AXDP and YAPP) work the same as on the Mac, with
+these differences, all covered in `Docs/PacketFileTransfer.md`:
+
+- Received files go to `Documents/AXTerm Transfers`, which the Files app
+  shows under AXTerm once the target declares `UIFileSharingEnabled` and
+  `LSSupportsOpeningDocumentsInPlace`. They used to go to the container's
+  Downloads folder, which nothing outside the app can open.
+- A finished file offers Share and Quick Look instead of Show in Finder.
+- Picked files are copied while their security scope is held and the scope
+  is released at once; a picker that fails says so in an alert.
+- On iPad, files dropped on the terminal from Files or Photos are loaded as
+  file representations, several at a time. An iPhone is told to tap +.
+- The Send File and offer sheets size to the device.
+- Offers are prompted for from the root view over whichever tab is showing,
+  and post a notification when the app is in the background.
 
 ### Transport on iOS
 
