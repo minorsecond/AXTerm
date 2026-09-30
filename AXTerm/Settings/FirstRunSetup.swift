@@ -126,7 +126,7 @@ struct FirstRunSetupView: View {
     private var stageSubtitle: String {
         switch stage {
         case .callsign: return "Who this station is. Three short steps, and you can change any of it later."
-        case .position: return "Where the station is. The map, distances, terrain and APRS beacons start here."
+        case .position: return "Where the station is. The map, distances, terrain profiles and position beacons start here."
         case .radio: return "How AXTerm reaches your radio, what its channel is for, and its SSID."
         }
     }

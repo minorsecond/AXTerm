@@ -231,14 +231,14 @@ struct AddRadioSheet: View {
     @ViewBuilder
     private var channelStep: some View {
         HStack(spacing: 10) {
-            SetupTile(symbol: "mappin.and.ellipse", title: "APRS",
-                      detail: "A shared APRS frequency such as 144.390 MHz: position beacons, "
-                        + "messages and the map's Ping. Node, ping and mailbox stay off.",
-                      selected: channel == .aprs) { flow.setChannel(.aprs) }
             SetupTile(symbol: "point.3.connected.trianglepath.dotted", title: "Packet",
                       detail: "A node, BBS or keyboard frequency: connected sessions, the NET/ROM "
                         + "node and the mailbox. No APRS goes out on it.",
                       selected: channel == .packet) { flow.setChannel(.packet) }
+            SetupTile(symbol: "mappin.and.ellipse", title: "APRS",
+                      detail: "A shared APRS frequency such as 144.390 MHz: position beacons, "
+                        + "messages and the map's Ping. Node, ping and mailbox stay off.",
+                      selected: channel == .aprs) { flow.setChannel(.aprs) }
         }
         Text("A radio is one or the other. You can change it later on the radio's page.")
             .font(.caption)

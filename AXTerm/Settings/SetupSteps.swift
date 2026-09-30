@@ -59,25 +59,44 @@ struct SetupCallsignStep: View {
             focused = true
         }
 
-        SetupCard(title: "On the air",
-                  note: "Enter your licence callsign without an SSID. Each radio adds its own SSID "
-                    + "when you set it up, so two radios never answer to the same address.") {
-            Text("Each radio goes on the air as this callsign plus an SSID. The APRS custom:")
+        SetupCard(title: "SSIDs",
+                  note: "Enter your licence callsign without an SSID. You pick each radio's SSID "
+                    + "when you set that radio up, so two radios never answer to the same address.") {
+            Text("Each radio goes on the air as this callsign plus its own SSID, 0 to 15. What "
+                 + "the SSID means depends on the radio's channel:")
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
-                ForEach([0, 7, 9, 10], id: \.self) { ssid in
-                    GridRow {
-                        Text(ssid == 0 ? shownBase : "\(shownBase)-\(ssid)")
-                            .font(.system(.callout, design: .monospaced).weight(.medium))
-                            .foregroundStyle(base.isEmpty ? .secondary : .primary)
-                        Text(SSIDConvention.aprsMeaning(ssid) ?? "")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                GridRow(alignment: .firstTextBaseline) {
+                    channelLabel("PACKET")
+                    Text("\(shownBase)-1  \(shownBase)-2")
+                        .font(.system(.callout, design: .monospaced).weight(.medium))
+                        .foregroundStyle(base.isEmpty ? .secondary : .primary)
+                    Text("No fixed meaning. Any SSID your other radios don't use.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                GridRow(alignment: .firstTextBaseline) {
+                    channelLabel("APRS")
+                    Text("\(shownBase)-9  \(shownBase)-7")
+                        .font(.system(.callout, design: .monospaced).weight(.medium))
+                        .foregroundStyle(base.isEmpty ? .secondary : .primary)
+                    Text("Read by other stations: 9 mobile, 7 handheld, none for a home station.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+
+    private func channelLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .tracking(0.6)
+            .foregroundStyle(.secondary)
+            .gridColumnAlignment(.trailing)
     }
 
     private var shownBase: String { base.isEmpty ? "N0CALL" : base }
