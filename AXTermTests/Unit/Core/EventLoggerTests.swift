@@ -23,7 +23,7 @@ final class EventLoggerTests: XCTestCase {
     }
 
     private func makeSettings() -> AppSettingsStore {
-        let suiteName = "AXTermTests-EventLogger-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests-EventLogger")
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.set(true, forKey: AppSettingsStore.persistKey)
         return AppSettingsStore(defaults: defaults)

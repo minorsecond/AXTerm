@@ -11,7 +11,7 @@ final class MapLayerCatalogTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        defaults = UserDefaults(suiteName: "MapLayerCatalogTests-\(UUID().uuidString)")
+        defaults = TestDefaults.make("MapLayerCatalogTests")
     }
 
     override func tearDown() {

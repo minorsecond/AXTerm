@@ -156,7 +156,7 @@ final class KISSLinkBLETests: XCTestCase {
     // MARK: - Settings Integration Tests
 
     func testAppSettingsBLETransport() {
-        let defaults = UserDefaults(suiteName: "KISSLinkBLETests_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("KISSLinkBLETests")
         let settings = AppSettingsStore(defaults: defaults)
 
         settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .ble }
@@ -170,12 +170,10 @@ final class KISSLinkBLETests: XCTestCase {
         XCTAssertEqual(settings.primaryRadio!.blePeripheralUUID, "AABBCCDD-1234-5678-9ABC-DEF012345678")
         XCTAssertEqual(settings.primaryRadio!.blePeripheralName, "Test TNC")
         XCTAssertFalse(settings.primaryRadio!.bleAutoReconnect)
-
-        defaults.removePersistentDomain(forName: "KISSLinkBLETests_\(UUID().uuidString)")
     }
 
     func testAppSettingsBLEDefaults() {
-        let defaults = UserDefaults(suiteName: "KISSLinkBLEDefaultsTests_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("KISSLinkBLEDefaultsTests")
         let settings = AppSettingsStore(defaults: defaults)
 
         XCTAssertEqual(settings.primaryRadio!.blePeripheralUUID, "")

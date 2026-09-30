@@ -54,7 +54,7 @@ final class DRLNODLiveTest: XCTestCase {
             throw XCTSkip("Network tests disabled — touch /tmp/axterm_net_tests_enabled to enable")
         }
 
-        let suiteName = "AXTermTests.DRLNODLive.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests.DRLNODLive")
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
 

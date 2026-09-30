@@ -26,7 +26,7 @@ final class WinlinkViewModelTests: XCTestCase {
     }
 
     private func makeSettings() -> WinlinkSettings {
-        let defaults = UserDefaults(suiteName: "WinlinkVMTests-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("WinlinkVMTests")
         return WinlinkSettings(defaults: defaults, keychain: KeychainStore(service: "test-\(UUID().uuidString)"))
     }
 
@@ -622,7 +622,7 @@ final class WinlinkViewModelTests: XCTestCase {
 final class WinlinkGatewayLadderTests: XCTestCase {
 
     private func makeSettings() -> WinlinkSettings {
-        let defaults = UserDefaults(suiteName: "ladder-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("ladder")
         return WinlinkSettings(defaults: defaults, keychain: KeychainStore(service: "test-\(UUID().uuidString)"))
     }
 
@@ -669,7 +669,7 @@ final class WinlinkGatewayLadderTests: XCTestCase {
     }
 
     func testLadderPersistsAcrossInstances() async {
-        let suite = "ladder-\(UUID().uuidString)"
+        let suite = TestDefaults.name("ladder")
         let defaults = UserDefaults(suiteName: suite)!
         let keychain = KeychainStore(service: "test-\(UUID().uuidString)")
         let settings = WinlinkSettings(defaults: defaults, keychain: keychain)
@@ -681,7 +681,7 @@ final class WinlinkGatewayLadderTests: XCTestCase {
     }
 
     func testLegacySingleGatewayMigratesToLadder() async {
-        let suite = "ladder-\(UUID().uuidString)"
+        let suite = TestDefaults.name("ladder")
         let defaults = UserDefaults(suiteName: suite)!
         defaults.set("KE7XO-10", forKey: WinlinkSettings.gatewayCallsignKey)
         let settings = WinlinkSettings(defaults: defaults, keychain: KeychainStore(service: "test-\(UUID().uuidString)"))
@@ -717,7 +717,7 @@ final class WinlinkGatewayLadderTests: XCTestCase {
 final class WinlinkCredentialPersistenceTests: XCTestCase {
 
     func testPasswordSaveVerifyOverwriteAndClear() async {
-        let defaults = UserDefaults(suiteName: "cred-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("cred")
         let keychain = KeychainStore(service: "test-\(UUID().uuidString)")
         let settings = WinlinkSettings(defaults: defaults, keychain: keychain)
 
@@ -738,7 +738,7 @@ final class WinlinkCredentialPersistenceTests: XCTestCase {
     /// winlink.org trims and logs you in; the `;PR:` hash is over the exact
     /// bytes, so the CMS refuses the session and the settings box looks fine.
     func testStoredPasswordIsTrimmed() async {
-        let defaults = UserDefaults(suiteName: "cred-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("cred")
         let keychain = KeychainStore(service: "test-\(UUID().uuidString)")
         let settings = WinlinkSettings(defaults: defaults, keychain: keychain)
 
@@ -752,7 +752,7 @@ final class WinlinkCredentialPersistenceTests: XCTestCase {
     /// of any typo. Verification is now a CMS answer, and it must not
     /// outlive the password it was about.
     func testVerificationIsClearedWhenThePasswordChanges() async {
-        let defaults = UserDefaults(suiteName: "cred-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("cred")
         let keychain = KeychainStore(service: "test-\(UUID().uuidString)")
         let settings = WinlinkSettings(defaults: defaults, keychain: keychain)
 

@@ -49,8 +49,7 @@ final class AnnouncedGridTests: XCTestCase {
 
     @MainActor
     func testIngestStoresAndReplayIsIdempotent() async {
-        let defaults = UserDefaults(suiteName: "AnnouncedGridTests")!
-        defaults.removePersistentDomain(forName: "AnnouncedGridTests")
+        let defaults = TestDefaults.make("AnnouncedGridTests")
         let store = AnnouncedGridStore(defaults: defaults)
 
         let stamp = Date(timeIntervalSince1970: 1_000_000)
@@ -72,7 +71,5 @@ final class AnnouncedGridTests: XCTestCase {
         // Re-sweeping the same stored packet must not forge freshness.
         store.ingest(packets: [beacon])
         XCTAssertEqual(store.announcements["DB0ABC"]?.heardAt, firstHeard)
-
-        defaults.removePersistentDomain(forName: "AnnouncedGridTests")
     }
 }

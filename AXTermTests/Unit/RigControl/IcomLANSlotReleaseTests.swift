@@ -13,7 +13,7 @@ import XCTest
 final class IcomLANSlotReleaseTests: XCTestCase {
 
     private func makeDefaults() -> UserDefaults {
-        let suite = "IcomLANSlotReleaseTests." + UUID().uuidString
+        let suite = TestDefaults.name("IcomLANSlotReleaseTests")
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         return defaults

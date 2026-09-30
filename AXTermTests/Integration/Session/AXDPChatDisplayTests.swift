@@ -19,7 +19,7 @@ final class AXDPChatDisplayTests: XCTestCase {
     /// NOTE: I-frames require an established session to be delivered. This test first establishes
     /// a session via SABM/UA handshake before sending the I-frame.
     func testSessionCoordinatorInvokesOnAXDPChatReceivedWhenReceivingAXDPChatIFrame() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "TEST-2"
@@ -100,7 +100,7 @@ final class AXDPChatDisplayTests: XCTestCase {
 
     /// AXDP chat over UI frame also triggers callback (SessionCoordinator handles UI in handleUFrame)
     func testSessionCoordinatorInvokesOnAXDPChatReceivedWhenReceivingAXDPChatUIFrame() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "TEST-2"
@@ -159,7 +159,7 @@ final class AXDPChatDisplayTests: XCTestCase {
     /// it MUST invoke onPeerAxdpEnabled with the peer address.
     /// NOTE: I-frames require an established session to be delivered.
     func testSessionCoordinatorInvokesOnPeerAxdpEnabledWhenReceivingPeerAxdpEnabledIFrame() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "TEST-2"
@@ -231,7 +231,7 @@ final class AXDPChatDisplayTests: XCTestCase {
 
     /// peerAxdpEnabled over UI frame also triggers callback.
     func testSessionCoordinatorInvokesOnPeerAxdpEnabledWhenReceivingPeerAxdpEnabledUIFrame() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "TEST-2"
@@ -287,7 +287,7 @@ final class AXDPChatDisplayTests: XCTestCase {
 
     /// NOTE: I-frames require an established session to be delivered.
     func testSessionCoordinatorInvokesOnPeerAxdpDisabledWhenReceivingPeerAxdpDisabledIFrame() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("AXDPChatDisplayTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "TEST-2"

@@ -15,7 +15,7 @@ final class RadioServicesTests: XCTestCase {
 
     func testAProbeLeavesOnTheRadioThatHeardTheStationAsThatRadiosCallsign() {
         let prober = PingProber(
-            defaults: UserDefaults(suiteName: "RadioServicesTests.\(UUID().uuidString)")!)
+            defaults: TestDefaults.make("RadioServicesTests"))
         var sent: [OutboundFrame] = []
         prober.sendFrame = { frame in sent.append(frame); return true }
         prober.localAddress = { [uhf, uhfNode, node] radio in radio == uhf ? uhfNode : node }
@@ -32,7 +32,7 @@ final class RadioServicesTests: XCTestCase {
 
     func testAProbeOfAStationNobodyListedGoesOutOnThePrimary() {
         let prober = PingProber(
-            defaults: UserDefaults(suiteName: "RadioServicesTests.\(UUID().uuidString)")!)
+            defaults: TestDefaults.make("RadioServicesTests"))
         var sent: [OutboundFrame] = []
         prober.sendFrame = { frame in sent.append(frame); return true }
         prober.localAddress = { [node] _ in node }

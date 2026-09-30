@@ -16,7 +16,7 @@ import AppKit
 final class StatusItemControllerTests: XCTestCase {
 
     private func makeController() -> (StatusItemController, PacketEngine) {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "status-item-tests")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("status-item-tests"))
         let client = PacketEngine(settings: settings)
         let controller = StatusItemController(
             client: client,
@@ -87,12 +87,8 @@ final class StatusItemControllerTests: XCTestCase {
     /// the status bar on the way through.
     func testConstructionDoesNotInsertOnItsOwn() {
         let settings = AppSettingsStore(
-            defaults: UserDefaults(suiteName: "status-item-construction-tests")!)
+            defaults: TestDefaults.make("status-item-construction-tests"))
         settings.defaults.set(true, forKey: AppSettingsStore.runInMenuBarKey)
-        defer {
-            UserDefaults.standard.removePersistentDomain(
-                forName: "status-item-construction-tests")
-        }
 
         let controller = StatusItemController(
             client: PacketEngine(settings: settings),

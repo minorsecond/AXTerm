@@ -61,7 +61,7 @@ final class PacketEngineConsoleVisibilityTests: XCTestCase {
     }
 
     private func makeSettings() -> AppSettingsStore {
-        let suiteName = "AXTermTests-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests")
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         return AppSettingsStore(defaults: defaults)
     }

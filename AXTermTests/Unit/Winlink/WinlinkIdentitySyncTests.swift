@@ -220,7 +220,7 @@ final class WinlinkIdentitySyncTests: XCTestCase {
     /// fake store would test nothing but the fake.
     @MainActor
     private func liveStore(callsign: String) async -> (LiveIdentityStore, AppSettingsStore, StationProfile, UserDefaults) {
-        let suite = "identity-sync-\(UUID().uuidString)"
+        let suite = TestDefaults.name("identity-sync")
         let defaults = UserDefaults(suiteName: suite)!
         let settings = AppSettingsStore(defaults: defaults)
         let profile = StationProfile(defaults: defaults)

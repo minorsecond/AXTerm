@@ -33,7 +33,7 @@ final class XIDNegotiationTests: XCTestCase {
         // verdict remembered by an earlier test (or an earlier run) into
         // this one, and "first connect probes with XID" stops being true.
         manager.xidMemory = XIDAnswerMemory(
-            defaults: UserDefaults(suiteName: "XIDNegotiationTests.\(UUID().uuidString)")!)
+            defaults: TestDefaults.make("XIDNegotiationTests"))
         manager.defaultConfig = AX25SessionConfig(
             windowSize: 4, paclen: 128, rtoMin: 2.0, rtoMax: 8.0, initialRto: 2.0)
         manager.negotiateV22 = true

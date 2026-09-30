@@ -18,7 +18,7 @@ final class PacketEngineAPRSLayerSeedTests: XCTestCase {
     private let epoch = Date(timeIntervalSince1970: 1_757_419_200)   // 091200z
 
     private func makeSettings() -> AppSettingsStore {
-        let suiteName = "AXTermTests-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests")
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         return AppSettingsStore(defaults: defaults)
     }

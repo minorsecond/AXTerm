@@ -82,7 +82,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         }
 
         // Create isolated settings so we don't touch the user's real config
-        let suiteName = "AXTermTests.TNC4Live.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests.TNC4Live")
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
 
@@ -579,7 +579,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
 
     /// Create a PacketEngine connected to ham-pi Direwolf via TCP KISS.
     private func connectDirewolfEngine() async throws -> PacketEngine {
-        let suiteName = "AXTermTests.DW.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests.DW")
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let dwSettings = AppSettingsStore(defaults: defaults)

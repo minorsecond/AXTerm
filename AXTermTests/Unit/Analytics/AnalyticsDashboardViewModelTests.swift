@@ -659,7 +659,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
     }
 
     private func makeSettings() -> AppSettingsStore {
-        let suiteName = "AXTermTests-AnalyticsDashboard-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests-AnalyticsDashboard")
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         return AppSettingsStore(defaults: defaults)
     }

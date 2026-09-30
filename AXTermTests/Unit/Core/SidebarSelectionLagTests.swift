@@ -24,8 +24,7 @@ final class SidebarSelectionLagTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeSettings() -> AppSettingsStore {
-        let id = UUID().uuidString
-        let defaults = UserDefaults(suiteName: "SidebarLag-\(id)") ?? .standard
+        let defaults = TestDefaults.make("SidebarLag")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         defaults.set("", forKey: AppSettingsStore.myCallsignKey)
         return AppSettingsStore(defaults: defaults)

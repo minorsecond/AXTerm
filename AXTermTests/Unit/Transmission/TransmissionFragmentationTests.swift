@@ -146,7 +146,7 @@ private func establishSessionForReassembly(from: AX25Address, to: AX25Address, i
 
 @MainActor
 private func makeReassemblyHarness(localCallsign: String) throws -> (SessionCoordinator, PacketEngine) {
-    let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+    let defaults = TestDefaults.make("TransmissionFragmentationTests")
     defaults.set(false, forKey: AppSettingsStore.persistKey)
     let settings = AppSettingsStore(defaults: defaults)
     settings.myCallsign = localCallsign

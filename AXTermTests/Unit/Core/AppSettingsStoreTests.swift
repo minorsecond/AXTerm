@@ -12,7 +12,7 @@ import Combine
 @MainActor
 final class AppSettingsStoreTests: XCTestCase {
     private func withIsolatedDefaults(_ body: (UserDefaults) -> Void) {
-        let suiteName = "AXTermTests.AppSettingsStore.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests.AppSettingsStore")
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             XCTFail("Unable to create isolated UserDefaults suite \(suiteName)")
             return

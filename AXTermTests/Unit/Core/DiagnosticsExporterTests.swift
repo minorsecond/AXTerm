@@ -33,7 +33,7 @@ final class DiagnosticsExporterTests: XCTestCase {
     }
 
     private func makeSettings() -> AppSettingsStore {
-        let suiteName = "AXTermTests-Diagnostics-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests-Diagnostics")
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         return AppSettingsStore(defaults: defaults)
     }

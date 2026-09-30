@@ -21,7 +21,7 @@ final class HiddenNodeBreakdownTests: XCTestCase {
     override func setUp() {
         super.setUp()
         Telemetry.setBackend(NoOpTelemetryBackend())
-        suiteName = "AXTermTests-HiddenBreakdown-\(UUID().uuidString)"
+        suiteName = TestDefaults.name("AXTermTests-HiddenBreakdown")
         defaults = UserDefaults(suiteName: suiteName) ?? .standard
     }
 

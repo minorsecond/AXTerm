@@ -96,7 +96,7 @@ final class ModemAudioCaptureTests: XCTestCase {
     /// that silently recorded every session would be a surprise on the disk
     /// and a surprise in the privacy sense.
     func testItIsOffUnlessTheDefaultIsSet() throws {
-        let defaults = UserDefaults(suiteName: "capture-test-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("capture-test")
         XCTAssertNil(ModemAudioCapture.makeIfEnabled(sampleRate: 48_000, defaults: defaults))
         defaults.set(true, forKey: ModemAudioCapture.defaultsKey)
         defaults.set(directory.path, forKey: ModemAudioCapture.pathDefaultsKey)

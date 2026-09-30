@@ -15,7 +15,7 @@ import XCTest
 final class SettingsObservationTests: XCTestCase {
 
     private func makeEngine() -> (PacketEngine, AppSettingsStore) {
-        let suiteName = "AXTermTests.SettingsObs.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests.SettingsObs")
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let settings = AppSettingsStore(defaults: defaults)

@@ -90,41 +90,61 @@ nonisolated enum AppEnvironment {
     /// appear in. A `--test-mode` instance keeps the named suite it was given:
     /// there the name is the operator's own handle on a rig instance, and two
     /// of those are meant to be told apart by it.
+    ///
+    /// The XCTest suite is named by absolute path, which CFPreferences takes
+    /// as the plist's location, so it lives in tmp instead of
+    /// Library/Preferences. A pid-named suite in Preferences left one plist
+    /// behind per worker per run: `removePersistentDomain` empties a domain,
+    /// and cfprefsd writes the empty file back.
     static let defaults: UserDefaults = {
         guard isTestMode else { return .standard }
-        var suite = "com.rosswardrup.AXTerm.test.\(TestModeConfiguration.shared.instanceID)"
-        if isUnitTestHost {
-            suite += ".pid\(ProcessInfo.processInfo.processIdentifier)"
-        }
+        let base = "com.rosswardrup.AXTerm.test.\(TestModeConfiguration.shared.instanceID)"
+        let suite = isUnitTestHost ? unitTestHostSuite(base: base) : base
         let defaults = UserDefaults(suiteName: suite) ?? .standard
         defaults.removePersistentDomain(forName: suite)
-        if isUnitTestHost { sweepFinishedWorkerSuites(keeping: suite) }
         return defaults
     }()
 
-    /// Remove the per-worker suites left by test processes that are gone.
+    /// Where an XCTest host keeps its suite: `<tmp>/AXTermTestHost/<base>.pid<N>`.
+    private static func unitTestHostSuite(base: String) -> String {
+        let fileManager = FileManager.default
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("AXTermTestHost", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let prefix = "\(base).pid"
+        // Earlier builds kept these suites in Preferences; sweep both places.
+        let legacy = fileManager.urls(for: .libraryDirectory, in: .userDomainMask)
+            .map { $0.appendingPathComponent("Preferences", isDirectory: true) }
+        for place in [directory] + legacy {
+            sweepFinishedWorkerSuites(in: place, prefix: prefix)
+        }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        return directory.appendingPathComponent("\(prefix)\(pid)").path
+    }
+
+    /// Delete the per-worker suites left by test processes that are gone.
     ///
     /// Swept on the way in rather than removed on the way out: a worker is
     /// killed as often as it exits cleanly, and an `atexit` handler that does
     /// not run leaves the plist behind anyway — which is exactly what the first
     /// attempt at this did. Checking which pids are still alive is robust to
     /// however the last run ended.
-    private static func sweepFinishedWorkerSuites(keeping current: String) {
-        let prefix = "com.rosswardrup.AXTerm.test.\(TestModeConfiguration.shared.instanceID).pid"
-        let preferences = FileManager.default
-            .urls(for: .libraryDirectory, in: .userDomainMask)
-            .map { $0.appendingPathComponent("Preferences") }
-        for directory in preferences {
-            let entries = (try? FileManager.default.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: nil)) ?? []
-            for entry in entries where entry.pathExtension == "plist" {
-                let name = entry.deletingPathExtension().lastPathComponent
-                guard name.hasPrefix(prefix), name != current else { continue }
-                guard let pid = Int32(name.dropFirst(prefix.count)) else { continue }
-                // ESRCH means no such process: that worker is finished with it.
-                guard kill(pid, 0) != 0, errno == ESRCH else { continue }
-                UserDefaults().removePersistentDomain(forName: name)
-            }
+    ///
+    /// The file is deleted outright. Nothing uses that suite any more, and
+    /// `removePersistentDomain` would only have cfprefsd write an empty plist
+    /// in its place, which is what this used to do.
+    private static func sweepFinishedWorkerSuites(in directory: URL, prefix: String) {
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil)) ?? []
+        let current = ProcessInfo.processInfo.processIdentifier
+        for entry in entries where entry.pathExtension == "plist" {
+            let name = entry.deletingPathExtension().lastPathComponent
+            guard name.hasPrefix(prefix),
+                  let pid = Int32(name.dropFirst(prefix.count)),
+                  pid != current else { continue }
+            // ESRCH means no such process: that worker is finished with it.
+            guard kill(pid, 0) != 0, errno == ESRCH else { continue }
+            try? FileManager.default.removeItem(at: entry)
         }
     }
 }

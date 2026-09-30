@@ -198,7 +198,7 @@ final class StationLocationTests: XCTestCase {
     // MARK: - Profile
 
     func testProfileNameWithTitleAndContactBlock() async {
-        let defaults = UserDefaults(suiteName: "StationProfileTests-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("StationProfileTests")
         let profile = StationProfile(defaults: defaults)
         XCTAssertEqual(profile.nameWithTitle, "")
 

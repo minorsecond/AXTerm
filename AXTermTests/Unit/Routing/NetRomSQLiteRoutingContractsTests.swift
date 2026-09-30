@@ -74,7 +74,7 @@ final class NetRomSQLiteRoutingContractsTests: XCTestCase {
             throw XCTSkip("Shifted replay produced no routes-page data")
         }
 
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "AXTermTests.NetRomSQLite.\(UUID().uuidString)") ?? .standard)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("AXTermTests.NetRomSQLite"))
         let viewModel = NetRomRoutesViewModel(
             integration: integration,
             packetEngine: nil,

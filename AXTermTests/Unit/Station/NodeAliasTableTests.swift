@@ -484,7 +484,7 @@ final class NodeAliasTableTests: XCTestCase {
     }
 
     private func isolatedDefaults() -> UserDefaults {
-        let suite = UserDefaults(suiteName: "NodeAliasTableTests.\(UUID().uuidString)")!
+        let suite = TestDefaults.make("NodeAliasTableTests")
         return suite
     }
 

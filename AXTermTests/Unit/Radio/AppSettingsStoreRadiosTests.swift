@@ -12,7 +12,7 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        suiteName = "AXTermTests.Radios.\(UUID().uuidString)"
+        suiteName = TestDefaults.name("AXTermTests.Radios")
         defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }

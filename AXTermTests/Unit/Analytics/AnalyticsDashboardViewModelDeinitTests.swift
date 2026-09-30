@@ -22,7 +22,7 @@ import XCTest
 final class AnalyticsDashboardViewModelDeinitTests: XCTestCase {
     func testSynchronousDeallocationDoesNotCrash() {
         Telemetry.setBackend(NoOpTelemetryBackend())
-        let suiteName = "AXTermTests-VMDeinit-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests-VMDeinit")
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         let settings = AppSettingsStore(defaults: defaults)
 

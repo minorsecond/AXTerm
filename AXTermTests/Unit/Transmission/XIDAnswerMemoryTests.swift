@@ -14,7 +14,7 @@ import XCTest
 final class XIDAnswerMemoryTests: XCTestCase {
 
     private func isolatedDefaults() -> UserDefaults {
-        UserDefaults(suiteName: "XIDAnswerMemoryTests.\(UUID().uuidString)")!
+        TestDefaults.make("XIDAnswerMemoryTests")
     }
 
     func testAnAnsweredRejectionIsRememberedAcrossLaunches() {
@@ -93,7 +93,7 @@ final class PingProberXIDVerdictTests: XCTestCase {
     @MainActor
     private func prober() -> PingProber {
         let prober = PingProber(
-            defaults: UserDefaults(suiteName: "PingProberXIDVerdictTests.\(UUID().uuidString)")!)
+            defaults: TestDefaults.make("PingProberXIDVerdictTests"))
         prober.sendFrame = { _ in true }
         prober.localAddress = { _ in AX25Address(call: "K0EPI", ssid: 7) }
         return prober

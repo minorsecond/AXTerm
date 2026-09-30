@@ -14,7 +14,7 @@ import XCTest
 final class TerminationTeardownTests: XCTestCase {
 
     private func makeCoordinator(localCallsign: String) -> SessionCoordinator {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("TerminationTeardownTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = localCallsign

@@ -17,7 +17,7 @@ final class BeaconNowTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        suite = "beacon-now-\(UUID().uuidString)"
+        suite = TestDefaults.name("beacon-now")
         defaults = UserDefaults(suiteName: suite)!
     }
 

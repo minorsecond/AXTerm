@@ -256,7 +256,7 @@ final class PacketHandlingTests: XCTestCase {
     }
 
     private func makeSettings(persistHistory: Bool) -> AppSettingsStore {
-        let suiteName = "AXTermTests-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests")
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.set(persistHistory, forKey: AppSettingsStore.persistKey)
         return AppSettingsStore(defaults: defaults)

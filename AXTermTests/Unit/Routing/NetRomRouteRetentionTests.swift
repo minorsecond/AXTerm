@@ -15,12 +15,12 @@ final class NetRomRouteRetentionTests: XCTestCase {
     // MARK: - Settings Tests
 
     func testHideExpiredRoutes_DefaultsToTrue() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         XCTAssertTrue(settings.hideExpiredRoutes, "hideExpiredRoutes should default to true")
     }
 
     func testHideExpiredRoutes_PersistsValue() {
-        let suiteName = "test_\(UUID())"
+        let suiteName = TestDefaults.name("NetRomRouteRetentionTests")
         let defaults = UserDefaults(suiteName: suiteName)!
 
         // Set value in one instance
@@ -33,12 +33,12 @@ final class NetRomRouteRetentionTests: XCTestCase {
     }
 
     func testRouteRetentionDays_DefaultsTo60() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         XCTAssertEqual(settings.routeRetentionDays, 60, "routeRetentionDays should default to 60")
     }
 
     func testRouteRetentionDays_ClampsToMinimum() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.routeRetentionDays = 0
 
         // Allow for async clamping
@@ -51,7 +51,7 @@ final class NetRomRouteRetentionTests: XCTestCase {
     }
 
     func testRouteRetentionDays_ClampsToMaximum() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.routeRetentionDays = 1000
 
         // Allow for async clamping
@@ -64,7 +64,7 @@ final class NetRomRouteRetentionTests: XCTestCase {
     }
 
     func testGlobalStaleTTLHours_DefaultsTo1() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         XCTAssertEqual(settings.globalStaleTTLHours, 1, "globalStaleTTLHours should default to 1 hour")
     }
 
@@ -188,7 +188,7 @@ final class NetRomRouteRetentionTests: XCTestCase {
 
     @MainActor
     func testFilteredNeighbors_HidesExpiredWhenEnabled() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.hideExpiredRoutes = true
         settings.globalStaleTTLHours = 1 // 1 hour TTL
 
@@ -200,7 +200,7 @@ final class NetRomRouteRetentionTests: XCTestCase {
 
     @MainActor
     func testFilteredNeighbors_ShowsExpiredWhenDisabled() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.hideExpiredRoutes = false
 
         XCTAssertFalse(settings.hideExpiredRoutes)
@@ -209,12 +209,12 @@ final class NetRomRouteRetentionTests: XCTestCase {
     // MARK: - Adaptive Stale Threshold Settings Tests
 
     func testStalePolicyMode_DefaultsToAdaptive() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         XCTAssertEqual(settings.stalePolicyMode, "adaptive", "stalePolicyMode should default to adaptive")
     }
 
     func testStalePolicyMode_PersistsValue() {
-        let suiteName = "test_\(UUID())"
+        let suiteName = TestDefaults.name("NetRomRouteRetentionTests")
         let defaults = UserDefaults(suiteName: suiteName)!
 
         let settings1 = AppSettingsStore(defaults: defaults)
@@ -225,12 +225,12 @@ final class NetRomRouteRetentionTests: XCTestCase {
     }
 
     func testAdaptiveStaleMissedBroadcasts_DefaultsTo3() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         XCTAssertEqual(settings.adaptiveStaleMissedBroadcasts, 3, "adaptiveStaleMissedBroadcasts should default to 3")
     }
 
     func testAdaptiveStaleMissedBroadcasts_ClampsToMinimum() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.adaptiveStaleMissedBroadcasts = 1
 
         let expectation = XCTestExpectation(description: "Wait for clamping")
@@ -242,7 +242,7 @@ final class NetRomRouteRetentionTests: XCTestCase {
     }
 
     func testAdaptiveStaleMissedBroadcasts_ClampsToMaximum() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.adaptiveStaleMissedBroadcasts = 100
 
         let expectation = XCTestExpectation(description: "Wait for clamping")
@@ -389,12 +389,12 @@ final class NetRomRouteRetentionTests: XCTestCase {
     // MARK: - Neighbor and Link Stat TTL Settings Tests
 
     func testNeighborStaleTTLHours_DefaultsTo6() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         XCTAssertEqual(settings.neighborStaleTTLHours, 6, "neighborStaleTTLHours should default to 6 hours")
     }
 
     func testNeighborStaleTTLHours_ClampsToMinimum() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.neighborStaleTTLHours = 0
 
         let expectation = XCTestExpectation(description: "Wait for clamping")
@@ -406,12 +406,12 @@ final class NetRomRouteRetentionTests: XCTestCase {
     }
 
     func testLinkStatStaleTTLHours_DefaultsTo12() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         XCTAssertEqual(settings.linkStatStaleTTLHours, 12, "linkStatStaleTTLHours should default to 12 hours")
     }
 
     func testLinkStatStaleTTLHours_ClampsToMinimum() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.linkStatStaleTTLHours = 0
 
         let expectation = XCTestExpectation(description: "Wait for clamping")
@@ -580,7 +580,7 @@ final class NetRomRouteRetentionTests: XCTestCase {
 
     @MainActor
     func testFilteredNeighbors_ShowsExpiredWhenToggleOff() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.hideExpiredRoutes = false
         settings.neighborStaleTTLHours = 1
 
@@ -607,7 +607,7 @@ final class NetRomRouteRetentionTests: XCTestCase {
 
     @MainActor
     func testFilteredNeighbors_HidesExpiredWhenToggleOn() {
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("NetRomRouteRetentionTests"))
         settings.hideExpiredRoutes = true
         settings.neighborStaleTTLHours = 1
 

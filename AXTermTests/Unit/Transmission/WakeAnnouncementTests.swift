@@ -11,7 +11,7 @@ import XCTest
 final class WakeAnnouncementTests: XCTestCase {
 
     private func settings(announcing: Bool) -> AppSettingsStore {
-        let suite = "wake-announcement-\(UUID().uuidString)"
+        let suite = TestDefaults.name("wake-announcement")
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         let store = AppSettingsStore(defaults: defaults)

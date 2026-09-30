@@ -18,8 +18,7 @@ final class BBSCircuitSessionTests: XCTestCase {
         try DatabaseManager.migrator.migrate(queue)
         store = SQLiteBBSMessageStore(dbQueue: queue)
 
-        let defaults = UserDefaults(suiteName: "bbs-circuit-tests")!
-        defaults.removePersistentDomain(forName: "bbs-circuit-tests")
+        let defaults = TestDefaults.make("bbs-circuit-tests")
         settings = BBSSettings(defaults: defaults)
         settings.onAir = true
         settings.callsign = "K0EPI-2"

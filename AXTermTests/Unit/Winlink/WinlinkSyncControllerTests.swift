@@ -204,8 +204,7 @@ final class WinlinkSyncControllerTests: XCTestCase {
     /// The identifier must survive relaunches, or every restart would look
     /// like a new device and orphan the claims held by the old one.
     func testDeviceIdentifierIsStable() {
-        let defaults = UserDefaults(suiteName: "sync-device-test")!
-        defaults.removePersistentDomain(forName: "sync-device-test")
+        let defaults = TestDefaults.make("sync-device-test")
 
         let first = WinlinkSyncDevice.identifier(defaults: defaults)
         let second = WinlinkSyncDevice.identifier(defaults: defaults)

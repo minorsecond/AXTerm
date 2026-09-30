@@ -353,7 +353,7 @@ final class ObservabilityTests: XCTestCase {
 
     @MainActor
     func testAppSettingsStore_sentryDefaults() {
-        let suiteName = "AXTermTests.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests")
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let store = AppSettingsStore(defaults: defaults)

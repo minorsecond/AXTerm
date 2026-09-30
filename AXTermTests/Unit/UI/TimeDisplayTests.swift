@@ -41,7 +41,7 @@ final class TimeDisplayTests: XCTestCase {
     }
 
     func testUnknownStoredValueFallsBackToSystem() {
-        let defaults = UserDefaults(suiteName: "TimeDisplayTests.\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("TimeDisplayTests")
         defaults.set("fortnight", forKey: TimeDisplay.formatKey)
         XCTAssertEqual(TimeDisplay.format(from: defaults), .system)
     }

@@ -76,7 +76,7 @@ final class RadioVisibilityTests: XCTestCase {
     /// silently ignored. This is the only test here that builds an engine, and
     /// it does so precisely to pin that down.
     @MainActor func testHiddenRadiosPersistToTheInjectedStoreNotTheProcessDomain() async throws {
-        let suiteName = "RadioVisibilityTests.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("RadioVisibilityTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let untouched = UserDefaults.standard.stringArray(forKey: PacketEngine.hiddenRadiosKey)

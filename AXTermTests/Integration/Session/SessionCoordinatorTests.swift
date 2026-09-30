@@ -831,7 +831,7 @@ final class SessionCoordinatorTests: XCTestCase {
     /// Before the fix, each call added another Combine subscriber, causing every inbound
     /// I-frame to be processed N times — generating N RR frames per packet.
     func testSubscribeToPacketsTwiceDoesNotDuplicateProcessing() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "LOCAL-7"
@@ -884,7 +884,7 @@ final class SessionCoordinatorTests: XCTestCase {
     /// Proves that after multiple subscribeToPackets calls, the session state machine
     /// receives each I-frame exactly once — preventing duplicate RR generation.
     func testSubscribeToPacketsReplacesNotAccumulatesSubscriptions() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "LOCAL-7"
@@ -1289,7 +1289,7 @@ final class SessionCoordinatorTests: XCTestCase {
     
     /// Test that frames from same base callsign but different SSID are NOT filtered as echoes (Bug Fix P2)
     func testEchoFilterAllowsSameBaseCallsignDifferentSSID() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "K0EPI-7"
@@ -1340,7 +1340,7 @@ final class SessionCoordinatorTests: XCTestCase {
     
     /// Test that frames from identical callsign+SSID ARE still filtered as echoes (Bug Fix P2 - verify we didn't break this)
     func testEchoFilterBlocksExactCallsignMatch() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "K0EPI-7"
@@ -1533,7 +1533,7 @@ final class SessionCoordinatorTests: XCTestCase {
         
         coordinator.localCallsign = "K0EPI-7"
         
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("SessionCoordinatorTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "K0EPI-7"

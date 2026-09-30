@@ -98,8 +98,7 @@ final class MapStartRegionTests: XCTestCase {
     }
 
     func testPersistenceRoundTripsThroughDefaults() throws {
-        let suite = try XCTUnwrap(UserDefaults(suiteName: "MapStartRegionTests"))
-        suite.removePersistentDomain(forName: "MapStartRegionTests")
+        let suite = TestDefaults.make("MapStartRegionTests")
         XCTAssertNil(MapStartRegion.load(suite))
         let region = MapStartRegion.around(latitude: home.lat, longitude: home.lon)
         MapStartRegion.save(region, to: suite)
@@ -110,6 +109,5 @@ final class MapStartRegionTests: XCTestCase {
         XCTAssertEqual(back.longitude, region.longitude, accuracy: 0.000001)
         XCTAssertEqual(back.latitudeDelta, region.latitudeDelta, accuracy: 0.000001)
         XCTAssertEqual(back.longitudeDelta, region.longitudeDelta, accuracy: 0.000001)
-        suite.removePersistentDomain(forName: "MapStartRegionTests")
     }
 }

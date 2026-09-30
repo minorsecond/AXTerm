@@ -21,7 +21,7 @@ final class TemporaryShowAllOverrideTests: XCTestCase {
     override func setUp() {
         super.setUp()
         Telemetry.setBackend(NoOpTelemetryBackend())
-        suiteName = "AXTermTests-TemporaryShowAll-\(UUID().uuidString)"
+        suiteName = TestDefaults.name("AXTermTests-TemporaryShowAll")
         defaults = UserDefaults(suiteName: suiteName) ?? .standard
     }
 

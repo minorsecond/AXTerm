@@ -9,11 +9,12 @@ import XCTest
 final class NodeAliasRemovalTests: XCTestCase {
 
     private var store: NodeAliasStore!
+    private var suiteName = ""
     private let now = Date(timeIntervalSince1970: 1_788_000_000)
 
     override func setUp() async throws {
-        let defaults = UserDefaults(suiteName: "alias-removal-tests")!
-        defaults.removePersistentDomain(forName: "alias-removal-tests")
+        suiteName = TestDefaults.name("alias-removal-tests")
+        let defaults = UserDefaults(suiteName: suiteName)!
         store = NodeAliasStore(defaults: defaults)
         // DRLNOD:KE0NCQ is itself in the directory, and both of its
         // names have vouched for COSCO; SOLBPQ vouches independently.
@@ -72,7 +73,7 @@ final class NodeAliasRemovalTests: XCTestCase {
 
     func testRemovalPersists() async {
         store.removeEntry(alias: "INRMS")
-        let reloaded = NodeAliasStore(defaults: UserDefaults(suiteName: "alias-removal-tests")!)
+        let reloaded = NodeAliasStore(defaults: UserDefaults(suiteName: suiteName)!)
         XCTAssertNil(reloaded.directory.entry(for: "INRMS"))
     }
 }

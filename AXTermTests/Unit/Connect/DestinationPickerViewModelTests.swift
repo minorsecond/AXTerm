@@ -30,12 +30,7 @@ final class DestinationPickerViewModelTests: XCTestCase {
     }
 
     func testAliasLinkingRequiresEvidence() {
-        let suiteName = "DestinationPickerViewModelTests.alias"
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
-            XCTFail("Unable to create UserDefaults suite \(suiteName)")
-            return
-        }
-        defaults.removePersistentDomain(forName: suiteName)
+        let defaults = TestDefaults.make("DestinationPickerViewModelTests.alias")
 
         let vm = DestinationPickerViewModel(defaults: defaults)
 

@@ -313,7 +313,7 @@ final class AX25TransmissionTests: XCTestCase {
     /// Same chat message (from, messageId, sessionId) delivered twice invokes onAXDPChatReceived only once.
     /// Uses UI frames so no AX.25 session is required; deduplication key is (from, messageId, sessionId).
     func testAXDPChatDeduplicationSkipsDuplicateMessage() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("AX25TransmissionTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "TEST-2"
@@ -845,7 +845,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// Three identical chat messages (same messageId) via UI: only first displayed.
     func testEdgeThreeIdenticalChatMessagesOnlyOneDisplayed() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("AX25TransmissionTests")
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "TEST-2"

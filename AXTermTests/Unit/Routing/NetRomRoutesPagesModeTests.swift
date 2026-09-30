@@ -325,7 +325,7 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
 
     func testViewModel_IgnoredServiceEndpointRemovedFromAllTables() {
         let integration = makeIntegrationWithMixedData()
-        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "AXTermTests.NetRomRoutes.\(UUID().uuidString)") ?? .standard)
+        let settings = AppSettingsStore(defaults: TestDefaults.make("AXTermTests.NetRomRoutes"))
         let viewModel = NetRomRoutesViewModel(integration: integration, settings: settings)
         viewModel.setMode(.hybrid)
 

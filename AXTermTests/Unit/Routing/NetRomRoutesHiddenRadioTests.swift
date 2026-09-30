@@ -37,7 +37,7 @@ final class NetRomRoutesHiddenRadioTests: XCTestCase {
                                   timestamp: t.addingTimeInterval(1))
 
         let engine = PacketEngine(settings: AppSettingsStore(
-            defaults: UserDefaults(suiteName: "NetRomRoutesHidden.\(UUID().uuidString)")!))
+            defaults: TestDefaults.make("NetRomRoutesHidden")))
         // PacketEngine loads hiddenRadioIDs from UserDefaults.standard, which a
         // prior run may have left non-empty; start from a known-clean baseline.
         engine.hiddenRadioIDs = []

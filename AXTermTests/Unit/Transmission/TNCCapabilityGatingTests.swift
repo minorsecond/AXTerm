@@ -69,7 +69,7 @@ final class TNCCapabilityGatingTests: XCTestCase {
     // MARK: - AppSettingsStore Persistence
 
     func testSettingsStoreDefaultTNCCapabilities() {
-        let suiteName = "TNCCapabilityGatingTests-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("TNCCapabilityGatingTests")
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -79,7 +79,7 @@ final class TNCCapabilityGatingTests: XCTestCase {
     }
 
     func testSettingsStorePersistsTNCCapabilities() {
-        let suiteName = "TNCCapabilityGatingTests-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("TNCCapabilityGatingTests")
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
 
@@ -100,7 +100,7 @@ final class TNCCapabilityGatingTests: XCTestCase {
 
     @MainActor
     func testSyncUsesDefaultsWhenLinkTuningNotSupported() async {
-        let defaults = UserDefaults(suiteName: "TNCCapabilityGatingTests-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("TNCCapabilityGatingTests")
 
         let settings = AppSettingsStore(defaults: defaults)
         var caps = TNCCapabilities()
@@ -133,7 +133,7 @@ final class TNCCapabilityGatingTests: XCTestCase {
 
     @MainActor
     func testSyncAppliesUserValuesWhenLinkTuningSupported() async {
-        let defaults = UserDefaults(suiteName: "TNCCapabilityGatingTests-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("TNCCapabilityGatingTests")
 
         let settings = AppSettingsStore(defaults: defaults)
         // Default: KISS mode, supportsLinkTuning = true
@@ -162,7 +162,7 @@ final class TNCCapabilityGatingTests: XCTestCase {
 
     @MainActor
     func testSyncUsesDefaultsWhenAdaptiveDisabledButLinkTuningSupported() async {
-        let defaults = UserDefaults(suiteName: "TNCCapabilityGatingTests-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("TNCCapabilityGatingTests")
 
         let settings = AppSettingsStore(defaults: defaults)
         let coordinator = SessionCoordinator()

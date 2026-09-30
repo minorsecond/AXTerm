@@ -13,7 +13,7 @@ import XCTest
 final class BLELinkReuseTests: XCTestCase {
 
     private func makeEngine() -> PacketEngine {
-        let suiteName = "AXTermTests.BLEReuse.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests.BLEReuse")
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let settings = AppSettingsStore(defaults: defaults)

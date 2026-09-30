@@ -154,7 +154,7 @@ final class PacketEngineResourceStressTests: XCTestCase {
     }
 
     private func makeSettings(persistHistory: Bool) -> AppSettingsStore {
-        let suiteName = "AXTermTests-Resource-\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests-Resource")
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.set(persistHistory, forKey: AppSettingsStore.persistKey)
         defaults.set("", forKey: AppSettingsStore.myCallsignKey)

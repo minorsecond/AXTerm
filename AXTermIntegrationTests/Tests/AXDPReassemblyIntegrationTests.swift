@@ -26,7 +26,14 @@ final class AXDPReassemblyIntegrationTests: XCTestCase {
     // MARK: - Setup / Teardown
 
     override func setUp() async throws {
-        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        // Named by path so the plist goes to tmp, not Library/Preferences,
+        // where a UUID-named suite is never cleaned up.
+        let suiteName = NSTemporaryDirectory() + "AXDPReassemblyIntegrationTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        addTeardownBlock {
+            UserDefaults().removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(atPath: suiteName + ".plist")
+        }
         defaults.set(false, forKey: AppSettingsStore.persistKey)
         let settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "TEST-2"

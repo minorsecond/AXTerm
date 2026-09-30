@@ -214,7 +214,7 @@ final class NodeCapabilityTests: XCTestCase {
     /// is, across launches, without the observation deciding any verdict.
     @MainActor
     func testABorrowedLegIsRememberedAndNamed() async {
-        let defaults = UserDefaults(suiteName: "NodeCapabilityTests.\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("NodeCapabilityTests")
         let store = NodeCapabilityStore(defaults: defaults)
         store.recordBorrowedLeg("K0EPI-6", node: "DRLNOD", toward: "KB5YZB-7")
 
@@ -266,7 +266,7 @@ final class NodeCapabilityTests: XCTestCase {
     // SIGABRT under this project's default-isolation settings (see the
     // NodeAliasStore tests and AXTermTests history for the same rule).
     func testStoreLearnsFromSessionLinesAndPersists() async {
-        let defaults = UserDefaults(suiteName: "NodeCapabilityTests-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("NodeCapabilityTests")
         let store = NodeCapabilityStore(defaults: defaults)
         store.ingest(line: "###CONNECTED TO NODE DRLNOD(KE0NCQ) CHANNEL A", peer: "KE0NCQ", at: now)
         XCTAssertEqual(store.canRouteNetRom("KE0NCQ"), false)
@@ -278,7 +278,7 @@ final class NodeCapabilityTests: XCTestCase {
     }
 
     func testStoreLearnsGroundTruthFromPackets() async {
-        let defaults = UserDefaults(suiteName: "NodeCapabilityTests-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("NodeCapabilityTests")
         let store = NodeCapabilityStore(defaults: defaults)
 
         let info = Data([0xFF])

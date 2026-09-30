@@ -136,7 +136,7 @@ final class WinlinkSyncPushLedgerTests: XCTestCase {
     /// The ledger survives a relaunch, so restarting the app does not
     /// re-upload the mailbox.
     func testTheLedgerPersistsAcrossDeviceRestarts() throws {
-        let defaults = UserDefaults(suiteName: "ledger-\(UUID().uuidString)")!
+        let defaults = TestDefaults.make("ledger")
         let store = WinlinkDefaultsTokenStore(defaults: defaults, key: "test.token")
 
         store.savePushLedger(["message|A": t(0)])

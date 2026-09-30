@@ -14,7 +14,7 @@ import XCTest
 final class ConnectionConfigSnapshotTests: XCTestCase {
 
     private func makeSettings() -> AppSettingsStore {
-        let suiteName = "AXTermTests.Snapshot.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests.Snapshot")
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return AppSettingsStore(defaults: defaults)

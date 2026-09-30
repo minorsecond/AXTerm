@@ -12,7 +12,7 @@ import XCTest
 final class SerialDeviceAutoDetectionTests: XCTestCase {
 
     private func makeEngine() -> PacketEngine {
-        let suiteName = "AXTermTests.AutoDetect.\(UUID().uuidString)"
+        let suiteName = TestDefaults.name("AXTermTests.AutoDetect")
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let settings = AppSettingsStore(defaults: defaults)

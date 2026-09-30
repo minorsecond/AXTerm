@@ -10,7 +10,7 @@ import XCTest
 final class WinlinkSyncDefaultTests: XCTestCase {
 
     private func freshDefaults() -> UserDefaults {
-        UserDefaults(suiteName: "SyncDefault-\(UUID().uuidString)")!
+        TestDefaults.make("SyncDefault")
     }
 
     private func settings(_ defaults: UserDefaults) -> WinlinkSettings {

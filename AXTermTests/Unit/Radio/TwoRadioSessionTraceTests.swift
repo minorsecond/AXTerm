@@ -21,7 +21,7 @@ final class TwoRadioSessionTraceTests: XCTestCase {
     }
 
     private func makeStation() -> (PacketEngine, SessionCoordinator, AppSettingsStore) {
-        suiteName = "AXTermTests.TwoRadioTrace.\(UUID().uuidString)"
+        suiteName = TestDefaults.name("AXTermTests.TwoRadioTrace")
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let settings = AppSettingsStore(defaults: defaults)

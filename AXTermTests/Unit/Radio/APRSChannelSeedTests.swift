@@ -17,7 +17,7 @@ final class APRSChannelSeedTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        suiteName = "AXTermTests.APRSSeed.\(UUID().uuidString)"
+        suiteName = TestDefaults.name("AXTermTests.APRSSeed")
         defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }

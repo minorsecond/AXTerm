@@ -12,7 +12,7 @@ final class ConnectionTransportViewModelModemTests: XCTestCase {
     private var radioID: RadioID!
 
     override func setUp() async throws {
-        defaults = UserDefaults(suiteName: "ConnectionTransportViewModelModemTests.\(UUID().uuidString)")!
+        defaults = TestDefaults.make("ConnectionTransportViewModelModemTests")
         settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = "K0EPI"
         engine = PacketEngine(settings: settings)
