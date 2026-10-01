@@ -47,6 +47,16 @@ final class KISSTests: XCTestCase {
         XCTAssertEqual(unescaped, Data([0x01, 0xDB]))
     }
 
+    // A broken escape keeps its bytes but is counted, so the parser can log
+    // the frame (CLAUDE.md §4: malformed frames are logged).
+    func testInvalidEscapesAreCounted() {
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0x01, 0xDB, 0xDC, 0xDB, 0xDD])), 0)
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0x01, 0xDB, 0x41])), 1, "FESC followed by a plain byte")
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0x01, 0xDB])), 1, "FESC ending the frame")
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0xDB, 0xDB, 0xDC])), 1, "FESC followed by FESC")
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0x00, 0xDB, 0x41]).dropFirst()), 1, "works on a slice")
+    }
+
     // MARK: - KISS Frame Parser Tests
 
     func testKISSStreamParserSingleFrame() {

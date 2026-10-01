@@ -47,6 +47,29 @@ nonisolated enum KISS {
         return result
     }
 
+    /// How many FESC bytes in `data` do not start a valid escape: a FESC
+    /// followed by anything but TFEND or TFESC, or a FESC that ends the
+    /// frame. No correct KISS sender produces either, so a nonzero count
+    /// means the frame was corrupted on the host link. `unescape` keeps
+    /// such bytes as they are (the KISS spec says "no action is taken");
+    /// this lets the parser log the frame instead of passing it on silently.
+    static func invalidEscapeCount(_ data: Data) -> Int {
+        var count = 0
+        var i = data.startIndex
+        while i < data.endIndex {
+            if data[i] == FESC {
+                let next = data.index(after: i)
+                if next < data.endIndex, data[next] == TFEND || data[next] == TFESC {
+                    i = data.index(after: next)
+                    continue
+                }
+                count += 1
+            }
+            i = data.index(after: i)
+        }
+        return count
+    }
+
     // MARK: - TX Encoding
 
     /// Escape data for KISS transmission
@@ -177,6 +200,18 @@ nonisolated struct KISSFrameParser {
 
         let escapedPayload = data.count > 1 ? data.subdata(in: 1..<data.count) : Data()
         let payload = KISS.unescape(escapedPayload)
+
+        // A broken escape is a malformed frame, which must be logged rather
+        // than passed on silently (CLAUDE.md §4). The bytes still go
+        // downstream unchanged; the AX.25 decoder judges the frame.
+        let invalidEscapes = KISS.invalidEscapeCount(escapedPayload)
+        if invalidEscapes > 0 {
+            TxLog.warning(.kiss, "KISS frame has invalid escape sequences", [
+                "command": String(format: "0x%02X", command),
+                "invalidEscapes": invalidEscapes,
+                "payloadLen": payload.count
+            ])
+        }
 
         TxLog.debug(.kiss, "KISS frame received", [
             "command": String(format: "0x%02X", command),
