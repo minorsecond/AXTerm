@@ -348,9 +348,17 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
             }
         }
 
-        // Info field (payload) - only for UI and I frames
-        // S-frames and most U-frames have no info field
-        if frameClass == "ui" || frameClass == "i" {
+        // Info field: I and UI frames, and the U frames that carry one.
+        // XID holds its parameters there (AX.25 2.2 §4.3.3.7), and so do
+        // TEST and FRMR. Until 2026-10-01 only I and UI were let through,
+        // so every XID AXTerm sent, command or response, went out empty.
+        // S frames and the other U frames have no information field.
+        let uCarriesInfo: Bool = {
+            guard frameClass == "u", let ctrl = controlByte else { return false }
+            let base = ctrl & ~0x10
+            return base == 0xAF || base == 0xE3 || base == AX25Control.frmr
+        }()
+        if frameClass == "ui" || frameClass == "i" || uCarriesInfo {
             data.append(payload)
         }
 
