@@ -360,6 +360,78 @@ final class ConnectedModeStressTests: XCTestCase {
         XCTAssertGreaterThan(tally.completed, 0)
     }
 
+    // MARK: Defaults against the switched-off alternatives
+
+    /// The same scenarios under the production defaults (FRACK floor under
+    /// T1, in-session growth off), with SessionCoordinator.inSessionLinkGrowth
+    /// on, and with AX25SessionManager.useDelayedAckT1 on. Data for the
+    /// owner: the invariants must hold in every mode, and the figures go to
+    /// AXTermStress/mode-comparison.txt. No default is changed.
+    func testModeComparison() {
+        struct Case { let name: String; let make: (inout StressScenario) -> Void }
+        let cases: [Case] = [
+            Case(name: "field-705") { s in
+                // 2026-09-30: the 705 through Warbler (0.7 s hang) and the
+                // TNC4 at 800 ms TX delay; 20 KB from B to A.
+                s.hang = (0.7, 0); s.txDelay = (0.3, 0.8)
+                s.traffic = .bulk(aToB: 0, bToA: 20000)
+            },
+            Case(name: "field-705-txd300") { s in
+                s.hang = (0.7, 0); s.txDelay = (0.3, 0.3)
+                s.traffic = .bulk(aToB: 0, bToA: 20000)
+            },
+            Case(name: "field-705-loss10") { s in
+                s.hang = (0.7, 0); s.txDelay = (0.3, 0.8); s.loss = 0.1
+                s.traffic = .bulk(aToB: 0, bToA: 20000)
+            },
+            Case(name: "clean-1200") { s in s.traffic = .bulk(aToB: 20000, bToA: 0) },
+            Case(name: "clean-9600") { s in s.bitRate = 9600; s.traffic = .bulk(aToB: 20000, bToA: 0) },
+            Case(name: "two-way-1200") { s in s.traffic = .bulk(aToB: 8000, bToA: 8000) },
+            Case(name: "loss20-1200") { s in s.loss = 0.2; s.traffic = .bulk(aToB: 10000, bToA: 0) },
+            Case(name: "fades-1200") { s in
+                s.fade = SimFadeModel(meanClear: 40, meanFade: 5); s.traffic = .bulk(aToB: 10000, bToA: 0)
+            },
+            Case(name: "digi-1200") { s in s.viaDigi = true; s.traffic = .bulk(aToB: 10000, bToA: 0) },
+            Case(name: "chat-slow-peer-frack3") { s in
+                // Lone unpolled lines to a slow peer: 1 s TX delay, the
+                // 705's hang on our side, FRACK at its 3 s minimum.
+                s.hang = (0.7, 0); s.txDelay = (0.3, 1.0); s.frack = 3
+                s.traffic = .chat(linesEach: 30, meanGap: 6, bothWays: true)
+            },
+            Case(name: "bulk-K4-P256-1200") { s in
+                // Four 256-byte frames hold a 1200 baud channel about 7.5 s,
+                // longer than the 4 s FRACK floor. (Fixed K and paclen, so
+                // growth has nothing to do here.)
+                s.window = 4; s.paclen = 256
+                s.traffic = .bulk(aToB: 20000, bToA: 0)
+            },
+            Case(name: "chat-705") { s in
+                s.hang = (0.7, 0); s.txDelay = (0.3, 0.3)
+                s.traffic = .chat(linesEach: 30, meanGap: 6, bothWays: true)
+            }
+        ]
+        var lines: [String] = []
+        var totals: [StressMode: StressTally] = [:]
+        for c in cases {
+            for mode in StressMode.allCases {
+                let tally = runFamily("mode-\(c.name)-\(mode.rawValue)", seeds: seeds(4)) { seed in
+                    var s = StressScenario(name: c.name, seed: seed)
+                    s.mode = mode
+                    c.make(&s)
+                    return s
+                }
+                lines.append("\(c.name) \(mode.rawValue): \(tally.row)")
+                var total = totals[mode] ?? StressTally()
+                total.merge(tally)
+                totals[mode] = total
+            }
+        }
+        for mode in StressMode.allCases {
+            lines.append("ALL \(mode.rawValue): \(totals[mode]?.row ?? "")")
+        }
+        StressReport.write(lines, name: "mode-comparison")
+    }
+
     // MARK: Determinism
 
     func testTheSameSeedReplaysTheSameRun() {

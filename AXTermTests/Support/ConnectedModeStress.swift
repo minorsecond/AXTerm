@@ -586,6 +586,13 @@ struct StressTally {
         midBurstLost += r.midBurstT2Lost
     }
 
+    mutating func merge(_ o: StressTally) {
+        runs += o.runs; completed += o.completed; failed += o.failed
+        bytes += o.bytes; dataTime += o.dataTime; newI += o.newI; retx += o.retx
+        collisions += o.collisions; deaf += o.deaf; timers = timers + o.timers
+        midBurstLost += o.midBurstLost; gapFlushRuns += o.gapFlushRuns
+    }
+
     var row: String {
         let bps = dataTime > 0 ? Double(bytes * 8) / dataTime : 0
         let ratio = newI > 0 ? Double(retx) / Double(newI) : 0
