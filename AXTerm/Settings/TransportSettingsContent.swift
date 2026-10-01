@@ -1,3 +1,4 @@
+import CoreBluetooth
 import SwiftUI
 
 // The per-transport halves of a radio's form. `RadioDetailView` composes
@@ -185,6 +186,13 @@ struct BLESettingsContent: View {
                     .controlSize(.small)
                     .padding(.leading, 4)
             }
+
+            if !viewModel.isScanningBLE, let notice = viewModel.bleScanNotice {
+                Label(notice, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             
             if let error = viewModel.userFriendlyError {
                 HStack(spacing: 8) {
@@ -231,6 +239,35 @@ enum BLEDevicePicker {
             rows.insert(Row(id: selectedID, label: connected ? "\(name) (connected)" : name), at: 0)
         }
         return rows
+    }
+}
+
+/// What the form says when a Bluetooth scan ends with nothing to show.
+///
+/// A scan that found nothing used to end in silence. On 2026-09-30 the
+/// TNC4 did not show up because the Mobilinkd configuration app still held
+/// its Bluetooth connection (a TNC stops advertising while connected), and
+/// for a while after it was switched over from USB.
+nonisolated enum BLEScanNotice {
+    static let nothingFound = "No TNC found. If the Mobilinkd configuration app or another app is connected to the TNC, close it and scan again. A TNC that was just switched from USB may need a moment, or a power cycle."
+    static let bluetoothOff = "Bluetooth is off. Turn it on and scan again."
+    #if os(macOS)
+    static let notAllowed = "AXTerm isn't allowed to use Bluetooth. Allow it in System Settings under Privacy & Security, then scan again."
+    #else
+    static let notAllowed = "AXTerm isn't allowed to use Bluetooth. Allow it in Settings under Privacy & Security, then scan again."
+    #endif
+
+    /// Nil when the scan found something, or when the radio's own TNC is
+    /// connected: it has stopped advertising, and the picker already lists
+    /// it as connected.
+    static func afterScan(found: Int, bluetoothState: CBManagerState, thisRadioConnected: Bool) -> String? {
+        switch bluetoothState {
+        case .poweredOff: return bluetoothOff
+        case .unauthorized: return notAllowed
+        default: break
+        }
+        guard found == 0, !thisRadioConnected else { return nil }
+        return nothingFound
     }
 }
 

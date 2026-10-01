@@ -6,6 +6,7 @@
 //
 
 import Combine
+import CoreBluetooth
 import Foundation
 import SwiftUI
 
@@ -201,6 +202,8 @@ final class ConnectionTransportViewModel: ObservableObject {
     // BLE Discovery
     @Published var bleDevices: [BLEDiscoveredDevice] = []
     @Published var isScanningBLE = false
+    /// Said under the picker when a scan ends with nothing to show.
+    @Published private(set) var bleScanNotice: String?
     @Published var selectedBLEPeripheralID: String = "" {
         didSet {
             if selectedTransport == .ble {
@@ -406,6 +409,16 @@ final class ConnectionTransportViewModel: ObservableObject {
         bleScanner.$isScanning
             .receive(on: RunLoop.main)
             .assign(to: &$isScanningBLE)
+        bleScanner.$isScanning
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] scanning in
+                guard let self else { return }
+                self.bleScanDidChange(isScanning: scanning, found: self.bleScanner.devices.count,
+                                      bluetoothState: self.bleScanner.bluetoothState)
+            }
+            .store(in: &cancellables)
 
         audioDiscovery.$devices
             .receive(on: RunLoop.main)
@@ -512,6 +525,19 @@ final class ConnectionTransportViewModel: ObservableObject {
         }
     }
     
+    /// A scan starting clears the last one's notice; a scan ending says why
+    /// it found nothing, if it did. Called with the scanner's own values when
+    /// its scanning flag changes, which it does when the scan window runs out.
+    func bleScanDidChange(isScanning: Bool, found: Int, bluetoothState: CBManagerState) {
+        if isScanning {
+            bleScanNotice = nil
+            return
+        }
+        bleScanNotice = BLEScanNotice.afterScan(
+            found: found, bluetoothState: bluetoothState,
+            thisRadioConnected: radioConnected && !selectedBLEPeripheralID.isEmpty)
+    }
+
     func refreshSerialPorts() {
         Task { serialDiscovery.startScanning() }
     }
@@ -621,6 +647,7 @@ final class ConnectionTransportViewModel: ObservableObject {
     private func handleTransportChange() {
         userFriendlyError = nil
         errorDetail = nil
+        bleScanNotice = nil
         
         switch selectedTransport {
         case .network:
