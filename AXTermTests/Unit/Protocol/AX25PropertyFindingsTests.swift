@@ -148,6 +148,34 @@ final class AX25PropertyFindingsTests: XCTestCase {
         XCTAssertEqual(delivered.count, 10)
     }
 
+    // MARK: - Fixed: a poll that fills one SREJ gap and exposes another
+    //
+    // S1.hostile seed 0xD01EA0FF5018BFC4: with SREJ negotiated, V(R)=0 and
+    // frames 1 and 3 buffered, I(0) with P=1 delivered 0 and 1 and exposed
+    // the gap at 2. The state machine asked for SREJ(2) F=0 and RR F=1,
+    // but the manager returns one response per I-frame, so only the SREJ
+    // went out and the poll was never answered (§6.2).
+
+    func testPollThatExposesASecondSREJGapIsAnswered() throws {
+        let clock = AX25VirtualClock()
+        let manager = AX25SessionManager(localCallsign: local, clock: clock)
+        manager.defaultConfig = AX25SessionConfig(srejEnabled: true)
+        _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
+        func send(_ ns: Int, pf: Bool) -> OutboundFrame? {
+            manager.handleInboundIFrame(from: peer, path: DigiPath(), radio: .primary,
+                                        ns: ns, nr: 0, pf: pf, payload: Data("f\(ns)".utf8))
+        }
+        _ = send(1, pf: false)  // gap at 0: SREJ(0)
+        _ = send(3, pf: false)  // buffered behind it
+        let reply = try XCTUnwrap(send(0, pf: true))
+
+        XCTAssertEqual(manager.existingSession(for: peer)?.vr, 2)
+        XCTAssertEqual(reply.frameType, "s")
+        XCTAssertEqual(reply.isCommand, false)
+        XCTAssertNotEqual((reply.controlByte ?? 0) & 0x10, 0, "the poll needs F=1: got \(reply.displayInfo ?? "?")")
+        XCTAssertEqual(reply.displayInfo, "SREJ(2)", "the new gap is still asked for")
+    }
+
     // MARK: - Fixed: a new link starts its N2 ladder at zero
     //
     // S1.hostile seed 0x036E22AFF228470A: retryCount 9 with N2=8 on a

@@ -1438,10 +1438,18 @@ nonisolated struct AX25StateMachine: Sendable {
         // A second gap can already be visible: frames beyond it are still
         // buffered. With SREJ negotiated, ask for the new missing frame
         // now — leaving it costs a full T1 before anything moves.
+        //
+        // On a P=1 frame that SREJ is also the F=1 answer. An F=1 SREJ
+        // acknowledges everything below N(R) (§4.3.2.4), which here is V(R),
+        // exactly what the RR would have said. The manager returns one
+        // response per inbound I-frame, so sending SREJ and then RR dropped
+        // the RR and left the peer's poll unanswered.
+        var srejAnswersPoll = false
         if config.srejEnabled, !receiveBuffer.isEmpty, !rejSent {
-            actions.append(.sendSREJ(nr: sequenceState.vr, pf: false))
+            actions.append(.sendSREJ(nr: sequenceState.vr, pf: pf))
             actions.append(.startT1)
             rejSent = true
+            srejAnswersPoll = pf
         }
 
         // Acknowledge cumulatively. A P=1 frame demands an immediate F=1
@@ -1451,7 +1459,9 @@ nonisolated struct AX25StateMachine: Sendable {
         // and our RR can collide with the peer's next I-frame — turning
         // the ack itself into inbound loss and a go-back-N resend.
         if pf {
-            actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+            if !srejAnswersPoll {
+                actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+            }
             if ackPending {
                 ackPending = false
                 actions.append(.stopT2)
