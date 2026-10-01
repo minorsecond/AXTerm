@@ -31,6 +31,8 @@ nonisolated enum TransferSendRoute: Equatable, Sendable {
         case .yapp: return .yapp
         case .sevenPlus, .rawBinary:
             return .unavailable("\(type.displayName) sending is not available in this version of AXTerm.")
+        case .text:
+            return .unavailable("Text can only be received from a session. Send the file by AXDP or YAPP.")
         }
     }
 

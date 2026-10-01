@@ -190,8 +190,10 @@ struct BulkTransferRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
-            // A received file: where it went and what to do with it.
-            if transfer.direction == .inbound, transfer.status == .completed,
+            // A received file: where it went and what to do with it. An
+            // incomplete text download is failed but saved, so it gets the
+            // same actions under its failure reason.
+            if transfer.direction == .inbound, showsSavedFile,
                let path = transfer.savedFilePath {
                 ReceivedFileActions(path: path)
                     .buttonStyle(.borderless)
@@ -215,6 +217,15 @@ struct BulkTransferRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
+    /// Whether the row offers the saved file: a completed one, or a failed
+    /// one that was saved anyway (an incomplete text download).
+    private var showsSavedFile: Bool {
+        switch transfer.status {
+        case .completed, .failed: return true
+        default: return false
+        }
+    }
+
     // MARK: - Compression Badge
 
     /// Protocol badge for transfer row
@@ -226,6 +237,7 @@ struct BulkTransferRow: View {
             case .yapp: return .green
             case .sevenPlus: return .orange
             case .rawBinary: return .gray
+            case .text: return .teal
             }
         }()
 
@@ -1193,6 +1205,7 @@ struct SendFileSheet: View {
             case .yapp: return .green
             case .sevenPlus: return .orange
             case .rawBinary: return .gray
+            case .text: return .teal
             }
         }()
 

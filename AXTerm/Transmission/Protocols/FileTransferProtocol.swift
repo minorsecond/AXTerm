@@ -28,6 +28,11 @@ nonisolated enum TransferProtocolType: String, CaseIterable, Sendable, Identifia
     /// Simple raw binary over I-frames (minimal protocol)
     case rawBinary = "Raw"
 
+    /// Lines of text typed down the session: a mailbox's marked text download
+    /// or a Capture. Received only; there is no sender, and nothing offers it
+    /// as a choice (see `ReceivedText.swift`).
+    case text = "Text"
+
     var id: String { rawValue }
 
     /// Human-readable display name
@@ -37,6 +42,7 @@ nonisolated enum TransferProtocolType: String, CaseIterable, Sendable, Identifia
         case .yapp: return "YAPP"
         case .sevenPlus: return "7plus"
         case .rawBinary: return "Raw Binary"
+        case .text: return "Text"
         }
     }
 
@@ -47,6 +53,7 @@ nonisolated enum TransferProtocolType: String, CaseIterable, Sendable, Identifia
         case .yapp: return "Legacy binary protocol with ACK/NAK"
         case .sevenPlus: return "ASCII encoding for 7-bit paths"
         case .rawBinary: return "Simple binary, relies on AX.25 L2"
+        case .text: return "Plain text lines from the session, saved as a file"
         }
     }
 
@@ -57,6 +64,7 @@ nonisolated enum TransferProtocolType: String, CaseIterable, Sendable, Identifia
         case .yapp: return true   // Needs reliable transport
         case .sevenPlus: return true  // Designed for connected sessions
         case .rawBinary: return true  // Relies on L2 reliability
+        case .text: return true   // Lines arrive over a session
         }
     }
 
@@ -64,7 +72,7 @@ nonisolated enum TransferProtocolType: String, CaseIterable, Sendable, Identifia
     var supportsCompression: Bool {
         switch self {
         case .axdp: return true
-        case .yapp, .sevenPlus, .rawBinary: return false
+        case .yapp, .sevenPlus, .rawBinary, .text: return false
         }
     }
 
@@ -75,6 +83,7 @@ nonisolated enum TransferProtocolType: String, CaseIterable, Sendable, Identifia
         case .yapp: return true   // ACK/NAK per block
         case .sevenPlus: return true  // Block checksums with retry
         case .rawBinary: return false  // Relies entirely on AX.25 L2
+        case .text: return false  // The byte count is checked at the end, nothing is acked
         }
     }
 
@@ -85,6 +94,7 @@ nonisolated enum TransferProtocolType: String, CaseIterable, Sendable, Identifia
         case .yapp: return 5   // STX + length + checksum
         case .sevenPlus: return 8  // ASCII expansion ~33% + checksums
         case .rawBinary: return 1  // Minimal framing
+        case .text: return 0   // Two marker lines per file, nothing per block
         }
     }
 }

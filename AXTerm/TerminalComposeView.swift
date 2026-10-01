@@ -1444,6 +1444,10 @@ struct TerminalComposeView: View {
     /// Appends the operator's position stamp to the compose text (GPS or
     /// grid-square fallback). Nil hides the button.
     var onInsertPosition: (() -> Void)?
+    /// Whether Capture is on for the session on screen.
+    var isCapturing: Bool = false
+    /// Turns Capture on or off for the session on screen. Nil hides the button.
+    var onToggleCapture: (() -> Void)?
 
     @FocusState private var isTextFieldFocused: Bool
     @State private var showRoutingChangeConfirmation = false
@@ -1536,6 +1540,25 @@ struct TerminalComposeView: View {
                         .disabled(!isConnected || !canTypeMessage)
                         .help("Insert your position (GPS when available, otherwise your grid square) into the message.")
                         .accessibilityIdentifier("terminalInsertPosition")
+                    }
+
+                    // Capture: keep what the station sends as a text file.
+                    // Offered while a session is up, and kept on screen while
+                    // a capture runs so it can always be turned off.
+                    if let onToggleCapture,
+                       isCapturing || (connectionMode == .connected && sessionState == .connected) {
+                        Button {
+                            onToggleCapture()
+                        } label: {
+                            Image(systemName: isCapturing ? "record.circle.fill" : "record.circle")
+                                .foregroundStyle(isCapturing ? Color.red : Color.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(isCapturing
+                              ? "Stop capturing and save what this station sent as a text file in \(ReceivedFileStore.folderName)."
+                              : "Capture everything this station sends to a text file in \(ReceivedFileStore.folderName). Your own lines are not included.")
+                        .accessibilityLabel(isCapturing ? "Stop Capture" : "Capture")
+                        .accessibilityIdentifier("terminalCaptureToggle")
                     }
 
                     if !composeText.isEmpty {

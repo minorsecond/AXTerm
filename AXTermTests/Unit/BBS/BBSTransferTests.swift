@@ -165,15 +165,63 @@ final class BBSTransferTests: XCTestCase {
         let reply = await command("D notes.txt")
 
         let announce = try XCTUnwrap(reply.range(of: "notes.txt is text"))
-        let start = try XCTUnwrap(reply.range(of: "--- notes.txt ---"))
+        let start = try XCTUnwrap(reply.range(of: "--- BEGIN notes.txt (41 bytes) ---\r"), reply)
         let body = try XCTUnwrap(reply.range(of: "Check-ins by suffix"))
-        let end = try XCTUnwrap(reply.range(of: "--- end of notes.txt ---"))
+        let end = try XCTUnwrap(reply.range(of: "--- END notes.txt ---\r"), reply)
         XCTAssertTrue(announce.lowerBound < start.lowerBound
                       && start.lowerBound < body.lowerBound
                       && body.lowerBound < end.lowerBound,
                       "the announcement comes before the file, not after it: \(reply)")
         XCTAssertTrue(reply.hasSuffix(">\r"))
         assertIdle()
+    }
+
+    /// The marker lines carry the exact count of the text between them, with
+    /// each CR the mailbox sends standing for one LF in the caller's copy.
+    func testTheMarkersCarryTheExactCountOfWhatIsBetweenThem() async throws {
+        try writeFile("crlf.txt", bytes: Data("one\r\n\r\nthree\r\nno newline".utf8))
+        library.rescan()
+        try await connect()
+        let reply = await command("D crlf.txt")
+
+        let start = try XCTUnwrap(reply.range(of: "--- BEGIN crlf.txt (21 bytes) ---\r"), reply)
+        let end = try XCTUnwrap(reply.range(of: "--- END crlf.txt ---\r"), reply)
+        let between = String(reply[start.upperBound..<end.lowerBound])
+        XCTAssertEqual(between, "one\r\rthree\rno newline\r",
+                       "CRLF goes out as one CR and blank lines are kept")
+        XCTAssertEqual(between.utf8.count, 21 + 1,
+                       "one CR per line; the count is one less because the file has no final newline")
+    }
+
+    /// A line in the file that looks like the end marker goes out as it is:
+    /// the count, not the marker, says where the file ends.
+    func testAFileHoldingAMarkerLikeLineIsSentUnchanged() async throws {
+        try writeFile("tricky.txt", bytes: Data("a\n--- END tricky.txt ---\nb\n".utf8))
+        library.rescan()
+        try await connect()
+        let reply = await command("D tricky.txt")
+        XCTAssertTrue(reply.contains("--- BEGIN tricky.txt (27 bytes) ---\r"
+                                     + "a\r--- END tricky.txt ---\rb\r--- END tricky.txt ---\r"),
+                      reply)
+    }
+
+    /// A reply is one batch: the lines are packed into I-frames up to the
+    /// paclen instead of costing a frame header each.
+    func testATypedOutFileIsPackedIntoFewerFramesThanLines() async throws {
+        let lines = (1...40).map { String(format: "Line %02d of the net script, padded out a bit.", $0) }
+        let source = lines.joined(separator: "\n") + "\n"
+        try writeFile("script.txt", bytes: Data(source.utf8))
+        library.rescan()
+        try await connect()
+
+        var frames = 0
+        caller.onBytes = { _ in frames += 1 }
+        let reply = await command("D script.txt")
+        caller.onBytes = nil
+
+        XCTAssertTrue(reply.contains(lines.joined(separator: "\r") + "\r--- END script.txt ---\r"), reply)
+        XCTAssertLessThan(frames, lines.count / 2,
+                          "\(frames) frames for \(lines.count) lines: one frame per line would waste a header each")
     }
 
     // MARK: - Binary downloads

@@ -636,6 +636,46 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Used to add to console when sender uses plain text instead of AXDP.
     var onPlainTextChatReceived: ((AX25Address, String, [String]) -> Void)?
 
+    /// Marked text downloads and captures, per station. Fed every received
+    /// byte below, after AXDP envelopes are taken out. See `ReceivedText.swift`.
+    private let textRecorder = ReceivedTextRecorder()
+
+    /// Where finished downloads and captures are saved and listed. The
+    /// terminal view points it at the session coordinator.
+    var receivedTextSink: ReceivedTextSink? {
+        get { textRecorder.sink }
+        set { textRecorder.sink = newValue }
+    }
+
+    /// Stations being captured, by uppercased callsign. Published so the
+    /// Capture button follows a capture that the link's end stopped.
+    @Published private(set) var capturingPeerKeys: Set<String> = []
+
+    /// Whether the Capture switch is on for the session the terminal shows.
+    var isCapturingCurrentSession: Bool {
+        guard let session = currentSession else { return false }
+        return capturingPeerKeys.contains(session.remoteAddress.display.uppercased())
+    }
+
+    func isCapturing(peer: String) -> Bool {
+        capturingPeerKeys.contains(peer.uppercased())
+    }
+
+    /// Turns Capture on or off for the current session. Turning it off saves
+    /// what was captured and returns what happened; turning it on returns nil.
+    /// Only a connected session can start a capture.
+    @discardableResult
+    func toggleCapture() -> ReceivedTextReport? {
+        guard let session = currentSession else { return nil }
+        let key = session.remoteAddress.display
+        if textRecorder.isCapturing(key: key) {
+            return textRecorder.stopCapture(key: key)
+        }
+        guard session.state == .connected else { return nil }
+        textRecorder.startCapture(key: key, label: conversationPeer(for: session).display)
+        return nil
+    }
+
     /// Tracks peers that are currently mid-AXDP reassembly.
     /// When data with AXDP magic is received, the peer is added here.
     /// When AXDP message extraction completes via appendAXDPChatToTranscript, the peer is removed.
@@ -720,6 +760,10 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         
         setupSearchDebounce()
         setupConsoleSubscription(client: client)
+        textRecorder.onCaptureChange = { [weak self] in
+            guard let self else { return }
+            self.capturingPeerKeys = self.textRecorder.capturingKeys
+        }
     }
 
     private func createSessionNotification(for session: AX25Session, oldState: AX25SessionState, newState: AX25SessionState) -> SessionNotification? {
@@ -824,7 +868,15 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                         self?.clearOutboundProgress()
                     }
                 }
-                
+
+                // The link is gone, whether it closed or gave up: a text
+                // download still coming in is saved as incomplete, and a
+                // capture stops and is saved.
+                if (newState == .disconnected || newState == .error),
+                   oldState != .disconnected, oldState != .error {
+                    self?.textRecorder.linkClosed(key: session.remoteAddress.display)
+                }
+
                 // Show notification for significant state changes
                 if oldState != newState {
                     if let notification = self?.createSessionNotification(for: session, oldState: oldState, newState: newState) {
@@ -1096,6 +1148,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         // is still set and would incorrectly suppress this decoded text.
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedText.isEmpty {
+            textRecorder.receivedMessage(trimmedText, key: peerKey, label: conversationPeer(for: session).display)
             sessionTranscriptLines.append(trimmedText)
             TxLog.debug(.axdp, "Delivering AXDP chat to console", [
                 "peer": peerKey,
@@ -1323,6 +1376,11 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                 viewModel.digiPath = session.path.display
             }
         }
+
+        // Marked text downloads and captures read the same bytes, with their
+        // own line assembly: the loop below drops blank lines, and a file
+        // needs them.
+        textRecorder.received(data, key: peerKey, label: conversationPeer(for: session).display)
 
         // Get or create the per-peer buffer
         var peerBuffer = currentLineBuffers[peerKey] ?? Data()
@@ -2163,7 +2221,11 @@ struct TerminalView: View {
         // to avoid the @StateObject gotcha where init() is called multiple times
         // but only the first instance is kept. See setupSessionCallbacks() for details.
         txViewModel.setupSessionCallbacks()
-        
+
+        // Marked text downloads and captures are saved and listed with the
+        // other received files.
+        txViewModel.receivedTextSink = sessionCoordinator
+
         // Wire sender progress: I-frames transmitted (incl. from drain) update bytesSent
         client.onUserFrameTransmitted = { [weak txViewModel] bytes in
             txViewModel?.updateOutboundBytesSent(additionalBytes: bytes)
@@ -2609,6 +2671,20 @@ struct TerminalView: View {
         txViewModel.dismissSessionNotification()
     }
 
+    /// The Capture button. Saving is announced by the coordinator along with
+    /// the file; the start, and a capture with nothing in it, are said here.
+    private func toggleCapture() {
+        let wasCapturing = txViewModel.isCapturingCurrentSession
+        let report = txViewModel.toggleCapture()
+        if !wasCapturing, txViewModel.isCapturingCurrentSession,
+           let peer = txViewModel.currentSession?.remoteAddress.display {
+            client.appendSystemNotification(
+                "Capturing what \(peer) sends. Turn Capture off to save it in \(ReceivedFileStore.folderName).")
+        } else if let report, report.transferID == nil {
+            client.appendSystemNotification(report.notice)
+        }
+    }
+
     /// Notify all connected peers with confirmed AXDP capability that we enabled AXDP.
     /// Called when user enables via the toggle or via the toast's Enable button.
     private func sendPeerAxdpEnabledToConnectedSessions() {
@@ -2807,6 +2883,10 @@ struct TerminalView: View {
                             txViewModel.composeText.wrappedValue = text.isEmpty ? stamp : text + " " + stamp
                         }
                     }
+                },
+                isCapturing: txViewModel.isCapturingCurrentSession,
+                onToggleCapture: {
+                    toggleCapture()
                 }
             )
             }

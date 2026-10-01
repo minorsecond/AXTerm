@@ -787,12 +787,14 @@ final class BBSService: ObservableObject {
     /// file area actually holds is text, so this is the common path rather
     /// than the fallback. Shared with NET/ROM circuit callers, whose link
     /// carries lines and nothing else.
+    ///
+    /// The file goes between a BEGIN line carrying its name and exact byte
+    /// count and an END line (`TextDownloadMarkers`). Any terminal shows
+    /// them as two more lines of text; an AXTerm caller uses them to save
+    /// the file and to check that every line arrived.
     fileprivate func textLines(for file: BBSSharedFile) -> [String]? {
         guard let data = library?.data(for: file) else { return nil }
-        let text = String(decoding: data, as: UTF8.self)
-        return ["--- \(file.name) ---"]
-            + text.components(separatedBy: .newlines)
-            + ["--- end of \(file.name) ---"]
+        return TextDownloadMarkers.markedLines(name: file.name, data: data)
     }
 
     private func viewFile(_ file: BBSSharedFile) {
