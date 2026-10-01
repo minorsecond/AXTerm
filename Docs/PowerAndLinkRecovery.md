@@ -119,7 +119,10 @@ On `didWakeNotification`:
 - `RadioManager.resumeAll()` reopens every wanted link with the backoff
   cleared. Making the station serve an exponential delay accrued while its
   operator's laptop was shut is how a node stays off the air long after the Mac
-  is awake.
+  is awake. A link the operator closed with Disconnect is not wanted and stays
+  closed. `KISSLinkSerial` has its own `suspend()` and `resume()` for the same
+  reason: the protocol's default resume is a plain `open()`, which reopened a
+  port the operator had closed.
 - `LinkOutageWatch.reset` restarts the outage clocks without reporting. A
   sleeping machine has every link down by definition, and counting that time
   would hand the operator an alert about their own lid.

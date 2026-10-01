@@ -2488,9 +2488,20 @@ final class PacketEngine: ObservableObject {
             } else {
                 // Compare snapshot to current settings on panel close
                 let currentSnapshot = ConnectionConfigSnapshot(settings: settings)
-                if currentSnapshot != suspendedConfigSnapshot {
-                    debugTrace("Settings changed while suspended — reconnecting")
-                    connectUsingSettings()
+                // A radio switched to another transport and back ends with the
+                // snapshot it started with, but its old link was retired on
+                // the way and the radio has none until this reconciles.
+                if currentSnapshot != suspendedConfigSnapshot || radioManager.hasRetiredLinks {
+                    if radioManager.isHeldClosed {
+                        // The operator pressed Disconnect on the page. Bring
+                        // the links into line with what they set, open none.
+                        debugTrace("Settings changed while suspended — applying, held closed by Disconnect")
+                        radioManager.reconcileAfterSettingsChange(settings.radios)
+                        refreshLinkSummary()
+                    } else {
+                        debugTrace("Settings changed while suspended — reconnecting")
+                        connectUsingSettings()
+                    }
                 } else {
                     debugTrace("Settings unchanged while suspended — skipping reconnect")
                 }
@@ -2515,7 +2526,7 @@ final class PacketEngine: ObservableObject {
                     self.radioManager.applyInPlace(radios)
                     return
                 }
-                if self.radioManager.reconcile(radios, open: true) > 0 {
+                if self.radioManager.reconcileAfterSettingsChange(radios) > 0 {
                     self.loadPersistedPackets(reason: "connect")
                 }
                 self.refreshLinkSummary()

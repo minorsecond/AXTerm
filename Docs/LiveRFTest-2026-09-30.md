@@ -106,15 +106,15 @@ Status is filled in as each is fixed.
 
 | # | bug | where seen | status |
 |---|---|---|---|
-| 1 | AXDP capability PING/PONG is never retried. A lost PONG leaves the Send File sheet on "Checking…" until a 15-minute timeout, offering only YAPP. AXDP was confirmed later only because B's chat message implied it. | A, 17:36 | open |
+| 1 | AXDP capability PING/PONG is never retried. A lost PONG leaves the Send File sheet on "Checking…" until a 15-minute timeout, offering only YAPP. AXDP was confirmed later only because B's chat message implied it. | A, 17:36 | fixed, 78bbf32: the probe and PONG are UI frames, so nothing retransmitted them; the check now asks 3 times about one RTO apart (10 to 30 s), then shows "No answer" and offers YAPP |
 | 2 | After a chat message is acked at the link layer (RR received, no retransmission), the message still shows "Queued" and the header still says "Sending…". Both stations. | A and B, 17:40 | open |
 | 3 | The terminal's To field lost keystrokes to its suggestion popover: typing K0EPI-2 left just "K", and the field then locked to a session with "K" and could not be edited. | B, 17:40 | open |
 | 4 | Send stays disabled on B until the session is picked in the sidebar, even though B is connected to K0EPI-2. Related to 3. | B, 17:41 | open |
 | 5 | The connection note says "connected and polling, but nothing has passed … may not be answering" while both sides answer every 30 s keep-alive poll. | A, 17:37 | open |
-| 6 | Changing the radio's transport (Serial to Bluetooth and back) clears the chosen serial device. | B, 17:54 | open |
-| 7 | After Disconnect, or after a transport change, the old serial link keeps reconnecting and reopens the port, which also got in the way of probing the TNC4. | B, 18:11 | open |
-| 8 | The receiver of a paused transfer keeps saying "Receiving" with a decaying rate and no sign that the sender paused. | A, 19:48 | open |
-| 9 | The session log view would not scroll back reliably to earlier lines. | A, 17:38 | open |
+| 6 | Changing the radio's transport (Serial to Bluetooth and back) clears the chosen serial device. | B, 17:54 | fixed, 683c957: the form cleared a device missing from /dev for 10 s and saved the empty path; it now stays chosen, marked unavailable |
+| 7 | After Disconnect, or after a transport change, the old serial link keeps reconnecting and reopens the port, which also got in the way of probing the TNC4. | B, 18:11 | fixed, 0cc4b00: any settings write after Disconnect reopened every link, a transport change on the open page kept the old link, and a released serial link never closed its descriptor |
+| 8 | The receiver of a paused transfer keeps saying "Receiving" with a decaying rate and no sign that the sender paused. | A, 19:48 | fixed, 91e9324: AXDP and YAPP have no pause message, so after a silence longer than max(15 s, 4 times the usual chunk gap) the receiver shows "Waiting for" the sender and hides the rate |
+| 9 | The session log view would not scroll back reliably to earlier lines. | A, 17:38 | fixed, 8fa62c1: the console and raw log scrolled to the bottom on every new line; they now follow only while the reader is at the bottom |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -132,7 +132,7 @@ Not bugs, recorded so nobody chases them again:
 |---|---|---|
 | I-1 | Let K and paclen grow during a session, within limits (details below). | approved 2026-09-30, planned for 2026-10-01 |
 | I-2 | Fix the 705's transmit tail in Warbler; in AXTerm, add a diagnostic hint and leave TX delay manual (details below). | approved 2026-09-30, planned for 2026-10-01 |
-| I-3 | When a Bluetooth scan finds no TNC, say that another app (such as the Mobilinkd configuration app) may be holding it. | open |
+| I-3 | When a Bluetooth scan finds no TNC, say that another app (such as the Mobilinkd configuration app) may be holding it. | done, b8c4ded |
 
 ### I-1: K and paclen grow during a session
 
