@@ -107,9 +107,4 @@ final class MobilinkdInputLevelTests: XCTestCase {
         let frame = MobilinkdTNC.pollInputLevel()
         XCTAssertEqual(frame, [0xC0, 0x06, 0x04, 0xC0])
     }
-
-    func testAdjustInputLevelsFrame() {
-        let frame = MobilinkdTNC.adjustInputLevels()
-        XCTAssertEqual(frame, [0xC0, 0x06, 0x2B, 0xC0])
-    }
 }

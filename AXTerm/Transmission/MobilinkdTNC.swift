@@ -22,7 +22,15 @@ enum MobilinkdTNC {
     static let POLL_INPUT_LEVEL: UInt8 = 0x04   // Returns Vpp/Vavg/Vmin/Vmax
     static let GET_BATTERY_LEVEL: UInt8 = 0x06
     static let STREAM_AMPLIFIED_INPUT: UInt8 = 29 // Scope data
-    static let ADJUST_INPUT_LEVELS: UInt8 = 0x2B  // Runs firmware auto-AGC (43)
+    /// The firmware's own input auto-adjust (43). Known so its replies can be
+    /// recognized; AXTerm deliberately has no way to send it. It saves the
+    /// gain it picks to the TNC4's memory, changing it for every radio the
+    /// TNC4 serves, and in firmware 2.5.x it judges 14-bit readings against a
+    /// 12-bit full scale (AudioLevel.hpp: vref = 4095): it lands about two
+    /// steps low, never sees clipping at the top, and loops with no timeout
+    /// while the input clips at the bottom. MobilinkdLevelAssistant does the
+    /// job instead, per radio, saving nothing.
+    static let ADJUST_INPUT_LEVELS: UInt8 = 0x2B
     static let RESET: UInt8 = 0x0B                // Restarts the demodulator
     static let GET_OUTPUT_GAIN: UInt8 = 0x0C
     static let GET_FIRMWARE_VERSION: UInt8 = 0x28 // Replies with an ASCII version, e.g. "2.5.14"
@@ -217,14 +225,8 @@ enum MobilinkdTNC {
         return [KISS_FEND, CMD_HARDWARE, POLL_INPUT_LEVEL, KISS_FEND]
     }
 
-    /// Generates a frame to trigger the firmware's auto-AGC adjustment.
-    /// NOTE: This stops the demodulator during calibration. Send reset() after to restart.
-    static func adjustInputLevels() -> [UInt8] {
-        return [KISS_FEND, CMD_HARDWARE, ADJUST_INPUT_LEVELS, KISS_FEND]
-    }
-
     /// Generates a frame to restart the demodulator.
-    /// Must be sent after POLL_INPUT_LEVEL or ADJUST_INPUT_LEVELS to resume packet reception.
+    /// Must be sent after POLL_INPUT_LEVEL or STREAM_INPUT_LEVEL to resume packet reception.
     static func reset() -> [UInt8] {
         return [KISS_FEND, CMD_HARDWARE, RESET, KISS_FEND]
     }
