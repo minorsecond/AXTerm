@@ -105,6 +105,12 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     /// Disconnect (2026-09-30).
     private(set) var isHeldClosed = false
 
+    /// A link was retired while the settings page held off reconciling
+    /// (see `retireLinksOfMovedRadios`), so the links no longer match the
+    /// settings even when the settings ended where they started. Cleared by
+    /// the next reconcile.
+    private(set) var hasRetiredLinks = false
+
     weak var delegate: RadioManagerDelegate?
     private let linkFactory: LinkFactory
 
@@ -175,6 +181,7 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     @discardableResult
     func reconcile(_ radios: [RadioProfile], open shouldOpen: Bool) -> Int {
         if shouldOpen { isHeldClosed = false }
+        hasRetiredLinks = false
         let desired = radios.filter { $0.enabled && !$0.archived }
         profiles = desired
         var unavailable: [RadioID: String] = [:]
@@ -296,6 +303,7 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
             return new.kind != old.kind
         }
         guard !moved.isEmpty else { return }
+        hasRetiredLinks = true
         let movedIDs = Set(moved.map(\.id))
         for radio in moved {
             guard let key = assignment[radio.id]?.key else { continue }

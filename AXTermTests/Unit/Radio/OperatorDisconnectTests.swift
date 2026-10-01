@@ -211,4 +211,28 @@ final class OperatorDisconnectTests: XCTestCase {
         XCTAssertEqual(link(bleKey)?.opens, 1, "closing the page connects the new transport")
         XCTAssertEqual(serial.opens, 1, "and never the old one")
     }
+
+    /// Serial to Bluetooth and back on the open page retires the serial link
+    /// on the way. The settings end where they started, and closing the page
+    /// must still bring the radio's link back.
+    func testSwitchingAwayAndBackOnTheOpenPageReconnectsOnClose() async throws {
+        let (engine, settings, id) = makeEngine()
+        defer { withExtendedLifetime(engine) {} }
+        engine.connectUsingSettings()
+        let serialKey = try! XCTUnwrap(settings.radio(id)?.linkKey)
+        let first = try! XCTUnwrap(link(serialKey))
+
+        engine.isConnectionLogicSuspended = true
+        settings.updateRadio(id) { $0.kind = .ble }
+        await letTheSettingsSinkRun()
+        XCTAssertEqual(first.closes, 1)
+        settings.updateRadio(id) { $0.kind = .serial }
+        await letTheSettingsSinkRun()
+        engine.isConnectionLogicSuspended = false
+
+        let current = try XCTUnwrap(engine.radioManager.session(for: id), "the radio has a link again")
+        XCTAssertEqual(current.key, serialKey)
+        XCTAssertEqual(current.state, .connected)
+        XCTAssertEqual(first.opens, 1, "a new link, not the retired one")
+    }
 }
