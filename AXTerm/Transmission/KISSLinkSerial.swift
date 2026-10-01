@@ -166,6 +166,9 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     private static let maxOngoingNoAX25RecoveryAttempts = 3
     private var originalTermios = termios()
     private var isBluetoothSerial = false
+    /// When the last paced piece went to the port (uptime nanoseconds), so
+    /// the next one, from this frame or the next, waits out the gap.
+    private var lastPacedWriteAt: UInt64 = 0
 
     // MARK: - Stats
 
@@ -249,6 +252,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         // WRITE LOOP: Ensure full frame is written
         var bytesWritten = 0
         let totalBytes = data.count
+        let pacing = Self.writePacing(isBluetooth: isBluetoothSerial)
 
         let result = data.withUnsafeBytes { buffer -> Int in
             guard let baseAddress = buffer.baseAddress else { return -1 }
@@ -256,7 +260,17 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             while bytesWritten < totalBytes {
                 let ptr = baseAddress.advanced(by: bytesWritten)
                 let remaining = totalBytes - bytesWritten
-                let count = Darwin.write(fd, ptr, remaining)
+                if let pacing {
+                    // The gap holds across frames too: an RR and an I-frame
+                    // written a millisecond apart reach the TNC as one USB
+                    // transfer, and 18 + 38 + 18 bytes reset it just as a
+                    // single 74-byte frame did.
+                    let wait = Self.pacingWait(lastWriteAt: lastPacedWriteAt, now: DispatchTime.now().uptimeNanoseconds,
+                                               pacing: pacing)
+                    if wait > 0 { usleep(wait) }
+                }
+                let count = Darwin.write(fd, ptr, min(remaining, pacing?.chunkBytes ?? remaining))
+                if pacing != nil, count > 0 { lastPacedWriteAt = DispatchTime.now().uptimeNanoseconds }
 
                 if count < 0 {
                     let err = errno
@@ -292,6 +306,42 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         lock.unlock()
         KISSLinkLog.bytesOut(endpointDescription, count: result)
         return nil
+    }
+
+    /// How a frame is handed to a USB serial TNC: in pieces, a moment apart.
+    ///
+    /// A Mobilinkd TNC4 (firmware 2.5.14, tested 2026-09-30) on USB loses
+    /// about half of the KISS frames that arrive in one write longer than a
+    /// 64-byte USB packet: the frame never goes on the air, and 8.2 seconds
+    /// later the TNC4 drops off USB and starts again, which a watchdog would
+    /// explain. Short frames were always fine, so a connected session lost
+    /// its I-frames and the link while its RRs went through. The same frames
+    /// written 32 bytes at a time, 10 ms apart, all went out and nothing
+    /// reset (14 of 14 at 79 to 249 bytes). 32 bytes every 10 ms is 3.2 kB/s,
+    /// many times what a 1200 or 9600 baud channel takes, so no TNC is slowed
+    /// by it. Bluetooth serial has its own framing and is left alone.
+    nonisolated struct WritePacing: Equatable, Sendable {
+        let chunkBytes: Int
+        let gapMicroseconds: UInt32
+    }
+
+    nonisolated static func writePacing(isBluetooth: Bool) -> WritePacing? {
+        isBluetooth ? nil : WritePacing(chunkBytes: 32, gapMicroseconds: 10_000)
+    }
+
+    /// How long to wait before the next piece, in microseconds.
+    nonisolated static func pacingWait(lastWriteAt: UInt64, now: UInt64, pacing: WritePacing) -> UInt32 {
+        guard lastWriteAt > 0 else { return 0 }
+        guard now > lastWriteAt else { return pacing.gapMicroseconds }
+        let elapsed = (now - lastWriteAt) / 1_000
+        return elapsed >= UInt64(pacing.gapMicroseconds) ? 0 : pacing.gapMicroseconds - UInt32(elapsed)
+    }
+
+    /// The pieces a frame is written in, for tests.
+    nonisolated static func writeChunks(_ count: Int, pacing: WritePacing?) -> [Int] {
+        guard count > 0 else { return [] }
+        guard let pacing else { return [count] }
+        return stride(from: 0, to: count, by: pacing.chunkBytes).map { min(pacing.chunkBytes, count - $0) }
     }
 
     /// Write frames 50 ms apart, then call back. On serialQueue.
