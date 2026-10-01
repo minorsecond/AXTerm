@@ -1273,6 +1273,20 @@ nonisolated struct AX25StateMachine: Sendable {
             state = .disconnected
             return [.stopT1, .stopT3, .notifyDisconnected]
 
+        case (.error, .receivedIFrame(_, _, let pf, _, _)):
+            // A link that gave up is a disconnected link: AX.25 2.2's SDL
+            // leaves timer recovery for state 0 when N2 runs out, and §6.3.5
+            // answers any command with P=1 there with DM F=1. Without it a
+            // peer still holding the link polls into silence until its own
+            // retries run out.
+            return pf ? [.sendDM] : []
+
+        case (.error, .receivedRR(_, let pf, let isCommand)),
+             (.error, .receivedRNR(_, let pf, let isCommand)),
+             (.error, .receivedREJ(_, let pf, let isCommand)):
+            // As above, for supervisory command polls.
+            return (pf && isCommand) ? [.sendDM] : []
+
         case (.error, _):
             return []
         }

@@ -2531,6 +2531,13 @@ final class AX25SessionManager: ObservableObject {
             return processActions(actions, for: session).first
         }
 
+        if session.state == .error {
+            // The link gave up: answer a poll with DM, as a disconnected
+            // station does (see the state machine's .error cases).
+            let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
+            return processActions(actions, for: session).first
+        }
+
         guard session.state == .connected else {
             TxLog.warning(.session, "I-frame received but not connected", [
                 "state": session.state.rawValue
