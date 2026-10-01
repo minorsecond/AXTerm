@@ -1185,8 +1185,8 @@ final class SessionAutoSwitchTests: XCTestCase {
         }
     }
     
-    /// Test that session is auto-switched when data arrives from a different connected session
-    func testAutoSwitchToConnectedSession() async {
+    /// Data from a second connected session is delivered without moving the terminal off the chosen one
+    func testDataFromAnotherConnectedSessionKeepsTheChosenOne() async {
         await MainActor.run {
             var receivedLines: [String] = []
             
@@ -1225,9 +1225,12 @@ final class SessionAutoSwitchTests: XCTestCase {
             viewModel.sessionManager.onDataReceived?(session1, Data("From peer 1\r\n".utf8))
             XCTAssertEqual(viewModel.currentSession?.id, session1.id)
             
-            // Send data from session2 - should auto-switch since session2 is connected
+            // Data from session2 is shown, but the terminal stays on the
+            // session the operator chose. Switching here once left the To
+            // field on PEER1 while the session moved to PEER2, so the next
+            // message went down the wrong link (live RF test 2026-09-30).
             viewModel.sessionManager.onDataReceived?(session2, Data("From peer 2\r\n".utf8))
-            XCTAssertEqual(viewModel.currentSession?.id, session2.id, "Should auto-switch to session with incoming data")
+            XCTAssertEqual(viewModel.currentSession?.id, session1.id, "Data from another station must not take the terminal away")
             
             // Both messages should be delivered
             XCTAssertEqual(receivedLines.count, 2)
