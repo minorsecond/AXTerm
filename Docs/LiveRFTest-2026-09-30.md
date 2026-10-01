@@ -36,6 +36,28 @@ files and their SHA-256 sums are in the session scratchpad (`rf/sums.txt`):
 | 8 | incoming offer prompt, accept | pass (A and B, AXDP and YAPP) |
 | 9 | received file saved to `~/Downloads/AXTerm Transfers` with Quick Look, Show in Finder, Open | pass |
 
+## Results on 2026-10-01
+
+| # | test | result |
+|---|---|---|
+| 10 | To field: typing k0epi-3 key by key (bug 3) | pass, uppercased, nothing lost, field stays editable |
+| 11 | chat both ways, send state clears on the ack (bug 2), Send enabled on B without the sidebar (bug 4) | pass; B's reply needed 2 retries (bug 11) |
+| 12 | Send File sheet shows AXDP confirmed, no "Checking…" (bug 1) | pass |
+| 13 | YAPP A to B, 3 KB text | pass, byte-identical (saved as "t3k_text 2.txt" beside last night's copy) |
+| 14 | offer declined | pass, labels inconsistent (bug 13) |
+| 15 | pause on the sender: receiver shows "Waiting for K0EPI-2" with no rate (bug 8); resume | pass |
+| 16 | cancel from the receiver mid-transfer | pass |
+| 17 | AXDP B to A, 1 KB, "Always Accept" from the prompt | pass, byte-identical, 47 s from Send to saved file |
+| 18 | auto-accept from the allow list with the terminal off screen | pass, no prompt (bug 16: no visible sign either) |
+| 19 | cancel from the sender mid-transfer | pass, receiver logs "K0EPI-3 canceled the transfer" |
+
+Setup notes: Station B ran from a copy of the app with its own bundle ID
+(`com.rosswardrup.AXTerm.stationb`, ad hoc signed without the iCloud
+entitlements) so background UI control can address each station's windows.
+Station A first failed with "This radio's link could not be created": the link
+trusted the profile's saved-password flag, which test mode had reset, instead
+of the Keychain (fixed, fc70878).
+
 ## Findings
 
 ### 1. TNC4 resets itself after a large USB write (fixed, 064c53a)
@@ -118,6 +140,10 @@ Status is filled in as each is fixed.
 | 10 | Found while fixing 3 and 4: data arriving from a second connected station switched the terminal to that session but left the To field on the first, so the next message went down the wrong link. | code review | fixed, 0b1bb83: the terminal takes up the sending session only when it has no live session, and the To field follows |
 | 11 | Found on the air 2026-10-01: a single unpolled I-frame was resent before the peer's delayed ack could arrive. B's T1 fired after 4.3 s, while B's airtime plus A's 2 s T2 plus the 705's key-up path needs about 5.5 s, so the resend keyed over A's RR. The RTO is learned from polled exchanges, which are answered at once, so it does not cover the peer's T2 (spec: "T2 must sit inside every plausible peer T1"). | B, 10:44:53 UTC 2026-10-01 | open |
 | 12 | Pressing Return in the To field commits and connects, but the suggestion popover stays open over the transcript until Escape. | A, 10:42 UTC 2026-10-01 | open |
+| 13 | Transfer end states disagree: a declined offer is a red "Failed: Transfer declined by remote station" on the sender and "Canceled" on the receiver, and a cancel by the other station does not say who canceled. | A and B, 10:51 UTC 2026-10-01 | open |
+| 14 | After the receiver accepts, its own row reads "Pending permission" (the sender's wording) for a few seconds until data flows. | A, 10:53 UTC 2026-10-01 | open |
+| 15 | Narrow-window layout: at half-screen width with the sidebar open, the locked To field in the compose bar and the Map's station-list title both wrap one or two characters per line. | A, 10:55 UTC 2026-10-01 | open |
+| 16 | An auto-accepted transfer arriving while another view is on screen gives no visible sign that a file is coming in. | A, 10:55 UTC 2026-10-01 | open |
 
 Not bugs, recorded so nobody chases them again:
 
