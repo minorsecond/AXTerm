@@ -108,8 +108,11 @@ final class KISSTransportTests: XCTestCase {
             let payload = Data([0x01])
             let frame = KISS.encodeFrame(payload: payload, port: port)
 
-            // Command byte should be port << 4 | 0
-            XCTAssertEqual(frame[1], port << 4)
+            // Command byte should be port << 4 | 0. It is escaped like the
+            // rest of the frame (port 12's 0xC0 is the FEND value), so read
+            // it after unescaping.
+            let body = KISS.unescape(frame.dropFirst().dropLast())
+            XCTAssertEqual(body.first, port << 4)
         }
     }
 

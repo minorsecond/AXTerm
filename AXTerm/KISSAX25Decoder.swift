@@ -26,10 +26,12 @@ nonisolated enum KISS {
         var result = Data()
         result.reserveCapacity(data.count)
 
-        var i = 0
-        while i < data.count {
+        // Indexed from startIndex so a Data slice (a frame body cut out of
+        // a larger buffer) unescapes like a fresh copy.
+        var i = data.startIndex
+        while i < data.endIndex {
             let byte = data[i]
-            if byte == FESC && i + 1 < data.count {
+            if byte == FESC && i + 1 < data.endIndex {
                 let next = data[i + 1]
                 if next == TFEND {
                     result.append(FEND)

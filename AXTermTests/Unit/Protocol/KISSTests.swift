@@ -47,6 +47,11 @@ final class KISSTests: XCTestCase {
         XCTAssertEqual(unescaped, Data([0x01, 0xDB]))
     }
 
+    func testUnescapeWorksOnASlice() {
+        let framed = Data([0xC0, 0x01, 0xDB, 0xDC, 0x02, 0xC0])
+        XCTAssertEqual(KISS.unescape(framed.dropFirst().dropLast()), Data([0x01, 0xC0, 0x02]))
+    }
+
     // A broken escape keeps its bytes but is counted, so the parser can log
     // the frame (CLAUDE.md §4: malformed frames are logged).
     func testInvalidEscapesAreCounted() {

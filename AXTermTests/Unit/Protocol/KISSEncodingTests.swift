@@ -200,7 +200,9 @@ final class KISSEncodingTests: XCTestCase {
 
         for port: UInt8 in 0..<16 {
             let frame = KISS.encodeFrame(payload: payload, port: port)
-            let commandByte = frame[1]
+            // The command byte is escaped with the frame (port 12's data
+            // command is 0xC0, the FEND value).
+            let commandByte = KISS.unescape(frame.dropFirst().dropLast()).first ?? 0xFF
             let decodedPort = (commandByte >> 4) & 0x0F
 
             XCTAssertEqual(decodedPort, port, "Port \(port) not encoded correctly")
