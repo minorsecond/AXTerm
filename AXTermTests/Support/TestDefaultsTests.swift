@@ -47,4 +47,40 @@ final class TestDefaultsTests: XCTestCase {
             .filter { $0.contains((name as NSString).lastPathComponent) } ?? []
         XCTAssertEqual(leaked, [])
     }
+
+    /// Every test gets its suites from TestDefaults. A suite named by hand,
+    /// `UserDefaults(suiteName: "SomeTests.\(UUID())")`, becomes a plist in
+    /// Library/Preferences that nothing removes: on 2026-10-01 two test
+    /// classes doing that had left 742 of them since the 2026-09-30 fix.
+    func testNoTestNamesItsOwnSuite() throws {
+        let testsRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()      // Support
+            .deletingLastPathComponent()      // AXTermTests
+        let handNamed = try NSRegularExpression(
+            pattern: #"UserDefaults\(suiteName:\s*"|suiteName\s*=\s*"[^"]"#)
+        var offenders: [String] = []
+        let files = FileManager.default.enumerator(at: testsRoot, includingPropertiesForKeys: nil)
+        while let file = files?.nextObject() as? URL {
+            guard file.pathExtension == "swift", file.lastPathComponent != "TestDefaults.swift",
+                  let source = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            for (number, line) in source.components(separatedBy: "\n").enumerated() {
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") { continue }
+                let range = NSRange(line.startIndex..., in: line)
+                if handNamed.firstMatch(in: line, range: range) != nil {
+                    offenders.append("\(file.lastPathComponent):\(number + 1)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(Self.countSwiftFiles(in: testsRoot), 100, "the scan has to find the test sources")
+        XCTAssertEqual(offenders, [], "use TestDefaults.make or TestDefaults.name for these suites")
+    }
+
+    private static func countSwiftFiles(in root: URL) -> Int {
+        var count = 0
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
+        while let file = files?.nextObject() as? URL {
+            if file.pathExtension == "swift" { count += 1 }
+        }
+        return count
+    }
 }

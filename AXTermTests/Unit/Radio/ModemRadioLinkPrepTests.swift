@@ -30,7 +30,7 @@ final class ModemRadioLinkPrepTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        suiteName = "ModemRadioLinkPrepTests.\(UUID().uuidString)"
+        suiteName = TestDefaults.name("ModemRadioLinkPrepTests")
         defaults = UserDefaults(suiteName: suiteName)
     }
 

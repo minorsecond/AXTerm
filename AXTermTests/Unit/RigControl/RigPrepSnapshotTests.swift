@@ -13,7 +13,7 @@ final class RigPrepSnapshotTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        suiteName = "RigPrepSnapshotTests.\(UUID().uuidString)"
+        suiteName = TestDefaults.name("RigPrepSnapshotTests")
         defaults = UserDefaults(suiteName: suiteName)
     }
 
