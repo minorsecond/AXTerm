@@ -252,7 +252,7 @@ struct SessionStatusBadge: View {
                 return "AXDP enabled for this peer."
             }
         case .notSupported:
-            return "AXDP not supported."
+            return "No answer to the AXDP check, so AXDP is off for this peer."
         }
     }
 }

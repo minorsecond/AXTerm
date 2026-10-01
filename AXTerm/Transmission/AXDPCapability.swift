@@ -291,6 +291,81 @@ nonisolated struct AXDPCapabilityCache: Sendable {
     }
 }
 
+// MARK: - Probe Retry
+
+/// One outstanding AXDP capability check: when it went out, how many times,
+/// and whether it is time to ask again or give up.
+///
+/// The PONG always comes back as a UI frame, and the text probe goes out as
+/// one, so nothing below AXDP retransmits either. On 2026-09-30 a single lost
+/// PONG left the check pending for 15 minutes. The spec (6.x.3) says a peer
+/// that does not answer is treated as having no AXDP extensions, and does not
+/// say how many times to ask. This asks a few times, about one RTO apart with
+/// a floor, then stops.
+nonisolated struct AXDPCapabilityProbe: Sendable, Equatable {
+    /// Attempts in all, counting the first.
+    static let maxAttempts = 3
+
+    /// Never ask again sooner than this. A probe and its PONG each need the
+    /// channel and a turnaround on a half-duplex radio; at 1200 baud with
+    /// several hundred ms of TX delay a round trip alone takes a few seconds.
+    static let minimumInterval: TimeInterval = 10
+
+    /// Never wait longer than this between attempts, the session's own
+    /// default ceiling on RTO.
+    static let maximumInterval: TimeInterval = 30
+
+    enum Step: Equatable, Sendable {
+        case wait
+        case resend
+        case giveUp
+    }
+
+    let interval: TimeInterval
+    private(set) var attempts: Int
+    private(set) var lastSentAt: Date
+
+    init(sentAt: Date, rto: TimeInterval?) {
+        self.interval = Self.interval(rto: rto)
+        self.attempts = 1
+        self.lastSentAt = sentAt
+    }
+
+    /// The wait between attempts: the link's current RTO, kept between the
+    /// floor and the ceiling.
+    static func interval(rto: TimeInterval?) -> TimeInterval {
+        guard let rto, rto.isFinite, rto > 0 else { return minimumInterval }
+        return min(maximumInterval, max(minimumInterval, rto))
+    }
+
+    /// How long a check lasts from the first send when nothing answers.
+    static func totalWait(rto: TimeInterval?) -> TimeInterval {
+        interval(rto: rto) * Double(maxAttempts)
+    }
+
+    /// One interval after the latest attempt.
+    var deadline: Date { lastSentAt.addingTimeInterval(interval) }
+
+    /// When the check is over if every remaining attempt goes unanswered.
+    var giveUpAt: Date {
+        lastSentAt.addingTimeInterval(interval * Double(Self.maxAttempts - attempts + 1))
+    }
+
+    /// A check whose timer was held up past the whole schedule (the Mac
+    /// slept, say) gives up rather than starting its retries late, so what
+    /// the sheet shows and what the timers do always agree.
+    func step(at now: Date) -> Step {
+        if now >= giveUpAt { return .giveUp }
+        guard now >= deadline else { return .wait }
+        return attempts >= Self.maxAttempts ? .giveUp : .resend
+    }
+
+    mutating func noteResent(at now: Date) {
+        attempts += 1
+        lastSentAt = now
+    }
+}
+
 // MARK: - Observable Capability Store
 
 /// Observable store for AXDP peer capabilities
