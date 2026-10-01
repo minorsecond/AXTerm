@@ -241,7 +241,6 @@ final class ConnectionTransportViewModel: ObservableObject {
     private let bleScanner = BLEDeviceScanner()
     private let audioDiscovery = AudioDeviceDiscovery()
     private var cancellables: Set<AnyCancellable> = []
-    private var serialGraceTimer: Timer?
     
     func identifyTNC() { packetEngine.identifyTNC() }
 
@@ -428,38 +427,27 @@ final class ConnectionTransportViewModel: ObservableObject {
             .assign(to: &$receiveDrift)
     }
     
+    /// Merges discovery's list with the radio's saved device.
+    ///
+    /// A saved device that is not plugged in stays the choice, listed as
+    /// unavailable, for as long as it is gone. It used to be cleared, and the
+    /// empty path saved, after ten seconds missing. A TNC4 taken off USB to
+    /// try it over Bluetooth, or one that drops off USB while it restarts,
+    /// then came back to a radio with no device chosen (2026-09-30).
     private func handleSerialDevicesUpdate(_ discovered: [SerialDevice]) {
-        // 1. If currently selected device is missing, keep it but mark unavailable
-        // 2. If it reappears, mark available and clear grace timer
-        
         var mergedList = discovered
-        
-        if !selectedSerialDevicePath.isEmpty {
-            let isPresent = discovered.contains { $0.path == selectedSerialDevicePath }
-            
-            if !isPresent {
-                // Device went missing
-                if missingSerialDeviceDate == nil {
-                    missingSerialDeviceDate = Date()
-                    startSerialGraceTimer()
-                }
-                
-                // Keep it in the list but marked unavailable
-                let name = (selectedSerialDevicePath as NSString).lastPathComponent.replacingOccurrences(of: "cu.", with: "")
-                var missingDevice = SerialDevice(id: selectedSerialDevicePath, path: selectedSerialDevicePath, name: name)
-                missingDevice.isAvailable = false
-                mergedList.append(missingDevice)
-                
-            } else {
-                // Device is present
-                missingSerialDeviceDate = nil
-                stopSerialGraceTimer()
-            }
+
+        if !selectedSerialDevicePath.isEmpty,
+           !discovered.contains(where: { $0.path == selectedSerialDevicePath }) {
+            if missingSerialDeviceDate == nil { missingSerialDeviceDate = Date() }
+            let name = (selectedSerialDevicePath as NSString).lastPathComponent.replacingOccurrences(of: "cu.", with: "")
+            var missingDevice = SerialDevice(id: selectedSerialDevicePath, path: selectedSerialDevicePath, name: name)
+            missingDevice.isAvailable = false
+            mergedList.append(missingDevice)
         } else {
             missingSerialDeviceDate = nil
-            stopSerialGraceTimer()
         }
-        
+
         // Sort: Available first, then by name
         self.serialDevices = mergedList.sorted {
             if $0.isAvailable != $1.isAvailable {
@@ -468,39 +456,7 @@ final class ConnectionTransportViewModel: ObservableObject {
             return $0.name < $1.name
         }
     }
-    
-    private func startSerialGraceTimer() {
-        guard serialGraceTimer == nil else { return }
-        serialGraceTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            // Every property this closure touches is @MainActor-isolated, so hop onto the
-            // main actor explicitly rather than relying on the timer's run loop happening
-            // to be the main one. Reading and mutating them from the nonisolated Sendable
-            // closure is a data race (and an error under the Swift 6 language mode).
-            // The weak reference is read once, here, into a local: reading it
-            // inside the Task means the concurrently-executing closure touches
-            // the captured variable, which Swift 6 rejects. Capturing strongly
-            // would be worse — the timer owns this closure and this object owns
-            // the timer, so it would be a retain cycle rather than a fix.
-            let model = self
-            Task { @MainActor in
-                guard let model, let missingSince = model.missingSerialDeviceDate else { return }
-                guard Date().timeIntervalSince(missingSince) > 10 else { return }
 
-                // Grace period expired
-                model.selectedSerialDevicePath = ""
-                model.stopSerialGraceTimer()
-                model.missingSerialDeviceDate = nil
-                // Refresh list to remove the unavailable item
-                model.handleSerialDevicesUpdate(model.serialDiscovery.devices)
-            }
-        }
-    }
-    
-    private func stopSerialGraceTimer() {
-        serialGraceTimer?.invalidate()
-        serialGraceTimer = nil
-    }
-    
     private func updateErrorMessage(for status: ConnectionStatus) {
         if status == .failed {
             // Check PacketEngine.lastError if exposed, or infer from context
@@ -544,7 +500,6 @@ final class ConnectionTransportViewModel: ObservableObject {
         Task { serialDiscovery.stopScanning() }
         bleScanner.stopScan()
         audioDiscovery.stopObserving()
-        stopSerialGraceTimer()
     }
     
     // MARK: - Actions
@@ -671,15 +626,13 @@ final class ConnectionTransportViewModel: ObservableObject {
         case .network:
             Task { serialDiscovery.stopScanning() }
             bleScanner.stopScan()
-            stopSerialGraceTimer()
-            
+
         case .serial:
             Task { serialDiscovery.startScanning() }
             bleScanner.stopScan()
             
         case .ble:
             Task { serialDiscovery.stopScanning() }
-            stopSerialGraceTimer()
             // BLE scan is manual or on-demand
 
         case .modem:
