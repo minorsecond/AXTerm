@@ -107,9 +107,12 @@ nonisolated enum KISS {
         // Start delimiter
         frame.append(FEND)
 
-        // Command byte: high nibble = port, low nibble = command (0 = data)
+        // Command byte: high nibble = port, low nibble = command (0 = data).
+        // It is escaped like the payload: port 12's data command is 0xC0,
+        // the FEND value, and sent raw it would end the frame right there.
+        // Direwolf escapes the whole frame, command byte included.
         let command = (port << 4) | CMD_DATA
-        frame.append(command)
+        frame.append(escape(Data([command])))
 
         // Escaped AX.25 payload
         frame.append(escape(payload))
@@ -191,20 +194,23 @@ nonisolated struct KISSFrameParser {
     private func processKISSFrame(_ data: Data) -> KISSParsedFrame? {
         guard !data.isEmpty else { return nil }
 
-        // First byte is KISS command byte
-        let command = data[0]
+        // The escapes cover the whole frame, command byte included: port
+        // 12's data command is 0xC0 and arrives as FESC TFEND. Reading the
+        // raw first byte took that for command 0xDB and dropped the frame.
+        let unescaped = KISS.unescape(data)
+        guard let command = unescaped.first else { return nil }
 
         // Command byte format: high nibble = port, low nibble = command type
         let cmdType = command & 0x0F
         let port = (command >> 4) & 0x0F
 
-        let escapedPayload = data.count > 1 ? data.subdata(in: 1..<data.count) : Data()
-        let payload = KISS.unescape(escapedPayload)
+        // A fresh Data, so downstream code can index it from zero.
+        let payload = Data(unescaped.dropFirst())
 
         // A broken escape is a malformed frame, which must be logged rather
         // than passed on silently (CLAUDE.md §4). The bytes still go
         // downstream unchanged; the AX.25 decoder judges the frame.
-        let invalidEscapes = KISS.invalidEscapeCount(escapedPayload)
+        let invalidEscapes = KISS.invalidEscapeCount(data)
         if invalidEscapes > 0 {
             TxLog.warning(.kiss, "KISS frame has invalid escape sequences", [
                 "command": String(format: "0x%02X", command),
