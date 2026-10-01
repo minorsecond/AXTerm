@@ -1983,6 +1983,11 @@ final class AX25SessionManager: ObservableObject {
     /// spec, "Modulo 128 is deliberately not offered"). The peer then sat in
     /// XID retrying against a station that had said yes to something it could
     /// not do. Saying no is both honest and faster.
+    ///
+    /// Returns the answer for a caller that sends it itself. By then the
+    /// layer above has already been told the link is up, and anything it sent
+    /// from that notification is ahead of the UA, so the app answers calls
+    /// with `answerInboundSABM(transmit:)` instead.
     func handleInboundSABM(
         from source: AX25Address,
         to destination: AX25Address,
@@ -1991,14 +1996,40 @@ final class AX25SessionManager: ObservableObject {
         extended: Bool = false,
         pf: Bool = true
     ) -> OutboundFrame? {
+        var answer: OutboundFrame?
+        answerInboundSABM(from: source, to: destination, path: path, radio: radio,
+                          extended: extended, pf: pf) { answer = $0 }
+        return answer
+    }
+
+    /// Answers an inbound SABM and hands the answer to `transmit` before the
+    /// layer above hears that the link is up.
+    ///
+    /// A service that answers calls sends from inside the state-change
+    /// notification: the mailbox greets the caller, Winlink P2P sends its
+    /// banner. Those I-frames belong after the UA. A station still waiting for
+    /// UA discards anything else (AX.25 2.2, awaiting-connection state), so a
+    /// greeting that goes out first costs the caller a T1 before it is sent
+    /// again. On 2026-10-01 the mailbox's I(0) and I(1) reached the TNC ahead
+    /// of its UA for exactly that reason.
+    func answerInboundSABM(
+        from source: AX25Address,
+        to destination: AX25Address,
+        path: DigiPath,
+        radio: RadioID,
+        extended: Bool = false,
+        pf: Bool = true,
+        transmit: (OutboundFrame) -> Void
+    ) {
         if extended {
             debugTrace("SABME refused", ["from": source.display, "reason": "modulo 128 unsupported"])
             TxLog.debug(.session, "SABME refused with DM; this station is modulo 8 only", [
                 "peer": source.display
             ])
             // From the address the peer called, the way a UA would be.
-            return AX25FrameBuilder.buildDM(from: destination, to: source, via: path, pf: pf)
-                .onRadio(radio)
+            transmit(AX25FrameBuilder.buildDM(from: destination, to: source, via: path, pf: pf)
+                .onRadio(radio))
+            return
         }
         debugTrace("SABM received", [
             "from": source.display,
@@ -2065,10 +2096,6 @@ final class AX25SessionManager: ObservableObject {
             "actions": actions.map { String(describing: $0) }.joined(separator: ",")
         ])
 
-        if oldState != session.state {
-            notifyStateChanged(session, from: oldState, to: session.state)
-        }
-
         if session.state == .connected {
             session.connectedAt = Date()
             session.resetTurnaroundEvidence()
@@ -2081,16 +2108,19 @@ final class AX25SessionManager: ObservableObject {
             TxLog.warning(.session, "Link reset by peer: unacknowledged frames discarded", [
                 "peer": source.display
             ])
+        }
+        // The answer first; only then may the layer above start talking.
+        if let frame = frames.first { transmit(frame) }
+
+        if oldState != session.state {
+            notifyStateChanged(session, from: oldState, to: session.state)
+        }
+        if resetLosesFrames {
             // The old link ended and a new one began, as the layer above
             // sees any other disconnect and inbound connect.
             notifyStateChanged(session, from: .connected, to: .disconnected)
             notifyStateChanged(session, from: .disconnected, to: .connected)
         }
-        print("[AX25SessionManager] processActions returned \(frames.count) frames")
-        if let frame = frames.first {
-            print("[AX25SessionManager] Returning UA frame to \(frame.destination.display)")
-        }
-        return frames.first
     }
 
     /// Handle an inbound UA (unnumbered acknowledge)

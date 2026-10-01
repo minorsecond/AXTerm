@@ -75,6 +75,9 @@ final class SessionCoordinator: ObservableObject {
     /// on which view was built last. Subscribers are additive; each decides
     /// for itself whether the call is theirs.
     private var inboundSubscribers: [UUID: (AX25Session) -> Void] = [:]
+    /// Every frame `sendFrame` is given, in order, before it reaches the
+    /// packet engine. For tests that check what goes on the air in what order.
+    var onFrameHandedToRadio: ((OutboundFrame) -> Void)?
     /// Sessions already reported as up-but-silent, so the notice appears once.
     private var idleLinkReported: Set<UUID> = []
 
@@ -3032,6 +3035,7 @@ final class SessionCoordinator: ObservableObject {
     ///   transport below assumed success.
     @discardableResult
     func sendFrame(_ frame: OutboundFrame) -> Bool {
+        onFrameHandedToRadio?(frame)
         // Outside tests this is a wiring fault, not a benign no-op: the state
         // machine believes it transmitted, so T1 keeps expiring against frames
         // that never reached the air and the session dies at N2 looking like a
@@ -3217,16 +3221,14 @@ final class SessionCoordinator: ObservableObject {
                 sendFrame(response)
             }
         case .SABM, .SABME:
-            if let response = sessionManager.handleInboundSABM(
+            sessionManager.answerInboundSABM(
                 from: from,
                 to: to,
                 path: path,
                 radio: radio,
                 extended: uType == .SABME,
                 pf: (packet.control & 0x10) != 0
-            ) {
-                sendFrame(response)
-            }
+            ) { sendFrame($0) }
         case .UI:
             // Check for text-safe AXDP probe ("AXDP?\r") before binary AXDP check.
             // Text probes don't have AXDP magic, so handleAXDPMessage would skip them.
