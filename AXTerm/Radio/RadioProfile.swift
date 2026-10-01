@@ -361,7 +361,11 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         c.lanSerialPort = lanSerialPort.map { UInt16(clamping: $0) }
         c.lanAudioPort = lanAudioPort.map { UInt16(clamping: $0) }
         c.lanUsername = lanUsername
-        c.lanPassword = hasLANPassword ? RadioSecrets.lanPassword(for: id) ?? "" : ""
+        // From the Keychain, as the connect check reads it. The profile's
+        // flag can fall out of step (a test-mode launch resets settings and
+        // leaves the Keychain alone), and trusting it built a link with an
+        // empty password that was never created.
+        c.lanPassword = RadioSecrets.lanPassword(for: id) ?? ""
         c.civSerialPath = civSerialPath
         c.civAddress = civAddress
         c.civControllerAddress = civControllerAddress

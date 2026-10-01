@@ -147,6 +147,40 @@ final class RadioProfileModemTests: XCTestCase {
         XCTAssertNil(tcp.modemConfig)
     }
 
+    /// The Keychain is where the Wi-Fi password lives, and the connect check
+    /// reads it there. On 2026-10-01 a test-mode launch reset the profile's
+    /// "password saved" flag while the password itself was still in the
+    /// Keychain: the form said "stored", the check passed, and the link was
+    /// built with an empty password and never created ("This radio's link
+    /// could not be created"). The link must read the Keychain the same way.
+    func testTheWiFiPasswordComesFromTheKeychainWhateverTheProfileFlagSays() {
+        let id = RadioID()
+        defer { RadioSecrets.forget(id) }
+        XCTAssertTrue(RadioSecrets.setLANPassword("hunter2-test", for: id), "precondition: Keychain write")
+        var radio = RadioProfile(id: id, name: "705 over Wi-Fi")
+        radio.kind = .modem
+        radio.modemRigLink = .lan
+        radio.lanHost = "localhost"
+        radio.lanUsername = "operator"
+        radio.hasLANPassword = false
+
+        XCTAssertEqual(radio.modemConfig?.lanPassword, "hunter2-test")
+        XCTAssertNil(RadioManager.unsupportedReason(for: radio), "precondition: the connect check passes")
+        XCTAssertNotNil(RadioManager.defaultLinkFactory(radio),
+                        "the connect check passed but the link was never created")
+    }
+
+    func testNoKeychainPasswordMeansAnEmptyOneEvenIfTheFlagIsSet() {
+        let id = RadioID()
+        RadioSecrets.forget(id)
+        var radio = RadioProfile(id: id, name: "705 over Wi-Fi")
+        radio.kind = .modem
+        radio.modemRigLink = .lan
+        radio.hasLANPassword = true
+
+        XCTAssertEqual(radio.modemConfig?.lanPassword, "")
+    }
+
     func testTxAudioLevelMapsToDBFS() {
         var config = ModemLinkConfig()
         config.txAudioLevel = 85
