@@ -213,6 +213,7 @@ final class AX25SessionFuzzRig {
         let ctx = "after \(step)"
 
         // Every announced transition is one the state machine allows.
+        let firstNewTransition = checkedTransitions
         while checkedTransitions < transitions.count {
             let (_, from, to) = transitions[checkedTransitions]
             checkedTransitions += 1
@@ -284,7 +285,8 @@ final class AX25SessionFuzzRig {
 
         // No I-frame goes out on a link that was not up at either end of the step.
         if newFrames.contains(where: { $0.frameType == "i" }) {
-            v.check(before.state == .connected || s.state == .connected || before.id != s.id,
+            let wentUp = transitions[firstNewTransition...].contains { $0.2 == .connected }
+            v.check(before.state == .connected || s.state == .connected || before.id != s.id || wentUp,
                     "I-frame transmitted while \(before.state.rawValue) -> \(s.state.rawValue) \(ctx)")
         }
 

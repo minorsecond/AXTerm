@@ -23,8 +23,9 @@
 //     (go-back-N receiver, window 1 to 7, 2.0 or 2.2 timer recovery) over
 //     a channel that loses and duplicates frames. On top of S1's checks:
 //     data reaches the application exactly once and in order, our stream
-//     reaches the peer exactly once and in order, and we never acknowledge
-//     a frame the peer has not sent.
+//     reaches the peer exactly once and in order, we never acknowledge a
+//     frame the peer has not sent, and once the channel turns clean the
+//     link drains (nothing stuck in either direction).
 //
 //  S3: out-of-window N(R) on any S or I frame leaves V(A), the send buffer
 //     and the RTT estimate untouched.
@@ -122,6 +123,41 @@ final class AX25SessionStatePropertyTests: XCTestCase {
             var lastPeerReceived: Int64 = -1
             var checkedPeerReceived = 0
 
+            /// Checks what reached each application since the last call.
+            /// False when something is wrong (the violation is recorded).
+            @MainActor func audit(_ ctx: String, _ before: AX25SessionSnapshot) -> Bool {
+                // What reached our application: the peer's tags, strictly increasing.
+                while checkedDeliveries < rig.delivered.count {
+                    let data = rig.delivered[checkedDeliveries]
+                    checkedDeliveries += 1
+                    guard let tag = AX25ModelPeer.tag(data, marker: 0x50) else {
+                        v.record("delivered a payload that is not one the peer sent \(ctx)")
+                        continue
+                    }
+                    v.check(Int64(tag) > lastDelivered,
+                            "delivered peer frame \(tag) after \(lastDelivered): duplicate or out of order \(ctx); "
+                            + "before vr=\(before.vr) rx=\(before.receiveBufferKeys) retries=\(before.retryCount) "
+                            + "state=\(before.state.rawValue)")
+                    channel.note("delivered P\(tag)")
+                    lastDelivered = max(lastDelivered, Int64(tag))
+                }
+                // What reached the peer: our tags, strictly increasing.
+                while checkedPeerReceived < peer.receivedTags.count {
+                    let tag = peer.receivedTags[checkedPeerReceived]
+                    checkedPeerReceived += 1
+                    v.check(Int64(tag) > lastPeerReceived,
+                            "peer received our frame \(tag) after \(lastPeerReceived) \(ctx)")
+                    lastPeerReceived = max(lastPeerReceived, Int64(tag))
+                }
+                guard v.isEmpty else {
+                    v.record("context: \(ctx), peer K=\(peer.k), local K=\(rig.config.windowSize), "
+                             + "N2=\(rig.config.maxRetries), SREJ=\(rig.config.srejEnabled)\n      "
+                             + channel.trace.joined(separator: "\n      "))
+                    return false
+                }
+                return true
+            }
+
             if rng.chance(0.5) {
                 rig.emit(rig.manager.connect(to: rig.peer, path: rig.path))
             } else {
@@ -173,38 +209,44 @@ final class AX25SessionStatePropertyTests: XCTestCase {
                 }
                 channel.pump()
                 let ctx = "step \(step) (\(label))"
+                if !label.hasPrefix("deliver") && !label.hasPrefix("advance") {
+                    channel.note("\(label) [local \(rig.session?.state.rawValue ?? "none")]")
+                }
                 rig.checkInvariants(before: before, inbound: inbound, step: ctx, v)
 
-                // What reached our application: the peer's tags, strictly increasing.
-                while checkedDeliveries < rig.delivered.count {
-                    let data = rig.delivered[checkedDeliveries]
-                    checkedDeliveries += 1
-                    guard let tag = AX25ModelPeer.tag(data, marker: 0x50) else {
-                        v.record("delivered a payload that is not one the peer sent \(ctx)")
-                        continue
-                    }
-                    v.check(Int64(tag) > lastDelivered,
-                            "delivered peer frame \(tag) after \(lastDelivered): duplicate or out of order \(ctx); "
-                            + "before vr=\(before.vr) rx=\(before.receiveBufferKeys) retries=\(before.retryCount) "
-                            + "state=\(before.state.rawValue)")
-                    channel.note("delivered P\(tag)")
-                    lastDelivered = max(lastDelivered, Int64(tag))
-                }
-                // What reached the peer: our tags, strictly increasing.
-                while checkedPeerReceived < peer.receivedTags.count {
-                    let tag = peer.receivedTags[checkedPeerReceived]
-                    checkedPeerReceived += 1
-                    v.check(Int64(tag) > lastPeerReceived,
-                            "peer received our frame \(tag) after \(lastPeerReceived) \(ctx)")
-                    lastPeerReceived = max(lastPeerReceived, Int64(tag))
-                }
                 coverage.note(rig)
-                if !v.isEmpty {
-                    v.record("context: \(ctx), peer K=\(peer.k), local K=\(rig.config.windowSize), "
-                             + "N2=\(rig.config.maxRetries), SREJ=\(rig.config.srejEnabled)\n      "
-                             + channel.trace.joined(separator: "\n      "))
-                    return
+                if !audit(ctx, before) { return }
+            }
+
+            // Liveness: once the channel is clean the link must drain. Both
+            // ends keep their timers; nothing is lost or duplicated.
+            var drained = false
+            for round in 0..<150 {
+                let before = rig.snapshot()
+                channel.deliverAllCleanly()
+                peer.ackIfOwed()
+                if round % 3 == 2 { peer.t1Expiry() }
+                channel.pump()
+                channel.deliverAllCleanly()
+                rig.clock.advance(by: 2)
+                channel.pump()
+                let ctx = "drain round \(round)"
+                channel.note(ctx)
+                rig.checkInvariants(before: before, inbound: nil, step: ctx, v)
+                if !audit(ctx, before) { return }
+                guard let s = rig.session, s.state == .connected, peer.state == .connected else { break }
+                if s.sendBuffer.isEmpty, s.pendingDataQueue.isEmpty, s.stateMachine.receiveBuffer.isEmpty,
+                   !peer.hasOutstanding, channel.isEmpty {
+                    drained = true
+                    break
                 }
+            }
+            if !drained, let s = rig.session, s.state == .connected, peer.state == .connected {
+                v.record("link did not drain on a clean channel: sendBuffer=\(s.sendBuffer.keys.sorted()) "
+                         + "queued=\(s.pendingDataQueue.count) rx=\(s.stateMachine.receiveBuffer.keys.sorted()) "
+                         + "vs=\(s.vs) va=\(s.va) vr=\(s.vr) peerOutstanding=\(peer.hasOutstanding)")
+                _ = audit("after drain", rig.snapshot())
+                return
             }
             peerReceived += peer.receivedTags.count
         }
@@ -401,6 +443,8 @@ final class AX25ModelPeer {
     private var unansweredT1 = 0
     private var outstanding: [Int: Data] = [:]
     private var nextTag: UInt32 = 0
+
+    var hasOutstanding: Bool { !outstanding.isEmpty }
 
     /// Tags of our frames the peer accepted, in order.
     private(set) var receivedTags: [UInt32] = []
@@ -671,6 +715,30 @@ final class AX25FuzzChannel {
         // The reply to the U frame is not pumped yet, so it survives.
         if Self.isLinkControl(bytes) { toLocal.removeAll(); toPeer.removeAll() }
         return summary
+    }
+
+    var isEmpty: Bool { toPeer.isEmpty && toLocal.isEmpty }
+
+    /// Delivers everything queued both ways, replies included, with no
+    /// loss or duplication.
+    func deliverAllCleanly() {
+        var budget = 400
+        pump()
+        while !isEmpty, budget > 0 {
+            budget -= 1
+            if !toLocal.isEmpty {
+                let bytes = toLocal.removeFirst()
+                note("-> local: \(Self.describe(bytes))")
+                rig.receive(bytes)
+                if Self.isLinkControl(bytes) { toLocal.removeAll(); toPeer.removeAll() }
+            } else {
+                let bytes = toPeer.removeFirst()
+                note("-> peer: \(Self.describe(bytes))")
+                peer.receive(bytes)
+                if Self.isLinkControl(bytes) { toLocal.removeAll(); toPeer.removeAll() }
+            }
+            pump()
+        }
     }
 
     func deliverToPeer(_ rng: inout PropertyRNG) {
