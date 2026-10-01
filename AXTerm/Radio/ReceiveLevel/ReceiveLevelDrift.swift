@@ -78,6 +78,28 @@ nonisolated enum ReceiveLevelDrift {
         let turnVolume: VolumeTurn?
     }
 
+    /// An input pinned at an end of the range in two checks running.
+    struct Pinned: Equatable, Sendable {
+        /// The two checks, oldest first.
+        let samples: [ReceiveLevelObservation]
+        /// The input gain of the newer check.
+        let gain: Int
+    }
+
+    /// The one level problem a check can name without a calibration to
+    /// compare against: more than `clipShare` of the reports at an end of the
+    /// ADC's range, in two checks running. Noise or a carrier that loud
+    /// leaves no headroom, and packet tones riding on it clip.
+    ///
+    /// Found on 2026-10-01: a TNC4 at +24 dB that was never calibrated read
+    /// fully clipped in all four checks of the day, and `assess` said nothing
+    /// because it needs a baseline.
+    static func assessUncalibrated(observations: [ReceiveLevelObservation]) -> Pinned? {
+        guard let pair = lastPair(observations.sorted { $0.at < $1.at }),
+              pair.allSatisfy({ $0.clippedShare > clipShare }) else { return nil }
+        return Pinned(samples: pair, gain: pair.last?.gain ?? 0)
+    }
+
     static func assess(baseline: ReceiveLevelBaseline?, observations: [ReceiveLevelObservation],
                        range: ClosedRange<Int> = 0...4) -> Finding? {
         guard let baseline else { return nil }

@@ -193,4 +193,39 @@ final class ReceiveLevelDriftTests: XCTestCase {
         XCTAssertTrue(text.contains("quieter"))
         XCTAssertTrue(text.contains("squelch closed"))
     }
+
+    // MARK: Pinned input, no calibration
+
+    /// Field case 2026-10-01: a TNC4 at +24 dB with no calibration found
+    /// every report at the end of the range in every check, and nothing was
+    /// said. With no calibration to compare against, a pinned input is still
+    /// wrong on its own terms.
+    func testTwoPinnedChecksInARowArePinned() {
+        let o = [obs(30, gain: 4, noise: nil, clipped: 1), obs(64, gain: 4, noise: nil, clipped: 1)]
+        let pinned = ReceiveLevelDrift.assessUncalibrated(observations: o)
+        XCTAssertEqual(pinned?.samples, o)
+        XCTAssertEqual(pinned?.gain, 4)
+    }
+
+    func testOnePinnedCheckIsNotEnough() {
+        XCTAssertNil(ReceiveLevelDrift.assessUncalibrated(observations: [obs(30, noise: nil, clipped: 1)]))
+    }
+
+    /// The newest two decide: a pinned check followed by a good one is fixed.
+    func testAGoodCheckAfterAPinnedOneClearsIt() {
+        let o = [obs(30, noise: nil, clipped: 1), obs(64, noise: nil, clipped: 1), obs(98, noise: 30_000, clipped: 0)]
+        XCTAssertNil(ReceiveLevelDrift.assessUncalibrated(observations: o))
+    }
+
+    /// The same 20% share the drift rules and the level assistant use.
+    func testAFewClippedReportsAreNotPinned() {
+        let o = [obs(30, noise: 50_000, clipped: 0.15), obs(64, noise: 50_000, clipped: 0.2)]
+        XCTAssertNil(ReceiveLevelDrift.assessUncalibrated(observations: o))
+    }
+
+    /// Two checks far apart are two separate events, not a sustained level.
+    func testPinnedChecksHoursApartDoNotCount() {
+        let o = [obs(30, noise: nil, clipped: 1), obs(30 + 3 * 60, noise: nil, clipped: 1)]
+        XCTAssertNil(ReceiveLevelDrift.assessUncalibrated(observations: o))
+    }
 }

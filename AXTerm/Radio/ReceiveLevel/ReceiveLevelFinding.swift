@@ -99,6 +99,22 @@ nonisolated struct ReceiveLevelFinding: Equatable, Sendable {
         return ReceiveLevelFinding(message: message, evidence: evidence, retune: retune)
     }
 
+    /// An input pinned at the end of its range, on a radio with no
+    /// calibration to compare against.
+    static func pinned(_ p: ReceiveLevelDrift.Pinned, radioName: String,
+                       time: TimeText = defaultTimeText) -> ReceiveLevelFinding {
+        let message = "The TNC4 input on \(radioName) is hitting the end of its range. "
+            + "Packets riding on audio that loud clip and may not decode."
+        let times = p.samples.map { time($0.at) }.joined(separator: " and ")
+        let shares = p.samples.map { ReceiveGainAdvice.percent($0.clippedShare) }.joined(separator: " and ")
+        let evidence = [
+            "Level checks at \(times) at \(ReceiveGainAdvice.gainText(p.gain)): \(shares) of reports at an end of the range.",
+            "Rule: more than \(Int(ReceiveLevelDrift.clipShare * 100))% of reports at an end of the range in two checks in a row.",
+            "Turn the radio's volume down, or lower the input gain with Find the right gain, squelch open on a quiet channel.",
+        ]
+        return ReceiveLevelFinding(message: message, evidence: evidence, retune: .levelMeter)
+    }
+
     /// A digipeat finding.
     static func digipeats(_ f: DigipeatExpectation.Finding, radioName: String,
                           time: TimeText = defaultTimeText) -> ReceiveLevelFinding {

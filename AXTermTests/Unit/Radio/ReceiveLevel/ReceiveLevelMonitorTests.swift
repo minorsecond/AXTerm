@@ -354,4 +354,52 @@ final class ReceiveLevelMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.record(radio).baseline?.source, .passive)
         XCTAssertEqual(beacons, 0)
     }
+
+    // MARK: Pinned input, no calibration
+
+    /// Runs `checks` drift-watch checks, each finding the input as `series`
+    /// leaves it.
+    private func watch(_ monitor: ReceiveLevelMonitor, checks: Int,
+                       _ series: (inout LevelSeries) -> Void) async {
+        monitor.tick()
+        for _ in 0..<checks {
+            now = now.addingTimeInterval(40 * 60)
+            monitor.tick()
+            var s = LevelSeries(seed: 5)
+            series(&s)
+            control.finish(LevelSampleResult(outcome: .completed, samples: s.samples))
+            await settle()
+        }
+    }
+
+    /// Field case 2026-10-01: Station B's TNC4 at +24 dB, never calibrated,
+    /// on a packet channel. Four level checks found every report at the end
+    /// of the range, and the operator was never told, because every finding
+    /// needed a calibration to compare against.
+    func testAPinnedInputWithNoCalibrationBecomesAFinding() async {
+        profile.aprsEnabled = false
+        profile.tnc4.inputGain = 4
+        let monitor = makeMonitor()
+        await watch(monitor, checks: 2) { $0.noise(2, scale: 2.5) }
+
+        let finding = monitor.finding(for: radio)
+        XCTAssertTrue(finding?.message.contains("end of its range") ?? false, finding?.message ?? "nil")
+        XCTAssertEqual(finding?.retune, .levelMeter)
+        XCTAssertTrue(finding?.help.contains("+24 dB") ?? false, finding?.help ?? "")
+        XCTAssertEqual(notes.filter { $0.contains("end of its range") }.count, 1, "told once, in the console")
+    }
+
+    func testOnePinnedCheckIsNotYetAFinding() async {
+        profile.aprsEnabled = false
+        let monitor = makeMonitor()
+        await watch(monitor, checks: 1) { $0.noise(2, scale: 2.5) }
+        XCTAssertNil(monitor.finding(for: radio))
+    }
+
+    func testAnInputInRangeWithNoCalibrationSaysNothing() async {
+        profile.aprsEnabled = false
+        let monitor = makeMonitor()
+        await watch(monitor, checks: 2) { $0.noise(2) }
+        XCTAssertNil(monitor.finding(for: radio))
+    }
 }

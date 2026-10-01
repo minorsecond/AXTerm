@@ -353,6 +353,9 @@ final class ReceiveLevelMonitor: ObservableObject {
                                                 range: deps.gainRange(radio)) {
             return .level(drift, radioName: name, onAPRS: profile.handlesAPRS)
         }
+        if r.baseline == nil, let pinned = ReceiveLevelDrift.assessUncalibrated(observations: r.observations) {
+            return .pinned(pinned, radioName: name)
+        }
         if profile.handlesAPRS, let missing = r.digipeats.assess(now: now ?? deps.now()) {
             return .digipeats(missing, radioName: name)
         }
