@@ -759,6 +759,12 @@ nonisolated struct AX25StateMachine: Sendable {
 
     /// Reset all session state for a new connection
     mutating func resetSessionState() {
+        // A new link starts its N2 ladders from zero. A count left over
+        // from a teardown that ran out its retries (disconnecting, then a
+        // peer SABM on the same session) made the new link fail on its
+        // first T1 expiry.
+        retryCount = 0
+        unsatisfiableREJCount = 0
         sequenceState.reset()
         receiveBuffer.removeAll()
         rejSent = false

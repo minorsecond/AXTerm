@@ -88,4 +88,31 @@ final class AX25PropertyFindingsTests: XCTestCase {
                       "an F=1 response is not a poll")
         XCTAssertEqual(session.state, .error, "answering does not revive the link")
     }
+
+    // MARK: - Fixed: a new link starts its N2 ladder at zero
+    //
+    // S1.hostile seed 0x036E22AFF228470A: retryCount 9 with N2=8 on a
+    // connected link. A DISC sent while connecting retried until N2 and
+    // gave up (disconnected, retryCount N2+1); the session had never been
+    // connected, so a peer SABM reused it, and the link came up already
+    // past N2. Its first T1 expiry failed it.
+
+    func testLinkOpenedAfterAnExhaustedTeardownGetsItsFullN2() throws {
+        let (manager, clock) = makeManager(maxRetries: 3)
+        _ = manager.connect(to: peer)
+        let session = try XCTUnwrap(manager.existingSession(for: peer))
+        _ = manager.disconnect(session: session)
+        XCTAssertEqual(session.state, .disconnecting)
+        clock.advance(by: 120)
+        XCTAssertEqual(session.state, .disconnected, "precondition: the DISC ran out its retries")
+
+        _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
+        let reopened = try XCTUnwrap(manager.existingSession(for: peer))
+        XCTAssertEqual(reopened.state, .connected)
+        XCTAssertEqual(reopened.stateMachine.retryCount, 0)
+
+        _ = manager.sendData(Data("hello".utf8), to: peer)
+        _ = manager.handleT1Timeout(session: reopened)
+        XCTAssertEqual(reopened.state, .connected, "one T1 expiry must not fail a fresh link with N2=3")
+    }
 }
