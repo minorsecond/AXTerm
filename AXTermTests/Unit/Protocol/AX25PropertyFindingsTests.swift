@@ -262,4 +262,74 @@ final class AX25PropertyFindingsTests: XCTestCase {
         _ = manager.handleT1Timeout(session: reopened)
         XCTAssertEqual(reopened.state, .connected, "one T1 expiry must not fail a fresh link with N2=3")
     }
+
+    // MARK: - Reported, not changed
+    //
+    // Each of these departs from AX.25 2.2 in a way that is a design choice
+    // (or where changing it reaches past the frame in hand), so the code is
+    // left alone and the test records the gap. XCTExpectFailure turns into
+    // a failure the day the behavior changes, so the note gets revisited.
+
+    /// §4.3.3.9 and the 2.2 SDL "N(R) error recovery": an N(R) outside
+    /// V(A)...V(S) is a protocol error, answered by re-establishing the link
+    /// (2.0 sent FRMR). AXTerm ignores the N(R). For an RR it ignores the
+    /// whole frame, so an RR poll with a bad N(R) is not answered at all,
+    /// while I, RNR and REJ frames with a bad N(R) are processed and
+    /// answered. Found by S3.outOfWindowNR seed 0x45FBF6D32CA81481.
+    func testOutOfWindowNRIsAnNRErrorReported() throws {
+        let (manager, _) = makeManager()
+        let session = try connected(manager)
+        let frames = manager.handleInboundRRFrames(from: peer, path: DigiPath(), radio: .primary,
+                                                   nr: 3, pf: true, isCommand: true)
+        XCTExpectFailure("Reported, not changed: AXTerm ignores an out-of-window N(R) instead of "
+                         + "re-establishing the link (AX.25 2.2 N(R) error recovery)")
+        XCTAssertTrue(session.state == .connecting || frames.contains { $0.displayInfo == "SABM" },
+                      "an RR poll with N(R)=3 while V(A)=V(S)=0 drew \(frames.map { $0.displayInfo ?? "?" })")
+    }
+
+    /// §4.3.3.9 (FRMR W bit) and the 2.2 SDL: an I field in a frame type
+    /// that does not allow one (S frames, and U frames other than UI, XID,
+    /// FRMR and TEST) is an error. AXTerm decodes such a frame, keeps the
+    /// bytes in `info`, and acts on it: an RR carrying three info bytes
+    /// still acknowledges. Found by A5.controlPidCombos.
+    func testSupervisoryFrameWithAnInfoFieldIsAcceptedReported() throws {
+        var rr = Data()
+        rr.append(local.encodeForAX25(isLast: false, isDestination: true, isCommand: false))
+        rr.append(peer.encodeForAX25(isLast: true, isDestination: false, isCommand: false))
+        rr.append(AX25Control.sFrame(base: AX25Control.rrBase, nr: 1))
+        rr.append(contentsOf: [0x41, 0x42, 0x43])
+        let decoded = try XCTUnwrap(AX25.decodeFrame(ax25: rr), "decoded today, info kept")
+        XCTAssertEqual(decoded.info, Data([0x41, 0x42, 0x43]))
+
+        XCTExpectFailure("Reported, not changed: an S frame with an I field is decoded and acted on; "
+                         + "AX.25 2.2 treats it as a frame error")
+        XCTAssertNil(AX25.decodeFrame(ax25: rr), "an RR with an I field should be refused or flagged")
+    }
+
+    /// §3.4: every I and UI frame carries a PID. A frame that ends at its
+    /// control byte is decoded with `pid == nil`, and on a connected link an
+    /// I-frame like that delivers an empty payload. Found by A2 and A5.
+    func testInformationFrameWithoutPIDIsAcceptedReported() {
+        var frame = Data()
+        frame.append(AX25.encodeAddress(local, isLast: false))
+        frame.append(AX25.encodeAddress(peer, isLast: true))
+        frame.append(AX25Control.iFrame(ns: 0, nr: 0))
+        XCTAssertNotNil(AX25.decodeFrame(ax25: frame), "decoded today")
+        XCTAssertNil(AX25.decodeFrame(ax25: frame)?.pid, "with no PID")
+
+        XCTExpectFailure("Reported, not changed: an I frame without its PID byte is accepted")
+        XCTAssertNil(AX25.decodeFrame(ax25: frame), "an I frame missing its PID should be refused")
+    }
+
+    /// §6.2: a response's F bit is set to the P bit of the command it
+    /// answers. UA and DM always go out with F=1, so a SABM or DISC sent
+    /// with P=0 is answered F=1.
+    func testUAFinalBitDoesNotFollowThePollBitReported() {
+        let (manager, _) = makeManager()
+        let ua = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary, pf: false)
+        XCTAssertEqual(ua?.displayInfo, "UA")
+
+        XCTExpectFailure("Reported, not changed: UA answers a P=0 SABM with F=1")
+        XCTAssertEqual((ua?.controlByte ?? 0) & 0x10, 0, "UA to a P=0 SABM should carry F=0")
+    }
 }
