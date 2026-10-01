@@ -245,7 +245,38 @@ and a capability check that gave up is not retried until the session ends (a
 ## Incident at the end of the session
 
 Around 20:00 the IC-705 hung transmitting an unmodulated carrier, stopped, then
-started again on its own. Both AXTerm test stations were shut down at once and
-nothing was connected to Warbler's KISS port afterward, so the later keying came
-from Warbler itself. The operator turned the ID-50 off and disabled 705 transmit
-in Warbler for the night. This belongs in Warbler's tracker, not AXTerm's.
+started again. The operator turned the ID-50 off and disabled 705 transmit in
+Warbler for the night.
+
+What the logs show (read-only review of Warbler's code and logs on 2026-10-01;
+the hub's own journal was not read):
+
+- Port 50100 is Warbler's virtual IC-705, which speaks Icom's LAN protocol over
+  UDP. The `lsof` check that night looked at TCP and proved nothing. The chain
+  is AXTerm, then the Mac's warblerd, then the hub on ham-pi, then the 705 over
+  its Wi-Fi.
+- At 19:58:21 Station A keyed an over that ran 5.8 s with 1.6 s of audio. The
+  705 stopped answering CI-V; Station A logged "Lost the radio: the radio has
+  not answered 8 CI-V commands in a row" at 19:58:51 and reconnected at
+  19:58:54. Warbler logged "the IC-705 stopped answering CI-V for 15 s" at
+  19:59:25 and 20:00:43, while the FT-710 on the same hub stayed healthy. A
+  radio that has stopped processing CI-V cannot be unkeyed over the network,
+  which fits the dead carrier.
+- Station A was still connected and keyed 31 more overs between 19:59:30 and
+  20:03:21, until the test stations were shut down. The note written that night
+  that nothing from AXTerm was connected was wrong. Any keying after about
+  20:03:46 came from the hub or the radio, not from the Mac.
+- CI-V to the 705 stayed dead from 20:05 until 04:18 on 2026-10-01, when the
+  link came back and the radio confirmed it was not transmitting.
+
+Transmit tail: about 300 ms comes from AXTerm sending trailing silence after the
+frame (`LANModemAudioIO`), and about 340 ms from the hub waiting out an assumed
+300 ms radio buffer plus 40 ms. With the radio really buffering around 100 ms,
+that adds up to the measured 0.7 s.
+
+Safeguards to put in place: the 705's own transmit time-out timer as the last
+backstop; in Warbler, confirm the radio's real transmit state while idle and
+unkey on disagreement, never resend a superseded key-down, drop an unconfirmed
+key-down once an unkey is queued, and time the unkey from the last audible
+sample; in AXTerm, stop sending trailing silence. Filing the Warbler items
+needs a GitLab project token for `workshop/warbler`.
