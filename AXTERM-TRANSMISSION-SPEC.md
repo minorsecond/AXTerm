@@ -890,6 +890,15 @@ evidence.
 
 ### 7.8.1 K and paclen during a session
 
+**Status (2026-10-01): implemented, switched off by default**
+(`SessionCoordinator.inSessionLinkGrowth`). On the air a session grew to K=3
+with 174-byte frames, so each burst ran about 4 s, longer than the
+receiver's 2 s T2. The receiver's delayed ack went out part-way through the
+burst, the stations keyed over each other, and the session fell back to K=1,
+paclen 64. Growth stays off until the receiver's ack timing is designed to
+match bursts that long. With it off, a session keeps the K and paclen it
+started with, as §7.8 described before this section.
+
 **Ceilings**, fixed when the session is created (`AX25SessionConfig.maxWindowSize`, `maxPaclen`):
 - K: 4. Four 256-byte frames already hold a 1200 baud channel about 7.5 s per burst, so 4 is the most we allow at 1200 baud, and since AXTerm cannot see a KISS TNC's modem rate it is the most we allow at all.
 - paclen: 256 on a direct path, one ladder rung less per digipeater (`TxAdaptiveSettings.paclenCeiling(forHops:)`: 192 for one, 128 for two or more).

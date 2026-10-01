@@ -461,8 +461,21 @@ final class InSessionLinkCoordinatorTests: XCTestCase {
     private func makeCoordinator() -> SessionCoordinator {
         let coordinator = SessionCoordinator()
         coordinator.adaptiveTransmissionEnabled = true
+        coordinator.inSessionLinkGrowth = true
         coordinator.localCallsign = "LOCAL-0"
         return coordinator
+    }
+
+    /// Off by default since 2026-10-01 (bursts longer than the receiver's T2
+    /// collided with its acks): a session keeps the K and paclen it started
+    /// with unless growth is switched on.
+    func testGrowthIsOffByDefault() {
+        let coordinator = SessionCoordinator()
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.localCallsign = "LOCAL-0"
+        XCTAssertFalse(coordinator.inSessionLinkGrowth)
+        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary)
+        XCTAssertEqual(config?.adaptsInSession, false, "a session got growth ceilings with growth off")
     }
 
     override func tearDown() {

@@ -1055,8 +1055,16 @@ final class SessionCoordinator: ObservableObject {
     /// or adaptive transmission is off. K=4; paclen 256 direct and one ladder
     /// rung less per digipeater (spec §7.8.1). The peer's XID can only lower
     /// these.
+    /// Whether K and paclen may grow during a session (§7.8.1). Off by
+    /// default since 2026-10-01: on the air a session that grew to K3 sent
+    /// bursts of about 4 s, longer than the receiver's 2 s T2, so acks came
+    /// back mid-burst, the stations keyed over each other and the session
+    /// fell to K1. Growth stays off until the receiver side is designed to
+    /// match. With it off a session keeps the K and paclen it started with.
+    var inSessionLinkGrowth = false
+
     private func linkCeilings(hops: Int) -> (window: Int?, paclen: Int?) {
-        guard adaptiveTransmissionEnabled else { return (nil, nil) }
+        guard adaptiveTransmissionEnabled, inSessionLinkGrowth else { return (nil, nil) }
         let window = globalAdaptiveSettings.windowSize.mode == .auto
             ? TxAdaptiveSettings.autoWindowCap : nil
         let paclen = globalAdaptiveSettings.paclen.mode == .auto
