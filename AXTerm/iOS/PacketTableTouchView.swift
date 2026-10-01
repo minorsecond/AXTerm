@@ -108,18 +108,18 @@ struct PacketTableTouchView: View {
             .onScrollPhaseChange { _, phase in
                 userIsScrolling = phase == .interacting || phase == .decelerating
             }
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                PacketListFollow.isAtBottom(contentHeight: geometry.contentSize.height,
-                                            visibleMaxY: geometry.visibleRect.maxY)
-            } action: { _, atBottom in
-                if atBottom {
-                    // Scrolling back down resumes following.
-                    isFollowing = true
-                } else if userIsScrolling {
-                    // The operator scrolling away to read stops it.
-                    isFollowing = false
-                } else if isFollowing {
-                    // Moved by something else while following: put it back.
+            .onScrollGeometryChange(for: PacketListFollow.Geometry.self) { geometry in
+                PacketListFollow.Geometry(contentHeight: geometry.contentSize.height,
+                                          visibleMinY: geometry.visibleRect.minY,
+                                          visibleHeight: geometry.visibleRect.height)
+            } action: { old, new in
+                // Scrolling back down resumes following, scrolling away to
+                // read stops it, and a follower moved by something else is
+                // put back.
+                let decision = PacketListFollow.decide(from: old, to: new, isFollowing: isFollowing,
+                                                       userIsScrolling: userIsScrolling)
+                if isFollowing != decision.isFollowing { isFollowing = decision.isFollowing }
+                if decision.scrollToNewest {
                     DispatchQueue.main.async { scroll(proxy, animated: false) }
                 }
             }

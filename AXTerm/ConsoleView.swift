@@ -322,6 +322,12 @@ struct ConsoleView: View {
     @State private var undoClearTask: Task<Void, Never>?
     @State private var previousClearedAt: Date?
     @State private var scrollToBottomToken = 0
+    /// Whether new lines move the view. Scrolling up to read turns it off and
+    /// getting back to the bottom turns it on again (`PacketListFollow`).
+    /// The Auto-scroll checkbox alone stayed on while the operator read back,
+    /// so every keep-alive line pulled them to the bottom.
+    @State private var isFollowing = true
+    @State private var userIsScrolling = false
     /// Debounced write of `isUserNearBottom` from the bottom sentinel, and the
     /// deferred re-pin after a rebuild. Both are `QuietWindowTimer` rather than
     /// a canceled-and-replaced `DispatchWorkItem`: see that type for the
@@ -441,13 +447,19 @@ struct ConsoleView: View {
     /// content is laid out. The quiet window collapses a burst of rebuilds (live
     /// packets) to a single re-pin once they stop. It targets the last real line,
     /// never the phantom "bottom" sentinel an overshoot would land past. Only
-    /// while Auto-scroll is on, so a reader who scrolled up is left alone.
+    /// while following, so a reader who scrolled up is left alone.
     private func scheduleRepin() {
-        guard autoScroll else { return }
+        guard followsNewLines else { return }
         repinTimer.poke {
-            guard autoScroll else { return }
+            guard followsNewLines else { return }
             scrollToBottomToken += 1
         }
+    }
+
+    /// Auto-scroll is on and the reader is at the bottom.
+    private var followsNewLines: Bool {
+        AutoScrollDecision.shouldAutoScroll(isUserAtTarget: isFollowing, followNewest: autoScroll,
+                                            didRequestScrollToTarget: false)
     }
 
     var body: some View {
@@ -585,9 +597,27 @@ struct ConsoleView: View {
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .defaultScrollAnchor(.bottom)
+                    // Open at the bottom and sit short content there. Size
+                    // changes are left to the follow logic below: anchoring
+                    // them to the bottom too moved the lines under a reader
+                    // each time one arrived or a row was measured.
+                    .defaultScrollAnchor(.bottom, for: .initialOffset)
+                    .defaultScrollAnchor(.bottom, for: .alignment)
+                    .onScrollPhaseChange { _, phase in
+                        userIsScrolling = phase == .interacting || phase == .decelerating
+                    }
+                    .onScrollGeometryChange(for: PacketListFollow.Geometry.self) { geometry in
+                        PacketListFollow.Geometry(contentHeight: geometry.contentSize.height,
+                                                  visibleMinY: geometry.visibleRect.minY,
+                                                  visibleHeight: geometry.visibleRect.height)
+                    } action: { old, new in
+                        let decision = PacketListFollow.decide(from: old, to: new, isFollowing: isFollowing,
+                                                               userIsScrolling: userIsScrolling)
+                        if isFollowing != decision.isFollowing { isFollowing = decision.isFollowing }
+                        if decision.scrollToNewest { scheduleRepin() }
+                    }
                     .onChange(of: groupedLines.count) { _, _ in
-                        guard autoScroll else { return }
+                        guard followsNewLines else { return }
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                     .onChange(of: scrollToBottomToken) { _, _ in
@@ -604,6 +634,7 @@ struct ConsoleView: View {
                     }
                     .onChange(of: autoScroll) { _, newValue in
                         if newValue {
+                            isFollowing = true
                             withAnimation(.easeOut(duration: 0.2)) {
                                 proxy.scrollTo("bottom", anchor: .bottom)
                             }
@@ -613,6 +644,8 @@ struct ConsoleView: View {
                         scrollToBottomToken += 1
                     }
                     .onChange(of: repinSignal) { _, _ in
+                        // A different set of lines: start again at the newest.
+                        isFollowing = true
                         scheduleRepin()
                     }
                 }
@@ -653,6 +686,7 @@ struct ConsoleView: View {
                     Spacer()
                     Button {
                         isUserNearBottom = true // Optimistic update
+                        isFollowing = true
                         autoScroll = true
                         scrollToBottomToken += 1
                     } label: {

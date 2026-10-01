@@ -19,6 +19,10 @@ struct RawView: View {
     @State private var undoClearTask: Task<Void, Never>?
     @State private var previousClearedAt: Date?
     @State private var scrollToBottomToken = 0
+    /// Whether new chunks move the view: off while the reader is scrolled
+    /// up, on again at the bottom. See `PacketListFollow`.
+    @State private var isFollowing = true
+    @State private var userIsScrolling = false
 
     /// Chunks filtered by clear timestamp
     private var filteredChunks: [RawChunk] {
@@ -79,9 +83,29 @@ struct RawView: View {
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .defaultScrollAnchor(.bottom)
+                    // Size changes are left to the follow logic: anchoring
+                    // them to the bottom moved the lines under a reader.
+                    .defaultScrollAnchor(.bottom, for: .initialOffset)
+                    .defaultScrollAnchor(.bottom, for: .alignment)
+                    .onScrollPhaseChange { _, phase in
+                        userIsScrolling = phase == .interacting || phase == .decelerating
+                    }
+                    .onScrollGeometryChange(for: PacketListFollow.Geometry.self) { geometry in
+                        PacketListFollow.Geometry(contentHeight: geometry.contentSize.height,
+                                                  visibleMinY: geometry.visibleRect.minY,
+                                                  visibleHeight: geometry.visibleRect.height)
+                    } action: { old, new in
+                        let decision = PacketListFollow.decide(from: old, to: new, isFollowing: isFollowing,
+                                                               userIsScrolling: userIsScrolling)
+                        if isFollowing != decision.isFollowing { isFollowing = decision.isFollowing }
+                        if decision.scrollToNewest, autoScroll {
+                            DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+                        }
+                    }
                     .onChange(of: filteredChunks.count) { _, _ in
-                        guard autoScroll else { return }
+                        guard AutoScrollDecision.shouldAutoScroll(
+                            isUserAtTarget: isFollowing, followNewest: autoScroll,
+                            didRequestScrollToTarget: false) else { return }
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                     .onChange(of: scrollToBottomToken) { _, _ in
@@ -91,6 +115,7 @@ struct RawView: View {
                     }
                     .onChange(of: autoScroll) { _, newValue in
                         if newValue {
+                            isFollowing = true
                             withAnimation(.easeOut(duration: 0.2)) {
                                 proxy.scrollTo("bottom", anchor: .bottom)
                             }
@@ -118,6 +143,7 @@ struct RawView: View {
             if !isUserNearBottom {
                 Button {
                     isUserNearBottom = true
+                    isFollowing = true
                     autoScroll = true
                     scrollToBottomToken += 1
                 } label: {
