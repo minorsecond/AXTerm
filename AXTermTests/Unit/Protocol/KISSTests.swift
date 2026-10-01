@@ -47,6 +47,21 @@ final class KISSTests: XCTestCase {
         XCTAssertEqual(unescaped, Data([0x01, 0xDB]))
     }
 
+    func testUnescapeWorksOnASlice() {
+        let framed = Data([0xC0, 0x01, 0xDB, 0xDC, 0x02, 0xC0])
+        XCTAssertEqual(KISS.unescape(framed.dropFirst().dropLast()), Data([0x01, 0xC0, 0x02]))
+    }
+
+    // A broken escape keeps its bytes but is counted, so the parser can log
+    // the frame (CLAUDE.md §4: malformed frames are logged).
+    func testInvalidEscapesAreCounted() {
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0x01, 0xDB, 0xDC, 0xDB, 0xDD])), 0)
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0x01, 0xDB, 0x41])), 1, "FESC followed by a plain byte")
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0x01, 0xDB])), 1, "FESC ending the frame")
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0xDB, 0xDB, 0xDC])), 1, "FESC followed by FESC")
+        XCTAssertEqual(KISS.invalidEscapeCount(Data([0x00, 0xDB, 0x41]).dropFirst()), 1, "works on a slice")
+    }
+
     // MARK: - KISS Frame Parser Tests
 
     func testKISSStreamParserSingleFrame() {
@@ -251,6 +266,30 @@ final class KISSTests: XCTestCase {
 
         // Command byte for port 1: 0x10
         XCTAssertEqual(kissFrame, Data([0xC0, 0x10, 0x01, 0x02, 0xC0]))
+    }
+
+    // Port 12's data command is 0xC0, the FEND value. Sent raw it ended the
+    // frame after one byte; Direwolf escapes the whole frame, command byte
+    // included, and so must we.
+    func testPort12CommandByteIsEscaped() {
+        let kissFrame = KISS.encodeFrame(payload: Data([0x01, 0x02]), port: 12)
+        XCTAssertEqual(kissFrame, Data([0xC0, 0xDB, 0xDC, 0x01, 0x02, 0xC0]))
+        XCTAssertEqual(kissFrame.dropFirst().dropLast().filter { $0 == KISS.FEND }.count, 0)
+    }
+
+    func testPort12FrameFromDirewolfIsReceived() {
+        var parser = KISSFrameParser()
+        let frames = parser.feedFrames(Data([0xC0, 0xDB, 0xDC, 0x01, 0x02, 0xC0]))
+        XCTAssertEqual(frames, [KISSParsedFrame(port: 12, output: .ax25(Data([0x01, 0x02])))])
+    }
+
+    func testEveryPortRoundTrips() {
+        for port in UInt8(0)...15 {
+            var parser = KISSFrameParser()
+            let payload = Data([0x41, 0xC0, 0xDB, 0x42])
+            let frames = parser.feedFrames(KISS.encodeFrame(payload: payload, port: port))
+            XCTAssertEqual(frames, [KISSParsedFrame(port: port, output: .ax25(payload))], "port \(port)")
+        }
     }
 
     func testEncodeDecodeRoundTrip() {

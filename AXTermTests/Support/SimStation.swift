@@ -446,7 +446,8 @@ final class SimStation {
               manager.answers(to), packet.isFullyDigipeated else { return }
         let control = AX25ControlFieldDecoder.decode(control: packet.control,
                                                      controlByte1: packet.controlByte1)
-        let path = DigiPath.from(packet.via.map { $0.display })
+        // Session frames are keyed and answered by the reversed heard path.
+        let path = DigiPath.replyPath(heardVia: packet.via)
         let radio = RadioID.primary
         manager.noteFrameHeard(from: from, path: path, radio: radio)
 
@@ -501,7 +502,7 @@ final class SimStation {
                 replies += manager.handleInboundXID(from: from, to: to, path: path, radio: radio,
                                                     info: packet.info, isCommand: packet.isCommand, pf: pf)
             case .DISC:
-                if let r = manager.handleInboundDISC(from: from, path: path, radio: radio) { replies.append(r) }
+                if let r = manager.handleInboundDISC(from: from, to: to, path: path, radio: radio) { replies.append(r) }
             case .SABM, .SABME:
                 if let r = manager.handleInboundSABM(from: from, to: to, path: path, radio: radio,
                                                      extended: uType == .SABME, pf: pf) {
@@ -511,7 +512,7 @@ final class SimStation {
                 break
             }
         case .I:
-            if let r = manager.handleInboundIFrame(from: from, path: path, radio: radio,
+            if let r = manager.handleInboundIFrame(from: from, to: to, path: path, radio: radio,
                                                    ns: control.ns ?? 0, nr: control.nr ?? 0,
                                                    pf: (control.pf ?? 0) == 1,
                                                    payload: packet.info, pid: packet.pid) {
@@ -522,13 +523,13 @@ final class SimStation {
             let pf = (control.pf ?? 0) == 1
             switch control.sType {
             case .RR?:
-                replies += manager.handleInboundRRFrames(from: from, path: path, radio: radio, nr: nr,
+                replies += manager.handleInboundRRFrames(from: from, to: to, path: path, radio: radio, nr: nr,
                                                          pf: pf, isCommand: packet.isCommand)
             case .REJ?:
-                replies += manager.handleInboundREJ(from: from, path: path, radio: radio, nr: nr,
+                replies += manager.handleInboundREJ(from: from, to: to, path: path, radio: radio, nr: nr,
                                                     pf: pf, isCommand: packet.isCommand)
             case .RNR?:
-                replies += manager.handleInboundRNR(from: from, path: path, radio: radio, nr: nr,
+                replies += manager.handleInboundRNR(from: from, to: to, path: path, radio: radio, nr: nr,
                                                     pf: pf, isCommand: packet.isCommand)
             case .SREJ?:
                 replies += manager.handleInboundSREJ(from: from, path: path, radio: radio, nr: nr, pf: pf)

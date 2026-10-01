@@ -428,6 +428,13 @@ nonisolated final class AX25Session: @unchecked Sendable {
         return sendTimeByNs[ackedNs]
     }
 
+    /// Whether N(R) acknowledges at least one frame not acknowledged
+    /// before: it lies in V(A)+1...V(S).
+    func newlyAcknowledges(nr: Int) -> Bool {
+        let sequence = stateMachine.sequenceState
+        return sequence.isValidNR(nr: nr) && nr != sequence.va
+    }
+
     /// Legacy: returns send time regardless of Karn status (used only for
     /// compatibility during SABM RTT measurement where retransmit status is irrelevant).
     func sendTimeForAckedBy(nr: Int) -> TimeInterval? {
@@ -605,6 +612,17 @@ final class AX25SessionManager: ObservableObject {
     /// Registers the address a service answers on; nil withdraws it.
     func setServiceAddress(_ address: AX25Address?, for service: String) {
         serviceAddresses[service] = address
+    }
+
+    /// The address a frame that belongs to no session is answered from:
+    /// the one it was sent to, when that is one of ours (a mailbox on its
+    /// own SSID), otherwise this radio's address. A station matches the DM
+    /// to its link by both addresses, so a DM to a stale link at the
+    /// mailbox that came from the station address cleared nothing, and the
+    /// caller polled on until its N2 ran out (found 2026-10-01 by a
+    /// scripted TNC-2 peer).
+    func answeringAddress(for destination: AX25Address?, radio: RadioID) -> AX25Address {
+        destination.flatMap { answers($0) ? $0 : nil } ?? localAddress(for: radio)
     }
 
     /// Whether a frame addressed to `address` belongs to this station at all.
@@ -2341,6 +2359,7 @@ final class AX25SessionManager: ObservableObject {
     /// Handle an inbound DISC (disconnect request)
     func handleInboundDISC(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID
     ) -> OutboundFrame? {
@@ -2373,9 +2392,10 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("DISC with no session -> DM", [
                 "from": source.display
             ])
-            // No session - respond with DM, from this radio's address.
+            // No session - respond with DM, from the address the DISC was
+            // sent to (see answeringAddress).
             return AX25FrameBuilder.buildDM(
-                from: localAddress(for: radio),
+                from: answeringAddress(for: destination, radio: radio),
                 to: source,
                 via: path
             ).onRadio(radio)
@@ -2437,6 +2457,7 @@ final class AX25SessionManager: ObservableObject {
     /// - Returns: Response frame (RR or REJ) to send
     func handleInboundIFrame(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID,
         ns: Int,
@@ -2499,7 +2520,7 @@ final class AX25SessionManager: ObservableObject {
             // peer clear its stale session instead of retrying until N2.
             if pf {
                 debugTrace("I-frame poll with no session -> DM", ["from": source.display])
-                return AX25FrameBuilder.buildDM(from: localAddress(for: radio), to: source, via: path).onRadio(radio)
+                return AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source, via: path).onRadio(radio)
             }
             TxLog.warning(.session, "I-frame received with no matching session; ignoring", [
                 "from": source.display,
@@ -2522,27 +2543,22 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
-        if session.state == .connecting {
-            // Stale remote state: the peer is sending numbered traffic before
-            // accepting our SABM. Let the state machine emit DM to reset the
-            // remote phantom session while our connect attempt continues.
+        guard session.state == .connected else {
+            // The state machine owns what a link that is not up does with an
+            // I-frame. Connecting: §6.3.1, ignored. Disconnecting,
+            // disconnected and error: a P=1 command is answered DM(F=1)
+            // (§6.3.5, SDL C4.3), so a peer still holding the link learns it
+            // is gone instead of polling until its N2. This path used to hand
+            // only the connecting case to the state machine, which left the
+            // DM rule unreachable.
+            if session.state != .connecting {
+                TxLog.warning(.session, "I-frame received but not connected", [
+                    "state": session.state.rawValue, "pf": pf ? 1 : 0
+                ])
+            }
             let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
             session.touch()
             return processActions(actions, for: session).first
-        }
-
-        if session.state == .error {
-            // The link gave up: answer a poll with DM, as a disconnected
-            // station does (see the state machine's .error cases).
-            let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
-            return processActions(actions, for: session).first
-        }
-
-        guard session.state == .connected else {
-            TxLog.warning(.session, "I-frame received but not connected", [
-                "state": session.state.rawValue
-            ])
-            return nil
         }
 
         // Capture V(A) before state machine updates it - piggybacked N(R) acks [V(A), N(R))
@@ -2621,6 +2637,7 @@ final class AX25SessionManager: ObservableObject {
     /// - Returns: Response frame (RR with F=1) if this was a poll, nil otherwise
     func handleInboundRRFrames(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID,
         nr: Int,
@@ -2657,7 +2674,7 @@ final class AX25SessionManager: ObservableObject {
             // or restarted) clear it promptly instead of polling until its N2 expires.
             // P=0 frames and response frames are ignored per the same sentence.
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: localAddress(for: radio), to: source, via: path).onRadio(radio)]
+                return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source, via: path).onRadio(radio)]
             }
             return []
         }
@@ -2668,17 +2685,26 @@ final class AX25SessionManager: ObservableObject {
         // might correspond to the original or the retransmit. Using the original
         // send time would overstate RTT by including the retransmit wait.
         // Bug F fix: use clock.currentTime instead of Date() for determinism.
-        if let sentAt = session.rttSendTime(ackedBy: nr) {
-            let rtt = clock.currentTime - sentAt
-            session.timers.updateRTT(sample: rtt)
-            TxLog.rttUpdate(
-                peer: source.display,
-                srtt: session.timers.srtt ?? rtt,
-                rttvar: session.timers.rttvar,
-                rto: session.timers.rto
-            )
+        //
+        // Only an N(R) that newly acknowledges something can time a frame.
+        // An RR repeating V(A), or one outside V(A)...V(S), names a frame
+        // acknowledged earlier, and when that ack came piggybacked on an
+        // I-frame or in a REJ its send time was never cleared: the sample
+        // was the time since that old frame went out, minutes on an idle
+        // link, and it pinned the RTO at rtoMax.
+        if session.newlyAcknowledges(nr: nr) {
+            if let sentAt = session.rttSendTime(ackedBy: nr) {
+                let rtt = clock.currentTime - sentAt
+                session.timers.updateRTT(sample: rtt)
+                TxLog.rttUpdate(
+                    peer: source.display,
+                    srtt: session.timers.srtt ?? rtt,
+                    rttvar: session.timers.rttvar,
+                    rto: session.timers.rto
+                )
+            }
+            session.clearSendTimesAcked(by: nr)
         }
-        session.clearSendTimesAcked(by: nr)
 
         // Capture V(A) BEFORE state machine update - RR only acks [V(A), N(R))
         let vaBefore = session.va
@@ -2949,6 +2975,7 @@ final class AX25SessionManager: ObservableObject {
     /// was healthy and merely busy.
     func handleInboundRNR(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID,
         nr: Int,
@@ -2976,18 +3003,21 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("RNR for unknown session", ["from": source.display])
             // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: localAddress(for: radio), to: source, via: path).onRadio(radio)]
+                return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source, via: path).onRadio(radio)]
             }
             return []
         }
 
         // The N(R) in an RNR is a real acknowledgment, so it yields a valid RTT
-        // sample under the same Karn's-algorithm rules used for RR.
-        if let sentAt = session.rttSendTime(ackedBy: nr) {
-            let rtt = clock.currentTime - sentAt
-            session.timers.updateRTT(sample: rtt)
+        // sample under the same Karn's-algorithm rules used for RR, and only
+        // when it newly acknowledges something (see the RR handler).
+        if session.newlyAcknowledges(nr: nr) {
+            if let sentAt = session.rttSendTime(ackedBy: nr) {
+                let rtt = clock.currentTime - sentAt
+                session.timers.updateRTT(sample: rtt)
+            }
+            session.clearSendTimesAcked(by: nr)
         }
-        session.clearSendTimesAcked(by: nr)
 
         let vaBefore = session.va
         let oldState = session.state
@@ -3110,6 +3140,7 @@ final class AX25SessionManager: ObservableObject {
 
     func handleInboundREJ(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID,
         nr: Int,
@@ -3144,7 +3175,7 @@ final class AX25SessionManager: ObservableObject {
             ])
             // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: localAddress(for: radio), to: source, via: path).onRadio(radio)]
+                return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source, via: path).onRadio(radio)]
             }
             return []
         }

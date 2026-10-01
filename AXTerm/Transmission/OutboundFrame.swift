@@ -47,6 +47,14 @@ nonisolated struct DigiPath: Codable, Hashable, Sendable {
         return DigiPath(addresses)
     }
 
+    /// The path to answer a received frame on: its digipeaters in reverse
+    /// order, H bits cleared. A station calling via D2,D1 sits beside D2,
+    /// so the answer goes to D1 first. Linux does the same for every
+    /// inbound link (ax25_digi_invert in net/ax25/ax25_addr.c).
+    static func replyPath(heardVia via: [AX25Address]) -> DigiPath {
+        DigiPath(via.reversed().map { AX25Address(call: $0.call, ssid: $0.ssid) })
+    }
+
     var isEmpty: Bool { digis.isEmpty }
     var count: Int { digis.count }
 
@@ -348,9 +356,17 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
             }
         }
 
-        // Info field (payload) - only for UI and I frames
-        // S-frames and most U-frames have no info field
-        if frameClass == "ui" || frameClass == "i" {
+        // Info field: I and UI frames, and the U frames that carry one.
+        // XID holds its parameters there (AX.25 2.2 §4.3.3.7), and so do
+        // TEST and FRMR. Until 2026-10-01 only I and UI were let through,
+        // so every XID AXTerm sent, command or response, went out empty.
+        // S frames and the other U frames have no information field.
+        let uCarriesInfo: Bool = {
+            guard frameClass == "u", let ctrl = controlByte else { return false }
+            let base = ctrl & ~0x10
+            return base == 0xAF || base == 0xE3 || base == AX25Control.frmr
+        }()
+        if frameClass == "ui" || frameClass == "i" || uCarriesInfo {
             data.append(payload)
         }
 

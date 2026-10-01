@@ -3151,7 +3151,7 @@ final class SessionCoordinator: ObservableObject {
 
         // Before the frame is handled, so a reply built while handling it is
         // timed from now. See TurnaroundEvidence.
-        sessionManager.noteFrameHeard(from: from, path: DigiPath.from(packet.via.map { $0.display }),
+        sessionManager.noteFrameHeard(from: from, path: DigiPath.replyPath(heardVia: packet.via),
                                       radio: radio)
 
         switch decoded.frameClass {
@@ -3178,7 +3178,11 @@ final class SessionCoordinator: ObservableObject {
             return
         }
 
-        let path = DigiPath.from(packet.via.map { $0.display })
+        // Session frames are keyed and answered by the path back to the
+        // sender: the heard path reversed (DigiPath.replyPath). UI frames
+        // keep the order they were heard in, as before.
+        let path = DigiPath.replyPath(heardVia: packet.via)
+        let heardPath = DigiPath.from(packet.via.map { $0.display })
 
         switch uType {
         case .UA:
@@ -3209,7 +3213,7 @@ final class SessionCoordinator: ObservableObject {
                 sendFrame(response)
             }
         case .DISC:
-            if let response = sessionManager.handleInboundDISC(from: from, path: path, radio: radio) {
+            if let response = sessionManager.handleInboundDISC(from: from, to: to, path: path, radio: radio) {
                 sendFrame(response)
             }
         case .SABM, .SABME:
@@ -3226,18 +3230,19 @@ final class SessionCoordinator: ObservableObject {
         case .UI:
             // Check for text-safe AXDP probe ("AXDP?\r") before binary AXDP check.
             // Text probes don't have AXDP magic, so handleAXDPMessage would skip them.
-            handleInboundTextProbe(from: from, path: path, payload: packet.info, radio: radio)
+            handleInboundTextProbe(from: from, path: heardPath, payload: packet.info, radio: radio)
             // UI frames can also contain binary AXDP messages (capability discovery, file transfers)
-            handleAXDPMessage(from: from, path: path, payload: packet.info, radio: radio)
+            handleAXDPMessage(from: from, path: heardPath, payload: packet.info, radio: radio)
         default:
             break
         }
     }
 
     private func handleIFrame(packet: Packet, from: AX25Address, ns: Int, nr: Int, pf: Bool, radio: RadioID) {
-        let path = DigiPath.from(packet.via.map { $0.display })
+        let path = DigiPath.replyPath(heardVia: packet.via)
         if let response = sessionManager.handleInboundIFrame(
             from: from,
+            to: packet.to,
             path: path,
             radio: radio,
             ns: ns,
@@ -4604,13 +4609,14 @@ final class SessionCoordinator: ObservableObject {
 
     private func handleSFrame(packet: Packet, from: AX25Address, sType: AX25SType?, nr: Int, pf: Int, radio: RadioID) {
         guard let sType = sType else { return }
-        let path = DigiPath.from(packet.via.map { $0.display })
+        let path = DigiPath.replyPath(heardVia: packet.via)
         let pfSet = pf == 1
 
         switch sType {
         case .RR:
             let responses = sessionManager.handleInboundRRFrames(
                 from: from,
+                to: packet.to,
                 path: path,
                 radio: radio,
                 nr: nr,
@@ -4623,7 +4629,7 @@ final class SessionCoordinator: ObservableObject {
             reportIdleLinkIfNeeded(peer: from, radio: radio)
         case .REJ:
             let retransmits = sessionManager.handleInboundREJ(
-                from: from, path: path, radio: radio, nr: nr,
+                from: from, to: packet.to, path: path, radio: radio, nr: nr,
                 pf: pfSet, isCommand: packet.isCommand
             )
             for frame in retransmits {
@@ -4633,6 +4639,7 @@ final class SessionCoordinator: ObservableObject {
             // Peer receiver busy: apply the ack it carries and enter the busy condition.
             let responses = sessionManager.handleInboundRNR(
                 from: from,
+                to: packet.to,
                 path: path,
                 radio: radio,
                 nr: nr,

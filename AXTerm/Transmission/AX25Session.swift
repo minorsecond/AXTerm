@@ -555,6 +555,14 @@ nonisolated enum AX25SessionAction: Sendable, Equatable {
 
 // MARK: - State Machine
 
+/// What became of the frame at one N(S) on the latest lap: enough to tell
+/// a stale copy of it from the frame one lap ahead.
+nonisolated enum ReceivedAtNS: Sendable, Equatable {
+    case delivered(payload: Data, pid: UInt8?)
+    /// Passed over by a receive-gap flush without ever arriving.
+    case skipped
+}
+
 /// Buffered I-frame waiting for delivery
 nonisolated struct BufferedIFrame: Sendable {
     let ns: Int
@@ -698,9 +706,17 @@ nonisolated struct AX25StateMachine: Sendable {
             "reason": reason
         ])
 
+        // The frames passed over never arrived, so they cannot be told by
+        // their bytes. Any copy of one that turns up later (the peer may
+        // still be resending it) is stale, and must not be buffered as the
+        // frame a lap ahead.
+        for offset in 0..<skippedCount {
+            lastDeliveredByNS[(sequenceState.vr + offset) % config.modulo] = .skipped
+        }
         sequenceState.vr = lowestBuffered
         var actions: [AX25SessionAction] = []
         while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
+            noteDelivered(ns: sequenceState.vr, payload: buffered.payload, pid: buffered.pid)
             sequenceState.incrementVR()
             actions.append(.deliverData(buffered.payload, pid: buffered.pid))
         }
@@ -729,6 +745,10 @@ nonisolated struct AX25StateMachine: Sendable {
     /// Receive buffer for out-of-sequence I-frames
     /// Key is N(S) sequence number
     var receiveBuffer: [Int: BufferedIFrame] = [:]
+
+    /// What became of each N(S) on the latest lap, so a stale copy is not
+    /// buffered as the frame a lap ahead (see `isStaleCopy`).
+    private var lastDeliveredByNS: [Int: ReceivedAtNS] = [:]
 
     /// Flag indicating we've sent REJ and are waiting for retransmission
     /// This prevents sending multiple REJs for the same gap
@@ -759,8 +779,15 @@ nonisolated struct AX25StateMachine: Sendable {
 
     /// Reset all session state for a new connection
     mutating func resetSessionState() {
+        // A new link starts its N2 ladders from zero. A count left over
+        // from a teardown that ran out its retries (disconnecting, then a
+        // peer SABM on the same session) made the new link fail on its
+        // first T1 expiry.
+        retryCount = 0
+        unsatisfiableREJCount = 0
         sequenceState.reset()
         receiveBuffer.removeAll()
+        lastDeliveredByNS.removeAll()
         rejSent = false
         ackPending = false
         peerBusy = false
@@ -1274,17 +1301,15 @@ nonisolated struct AX25StateMachine: Sendable {
             return [.stopT1, .stopT3, .notifyDisconnected]
 
         case (.error, .receivedIFrame(_, _, let pf, _, _)):
-            // A link that gave up is a disconnected link: AX.25 2.2's SDL
-            // leaves timer recovery for state 0 when N2 runs out, and §6.3.5
-            // answers any command with P=1 there with DM F=1. Without it a
-            // peer still holding the link polls into silence until its own
-            // retries run out.
+            // A failed link is a disconnected one (the SDL leaves for the
+            // disconnected state on N2), so the §6.3.5 rule applies: a P=1
+            // command draws DM(F=1). Without it a peer that still holds the
+            // link polls us until its own N2 runs out.
             return pf ? [.sendDM] : []
 
         case (.error, .receivedRR(_, let pf, let isCommand)),
              (.error, .receivedRNR(_, let pf, let isCommand)),
              (.error, .receivedREJ(_, let pf, let isCommand)):
-            // As above, for supervisory command polls.
             return (pf && isCommand) ? [.sendDM] : []
 
         case (.error, _):
@@ -1309,9 +1334,20 @@ nonisolated struct AX25StateMachine: Sendable {
             // Pass the P/F bit so we can respond with F=1 if P=1
             actions.append(contentsOf: deliverInSequenceFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
         } else if isWithinReceiveWindow(ns: ns) {
-            // Out of sequence but within window - buffer for later delivery
-
-            bufferOutOfSequenceFrame(ns: ns, nr: nr, payload: payload, pid: pid)
+            // Out of sequence but within window - buffer for later delivery,
+            // unless it is a stale copy from the latest lap (`isStaleCopy`:
+            // it repeats the frame delivered at this N(S), or a gap flush
+            // skipped this N(S)). A peer with K above the receive span (5 to 7)
+            // that missed our ack resends frames from that lap, and their
+            // N(S) lands just ahead of V(R). Buffering such a frame
+            // delivered the old data again when V(R) reached it, and the
+            // real frame at that N(S) was then dropped as a duplicate.
+            // Discarding it is what §6.4.4.1 does with every out-of-sequence
+            // frame, so the REJ below still goes out, and a genuine new frame
+            // that happens to repeat the old bytes is simply sent again.
+            if !isStaleCopy(ns: ns, payload: payload, pid: pid) {
+                bufferOutOfSequenceFrame(ns: ns, nr: nr, payload: payload, pid: pid)
+            }
 
             // Send REJ only once per gap (with F=1 if remote sent P=1).
             //
@@ -1394,12 +1430,14 @@ nonisolated struct AX25StateMachine: Sendable {
         rejSent = false
 
         // Deliver the current frame
+        noteDelivered(ns: ns, payload: payload, pid: pid)
         sequenceState.incrementVR()
 
         actions.append(.deliverData(payload, pid: pid))
 
         // Check for consecutive buffered frames and deliver them
         while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
+            noteDelivered(ns: sequenceState.vr, payload: buffered.payload, pid: buffered.pid)
             sequenceState.incrementVR()
 
             actions.append(.deliverData(buffered.payload, pid: buffered.pid))
@@ -1408,10 +1446,18 @@ nonisolated struct AX25StateMachine: Sendable {
         // A second gap can already be visible: frames beyond it are still
         // buffered. With SREJ negotiated, ask for the new missing frame
         // now — leaving it costs a full T1 before anything moves.
+        //
+        // On a P=1 frame that SREJ is also the F=1 answer. An F=1 SREJ
+        // acknowledges everything below N(R) (§4.3.2.4), which here is V(R),
+        // exactly what the RR would have said. The manager returns one
+        // response per inbound I-frame, so sending SREJ and then RR dropped
+        // the RR and left the peer's poll unanswered.
+        var srejAnswersPoll = false
         if config.srejEnabled, !receiveBuffer.isEmpty, !rejSent {
-            actions.append(.sendSREJ(nr: sequenceState.vr, pf: false))
+            actions.append(.sendSREJ(nr: sequenceState.vr, pf: pf))
             actions.append(.startT1)
             rejSent = true
+            srejAnswersPoll = pf
         }
 
         // Acknowledge cumulatively. A P=1 frame demands an immediate F=1
@@ -1421,7 +1467,9 @@ nonisolated struct AX25StateMachine: Sendable {
         // and our RR can collide with the peer's next I-frame — turning
         // the ack itself into inbound loss and a go-back-N resend.
         if pf {
-            actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+            if !srejAnswersPoll {
+                actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+            }
             if ackPending {
                 ackPending = false
                 actions.append(.stopT2)
@@ -1437,6 +1485,25 @@ nonisolated struct AX25StateMachine: Sendable {
         }
 
         return actions
+    }
+
+    private mutating func noteDelivered(ns: Int, payload: Data, pid: UInt8?) {
+        lastDeliveredByNS[ns] = .delivered(payload: payload, pid: pid)
+    }
+
+    /// Whether an out-of-sequence I-frame is most likely a stale copy from
+    /// the latest lap rather than the frame one lap ahead: it carries
+    /// exactly the info field and PID delivered at its N(S), as every
+    /// retransmission does, or its N(S) was skipped by a receive-gap flush.
+    private func isStaleCopy(ns: Int, payload: Data, pid: UInt8?) -> Bool {
+        switch lastDeliveredByNS[ns] {
+        case .delivered(let deliveredPayload, let deliveredPID)?:
+            return deliveredPayload == payload && deliveredPID == pid
+        case .skipped?:
+            return true
+        case nil:
+            return false
+        }
     }
 
     /// Buffer an out-of-sequence frame for later delivery

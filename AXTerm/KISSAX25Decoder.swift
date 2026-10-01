@@ -26,10 +26,12 @@ nonisolated enum KISS {
         var result = Data()
         result.reserveCapacity(data.count)
 
-        var i = 0
-        while i < data.count {
+        // Indexed from startIndex so a Data slice (a frame body cut out of
+        // a larger buffer) unescapes like a fresh copy.
+        var i = data.startIndex
+        while i < data.endIndex {
             let byte = data[i]
-            if byte == FESC && i + 1 < data.count {
+            if byte == FESC && i + 1 < data.endIndex {
                 let next = data[i + 1]
                 if next == TFEND {
                     result.append(FEND)
@@ -45,6 +47,29 @@ nonisolated enum KISS {
             i += 1
         }
         return result
+    }
+
+    /// How many FESC bytes in `data` do not start a valid escape: a FESC
+    /// followed by anything but TFEND or TFESC, or a FESC that ends the
+    /// frame. No correct KISS sender produces either, so a nonzero count
+    /// means the frame was corrupted on the host link. `unescape` keeps
+    /// such bytes as they are (the KISS spec says "no action is taken");
+    /// this lets the parser log the frame instead of passing it on silently.
+    static func invalidEscapeCount(_ data: Data) -> Int {
+        var count = 0
+        var i = data.startIndex
+        while i < data.endIndex {
+            if data[i] == FESC {
+                let next = data.index(after: i)
+                if next < data.endIndex, data[next] == TFEND || data[next] == TFESC {
+                    i = data.index(after: next)
+                    continue
+                }
+                count += 1
+            }
+            i = data.index(after: i)
+        }
+        return count
     }
 
     // MARK: - TX Encoding
@@ -84,9 +109,12 @@ nonisolated enum KISS {
         // Start delimiter
         frame.append(FEND)
 
-        // Command byte: high nibble = port, low nibble = command (0 = data)
+        // Command byte: high nibble = port, low nibble = command (0 = data).
+        // It is escaped like the payload: port 12's data command is 0xC0,
+        // the FEND value, and sent raw it would end the frame right there.
+        // Direwolf escapes the whole frame, command byte included.
         let command = (port << 4) | CMD_DATA
-        frame.append(command)
+        frame.append(escape(Data([command])))
 
         // Escaped AX.25 payload
         frame.append(escape(payload))
@@ -168,15 +196,30 @@ nonisolated struct KISSFrameParser {
     private func processKISSFrame(_ data: Data) -> KISSParsedFrame? {
         guard !data.isEmpty else { return nil }
 
-        // First byte is KISS command byte
-        let command = data[0]
+        // The escapes cover the whole frame, command byte included: port
+        // 12's data command is 0xC0 and arrives as FESC TFEND. Reading the
+        // raw first byte took that for command 0xDB and dropped the frame.
+        let unescaped = KISS.unescape(data)
+        guard let command = unescaped.first else { return nil }
 
         // Command byte format: high nibble = port, low nibble = command type
         let cmdType = command & 0x0F
         let port = (command >> 4) & 0x0F
 
-        let escapedPayload = data.count > 1 ? data.subdata(in: 1..<data.count) : Data()
-        let payload = KISS.unescape(escapedPayload)
+        // A fresh Data, so downstream code can index it from zero.
+        let payload = Data(unescaped.dropFirst())
+
+        // A broken escape is a malformed frame, which must be logged rather
+        // than passed on silently (CLAUDE.md §4). The bytes still go
+        // downstream unchanged; the AX.25 decoder judges the frame.
+        let invalidEscapes = KISS.invalidEscapeCount(data)
+        if invalidEscapes > 0 {
+            TxLog.warning(.kiss, "KISS frame has invalid escape sequences", [
+                "command": String(format: "0x%02X", command),
+                "invalidEscapes": invalidEscapes,
+                "payloadLen": payload.count
+            ])
+        }
 
         TxLog.debug(.kiss, "KISS frame received", [
             "command": String(format: "0x%02X", command),
