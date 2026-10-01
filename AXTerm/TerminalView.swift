@@ -1125,8 +1125,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             get: { self.viewModel.destinationCall },
             set: {
                 self.viewModel.destinationCall = $0
-                // Update current session when destination changes
-                self.updateCurrentSession()
+                // Bind the session for this station, if there is one. Never
+                // another station's: see `updateCurrentSession`.
+                self.updateCurrentSession(adoptingAnyConnected: false)
             }
         )
     }
@@ -1137,7 +1138,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             set: {
                 self.viewModel.digiPath = $0
                 // Update current session when path changes
-                self.updateCurrentSession()
+                self.updateCurrentSession(adoptingAnyConnected: false)
             }
         )
     }
@@ -1686,7 +1687,16 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Update the current session based on destination/path
     /// Also handles responder sessions where we might not have set a destination
-    private func updateCurrentSession() {
+    ///
+    /// `adoptingAnyConnected` decides what happens when the destination names
+    /// no session. Taking up whichever session is connected is right for an
+    /// inbound connection or a terminal coming back on screen. It is wrong
+    /// while the operator is choosing a destination: on the live RF test of
+    /// 2026-09-30 the first keystroke of K0EPI-2 set the destination to "K",
+    /// this fell back to the session with K0EPI-2, and the To field locked
+    /// as connected while showing "K". So a destination the operator sets
+    /// binds only its own session, and clearing it lets go.
+    private func updateCurrentSession(adoptingAnyConnected: Bool = true) {
         // If we have a destination specified, look for that specific session.
         // Through a relay that is the next-hop link, not the destination — the
         // circuit lives on the link to the node (see `wireDestination`), and so
@@ -1711,16 +1721,20 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         // If no destination set or not found, check for any connected session
         // This handles the responder case where Station B receives an inbound connection
         // but hasn't typed the destination callsign yet
-        if let session = sessionManager.anyConnectedSession() {
+        if adoptingAnyConnected, let session = sessionManager.anyConnectedSession() {
             currentSession = session
-            // Auto-populate from the session so the operator can see who they
-            // are connected to — the path as well as the callsign. Restoring
-            // the peer alone would redraw a session through DRLNOD as direct,
-            // and the next thing typed would go out the wrong way.
-            if viewModel.destinationCall.isEmpty {
-                viewModel.destinationCall = session.remoteAddress.display
-                viewModel.digiPath = session.path.display
-            }
+            // Name the session's station so the operator can see who they are
+            // connected to, the path as well as the callsign. Restoring the
+            // peer alone would redraw a session through DRLNOD as direct, and
+            // the next thing typed would go out the wrong way.
+            //
+            // A destination left in the bar is replaced too: getting here
+            // means it has no session at all. Keeping it showed the session
+            // locked under "K" on the live RF test of 2026-09-30, and kept
+            // Send disabled because "K" is not a callsign, while sending
+            // would have dialed "K" rather than the station on the link.
+            viewModel.destinationCall = session.remoteAddress.display
+            viewModel.digiPath = session.path.display
             return
         }
 
@@ -2053,6 +2067,14 @@ struct TerminalView: View {
                 applyAutoPathSuggestionIfNeeded(previousDestination: lastObservedDestination, newDestination: newValue)
                 lastObservedDestination = newValue
                 cachedAutoPathSuggestions = buildAutoPathCandidates(for: newValue)
+                // The model names the station when it takes up a session
+                // nobody chose (an inbound connection). The connect bar has
+                // to agree, or the next sync from it would set the
+                // destination back and let go of that session.
+                if !newValue.isEmpty,
+                   CallsignValidator.normalize(newValue) != CallsignValidator.normalize(connectBarViewModel.toCall) {
+                    connectBarViewModel.applySuggestedTo(newValue)
+                }
             }
             .onChange(of: connectBarViewModel.toCall) { _, _ in
                 syncLegacyFieldsFromConnectBar()
@@ -3305,6 +3327,16 @@ struct TerminalView: View {
         }
     }
 
+    /// True when the destination just committed names a session that is
+    /// already up, which the sync before this bound. Return in the To field
+    /// or a picked suggestion asks to connect, and for a station the link is
+    /// already up to that means talk to it, not dial it again. Dialing would
+    /// run the route ladder at a peer that is connected to us. The session
+    /// state change that the sync caused marks the bar connected.
+    private var isAlreadyConnectedToDestination: Bool {
+        txViewModel.sessionState == .connected
+    }
+
     /// Establish connection to current destination
     private func connectToDestination() {
         connectWithActiveIntent(sourceContext: connectCoordinator.activeContext)
@@ -3318,6 +3350,7 @@ struct TerminalView: View {
     private func startAutoConnectAttempts(sourceContext: ConnectSourceContext) {
         stopAutoConnectAttempts()
         syncLegacyFieldsFromConnectBar()
+        guard !isAlreadyConnectedToDestination else { return }
 
         let destination = CallsignValidator.normalize(connectBarViewModel.toCall)
         guard !destination.isEmpty else {
@@ -4169,6 +4202,7 @@ struct TerminalView: View {
     private func connectWithActiveIntent(sourceContext: ConnectSourceContext) {
         stopAutoConnectAttempts()
         syncLegacyFieldsFromConnectBar()
+        guard !isAlreadyConnectedToDestination else { return }
         let intent = connectBarViewModel.buildIntent(sourceContext: sourceContext)
         guard intent.validationErrors.isEmpty else {
             connectBarViewModel.markFailed(reason: .invalidDraft, detail: intent.validationErrors.joined(separator: "; "))
@@ -4825,6 +4859,17 @@ struct TerminalViewModifiers: ViewModifier {
             }
             .onAppear {
                 wireCallbacks()
+            }
+            // The model is held above this view and is replaced when the
+            // station's callsign changes (TerminalModelBox), while this view
+            // stays on screen and onAppear does not run again. Wiring only on
+            // appear left the new model deaf: a sent chat line read "Queued"
+            // and the header "Sending…" after the peer had acked it, and an
+            // inbound session never became the terminal's (live RF test
+            // 2026-09-30, where test mode sets the callsign after launch).
+            .onChange(of: ObjectIdentifier(txViewModel)) { _, _ in
+                wireCallbacks()
+                txViewModel.refreshCurrentSession()
             }
     }
 }

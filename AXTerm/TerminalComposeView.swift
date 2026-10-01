@@ -1661,9 +1661,25 @@ struct TerminalComposeView: View {
     @ViewBuilder
     private var destinationControl: some View {
         if sessionState == .connected {
-            Text(relayDestination ?? connectBarViewModel.toCall)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .accessibilityIdentifier("connectBar.lockedDestination")
+            HStack(spacing: 4) {
+                Text(relayDestination ?? connectBarViewModel.toCall)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .accessibilityIdentifier("connectBar.lockedDestination")
+                if relayDestination == nil {
+                    // Lets the operator pick another station without ending
+                    // this session, which carries on in the session list.
+                    Button {
+                        connectBarViewModel.applySuggestedTo("")
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Choose a different station. This session stays open.")
+                    .accessibilityLabel("Choose a different station")
+                    .accessibilityIdentifier("connectBar.changeDestination")
+                }
+            }
         } else {
             DestinationPickerControl(
                 viewModel: destinationPickerViewModel,
@@ -1805,7 +1821,9 @@ struct TerminalComposeView: View {
         case .connecting, .disconnecting, .connected:
             return false
         case .disconnected, .error, .none:
-            return !isConnected || destinationValidationIsBlocking || !connectBarViewModel.validationErrors.isEmpty
+            // The destination is judged by what is in the field, which
+            // Connect commits; the bar's own copy is stale until then.
+            return !isConnected || destinationValidationIsBlocking || nonDestinationValidationError != nil
         }
     }
 
@@ -1833,6 +1851,12 @@ struct TerminalComposeView: View {
         case .connecting, .disconnecting:
             onForceDisconnect()
         case .disconnected, .error, .none:
+            // Typing commits nothing, so what is in the field becomes the
+            // destination now, when the operator asks to connect to it.
+            if let typed = destinationPickerViewModel.typedDestination,
+               typed != CallsignValidator.normalize(connectBarViewModel.toCall) {
+                connectBarViewModel.applySuggestedTo(typed)
+            }
             // Auto-routing (the default) runs the cross-family ladder. A forced
             // Digi with no path typed is still ambiguous enough to auto-route.
             if connectBarViewModel.autoRouting

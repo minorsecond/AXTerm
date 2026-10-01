@@ -173,6 +173,13 @@ final class DestinationPickerViewModel: ObservableObject {
         }
     }
 
+    /// What was typed, as a destination, when it is a valid one. The
+    /// Connect button commits this, since typing alone commits nothing.
+    var typedDestination: String? {
+        if case let .valid(value) = validationState { return value }
+        return nil
+    }
+
     @discardableResult
     func commitSelection() -> String? {
         if let highlighted = highlightedRow(), let resolved = resolveCommit(for: highlighted.callsign) {
