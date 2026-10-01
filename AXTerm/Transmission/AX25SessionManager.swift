@@ -161,6 +161,13 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// making the sample ambiguous and potentially inflating SRTT/RTO.
     private var retransmittedNS: Set<Int> = []
 
+    /// Whether any frame still outstanding has been sent more than once. A
+    /// retransmission goes out in timer recovery or after a REJ, and its
+    /// copy in `sendBuffer` keeps the original control byte.
+    var hasRetransmittedOutstanding: Bool {
+        sendBuffer.keys.contains { retransmittedNS.contains($0) }
+    }
+
     /// Whether replies sent right after hearing the station are being lost
     /// while later frames get through. Fed by the hooks below and by
     /// `AX25SessionManager.noteFrameHeard`; see TurnaroundEvidence.swift.
@@ -3324,6 +3331,7 @@ final class AX25SessionManager: ObservableObject {
         // the peer's T2 runs out. A retry polls, and is answered at once.
         let awaitingDelayedAck = !session.sendBuffer.isEmpty
             && session.stateMachine.retryCount == 0
+            && !session.hasRetransmittedOutstanding
             && !session.sendBuffer.values.contains { ($0.controlByte ?? 0) & 0x10 != 0 }
         let rto = Self.t1Delay(rto: session.timers.rto, srtt: session.timers.srtt,
                                bytesInFlight: session.bytesInFlight,
