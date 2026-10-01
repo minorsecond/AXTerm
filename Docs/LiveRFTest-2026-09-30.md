@@ -107,14 +107,15 @@ Status is filled in as each is fixed.
 | # | bug | where seen | status |
 |---|---|---|---|
 | 1 | AXDP capability PING/PONG is never retried. A lost PONG leaves the Send File sheet on "Checking…" until a 15-minute timeout, offering only YAPP. AXDP was confirmed later only because B's chat message implied it. | A, 17:36 | fixed, 78bbf32: the probe and PONG are UI frames, so nothing retransmitted them; the check now asks 3 times about one RTO apart (10 to 30 s), then shows "No answer" and offers YAPP |
-| 2 | After a chat message is acked at the link layer (RR received, no retransmission), the message still shows "Queued" and the header still says "Sending…". Both stations. | A and B, 17:40 | open |
-| 3 | The terminal's To field lost keystrokes to its suggestion popover: typing K0EPI-2 left just "K", and the field then locked to a session with "K" and could not be edited. | B, 17:40 | open |
-| 4 | Send stays disabled on B until the session is picked in the sidebar, even though B is connected to K0EPI-2. Related to 3. | B, 17:41 | open |
-| 5 | The connection note says "connected and polling, but nothing has passed … may not be answering" while both sides answer every 30 s keep-alive poll. | A, 17:37 | open |
+| 2 | After a chat message is acked at the link layer (RR received, no retransmission), the message still shows "Queued" and the header still says "Sending…". Both stations. | A and B, 17:40 | fixed, 5f5ddf9: setting the callsign with the terminal open built a new terminal model that was never wired to the session callbacks, so sends and acks never reached it; it is rewired whenever the model changes |
+| 3 | The terminal's To field lost keystrokes to its suggestion popover: typing K0EPI-2 left just "K", and the field then locked to a session with "K" and could not be edited. | B, 17:40 | fixed, 2915376: every keystroke committed the destination, and "K" fell back to the connected session and locked the field; the field now commits on a picked suggestion, Return or Connect, and binds only its own station |
+| 4 | Send stays disabled on B until the session is picked in the sidebar, even though B is connected to K0EPI-2. Related to 3. | B, 17:41 | fixed, 0f5da3a (with 5f5ddf9): taking up a session left "K" in the To field, which is not a callsign; the field now names the session's station |
+| 5 | The connection note says "connected and polling, but nothing has passed … may not be answering" while both sides answer every 30 s keep-alive poll. | A, 17:37 | fixed, 75af580: the note counted the peer's polls we answered; it now looks at whether our own polls were answered and says so |
 | 6 | Changing the radio's transport (Serial to Bluetooth and back) clears the chosen serial device. | B, 17:54 | fixed, 683c957: the form cleared a device missing from /dev for 10 s and saved the empty path; it now stays chosen, marked unavailable |
 | 7 | After Disconnect, or after a transport change, the old serial link keeps reconnecting and reopens the port, which also got in the way of probing the TNC4. | B, 18:11 | fixed, 0cc4b00: any settings write after Disconnect reopened every link, a transport change on the open page kept the old link, and a released serial link never closed its descriptor |
 | 8 | The receiver of a paused transfer keeps saying "Receiving" with a decaying rate and no sign that the sender paused. | A, 19:48 | fixed, 91e9324: AXDP and YAPP have no pause message, so after a silence longer than max(15 s, 4 times the usual chunk gap) the receiver shows "Waiting for" the sender and hides the rate |
 | 9 | The session log view would not scroll back reliably to earlier lines. | A, 17:38 | fixed, 8fa62c1: the console and raw log scrolled to the bottom on every new line; they now follow only while the reader is at the bottom |
+| 10 | Found while fixing 3 and 4: data arriving from a second connected station switched the terminal to that session but left the To field on the first, so the next message went down the wrong link. | code review | fixed, 0b1bb83: the terminal takes up the sending session only when it has no live session, and the To field follows |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -191,8 +192,28 @@ Before the radios come on:
 - Implement the I-2 diagnostic hint test-first.
 - Look at the Warbler PTT tail and the stuck carrier (I-2).
 
-On the air, first confirm the fixes for bugs 1 to 9 and measure I-1's throughput
-against the table above, then work through the list below.
+On the air, first confirm the fixes for bugs 1 to 10 and measure I-1's
+throughput against the table above, then work through the list below.
+
+Things the fixes changed that are worth checking by hand, since unit tests
+cannot see them:
+
+- Scroll the terminal log up during a session with keep-alives running; it
+  should stay put, and pick up following again at the bottom (bug 9).
+- After Disconnect, editing a radio's settings or leaving its page no longer
+  reconnects it. Press Connect to bring it back (bug 7).
+- Clearing the To field, or choosing a station with no session, leaves the
+  terminal unbound even while another session is up; that session carries on
+  in the sidebar (bug 3).
+- Opening Send File for a station whose AXDP support is unknown now sends one
+  `AXDP?` probe, also from the station that answered the call (bug 1).
+- A receiver shows "Waiting for" the sender after max(15 s, 4 times the usual
+  chunk gap) of silence. On a very lossy link a long retry gap can show it
+  briefly (bug 8).
+
+Left alone: the radio page still has no Disconnect while a link is retrying,
+and a capability check that gave up is not retried until the session ends (a
+"Check again" button would cover a link that improves mid-session).
 
 ## Left to test
 
