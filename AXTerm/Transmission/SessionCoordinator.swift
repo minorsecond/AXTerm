@@ -3213,7 +3213,7 @@ final class SessionCoordinator: ObservableObject {
                 sendFrame(response)
             }
         case .DISC:
-            if let response = sessionManager.handleInboundDISC(from: from, path: path, radio: radio) {
+            if let response = sessionManager.handleInboundDISC(from: from, to: to, path: path, radio: radio) {
                 sendFrame(response)
             }
         case .SABM, .SABME:
@@ -3242,6 +3242,7 @@ final class SessionCoordinator: ObservableObject {
         let path = DigiPath.replyPath(heardVia: packet.via)
         if let response = sessionManager.handleInboundIFrame(
             from: from,
+            to: packet.to,
             path: path,
             radio: radio,
             ns: ns,
@@ -4615,6 +4616,7 @@ final class SessionCoordinator: ObservableObject {
         case .RR:
             let responses = sessionManager.handleInboundRRFrames(
                 from: from,
+                to: packet.to,
                 path: path,
                 radio: radio,
                 nr: nr,
@@ -4627,7 +4629,7 @@ final class SessionCoordinator: ObservableObject {
             reportIdleLinkIfNeeded(peer: from, radio: radio)
         case .REJ:
             let retransmits = sessionManager.handleInboundREJ(
-                from: from, path: path, radio: radio, nr: nr,
+                from: from, to: packet.to, path: path, radio: radio, nr: nr,
                 pf: pfSet, isCommand: packet.isCommand
             )
             for frame in retransmits {
@@ -4637,6 +4639,7 @@ final class SessionCoordinator: ObservableObject {
             // Peer receiver busy: apply the ack it carries and enter the busy condition.
             let responses = sessionManager.handleInboundRNR(
                 from: from,
+                to: packet.to,
                 path: path,
                 radio: radio,
                 nr: nr,
