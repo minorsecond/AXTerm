@@ -47,6 +47,14 @@ nonisolated struct DigiPath: Codable, Hashable, Sendable {
         return DigiPath(addresses)
     }
 
+    /// The path to answer a received frame on: its digipeaters in reverse
+    /// order, H bits cleared. A station calling via D2,D1 sits beside D2,
+    /// so the answer goes to D1 first. Linux does the same for every
+    /// inbound link (ax25_digi_invert in net/ax25/ax25_addr.c).
+    static func replyPath(heardVia via: [AX25Address]) -> DigiPath {
+        DigiPath(via.reversed().map { AX25Address(call: $0.call, ssid: $0.ssid) })
+    }
+
     var isEmpty: Bool { digis.isEmpty }
     var count: Int { digis.count }
 
