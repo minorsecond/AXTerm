@@ -99,6 +99,9 @@ final class ReceiveLevelMonitor: ObservableObject {
     private let deps: Dependencies
     private var nextWatchAt: [RadioID: Date] = [:]
     private var watching: Set<RadioID> = []
+    /// Radios taking a sample for the tuning wizard. Published through
+    /// `revision`.
+    private var listening: Set<RadioID> = []
     private var lastFindingMessage: [RadioID: String] = [:]
     /// No deinit to invalidate it: an isolated deinit on a main-actor class
     /// has crashed the test runner on this toolchain (see SessionCoordinator).
@@ -145,7 +148,7 @@ final class ReceiveLevelMonitor: ObservableObject {
     /// Whether a calibration or level check is running on the radio.
     func isBusy(_ radio: RadioID) -> Bool {
         if case .running = calibrations[radio] { return true }
-        return watching.contains(radio)
+        return watching.contains(radio) || listening.contains(radio)
     }
 
     /// When the next calibration beacon may go out, or nil if now.
@@ -431,7 +434,13 @@ final class ReceiveLevelMonitor: ObservableObject {
             return
         }
         nextWatchAt[radio] = now.addingTimeInterval(Self.watchInterval + (deps.random() * 2 - 1) * Self.watchJitter)
-        let reading = ReceiveLevelAnalysis.read(result.samples)
+        recordSample(radio, gain: gain, samples: result.samples, now: now)
+    }
+
+    /// Keep what a level sample showed: the observation, any packets in it,
+    /// and the calibration's missing noise floor if this sample has it.
+    private func recordSample(_ radio: RadioID, gain: Int, samples: [TNC4LevelSample], now: Date) {
+        let reading = ReceiveLevelAnalysis.read(samples)
         let obs = ReceiveLevelAnalysis.observation(reading, at: now, gain: gain)
         update(radio) { r in
             r.add(obs)
@@ -446,6 +455,55 @@ final class ReceiveLevelMonitor: ObservableObject {
                   "clipped": String(format: "%.2f", reading.clippedShare),
                   "packets": "\(reading.segments.count)"])
         reportFindingChange(radio, now: now)
+    }
+
+    // MARK: Tuning wizard
+
+    /// The longest the wizard listens in one go. The TNC4 decodes nothing
+    /// meanwhile, and the session driver caps a recording at 30 s anyway.
+    static let maxListenSeconds: TimeInterval = 30
+
+    func isListening(_ radio: RadioID) -> Bool { listening.contains(radio) }
+
+    /// Listen for other stations' packets now, for the tuning wizard's
+    /// packet check on a packet channel. Recorded the way a level check is,
+    /// so the packets count toward `passiveAdvice`.
+    func listen(_ radio: RadioID, seconds: TimeInterval) {
+        guard let control = deps.control(radio), control.mobilinkdActivity == .idle,
+              !isBusy(radio) else { return }
+        let gain = deps.currentGain(radio)
+        listening.insert(radio)
+        revision &+= 1
+        let duration = min(seconds, Self.maxListenSeconds)
+        deps.log("Receive level: listening for packets", ["radio": radio.rawValue, "gain": "\(gain)",
+                                                          "seconds": "\(Int(duration))"])
+        control.sampleInputLevels(.now(for: duration)) { result in
+            Task { @MainActor in self.listened(radio, gain: gain, result: result) }
+        }
+    }
+
+    private func listened(_ radio: RadioID, gain: Int, result: LevelSampleResult) {
+        listening.remove(radio)
+        defer { revision &+= 1 }
+        guard result.outcome == .completed else {
+            deps.log("Receive level: listening ended early", ["radio": radio.rawValue, "outcome": "\(result.outcome)"])
+            return
+        }
+        recordSample(radio, gain: gain, samples: result.samples, now: deps.now())
+    }
+
+    /// A connected TNC4 radio that has never been tuned: no calibration and
+    /// no input gain of its own. The radio page offers the wizard, until the
+    /// radio is tuned or the operator says not now.
+    func suggestsTuning(_ radio: RadioID) -> Bool {
+        guard deps.control(radio) != nil, let profile = deps.profile(radio),
+              profile.tnc4.inputGain == nil else { return false }
+        let r = record(radio)
+        return r.baseline == nil && !r.tuningSuggestionDismissed
+    }
+
+    func dismissTuningSuggestion(_ radio: RadioID) {
+        update(radio) { $0.tuningSuggestionDismissed = true }
     }
 
     /// Log a finding when it appears, changes or clears, and put new ones in

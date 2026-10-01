@@ -80,9 +80,20 @@ from noise can leave packets 10 dB quieter than intended. Receive-level
 calibration measures the packets themselves and is the better tool where it
 can run.
 
-The firmware's own auto-adjust isn't used. It saves its result to flash,
-changing the TNC4 for every radio, and it loops forever if the input clips at
-gain 0 (`AudioLevel.cpp`).
+The firmware's own auto-adjust (`06 2B`) isn't used, and AXTerm has no way
+to send it. It saves its result to flash, changing the TNC4 for every radio.
+In firmware 2.5.x it also judges 14-bit readings against a 12-bit full scale:
+`AudioLevel.hpp` has `vref = 4095` ("Must match ADC output (adjust when
+oversampling)"), while the ADC is oversampled 16 times and shifted right 2,
+so its samples run to 16,383. `adjust_input_gain` in `AudioLevel.cpp` then:
+
+- picks `gain` from `vref / vpp`, about two steps (12 dB) lower than the same
+  formula with 16,383, except where it is already at 0 or +24 dB;
+- tests for clipping at the top with `vmax == vref`, which a clipped input
+  (16,383) never matches;
+- loops with no timeout while `vmin == 0` at gain 0, so an input clipping at
+  the bottom holds the audio task, and the TNC4 neither decodes nor streams,
+  until the audio itself stops clipping.
 
 ### Test tones
 
@@ -107,6 +118,28 @@ Changes go into the radio's managed input gain like any other setting:
 applied in working memory while connected, the TNC4's own put back on
 disconnect, never saved to flash, and never through the firmware's
 auto-adjust.
+
+### Level reports
+
+Each report is `06 04` and four big-endian 16-bit values: Vpp, Vavg, Vmin,
+Vmax. They are raw ADC samples, not centered on zero, so a quiet input sits
+near mid-scale. The ADC is 12 bits, oversampled 16 times and shifted right 2
+(`main.c`, `MX_ADC2_Init`), giving 14-bit samples, and every value is shifted
+left by the demodulator's ADC exponent, 2 for AFSK 1200, 9600 and M17
+(`AudioInput.cpp`). Full scale is therefore 65,532, in steps of 4
+(`MobilinkdInputLevel.fullScale`). A report touched an end of the range when
+Vmin is 0 or Vmax is 65,400 or more, about 33 ADC counts under the top; the
+firmware's own gain code treats Vmin 0 as clipping the same way.
+
+When no ADC block arrives within its 1 s wait, the stream sends a report
+built from no samples: Vmin and Vmax keep their starting values (shifted to
+65,532 and 0), Vpp wraps to 4, and Vavg divides by zero. Read as a level it
+is near-silence. `MobilinkdTNC.parseInputLevel` drops any report whose Vmin
+is above its Vmax, so nothing downstream sees one, and a recording counts it
+as a gap in the stream.
+
+A poll (`06 04` sent) is answered twice: `04 00` at once, then the levels.
+The short reply is ignored.
 
 ### What a packet looks like in the level stream
 
@@ -145,8 +178,10 @@ doubles the peak-to-peak of everything at the input until it reaches full
 scale, so one measurement predicts every other step (`ReceiveGainAdvice`).
 
 - Aim for packet tones near 45% of full scale. The firmware's auto-adjust
-  puts whatever is on the input between 50% and 100%, usually noise; tones
-  need more headroom because stations' deviation differs by 3 dB or so.
+  is meant to fill the range with whatever is on the input, usually noise
+  (in 2.5.x it lands about two steps under that; see "Finding the input
+  gain"); tones need more headroom because stations' deviation differs by
+  3 dB or so.
 - Never pick a step predicted above 80%.
 - Take the lowest step within 1.5 dB of the one nearest 45%. Less gain
   recovers sooner after an unkey. Today's 16% sits almost exactly between
@@ -229,6 +264,14 @@ out (6.02 dB each):
 | Packet tones moved | 6 dB, two samples with packets in a row | Stations' deviation differs by about 3 dB, and a sample catches whoever is on. |
 | Packets clipping | two samples with packets in a row, both clipped | Clipped packets are lost now. |
 
+With no calibration there is nothing to compare against, but one reading is
+wrong on its own: an input pinned at an end of the range. Two samples in a
+row, at most 2 h apart, with more than 20% of their reports at an end raise a
+finding that says so and points at the radio's volume and the tuning wizard
+(`ReceiveLevelDrift.assessUncalibrated`). Until 2026-10-01 an uncalibrated
+radio could raise no finding at all, and Station B's TNC4, at its own +24 dB,
+read fully clipped in every sample of the day without a word.
+
 Readings that fill the range only bound the change: noise pinned at full
 scale can show the audio got louder but not by how much, and a calibration
 whose noise already filled the range can only show it got quieter. A
@@ -283,9 +326,35 @@ AXTerm never changes the gain on its own after a finding. Retune does:
 - On an APRS radio, Retune runs a calibration (one beacon, the ten-minute
   limit applies).
 - On a packet radio, it offers the step that would undo the change ("Use
-  +0 dB"), or the level meter when there's nothing to go on.
+  +0 dB"), or the tuning wizard when there's nothing to go on.
 - When the step needed is outside 0 to +24 dB, the finding says which way to
   turn the radio's volume instead.
+
+### The tuning wizard
+
+"Tune the TNC4" puts the receive pieces in order for one radio
+(`TNC4TuningFlow`, `TNC4TuningSheet`):
+
+1. Start: what it does, and that nothing is saved to the TNC4.
+2. Receive gain: squelch open on a quiet channel, then the gain finder above,
+   with the level meter running. Next waits for a usable gain; clipping even
+   at 0 dB has to be fixed with the radio's volume first.
+3. Squelch: back to normal.
+4. Packets: on APRS, one calibration beacon (the ten-minute limit applies); on
+   packet, a 30 s listen for other stations, which feeds the packet-based
+   advice and offers its step once three packets are in. Either can be
+   skipped.
+5. Done: the radio's gain now against what it was.
+
+Every change goes into the radio's managed input gain through the radio
+page's own view model. Cancel puts that setting back as it was when the
+wizard opened, including "the TNC4's own", whatever the finder tried on the
+way.
+
+It opens from "Tune This TNC4…" in the Receive audio section, from a
+finding's button when the meter was the only advice, and from a one-line
+suggestion on the radio page for a connected TNC4 radio with no calibration
+and no gain of its own. "Not Now" hides the suggestion for that radio.
 
 ### What is kept
 
@@ -293,7 +362,8 @@ Per radio, in the settings store's defaults under `receiveLevel.v1.<radio>`
 (`ReceiveLevelRecord`): the calibration baseline (time, gain, packet tone
 level, noise floor, and how many packets it came from), the last 12 samples,
 the last 24 packet levels, the time of the last calibration beacon, the last
-20 frames for the digipeat check, and the watch switch. Every field decodes
+20 frames for the digipeat check, the watch switch, and whether the operator
+said not now to tuning. Every field decodes
 tolerantly, so a record from another build loads with defaults for what it
 lacks.
 

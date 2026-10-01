@@ -32,6 +32,8 @@ struct RadioDetailView: View {
     /// seconds while the radio is connected. A deaf receiver brings no
     /// frames, and so nothing else that would redraw the page.
     @State private var healthClock = Date()
+    /// The TNC4 tuning wizard, while it is open.
+    @State private var tuningFlow: TNC4TuningFlow?
 
     /// The sections a deep link can land on.
     static let landingSections: Set<SettingsSection> = [
@@ -79,6 +81,10 @@ struct RadioDetailView: View {
             }
         }
         .navigationTitle(Self.title(for: profile))
+        .sheet(item: $tuningFlow) { flow in
+            TNC4TuningSheet(flow: flow, client: client, viewModel: viewModel,
+                            monitor: client.receiveLevel) { tuningFlow = nil }
+        }
         .onAppear {
             viewModel.onAppear()
             viewModel.suspendAutoReconnect(true)
@@ -96,6 +102,12 @@ struct RadioDetailView: View {
 
     private var profile: RadioProfile {
         settings.radio(radioID) ?? RadioProfile(id: radioID, name: "")
+    }
+
+    /// Open the TNC4 tuning wizard for this radio. Every way in comes here.
+    private func openTuning() {
+        tuningFlow = .forRadio(radioID, name: Self.title(for: profile), onAPRS: channel == .aprs,
+                               client: client, viewModel: viewModel)
     }
 
     private var channel: RadioChannel { RadioChannel.of(profile) }
@@ -171,9 +183,11 @@ struct RadioDetailView: View {
 
             receiveHealthRows
             ReceiveLevelFindingRows(radioID: radioID, now: max(healthClock, Date()),
-                                    monitor: client.receiveLevel) {
-                router.navigate(to: .radioReceiveAudio, radio: radioID)
-            }
+                                    monitor: client.receiveLevel,
+                                    showReceiveAudio: { router.navigate(to: .radioReceiveAudio, radio: radioID) },
+                                    openTuning: openTuning)
+            TNC4TuningSuggestionRow(radioID: radioID, now: max(healthClock, Date()),
+                                    monitor: client.receiveLevel, open: openTuning)
 
             if viewModel.selectedTransport == .modem, viewModel.radioConnected {
                 ModemStatusRows(viewModel: viewModel)
@@ -278,7 +292,7 @@ struct RadioDetailView: View {
     @ViewBuilder
     private var tncSections: some View {
         MobilinkdSettingsSections(radioID: radioID, client: client, viewModel: viewModel,
-                                  onAPRS: channel == .aprs)
+                                  onAPRS: channel == .aprs, openTuning: openTuning)
 
         #if os(macOS)
         if viewModel.selectedTransport == .modem {

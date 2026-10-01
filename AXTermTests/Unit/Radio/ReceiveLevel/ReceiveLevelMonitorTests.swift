@@ -402,4 +402,66 @@ final class ReceiveLevelMonitorTests: XCTestCase {
         await watch(monitor, checks: 2) { $0.noise(2) }
         XCTAssertNil(monitor.finding(for: radio))
     }
+
+    // MARK: Tuning wizard
+
+    /// The wizard's packet check on a packet channel: one longer sample now,
+    /// recorded the way a level check is, so packets heard count toward the
+    /// packet-based gain advice.
+    func testListeningNowRecordsLikeALevelCheck() async {
+        profile.aprsEnabled = false
+        let monitor = makeMonitor()
+        monitor.listen(radio, seconds: 20)
+        XCTAssertEqual(control.requests, [.now(for: 20)])
+        XCTAssertTrue(monitor.isListening(radio))
+        XCTAssertTrue(monitor.isBusy(radio), "no level check or calibration on top of it")
+
+        var s = LevelSeries(seed: 2)
+        s.noise(0.5)
+        s.packet(seconds: 0.7)
+        s.noise(0.7)
+        control.finish(LevelSampleResult(outcome: .completed, samples: s.samples))
+        await settle()
+
+        XCTAssertFalse(monitor.isListening(radio))
+        XCTAssertEqual(monitor.record(radio).observations.count, 1)
+        XCTAssertEqual(monitor.record(radio).packetLevels.count, 1)
+    }
+
+    func testListeningIsRefusedWhileTheTNC4IsBusy() {
+        let monitor = makeMonitor()
+        control.mobilinkdActivity = .sendingTone(.mark)
+        monitor.listen(radio, seconds: 20)
+        XCTAssertTrue(control.requests.isEmpty)
+        XCTAssertFalse(monitor.isListening(radio))
+    }
+
+    /// A connected TNC4 radio that was never tuned (no calibration and no
+    /// gain of its own) gets a quiet suggestion, until it is tuned or the
+    /// operator says not now.
+    func testAnUntunedTNC4IsSuggestedTuning() {
+        let monitor = makeMonitor()
+        profile.tnc4.inputGain = nil
+        XCTAssertTrue(monitor.suggestsTuning(radio))
+
+        monitor.dismissTuningSuggestion(radio)
+        XCTAssertFalse(monitor.suggestsTuning(radio))
+        XCTAssertFalse(makeMonitor().suggestsTuning(radio), "remembered")
+    }
+
+    func testATunedOrDisconnectedTNC4IsNotSuggestedTuning() {
+        let monitor = makeMonitor()
+        profile.tnc4.inputGain = 2
+        XCTAssertFalse(monitor.suggestsTuning(radio), "it has a gain of its own")
+
+        profile.tnc4.inputGain = nil
+        var r = ReceiveLevelRecord()
+        r.baseline = ReceiveLevelBaseline(at: now, gain: 1, toneVpp: 21_000, noiseVpp: nil)
+        store.save(r, for: radio)
+        XCTAssertFalse(makeMonitor().suggestsTuning(radio), "it was calibrated")
+
+        store.save(ReceiveLevelRecord(), for: radio)
+        connected = false
+        XCTAssertFalse(makeMonitor().suggestsTuning(radio), "nothing to tune while it is down")
+    }
 }

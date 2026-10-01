@@ -16,6 +16,8 @@ struct MobilinkdSettingsSections: View {
     @ObservedObject var viewModel: ConnectionTransportViewModel
     /// The radio is on an APRS channel, where calibration may send a beacon.
     var onAPRS = false
+    /// Opens the TNC4 tuning wizard.
+    var openTuning: (() -> Void)?
 
     @State private var tone: MobilinkdTestTone = .both
     @State private var confirmingTone = false
@@ -99,6 +101,15 @@ struct MobilinkdSettingsSections: View {
 
     private var receiveSection: some View {
         Section {
+            if connected, let openTuning {
+                LabeledContent {
+                    Button("Tune This TNC4\u{2026}") { openTuning() }
+                        .disabled(measuring || toneEndsAt != nil || assistant.running)
+                } label: {
+                    Text("Tuning")
+                    Text("Steps through the receive gain and a check on real packets.")
+                }
+            }
             levelMeter
             ReceiveLevelTuningRows(radioID: radioID, onAPRS: onAPRS, connected: connected,
                                    blocked: measuring || toneEndsAt != nil || assistant.running,
@@ -362,6 +373,9 @@ final class MobilinkdLevelAssistantRunner: ObservableObject {
     @Published private(set) var running = false
     @Published private(set) var status: String?
     @Published private(set) var resultMessage: String?
+    /// Where the last run ended. Nil while running, after a cancel, and when
+    /// the TNC4 sent no levels.
+    @Published private(set) var outcome: MobilinkdLevelAssistant.Step?
     private var task: Task<Void, Never>?
     private weak var control: MobilinkdControlling?
 
@@ -377,6 +391,7 @@ final class MobilinkdLevelAssistantRunner: ObservableObject {
         self.control = control
         running = true
         resultMessage = nil
+        outcome = nil
         task = Task { [weak self] in
             var planner = MobilinkdLevelAssistant(minGain: gains.lowerBound, maxGain: gains.upperBound)
             control.startMeasuringInput()
@@ -401,6 +416,7 @@ final class MobilinkdLevelAssistantRunner: ObservableObject {
                 }
                 planner.record(samples)
             }
+            self?.outcome = planner.step
             switch planner.step {
             case .done(let gain):
                 setGain(gain)

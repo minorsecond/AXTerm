@@ -144,6 +144,8 @@ nonisolated struct ReceiveLevelRecord: Codable, Equatable, Sendable {
     var digipeats = DigipeatExpectation()
     /// Take a short level sample every half hour while connected.
     var watchEnabled = true
+    /// The operator said not now to tuning this radio.
+    var tuningSuggestionDismissed = false
 
     /// Six hours of half-hourly samples.
     static let maxObservations = 12
@@ -154,6 +156,7 @@ nonisolated struct ReceiveLevelRecord: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case baseline, observations, packetLevels, lastCalibrationBeaconAt, digipeats, watchEnabled
+        case tuningSuggestionDismissed
     }
 
     init(from decoder: Decoder) throws {
@@ -164,6 +167,7 @@ nonisolated struct ReceiveLevelRecord: Codable, Equatable, Sendable {
         lastCalibrationBeaconAt = try? c.decodeIfPresent(Date.self, forKey: .lastCalibrationBeaconAt)
         digipeats = (try? c.decodeIfPresent(DigipeatExpectation.self, forKey: .digipeats)) ?? DigipeatExpectation()
         watchEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .watchEnabled)) ?? true
+        tuningSuggestionDismissed = (try? c.decodeIfPresent(Bool.self, forKey: .tuningSuggestionDismissed)) ?? false
     }
 
     mutating func add(_ observation: ReceiveLevelObservation) {

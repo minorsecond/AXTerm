@@ -119,6 +119,8 @@ struct ReceiveLevelFindingRows: View {
     @ObservedObject var monitor: ReceiveLevelMonitor
     /// Opens the receive audio section, for the level meter.
     let showReceiveAudio: () -> Void
+    /// Opens the TNC4 tuning wizard, for findings the meter used to answer.
+    var openTuning: (() -> Void)?
 
     var body: some View {
         if let finding = monitor.finding(for: radioID, now: now) {
@@ -128,7 +130,7 @@ struct ReceiveLevelFindingRows: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .help(finding.help)
             ReceiveLevelRetuneButton(radioID: radioID, retune: finding.retune, monitor: monitor,
-                                     showReceiveAudio: showReceiveAudio)
+                                     showReceiveAudio: showReceiveAudio, openTuning: openTuning)
         }
     }
 }
@@ -139,6 +141,7 @@ struct ReceiveLevelRetuneButton: View {
     let retune: ReceiveLevelFinding.Retune
     @ObservedObject var monitor: ReceiveLevelMonitor
     let showReceiveAudio: () -> Void
+    var openTuning: (() -> Void)?
 
     var body: some View {
         switch retune {
@@ -152,7 +155,37 @@ struct ReceiveLevelRetuneButton: View {
         case .useGain(let gain):
             Button("Use \(ReceiveGainAdvice.gainText(gain))") { monitor.useGain(gain, for: radioID) }
         case .levelMeter, .turnVolume(_, thenCalibrate: false):
-            Button("Check the Receive Level\u{2026}") { showReceiveAudio() }
+            if let openTuning {
+                Button("Tune the TNC4\u{2026}") { openTuning() }
+            } else {
+                Button("Check the Receive Level\u{2026}") { showReceiveAudio() }
+            }
+        }
+    }
+}
+
+/// A quiet offer to tune a TNC4 radio that never has been: a radio just
+/// added, or one that has run on the TNC4's own gain all along. Hidden while
+/// a receive-level finding is showing, since its button opens the same
+/// wizard.
+struct TNC4TuningSuggestionRow: View {
+    let radioID: RadioID
+    let now: Date
+    @ObservedObject var monitor: ReceiveLevelMonitor
+    let open: () -> Void
+
+    var body: some View {
+        if monitor.suggestsTuning(radioID), monitor.finding(for: radioID, now: now) == nil {
+            HStack {
+                Label("The TNC4's receive level hasn't been tuned for this radio.", systemImage: "slider.horizontal.3")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Not Now") { monitor.dismissTuningSuggestion(radioID) }
+                Button("Tune\u{2026}") { open() }
+            }
+            .controlSize(.small)
         }
     }
 }
