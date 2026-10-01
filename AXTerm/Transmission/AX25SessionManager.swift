@@ -2161,7 +2161,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         session.touch()
-        let frames = processActions(actions, for: session)
+        let frames = processActions(actions, for: session, answerFinal: pf)
         if resetLosesFrames {
             session.clearPendingTransmission(reason: "Link reset by peer with frames unacknowledged")
             TxLog.warning(.session, "Link reset by peer: unacknowledged frames discarded", [
@@ -2468,7 +2468,8 @@ final class AX25SessionManager: ObservableObject {
         from source: AX25Address,
         to destination: AX25Address? = nil,
         path: DigiPath,
-        radio: RadioID
+        radio: RadioID,
+        pf: Bool = true
     ) -> OutboundFrame? {
         debugTrace("DISC received", [
             "from": source.display,
@@ -2500,11 +2501,12 @@ final class AX25SessionManager: ObservableObject {
                 "from": source.display
             ])
             // No session - respond with DM, from the address the DISC was
-            // sent to (see answeringAddress).
+            // sent to (see answeringAddress), F set to the DISC's P (§6.2).
             return AX25FrameBuilder.buildDM(
                 from: answeringAddress(for: destination, radio: radio),
                 to: source,
-                via: path
+                via: path,
+                pf: pf
             ).onRadio(radio)
         }
 
@@ -2549,7 +2551,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         session.touch()
-        return processActions(actions, for: session).first
+        return processActions(actions, for: session, answerFinal: pf).first
     }
 
     /// Handle an inbound I-frame (information)
@@ -2627,7 +2629,8 @@ final class AX25SessionManager: ObservableObject {
             // peer clear its stale session instead of retrying until N2.
             if pf {
                 debugTrace("I-frame poll with no session -> DM", ["from": source.display])
-                return AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source, via: path).onRadio(radio)
+                return AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source,
+                                                via: path, pf: pf).onRadio(radio)
             }
             TxLog.warning(.session, "I-frame received with no matching session; ignoring", [
                 "from": source.display,
@@ -2781,7 +2784,8 @@ final class AX25SessionManager: ObservableObject {
             // or restarted) clear it promptly instead of polling until its N2 expires.
             // P=0 frames and response frames are ignored per the same sentence.
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source, via: path).onRadio(radio)]
+                return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source,
+                                                 via: path, pf: pf).onRadio(radio)]
             }
             return []
         }
@@ -3125,7 +3129,8 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("RNR for unknown session", ["from": source.display])
             // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source, via: path).onRadio(radio)]
+                return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source,
+                                                 via: path, pf: pf).onRadio(radio)]
             }
             return []
         }
@@ -3307,7 +3312,8 @@ final class AX25SessionManager: ObservableObject {
             ])
             // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source, via: path).onRadio(radio)]
+                return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source,
+                                                 via: path, pf: pf).onRadio(radio)]
             }
             return []
         }
@@ -3926,7 +3932,14 @@ final class AX25SessionManager: ObservableObject {
     /// lost answer then stalled the exchange until the protocol above gave up
     /// (full-stack fuzz, 2026-10-02). In the SDL a DL-DATA request is queued
     /// and handled after the transition in progress; this is the same order.
-    private func processActions(_ actions: [AX25SessionAction], for session: AX25Session) -> [OutboundFrame] {
+    ///
+    /// - Parameter answerFinal: the F bit for a UA or DM among `actions`,
+    ///   which is the P bit of the frame they answer (AX.25 2.2 §6.2).
+    ///   Only SABM and DISC are answered UA or DM whatever their P bit, so
+    ///   their handlers pass it. Every other DM answers an I or S command
+    ///   that polled (§6.3.5), so the default F=1 is the P bit there too.
+    private func processActions(_ actions: [AX25SessionAction], for session: AX25Session,
+                                answerFinal: Bool = true) -> [OutboundFrame] {
         var frames: [OutboundFrame] = []
         var deliveries: [(data: Data, pid: UInt8?)] = []
 
@@ -3946,7 +3959,8 @@ final class AX25SessionManager: ObservableObject {
                 let frame = AX25FrameBuilder.buildUA(
                     from: session.localAddress,
                     to: session.remoteAddress,
-                    via: session.path
+                    via: session.path,
+                    pf: answerFinal
                 )
                 debugTrace("TX UA", ["frame": describeFrame(frame)])
                 frames.append(frame)
@@ -3955,7 +3969,8 @@ final class AX25SessionManager: ObservableObject {
                 let frame = AX25FrameBuilder.buildDM(
                     from: session.localAddress,
                     to: session.remoteAddress,
-                    via: session.path
+                    via: session.path,
+                    pf: answerFinal
                 )
                 debugTrace("TX DM", ["frame": describeFrame(frame)])
                 frames.append(frame)

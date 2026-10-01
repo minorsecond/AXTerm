@@ -502,7 +502,7 @@ final class SimStation {
                 replies += manager.handleInboundXID(from: from, to: to, path: path, radio: radio,
                                                     info: packet.info, isCommand: packet.isCommand, pf: pf)
             case .DISC:
-                if let r = manager.handleInboundDISC(from: from, to: to, path: path, radio: radio) { replies.append(r) }
+                if let r = manager.handleInboundDISC(from: from, to: to, path: path, radio: radio, pf: pf) { replies.append(r) }
             case .SABM, .SABME:
                 if let r = manager.handleInboundSABM(from: from, to: to, path: path, radio: radio,
                                                      extended: uType == .SABME, pf: pf) {

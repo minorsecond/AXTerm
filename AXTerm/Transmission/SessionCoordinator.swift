@@ -3312,7 +3312,8 @@ final class SessionCoordinator: ObservableObject {
                 sendFrame(response)
             }
         case .DISC:
-            if let response = sessionManager.handleInboundDISC(from: from, to: to, path: path, radio: radio) {
+            if let response = sessionManager.handleInboundDISC(from: from, to: to, path: path, radio: radio,
+                                                                pf: (packet.control & 0x10) != 0) {
                 sendFrame(response)
             }
         case .SABM, .SABME:

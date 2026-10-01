@@ -640,6 +640,16 @@ Events:
 - Timer T1 expiration
 - Idle timer T3 expiration
 
+**UA and DM carry the P bit of the frame they answer** (AX.25 2.2 §6.2):
+a SABM or DISC sent with P=0 is answered F=0, with P=1 F=1. That covers UA
+to SABM (fresh link, link reset, SABM collision) and to DISC, and DM to
+SABME, to DISC with no link or while our SABM or DISC is out, and to SABM
+while our DISC is out. A DM to an I or S command is sent only when it polled
+(§6.3.5), so it always carries F=1; P=0 commands with no link are ignored.
+Until 2026-10-01 every UA and DM went out F=1
+(`AX25SessionManager.processActions(answerFinal:)`, `handleInboundSABM`,
+`handleInboundDISC`).
+
 ### 7.1.1 Link setup, collisions and resets (AX.25 2.2 SDL, figures C4.2 to C4.5)
 AXTerm folds the SDL's Timer Recovery state into `CONNECTED` (retry count
 above zero) and calls Awaiting Connection `CONNECTING`. These transitions

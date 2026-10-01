@@ -452,7 +452,8 @@ final class AXTermInteropStation: InteropNode {
                                                   info: packet.info, isCommand: packet.isCommand,
                                                   pf: (packet.control & 0x10) != 0))
             case .DISC:
-                if let response = manager.handleInboundDISC(from: from, to: to, path: path, radio: radio) {
+                if let response = manager.handleInboundDISC(from: from, to: to, path: path, radio: radio,
+                                                            pf: (packet.control & 0x10) != 0) {
                     transmit(response)
                 }
             case .SABM, .SABME:

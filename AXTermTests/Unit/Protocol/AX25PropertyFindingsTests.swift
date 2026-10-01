@@ -263,6 +263,17 @@ final class AX25PropertyFindingsTests: XCTestCase {
         XCTAssertEqual(reopened.state, .connected, "one T1 expiry must not fail a fresh link with N2=3")
     }
 
+    /// §6.2: a response's F bit is set to the P bit of the command it
+    /// answers. UA and DM went out with F=1 whatever the P bit, so a SABM
+    /// or DISC sent with P=0 was answered F=1. Fixed 2026-10-01; the full
+    /// set of UA and DM answers is in UADMFinalBitTests.
+    func testUAFinalBitFollowsThePollBit() {
+        let (manager, _) = makeManager()
+        let ua = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary, pf: false)
+        XCTAssertEqual(ua?.displayInfo, "UA")
+        XCTAssertEqual((ua?.controlByte ?? 0) & 0x10, 0, "UA to a P=0 SABM carries F=0")
+    }
+
     // MARK: - Reported, not changed
     //
     // Each of these departs from AX.25 2.2 in a way that is a design choice
@@ -319,17 +330,5 @@ final class AX25PropertyFindingsTests: XCTestCase {
 
         XCTExpectFailure("Reported, not changed: an I frame without its PID byte is accepted")
         XCTAssertNil(AX25.decodeFrame(ax25: frame), "an I frame missing its PID should be refused")
-    }
-
-    /// §6.2: a response's F bit is set to the P bit of the command it
-    /// answers. UA and DM always go out with F=1, so a SABM or DISC sent
-    /// with P=0 is answered F=1.
-    func testUAFinalBitDoesNotFollowThePollBitReported() {
-        let (manager, _) = makeManager()
-        let ua = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary, pf: false)
-        XCTAssertEqual(ua?.displayInfo, "UA")
-
-        XCTExpectFailure("Reported, not changed: UA answers a P=0 SABM with F=1")
-        XCTAssertEqual((ua?.controlByte ?? 0) & 0x10, 0, "UA to a P=0 SABM should carry F=0")
     }
 }
