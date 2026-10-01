@@ -505,8 +505,6 @@ nonisolated struct BufferedIFrame: Sendable {
     var pid: UInt8? = nil
 }
 
-/// AX.25 connected-mode state machine
-/// Handles state transitions and generates actions in response to events
 /// What became of the last poll this station sent on a connected link.
 nonisolated enum AX25PollEvidence: Equatable, Sendable {
     /// No poll of ours has been resolved yet.
@@ -517,6 +515,8 @@ nonisolated enum AX25PollEvidence: Equatable, Sendable {
     case unanswered
 }
 
+/// AX.25 connected-mode state machine
+/// Handles state transitions and generates actions in response to events
 nonisolated struct AX25StateMachine: Sendable {
     /// Current session state
     private(set) var state: AX25SessionState = .disconnected {

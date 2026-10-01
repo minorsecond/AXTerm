@@ -1724,7 +1724,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         if adoptingAnyConnected, let session = sessionManager.anyConnectedSession() {
             currentSession = session
             // Name the session's station so the operator can see who they are
-            // connected to — the path as well as the callsign. Restoring the
+            // connected to, the path as well as the callsign. Restoring the
             // peer alone would redraw a session through DRLNOD as direct, and
             // the next thing typed would go out the wrong way.
             //
