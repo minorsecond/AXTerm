@@ -454,6 +454,11 @@ final class SessionCoordinator: ObservableObject {
     }
 
     let adaptiveStatusStore = AdaptiveStatusStore()
+    /// K and paclen each link last confirmed, for seeding the next session
+    /// to it (spec §7.8.1). Persisted in the app; process-only under XCTest,
+    /// so one test's confirmed link can never seed another test's session.
+    var confirmedLinkMemory = ConfirmedLinkMemory(
+        defaults: AppEnvironment.isUnitTestHost ? nil : AppEnvironment.defaults)
     /// Live link visualization aggregates (window state, RTT, throughput).
     let linkVizMonitor = LinkVizMonitor()
 
@@ -589,11 +594,24 @@ final class SessionCoordinator: ObservableObject {
     /// The entry a scope *learns* into. A scope learns only from evidence
     /// about itself: seeding from the channel was tried in both directions and
     /// broke route isolation each time — see `AdaptiveScope.resolve`.
+    ///
+    /// A route with nothing recent starts from what that same route last
+    /// confirmed, if it did within a day. That is the route's own evidence,
+    /// so it does not break the isolation rule above, and without it the
+    /// first sample of a session seeded from those values would pull the
+    /// session back to the defaults.
     private func learningEntry(for scope: AdaptiveScope) -> TxAdaptiveSettings {
         if let cached = adaptiveByScope[scope], !isAdaptiveCacheEntryExpired(cached) {
             return cached.settings
         }
-        return TxAdaptiveSettings()
+        var fresh = TxAdaptiveSettings()
+        if scope.route != nil, let seed = confirmedLinkMemory.values(for: scope) {
+            fresh.windowSize.currentAdaptive = seed.window
+            fresh.paclen.currentAdaptive = seed.paclen
+            fresh.windowSize.adaptiveReason = "Confirmed on this link earlier today"
+            fresh.paclen.adaptiveReason = "Confirmed on this link earlier today"
+        }
+        return fresh
     }
 
     /// The key the *display* filed a figure under. It has to carry the radio
@@ -642,6 +660,10 @@ final class SessionCoordinator: ObservableObject {
         }
         let a = globalAdaptiveSettings
         let initialRto = max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, userT1))
+        // Ceilings as well as starts: the default config is also what an
+        // inbound XID is answered from, and N1 and k there are what this
+        // station can receive (§7.8.1).
+        let ceilings = linkCeilings(hops: 0)
         sessionManager.defaultConfig = AX25SessionConfig(
             windowSize: a.windowSize.effectiveValue,
             paclen: a.paclen.effectiveValue,
@@ -651,7 +673,9 @@ final class SessionCoordinator: ObservableObject {
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
             initialRto: initialRto,
-            adaptiveTimeout: adaptiveTransmissionEnabled
+            adaptiveTimeout: adaptiveTransmissionEnabled,
+            maxWindowSize: ceilings.window,
+            maxPaclen: ceilings.paclen
         )
         TxLog.adaptiveConfigSynced(
             window: a.windowSize.effectiveValue,
@@ -725,7 +749,10 @@ final class SessionCoordinator: ObservableObject {
         source: String = "session",
         scope: AdaptiveScope? = nil,
         newFrames: Int = 1,
-        retransmits: Int? = nil
+        retransmits: Int? = nil,
+        windowCeiling: Int? = nil,
+        paclenCeiling: Int? = nil,
+        bytesInFlight: Int? = nil
     ) {
         guard adaptiveTransmissionEnabled else {
             TxLog.adaptiveSampleIgnored(reason: "adaptive disabled", lossRate: lossRate, etx: etx)
@@ -758,9 +785,29 @@ final class SessionCoordinator: ObservableObject {
                     "to": entry.paclen.currentAdaptive
                 ])
             }
+            // The session's own ceilings (the peer's XID k and N1), so the
+            // route never probes values the session could not run, and a
+            // trial cannot pass without having been tried (§7.8.1).
+            if windowCeiling != nil || paclenCeiling != nil {
+                entry.applyLinkCeilings(window: windowCeiling ?? entry.windowCeiling,
+                                        paclen: paclenCeiling ?? entry.paclenCeiling)
+            }
             let before = AdaptiveSnapshot(from: entry)
             let rollbacksBefore = entry.metrics.probeRollbacks
-            entry.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
+            let confirmationsBefore = entry.metrics.upgradesConfirmed
+            entry.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits, bytesInFlight: bytesInFlight)
+            // What the next session to this link may start from: written
+            // when a trial passes, lowered when the link backs off.
+            if entry.metrics.upgradesConfirmed > confirmationsBefore {
+                confirmedLinkMemory.recordConfirmed(window: entry.confirmedWindow,
+                                                    paclen: entry.confirmedPaclen,
+                                                    for: normalizedKey)
+            } else if entry.windowSize.currentAdaptive < before.k
+                        || entry.paclen.currentAdaptive < before.p {
+                confirmedLinkMemory.lower(window: entry.confirmedWindow,
+                                          paclen: entry.confirmedPaclen,
+                                          for: normalizedKey)
+            }
             if Self.didCollapseToStopAndWait(beforeK: before.k, afterK: entry.windowSize.currentAdaptive) {
                 // Warning level: the collapse is the headline event of a
                 // degrading link, and debug-level Learning crumbs are exactly
@@ -877,6 +924,53 @@ final class SessionCoordinator: ObservableObject {
         objectWillChange.send()
     }
 
+    /// Hands the route's latest K and paclen to the session that produced the
+    /// sample (spec §7.8.1). The route's controller decides; the session
+    /// layer applies it under the merge, the ceilings and the quiescent rule.
+    private func pushLinkTargets(to session: AX25Session, scope: AdaptiveScope,
+                                 srtt: Double?, bytesInFlight: Int?) {
+        defer { refreshLiveLinkDisplay(for: session) }
+        guard adaptiveTransmissionEnabled,
+              session.stateMachine.config.adaptsInSession,
+              let entry = adaptiveByScope[canonicalScope(scope)]?.settings else { return }
+        var evidence: [String: Any] = [
+            "streak": entry.successStreak,
+            "nextUpgradeNeeds": entry.upgradeStreakRequirement,
+            "loss": String(format: "%.2f", entry.lossRateEWMA ?? 0),
+            "lossOut": String(format: "%.2f", entry.forwardLossEWMA ?? 0)
+        ]
+        if let srtt { evidence["srtt"] = String(format: "%.2fs", srtt) }
+        if let bytesInFlight { evidence["bytesInFlight"] = bytesInFlight }
+        if let trial = entry.probation { evidence["trialFramesLeft"] = trial.framesRemaining }
+        sessionManager.updateLinkTargets(
+            for: session,
+            window: entry.windowSize.currentAdaptive,
+            paclen: entry.paclen.currentAdaptive,
+            reason: entry.windowSize.adaptiveReason ?? entry.paclen.adaptiveReason ?? "Adaptive",
+            evidence: evidence)
+    }
+
+    /// Puts a session's live K and paclen, and why, on its status entry.
+    private func refreshLiveLinkDisplay(for session: AX25Session) {
+        let config = session.stateMachine.config
+        let id = adaptiveSessionID(radio: session.radio,
+                                   destination: session.remoteAddress.display,
+                                   path: session.path.display)
+        guard session.state == .connected || session.state == .connecting,
+              config.adaptsInSession else {
+            adaptiveStatusStore.updateLive(id: id, live: nil)
+            return
+        }
+        adaptiveStatusStore.updateLive(id: id, live: AdaptiveLiveLink(
+            k: session.liveWindowSize,
+            p: session.livePaclen,
+            windowCeiling: config.windowCeiling,
+            paclenCeiling: config.paclenCeiling,
+            pendingK: session.pendingWindowSize,
+            startSource: config.startSource,
+            reason: session.liveLinkReason))
+    }
+
     /// True if cached entry is older than TTL (route-level cache invalidation).
     private func isAdaptiveCacheEntryExpired(_ entry: CachedAdaptiveEntry) -> Bool {
         Date().timeIntervalSince(entry.lastUpdated) > Self.adaptiveByScopeTTLSeconds
@@ -920,7 +1014,15 @@ final class SessionCoordinator: ObservableObject {
     ///
     /// `learnedPathRto` is passed ONLY by the per-route cache-hit branch — the
     /// field's single writer. Merged configs and the global path leave it nil.
-    private func configFromAdaptive(_ a: TxAdaptiveSettings, learnedPathRto: Double? = nil) -> AX25SessionConfig {
+    ///
+    /// K and paclen (spec §7.8.1): a parameter on Auto gets a ceiling, the
+    /// most the link allows, and starts at the values `a` has *confirmed*
+    /// (an upgrade still on trial starts at what it would roll back to). A
+    /// parameter the operator set by hand stays exactly that for the session,
+    /// with no ceiling to grow toward. XID can only lower both, later.
+    private func configFromAdaptive(_ a: TxAdaptiveSettings, hops: Int = 0,
+                                    startSource: LinkStartSource = .configured,
+                                    learnedPathRto: Double? = nil) -> AX25SessionConfig {
         let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
             appSettings?.ax25T1TimeoutSeconds ?? AppSettingsStore.defaultAX25T1TimeoutSeconds
         )
@@ -928,9 +1030,12 @@ final class SessionCoordinator: ObservableObject {
             min(a.rtoMax.effectiveValue,
                 max(max(a.rtoMin.effectiveValue, Self.learnedSeedFloorSeconds), learned))
         }
+        let ceilings = linkCeilings(hops: hops)
+        let operatorK = globalAdaptiveSettings.windowSize
+        let operatorP = globalAdaptiveSettings.paclen
         return AX25SessionConfig(
-            windowSize: a.windowSize.effectiveValue,
-            paclen: a.paclen.effectiveValue,
+            windowSize: ceilings.window == nil ? operatorK.effectiveValue : a.confirmedWindow,
+            paclen: ceilings.paclen == nil ? operatorP.effectiveValue : a.confirmedPaclen,
             maxReceiveBufferSize: nil,
             maxRetries: a.maxRetries.effectiveValue,
             extended: false,
@@ -938,8 +1043,25 @@ final class SessionCoordinator: ObservableObject {
             rtoMax: a.rtoMax.effectiveValue,
             initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, userT1)),
             adaptiveTimeout: adaptiveTransmissionEnabled,
-            learnedPathRto: clampedLearned
+            learnedPathRto: clampedLearned,
+            maxWindowSize: ceilings.window,
+            maxPaclen: ceilings.paclen,
+            startSource: startSource
         )
+    }
+
+    /// The most K and paclen may grow to on a route with `hops` digipeaters,
+    /// or nil for a parameter that stays fixed: the operator set it by hand,
+    /// or adaptive transmission is off. K=4; paclen 256 direct and one ladder
+    /// rung less per digipeater (spec §7.8.1). The peer's XID can only lower
+    /// these.
+    private func linkCeilings(hops: Int) -> (window: Int?, paclen: Int?) {
+        guard adaptiveTransmissionEnabled else { return (nil, nil) }
+        let window = globalAdaptiveSettings.windowSize.mode == .auto
+            ? TxAdaptiveSettings.autoWindowCap : nil
+        let paclen = globalAdaptiveSettings.paclen.mode == .auto
+            ? TxAdaptiveSettings.paclenCeiling(forHops: hops) : nil
+        return (window, paclen)
     }
 
     /// Number of active sessions (any state) to the given destination. Used to stabilize config when multiple connections exist.
@@ -956,13 +1078,20 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Conservative merge of configs for a destination: min window, max RTO, max retries. Used when 2+ sessions exist to same peer so we don't flip parameters between connections or corrupt transmissions.
-    private func mergedConfigForDestination(_ destination: String, radio: RadioID) -> AX25SessionConfig {
-        var configs: [AX25SessionConfig] = [configFromAdaptive(globalAdaptiveSettings)]
+    ///
+    /// The starts are the smallest confirmed values across the routes, and
+    /// the ceilings are the new session's own (its hop count) capped by the
+    /// smallest of theirs. While both sessions are open the session layer
+    /// keeps them on the smaller live values too (§7.8.1).
+    private func mergedConfigForDestination(_ destination: String, path pathSignature: String,
+                                            radio: RadioID) -> AX25SessionConfig {
+        let hops = hopCount(inPathSignature: pathSignature)
+        var configs: [AX25SessionConfig] = [configFromAdaptive(globalAdaptiveSettings, hops: hops)]
         let canon = canonicalDestination(destination)
         for (key, entry) in adaptiveByScope
         where key.radio == radio && key.route?.destination == canon
               && !isAdaptiveCacheEntryExpired(entry) {
-            configs.append(configFromAdaptive(entry.settings))
+            configs.append(configFromAdaptive(entry.settings, hops: hops))
         }
         guard let first = configs.first else { return AX25SessionConfig() }
         let windowSize = configs.map(\.windowSize).min() ?? first.windowSize
@@ -973,6 +1102,7 @@ final class SessionCoordinator: ObservableObject {
         let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
             appSettings?.ax25T1TimeoutSeconds ?? AppSettingsStore.defaultAX25T1TimeoutSeconds
         )
+        let ceilings = linkCeilings(hops: hops)
         return AX25SessionConfig(
             windowSize: windowSize,
             paclen: paclen,
@@ -982,7 +1112,10 @@ final class SessionCoordinator: ObservableObject {
             rtoMin: rtoMin,
             rtoMax: rtoMax,
             initialRto: max(rtoMin, min(rtoMax, userT1)),
-            adaptiveTimeout: adaptiveTransmissionEnabled
+            adaptiveTimeout: adaptiveTransmissionEnabled,
+            maxWindowSize: ceilings.window,
+            maxPaclen: ceilings.paclen,
+            startSource: .merged
         )
     }
 
@@ -1012,6 +1145,7 @@ final class SessionCoordinator: ObservableObject {
         globalAdaptiveSettings = fresh
         useDefaultConfigForDestinations.removeAll()
         adaptiveByScope.removeAll()
+        confirmedLinkMemory.removeAll()
         syncSessionManagerConfigFromAdaptive()
         TxLog.adaptiveCleared(reason: "clear all – reset to defaults (routes + global)")
         objectWillChange.send()
@@ -1022,6 +1156,7 @@ final class SessionCoordinator: ObservableObject {
         let normalized = canonicalDestination(callsign)
         guard !normalized.isEmpty else { return }
         useDefaultConfigForDestinations.insert(normalized)
+        confirmedLinkMemory.remove(destination: normalized)
         TxLog.adaptiveStationReset(callsign: normalized)
         objectWillChange.send()
     }
@@ -2080,7 +2215,7 @@ final class SessionCoordinator: ObservableObject {
             return MainActor.assumeIsolated {
                 coordinator.sessionManager
                     .session(for: neighbor, path: DigiPath(), radio: coordinator.radio(forNetRomNeighbor: neighbor))
-                    .stateMachine.config.paclen
+                    .livePaclen
             }
         }
 
@@ -2168,10 +2303,12 @@ final class SessionCoordinator: ObservableObject {
         }
 
         sessionManager.onLinkQualitySample = { [weak self] session, sample in
+            guard let self else { return }
             let scope = AdaptiveScope.route(radio: session.radio,
                                             destination: session.remoteAddress.display,
                                             path: session.path.display)
-            self?.applyLinkQualitySample(
+            let config = session.stateMachine.config
+            self.applyLinkQualitySample(
                 lossRate: sample.lossRate,
                 forwardLoss: sample.forwardLoss,
                 reverseLoss: sample.reverseLoss,
@@ -2180,8 +2317,17 @@ final class SessionCoordinator: ObservableObject {
                 source: "session",
                 scope: scope,
                 newFrames: sample.newFrames,
-                retransmits: sample.retransmits
+                retransmits: sample.retransmits,
+                windowCeiling: config.maxWindowSize,
+                paclenCeiling: config.maxPaclen,
+                bytesInFlight: sample.peakBytesInFlight
             )
+            self.pushLinkTargets(to: session, scope: scope, srtt: sample.srtt,
+                                 bytesInFlight: sample.peakBytesInFlight)
+        }
+
+        sessionManager.onLiveLinkChanged = { [weak self] session in
+            self?.refreshLiveLinkDisplay(for: session)
         }
 
         sessionManager.getConfigForDestination = { [weak self] destination, pathSignature, radio in
@@ -2209,19 +2355,34 @@ final class SessionCoordinator: ObservableObject {
             }
             // When multiple connections exist to the same destination, use a conservative merged config so we don't flip parameters between connections or change settings mid-transmission.
             if self.activeSessionCount(forDestination: destination) >= 1 {
-                return self.mergedConfigForDestination(destination, radio: radio)
+                return self.mergedConfigForDestination(destination, path: pathSignature, radio: radio)
             }
             let key = self.canonicalScope(.route(radio: radio, destination: destination,
                                                  path: pathSignature))
+            let hops = hopCount(inPathSignature: pathSignature)
             if let cached = self.adaptiveByScope[key], !self.isAdaptiveCacheEntryExpired(cached) {
                 // Single writer of learnedPathRto: a fresh entry for THIS
                 // exact route seeds the connect timer with its measured
                 // full-path RTO (clamped; never hop-scaled downstream).
-                return self.configFromAdaptive(cached.settings, learnedPathRto: cached.settings.currentRto)
+                return self.configFromAdaptive(cached.settings, hops: hops,
+                                               startSource: .recentEvidence,
+                                               learnedPathRto: cached.settings.currentRto)
+            }
+            // Nothing in the last 30 minutes: the values this route last
+            // confirmed, if within a day (§7.8.1).
+            if let seed = self.confirmedLinkMemory.values(for: key) {
+                var seeded = TxAdaptiveSettings()
+                seeded.windowSize.currentAdaptive = seed.window
+                seeded.paclen.currentAdaptive = seed.paclen
+                return self.configFromAdaptive(seeded, hops: hops,
+                                               startSource: .confirmed(seed.recordedAt))
             }
             // Nothing for this exact route: inherit the channel before the
             // baseline, so a new route on a known radio does not start over.
-            return self.configFromAdaptive(self.resolvedSettings(for: key))
+            let channelKnown = self.adaptiveByScope[.radio(radio)]
+                .map { !self.isAdaptiveCacheEntryExpired($0) } ?? false
+            return self.configFromAdaptive(self.resolvedSettings(for: key), hops: hops,
+                                           startSource: channelKnown ? .channel : .configured)
         }
 
         // Wire up session state changes for capability discovery
@@ -2241,6 +2402,12 @@ final class SessionCoordinator: ObservableObject {
             // operator about what is still up.
             if newState == .disconnected, oldState != .disconnected {
                 self.netRomDriver.neighborLinkDropped(session.remoteAddress)
+            }
+
+            // The status bar shows a session's live K and paclen only while
+            // the session is up; when it ends, the route's figure shows again.
+            if newState == .disconnected || newState == .error || newState == .connected {
+                self.refreshLiveLinkDisplay(for: session)
             }
 
             if oldState != .connected && newState == .connected {

@@ -44,6 +44,10 @@ the middle of a block or carry the end of one block and the start of the
 next, so nothing assumes one frame per packet. When sending, blocks are
 sized to paclen minus three so each one, with its header bytes and a
 possible checksum, still fits a single I-frame for receivers that do.
+The paclen is the one in use when the transfer starts. It can change
+later in the session (transmission spec §7.8.1); a larger one leaves the
+blocks as they are, and a smaller one splits a block across two
+I-frames, which the parser above already handles.
 
 YAPP bytes are foreign protocol bytes (spec §16). They go out as plain
 PID 0xF0 I-frames, and `YAPPSessionTransfer` claims the session's delivered

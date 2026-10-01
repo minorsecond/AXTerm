@@ -156,7 +156,24 @@ struct ConnectionStatusStripView: View {
     }
     
     // MARK: - Connected Status
-    
+
+    /// Why the session's K is what it is (CLAUDE.md §11).
+    private static func windowHelp(for session: AX25Session) -> String {
+        let config = session.stateMachine.config
+        guard config.adaptsInSession else {
+            return "K: at most \(session.liveWindowSize) frames in flight before waiting for an "
+                + "acknowledgment. Fixed for this session: K is set by hand, or adaptive "
+                + "transmission is off."
+        }
+        return AdaptiveLiveLink(k: session.liveWindowSize,
+                                p: session.livePaclen,
+                                windowCeiling: config.windowCeiling,
+                                paclenCeiling: config.paclenCeiling,
+                                pendingK: session.pendingWindowSize,
+                                startSource: config.startSource,
+                                reason: session.liveLinkReason).explanation
+    }
+
     @ViewBuilder
     private func connectedStatusView(session: AX25Session) -> some View {
         HStack(spacing: 6) {
@@ -219,9 +236,10 @@ struct ConnectionStatusStripView: View {
                 Text("·")
                     .foregroundStyle(.tertiary)
                 
-                Text("K: \(session.stateMachine.config.windowSize)")
+                Text("K: \(session.liveWindowSize)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .help(Self.windowHelp(for: session))
                 
                 if session.statistics.retransmissions > 0 {
                     Text("·")

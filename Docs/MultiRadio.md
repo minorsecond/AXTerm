@@ -369,6 +369,14 @@ knows is used at read time only — to answer "what should I open a session with
 for a route I know nothing about yet", a question whose wrong answer costs one
 session's opening parameters rather than a lasting belief.
 
+A route does start from its *own* earlier evidence. When its 30-minute entry
+has expired, the K and paclen it last confirmed (passed a probation trial)
+within the past 24 hours seed both the next session and the route's fresh
+learning entry (`ConfirmedLinkMemory`, keyed by radio, station and path). That
+is the same route's evidence, so it does not break the rule above. During a
+session the route's controller keeps steering the session's live K and paclen
+inside its ceilings; see the transmission spec, §7.8.1.
+
 ### Saying which
 
 A per-radio number nobody can attribute is worse than a global one, so every

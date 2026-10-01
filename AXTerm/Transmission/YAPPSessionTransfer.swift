@@ -43,7 +43,10 @@ final class YAPPSessionTransfer: FileTransferProtocolDelegate {
         yapp.responseTimeout = responseTimeout
         // Each block with its two header bytes and a possible checksum fits
         // one I-frame, for receivers that read one block per packet.
-        yapp.blockSize = max(1, min(256, session.stateMachine.config.paclen - 3))
+        // The paclen in use when the transfer starts; it may change later in
+        // the session, and the block reader copes with blocks split across
+        // I-frames anyway.
+        yapp.blockSize = max(1, min(256, session.livePaclen - 3))
         yapp.delegate = self
         yapp.readyForData = { [weak self] in self?.linkHasRoom ?? false }
     }

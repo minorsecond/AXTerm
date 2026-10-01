@@ -60,6 +60,9 @@ nonisolated struct LinkQualitySample: Sendable {
     let srtt: Double?
     let newFrames: Int
     let retransmits: Int
+    /// The most bytes of our own I-frames in flight during this sample,
+    /// headers included. Nil when nothing was sent.
+    var peakBytesInFlight: Int? = nil
 }
 
 nonisolated final class AX25Session: @unchecked Sendable {
@@ -87,12 +90,65 @@ nonisolated final class AX25Session: @unchecked Sendable {
     var sendBuffer: [Int: OutboundFrame] = [:]
 
     /// AIMD congestion window.
-    /// Starts in slow start (cwnd=1) and grows as ACKs arrive.  Halved on each
-    /// T1 timeout (loss event).  The effective send window is
-    /// min(config.windowSize, aimdWindow.effectiveWindow) so the congestion
-    /// window can never exceed the protocol window K, but can be reduced below K
-    /// when the link is lossy.
+    /// Starts at the live K and grows back toward it as ACKs arrive. Halved on
+    /// each T1 timeout or REJ (loss event). The effective send window is
+    /// min(liveWindowSize, aimdWindow.effectiveWindow) so the congestion
+    /// window can never exceed the live K, but can be reduced below it when
+    /// the link is lossy. Its ceiling follows the live K (§7.8.1).
     var aimdWindow: AIMDWindow
+
+    // MARK: Live K and paclen (spec §7.8.1)
+
+    /// The K this session sends with now. Starts at `config.windowSize` and
+    /// moves between 1 and `config.windowCeiling` when the config allows it.
+    /// It never rises while a frame is outstanding (see `pendingWindowSize`).
+    fileprivate(set) var liveWindowSize: Int
+
+    /// The paclen data is cut at now. A change applies only to data segmented
+    /// after it: frames in flight and chunks already queued keep their size.
+    fileprivate(set) var livePaclen: Int
+
+    /// A larger K decided while frames were outstanding, waiting for the
+    /// next moment nothing is in flight.
+    fileprivate(set) var pendingWindowSize: Int?
+
+    /// What the link controller last asked this session for, before the
+    /// multi-session merge and the ceilings. Nil until it has asked.
+    fileprivate(set) var targetWindowSize: Int?
+    fileprivate(set) var targetPaclen: Int?
+
+    /// Why the live values are what they are, in the controller's words.
+    fileprivate(set) var liveLinkReason: String?
+
+    /// The most bytes of our own I-frames in flight since the last
+    /// link-quality sample, headers included. Feeds the round-trip
+    /// allowance for upgrades (`TxAdaptiveSettings.upgradeSrttAllowance`).
+    fileprivate(set) var peakBytesInFlight: Int = 0
+
+    /// Puts the live values back at the config's start. Called when the
+    /// state machine is rebuilt before SABM (XID), never while connected.
+    fileprivate func resetLiveLink() {
+        let config = stateMachine.config
+        liveWindowSize = config.windowSize
+        livePaclen = config.paclen
+        pendingWindowSize = nil
+        targetWindowSize = nil
+        targetPaclen = nil
+        aimdWindow = AIMDWindow(initialWindow: Double(config.windowSize),
+                                maxWindow: Double(config.windowSize))
+    }
+
+    /// On-air size of one of our I-frames for airtime purposes: the
+    /// information field plus addresses (7 bytes each, digipeaters included),
+    /// control, PID and FCS. Flags and bit stuffing are left out, so this
+    /// never overstates airtime.
+    fileprivate func airBytes(of frame: OutboundFrame) -> Int {
+        frame.payload.count + 18 + 7 * frame.path.digis.count
+    }
+
+    fileprivate var bytesInFlight: Int {
+        sendBuffer.values.reduce(0) { $0 + airBytes(of: $1) }
+    }
 
     /// Send timestamp per N(S) for RTT estimation when RR acks frames.
     /// Stored as monotonic TimeInterval from the injected clock so tests can
@@ -244,8 +300,8 @@ nonisolated final class AX25Session: @unchecked Sendable {
         self.statistics = AX25SessionStatistics()
         self.lastActivityAt = Date()
         self.isInitiator = isInitiator
-        // AIMD window: starts at windowSize (full protocol window) and shrinks
-        // on loss events.  We do NOT use slow-start (cwnd=1) because AX.25 has
+        // AIMD window: starts at the starting K and shrinks on loss events;
+        // its ceiling follows the live K (setLiveWindow).  We do NOT use slow-start (cwnd=1) because AX.25 has
         // a very small protocol window (max 7) and the round-trip times are large
         // (seconds, not milliseconds).  Starting at 1 would severely limit
         // throughput until enough ACKs arrived.  Instead, the protocol window K
@@ -254,6 +310,8 @@ nonisolated final class AX25Session: @unchecked Sendable {
             initialWindow: Double(config.windowSize),
             maxWindow: Double(config.windowSize)
         )
+        self.liveWindowSize = config.windowSize
+        self.livePaclen = config.paclen
     }
 
     deinit {
@@ -299,8 +357,11 @@ nonisolated final class AX25Session: @unchecked Sendable {
     }
 
     /// Whether we can send another I-frame (window not full)
+    ///
+    /// The sequence-number gate, against the protocol window (the ceiling).
+    /// The send paths also gate on the live K and the congestion window.
     var canSendIFrame: Bool {
-        stateMachine.sequenceState.canSend(windowSize: stateMachine.config.windowSize)
+        stateMachine.sequenceState.canSend(windowSize: stateMachine.config.windowCeiling)
     }
 
     /// Add frame to send buffer for retransmission
@@ -603,6 +664,161 @@ final class AX25SessionManager: ObservableObject {
     /// radios is two different sets of answers. See `AdaptiveScope`.
     var getConfigForDestination: ((String, String, RadioID) -> AX25SessionConfig)?
 
+    // MARK: - Live K and paclen (spec §7.8.1)
+
+    /// A session's live K, paclen or waiting raise changed. The display
+    /// listens so the status bar shows what the session sends with now.
+    var onLiveLinkChanged: ((AX25Session) -> Void)?
+
+    /// The link controller's latest choice of K and paclen for a session.
+    ///
+    /// What the session then runs is the smallest choice among the open
+    /// sessions to the same station (the multi-session merge, §7.8), clamped
+    /// to the session's own ceilings. A smaller value applies at once. A
+    /// larger K waits until nothing is outstanding; a new paclen applies to
+    /// data segmented from now on. A parameter the config holds fixed
+    /// (manual, adaptive off) does not move.
+    func updateLinkTargets(for session: AX25Session, window: Int, paclen: Int,
+                           reason: String, evidence: [String: Any] = [:]) {
+        guard session.stateMachine.config.adaptsInSession else { return }
+        session.targetWindowSize = max(1, window)
+        session.targetPaclen = max(32, paclen)
+        session.liveLinkReason = reason
+        for affected in mergeGroup(for: session) {
+            reconcileLiveLink(affected, reason: reason, evidence: evidence)
+        }
+    }
+
+    /// Open sessions to the same station whose K or paclen can move,
+    /// including `session` itself. Matched by callsign whatever the path or
+    /// radio, like the coordinator's count when it picks a merged config.
+    private func mergeGroup(for session: AX25Session) -> [AX25Session] {
+        let group = sessions.values.filter { other in
+            other === session
+                || ((other.state == .connected || other.state == .connecting)
+                    && other.stateMachine.config.adaptsInSession
+                    && CallsignNormalizer.addressesMatch(other.remoteAddress, session.remoteAddress))
+        }
+        // Fixed order so the same evidence always produces the same log and
+        // callback sequence.
+        return group.sorted { $0.key.pathSignature + $0.key.radio.rawValue
+            < $1.key.pathSignature + $1.key.radio.rawValue }
+    }
+
+    /// What `session` should run now: the smallest choice in its merge
+    /// group, each member's choice clamped to its own ceiling first, then
+    /// clamped to this session's ceiling. A member with no choice yet counts
+    /// with its live value. A fixed parameter stays at its config value.
+    private func desiredLiveLink(for session: AX25Session) -> (window: Int, paclen: Int) {
+        let config = session.stateMachine.config
+        let group = mergeGroup(for: session)
+        let window: Int
+        if config.maxWindowSize == nil {
+            window = config.windowSize
+        } else {
+            let merged = group.map { member in
+                min(member.targetWindowSize ?? member.liveWindowSize,
+                    member.stateMachine.config.windowCeiling)
+            }.min() ?? session.liveWindowSize
+            window = max(1, min(merged, config.windowCeiling))
+        }
+        let paclen: Int
+        if config.maxPaclen == nil {
+            paclen = config.paclen
+        } else {
+            let merged = group.map { member in
+                min(member.targetPaclen ?? member.livePaclen,
+                    member.stateMachine.config.paclenCeiling)
+            }.min() ?? session.livePaclen
+            paclen = max(32, min(merged, config.paclenCeiling))
+        }
+        return (window, paclen)
+    }
+
+    private func reconcileLiveLink(_ session: AX25Session, reason: String,
+                                   evidence: [String: Any]) {
+        let desired = desiredLiveLink(for: session)
+        var changed = false
+        var fields = evidence
+        fields["peer"] = session.remoteAddress.display
+        fields["path"] = session.path.display.isEmpty ? "(direct)" : session.path.display
+        fields["reason"] = reason
+
+        if desired.paclen != session.livePaclen {
+            let from = session.livePaclen
+            session.livePaclen = desired.paclen
+            changed = true
+            TxLog.debug(.adaptive, desired.paclen > from ? "Session paclen raised" : "Session paclen lowered",
+                        fields.merging(["from": from, "to": desired.paclen,
+                                        "ceiling": session.stateMachine.config.paclenCeiling]) { $1 })
+        }
+
+        if desired.window < session.liveWindowSize {
+            // Backing off is immediate. Lowering the gate only stops new
+            // frames; the frames in flight stay counted in the sequence state
+            // and the send buffer as before.
+            let from = session.liveWindowSize
+            setLiveWindow(desired.window, on: session)
+            session.pendingWindowSize = nil
+            changed = true
+            TxLog.debug(.adaptive, "Session window lowered",
+                        fields.merging(["from": from, "to": desired.window,
+                                        "outstanding": session.outstandingCount]) { $1 })
+        } else if desired.window > session.liveWindowSize {
+            if session.pendingWindowSize != desired.window {
+                session.pendingWindowSize = desired.window
+                changed = true
+            }
+            if applyPendingWindowIfQuiescent(session, fields: fields) { changed = true }
+        } else if session.pendingWindowSize != nil {
+            session.pendingWindowSize = nil
+            changed = true
+        }
+
+        if changed { onLiveLinkChanged?(session) }
+    }
+
+    /// Applies a waiting raise when nothing is outstanding. Called wherever
+    /// new frames are about to be sent, so the raise takes effect at the
+    /// first quiescent point and never while the sequence state counts
+    /// frames sent under the old K. Returns true when it applied one.
+    @discardableResult
+    private func applyPendingWindowIfQuiescent(_ session: AX25Session,
+                                               fields: [String: Any] = [:]) -> Bool {
+        guard let pending = session.pendingWindowSize,
+              session.outstandingCount == 0,
+              session.stateMachine.sequenceState.outstandingCount == 0 else { return false }
+        let from = session.liveWindowSize
+        session.pendingWindowSize = nil
+        guard pending != from else { return false }
+        setLiveWindow(pending, on: session)
+        var data = fields
+        data["peer"] = session.remoteAddress.display
+        data["from"] = from
+        data["to"] = pending
+        data["ceiling"] = session.stateMachine.config.windowCeiling
+        if data["reason"] == nil { data["reason"] = session.liveLinkReason ?? "" }
+        TxLog.debug(.adaptive, "Session window raised", data)
+        return true
+    }
+
+    private func setLiveWindow(_ window: Int, on session: AX25Session) {
+        session.liveWindowSize = window
+        session.aimdWindow.setMaxWindow(Double(window))
+    }
+
+    /// The send gate for new frames: the live K, the congestion window, and
+    /// never more than the protocol window.
+    private func effectiveSendWindow(for session: AX25Session) -> Int {
+        min(session.liveWindowSize, session.aimdWindow.effectiveWindow,
+            session.stateMachine.config.windowCeiling)
+    }
+
+    /// Notes the bytes in flight after a new I-frame went out.
+    private func noteBytesInFlight(_ session: AX25Session) {
+        session.peakBytesInFlight = max(session.peakBytesInFlight, session.bytesInFlight)
+    }
+
     // MARK: - AX.25 2.2 negotiation (XID)
 
     /// Master switch for XID parameter negotiation before the first SABM
@@ -646,11 +862,16 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Our offer: SREJ plus our receive limits from the session's config.
+    ///
+    /// N1 and k are what this station can receive, so they are the config's
+    /// ceilings rather than the values a session starts with: advertising
+    /// the start would make the peer treat K=2 paclen 128 as its own ceiling
+    /// toward us for the whole session (§7.8.1).
     private func localXIDParameters(config: AX25SessionConfig) -> AX25XIDParameters {
         var params = AX25XIDParameters()
         params.supportsSREJ = true
-        params.iFieldLengthRx = config.paclen
-        params.windowSizeRx = config.windowSize
+        params.iFieldLengthRx = config.paclenCeiling
+        params.windowSizeRx = config.windowCeiling
         return params
     }
 
@@ -764,7 +985,10 @@ final class AX25SessionManager: ObservableObject {
     /// this whole body was compiled out) and then trap in debug so tests fail
     /// loudly. The checks are a handful of comparisons per call: negligible.
     func checkInvariants(session: AX25Session) {
-        session.stateMachine.sequenceState.assertInvariants(windowSize: session.stateMachine.config.windowSize)
+        // Against the protocol window (the ceiling), never the live K: frames
+        // sent under a K that has since been lowered stay legitimately counted
+        // until they are acknowledged (§7.8.1).
+        session.stateMachine.sequenceState.assertInvariants(windowSize: session.stateMachine.config.windowCeiling)
 
         // sendBuffer.count must exactly match outstanding frames according to V(S) and V(A)
         // If this fails, we have a memory leak (frames stuck in buffer) or a duplicate tracking bug.
@@ -820,7 +1044,7 @@ final class AX25SessionManager: ObservableObject {
                 va: sm.sequenceState.va,
                 vr: sm.sequenceState.vr,
                 outstanding: session.outstandingCount,
-                windowSize: sm.config.windowSize,
+                windowSize: session.liveWindowSize,
                 retryCount: sm.retryCount,
                 sendBufferSeq: session.sendBuffer.keys.sorted(),
                 rto: session.timers.rto,
@@ -852,7 +1076,9 @@ final class AX25SessionManager: ObservableObject {
             "va": va,
             "vr": vr,
             "outstanding": outstanding,
-            "windowSize": sm.config.windowSize,
+            "windowSize": session.liveWindowSize,
+            "windowCeiling": sm.config.windowCeiling,
+            "paclen": session.livePaclen,
             "retryCount": sm.retryCount,
             "maxRetries": sm.config.maxRetries,
             "rto": String(format: "%.2f", timers.rto),
@@ -1390,11 +1616,14 @@ final class AX25SessionManager: ObservableObject {
               session.stateMachine.sequenceState.vr == 0 else { return }
         let negotiated = session.stateMachine.config.negotiating(with: params)
         session.stateMachine = AX25StateMachine(config: negotiated)
+        session.resetLiveLink()
         debugTrace("Negotiated config applied", [
             "peer": session.remoteAddress.display,
             "srej": negotiated.srejEnabled ? 1 : 0,
             "k": negotiated.windowSize,
-            "paclen": negotiated.paclen
+            "kCeiling": negotiated.windowCeiling,
+            "paclen": negotiated.paclen,
+            "paclenCeiling": negotiated.paclenCeiling
         ])
     }
 
@@ -1507,7 +1736,17 @@ final class AX25SessionManager: ObservableObject {
         displayInfo: String? = nil
     ) -> [OutboundFrame] {
         let session = selectSession(for: destination, path: path, radio: radio)
-        let paclen = session.stateMachine.config.paclen
+        // Cut at the live paclen: data segmented now uses the current value,
+        // and anything cut earlier keeps its size (§7.8.1).
+        //
+        // NET/ROM is the exception. One datagram must ride one I-frame, and
+        // the datagram was sized from the paclen when its circuit opened. If
+        // paclen has fallen since, it still goes out whole: it is within the
+        // ceiling the peer accepted, and splitting it would make the far end
+        // parse two halves as two broken datagrams.
+        let paclen = pid == NetRomWire.pid
+            ? session.stateMachine.config.paclenCeiling
+            : session.livePaclen
         let chunks = fragment(data, paclen: paclen)
         var frames: [OutboundFrame] = []
 
@@ -1584,8 +1823,11 @@ final class AX25SessionManager: ObservableObject {
             // effectiveSendWindow = min(K, aimdWindow.effectiveWindow).  canSendIFrame stays
             // as the sequence-number gate; the outstandingCount check is the AIMD gate.
             var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []
+            // A raise that was waiting for quiescence applies before the
+            // window is measured, so this burst can use it.
+            if applyPendingWindowIfQuiescent(session) { onLiveLinkChanged?(session) }
             let aimdEffectiveDirect = session.aimdWindow.effectiveWindow
-            let effectiveSendWindowDirect = min(session.stateMachine.config.windowSize, aimdEffectiveDirect)
+            let effectiveSendWindowDirect = effectiveSendWindow(for: session)
             axDebugPrint("[DEBUG:AX25:SEND] sendData connected | dest=\(destination.display) totalChunks=\(chunks.count) paclen=\(paclen) canSend=\(session.canSendIFrame) aimdEffective=\(aimdEffectiveDirect) effectiveWindow=\(effectiveSendWindowDirect) va=\(session.va) vs=\(session.vs)")
             for (i, chunk) in chunks.enumerated() {
                 guard session.canSendIFrame, session.outstandingCount < effectiveSendWindowDirect else {
@@ -1617,6 +1859,7 @@ final class AX25SessionManager: ObservableObject {
                 axDebugPrint("[DEBUG:AX25:SEND] immediate tx chunk \(i) | N(S)=\(ns) payload=\(chunk.count)")
 
                 session.bufferFrame(iFrame, ns: ns)  // ns, not vs-1 (avoids -1 when vs wraps 7->0)
+                noteBytesInFlight(session)
                 session.recordSendTime(ns: ns, time: clock.currentTime)
                 session.statistics.recordSent(bytes: chunk.count)
                 session.touch()
@@ -2597,6 +2840,12 @@ final class AX25SessionManager: ObservableObject {
         let reverseLoss = min(1.0, max(0.0, 1.0 - dr))
         let lossRate = min(1.0, max(forwardLoss, reverseLoss))
 
+        // The bytes of our own frames that were in flight over this sample,
+        // for the round-trip allowance on upgrades. The next sample starts
+        // from whatever is still in flight.
+        let peakBytes = session.peakBytesInFlight
+        session.peakBytesInFlight = session.bytesInFlight
+
         onLinkQualitySample?(session, LinkQualitySample(
             lossRate: lossRate,
             forwardLoss: forwardLoss,
@@ -2604,7 +2853,8 @@ final class AX25SessionManager: ObservableObject {
             etx: etx,
             srtt: session.timers.srtt,
             newFrames: deltaSent,
-            retransmits: deltaRetrans
+            retransmits: deltaRetrans,
+            peakBytesInFlight: peakBytes > 0 ? peakBytes : nil
         ))
     }
 
@@ -3173,6 +3423,12 @@ final class AX25SessionManager: ObservableObject {
 
     /// Drain the pending data queue (paclen-fragmented chunks) when window has space
     private func drainPendingDataQueue(for session: AX25Session) {
+        // Every call site is a moment new frames may go out, which is when a
+        // raise waiting for quiescence may take effect (§7.8.1). Before the
+        // empty-queue guard: being quiescent is the condition, not having data.
+        if session.state == .connected, applyPendingWindowIfQuiescent(session) {
+            onLiveLinkChanged?(session)
+        }
         guard !session.pendingDataQueue.isEmpty else { return }
 
         // I frames may only flow in the information-transfer state. Data queued while
@@ -3211,19 +3467,17 @@ final class AX25SessionManager: ObservableObject {
         //
         // Fix: compute the available window space ONCE from the current sequence state and limit
         // the drain to at most that many frames.
-        let windowSize = session.stateMachine.config.windowSize
         // Audit B5 fix: use sendBuffer.count (session.outstandingCount) as the canonical
         // outstanding-frame count.  The design comment on outstandingCount says
         // "use sendBuffer.count so it matches actual buffered frames after RR acks;
         // (vs-va) can be wrong across wrap."  sequenceState.outstandingCount is the
         // V(S)−V(A) view and can briefly diverge from sendBuffer.count during wrap.
         let currentOutstanding = session.outstandingCount
-        // Bug G fix: effective send window is the minimum of the AX.25 protocol
-        // window K and the AIMD congestion window.  This ensures the congestion
-        // window actually constrains transmit rate — not just bookkeeping.
-        let aimdEffective = session.aimdWindow.effectiveWindow
-        let effectiveSendWindow = min(windowSize, aimdEffective)
-        let availableSlots = max(0, effectiveSendWindow - currentOutstanding)
+        // Bug G fix: effective send window is the minimum of the live K and
+        // the AIMD congestion window, so the congestion window really limits
+        // what is sent.
+        let sendWindow = effectiveSendWindow(for: session)
+        let availableSlots = max(0, sendWindow - currentOutstanding)
 
         var drained: [(data: Data, pid: UInt8, displayInfo: String?)] = []
         var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []
@@ -3241,7 +3495,7 @@ final class AX25SessionManager: ObservableObject {
         var wasIdle = session.outstandingCount == 0
         for item in drained {
             // Checkpoint on window-full, as in sendData (§6.2).
-            let fillsWindow = session.outstandingCount + 1 >= effectiveSendWindow
+            let fillsWindow = session.outstandingCount + 1 >= sendWindow
             let ns = session.vs  // Capture before buildIFrame increments vs
             let iFrame = buildIFrame(
                 for: session,
@@ -3254,6 +3508,7 @@ final class AX25SessionManager: ObservableObject {
             axDebugPrint("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
             // Use ns directly - (vs-1) wraps to -1 when vs goes 7->0, corrupting sendBuffer
             session.bufferFrame(iFrame, ns: ns)
+            noteBytesInFlight(session)
             session.recordSendTime(ns: ns, time: clock.currentTime)
             session.statistics.recordSent(bytes: item.data.count)
 
