@@ -149,4 +149,59 @@ final class TerminalDestinationBindingTests: XCTestCase {
         XCTAssertEqual(terminal.viewModel.destinationCall, "K0EPI-2")
         XCTAssertTrue(terminal.canSend, "Send stayed disabled over a live session")
     }
+
+    // MARK: - Data arriving on another session
+
+    /// Talking to K0EPI-2 while K0EPI-4 is also connected: a line from
+    /// K0EPI-4 used to switch the terminal to its session but leave the To
+    /// field on K0EPI-2, so the next thing typed was addressed to one station
+    /// and sent down the other's link. The line still reaches the console
+    /// under K0EPI-4; what the operator is talking to stays put.
+    func testDataFromAnotherStationLeavesTheChosenSessionAlone() {
+        let (terminal, manager) = makeTerminal("DestinationBindingOtherData")
+        terminal.setupSessionCallbacks()
+        let chosen = connectedSession(manager, to: peer)
+        let other = connectedSession(manager, to: AX25Address(call: "K0EPI", ssid: 4))
+        terminal.destinationCall.wrappedValue = "K0EPI-2"
+        XCTAssertEqual(terminal.currentSession?.id, chosen.id, "precondition")
+
+        manager.onDataReceived?(other, Data("hello from 4\r".utf8))
+
+        XCTAssertEqual(terminal.currentSession?.id, chosen.id,
+                       "a line from K0EPI-4 took the terminal away from K0EPI-2")
+        XCTAssertEqual(terminal.viewModel.destinationCall, "K0EPI-2")
+    }
+
+    /// With nothing chosen, the first station to send data is the one the
+    /// terminal takes up, and the To field names it so Send goes there.
+    func testDataTakesUpItsSessionWhenNothingIsChosen() {
+        let (terminal, manager) = makeTerminal("DestinationBindingFirstData")
+        terminal.setupSessionCallbacks()
+        let other = connectedSession(manager, to: AX25Address(call: "K0EPI", ssid: 4))
+        terminal.setCurrentSession(nil)
+
+        manager.onDataReceived?(other, Data("hello from 4\r".utf8))
+
+        XCTAssertEqual(terminal.currentSession?.id, other.id)
+        XCTAssertEqual(terminal.viewModel.destinationCall, "K0EPI-4",
+                       "the terminal took up K0EPI-4's session with another station in the To field")
+    }
+
+    /// A chosen session that has since dropped gives way to the live one
+    /// sending data, and the To field follows it.
+    func testDataReplacesASessionThatDropped() {
+        let (terminal, manager) = makeTerminal("DestinationBindingDroppedData")
+        terminal.setupSessionCallbacks()
+        let chosen = connectedSession(manager, to: peer)
+        terminal.destinationCall.wrappedValue = "K0EPI-2"
+        XCTAssertEqual(terminal.currentSession?.id, chosen.id, "precondition")
+        _ = chosen.stateMachine.handle(event: .receivedDM)
+        XCTAssertNotEqual(chosen.state, .connected, "precondition")
+        let other = connectedSession(manager, to: AX25Address(call: "K0EPI", ssid: 4))
+
+        manager.onDataReceived?(other, Data("hello from 4\r".utf8))
+
+        XCTAssertEqual(terminal.currentSession?.id, other.id)
+        XCTAssertEqual(terminal.viewModel.destinationCall, "K0EPI-4")
+    }
 }

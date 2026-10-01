@@ -1297,35 +1297,30 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             }
         }
 
-        // Auto-select the session when data arrives:
-        // - If no currentSession is set, use the incoming session
-        // - If currentSession is set but to a different session, check if the incoming
-        //   session is connected and auto-switch to it (this handles the responder case
-        //   where data arrives before updateCurrentSession() has run)
-        // - Only ignore data if the incoming session is NOT connected (shouldn't happen)
-        if currentSession == nil {
-            // No session selected yet, use this one
-            currentSession = session
-            TxLog.debug(.session, "Auto-selected session on first data", [
-                "peer": session.remoteAddress.display,
-                "sessionId": session.id.uuidString
-            ])
-        } else if currentSession?.id != session.id {
-            // Different session - if it's connected, switch to it
-            if session.state == .connected {
-                TxLog.debug(.session, "Auto-switching to connected session with incoming data", [
-                    "oldPeer": currentSession?.remoteAddress.display ?? "nil",
-                    "newPeer": session.remoteAddress.display,
-                    "sessionId": session.id.uuidString
-                ])
-                currentSession = session
-            } else {
-                // Incoming data from a non-connected session, ignore (shouldn't happen normally)
+        // Take up the session data arrives on only when the terminal has no
+        // live session of its own: nothing chosen yet (the responder case,
+        // where data can beat updateCurrentSession), or a chosen session
+        // that has since dropped. The line reaches the console under its own
+        // station either way. On 2026-09-30 a line from a second station
+        // switched the session but not the To field, so the next message
+        // was addressed to one station and sent down the other's link.
+        if currentSession?.id != session.id {
+            guard session.state == .connected || currentSession == nil else {
                 TxLog.debug(.session, "Ignoring data from non-connected session", [
                     "peer": session.remoteAddress.display,
                     "state": String(describing: session.state)
                 ])
                 return
+            }
+            if currentSession?.state != .connected {
+                TxLog.debug(.session, "Taking up the session with incoming data", [
+                    "oldPeer": currentSession?.remoteAddress.display ?? "nil",
+                    "newPeer": session.remoteAddress.display,
+                    "sessionId": session.id.uuidString
+                ])
+                currentSession = session
+                viewModel.destinationCall = session.remoteAddress.display
+                viewModel.digiPath = session.path.display
             }
         }
 
