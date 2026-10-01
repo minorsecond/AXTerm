@@ -2881,12 +2881,6 @@ final class AX25SessionManager: ObservableObject {
             "queueDepth": session.pendingDataQueue.count
         ])
 
-        // Outstanding count BEFORE the drain. The no-ACK-progress retransmit below must
-        // only consider frames the peer has actually had a chance to see — the drain can
-        // put brand-new I-frames on the air microseconds earlier, and retransmitting those
-        // immediately sends every freshly drained frame twice.
-        let outstandingBeforeDrain = session.outstandingCount
-
         // Execute the state machine's actions BEFORE draining. The RR actions can
         // carry .stopT1 (all frames acked at handle time); the drain below may put a
         // fresh I-frame on the air and start T1 for it. Running the stale stopT1
@@ -2894,7 +2888,7 @@ final class AX25SessionManager: ObservableObject {
         // protection until the T3 enquiry — observed live on 2026-08-22 when "bbs"
         // was drained by an RR(F=1) and immediately stripped of its T1.
         let actionFrames = processActions(actions, for: session)
-        var responseFrames = actionFrames
+        let responseFrames = actionFrames
 
         // Drain pending queue now that window space freed (paclen-fragmented chunks)
         let queueBeforeDrain = session.pendingDataQueue.count
@@ -2911,42 +2905,26 @@ final class AX25SessionManager: ObservableObject {
         // Deep debug snapshot whenever we advance ACK state from RR.
         debugDumpSessionState(session, context: isPoll ? "inbound-RR-poll" : "inbound-RR")
 
-        if isPoll && session.state == .connected && outstandingBeforeDrain > 0 && vaAfter == vaBefore {
-            // Every poll-driven retransmit must climb the N2 ladder. The peer's
-            // polls arrive inside our RTO, so each one used to restart T1 before
-            // it could expire — retryCount froze at 0 and the session
-            // retransmitted the same frame forever (livelock, field capture
-            // 2026-08-22). Now a peer that polls without ever acking exhausts
-            // N2 exactly like unanswered T1 expiries would.
-            let failureActions = session.stateMachine.noteRetransmissionWithoutProgress()
-            guard failureActions.isEmpty else {
-                TxLog.warning(.session, "RR poll retransmission ladder exhausted N2", [
-                    "peer": session.remoteAddress.display,
-                    "retries": session.stateMachine.retryCount
-                ])
-                notifyStateChanged(session, from: .connected, to: session.state)
-                responseFrames.append(contentsOf: processActions(failureActions, for: session))
-                // Final evidence flush: the retransmissions that exhausted N2
-                // are the loss the next attempt on this route must know about.
-                emitLinkQualitySampleIfNeeded(for: session)
-                return responseFrames
-            }
-
-            TxLog.debug(.session, "RR poll made no ACK progress; retransmitting outstanding frames", [
-                "peer": session.remoteAddress.display,
-                "va": session.va,
-                "vs": session.vs,
-                "vr": session.vr,
-                "outstanding": session.outstandingCount,
-                "retryCount": session.stateMachine.retryCount
-            ])
-
-            responseFrames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "inbound-RR-poll-no-ack"))
-            if responseFrames.contains(where: { $0.frameType == "i" }) {
-                session.consecutiveT1PollsWithoutAck = 0
-                startT1Timer(for: session)
-            }
-        }
+        // A poll is answered with the RR F=1 the state machine returned and
+        // nothing more (AX.25 6.2 and the 2.2 SDL), even when frames of ours
+        // are outstanding and the poll acknowledges none of them. Its N(R)
+        // may simply predate them: a poll that crossed new frames drew
+        // resends that were duplicates, which 2.0 and Linux stations answer
+        // with REJ, drawing more resends. Frames that really were lost come
+        // back through T1, or through the peer's REJ or SREJ once it sees a
+        // gap.
+        //
+        // Until 2026-10-01 such a poll resent the outstanding frames and
+        // counted the resend on the N2 ladder. That counting was the fix for
+        // a livelock (field capture 2026-08-22, KB5YZB-7): the resends
+        // restarted T1, the peer's polls came inside our RTO, so T1 never
+        // expired and the frame went out forever. Without the resend the
+        // poll path neither transmits I-frames nor touches T1 (handleRR
+        // starts T1 only on ack progress), and a peer's command never clears
+        // the retry count (only an F=1 response does, 6.7.1.1). So T1 keeps
+        // its deadline, each expiry resends and climbs the ladder, and a peer
+        // that polls without ever acking exhausts N2 on T1 alone. Counting
+        // polls as well would charge us for retransmissions we never made.
 
         // Last of all: a claim's ack handler may send at once (YAPP pumps its
         // next blocks here). Run before the actions, the stale stopT1 left

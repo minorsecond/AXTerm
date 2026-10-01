@@ -1656,7 +1656,11 @@ final class AX25SessionTests: XCTestCase {
                        "only the session's real first I-frame polls; a wrapped V(S) is not a new session")
     }
 
-    func testInboundRRPollWithoutAckRetransmitsOutstandingFrame() {
+    /// A peer's RR poll that acknowledges nothing draws RR F=1 and nothing
+    /// else (AX.25 6.2 and the 2.2 SDL). The outstanding frame is left to T1,
+    /// which the poll neither stops nor restarts, so the resend comes when
+    /// the original T1 runs out.
+    func testInboundRRPollWithoutAckAnswersRRFinalAndLeavesRecoveryToT1() {
         let clock = AX25VirtualClock()
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7), clock: clock)
         manager.defaultConfig = AX25SessionConfig(initialRto: 4.0, adaptiveTimeout: false)
@@ -1682,16 +1686,16 @@ final class AX25SessionTests: XCTestCase {
             isCommand: true
         )
 
-        let rrFinals = responses.filter { $0.frameType == "s" }
-        let retransmittedIFrames = responses.filter { $0.frameType == "i" }
+        XCTAssertEqual(responses.count, 1, "RR(P=1) is answered with RR(F=1) only")
+        XCTAssertEqual(responses.first?.frameType, "s")
+        XCTAssertEqual(responses.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
+        XCTAssertEqual(session.stateMachine.retryCount, 0, "a peer's poll is not a retransmission of ours")
 
-        XCTAssertEqual(rrFinals.count, 1, "RR(P=1) requires an RR(F=1) response")
-        XCTAssertEqual(retransmittedIFrames.count, 1, "No-progress RR poll should retransmit the outstanding I-frame")
-        XCTAssertEqual(retransmittedIFrames.first?.payload, Data("Help\r".utf8))
-        XCTAssertEqual(retransmittedIFrames.first?.controlByte.map { Int($0 & 0x10) }, 0x10, "Peer-poll recovery preserves the original I-frame P bit")
-
-        clock.advance(by: 1.21)
-        XCTAssertTrue(timerDrivenFrames.isEmpty, "Inbound RR poll recovery must restart T1 and cancel the original timer")
+        // T1 was started at 0 s and still runs out at 4 s (then the 200 ms
+        // grace before the T1 action).
+        clock.advance(by: 1.25)
+        XCTAssertTrue(timerDrivenFrames.contains { $0.frameType == "i" || $0.isCommand == true },
+                      "the poll must not push T1 out; recovery runs on the original deadline")
         XCTAssertEqual(session.outstandingCount, 1)
     }
 

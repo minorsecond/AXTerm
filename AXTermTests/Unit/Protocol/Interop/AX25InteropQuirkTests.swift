@@ -6,7 +6,8 @@
 //  answers, one that acks only every third frame, slow TX/RX turnaround,
 //  an old node that DMs sessions polling on idle lines, and a peer's poll
 //  crossing new frames from AXTerm. Each is the TNC-2 profile with one
-//  behavior changed, so a failure points at that behavior.
+//  behavior changed, so a failure points at that behavior. The last test
+//  runs the standard stacks with AXTerm's frames lost while the peer polls.
 //
 
 import XCTest
@@ -156,15 +157,51 @@ final class AX25InteropQuirkTests: AX25InteropTestCase {
             run(30)
             XCTAssertTrue(sentAcrossPoll, "\(profile.name): the poll never crossed \(trace())")
             XCTAssertEqual(peer.delivered, Data("first\r".utf8) + Self.burst(200, tag: "X"), "\(profile.name) \(trace())")
-            XCTExpectFailure("""
-                Design choice, reported: AXTerm resends its outstanding frames when a peer's RR \
-                poll carries no new acknowledgment (handleInboundRRFrames, the 2026-08-22 \
-                livelock fix). Against a crossing poll the resends are duplicates, and 2.0 \
-                and Linux stations answer each duplicate with REJ, which AXTerm answers with \
-                more resends.
-                """) {
-                XCTAssertEqual(axtermRetransmissions, 0, "\(profile.name): frames sent after the poll were resent \(trace())")
+            // Until 2026-10-01 AXTerm resent its outstanding frames on a poll that
+            // acknowledged nothing, and here those resends were duplicates that 2.0
+            // and Linux stations answered with REJ, drawing more resends.
+            XCTAssertEqual(axtermRetransmissions, 0, "\(profile.name): frames sent after the poll were resent \(trace())")
+            assertNoViolations()
+        }
+    }
+
+    // MARK: - A peer polling because our frames were lost
+
+    /// Both stations are sending when AXTerm's transmissions stop reaching
+    /// the peer for 25 s. The peer's T1 runs out on its own frames and it
+    /// polls; AXTerm answers each poll with RR F=1 and resends nothing
+    /// because of it. Once the path clears, AXTerm's T1 (or the peer's REJ)
+    /// brings its frames back, and both streams arrive once, in order.
+    func testAPeerPollingAfterOurFramesWereLostStillGetsThem() {
+        for profile in [PeerProfile.tnc2(), .linux(), .direwolf(), .bpq()] {
+            build(profile)
+            axtermConnects()
+            let peerCall = self.peerCall
+            let outageEnds = clock.currentTime + 25
+            var dropped = 0
+            var pollTimes: [TimeInterval] = []
+            channel.dropRule = { d in
+                if d.sender == peerCall, d.frame?.isCommand == true, case .s(_, _, true) = d.frame?.kind {
+                    pollTimes.append(d.time)
+                }
+                guard d.receiver == peerCall, d.frame?.src.display == Self.axtermCall,
+                      d.time < outageEnds else { return false }
+                dropped += 1
+                return true
             }
+            let ours = Self.burst(300, tag: "O")
+            let theirs = Self.burst(300, tag: "T")
+            axterm.send(ours, to: peerCall)
+            peer.send(theirs)
+            run(until: {
+                peer.delivered.count >= ours.count && axDelivered.count >= theirs.count
+                    && (axSession?.outstandingCount ?? 1) == 0 && peer.outstanding == 0
+            }, limit: 400)
+            XCTAssertGreaterThan(dropped, 0, profile.name)
+            XCTAssertFalse(pollTimes.isEmpty, "\(profile.name): the peer never polled \(trace())")
+            XCTAssertEqual(peer.delivered, ours, "\(profile.name) \(trace())")
+            XCTAssertEqual(axDelivered, theirs, "\(profile.name) \(trace())")
+            XCTAssertEqual(axSession?.state, .connected, "\(profile.name) \(trace())")
             assertNoViolations()
         }
     }

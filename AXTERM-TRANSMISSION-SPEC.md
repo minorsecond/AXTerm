@@ -914,6 +914,22 @@ Maintain send buffer for unacked frames:
   - ack frames up to `nr-1`
   - advance `VA`
   - stop T1 if `VA == VS`
+- **A peer's RR or RNR poll draws RR F=1 and nothing else**, even with our
+  frames outstanding and none of them acknowledged (§6.2 and the 2.2 SDL).
+  The poll's `N(R)` may predate frames we sent after it, and resending those
+  makes duplicates that 2.0 and Linux stations answer with REJ, which draws
+  more resends. Lost frames come back through T1, or through the peer's REJ
+  or SREJ once it sees a gap. Until 2026-10-01 such a poll resent the
+  outstanding frames and counted the resend toward N2.
+- **A peer that polls but never acks still fails the link after N2.** The
+  2026-08-22 livelock (KB5YZB-7: the peer polled inside our RTO, each
+  poll-driven resend restarted T1, T1 never expired, the same frame went out
+  forever) cannot recur, because the poll path no longer transmits I-frames
+  or touches T1: an RR that acknowledges nothing neither stops nor restarts
+  T1, and a peer's command never clears the retry count (only an F=1
+  response does, §6.7.1.1). T1 keeps its deadline, each expiry resends and
+  counts, and N2 trips on T1 expiries alone. The poll path does not count
+  toward N2: it retransmits nothing.
 
 ### 7.7 UI/UX for connected mode
 - Show connection state as a compact pill: **Connected / Connecting / No response**

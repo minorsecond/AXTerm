@@ -677,31 +677,6 @@ nonisolated struct AX25StateMachine: Sendable {
     /// accept. The peer had been retransmitting the whole time.
     private(set) var inboundIFrameCount: Int = 0
 
-    /// Record a retransmission cycle that produced no ack progress — e.g. the
-    /// peer's RR command poll arrived with V(A) frozen and we are about to
-    /// retransmit in response. Climbs the same N2 ladder as T1 expiry.
-    ///
-    /// Without this, a peer that cannot hear us but keeps command-polling
-    /// (each poll arriving inside our RTO and restarting T1) froze retryCount
-    /// at 0 forever: T1 never expired, N2 never tripped, and the session
-    /// retransmitted the same I-frame indefinitely (field capture 2026-08-22:
-    /// ns=2 "b" resent every ~10 s with va pinned, no escalation, no failure).
-    /// Returns the link-failure actions when N2 is exhausted; empty otherwise.
-    /// Any genuine ack progress resets the ladder via the usual paths.
-    mutating func noteRetransmissionWithoutProgress() -> [AX25SessionAction] {
-        retryCount += 1
-        guard retryCount > config.maxRetries else { return [] }
-        state = .error
-        TxLog.error(.ax25, "Link failure", error: nil, [
-            "reason": "no ACK progress after \(config.maxRetries) retransmissions",
-            "retries": retryCount,
-            "vs": sequenceState.vs,
-            "va": sequenceState.va,
-            "vr": sequenceState.vr
-        ])
-        return [.stopT1, .stopT3, .notifyError("Link failure (no ACK progress after \(config.maxRetries) retries)")]
-    }
-
     /// Advances V(R) past a frame that is not coming, delivering whatever was
     /// buffered behind it. Returns no actions when there is no gap to skip.
     ///
@@ -1159,8 +1134,9 @@ nonisolated struct AX25StateMachine: Sendable {
                 // §6.7.1.1: a link that cannot make progress climbs the N2 ladder and
                 // fails. Resetting `retryCount` here (as the F=1 rule above used to,
                 // unconditionally) pinned the count at zero and made the livelock
-                // permanent — the same defect `noteRetransmissionWithoutProgress`
-                // was written for, arriving through REJ instead of through polling.
+                // permanent, the same defect as the 2026-08-22 poll livelock
+                // (see handleInboundRRFrames), arriving through REJ instead of
+                // through polling.
                 if !hadAckProgress {
                     unsatisfiableREJCount += 1
                     if unsatisfiableREJCount > config.maxRetries {
