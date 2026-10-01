@@ -25,7 +25,7 @@ struct AdaptiveToolbarControl: View {
 
                 if let effective = store.effectiveAdaptive {
                     LinkQualityIcon(lossRate: effective.lossRate)
-                    Text("· K\(effective.k) P\(effective.p) N2 \(effective.n2)")
+                    Text("· K\(effective.displayK) P\(effective.displayP) N2 \(effective.n2)")
                         .font(.system(size: 11))
                         .monospacedDigit()
                     if let destination = effective.destination, !destination.isEmpty {
@@ -50,7 +50,7 @@ struct AdaptiveToolbarControl: View {
         .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
             AdaptivePopoverContent(store: store, linkViz: linkViz, onOpenAnalytics: onOpenAnalytics)
         }
-        .help("Adaptive transmission status")
+        .help(store.effectiveAdaptive?.live?.explanation ?? "Adaptive transmission status")
     }
 }
 
@@ -89,8 +89,8 @@ private struct AdaptivePopoverContent: View {
                     info: "Frame-loss estimate, smoothed (EWMA of retransmits ÷ transmissions per sample). ≥20% forces stop-and-wait; ≤10% sustained allows recovery.",
                     value: adaptive.map { formatPercent($0.smoothedLoss ?? $0.lossRate) } ?? "—"
                 )
-                metricCard(label: "K", info: "Window size: outstanding frames allowed. Earned +1 per confirmed 10-clean-frame streak, halved on retransmission.", value: adaptive.map { "\($0.k)" } ?? "—")
-                metricCard(label: "P", info: "Packet size in bytes. Steps 64 → 128 → 192 → 256 on sustained stability; drops immediately on loss.", value: adaptive.map { "\($0.p)" } ?? "—")
+                metricCard(label: "K", info: adaptive?.live?.explanation ?? "Window size: outstanding frames allowed. Earned +1 per confirmed 10-clean-frame streak, halved on retransmission.", value: adaptive.map { "\($0.displayK)" } ?? "—")
+                metricCard(label: "P", info: adaptive?.live?.explanation ?? "Packet size in bytes. Steps 64 → 128 → 192 → 256 on sustained stability; drops immediately on loss.", value: adaptive.map { "\($0.displayP)" } ?? "—")
                 metricCard(label: "N2", info: "Maximum retries before fail.", value: adaptive.map { "\($0.n2)" } ?? "—")
                 metricCard(label: "RTO", info: "Current retransmission timeout (2 × smoothed RTT, clamped). Also seeds the connect timer for this route.", value: adaptive.map { formatSeconds($0.currentRto) } ?? "—")
             }
@@ -375,7 +375,7 @@ private struct AdaptivePopoverContent: View {
             scope = "Global"
         }
         let summary = """
-        \(scope) Adaptive K\(adaptive.k) P\(adaptive.p) N2 \(adaptive.n2) \
+        \(scope) Adaptive K\(adaptive.displayK) P\(adaptive.displayP) N2 \(adaptive.n2) \
         ETX \(format(adaptive.smoothedEtx ?? adaptive.etx)) \
         Loss \(formatPercent(adaptive.smoothedLoss ?? adaptive.lossRate)) \
         RTO \(formatSeconds(adaptive.currentRto))

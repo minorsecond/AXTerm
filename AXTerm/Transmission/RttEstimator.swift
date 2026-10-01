@@ -227,8 +227,9 @@ nonisolated struct AIMDWindow: Sendable {
     /// Slow start threshold
     private(set) var ssthresh: Double
 
-    /// Maximum window size
-    let maxWindow: Double
+    /// Maximum window size. Follows a connected session's live K
+    /// (`setMaxWindow`), so a loss always cuts below the K in use.
+    private(set) var maxWindow: Double
 
     /// Minimum window size
     let minWindow: Double = 1.0
@@ -280,6 +281,26 @@ nonisolated struct AIMDWindow: Sendable {
         cwnd = max(minWindow, cwnd * mdFactor)
 
         TxLog.congestionWindowChange(peer: "aimd", cwnd: effectiveWindow, reason: "LOSS (MD to \(String(format: "%.1f", cwnd)))")
+    }
+
+    /// Moves the ceiling to a session's new live K (spec §7.8.1).
+    ///
+    /// Lowering caps cwnd at once. Raising keeps any shortfall left by a
+    /// recent loss: a window halved to 1 under K=2 is still one short under
+    /// K=3, and earns the rest back through acks as before. Without the
+    /// ceiling following K, cwnd would float up to the protocol window while
+    /// K held lower, and the next loss would halve it to a value K already
+    /// enforced, cutting nothing.
+    mutating func setMaxWindow(_ newMax: Double) {
+        let ceiling = max(minWindow, newMax)
+        if ceiling < maxWindow {
+            cwnd = max(minWindow, min(cwnd, ceiling))
+        } else {
+            let shortfall = max(0, maxWindow - cwnd)
+            cwnd = max(minWindow, ceiling - shortfall)
+        }
+        maxWindow = ceiling
+        ssthresh = min(ssthresh, ceiling)
     }
 
     /// Reset to initial state.

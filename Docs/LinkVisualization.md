@@ -37,7 +37,7 @@ session manager is on the hot path.
 | `.rejSent` | We ask the peer to retransmit from N(R) | `.sendREJ` action |
 | `.retransmit` | We retransmit one of our own I-frames | retransmission path |
 
-`LinkWindowSnapshot` carries V(S)/V(A)/V(R), outstanding count, window size K,
+`LinkWindowSnapshot` carries V(S)/V(A)/V(R), outstanding count, the live window size K (it can move during a session, transmission spec §7.8.1),
 retry count, the send-buffer sequence numbers, and the live RTO/SRTT/RTTVAR
 from the session timers.
 

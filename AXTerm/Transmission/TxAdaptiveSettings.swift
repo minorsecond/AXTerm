@@ -276,7 +276,9 @@ nonisolated struct TxAdaptiveSettings: Sendable {
     private static let paclenLadder = [64, 128, 192, 256]
 
     /// Suggested-K cap in auto mode (spec 4.4: kMax user cap, default 4).
-    private static let autoWindowCap = 4
+    /// Also the most a session's K grows to (spec §7.8.1): at 1200 baud, four
+    /// 256-byte frames already hold the channel about 7.5 s per burst.
+    static let autoWindowCap = 4
 
     /// Maximum adaptive paclen for a route with `hops` digipeaters: one
     /// ladder rung down per hop, floored at 128. The 64-byte rung is a LOSS
@@ -304,13 +306,84 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         }
     }
 
-    /// Above this round trip, no upgrade is attempted however clean the samples.
+    /// Above this round trip, no upgrade is attempted however clean the samples,
+    /// apart from the airtime of our own frames in flight, which
+    /// `upgradeSrttAllowance(bytesInFlight:)` adds on top.
     ///
     /// A healthy 1200-baud VHF path measures 1–3 s; anything past five is a
     /// marginal link that a wider window would only make harder to recover.
     /// Deliberately a ceiling on *upgrades* only — a slow link is not downgraded
     /// on RTT alone, because a slow-but-clean path still carries traffic.
     static let upgradeSrttCeiling: Double = 5.0
+
+    /// Channel bit rate assumed when turning bytes in flight into airtime.
+    /// AXTerm cannot see a KISS TNC's modem rate, and 1200 bps is the
+    /// slowest channel it is used on. On a faster channel this overstates our
+    /// airtime, so the allowance there is more generous than the airtime
+    /// justifies: at most about 4 s beyond the fixed 5 s (three 192-byte
+    /// frames in flight, the largest window that can still earn a rung).
+    static let airtimeBitsPerSecond: Double = 1200
+
+    /// What the round trip may be and still permit an upgrade, given the
+    /// bytes of our own frames that were in flight when it was measured.
+    ///
+    /// The round trip of the last frame in a burst includes the airtime of
+    /// every frame queued ahead of it, so a larger window lengthens the
+    /// measured RTT by exactly its own airtime without the path getting any
+    /// worse. Against a fixed 5 s, the 2026-09-30 link (about 2.6 s of fixed
+    /// overhead) passed at K=2 paclen 128 and then failed at K=3 paclen 192
+    /// purely because of the frames it had just earned. So the 5 s is kept as
+    /// the allowance for everything that is not our airtime, and the airtime
+    /// is added on top.
+    ///
+    /// Kept conservative three ways: the airtime counts 8 bits per byte
+    /// (bit stuffing and flags only add), it counts only frames we sent (not
+    /// the digipeater's repeat of them, not the peer's RR), and it uses the
+    /// bytes actually in flight rather than what the window would allow, so
+    /// a session sending one short line at a time gets almost nothing extra.
+    /// Nil or zero keeps the original fixed 5 s.
+    static func upgradeSrttAllowance(bytesInFlight: Int?) -> Double {
+        guard let bytesInFlight, bytesInFlight > 0 else { return upgradeSrttCeiling }
+        return upgradeSrttCeiling + Double(bytesInFlight) * 8.0 / airtimeBitsPerSecond
+    }
+
+    /// Ceiling on the adaptive window for this link: the peer's XID k when it
+    /// gave one (spec §7.8.1). Never above `autoWindowCap`. Like
+    /// `paclenCeiling`, a ceiling on optimism only.
+    var windowCeiling: Int = TxAdaptiveSettings.autoWindowCap
+
+    /// Install the session's ceilings: the window cap, and a paclen cap that
+    /// can only lower the hop ceiling already in place. Values already above
+    /// them are clamped, and a probe on trial cannot roll back above them.
+    mutating func applyLinkCeilings(window: Int, paclen ceiling: Int) {
+        windowCeiling = max(1, min(window, Self.autoWindowCap))
+        paclenCeiling = max(Self.paclenLadder[0], min(paclenCeiling, ceiling))
+        if windowSize.currentAdaptive > windowCeiling {
+            windowSize.currentAdaptive = windowCeiling
+            windowSize.adaptiveReason = "Capped at \(windowCeiling): the most this link allows"
+        }
+        if self.paclen.currentAdaptive > paclenCeiling {
+            self.paclen.currentAdaptive = paclenCeiling
+            self.paclen.adaptiveReason = "Capped at \(paclenCeiling): the most this link allows"
+        }
+        if let trial = probation {
+            probation = AdaptiveProbation(priorWindow: min(trial.priorWindow, windowCeiling),
+                                          priorPaclen: min(trial.priorPaclen, paclenCeiling),
+                                          framesRemaining: trial.framesRemaining)
+        }
+    }
+
+    /// The window this link has confirmed: the current value, or, while an
+    /// upgrade is on trial, the value it would roll back to. What the next
+    /// session may start from (spec §7.8.1).
+    var confirmedWindow: Int {
+        min(windowSize.currentAdaptive, probation?.priorWindow ?? windowSize.currentAdaptive)
+    }
+
+    /// The paclen this link has confirmed, in the same sense.
+    var confirmedPaclen: Int {
+        min(paclen.currentAdaptive, probation?.priorPaclen ?? paclen.currentAdaptive)
+    }
 
     /// Update adaptive values from link quality (spec Sections 4.2 / 4.4 / 7.3).
     ///
@@ -330,6 +403,9 @@ nonisolated struct TxAdaptiveSettings: Sendable {
     ///     aggregate sources (network-wide inference) that carry no per-frame
     ///     evidence — those update the EWMAs but never the streaks, per the
     ///     spec's "UI best-effort … don't treat as success/failure" rule.
+    ///   - bytesInFlight: the most bytes of our own frames in flight during
+    ///     this sample, headers included. Widens the round-trip allowance for
+    ///     upgrades by their airtime; nil keeps the fixed 5 s.
     ///
     /// Only updates currentAdaptive (suggested value); manual-mode parameters
     /// keep the user's choice via effectiveValue.
@@ -339,7 +415,8 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         etx: Double,
         srtt: Double?,
         newFrames: Int = 1,
-        retransmits: Int? = nil
+        retransmits: Int? = nil,
+        bytesInFlight: Int? = nil
     ) {
         // Sanitize: a NaN/Inf sample must not poison the EWMAs.
         guard lossRate.isFinite, etx.isFinite else { return }
@@ -458,7 +535,11 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         // to notice a loss, and more of a shared channel held per exchange. So
         // an upgrade needs a round trip that plausibly belongs to a working
         // link, not merely a sample that happened not to fail.
-        let srttPermitsUpgrade = (srtt ?? 0) <= Self.upgradeSrttCeiling
+        //
+        // The allowance grows with the airtime of our own frames that were in
+        // flight (see upgradeSrttAllowance): that part of the round trip is
+        // the window we already run.
+        let srttPermitsUpgrade = (srtt ?? 0) <= Self.upgradeSrttAllowance(bytesInFlight: bytesInFlight)
         // Note the asymmetry with the downgrades above, which is deliberate:
         // **back off on forward evidence, grow only when both directions
         // look good.** Backing off is an attempt to fix something, and only
@@ -479,7 +560,7 @@ nonisolated struct TxAdaptiveSettings: Sendable {
                 paclen.adaptiveReason = "Stable link: probing larger frames"
                 upgraded = true
             }
-            if smoothedEtx <= 1.5, priorWindow < Self.autoWindowCap {
+            if smoothedEtx <= 1.5, priorWindow < min(Self.autoWindowCap, windowCeiling) {
                 windowSize.currentAdaptive = priorWindow + 1
                 windowSize.adaptiveReason = "Good link quality"
                 upgraded = true

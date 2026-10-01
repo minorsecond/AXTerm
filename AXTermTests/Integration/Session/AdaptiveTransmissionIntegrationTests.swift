@@ -66,8 +66,10 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         coordinator.localCallsign = "LOCAL-0"
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        // Spec 4.2: the direct route earns its larger window with a streak.
-        for _ in 0..<10 {
+        // Spec 4.2: the direct route earns its larger window with a streak,
+        // and only a window that passed its trial seeds a session (§7.8.1):
+        // ten frames open the probe, ten more confirm it.
+        for _ in 0..<20 {
             coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: ""), newFrames: 1, retransmits: 0)
         }
         coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: "DIGI-1"), newFrames: 1, retransmits: 1)

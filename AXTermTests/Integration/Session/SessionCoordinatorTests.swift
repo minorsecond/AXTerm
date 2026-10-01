@@ -800,8 +800,10 @@ final class SessionCoordinatorTests: XCTestCase {
         defer { SessionCoordinator.shared = nil }
 
         coordinator.adaptiveTransmissionEnabled = true
-        // Spec 4.2: upgrades need a sustained success streak, not one sample.
-        for _ in 0..<10 {
+        // Spec 4.2: upgrades need a sustained success streak, not one sample,
+        // and a session starts only from an upgrade that passed its trial
+        // (§7.8.1): ten frames open the probe, ten more confirm it.
+        for _ in 0..<20 {
             coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: ""), newFrames: 1, retransmits: 0)
         }
         coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.5, srtt: nil, source: "session", scope: AdaptiveScope.route(radio: .primary, destination: "PEER-0", path: "DIGI-1"), newFrames: 1, retransmits: 1)

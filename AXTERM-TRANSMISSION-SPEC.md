@@ -1,5 +1,5 @@
 # transmitting.md — AXTerm Transmission Logic (state-of-the-art, compatible)
-Status: 17/18 items complete
+Status: 21/22 items complete
 
 > **Scope:** This document guides AI coders implementing **packet transmission** features in **AXTerm** (macOS, Swift/SwiftUI) **above Direwolf** via **KISS**. AXTerm already decodes/sniffs RX frames; this adds a modern TX pipeline, unnumbered (UI) app protocols, and **AX.25 connected-mode** session support (implemented in-app, transmitted via Direwolf).  
 > **Compatibility rule:** Everything must remain usable on existing packet networks. Unknown frames should be ignorable by legacy stations. No “requires everyone to upgrade” assumptions.
@@ -189,6 +189,7 @@ Don’t literally count 10 frames globally. Do it like this:
 	•	if failStreak >= 1 or loss_rate_EWMA > 0.2 or ETX_EWMA > 2.0 → decrease paclen
 	•	else if successStreak >= 10 → increase paclen (up to cap), reset successStreak to something like 5 (so it doesn’t rocket upward)
 	•	and only if SRTT ≤ 5 s. Clean and fast are different properties: loss says the path works, round trip says what a mistake on it costs. A 12-second link that never drops a frame still cannot afford a wider window, because every recovery on it takes a minute. The RTT test gates *upgrades only* — a slow but clean path keeps whatever it has already earned, since shrinking a working link helps nobody.
+	•	Decision (2026-10-01, see §7.8.1): the 5 s is the allowance for everything except our own airtime. The round trip of the last frame in a burst includes the airtime of every frame queued ahead of it, so a session that has just earned a larger window measures a longer round trip on an unchanged path. The allowance is now `5 s + bytes in flight × 8 / 1200`, where bytes in flight is the most of our own I-frame bytes (information field plus 18 header bytes and 7 per digipeater) outstanding during the sample. With no bytes in flight it is exactly 5 s, as before. AXTerm cannot see a KISS TNC's modem rate, so 1200 bps is assumed; on a faster channel that overstates our airtime and loosens the gate by at most about 4 s (three 192-byte frames, the largest window that can still earn a rung). On the 2026-09-30 link (about 2.6 s of fixed overhead) a fixed 5 s let K=2 paclen 128 (4.4 s) climb once and then stopped K=3 paclen 192 (about 6.8 s) for no reason but its own frames. A 12 s path still never earns a rung.
 
 This avoids oscillation.
 
@@ -824,8 +825,51 @@ Maintain send buffer for unacked frames:
 - In the terminal transcript, visually group retransmissions and mark them subtly (don’t spam the user).
 
 ### 7.8 Session config fixed at connection start; multi-connection stabilization
-- **No mid-transmission changes:** Session parameters (window K, RTO min/max, N2, etc.) are chosen once when the session is created and MUST NOT be changed for the lifetime of that session. Changing parameters during an active transfer would risk corrupting in-flight data and sequence state.
+- ~~**No mid-transmission changes:** Session parameters (window K, RTO min/max, N2, etc.) are chosen once when the session is created and MUST NOT be changed for the lifetime of that session. Changing parameters during an active transfer would risk corrupting in-flight data and sequence state.~~
+  - Decision (2026-10-01, live RF test I-1, `Docs/LiveRFTest-2026-09-30.md`): RTO min/max, N2, modulo, SREJ and the ceilings on K and paclen are still chosen once when the session is created and do not change. The K and paclen a session actually uses may move during the session, below those ceilings, under the rules in §7.8.1. The concern above is about sequence state and data in flight, and §7.8.1 protects both: K never rises while a frame is outstanding, and a new paclen applies only to data cut into frames after the change. Freezing them cost too much: the 2026-09-30 session sent 61 I-frames with no retransmission and still ran 14 minutes at K=2 paclen 128 (about 315 bps on a 1200 baud channel), because the starting K was also the ceiling for the whole session.
 - **Multiple simultaneous connections to the same destination:** When more than one session exists to the same peer (e.g. direct and via digi), do not flip between per-route learned params. Use a **conservative merged config**: min(window), max(RTO min), max(RTO max), max(N2) across all relevant learned/config sources for that destination. This gives a stable middle ground and avoids chaotic parameter switching or corrupting any of the connections.
+  - Decision (2026-10-01): the merge also covers the values that move. While two or more sessions to the same station are open, each runs the smallest K and paclen any of them would choose, clamped to its own ceilings. When one ends, the others are free to grow again.
+
+### 7.8.1 K and paclen during a session
+
+**Ceilings**, fixed when the session is created (`AX25SessionConfig.maxWindowSize`, `maxPaclen`):
+- K: 4. Four 256-byte frames already hold a 1200 baud channel about 7.5 s per burst, so 4 is the most we allow at 1200 baud, and since AXTerm cannot see a KISS TNC's modem rate it is the most we allow at all.
+- paclen: 256 on a direct path, one ladder rung less per digipeater (`TxAdaptiveSettings.paclenCeiling(forHops:)`: 192 for one, 128 for two or more).
+- Both are clamped to what the peer advertised in XID (k and N1). Without an XID exchange we assume the AX.25 defaults the code already assumes, N1 = 256 and k = 4 for modulo 8 (`AX25Constants.defaultWindowSize`), which the ceilings above never exceed.
+- A K or paclen the operator set by hand, adaptive transmission off, or a station reset to defaults: that parameter has no ceiling to grow toward and stays fixed for the session, as before.
+- Our XID offer (and our answer to a peer's XID) advertises the ceilings as our N1 and k. They are what we can receive. Advertising the starting values would make the peer treat K=2 paclen 128 as its own ceiling toward us.
+
+**Start** (`AX25SessionConfig.windowSize`, `paclen`, `startSource`), in order:
+1. Another session to the same station is open: the merged config of §7.8.
+2. This route's own evidence from the last 30 minutes (the per-route adaptive cache).
+3. The values this route last confirmed, if confirmed within 24 hours (`ConfirmedLinkMemory`).
+4. The radio's channel figure, then the configured defaults (K=2, paclen 128).
+
+Only confirmed values seed a session. An upgrade still on probation counts as the values it would roll back to (`TxAdaptiveSettings.confirmedWindow`, `confirmedPaclen`). The memory is keyed by radio, station and path, so a digipeated path's figures never seed the direct path. It is written when a probation trial passes, lowered when the link backs off, and never raised by anything but another passed trial; a backoff with no record writes nothing. Clear All Learned and a per-station reset clear it.
+
+Decision: 24 hours. It covers the sessions an operator runs to one station in a sitting (a test, a break, more tests; an evening of BBS visits) and stops short of the changes that make an old figure wrong: another radio or power level, a different antenna, band conditions, the other station's TX delay changed overnight. A start that is too high costs little, since the first retransmission halves K and steps paclen down, but there is no reason to pay it with a stale figure.
+
+**During the session**:
+- Every link-quality sample from the session runs through the route's controller (`TxAdaptiveSettings.updateFromLinkQuality`, §4.2) with the session's ceilings installed (`applyLinkCeilings`), so the route never probes a value the session could not run and a trial cannot pass without having been tried. The session then follows the controller: one rung after a clean streak (10 frames; doubled after a failed trial), on probation for 10 frames, K halved and paclen stepped down on a retransmission.
+- **K rises only when nothing is outstanding.** A raise decided while frames are in flight waits (`AX25Session.pendingWindowSize`) and takes effect at the next point where new frames may go out with nothing outstanding, before the burst is measured. The sequence state therefore never counts frames sent under a K other than the one in force.
+- **K falls at once.** Lowering the gate only stops new frames; the frames in flight stay counted and are acknowledged or retransmitted as before. Sequence invariants are checked against the ceiling, which never moves. The AIMD window (§4.4) is capped at the live K and follows it, so a loss always cuts below the K in use.
+- **A new paclen applies only to data segmented after the change.** Data is cut into frames when it is handed to the session; frames in flight and chunks already queued keep their size, and a retransmission resends the frame as it was built.
+- NET/ROM datagrams (PID 0xCF) are sized from the paclen when the circuit opens and are never split: if paclen falls afterwards, the datagram goes out whole, which is safe because it is within the ceiling the peer accepted.
+- Determinism: the same sequence of samples produces the same trajectory of K and paclen.
+
+**Observability**: each change is a breadcrumb (`Session window raised`, `Session window lowered`, `Session paclen raised`, `Session paclen lowered`) carrying the controller's reason and evidence: clean streak and what the next upgrade needs, smoothed loss both ways, SRTT, bytes in flight, frames left on trial, outstanding frames, and the ceiling. The existing warnings for a collapse to stop-and-wait and for a rolled-back upgrade are unchanged.
+
+**UI**: during a session the status bar shows the live K and paclen, not the controller's suggestion. Its tooltip, the K and P cards in the adaptive popover, and the K in the session strip say why: the values in use, the ceilings, a raise waiting for frames in flight, where the start came from, and the last reason for a change (`AdaptiveLiveLink.explanation`).
+
+Checklist:
+- [x] Ceilings from the hop count, the K=4 cap, the operator's manual values and the peer's XID; XID offer advertises them
+  - Implementation notes: `AX25SessionConfig.maxWindowSize/maxPaclen`, `negotiating(with:)`; `SessionCoordinator.linkCeilings(hops:)`, `configFromAdaptive`; `AX25SessionManager.localXIDParameters`.
+- [x] Start from the last confirmed values (24 h, by radio, station and path), else recent evidence, channel or defaults
+  - Implementation notes: `ConfirmedLinkMemory`; `getConfigForDestination`, `learningEntry(for:)` and `applyLinkQualitySample` in `SessionCoordinator`.
+- [x] Growth and backoff in the session: K up only at quiescence, K down at once, paclen only for newly segmented data, merged values across sessions to one station
+  - Implementation notes: `AX25SessionManager.updateLinkTargets`, `reconcileLiveLink`, `applyPendingWindowIfQuiescent`; `AIMDWindow.setMaxWindow`; `SessionCoordinator.pushLinkTargets`.
+- [x] Round-trip allowance for upgrades includes our own airtime; live values and their reasons in the status bar, popover and session strip
+  - Implementation notes: `TxAdaptiveSettings.upgradeSrttAllowance(bytesInFlight:)`, `LinkQualitySample.peakBytesInFlight`; `AdaptiveLiveLink`, `AdaptiveStatusStore.updateLive`. Tests: `InSessionLinkGrowthTests.swift`.
 
 ---
 
@@ -1159,6 +1203,10 @@ of these is the Winlink **FBB/B2F** mail exchange. Rules:
   are released when the conversation ends.
 - Session parameters remain fixed at creation (§7.8); the protocol layer
   never mutates link config mid-session.
+  - Decision (2026-10-01): K and paclen may now move inside the session's
+    ceilings (§7.8.1), driven only by the link controller. The protocol
+    layer still never changes them, and its bytes are cut into frames at
+    whatever paclen is in force when it hands them over.
 - Protocol timeouts are stretched by expected on-air time for bytes queued
   at L2 (the peer cannot answer before our bytes finish transmitting).
 
@@ -1236,7 +1284,10 @@ rules that interact with this spec:
 - **One datagram, one I-frame.** Fragment size follows the neighbor's
   paclen; an oversized datagram is refused, never split. Note the
   interaction with §4.2: adaptive paclen collapse to 64 under loss
-  shrinks NET/ROM fragments accordingly.
+  shrinks NET/ROM fragments accordingly. Since paclen can now fall during
+  a session (§7.8.1), a datagram sized before the fall is still sent as
+  one I-frame, cut at the session's paclen ceiling rather than its live
+  paclen.
 - A dropped L2 link fails every circuit pinned to it immediately, rather
   than retrying to N2.
 - **Being a node** — announcing (NODES broadcasts) and forwarding

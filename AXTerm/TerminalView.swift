@@ -1667,12 +1667,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         
         // Check for existing connected session first
         if let session = sessionManager.connectedSession(withPeer: dest) {
-            return (vs: session.vs, paclen: session.stateMachine.config.paclen)
+            return (vs: session.vs, paclen: session.livePaclen)
         }
         
         // Check for any existing session (even if not yet connected)
         if let session = sessionManager.existingSession(for: dest, path: path) {
-            return (vs: session.vs, paclen: session.stateMachine.config.paclen)
+            return (vs: session.vs, paclen: session.livePaclen)
         }
         
         // No session yet - return default config values

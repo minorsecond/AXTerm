@@ -38,12 +38,32 @@ nonisolated enum AX25SessionState: String, Equatable, Sendable {
 
 // MARK: - Session Configuration
 
+/// Where a session's starting K and paclen came from (spec §7.8.1), so the
+/// operator can be told why the link opened with the values it did.
+nonisolated enum LinkStartSource: Equatable, Sendable {
+    /// The operator's settings or the defaults (K=2, paclen 128): nothing
+    /// learned for this link.
+    case configured
+    /// The values this link last confirmed, at that time, within a day.
+    case confirmed(Date)
+    /// This route's own evidence from the last 30 minutes.
+    case recentEvidence
+    /// Nothing for this route; the radio's channel figure.
+    case channel
+    /// Another session to the same station is open, so the smaller of the
+    /// learned values for every route to it.
+    case merged
+}
+
 /// Configuration for AX.25 session parameters
 nonisolated struct AX25SessionConfig: Sendable {
-    /// Window size K (max outstanding I-frames)
+    /// Window size K (max outstanding I-frames) the session starts with.
+    /// Fixed for the session unless `maxWindowSize` gives it room to move.
     let windowSize: Int
 
-    /// Maximum payload bytes per I-frame (paclen). Frames are fragmented at this size.
+    /// Maximum payload bytes per I-frame (paclen) the session starts with.
+    /// Frames are fragmented at the session's live paclen, which is this
+    /// value unless `maxPaclen` gives it room to move.
     let paclen: Int
 
     /// Maximum receive buffer size for out-of-sequence frames. When nil, holds
@@ -92,6 +112,32 @@ nonisolated struct AX25SessionConfig: Sendable {
     /// a route-specific RTO has no meaning across mixed routes.
     let learnedPathRto: Double?
 
+    /// The most K may grow to during the session (spec §7.8.1): K=4, never
+    /// above the peer's XID k. Nil keeps K fixed at `windowSize` for the
+    /// session, which is what a manual K, adaptive off, or a bare manager
+    /// gets. Never below `windowSize`.
+    let maxWindowSize: Int?
+
+    /// The most paclen may grow to during the session: 256 direct, one ladder
+    /// rung less per digipeater, never above the peer's XID N1. Nil keeps
+    /// paclen fixed. Never below `paclen`.
+    let maxPaclen: Int?
+
+    /// Where `windowSize` and `paclen` came from.
+    let startSource: LinkStartSource
+
+    /// The protocol window: the most frames this session may ever have
+    /// outstanding. Sequence invariants and our XID k are checked against
+    /// this, never against the live K, which moves below it.
+    var windowCeiling: Int { maxWindowSize ?? windowSize }
+
+    /// The largest information field this session may ever send. Also our
+    /// XID N1.
+    var paclenCeiling: Int { maxPaclen ?? paclen }
+
+    /// True when K or paclen may move during the session.
+    var adaptsInSession: Bool { maxWindowSize != nil || maxPaclen != nil }
+
     /// Sequence number modulo (8 or 128)
     var modulo: Int { extended ? 128 : 8 }
 
@@ -126,13 +172,23 @@ nonisolated struct AX25SessionConfig: Sendable {
         initialRto: Double? = nil,
         t2AckDelay: Double? = nil,
         adaptiveTimeout: Bool = true,
-        learnedPathRto: Double? = nil
+        learnedPathRto: Double? = nil,
+        maxWindowSize: Int? = nil,
+        maxPaclen: Int? = nil,
+        startSource: LinkStartSource = .configured
     ) {
         // Clamp window size to valid range
         let maxWindow = extended ? 127 : 7
-        let ws = max(1, min(windowSize, maxWindow))
+        // A ceiling wins over a start above it: the ceiling is what the link
+        // allows, the start only where this session begins.
+        let ceilingWindow = maxWindowSize.map { max(1, min($0, maxWindow)) }
+        let ws = max(1, min(windowSize, ceilingWindow ?? maxWindow))
         self.windowSize = ws
-        self.paclen = max(32, min(paclen, 256))
+        self.maxWindowSize = ceilingWindow
+        let ceilingPaclen = maxPaclen.map { max(32, min($0, 256)) }
+        self.paclen = max(32, min(paclen, ceilingPaclen ?? 256))
+        self.maxPaclen = ceilingPaclen
+        self.startSource = startSource
         // Bounded by the receive span, not by ws: the two are unrelated (see
         // `receiveWindowSpan`).
         let span = (extended ? 128 : 8) / 2
@@ -152,6 +208,9 @@ nonisolated struct AX25SessionConfig: Sendable {
     /// SREJ if the response selected it, and the peer's advertised receive
     /// limits taken as ceilings — N1 and k are notifications of what the
     /// peer can accept, so ours are clamped to them, never raised.
+    ///
+    /// The ceilings are clamped the same way, so a session never grows past
+    /// what the peer advertised; the start follows the ceiling down.
     func negotiating(with peer: AX25XIDParameters) -> AX25SessionConfig {
         AX25SessionConfig(
             windowSize: min(windowSize, peer.windowSizeRx ?? windowSize),
@@ -165,7 +224,10 @@ nonisolated struct AX25SessionConfig: Sendable {
             initialRto: initialRto,
             t2AckDelay: t2AckDelay,
             adaptiveTimeout: adaptiveTimeout,
-            learnedPathRto: learnedPathRto
+            learnedPathRto: learnedPathRto,
+            maxWindowSize: maxWindowSize.map { min($0, peer.windowSizeRx ?? $0) },
+            maxPaclen: maxPaclen.map { min($0, peer.iFieldLengthRx ?? $0) },
+            startSource: startSource
         )
     }
 }
@@ -530,7 +592,9 @@ nonisolated struct AX25StateMachine: Sendable {
     /// first SABM must never be discarded.
     private(set) var hasEverConnected = false
 
-    /// Session configuration (fixed at connection start; never changed mid-session to avoid corrupting in-flight data).
+    /// Session configuration, fixed at connection start. K and paclen move
+    /// during the session only below the ceilings recorded here, and that
+    /// live state belongs to `AX25Session`, never to this config (§7.8.1).
     let config: AX25SessionConfig
 
     /// Sequence number state

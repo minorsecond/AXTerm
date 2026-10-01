@@ -48,7 +48,75 @@ nonisolated struct AdaptiveRingBuffer<Element: Sendable>: Sendable {
     }
 }
 
+/// What an open session is sending with right now, and why (spec §7.8.1).
+///
+/// The route's controller suggests K and paclen; the session runs them only
+/// within its ceilings, merged with any other session to the same station,
+/// and a larger K waits for the frames in flight to be acknowledged. So the
+/// figure the status bar shows during a session comes from here.
+nonisolated struct AdaptiveLiveLink: Sendable, Equatable {
+    /// The K the session sends with now.
+    let k: Int
+    /// The paclen data is cut at now.
+    let p: Int
+    /// The most K may grow to on this link.
+    let windowCeiling: Int
+    /// The most paclen may grow to on this link.
+    let paclenCeiling: Int
+    /// A larger K waiting for the frames in flight to be acknowledged.
+    let pendingK: Int?
+    /// Where the session's starting values came from.
+    let startSource: LinkStartSource
+    /// The controller's reason for its latest change.
+    let reason: String?
+
+    /// Tooltip text: why the values are what they are (CLAUDE.md §11).
+    var explanation: String {
+        var lines = ["This session is sending with K\(k) P\(p)."]
+        lines.append("Window: \(k) frames in flight at most. This link allows up to \(windowCeiling).")
+        lines.append("Packet length: \(p) bytes. This link allows up to \(paclenCeiling).")
+        if let pendingK {
+            lines.append("A raise to K\(pendingK) is waiting until the frames in flight are acknowledged.")
+        }
+        lines.append(startSourceSentence)
+        if let reason, !reason.isEmpty {
+            lines.append("Last change: \(reason).")
+        }
+        lines.append("A run of clean frames earns one step, kept only if the next 10 frames are clean too. "
+                     + "A retransmission halves the window and shortens packets at once. "
+                     + "The ceilings are K=4 and 256 bytes direct, less per digipeater, "
+                     + "and never more than the other station offered.")
+        return lines.joined(separator: "\n")
+    }
+
+    private var startSourceSentence: String {
+        switch startSource {
+        case .configured:
+            return "Started from your settings: nothing was confirmed for this station on this path in the last 24 hours."
+        case .confirmed(let date):
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            formatter.dateStyle = .none
+            return "Started from the values this link confirmed at \(formatter.string(from: date))."
+        case .recentEvidence:
+            return "Started from this route's own results in the last 30 minutes."
+        case .channel:
+            return "Started from this radio's figure: nothing was known about this route yet."
+        case .merged:
+            return "Another session to this station is open, so both use the smaller of their values."
+        }
+    }
+}
+
 nonisolated struct AdaptiveParams: Sendable, Equatable {
+    /// The open session's live values, when one is up on this route. The
+    /// status bar shows these rather than the controller's suggestion.
+    var live: AdaptiveLiveLink? = nil
+    /// K as the status bar shows it: the session's live K when a session is
+    /// up, otherwise the route's learned value.
+    var displayK: Int { live?.k ?? k }
+    /// Paclen as the status bar shows it, in the same sense.
+    var displayP: Int { live?.p ?? p }
     let k: Int
     let p: Int
     let n2: Int
@@ -168,6 +236,11 @@ final class AdaptiveStatusStore: ObservableObject {
     @Published var defaultChannelID: AdaptiveSessionID?
     @Published var globalETXHistory = AdaptiveRingBuffer<AdaptiveETXSample>(capacity: 900)
     @Published var sessionETXHistoryByID: [AdaptiveSessionID: AdaptiveRingBuffer<AdaptiveETXSample>] = [:]
+
+    /// Live values of open sessions, by the same ID as their route's figure.
+    /// Kept apart so a route update (which rebuilds the figure from the
+    /// controller) does not drop them.
+    private var liveLinkByID: [AdaptiveSessionID: AdaptiveLiveLink] = [:]
 
     /// One hour of network history: samples land at most every 30 s, and the
     /// events that move channel ETX (a net, a mail forward, propagation) run
@@ -316,12 +389,14 @@ final class AdaptiveStatusStore: ObservableObject {
             }
             return
         }
-        sessionAdaptiveByID[id] = AdaptiveParams(
+        var params = AdaptiveParams(
             settings: settings,
             lossRate: lossRate, etx: etx, srtt: srtt,
             updatedAt: updatedAt,
             destination: destination, pathSignature: pathSignature, radio: radio
         )
+        params.live = liveLinkByID[id]
+        sessionAdaptiveByID[id] = params
 
         if let etx {
             var history = sessionETXHistoryByID[id] ?? AdaptiveRingBuffer<AdaptiveETXSample>(capacity: 400)
@@ -334,6 +409,21 @@ final class AdaptiveStatusStore: ObservableObject {
         }
     }
 
+    /// Records an open session's live K and paclen against its route's
+    /// figure, or clears them (nil) when the session ends.
+    func updateLive(id: AdaptiveSessionID, live: AdaptiveLiveLink?) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.updateLive(id: id, live: live) }
+            return
+        }
+        guard liveLinkByID[id] != live else { return }
+        liveLinkByID[id] = live
+        if var params = sessionAdaptiveByID[id] {
+            params.live = live
+            sessionAdaptiveByID[id] = params
+        }
+    }
+
     func removeSession(id: AdaptiveSessionID) {
         guard Thread.isMainThread else {
             DispatchQueue.main.async { [weak self] in self?.removeSession(id: id) }
@@ -341,6 +431,7 @@ final class AdaptiveStatusStore: ObservableObject {
         }
         sessionAdaptiveByID.removeValue(forKey: id)
         sessionETXHistoryByID.removeValue(forKey: id)
+        liveLinkByID.removeValue(forKey: id)
         if selectedSessionID == id {
             selectedSessionID = nil
         }

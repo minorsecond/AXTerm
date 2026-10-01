@@ -169,7 +169,11 @@ three decisions and nothing else:
    an oversized datagram is refused rather than split. **This matters on
    a real link:** AXTerm's adaptive layer collapses paclen to 64 under
    loss, which would otherwise split a 236-byte NET/ROM payload across
-   two frames.
+   two frames. Paclen can also fall in the middle of a session
+   (transmission spec §7.8.1), after a datagram was sized, so the session
+   layer cuts PID 0xCF data at the session's paclen ceiling, the most the
+   peer accepted, and a datagram sized before the fall still goes out as
+   one I-frame.
 3. **What a dead link means.** When the L2 session to a neighbor drops,
    every circuit pinned to it fails at once with a plain explanation,
    instead of retrying into a dead link until N2.
