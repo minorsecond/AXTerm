@@ -2030,6 +2030,15 @@ final class AX25SessionManager: ObservableObject {
         }
 
         let oldState = session.state
+        // A SABM on a connected link is a link reset. AX.25 2.2's SDL
+        // (appendix C4, connected state) discards the I-frame queue and gives
+        // layer 3 DL-CONNECT indication when frames were unacknowledged
+        // (V(S) != V(A)): what was in flight is lost, and the layer above
+        // must know it is talking on a new link. Without this, a peer that
+        // restarted and called back got the rest of the queue with a hole in
+        // it and neither application was told.
+        let resetLosesFrames = oldState == .connected
+            && session.stateMachine.sequenceState.vs != session.stateMachine.sequenceState.va
         let actions = session.stateMachine.handle(event: .receivedSABM)
         debugTrace("SABM state transition", [
             "peer": source.display,
@@ -2049,6 +2058,16 @@ final class AX25SessionManager: ObservableObject {
 
         session.touch()
         let frames = processActions(actions, for: session)
+        if resetLosesFrames {
+            session.clearPendingTransmission(reason: "Link reset by peer with frames unacknowledged")
+            TxLog.warning(.session, "Link reset by peer: unacknowledged frames discarded", [
+                "peer": source.display
+            ])
+            // The old link ended and a new one began, as the layer above
+            // sees any other disconnect and inbound connect.
+            notifyStateChanged(session, from: .connected, to: .disconnected)
+            notifyStateChanged(session, from: .disconnected, to: .connected)
+        }
         print("[AX25SessionManager] processActions returned \(frames.count) frames")
         if let frame = frames.first {
             print("[AX25SessionManager] Returning UA frame to \(frame.destination.display)")

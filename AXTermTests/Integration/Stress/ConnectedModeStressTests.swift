@@ -278,6 +278,19 @@ final class ConnectedModeStressTests: XCTestCase {
         XCTAssertEqual(tally.failed, tally.runs)
     }
 
+    /// The far station crashes mid-transfer and calls straight back. The
+    /// survivor's session receives SABM while connected: a link reset.
+    func testPeerRestartAndReconnectMidTransfer() {
+        runFamily("restart-reconnect", seeds: seeds(8)) { seed in
+            var pick = Picker(seed, 0x5A1F)
+            var s = StressScenario(name: "restart-reconnect", seed: seed)
+            s.loss = pick.pick([0, 0.05])
+            s.traffic = .bulk(aToB: 8000, bToA: 2000)
+            s.events = [.restart(at: pick.uniform(20, 60), station: 1, reconnect: true)]
+            return s
+        }
+    }
+
     /// Both stations call each other in the same instant (SABM collision,
     /// AX.25 2.2 §6.3.3). One link comes up and carries data both ways.
     ///
