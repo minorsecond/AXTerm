@@ -312,6 +312,10 @@ final class AX25TimerRaceTests: XCTestCase {
         manager.onSendFrame = { retransmitFrames.append($0) }
 
         _ = manager.sendData(Data("FrameA".utf8), to: peer, path: path, radio: .primary)
+        // FrameA polls (first I-frame of a call we placed); its F=1 answer
+        // comes before FrameB is sent (spec 7.6).
+        _ = manager.handleInboundRRFrames(from: peer, path: path, radio: .primary,
+                                          nr: 0, pf: true, isCommand: false)
         _ = manager.sendData(Data("FrameB".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 2)
 

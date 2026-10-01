@@ -1460,8 +1460,12 @@ final class AX25SessionTests: XCTestCase {
 
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        // Send 3 frames
+        // Send 3 frames. "A" is the first I-frame of a call we placed and
+        // polls; the peer's F=1 answer comes before anything more is sent
+        // (spec 7.6: no new I-frames while a poll is outstanding).
         _ = manager.sendData(Data("A".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, radio: .primary,
+                                          nr: 0, pf: true, isCommand: false)
         _ = manager.sendData(Data("B".utf8), to: destination, path: path, radio: .primary)
         _ = manager.sendData(Data("C".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 3)

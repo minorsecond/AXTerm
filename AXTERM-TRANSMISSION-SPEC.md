@@ -812,6 +812,15 @@ Maintain send buffer for unacked frames:
   against receivers that batch acks on T2. Only on window-full, not on every
   burst end: some node stacks (DRLNOD, live capture) DM a session that polls
   on every idle line.
+- **No new I-frames while a poll is outstanding.** After a burst that carried
+  P=1 (the window-full checkpoint, the first-frame nudge, or a T1 recovery
+  poll), nothing new is transmitted until a response with F=1 arrives or an
+  ack covers every outstanding frame. Frames handed over in the same burst as
+  the poll go out with it. Field evidence 2026-10-01: with K3, the peer's T2
+  ack arrived mid-burst as RR F=0, the sender filled the freed slot at once,
+  and that frame keyed over the peer's F=1 answer; the losses dropped the
+  session to K1, paclen 64. This is AX.25 2.2's timer-recovery rule applied
+  to checkpoint polls.
 - Start T1 if not running. For a first send of I-frames none of which polls,
   T1 = max(RTO, SRTT + airtime of our outstanding frames + 3 s): the peer may
   hold its ack for its own T2 (AXTerm 2 s, Linux AX.25 3 s), and the RTO is
