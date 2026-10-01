@@ -130,12 +130,12 @@ struct StressResult {
     }
 
     var summary: String {
-        String(format: "%@ | %@%@ %.0f bps, retx %.2f, coll %d, deaf %d, earlyT1 %d (own %d, T2 %d, ack %d), T1 %d, T2 %d mid %d (lost %d)",
+        String(format: "%@ | %@%@ %.0f bps, retx %.2f, coll %d, deaf %d, earlyT1 %d (own %d, T2 %d, ack %d), T1 %d, T2 %d mid %d (lost %d), tnc max %d",
                scenario, completed ? "ok" : (linkFailed ? "FAILED-LINK" : "INCOMPLETE"),
                gapFlushLosses.isEmpty ? "" : " GAP-FLUSH-LOSS",
                throughput, retransmissionRatio, collisions, deafLosses,
                timers.earlyT1, timers.earlyT1OwnBurst, timers.earlyT1PeerT2, timers.earlyT1AckInFlight,
-               timers.t1Batches, timers.t2Acks, timers.midBurstT2, midBurstT2Lost)
+               timers.t1Batches, timers.t2Acks, timers.midBurstT2, midBurstT2Lost, maxQueueDepth)
     }
 }
 
@@ -166,6 +166,7 @@ final class StressRunner {
     /// violation): no longer compared, and done once quiescent.
     private var gapFlushed = [false, false]
     private var silentResetsSeen: [String: Int] = [:]
+    private var reportedViolations: Set<String> = []
 
     static let addressA = AX25Address(call: "K0AAA", ssid: 1)
     static let addressB = AX25Address(call: "K0BBB", ssid: 2)
@@ -256,7 +257,8 @@ final class StressRunner {
     private func peer(of i: Int) -> SimStation { i == 0 ? b : a }
 
     private func violation(_ message: String) {
-        guard !result.violations.contains(message) else { return }
+        guard !reportedViolations.contains(message) else { return }
+        reportedViolations.insert(message)
         if result.firstViolationAt == nil { result.firstViolationAt = net.clock.currentTime }
         result.violations.append(String(format: "t=%.1f ", net.clock.currentTime) + message)
     }
@@ -420,8 +422,12 @@ final class StressRunner {
             lastStateLogCount = changes
             lastProgressAt = net.clock.currentTime
         }
-        for depth in net.channel.stats.maxQueueDepth.values where depth > 24 {
-            violation("a TNC queue reached \(depth) frames (retransmission storm)")
+        // A TNC backlog of a couple of windows happens when T1 runs out while
+        // our own burst is still queued or on the air (T1 counts from the
+        // hand-off to the TNC) and is reported as data. One that keeps
+        // growing is a storm.
+        for (node, depth) in net.channel.stats.maxQueueDepth.sorted(by: { $0.key < $1.key }) where depth > 64 {
+            violation("\(net.channel.nodes[node].name)'s TNC queue reached more than 64 frames (retransmission storm)")
         }
     }
 
@@ -570,9 +576,13 @@ struct StressTally {
     var timers = SimTimerMetrics()
     var midBurstLost = 0
     var gapFlushRuns = 0
+    var maxQueue = 0
+    var backlogRuns = 0
 
     mutating func add(_ r: StressResult) {
         runs += 1
+        maxQueue = max(maxQueue, r.maxQueueDepth)
+        if r.maxQueueDepth > 24 { backlogRuns += 1 }
         if !r.gapFlushLosses.isEmpty { gapFlushRuns += 1 }
         if r.completed { completed += 1 }
         if r.linkFailed { failed += 1 }
@@ -591,16 +601,17 @@ struct StressTally {
         bytes += o.bytes; dataTime += o.dataTime; newI += o.newI; retx += o.retx
         collisions += o.collisions; deaf += o.deaf; timers = timers + o.timers
         midBurstLost += o.midBurstLost; gapFlushRuns += o.gapFlushRuns
+        maxQueue = max(maxQueue, o.maxQueue); backlogRuns += o.backlogRuns
     }
 
     var row: String {
         let bps = dataTime > 0 ? Double(bytes * 8) / dataTime : 0
         let ratio = newI > 0 ? Double(retx) / Double(newI) : 0
-        return String(format: "runs %d ok %d failed %d gapflush %d | %.0f bps | retx %.3f | coll %d deaf %d | T1 %d early %d (own %d, peerT2 %d, ackInFlight %d) ackLost %d needed %d | T2 %d mid-burst %d (lost %d)",
+        return String(format: "runs %d ok %d failed %d gapflush %d | %.0f bps | retx %.3f | coll %d deaf %d | T1 %d early %d (own %d, peerT2 %d, ackInFlight %d) ackLost %d needed %d | T2 %d mid-burst %d (lost %d) | tnc max %d, runs over 24: %d",
                       runs, completed, failed, gapFlushRuns, bps, ratio, collisions, deaf,
                       timers.t1Batches, timers.earlyT1, timers.earlyT1OwnBurst, timers.earlyT1PeerT2,
                       timers.earlyT1AckInFlight, timers.spuriousT1AckLost, timers.neededT1,
-                      timers.t2Acks, timers.midBurstT2, midBurstLost)
+                      timers.t2Acks, timers.midBurstT2, midBurstLost, maxQueue, backlogRuns)
     }
 }
 
