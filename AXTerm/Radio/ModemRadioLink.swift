@@ -459,6 +459,8 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         guard let rig, let civTransport else {
             lock.withLock { phase = .modemOpen }
             modem.open()
+            // The modem reports its own failure; trying again is ours.
+            if modem.state == .failed { scheduleReconnect() }
             return
         }
         lock.withLock { phase = .rigOpening }
@@ -553,6 +555,19 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                     }
                     self.lock.withLock { self.phase = .modemOpen }
                     self.modem.open()
+                    // The radio can answer while the audio will not start: on
+                    // 2026-10-01 Warbler restarted its virtual IC-705 just as
+                    // this reconnected, and the link sat failed until someone
+                    // pressed Connect. The modem has already said why; start
+                    // over on the same backoff as any other failed open.
+                    guard self.modem.state != .failed else {
+                        self.civTransport?.close()
+                        self.rig?.close()
+                        self.lock.withLock { self.phase = .failed("Sound modem could not start") }
+                        self._delegate?.linkDidChangeState(.failed)
+                        self.scheduleReconnect()
+                        return
+                    }
                     self.startPolling()
                     // Clear the backoff only once this connection proves it will
                     // hold. Doing it the instant the rig came up treated a

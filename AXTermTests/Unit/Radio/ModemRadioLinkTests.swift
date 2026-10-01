@@ -384,6 +384,25 @@ final class ModemRadioLinkTests: XCTestCase {
         XCTAssertEqual(link.state, .connected, "no attempt was made to get the radio back")
     }
 
+    /// The radio answered but the audio would not start: on 2026-10-01
+    /// Warbler restarted its virtual IC-705 just as AXTerm reconnected, so
+    /// the rig came up and the sound modem found the network session gone
+    /// ("Sound modem could not start: the radio's network session is not
+    /// up"). Every other failure in `open()` schedules a retry; this one left
+    /// the link failed until somebody pressed Connect.
+    func testAModemThatWillNotStartIsRetried() async {
+        let (link, _, audio, spy) = makeLink(config())
+        audio.startError = ModemError.notRunning
+        link.open()
+        await waitUntil("the failed audio start to fail the link") { link.state == .failed }
+        XCTAssertTrue(spy.errors.contains { $0.contains("Sound modem could not start") }, "\(spy.errors)")
+
+        audio.startError = nil
+        await waitUntil("the link to retry and come back", timeout: 8) { link.state == .connected }
+        XCTAssertEqual(link.state, .connected, "nothing tried again after the audio failed to start")
+        link.close()
+    }
+
     /// ...but not after the operator has closed it. A reconnect that outlives
     /// `close()` re-keys a radio somebody deliberately released.
     func testAClosedLinkIsNotReconnected() async {
