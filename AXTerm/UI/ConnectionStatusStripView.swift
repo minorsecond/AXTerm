@@ -28,7 +28,10 @@ struct ConnectionStatusStripView: View {
     /// can prove — see `RelayDelivery`.
     var deliverySummary: String?
     var deliveryDetail: String?
-    
+    /// This radio's TX delay, for the turnaround hint. Nil when the TNC keeps
+    /// its own timing, since then the configured value is not the real one.
+    var txDelayMs: Int?
+
     private var isConnected: Bool {
         sessionState == .connected
     }
@@ -69,9 +72,13 @@ struct ConnectionStatusStripView: View {
                 Spacer()
             }
             .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color(platform: .platformCardBackground).opacity(0.5))
+            .padding(.vertical, 6)
+
+            if isConnected, let session, session.turnaroundEvidence.isShowing {
+                turnaroundHint(session: session)
+            }
         }
+        .background(Color(platform: .platformCardBackground).opacity(0.5))
         .frame(maxWidth: .infinity)
     }
 
@@ -230,6 +237,29 @@ struct ConnectionStatusStripView: View {
         }
     }
     
+    // MARK: - Turnaround hint
+
+    /// Replies sent right after the station transmits are being lost while
+    /// later frames get through. Shown only while the evidence holds, and
+    /// gone when it stops; see TurnaroundEvidence.
+    private func turnaroundHint(session: AX25Session) -> some View {
+        let station = session.turnaroundStation
+        return Label {
+            Text(TurnaroundHint.message(station: station, txDelayMs: txDelayMs))
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
+        .help(TurnaroundHint.help(station: station, tally: session.turnaroundEvidence.tally))
+        .accessibilityElement(children: .combine)
+    }
+
     // MARK: - Connecting / Disconnecting Status
 
     @ViewBuilder

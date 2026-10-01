@@ -2679,7 +2679,10 @@ struct TerminalView: View {
                         relayHops: txViewModel.relayProgressHops,
                         plannedHops: plannedRelayPathPreview,
                         deliverySummary: txViewModel.relayDelivery?.summary,
-                        deliveryDetail: txViewModel.relayDelivery?.detail
+                        deliveryDetail: txViewModel.relayDelivery?.detail,
+                        txDelayMs: txViewModel.currentSession
+                            .flatMap { settings.radio($0.radio) }
+                            .flatMap { $0.timingReachesTNC ? $0.txDelayMs : nil }
                     )
                 }
 
