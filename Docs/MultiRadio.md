@@ -120,6 +120,18 @@ stream belongs to.
   port. Opening reports "connecting" before the transport has said so, so a
   caller that connects and then reads the state is not shown the stale
   "disconnected".
+- Disconnect (`closeAll`) holds every link closed until the operator
+  connects again (`isHeldClosed`). A settings write after that goes through
+  `reconcileAfterSettingsChange`, which makes and drops links to match the
+  settings but opens none; so does the radio's page closing, and a wake from
+  sleep reopens nothing. `reconcile(_:open: true)` and `openAll` are the
+  operator's Connect and lift the hold. Before this, any later settings write
+  reopened every link (2026-09-30, `OperatorDisconnectTests`).
+- While a radio's page is open the engine applies settings in place and
+  holds off reconciling, but a radio moved to another kind of transport lets
+  go of its old link at once: the session is closed and dropped, and the new
+  transport's link is made when the page closes or the operator connects.
+  The serial port of a TNC4 moved to Bluetooth used to stay open until then.
 - Inbound: a frame comes off a session with its port; the table names the
   radio; `RadioManager.ingest` publishes it as a `RadioIngest`. A frame on a
   port no radio claims is dropped, counted, and reported once per link and

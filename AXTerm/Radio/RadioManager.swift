@@ -95,6 +95,16 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     /// that leaves the timing alone sends nothing.
     private var sentTiming: [RadioID: KISSTimingParameters] = [:]
 
+    /// The operator pressed Disconnect, and has not connected since.
+    ///
+    /// While this is set nothing opens a link by itself: not a settings
+    /// write, not the radio's page closing, not a wake from sleep. Their next
+    /// Connect (`reconcile(_:open: true)`, `openAll`) clears it. Before this,
+    /// any later write to a radio's settings reconciled with `open: true` and
+    /// reopened every link, so a TNC4's port was back in use moments after
+    /// Disconnect (2026-09-30).
+    private(set) var isHeldClosed = false
+
     weak var delegate: RadioManagerDelegate?
     private let linkFactory: LinkFactory
 
@@ -160,8 +170,11 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     /// Brings the links into line with `radios`. Returns how many links were
     /// newly created, so the caller can tell a fresh connection from a
     /// settings tweak that changed nothing about the wire.
+    ///
+    /// `open: true` is an operator's Connect, and lifts a Disconnect's hold.
     @discardableResult
     func reconcile(_ radios: [RadioProfile], open shouldOpen: Bool) -> Int {
+        if shouldOpen { isHeldClosed = false }
         let desired = radios.filter { $0.enabled && !$0.archived }
         profiles = desired
         var unavailable: [RadioID: String] = [:]
@@ -227,6 +240,15 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         return created
     }
 
+    /// The reconcile a settings write asks for, as opposed to an operator's
+    /// Connect: links are brought into line with the settings (a link no
+    /// longer configured is closed, a new one is made), and opened only when
+    /// the operator has not pressed Disconnect.
+    @discardableResult
+    func reconcileAfterSettingsChange(_ radios: [RadioProfile]) -> Int {
+        reconcile(radios, open: !isHeldClosed)
+    }
+
     /// Applies to open links the settings they take in place, and nothing
     /// else: no link is opened, closed or reconnected.
     ///
@@ -235,8 +257,11 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     /// host field, but timing and TNC4 levels change nothing about the link
     /// and have to reach the TNC while the operator is setting them (the TNC4
     /// level assistant tries each gain live). A radio whose transport changed
-    /// is left for the reconcile that follows when the page closes.
+    /// is left for the reconcile that follows when the page closes, except
+    /// that a radio moved to another kind of transport lets go of its old
+    /// link at once (see `retireLinksOfMovedRadios`).
     func applyInPlace(_ radios: [RadioProfile]) {
+        retireLinksOfMovedRadios(radios)
         for radio in radios where radio.enabled && !radio.archived {
             guard let index = profiles.firstIndex(where: { $0.id == radio.id }),
                   profiles[index].transportSignature == radio.transportSignature,
@@ -254,6 +279,39 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
             }
             sendTimingIfNeeded(radio)
         }
+    }
+
+    /// Closes and drops the link of every radio whose transport kind is no
+    /// longer the one its link was made for, unless another radio still
+    /// rides that link.
+    ///
+    /// For the settings page, where reconciling waits for the page to close.
+    /// Switching a TNC4 radio from Serial to Bluetooth there used to leave
+    /// the serial port open, and retrying if it dropped, until the operator
+    /// left the page. A dropped link is not opened again by anything: the
+    /// new transport's link is made by the next reconcile.
+    private func retireLinksOfMovedRadios(_ radios: [RadioProfile]) {
+        let moved = profiles.filter { old in
+            guard let new = radios.first(where: { $0.id == old.id }) else { return false }
+            return new.kind != old.kind
+        }
+        guard !moved.isEmpty else { return }
+        let movedIDs = Set(moved.map(\.id))
+        for radio in moved {
+            guard let key = assignment[radio.id]?.key else { continue }
+            assignment.removeValue(forKey: radio.id)
+            demux[key] = demux[key]?.filter { $0.value != radio.id }
+            sentTiming.removeValue(forKey: radio.id)
+            rigReceive.removeValue(forKey: radio.id)
+            // Two radios on one Direwolf share a link; it stays while one
+            // of them still uses it.
+            guard demux[key]?.isEmpty ?? true, let session = sessions.removeValue(forKey: key) else { continue }
+            demux.removeValue(forKey: key)
+            outages.forget(key)
+            session.close()
+        }
+        profiles.removeAll { movedIDs.contains($0.id) }
+        refreshRadioStates()
     }
 
     // MARK: - KISS timing for links that do not send it
@@ -331,13 +389,17 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     }
 
     func openAll() {
+        isHeldClosed = false
         for session in sessions.values where session.state == .disconnected || session.state == .failed {
             session.open()
         }
         refreshRadioStates()
     }
 
+    /// The operator's Disconnect: every link closes and stays closed until
+    /// they connect again (see `isHeldClosed`).
     func closeAll() {
+        isHeldClosed = true
         for session in sessions.values { session.close() }
         outages.removeAll()
         refreshRadioStates()
@@ -391,6 +453,8 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         // The sleep is not an outage the operator needs telling about, so the
         // clocks restart rather than reporting the hours the lid was shut.
         outages.reset(now: Date())
+        // Nothing was up when the lid closed, by the operator's choice.
+        guard !isHeldClosed else { return }
         for session in sessions.values { session.resume() }
         refreshRadioStates()
     }
@@ -456,7 +520,13 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     }
 
     func linkSession(_ session: LinkSession, didChangeState state: KISSLinkState, from previous: KISSLinkState) {
-        outages.observe(session.key, isUp: state == .connected, now: Date())
+        // A link the operator closed, or one no longer configured, is down on
+        // purpose and is not an outage to report.
+        if isHeldClosed || sessions[session.key] !== session {
+            outages.forget(session.key)
+        } else {
+            outages.observe(session.key, isUp: state == .connected, now: Date())
+        }
         refreshRadioStates()
         // A fresh connection is a TNC that may have restarted: tell it again.
         let carried = radios(onLink: session.key)

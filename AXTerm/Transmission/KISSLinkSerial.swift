@@ -149,6 +149,11 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     private var connectionOpenedAt: Date?
     private var ongoingNoAX25RecoveryAttempts = 0
     private var reconnectAttempt = 0
+    /// Set by `open()`, cleared by `close()`. Retries and wakes reopen only
+    /// a link that is still wanted, so a closed link stays closed whatever
+    /// was in flight when it closed. Guarded by `lock`.
+    private var _wantsOpen = false
+    private var wantsOpen: Bool { lock.lock(); defer { lock.unlock() }; return _wantsOpen }
     private static let maxReconnectDelay: TimeInterval = 15 // Cap at 15s per requirements
     private static let baseReconnectDelay: TimeInterval = 1
     private static let btOpenTimeout: TimeInterval = 10 // Timeout for BT serial open()
@@ -177,6 +182,9 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
 
     var totalBytesIn: Int { lock.lock(); defer { lock.unlock() }; return _totalBytesIn }
     var totalBytesOut: Int { lock.lock(); defer { lock.unlock() }; return _totalBytesOut }
+
+    /// Whether a retry is waiting to reopen the port.
+    var hasPendingReconnect: Bool { lock.lock(); defer { lock.unlock() }; return reconnectTimer != nil }
 
     // MARK: - Init
 
@@ -210,15 +218,50 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     // MARK: - KISSLink Conformance
 
     func open() {
+        setWantsOpen(true)
         serialQueue.async { [weak self] in
             self?.openInternal()
         }
     }
 
+    /// Closes the port and stops every retry until the next `open()`.
+    ///
+    /// Holds `self` until the close has run: the manager drops a link right
+    /// after closing it (its radio moved to another transport), and a weak
+    /// capture let the link go before the close, so the TNC4 settings this
+    /// link changed were never put back.
     func close() {
-        serialQueue.async { [weak self] in
-            self?.closeInternal(reason: "User initiated")
+        setWantsOpen(false)
+        serialQueue.async {
+            self.closeInternal(reason: "User initiated")
         }
+    }
+
+    /// Down for the machine's sleep, still wanted: `resume()` reopens it.
+    /// The protocol's default would be `close()`, which now means the
+    /// operator is done with the link.
+    func suspend() {
+        serialQueue.async {
+            self.closeInternal(reason: "System sleep")
+        }
+    }
+
+    /// Reopens after a sleep, and only a link that is still wanted. Serial
+    /// used the protocol's default, a plain `open()`, so a wake reopened a
+    /// port the operator had closed.
+    func resume() {
+        guard wantsOpen else { return }
+        serialQueue.async { [weak self] in
+            guard let self, self.wantsOpen else { return }
+            self.reconnectAttempt = 0
+            self.openInternal()
+        }
+    }
+
+    private func setWantsOpen(_ wanted: Bool) {
+        lock.lock()
+        _wantsOpen = wanted
+        lock.unlock()
     }
 
     func send(_ data: Data, completion: @escaping (Error?) -> Void) {
@@ -401,6 +444,8 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         if current == .connected || alreadyConnecting {
             return
         }
+        // Closed since this attempt was queued.
+        guard wantsOpen else { return }
 
         // Static Guard: Check if ANY instance is using this path
         KISSLinkSerial.pathLock.lock()
@@ -625,9 +670,14 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         let timerFD = fd
         let timerIsBluetoothSerial = isBluetoothSerial
         let timerOriginalTermios = originalTermios
+        let timerEndpoint = config.devicePath
+        let timerShortID = _shortID
 
+        // Closes the port whether or not the link is still around. The handler
+        // runs after cancel(), and a link released straight after close() was
+        // gone by then; returning early on a nil self left the descriptor
+        // open, and the app holding the TNC4's port (lsof, 2026-09-30).
         pollTimer.setCancelHandler { [weak self] in
-            guard let self else { return }
             if timerFD >= 0 {
                 // Restore original termios before closing (skip for BT serial)
                 if !timerIsBluetoothSerial {
@@ -635,14 +685,16 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                     tcsetattr(timerFD, TCSANOW, &origTermios)
                 }
                 Darwin.close(timerFD)
-                self.lock.lock()
-                if self.fileDescriptor == timerFD {
-                    self.fileDescriptor = -1
+                if let self {
+                    self.lock.lock()
+                    if self.fileDescriptor == timerFD {
+                        self.fileDescriptor = -1
+                    }
+                    self.lock.unlock()
                 }
-                self.lock.unlock()
             }
 
-            KISSLinkLog.info(self.endpointDescription, message: "Port released [\(self._shortID)]")
+            KISSLinkLog.info(timerEndpoint, message: "Port released [\(timerShortID)]")
         }
 
         lock.lock()
@@ -1138,7 +1190,8 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     }
 
     private func scheduleReconnectIfEnabled(initialDelay: TimeInterval? = nil) {
-        guard config.autoReconnect else { return }
+        // A Bluetooth open that fails after close() lands here too.
+        guard config.autoReconnect, wantsOpen else { return }
 
         reconnectAttempt += 1
         
@@ -1157,7 +1210,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: serialQueue)
         timer.schedule(deadline: .now() + delay)
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
+            guard let self, self.wantsOpen else { return }
             // Check if device is present/available before trying
             if FileManager.default.fileExists(atPath: self.config.devicePath) {
                 self.openInternal()
