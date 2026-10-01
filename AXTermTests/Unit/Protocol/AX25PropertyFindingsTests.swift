@@ -89,6 +89,65 @@ final class AX25PropertyFindingsTests: XCTestCase {
         XCTAssertEqual(session.state, .error, "answering does not revive the link")
     }
 
+    // MARK: - Fixed: a lap-old retransmission is not buffered as new data
+    //
+    // S2.faithfulPeer seed 0xA4E687328B834A8A (peer K=7): peer frames 4, 5
+    // and 6 were delivered a second time after frame 11. A peer may keep up
+    // to 7 frames outstanding (§6.4.1, k up to 7 in modulo 8), and the
+    // receive span is 4. When our ack of a full window is lost, the peer
+    // resends frames we already delivered, and their N(S) sits 1 to 3 ahead
+    // of V(R), where an out-of-sequence frame is buffered. The buffered
+    // copy was then delivered as the next lap's frame, and the real one
+    // dropped as a duplicate.
+
+    func testRetransmissionOfADeliveredWindowIsNotDeliveredAgain() throws {
+        let (manager, _) = makeManager()
+        var delivered: [String] = []
+        manager.onDataReceived = { _, data in delivered.append(String(decoding: data, as: UTF8.self)) }
+        _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
+
+        func send(_ ns: Int, _ text: String, pf: Bool = false) {
+            _ = manager.handleInboundIFrame(from: peer, path: DigiPath(), radio: .primary,
+                                            ns: ns, nr: 0, pf: pf, payload: Data(text.utf8))
+        }
+        // A full K=7 window, all received. Our RR answering the poll is lost.
+        for ns in 0..<7 { send(ns, "f\(ns)", pf: ns == 6) }
+        XCTAssertEqual(delivered, (0..<7).map { "f\($0)" })
+
+        // The peer's T1 runs out and it resends the window from frame 0.
+        for ns in 0..<7 { send(ns, "f\(ns)", pf: ns == 0) }
+        XCTAssertEqual(delivered.count, 7, "a retransmission was delivered: \(delivered)")
+
+        // It hears our ack at last and carries on with frames 7 and 8.
+        send(7, "f7")
+        send(0, "f8")
+        XCTAssertEqual(delivered, (0...8).map { "f\($0)" })
+    }
+
+    /// A genuine new frame that repeats the old bytes is held back, not
+    /// lost: it is sent again after the REJ and delivered then.
+    func testNewFrameRepeatingOldBytesIsDeliveredOnItsResend() throws {
+        let (manager, _) = makeManager()
+        var delivered: [String] = []
+        manager.onDataReceived = { _, data in delivered.append(String(decoding: data, as: UTF8.self)) }
+        _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
+        func send(_ ns: Int, _ text: String) -> OutboundFrame? {
+            manager.handleInboundIFrame(from: peer, path: DigiPath(), radio: .primary,
+                                        ns: ns, nr: 0, pf: false, payload: Data(text.utf8))
+        }
+        for ns in 0..<7 { _ = send(ns, "line\r") }
+        _ = send(7, "x")
+        // Frame 8 (N(S)=0) is lost; frame 9 (N(S)=1) repeats the bytes of
+        // frame 1, so it is not buffered. A REJ asks for frame 8.
+        let reply = send(1, "line\r")
+        XCTAssertEqual(reply?.displayInfo, "REJ(0)")
+        XCTAssertEqual(delivered.count, 8)
+        // Go-back-N: frames 8 and 9 again.
+        _ = send(0, "line\r")
+        _ = send(1, "line\r")
+        XCTAssertEqual(delivered.count, 10)
+    }
+
     // MARK: - Fixed: a new link starts its N2 ladder at zero
     //
     // S1.hostile seed 0x036E22AFF228470A: retryCount 9 with N2=8 on a
