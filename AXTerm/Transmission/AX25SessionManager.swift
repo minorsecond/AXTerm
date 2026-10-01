@@ -105,6 +105,11 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// making the sample ambiguous and potentially inflating SRTT/RTO.
     private var retransmittedNS: Set<Int> = []
 
+    /// Whether replies sent right after hearing the station are being lost
+    /// while later frames get through. Fed by the hooks below and by
+    /// `AX25SessionManager.noteFrameHeard`; see TurnaroundEvidence.swift.
+    var turnaroundEvidence = TurnaroundEvidence()
+
     /// Pending data queue: data waiting to be sent once connected
     /// Each entry is (data, pid, displayInfo)
     var pendingDataQueue: [(data: Data, pid: UInt8, displayInfo: String?)] = []
@@ -311,13 +316,15 @@ nonisolated final class AX25Session: @unchecked Sendable {
         sendTimeByNs[ns] = time
         // Sending a frame fresh: it is no longer tainted by retransmit
         retransmittedNS.remove(ns)
+        noteTurnaroundSent(ns: ns, at: time)
     }
 
     /// Mark a frame N(S) as retransmitted (Karn's algorithm).
     /// Once marked, its send time will NOT be used for RTT estimation because
     /// the ACK could correspond to either the original or the retransmitted copy.
-    func markRetransmitted(ns: Int) {
+    func markRetransmitted(ns: Int, at time: TimeInterval) {
         retransmittedNS.insert(ns)
+        noteTurnaroundSent(ns: ns, at: time)
     }
 
     /// Clear send times for sequence numbers acked by RR(nr) (nr = next expected)
@@ -338,6 +345,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
     func clearSendTimes() {
         sendTimeByNs.removeAll()
         retransmittedNS.removeAll()
+        forgetTurnaroundOutstanding()
     }
 
     /// Get send time for the last frame acked by RR(nr), for RTT sampling.
@@ -373,6 +381,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
         while current != nr {
             if sendBuffer.removeValue(forKey: current) != nil {
                 removedAny = true
+                noteTurnaroundAcknowledged(ns: current)
             }
             current = (current + 1) % modulo
         }
@@ -1774,6 +1783,7 @@ final class AX25SessionManager: ObservableObject {
 
         if session.state == .connected {
             session.connectedAt = Date()
+            session.resetTurnaroundEvidence()
         }
 
         session.touch()
@@ -1927,6 +1937,7 @@ final class AX25SessionManager: ObservableObject {
 
         if session.state == .connected {
             session.connectedAt = Date()
+            session.resetTurnaroundEvidence()
             TxLog.sessionOpen(
                 sessionId: session.id,
                 peer: source.display,
@@ -2796,7 +2807,7 @@ final class AX25SessionManager: ObservableObject {
         let frame = buffered.withUpdatedNR(session.vr)
         session.statistics.recordRetransmit()
         if let ctrl = frame.controlByte {
-            session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07))
+            session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07), at: clock.currentTime)
         }
         startT1Timer(for: session)
         session.touch()
@@ -2917,7 +2928,7 @@ final class AX25SessionManager: ObservableObject {
                 // Karn's algorithm: mark REJ-retransmitted frames so the ACK
                 // that follows doesn't generate an ambiguous RTT sample.
                 if let ctrl = frame.controlByte {
-                    session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07))
+                    session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07), at: clock.currentTime)
                 }
             }
             session.lastREJRetransmitNR = nr
@@ -3336,7 +3347,7 @@ final class AX25SessionManager: ObservableObject {
             onLinkVizEvent?(.retransmit(peer: session.remoteAddress.display, count: 1))
             session.statistics.recordRetransmit()
             if let ctrl = updatedFrame.controlByte {
-                session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07))
+                session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07), at: clock.currentTime)
             }
             return updatedFrame
         }

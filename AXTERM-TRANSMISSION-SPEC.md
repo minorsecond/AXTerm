@@ -823,6 +823,58 @@ Maintain send buffer for unacked frames:
   - window, paclen, RTO, retries, RTT, ETX/ETT estimates
 - In the terminal transcript, visually group retransmissions and mark them subtly (don’t spam the user).
 
+### 7.7.1 Turnaround loss hint (TX delay stays manual)
+
+Live RF test 2026-09-30 (Docs/LiveRFTest-2026-09-30.md, finding 3): an
+IC-705 keyed through Warbler kept an unmodulated carrier up about 0.7 s
+after each frame. The TNC4 at the other end heard no tones, treated the
+channel as clear, answered inside that window, and the 705 missed the start
+of every quick reply. T1 retries, seconds later, got through. Raising the
+TNC4's TX delay to 800 ms fixed it.
+
+AXTerm never changes TX delay itself. Waiting out one station's tail would
+add dead air to every exchange with every peer. It shows a hint instead,
+from evidence each session already has (`TurnaroundEvidence`):
+
+- **Samples.** This session's I-frames, first sends and resends alike,
+  timed from the last frame heard from the station (stamped by the
+  coordinator before the frame is handled). Handed to the modem under
+  1.0 s after: a turnaround frame. 2.0 s or more after: a later frame.
+  Between the two, or before anything was heard: not a sample. Only the
+  first I-frame of a burst counts (frames handed over less than 0.25 s
+  after another I-frame share its transmission, and go-back-N resends
+  them whenever the first is lost). S-frames are not counted: whether an
+  RR was heard is not observable, and nearly all of them are turnaround
+  frames, so there is nothing to compare them with.
+- **Outcome.** Acknowledged before any resend: heard. Sent again (T1, REJ
+  or SREJ, the same marks Karn's algorithm uses): missed. A cleared send
+  buffer drops frames still outstanding.
+- **Window.** The last 40 resolved samples of each kind, none older than
+  30 minutes. Reset when the session connects or the peer resets the link
+  with SABM.
+- **Shows** when there are at least 12 turnaround and 8 later samples, at
+  least half the turnaround frames were missed, at most one later frame
+  in five was, and a one-sided Fisher exact test puts the chance of loss
+  unrelated to timing splitting them that unevenly at 1 in 2,000 or less.
+  Plain loss spread over both kinds must not raise it; a late hint is
+  better than a wrong one.
+- **Clears** when under 35% of turnaround frames are missed, over 35% of
+  later frames are, or either count falls below its minimum. The gap
+  between the two thresholds keeps it from flickering.
+- **Where.** A line under the connection strip naming the station heard
+  last (the peer, or the first digipeater, which is also the one that must
+  hear the reply) and this radio's TX delay when AXTerm's value reaches
+  the TNC or modem. The tooltip gives the counts and the chance, and says
+  that another station keying up as soon as the channel clears can cause
+  the same pattern.
+- **Logged.** A `TxLog` warning, so a Sentry breadcrumb, each time the hint
+  appears or clears, with the four counts.
+
+The rule works the same with a KISS TNC or the sound modem, since it uses
+only when frames were handed over and whether they were acknowledged. A
+station that mostly receives sends few I-frames and so collects little
+evidence.
+
 ### 7.8 Session config fixed at connection start; multi-connection stabilization
 - **No mid-transmission changes:** Session parameters (window K, RTO min/max, N2, etc.) are chosen once when the session is created and MUST NOT be changed for the lifetime of that session. Changing parameters during an active transfer would risk corrupting in-flight data and sequence state.
 - **Multiple simultaneous connections to the same destination:** When more than one session exists to the same peer (e.g. direct and via digi), do not flip between per-route learned params. Use a **conservative merged config**: min(window), max(RTO min), max(RTO max), max(N2) across all relevant learned/config sources for that destination. This gives a stable middle ground and avoids chaotic parameter switching or corrupting any of the connections.

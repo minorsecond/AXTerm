@@ -2966,6 +2966,11 @@ final class SessionCoordinator: ObservableObject {
         // carry none and fall to the primary.
         let radio = radioOwning(to) ?? packet.radioID ?? .primary
 
+        // Before the frame is handled, so a reply built while handling it is
+        // timed from now. See TurnaroundEvidence.
+        sessionManager.noteFrameHeard(from: from, path: DigiPath.from(packet.via.map { $0.display }),
+                                      radio: radio)
+
         switch decoded.frameClass {
         case .U:
             handleUFrame(packet: packet, from: from, to: to, uType: decoded.uType, radio: radio)
