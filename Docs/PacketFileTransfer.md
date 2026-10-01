@@ -122,6 +122,17 @@ Look on every platform, Show in Finder and Open on the Mac, and Share on iOS.
 - Resume restarts the AXDP chunk loop that pause ended, or pumps YAPP blocks
   again. Resume used to set the status back to Sending without restarting
   anything, and the transfer sat there for good.
+- The receiver is not told about a pause. AXDP has no pause message and
+  YAPP has none either, so the receiving row goes by what it can see
+  (`TransferPace` in BulkTransfer.swift). When nothing has arrived for four
+  times the usual gap between chunks, and never less than 15 seconds, it
+  says "Waiting for K0EPI-3" instead of "Receiving" and drops the rate and
+  time remaining. It goes back to Receiving when data arrives. The sender's
+  row drops them too while paused.
+- The rate on both sides is the bytes over the time data was moving. It is
+  measured up to the last chunk, not up to the present moment, and a long
+  silence is left out, so it holds still through a pause instead of sinking
+  toward zero while the time remaining climbs.
 - Cancel tells the other station. AXDP has no abort message, so cancel sends
   the NACK a receiver sends to decline (session ID, message ID 1). An older
   AXTerm reads that as "declined" and stops; a newer one marks the transfer

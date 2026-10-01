@@ -309,6 +309,7 @@ final class TwoStationTransferTests: XCTestCase {
         try await Task.sleep(nanoseconds: 600_000_000)
         XCTAssertEqual(a.transfer(named: "pause.bin")?.bytesSent, held, "nothing new is sent while paused")
         XCTAssertNotEqual(b.transfer(named: "pause.bin")?.status, .completed)
+        assertReceiverWaits(for: "pause.bin")
 
         a.coordinator.resumeTransfer(id)
         try await waitUntil("pause.bin finishes after resuming") {
@@ -331,12 +332,29 @@ final class TwoStationTransferTests: XCTestCase {
         let held = a.transfer(named: "YPAUSE.BIN")!.bytesSent
         try await Task.sleep(nanoseconds: 600_000_000)
         XCTAssertEqual(a.transfer(named: "YPAUSE.BIN")?.bytesSent, held)
+        assertReceiverWaits(for: "YPAUSE.BIN")
         a.coordinator.resumeTransfer(id)
         try await waitUntil("YPAUSE.BIN finishes") {
             self.b.transfer(named: "YPAUSE.BIN")?.status == .completed
                 && self.a.transfer(named: "YPAUSE.BIN")?.status == .completed
         }
         XCTAssertEqual(b.savedData(b.transfer(named: "YPAUSE.BIN")), data)
+    }
+
+    /// B was never told about the pause. It says Receiving with a rate for
+    /// a short silence, and waiting for A once the silence runs long.
+    private func assertReceiverWaits(for name: String, file: StaticString = #filePath, line: UInt = #line) {
+        guard let received = b.transfer(named: name) else {
+            return XCTFail("B has no \(name)", file: file, line: line)
+        }
+        XCTAssertEqual(received.status, .sending, file: file, line: line)
+        XCTAssertNil(received.secondsWaitingForSender(now: Date()),
+                     "a second of quiet is an ordinary gap", file: file, line: line)
+        XCTAssertTrue(received.showsLiveRate(now: Date()), file: file, line: line)
+        let later = Date().addingTimeInterval(60)
+        XCTAssertNotNil(received.secondsWaitingForSender(now: later),
+                        "a minute of quiet is waiting for the sender", file: file, line: line)
+        XCTAssertFalse(received.showsLiveRate(now: later), file: file, line: line)
     }
 
     // MARK: Cancel

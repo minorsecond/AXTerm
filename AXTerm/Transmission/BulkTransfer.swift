@@ -360,6 +360,60 @@ nonisolated extension AXDPCompression.Algorithm {
     }
 }
 
+// MARK: - Transfer Pace
+
+/// When a transfer's data last moved, and how often it has been moving.
+///
+/// A receiver is never told that the sender paused: AXDP has no pause
+/// message (spec §6, §9) and neither does YAPP. All it can see is that data
+/// stopped arriving. This decides when a silence is longer than the
+/// transfer's own pace explains, so the row can say it is waiting instead
+/// of "Receiving", and keeps such silences out of the rate.
+nonisolated struct TransferPace: Sendable, Equatable {
+    /// No silence shorter than this counts as waiting. A window of frames,
+    /// the RR, and a retry or two on a slow channel fit inside it.
+    static let minimumQuietSeconds: TimeInterval = 15
+    /// A silence this many times the usual gap between data counts as
+    /// waiting, when that is longer than the floor.
+    static let quietIntervalMultiple: Double = 4
+    /// Weight of the newest gap in the running average.
+    private static let smoothing: Double = 0.25
+
+    private(set) var lastProgressAt: Date?
+    /// Running average of the gaps between data, leaving out silences.
+    private(set) var typicalInterval: TimeInterval?
+    /// Time spent in silences, less one ordinary gap for each, which the
+    /// rate leaves out.
+    private(set) var stalledSeconds: TimeInterval = 0
+
+    /// How long data can stop before the transfer counts as waiting.
+    var quietThreshold: TimeInterval {
+        max(Self.minimumQuietSeconds, Self.quietIntervalMultiple * (typicalInterval ?? 0))
+    }
+
+    mutating func noteProgress(at time: Date) {
+        if let last = lastProgressAt {
+            let gap = max(0, time.timeIntervalSince(last))
+            if gap > quietThreshold {
+                stalledSeconds += gap - (typicalInterval ?? 0)
+            } else if let typical = typicalInterval {
+                typicalInterval = typical + Self.smoothing * (gap - typical)
+            } else {
+                typicalInterval = gap
+            }
+        }
+        lastProgressAt = time
+    }
+
+    /// Seconds since data last moved, once that is past `quietThreshold`.
+    /// Nil while data is flowing, and before any has moved.
+    func quietSeconds(now: Date) -> TimeInterval? {
+        guard let last = lastProgressAt else { return nil }
+        let quiet = now.timeIntervalSince(last)
+        return quiet > quietThreshold ? quiet : nil
+    }
+}
+
 // MARK: - Bulk Transfer Model
 
 /// Represents a file transfer in progress or completed.
@@ -385,7 +439,16 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
     var status: BulkTransferStatus = .pending
 
     /// Bytes successfully acknowledged (sent) or received
-    var bytesSent: Int = 0
+    var bytesSent: Int = 0 {
+        didSet {
+            // markCompleted tops this up after setting the status; that is
+            // bookkeeping, not data arriving.
+            if bytesSent > oldValue, !status.isTerminal { pace.noteProgress(at: Date()) }
+        }
+    }
+
+    /// When data last moved, and how often it has been moving.
+    var pace = TransferPace()
 
     /// Bytes actually transmitted over the air (may differ due to compression)
     var bytesTransmitted: Int = 0
@@ -544,25 +607,52 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
 
     /// Throughput in bytes per second (data throughput, not air throughput)
     var throughputBytesPerSecond: Double {
-        guard let start = dataPhaseStart else { return 0 }
-        let end = dataPhaseEnd ?? Date()
-        let elapsed = end.timeIntervalSince(start)
-        guard elapsed > 0 else { return 0 }
+        throughputBytesPerSecond(now: Date())
+    }
+
+    /// Bytes over the time data was moving. A transfer still running is
+    /// measured up to the last data, not up to `now`, and silences longer
+    /// than its pace explains (a sender's pause) are left out, so the rate
+    /// holds still while nothing moves instead of sinking toward zero.
+    func throughputBytesPerSecond(now: Date) -> Double {
+        guard let elapsed = dataSeconds(now: now), elapsed > 0 else { return 0 }
         return Double(bytesSent) / elapsed
+    }
+
+    private func dataSeconds(now: Date) -> TimeInterval? {
+        guard let start = dataPhaseStart else { return nil }
+        let end = dataPhaseEnd ?? pace.lastProgressAt ?? now
+        return end.timeIntervalSince(start) - pace.stalledSeconds
+    }
+
+    /// How long an inbound transfer has gone without data, once that is
+    /// longer than its pace explains. The sender may have paused or the
+    /// link may be struggling; the receiver cannot tell which. Nil while
+    /// data is arriving, and for outbound transfers.
+    func secondsWaitingForSender(now: Date) -> TimeInterval? {
+        guard direction == .inbound, status == .sending else { return nil }
+        return pace.quietSeconds(now: now)
+    }
+
+    /// Whether a rate and a time remaining mean anything right now: not
+    /// while paused, and not while a receiver is waiting for the sender.
+    func showsLiveRate(now: Date) -> Bool {
+        status != .paused && secondsWaitingForSender(now: now) == nil
     }
 
     /// Air throughput in bytes per second (actual transmitted bytes)
     var airThroughputBytesPerSecond: Double {
-        guard let start = dataPhaseStart else { return 0 }
-        let end = dataPhaseEnd ?? Date()
-        let elapsed = end.timeIntervalSince(start)
-        guard elapsed > 0 else { return 0 }
+        guard let elapsed = dataSeconds(now: Date()), elapsed > 0 else { return 0 }
         return Double(bytesTransmitted) / elapsed
     }
 
     /// Estimated seconds remaining
     var estimatedSecondsRemaining: Double? {
-        let throughput = throughputBytesPerSecond
+        estimatedSecondsRemaining(now: Date())
+    }
+
+    func estimatedSecondsRemaining(now: Date) -> Double? {
+        let throughput = throughputBytesPerSecond(now: now)
         guard throughput > 0 else { return nil }
         let remaining = fileSize - bytesSent
         return Double(remaining) / throughput
