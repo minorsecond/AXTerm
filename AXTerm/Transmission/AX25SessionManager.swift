@@ -1847,13 +1847,14 @@ final class AX25SessionManager: ObservableObject {
                 // DRLNOD DMs sessions that poll on every idle line (see
                 // shouldPollFirstOutboundIFrame).
                 let fillsWindow = session.outstandingCount + 1 >= effectiveSendWindowDirect
+                let polls = fillsWindow || shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
                 let ns = session.vs  // Capture before buildIFrame increments vs
                 let iFrame = buildIFrame(
                     for: session,
                     payload: chunk,
                     pid: pid,
                     displayInfo: info,
-                    pf: fillsWindow || shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
+                    pf: polls
                 )
                 frames.append(iFrame)
                 axDebugPrint("[DEBUG:AX25:SEND] immediate tx chunk \(i) | N(S)=\(ns) payload=\(chunk.count)")
@@ -1869,6 +1870,10 @@ final class AX25SessionManager: ObservableObject {
                     // Per AX.25 spec, T3 and T1 are mutually exclusive — T1 takes over when
                     // there are outstanding unacked frames.
                     stopT3Timer(for: session)
+                    startT1Timer(for: session)
+                } else if polls {
+                    // The poll is answered at once: T1 was armed for an
+                    // unpolled frame's delayed ack and is too long for it now.
                     startT1Timer(for: session)
                 }
             }
@@ -3285,6 +3290,28 @@ final class AX25SessionManager: ObservableObject {
     // MARK: - Timer Management
 
     /// Start T1 (retransmit) timer for a session
+    /// How long a peer may hold its acknowledgment of an I-frame sent
+    /// without P=1, waiting for its own T2. AXTerm's T2 is 2 s; Linux AX.25
+    /// defaults to 3 s, and that is the longer one assumed here.
+    nonisolated static let peerAckDelayAllowance: Double = 3.0
+
+    /// How long T1 waits for the frames now outstanding.
+    ///
+    /// The RTO is learned from exchanges the peer answers at once (polls,
+    /// SABM), so for frames the peer is entitled to sit on it is too short:
+    /// on 2026-10-01 a lone chat line was resent after 4.3 s while the RR,
+    /// held for the peer's 2 s T2 and then sent through a slow transmitter,
+    /// needed about 5.3 s, and the resend keyed over it. So when nothing
+    /// outstanding asks for an immediate answer, T1 also covers our own
+    /// airtime and the peer's ack delay (spec 7.6). Polls keep the RTO.
+    nonisolated static func t1Delay(rto: Double, srtt: Double?, bytesInFlight: Int,
+                                    awaitingDelayedAck: Bool) -> Double {
+        guard awaitingDelayedAck else { return rto }
+        let roundTrip = srtt ?? rto
+        let ourAirtime = Double(bytesInFlight) * 8.0 / TxAdaptiveSettings.airtimeBitsPerSecond
+        return min(60.0, max(rto, roundTrip + ourAirtime + peerAckDelayAllowance))
+    }
+
     func startT1Timer(for session: AX25Session) {
         // Cancel any existing T1 timer and pending grace-period retransmit
         session.t1TimerTask?.cancel()
@@ -3293,12 +3320,21 @@ final class AX25SessionManager: ObservableObject {
         session.t1Generation &+= 1
         let generation = session.t1Generation
 
-        let rto = session.timers.rto
+        // A first send of I-frames none of which polls will be acked when
+        // the peer's T2 runs out. A retry polls, and is answered at once.
+        let awaitingDelayedAck = !session.sendBuffer.isEmpty
+            && session.stateMachine.retryCount == 0
+            && !session.sendBuffer.values.contains { ($0.controlByte ?? 0) & 0x10 != 0 }
+        let rto = Self.t1Delay(rto: session.timers.rto, srtt: session.timers.srtt,
+                               bytesInFlight: session.bytesInFlight,
+                               awaitingDelayedAck: awaitingDelayedAck)
         let sessionId = session.id
 
         TxLog.debug(.session, "Starting T1 timer", [
             "session": String(sessionId.uuidString.prefix(8)),
-            "rto": String(format: "%.1fs", rto),
+            "rto": String(format: "%.1fs", session.timers.rto),
+            "t1": String(format: "%.1fs", rto),
+            "awaitingDelayedAck": awaitingDelayedAck,
             "state": session.state.rawValue
         ])
 
@@ -3496,13 +3532,14 @@ final class AX25SessionManager: ObservableObject {
         for item in drained {
             // Checkpoint on window-full, as in sendData (§6.2).
             let fillsWindow = session.outstandingCount + 1 >= sendWindow
+            let polls = fillsWindow || shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
             let ns = session.vs  // Capture before buildIFrame increments vs
             let iFrame = buildIFrame(
                 for: session,
                 payload: item.data,
                 pid: item.pid,
                 displayInfo: item.displayInfo,
-                pf: fillsWindow || shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
+                pf: polls
             )
             debugTrace("TX I (drain queue)", ["frame": describeFrame(iFrame)])
             axDebugPrint("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
@@ -3515,6 +3552,9 @@ final class AX25SessionManager: ObservableObject {
             if wasIdle {
                 startT1Timer(for: session)
                 wasIdle = false
+            } else if polls {
+                // As in sendData: a poll gets the plain RTO.
+                startT1Timer(for: session)
             }
             onSendFrame?(iFrame)
 

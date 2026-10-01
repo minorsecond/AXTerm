@@ -812,7 +812,13 @@ Maintain send buffer for unacked frames:
   against receivers that batch acks on T2. Only on window-full, not on every
   burst end: some node stacks (DRLNOD, live capture) DM a session that polls
   on every idle line.
-- Start T1 if not running
+- Start T1 if not running. For a first send of I-frames none of which polls,
+  T1 = max(RTO, SRTT + airtime of our outstanding frames + 3 s): the peer may
+  hold its ack for its own T2 (AXTerm 2 s, Linux AX.25 3 s), and the RTO is
+  learned from exchanges answered at once. Sending a P=1 frame re-arms T1
+  with the plain RTO, and so does every retry, since a retry polls. Field
+  evidence 2026-10-01: a lone P=0 line was resent after 4.3 s while the RR
+  needed about 5.3 s, and the resend keyed over it.
 - On RR with `nr`:
   - ack frames up to `nr-1`
   - advance `VA`
