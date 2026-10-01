@@ -158,7 +158,7 @@ Status is filled in as each is fixed.
 | 22 | The mailbox wrote "Received <file>" as soon as it acknowledged end of file, while the caller waited for the end-of-transmission ack; AXTerm's YAPP sender read the line as a protocol error and marked an intact upload failed. | A and B, 12:07 UTC 2026-10-01 | fixed, e31615c |
 | 23 | A's AXDP check now retries three times, so every connect to a station without AXDP (most BBSes and nodes) sends three `AXDP?` UI frames instead of one. | A, 11:53 UTC 2026-10-01 | open, consider stopping after one try on a station already known not to answer |
 | 24 | Warbler's IC-705 radio loop stalled at 11:42:26 UTC; its watchdog exited (code 70) and launchd restarted it 30 s later. B heard none of the three SABMs Warbler logged as keyed. | Warbler, 11:42 UTC 2026-10-01 | the hub journal shows it keyed all four transmissions and played their audio with nothing lost or late, then logged the Mac's warblerd going quiet at 11:42:41; the stall was in the Mac warblerd. Why B missed the SABMs is still open; B's serial logs for that minute had aged out |
-| 25 | With the window grown to K3, the peer's T2 ack arrived mid-burst as RR F=0; the sender filled the freed slot at once and keyed over the peer's F=1 answer, and the losses dropped the session to K1, paclen 64. | A, 12:16 to 12:26 UTC 2026-10-01 | fixed, fde9358: no new I-frames after a polling burst until F=1 or an ack for everything |
+| 25 | With the window grown to K3, the peer's T2 ack arrived mid-burst as RR F=0; the sender filled the freed slot at once and keyed over the peer's F=1 answer, and the losses dropped the session to K1, paclen 64. | A, 12:16 to 12:26 UTC 2026-10-01 | not fixed in the AX.25 layer: a poll hold (fde9358) was tried and reverted (14643a3) on the owner's call; growth switched off instead (e2c6e35), pending a receiver-side design |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -174,7 +174,7 @@ Not bugs, recorded so nobody chases them again:
 
 | # | improvement | status |
 |---|---|---|
-| I-1 | Let K and paclen grow during a session, within limits (details below). | done, b5de7e1; measure on the air |
+| I-1 | Let K and paclen grow during a session, within limits (details below). | built (b5de7e1), measured on the air, switched off by default (e2c6e35) because bursts outran the receiver's 2 s T2; needs a receiver-side design before it is switched on |
 | I-2 | Fix the 705's transmit tail in Warbler; in AXTerm, add a diagnostic hint and leave TX delay manual (details below). | AXTerm hint done (962e1c5); AXTerm sends no trailing silence to Warbler (cba92c1); Warbler fixes on branch fix/ptt-safety, in progress |
 | I-3 | When a Bluetooth scan finds no TNC, say that another app (such as the Mobilinkd configuration app) may be holding it. | done, b8c4ded |
 | I-4 | Text downloads from a BBS become files: the mailbox marks a typed-out file with name and byte count, an AXTerm caller saves it to AXTerm Transfers with a Transfers row, and a Capture to file toggle covers any other BBS or node. | done, 07bf240 and e60b600; mailbox replies were already one send per command, so packing needed no change |
