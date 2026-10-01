@@ -3182,6 +3182,7 @@ final class SessionCoordinator: ObservableObject {
         case .XID:
             let responses = sessionManager.handleInboundXID(
                 from: from,
+                to: to,
                 path: path,
                 radio: radio,
                 info: packet.info,

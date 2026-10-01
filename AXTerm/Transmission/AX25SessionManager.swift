@@ -1642,6 +1642,7 @@ final class AX25SessionManager: ObservableObject {
     /// button, and defaults are always safe.
     func handleInboundXID(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID,
         info: Data,
@@ -1661,9 +1662,14 @@ final class AX25SessionManager: ObservableObject {
                 peerXIDStatus[peerKey] = .supported(parsed)
             }
             debugTrace("RX XID command", ["peer": peerKey, "srej": ours.supportsSREJ ? 1 : 0])
-            // Answered from the address this radio operates as, and on it.
+            // Answered from the address the XID was sent to when that is
+            // one of ours (a mailbox on its own SSID), as the SABM after it
+            // is; otherwise from the address this radio operates as. On
+            // 2026-10-01 an XID to the mailbox K0EPI-8 was answered as
+            // K0EPI-3, a station the caller was not negotiating with.
+            let answeringAs = destination.flatMap { answers($0) ? $0 : nil } ?? localAddress(for: radio)
             return [AX25FrameBuilder.buildXID(
-                from: localAddress(for: radio),
+                from: answeringAs,
                 to: source,
                 via: path,
                 parameters: ours,
