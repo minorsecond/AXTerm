@@ -1723,14 +1723,18 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         // but hasn't typed the destination callsign yet
         if adoptingAnyConnected, let session = sessionManager.anyConnectedSession() {
             currentSession = session
-            // Auto-populate from the session so the operator can see who they
-            // are connected to — the path as well as the callsign. Restoring
-            // the peer alone would redraw a session through DRLNOD as direct,
-            // and the next thing typed would go out the wrong way.
-            if viewModel.destinationCall.isEmpty {
-                viewModel.destinationCall = session.remoteAddress.display
-                viewModel.digiPath = session.path.display
-            }
+            // Name the session's station so the operator can see who they are
+            // connected to — the path as well as the callsign. Restoring the
+            // peer alone would redraw a session through DRLNOD as direct, and
+            // the next thing typed would go out the wrong way.
+            //
+            // A destination left in the bar is replaced too: getting here
+            // means it has no session at all. Keeping it showed the session
+            // locked under "K" on the live RF test of 2026-09-30, and kept
+            // Send disabled because "K" is not a callsign, while sending
+            // would have dialed "K" rather than the station on the link.
+            viewModel.destinationCall = session.remoteAddress.display
+            viewModel.digiPath = session.path.display
             return
         }
 

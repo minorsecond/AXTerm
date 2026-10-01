@@ -84,4 +84,69 @@ final class TerminalDestinationBindingTests: XCTestCase {
 
         XCTAssertNil(terminal.currentSession, "the cleared field locked again on the same session")
     }
+
+    // MARK: - Taking up a session nobody chose (bug 4)
+
+    /// With nothing chosen, the terminal takes up the connected session and
+    /// names it.
+    func testRefreshTakesUpTheConnectedSessionWhenNothingIsChosen() {
+        let (terminal, manager) = makeTerminal("DestinationBindingAdoptEmpty")
+        let session = connectedSession(manager, to: peer)
+
+        terminal.refreshCurrentSession()
+
+        XCTAssertEqual(terminal.currentSession?.id, session.id)
+        XCTAssertEqual(terminal.viewModel.destinationCall, "K0EPI-2")
+    }
+
+    /// A destination with no session at all ("K", left by the operator) must
+    /// not hide the session that is actually up. The terminal takes it up and
+    /// the destination follows it, so Send goes to the station the bar shows.
+    func testTakingUpASessionReplacesADestinationThatHasNoSession() {
+        let (terminal, manager) = makeTerminal("DestinationBindingAdoptStale")
+        let session = connectedSession(manager, to: peer)
+        terminal.destinationCall.wrappedValue = "K"
+
+        terminal.refreshCurrentSession()
+
+        XCTAssertEqual(terminal.currentSession?.id, session.id)
+        XCTAssertEqual(terminal.viewModel.destinationCall, "K0EPI-2",
+                       "the bar was bound to K0EPI-2 while still naming \"K\"")
+        terminal.composeText.wrappedValue = "B to A test 1"
+        XCTAssertTrue(terminal.canSend, "Send stayed disabled over a live session")
+    }
+
+    /// A destination that has its own session keeps it, even while another
+    /// station is connected.
+    func testAChosenStationIsNotReplacedByAnotherSession() {
+        let (terminal, manager) = makeTerminal("DestinationBindingKeepChosen")
+        _ = connectedSession(manager, to: peer)
+        let chosen = connectedSession(manager, to: AX25Address(call: "N0CALL", ssid: 1))
+        terminal.destinationCall.wrappedValue = "N0CALL-1"
+
+        terminal.refreshCurrentSession()
+
+        XCTAssertEqual(terminal.currentSession?.id, chosen.id)
+        XCTAssertEqual(terminal.viewModel.destinationCall, "N0CALL-1")
+    }
+
+    /// The field sequence end to end: "K" left in the bar, then K0EPI-2
+    /// connects in. The terminal takes the session up as it connects, names
+    /// it, and Send is available without a trip to the sidebar.
+    func testAnInboundConnectionEnablesSendOverAStaleDestination() async {
+        let (terminal, manager) = makeTerminal("DestinationBindingInbound")
+        terminal.setupSessionCallbacks()
+        terminal.destinationCall.wrappedValue = "K"
+        terminal.composeText.wrappedValue = "B to A test 1"
+
+        _ = manager.handleInboundSABM(from: peer, to: AX25Address(call: "K0EPI", ssid: 3),
+                                      path: DigiPath(), radio: .primary)
+        for _ in 0..<100 where terminal.viewModel.destinationCall != "K0EPI-2" {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(terminal.sessionState, .connected)
+        XCTAssertEqual(terminal.viewModel.destinationCall, "K0EPI-2")
+        XCTAssertTrue(terminal.canSend, "Send stayed disabled over a live session")
+    }
 }
