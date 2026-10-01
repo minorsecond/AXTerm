@@ -148,6 +148,36 @@ final class AX25PropertyFindingsTests: XCTestCase {
         XCTAssertEqual(delivered.count, 10)
     }
 
+    // S2.faithfulPeer seed 0x404236750E5215E5 (peer K=6, N2=2): frames 1
+    // and 2 were lost, the T1 gap flush skipped them, and the peer, which
+    // had not yet heard the ack that skip sent, resent them. By then V(R)
+    // had moved on so that their N(S) sat just ahead of it; they were
+    // buffered and delivered after frame 6.
+
+    func testCopiesOfFramesSkippedByTheGapFlushAreNotDeliveredLater() throws {
+        let (manager, _) = makeManager(maxRetries: 2)
+        var delivered: [String] = []
+        manager.onDataReceived = { _, data in delivered.append(String(decoding: data, as: UTF8.self)) }
+        _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
+        let session = try XCTUnwrap(manager.existingSession(for: peer))
+        func send(_ ns: Int, _ text: String) {
+            _ = manager.handleInboundIFrame(from: peer, path: DigiPath(), radio: .primary,
+                                            ns: ns, nr: 0, pf: false, payload: Data(text.utf8))
+        }
+        // A K=6 window; frames 0 and 1 are lost, 2 and 3 are buffered.
+        send(2, "f2"); send(3, "f3")
+        // Two T1 expiries reach the flush threshold: 0 and 1 are skipped.
+        _ = manager.handleT1Timeout(session: session)
+        _ = manager.handleT1Timeout(session: session)
+        XCTAssertEqual(delivered, ["f2", "f3"], "precondition: the flush skipped frames 0 and 1")
+        send(4, "f4"); send(5, "f5")
+
+        // The peer resends frame 0; its N(S) is now 2 ahead of V(R)=6.
+        send(0, "f0")
+        send(6, "f6"); send(7, "f7"); send(0, "f8")
+        XCTAssertEqual(delivered, ["f2", "f3", "f4", "f5", "f6", "f7", "f8"])
+    }
+
     // MARK: - Fixed: a poll that fills one SREJ gap and exposes another
     //
     // S1.hostile seed 0xD01EA0FF5018BFC4: with SREJ negotiated, V(R)=0 and
