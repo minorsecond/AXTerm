@@ -29,7 +29,10 @@
 //        that many digipeaters, too many digipeaters, an unterminated field
 //        and a missing control field.
 //    A4  Every frame PacketEngine cannot decode is logged as a parser
-//        warning, once, and none becomes a packet.
+//        warning, once.
+//    A5  All 256 control bytes, with any trailer, classify the same way in
+//        AX25.checkFrame and AX25ControlFieldDecoder, and the PID/info split
+//        follows the frame type.
 //
 
 import XCTest
@@ -555,6 +558,51 @@ final class KISSAX25DecodePropertyTests: XCTestCase {
                     v.check(result.failureValue == .unterminatedAddressField(addresses: slots),
                             "no end in \(slots) slots gave \(result)")
                 }
+            }
+        }
+    }
+
+    // A5: every control byte, with and without a PID and info, decodes the
+    // same way through both decoders, and S and U frames keep any info
+    // bytes they carry (AXTerm accepts them; see AX25PropertyFindingsTests).
+    func testEveryControlByteClassifiesConsistently() {
+        checkProperty("A5.controlPidCombos", cases: 200) { rng, v in
+            let to = AX25Gen.address(&rng), from = AX25Gen.address(&rng)
+            let via = (0..<rng.int(in: 0...8)).map { _ in AX25Gen.address(&rng) }
+            let trailer = rng.bytes(rng.pick([0, 1, 2, rng.int(in: 3...300)]))
+            for control in UInt8.min...UInt8.max {
+                var bytes = Data()
+                bytes.append(AX25.encodeAddress(to, isLast: false))
+                bytes.append(AX25.encodeAddress(from, isLast: via.isEmpty))
+                for (index, digi) in via.enumerated() {
+                    bytes.append(AX25.encodeAddress(digi, isLast: index == via.count - 1))
+                }
+                bytes.append(control)
+                bytes.append(trailer)
+                guard case .success(let frame) = AX25.checkFrame(ax25: bytes) else {
+                    v.record(String(format: "control 0x%02X refused: ", control) + AX25.decodeFailureReason(ax25: bytes))
+                    return
+                }
+                let decoded = AX25ControlFieldDecoder.decode(control: control, controlByte1: nil)
+                let agrees: Bool
+                switch frame.frameType {
+                case .i: agrees = decoded.frameClass == .I
+                case .s: agrees = decoded.frameClass == .S
+                case .u: agrees = decoded.frameClass == .U && decoded.uType != .UI
+                case .ui: agrees = decoded.frameClass == .U && decoded.uType == .UI
+                case .unknown: agrees = false
+                }
+                v.check(agrees, String(format: "control 0x%02X: frame type %@ but control decoder says %@ %@",
+                                       control, frame.frameType.rawValue, decoded.frameClass.rawValue,
+                                       decoded.uType?.rawValue ?? decoded.sType?.rawValue ?? ""))
+                if frame.frameType == .i || frame.frameType == .ui {
+                    v.check(frame.pid == trailer.first && frame.info == trailer.dropFirst(),
+                            String(format: "control 0x%02X: PID/info split wrong", control))
+                } else {
+                    v.check(frame.pid == nil && frame.info == trailer,
+                            String(format: "control 0x%02X: S/U frame lost or split its info bytes", control))
+                }
+                if !v.isEmpty { return }
             }
         }
     }
