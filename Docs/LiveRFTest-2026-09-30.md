@@ -55,6 +55,7 @@ files and their SHA-256 sums are in the session scratchpad (`rf/sums.txt`):
 | 22 | BBS: `D t3k_text.txt` (text, typed out) | received, but only as transcript lines (improvement I-4) |
 | 23 | BBS: `D t1k_bin.bin` (binary by YAPP) | pass, byte-identical, about 25 s |
 | 24 | BBS: `U` then a YAPP upload of t256_allbytes.bin | arrived byte-identical in the inbox, but A marked it failed (bug 22) |
+| 25 | AXDP A to B, 20 KB, with in-session growth (I-1) | pass, byte-identical, about 10 min (about 270 bps); grew to K3 with whole 174-byte frames after 10 clean frames, then collapsed to K1, paclen 64 (bug 25) |
 
 Setup notes: Station B ran from a copy of the app with its own bundle ID
 (`com.rosswardrup.AXTerm.stationb`, ad hoc signed without the iCloud
@@ -156,7 +157,8 @@ Status is filled in as each is fixed.
 | 21 | Return in an empty compose field sent nothing, so a mailbox's "Press Return to skip" and node prompts could not be answered with a blank line. | A, 11:54 UTC 2026-10-01 | fixed, 1367c56 |
 | 22 | The mailbox wrote "Received <file>" as soon as it acknowledged end of file, while the caller waited for the end-of-transmission ack; AXTerm's YAPP sender read the line as a protocol error and marked an intact upload failed. | A and B, 12:07 UTC 2026-10-01 | fixed, e31615c |
 | 23 | A's AXDP check now retries three times, so every connect to a station without AXDP (most BBSes and nodes) sends three `AXDP?` UI frames instead of one. | A, 11:53 UTC 2026-10-01 | open, consider stopping after one try on a station already known not to answer |
-| 24 | Warbler's IC-705 radio loop stalled at 11:42:26 UTC; its watchdog exited (code 70) and launchd restarted it 30 s later. B heard none of the three SABMs Warbler logged as keyed. | Warbler, 11:42 UTC 2026-10-01 | Warbler; cause needs the hub journal |
+| 24 | Warbler's IC-705 radio loop stalled at 11:42:26 UTC; its watchdog exited (code 70) and launchd restarted it 30 s later. B heard none of the three SABMs Warbler logged as keyed. | Warbler, 11:42 UTC 2026-10-01 | the hub journal shows it keyed all four transmissions and played their audio with nothing lost or late, then logged the Mac's warblerd going quiet at 11:42:41; the stall was in the Mac warblerd. Why B missed the SABMs is still open; B's serial logs for that minute had aged out |
+| 25 | With the window grown to K3, the peer's T2 ack arrived mid-burst as RR F=0; the sender filled the freed slot at once and keyed over the peer's F=1 answer, and the losses dropped the session to K1, paclen 64. | A, 12:16 to 12:26 UTC 2026-10-01 | fixed, fde9358: no new I-frames after a polling burst until F=1 or an ack for everything |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -175,7 +177,7 @@ Not bugs, recorded so nobody chases them again:
 | I-1 | Let K and paclen grow during a session, within limits (details below). | done, b5de7e1; measure on the air |
 | I-2 | Fix the 705's transmit tail in Warbler; in AXTerm, add a diagnostic hint and leave TX delay manual (details below). | AXTerm hint done (962e1c5); AXTerm sends no trailing silence to Warbler (cba92c1); Warbler fixes on branch fix/ptt-safety, in progress |
 | I-3 | When a Bluetooth scan finds no TNC, say that another app (such as the Mobilinkd configuration app) may be holding it. | done, b8c4ded |
-| I-4 | Text downloads from a BBS become files: the mailbox marks a typed-out file with name and byte count, an AXTerm caller saves it to AXTerm Transfers with a Transfers row, and a Capture to file toggle covers any other BBS or node. Optionally pack mailbox lines into full I-frames. | approved 2026-10-01, agent in progress |
+| I-4 | Text downloads from a BBS become files: the mailbox marks a typed-out file with name and byte count, an AXTerm caller saves it to AXTerm Transfers with a Transfers row, and a Capture to file toggle covers any other BBS or node. | done, 07bf240 and e60b600; mailbox replies were already one send per command, so packing needed no change |
 
 ### I-1: K and paclen grow during a session
 
