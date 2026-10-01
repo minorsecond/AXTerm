@@ -12,6 +12,8 @@ nonisolated final class SyntheticModemIO: ModemAudioIO, @unchecked Sendable {
     let blockSize: Int
     private(set) var format: ModemAudioFormat?
     var latency = ModemAudioLatency(inputSeconds: 0.01, outputSeconds: 0.01)
+    /// Set before `start()` to stand in for a link that reaches Warbler.
+    var transmitTail: ModemTransmitTail = .radio
     weak var sink: ModemAudioSink?
 
     /// Everything the engine rendered, block by block.

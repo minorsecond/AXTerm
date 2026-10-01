@@ -136,6 +136,12 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         capture = ModemAudioCapture.makeIfEnabled(sampleRate: sampleRate)
         if let capture { TxLog.debug(.transport, "Recording receive audio", ["path": capture.url.path]) }
         rebuildDSP()
+        let tail = audio.transmitTail
+        TxLog.debug(.modem, "Transmit tail", [
+            "policy": tail.rawValue,
+            "txTailMs": active.txTailMs,
+            "unkeyMarginMs": Int((Double(unkeyMarginSamples) / sampleRate * 1000).rounded()),
+            "reason": tail.reason])
         carriersHeard = 0
         rxClock = 0
         txWrittenTotal = 0
@@ -237,6 +243,8 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         }
         return n
     }
+
+    var transmitAudioPending: Bool { txFeeding.load(ordering: .relaxed) }
 
     func audioIO(didReceive event: ModemAudioIOEvent) {
         switch event {
@@ -357,9 +365,12 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         case .keying(let since):
             switch pttConfirmation.load(ordering: .acquiring) {
             case 1:
-                txFeeding.store(true, ordering: .releasing)
                 txState = .transmitting(keyedAt: rxClock, drainedAt: nil)
                 topUpTransmitRing()
+                // Raised once there is audio to take, so a network output
+                // never reads the gap before the first render as an underrun
+                // and sends silence ahead of the preamble.
+                txFeeding.store(true, ordering: .releasing)
             case 2:
                 framesDropped += UInt64(pending.withLock { let n = $0.count; $0.removeAll(); return n })
                 encoder = nil
@@ -386,11 +397,14 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
             topUpTransmitRing()
             guard let modulator, modulator.isExhausted else { return }
             txFeeding.store(false, ordering: .releasing)
-            if drainedAt == nil {
-                if outputConsumed.load(ordering: .acquiring) >= txWrittenTotal {
-                    txState = .transmitting(keyedAt: keyedAt, drainedAt: rxClock)
-                }
-            } else if let drainedAt, rxClock - drainedAt >= unkeyMarginSamples {
+            var drained = drainedAt
+            if drained == nil, outputConsumed.load(ordering: .acquiring) >= txWrittenTotal {
+                drained = rxClock
+                txState = .transmitting(keyedAt: keyedAt, drainedAt: rxClock)
+            }
+            // With no margin (Warbler) the unkey goes on the pass that finds
+            // the last sample handed over.
+            if let drained, rxClock - drained >= unkeyMarginSamples {
                 unkey(reason: nil)
             }
 
@@ -403,7 +417,18 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         }
     }
 
+    /// How long the transmitter stays keyed after the last sample has been
+    /// handed to the audio output. A radio driven directly buffers what it
+    /// is sent, so the margin covers that buffer, the key-up latency and a
+    /// little more. Warbler holds the unkey itself until its playout and the
+    /// radio's buffer have drained, so a margin here would only add carrier
+    /// after the frame. See `ModemTransmitTail`.
     private var unkeyMarginSamples: Int64 {
+        audio.transmitTail.waitsForRadioBuffer ? radioDrainSamples : 0
+    }
+
+    /// The radio's buffer, the key-up latency and a little more.
+    private var radioDrainSamples: Int64 {
         Int64((audio.latency.outputSeconds + ptt.keyUpLatencyHint + 0.02) * sampleRate)
     }
 
@@ -489,7 +514,12 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         encoder = nil
         modulator = nil
         toneBitsRemaining = 0
-        txState = .cooldown(until: rxClock + Int64(Double(active.rxMuteAfterTxMs) / 1000 * sampleRate))
+        // Through Warbler the radio is still on the air after this unkey,
+        // playing what Warbler holds, and our own audio can come back on the
+        // receive stream. Receive stays muted, and the next key-down waits,
+        // for as long as they did when the engine held the key itself.
+        let stillOnAir = audio.transmitTail.waitsForRadioBuffer ? 0 : radioDrainSamples
+        txState = .cooldown(until: rxClock + stillOnAir + Int64(Double(active.rxMuteAfterTxMs) / 1000 * sampleRate))
         demodulator?.reset()
         carrier.reset()
     }

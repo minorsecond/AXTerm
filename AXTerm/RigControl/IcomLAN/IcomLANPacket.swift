@@ -188,6 +188,22 @@ nonisolated enum IcomLAN {
         /// Sixteen bytes the connection request must echo.
         let replyID: [UInt8]
         let radioName: String
+
+        /// True when Warbler's virtual IC-705 sent these, not a radio.
+        var isWarbler: Bool { IcomLAN.isWarbler(replyID: replyID) }
+    }
+
+    /// The hardware address Warbler's virtual IC-705 puts in its
+    /// capabilities: locally administered, then "WBLER" in ASCII. A real
+    /// radio puts its own address there (an IC-705's starts 00:90:C7,
+    /// Icom's). Warbler compares the same six bytes to tell its own hub
+    /// from a radio (`icom_session.hpp`, `viaWarbler`).
+    static let warblerAddress: [UInt8] = [0x02, 0x57, 0x42, 0x4C, 0x45, 0x52]
+
+    /// Whether a capabilities reply ID carries Warbler's address, at bytes
+    /// 10 to 15 of the sixteen.
+    static func isWarbler(replyID: [UInt8]) -> Bool {
+        replyID.count >= 16 && Array(replyID[10..<16]) == warblerAddress
     }
 
     static func parseCapabilities(_ d: Data) -> Capabilities? {

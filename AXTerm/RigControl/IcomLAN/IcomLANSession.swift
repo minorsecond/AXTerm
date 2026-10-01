@@ -65,6 +65,10 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     /// What the radio called itself in the connection reply, e.g. "IC-705".
     private(set) var radioName: String = ""
     private(set) var deviceName: String = ""
+    /// True when the far end is Warbler's virtual IC-705 rather than a
+    /// radio, from the address in its capabilities. Set during the
+    /// handshake, before `open()` returns.
+    private(set) var viaWarbler = false
 
     private let control: IcomLANStream
     private let serial: IcomLANStream
@@ -158,6 +162,14 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
 
     deinit { close() }
 
+    #if DEBUG
+    /// Test seam: hand the session a control datagram as if it had arrived
+    /// from the far end. Sends nothing while the session is not logged in.
+    func testReceiveControl(_ d: Data) {
+        queue.sync { handleControl(d) }
+    }
+    #endif
+
     // MARK: - Lifecycle
 
     /// Connect and log in. Throws with the reason on any failure; the state
@@ -170,6 +182,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         // a half-finished token exchange carries over and the reconnect fails.
         authID = []
         replyID = nil
+        viaWarbler = false
         tokenAccepted = false
         innerSequence = 0
         serialSendSequence = 0
@@ -526,6 +539,7 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
             replyID = caps.replyID
             gotReplyID = true
             if !caps.radioName.isEmpty { radioName = caps.radioName }
+            viaWarbler = caps.isWarbler
             tokenAccepted = true   // legacy flag, kept for any readers
             trySendConnectionRequest()
             return

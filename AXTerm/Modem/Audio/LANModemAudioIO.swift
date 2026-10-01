@@ -33,10 +33,10 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
     private var captureInt16 = [Int16](repeating: 0, count: 4096)
     private var renderScratch = [Float](repeating: 0, count: 960)
     private var renderInt16 = [Int16](repeating: 0, count: 960)
-    private var wasFeeding = false
-    /// Consecutive 20 ms frames the engine has kept quiet; after a few,
-    /// nothing is sent until it speaks again.
-    private var quietFrames = 0
+    /// Decided at `start()`, from whether the session reached Warbler.
+    private(set) var transmitTail: ModemTransmitTail = .radio
+    /// Which transmit frames go out; see `TrailingSilenceGate`.
+    private var silenceGate = TrailingSilenceGate(tail: .radio)
     private(set) var packetsReceived = 0
     private(set) var packetsLost = 0
 
@@ -61,6 +61,13 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
         let fmt = ModemAudioFormat(sampleRate: measured, inputChannels: 1, outputChannels: 1)
         format = fmt
         latency.outputSeconds = Double(session.configuration.txBufferMs) / 1000 + 0.1
+        transmitTail = Self.transmitTail(for: session)
+        silenceGate = TrailingSilenceGate(tail: transmitTail)
+        TxLog.debug(.modem, "LAN transmit tail", [
+            "policy": transmitTail.rawValue,
+            "farEnd": session.viaWarbler ? "Warbler (capabilities carry 02:57:42:4C:45:52)" : "radio",
+            "trailingSilenceMs": silenceGate.limit * 20,
+            "reason": transmitTail.reason])
         isRunning = true
         session.onAudio = { [weak self] pcm in self?.receive(pcm) }
 
@@ -70,6 +77,11 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
         t.resume()
         txTimer = t
         sink?.audioIO(didReceive: .started(fmt))
+    }
+
+    /// The tail policy for a logged-in session.
+    static func transmitTail(for session: IcomLANSession) -> ModemTransmitTail {
+        .forIcomLAN(viaWarbler: session.viaWarbler)
     }
 
     /// Listen for `window` seconds and count 16-bit mono samples, then snap
@@ -137,19 +149,15 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
 
     // MARK: - Transmit
 
-    /// Every 20 ms: pull what the engine has. Silence is sent only briefly
-    /// after audio, so an idle modem costs the network nothing.
+    /// Every 20 ms: pull what the engine has. Silence goes out only inside a
+    /// transmission and, for a direct radio, briefly after it, so an idle
+    /// modem costs the network nothing.
     private func transmitFrame() {
         guard isRunning, let sink, let session, let format else { return }
         let frames = Int(format.sampleRate * 0.02)
         if renderScratch.count != frames { renderScratch = [Float](repeating: 0, count: frames) }
         let written = renderScratch.withUnsafeMutableBufferPointer { sink.audioIO(render: $0) }
-        if written == 0 {
-            quietFrames += 1
-            guard quietFrames <= 15 else { return }   // 300 ms of trailing silence, then quiet
-        } else {
-            quietFrames = 0
-        }
+        guard silenceGate.shouldSend(written: written, moreToCome: sink.transmitAudioPending) else { return }
         session.sendAudio(pcm: Self.encodePCM(&renderScratch, written: written, staging: &renderInt16))
     }
 
