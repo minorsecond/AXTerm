@@ -50,6 +50,11 @@ files and their SHA-256 sums are in the session scratchpad (`rf/sums.txt`):
 | 17 | AXDP B to A, 1 KB, "Always Accept" from the prompt | pass, byte-identical, 47 s from Send to saved file |
 | 18 | auto-accept from the allow list with the terminal off screen | pass, no prompt (bug 16: no visible sign either) |
 | 19 | cancel from the sender mid-transfer | pass, receiver logs "K0EPI-3 canceled the transfer" |
+| 20 | BBS: B shares a folder (bug 17 fix), A calls K0EPI-8, new-caller questions | pass after bugs 18 to 20 below; Return in an empty field sent nothing (bug 21) |
+| 21 | BBS: `W TEST` lists the area | pass |
+| 22 | BBS: `D t3k_text.txt` (text, typed out) | received, but only as transcript lines (improvement I-4) |
+| 23 | BBS: `D t1k_bin.bin` (binary by YAPP) | pass, byte-identical, about 25 s |
+| 24 | BBS: `U` then a YAPP upload of t256_allbytes.bin | arrived byte-identical in the inbox, but A marked it failed (bug 22) |
 
 Setup notes: Station B ran from a copy of the app with its own bundle ID
 (`com.rosswardrup.AXTerm.stationb`, ad hoc signed without the iCloud
@@ -145,6 +150,13 @@ Status is filled in as each is fixed.
 | 15 | Narrow-window layout: at half-screen width with the sidebar open, the locked To field in the compose bar and the Map's station-list title both wrap one or two characters per line. | A, 10:55 UTC 2026-10-01 | open |
 | 16 | An auto-accepted transfer arriving while another view is on screen gives no visible sign that a file is coming in. | A, 10:55 UTC 2026-10-01 | open |
 | 17 | Every BBS file pick did nothing: SwiftUI clears the importer's isPresented binding before calling the completion handler, and the Files screens kept the pick's purpose in that state. "Share a Folder" closed the panel and shared nothing, with no message. | B, 10:58 UTC 2026-10-01 | fixed, 738f67b |
+| 18 | An XID addressed to the mailbox (K0EPI-8) was answered from the station callsign (K0EPI-3). | B, 11:42 UTC 2026-10-01 | fixed, 383c380 |
+| 19 | When the radio came up but the sound modem would not start (Warbler restarting its virtual IC-705 at that moment), the link never retried, while its own status line said "still trying". | A, 11:42 UTC 2026-10-01 | fixed, 8837f31 |
+| 20 | Possibly flaky under full-suite load: ModemRadioLinkTests.testATransmissionKeysAndUnkeysOverCIV failed once and passed 10 of 10 alone. | test suite | watch |
+| 21 | Return in an empty compose field sent nothing, so a mailbox's "Press Return to skip" and node prompts could not be answered with a blank line. | A, 11:54 UTC 2026-10-01 | fixed, 1367c56 |
+| 22 | The mailbox wrote "Received <file>" as soon as it acknowledged end of file, while the caller waited for the end-of-transmission ack; AXTerm's YAPP sender read the line as a protocol error and marked an intact upload failed. | A and B, 12:07 UTC 2026-10-01 | fixed, e31615c |
+| 23 | A's AXDP check now retries three times, so every connect to a station without AXDP (most BBSes and nodes) sends three `AXDP?` UI frames instead of one. | A, 11:53 UTC 2026-10-01 | open, consider stopping after one try on a station already known not to answer |
+| 24 | Warbler's IC-705 radio loop stalled at 11:42:26 UTC; its watchdog exited (code 70) and launchd restarted it 30 s later. B heard none of the three SABMs Warbler logged as keyed. | Warbler, 11:42 UTC 2026-10-01 | Warbler; cause needs the hub journal |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -163,6 +175,7 @@ Not bugs, recorded so nobody chases them again:
 | I-1 | Let K and paclen grow during a session, within limits (details below). | done, b5de7e1; measure on the air |
 | I-2 | Fix the 705's transmit tail in Warbler; in AXTerm, add a diagnostic hint and leave TX delay manual (details below). | AXTerm hint done (962e1c5); AXTerm sends no trailing silence to Warbler (cba92c1); Warbler fixes on branch fix/ptt-safety, in progress |
 | I-3 | When a Bluetooth scan finds no TNC, say that another app (such as the Mobilinkd configuration app) may be holding it. | done, b8c4ded |
+| I-4 | Text downloads from a BBS become files: the mailbox marks a typed-out file with name and byte count, an AXTerm caller saves it to AXTerm Transfers with a Transfers row, and a Capture to file toggle covers any other BBS or node. Optionally pack mailbox lines into full I-frames. | approved 2026-10-01, agent in progress |
 
 ### I-1: K and paclen grow during a session
 
