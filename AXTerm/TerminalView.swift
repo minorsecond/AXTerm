@@ -4823,6 +4823,17 @@ struct TerminalViewModifiers: ViewModifier {
             .onAppear {
                 wireCallbacks()
             }
+            // The model is held above this view and is replaced when the
+            // station's callsign changes (TerminalModelBox), while this view
+            // stays on screen and onAppear does not run again. Wiring only on
+            // appear left the new model deaf: a sent chat line read "Queued"
+            // and the header "Sending…" after the peer had acked it, and an
+            // inbound session never became the terminal's (live RF test
+            // 2026-09-30, where test mode sets the callsign after launch).
+            .onChange(of: ObjectIdentifier(txViewModel)) { _, _ in
+                wireCallbacks()
+                txViewModel.refreshCurrentSession()
+            }
     }
 }
 
