@@ -123,6 +123,84 @@ final class AX25InteropDirewolfTests: AX25InteropTestCase {
         assertNoViolations()
     }
 
+    // MARK: - What AXTerm advertises it can receive
+
+    /// AXTerm's XID offer carries what it can receive, N1 256 and k 4
+    /// (2.2 §4.3.3.7, §6.3.2), not its own sending K 2 and paclen 128.
+    /// Direwolf then sends 256-byte frames four at a time and AXTerm
+    /// delivers every byte once, in order, without asking for anything
+    /// again. AXTerm's own frames still keep to K 2 and paclen 128.
+    func testDirewolfSendsFullFramesFourAtATimeAfterAXTermsXID() {
+        for path in Self.paths {
+            build(.direwolf(), digis: path)
+            axtermConnects()
+            let offer = axtermSent("XID").first.flatMap { AX25XIDParameters.parse($0.payload) }
+            XCTAssertEqual(offer?.iFieldLengthRx, 256, "path \(path)")
+            XCTAssertEqual(offer?.windowSizeRx, 4, "path \(path)")
+            XCTAssertEqual(peer.sendPaclen, 256, "path \(path)")
+            XCTAssertEqual(peer.sendWindow, 4, "path \(path)")
+
+            peerSends(Self.burst(8 * 256 + 100, tag: "F"))
+            XCTAssertTrue(peer.transmitted.contains { if case .i = $0.frame.kind { return $0.frame.info.count == 256 }; return false },
+                          "path \(path): Direwolf sent 256-byte frames \(trace())")
+            XCTAssertEqual(peer.maxOutstanding, 4, "path \(path): four frames in flight \(trace())")
+            XCTAssertTrue(axtermSent("REJ").isEmpty && axtermSent("SREJ").isEmpty,
+                          "path \(path): nothing was lost, so nothing is asked for again \(trace())")
+
+            axtermSends(Self.burst(600, tag: "A"))
+            assertWindowAndPaclenHeld()
+            assertNoViolations()
+        }
+    }
+
+    /// The same when Direwolf negotiates first: AXTerm's XID response
+    /// advertises N1 256 and k 4, and Direwolf keeps to them.
+    func testAXTermsXIDResponseAdvertisesItsReceiveCapacity() {
+        build(.direwolf())
+        peer.negotiate(with: Self.axtermCall, via: peerPath)
+        run(until: { peer.srejEnabled }, limit: 30)
+        let response = axtermSent("XID").last.flatMap { AX25XIDParameters.parse($0.payload) }
+        XCTAssertEqual(response?.iFieldLengthRx, 256)
+        XCTAssertEqual(response?.windowSizeRx, 4)
+        XCTAssertEqual(peer.sendPaclen, 256)
+        XCTAssertEqual(peer.sendWindow, 4)
+        peer.connect(to: Self.axtermCall, via: peerPath, sabme: false)
+        run(until: { axSession?.state == .connected && peer.isConnected }, limit: 60)
+        peerSends(Self.burst(8 * 256, tag: "G"))
+        XCTAssertEqual(peer.maxOutstanding, 4, trace())
+        assertNoViolations()
+    }
+
+    /// The first of four 256-byte frames is lost. AXTerm holds the three
+    /// behind the gap (its receive span is half the modulo, so a peer's
+    /// k 4 always fits) and asks for the one missing frame, with SREJ when
+    /// negotiated and REJ when not. Every byte arrives once, in order.
+    func testFirstOfFourFullFramesLost() {
+        for profile in [PeerProfile.direwolf(), PeerProfile.direwolf(srejOnModulo8: false)] {
+            for path in Self.paths {
+                build(profile, digis: path)
+                axtermConnects()
+                var dropped = false
+                channel.dropRule = { d in
+                    guard !dropped, d.receiver == "AXTerm", d.frame?.src.display != Self.axtermCall,
+                          case .i(0, _, _) = d.frame?.kind else { return false }
+                    dropped = true
+                    return true
+                }
+                peerSends(Self.burst(4 * 256, tag: "H"))
+                let label = "\(profile.srejOnModulo8 ? "SREJ" : "REJ") path \(path)"
+                XCTAssertTrue(dropped, label)
+                XCTAssertEqual(peer.maxOutstanding, 4, "\(label) \(trace())")
+                if profile.srejOnModulo8 {
+                    XCTAssertEqual(axtermSent("SREJ").count, 1, "\(label): one SREJ for the gap \(trace())")
+                } else {
+                    XCTAssertEqual(axtermSent("REJ").count, 1, "\(label): one REJ for the gap \(trace())")
+                }
+                assertNoViolations()
+            }
+        }
+    }
+
     /// A Direwolf that answers an early XID with DM (no link yet) still
     /// connects after one probe.
     func testDirewolfAnsweringXIDWithDM() {

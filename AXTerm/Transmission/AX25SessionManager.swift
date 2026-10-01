@@ -898,17 +898,31 @@ final class AX25SessionManager: ObservableObject {
         pendingXID.values.contains { $0.key == key }
     }
 
-    /// Our offer: SREJ plus our receive limits from the session's config.
+    /// The largest information field this station accepts in an inbound
+    /// I-frame: our XID N1. Neither the KISS and AX.25 decoders nor the
+    /// session's receive path limit an information field (the built-in
+    /// modem's HDLC decoder takes frames up to 1024 bytes); 256 is the AX.25
+    /// default N1 and the most any session here sends (`AX25SessionConfig`
+    /// clamps paclen to 256).
+    nonisolated static let receiveN1 = 256
+
+    /// Our offer: SREJ plus what this station can receive.
     ///
-    /// N1 and k are what this station can receive, so they are the config's
-    /// ceilings rather than the values a session starts with: advertising
-    /// the start would make the peer treat K=2 paclen 128 as its own ceiling
-    /// toward us for the whole session (§7.8.1).
+    /// N1 and k in XID are the receiver's limits (AX.25 2.2 §4.3.3.7,
+    /// §6.3.2), and the peer holds its frames toward us to them. They are
+    /// not our sending K and paclen: those were advertised here until
+    /// 2026-10-01, and with in-session growth off they are the start values
+    /// (K=2, paclen 128), so 2.2 peers sent us 128-byte frames two at a time.
+    /// k is the receive span: a peer with k frames in flight can have at
+    /// most k - 1 of them past a gap, and the out-of-sequence buffer holds
+    /// the span less one (4 under modulo 8, §7.5 "Receive span"). A buffer
+    /// configured smaller lowers k to match.
     private func localXIDParameters(config: AX25SessionConfig) -> AX25XIDParameters {
         var params = AX25XIDParameters()
         params.supportsSREJ = true
-        params.iFieldLengthRx = config.paclenCeiling
-        params.windowSizeRx = config.windowCeiling
+        params.iFieldLengthRx = Self.receiveN1
+        let buffered = config.maxReceiveBufferSize ?? (config.receiveWindowSpan - 1)
+        params.windowSizeRx = min(config.receiveWindowSpan, buffered + 1)
         return params
     }
 

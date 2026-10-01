@@ -245,6 +245,8 @@ final class ScriptedAX25Peer: InteropNode {
     private(set) var dmForPolls = 0
     /// Frames from a station other than the one this link is with.
     private(set) var strayFrames = 0
+    /// The most I-frames this station had outstanding at once.
+    private(set) var maxOutstanding = 0
     /// Lines (CR-terminated) received, for application models.
     var onLine: ((String) -> Void)?
     var onConnected: (() -> Void)?
@@ -712,6 +714,7 @@ final class ScriptedAX25Peer: InteropNode {
             let ns = vs
             sentFrames[ns] = info
             vs = (vs + 1) % 8
+            maxOutstanding = max(maxOutstanding, outstanding)
             let p = profile.pollsWhenWindowFull && outstanding == sendWindow
             transmitI(ns: ns, info: info, p: p)
             if !t1Running { startT1() }

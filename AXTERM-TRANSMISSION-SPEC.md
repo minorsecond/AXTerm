@@ -840,8 +840,17 @@ REJ. Discipline:
 ### 7.5.1 AX.25 2.2 parameter negotiation (XID)
 
 Before the first SABM to an unknown station (per-callsign cache), send an
-XID command (control 0xBF) offering: SREJ, our PACLEN as N1, our K —
-**modulo 8 explicitly**. Wire format and bit values follow the field
+XID command (control 0xBF) offering: SREJ, what we can receive as N1 and k
+(N1 = 256, k = 4), **modulo 8 explicitly**. N1 and k in XID are the
+receiver's limits (AX.25 2.2 §4.3.3.7, §6.3.2): the peer holds the frames it
+sends us to them. They are not our own K and paclen. Our decoders and receive
+path take any information field up to 256 bytes, and k is the receive span
+(modulo / 2), since a peer with k frames in flight has at most k - 1 of them
+past a gap and the out-of-sequence buffer holds the span less one. A buffer
+configured smaller (`maxReceiveBufferSize`) lowers k to match
+(`AX25SessionManager.receiveN1`, `localXIDParameters`). Until 2026-10-01 the
+offer carried our send ceilings, which with in-session growth off are the
+start values, so 2.2 peers sent us 128-byte frames two at a time. Wire format and bit values follow the field
 reference (Direwolf xid.c): FI 0x82, GI 0x80, 16-bit group length,
 PI 2 / 3 / 6 / 8 / 9 / 10. A command offers a menu; a response picks one.
 
@@ -857,7 +866,7 @@ Outcomes, all cached per callsign so the cost is paid at most once:
   must not strand the connect.
 
 Inbound: an XID command draws a response selecting the intersection of the
-offer and our capabilities; the SABM that follows opens the session with
+offer and our capabilities, with the same N1 and k as our own offer; the SABM that follows opens the session with
 exactly what the response promised.
 
 **Modulo 128 is deliberately not offered.** Extended mode changes the
@@ -998,7 +1007,7 @@ in any scenario, or behind it overall.
 - paclen: 256 on a direct path, one ladder rung less per digipeater (`TxAdaptiveSettings.paclenCeiling(forHops:)`: 192 for one, 128 for two or more).
 - Both are clamped to what the peer advertised in XID (k and N1). Without an XID exchange we assume the AX.25 defaults the code already assumes, N1 = 256 and k = 4 for modulo 8 (`AX25Constants.defaultWindowSize`), which the ceilings above never exceed.
 - A K or paclen the operator set by hand, adaptive transmission off, or a station reset to defaults: that parameter has no ceiling to grow toward and stays fixed for the session, as before.
-- Our XID offer (and our answer to a peer's XID) advertises the ceilings as our N1 and k. They are what we can receive. Advertising the starting values would make the peer treat K=2 paclen 128 as its own ceiling toward us.
+- Our XID offer (and our answer to a peer's XID) advertises what we can receive, N1 = 256 and k = 4 (§7.5.1), not these ceilings or the start values. The ceilings limit what we send; advertising them would hold the peer to our own K and paclen toward us.
 
 **Start** (`AX25SessionConfig.windowSize`, `paclen`, `startSource`), in order:
 1. Another session to the same station is open: the merged config of §7.8.
@@ -1023,7 +1032,7 @@ Decision: 24 hours. It covers the sessions an operator runs to one station in a 
 **UI**: during a session the status bar shows the live K and paclen, not the controller's suggestion. Its tooltip, the K and P cards in the adaptive popover, and the K in the session strip say why: the values in use, the ceilings, a raise waiting for frames in flight, where the start came from, and the last reason for a change (`AdaptiveLiveLink.explanation`).
 
 Checklist:
-- [x] Ceilings from the hop count, the K=4 cap, the operator's manual values and the peer's XID; XID offer advertises them
+- [x] Ceilings from the hop count, the K=4 cap, the operator's manual values and the peer's XID; XID offer advertises our receive capacity (N1 256, k 4)
   - Implementation notes: `AX25SessionConfig.maxWindowSize/maxPaclen`, `negotiating(with:)`; `SessionCoordinator.linkCeilings(hops:)`, `configFromAdaptive`; `AX25SessionManager.localXIDParameters`.
 - [x] Start from the last confirmed values (24 h, by radio, station and path), else recent evidence, channel or defaults
   - Implementation notes: `ConfirmedLinkMemory`; `getConfigForDestination`, `learningEntry(for:)` and `applyLinkQualitySample` in `SessionCoordinator`.
