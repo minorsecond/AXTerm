@@ -428,6 +428,13 @@ nonisolated final class AX25Session: @unchecked Sendable {
         return sendTimeByNs[ackedNs]
     }
 
+    /// Whether N(R) acknowledges at least one frame not acknowledged
+    /// before: it lies in V(A)+1...V(S).
+    func newlyAcknowledges(nr: Int) -> Bool {
+        let sequence = stateMachine.sequenceState
+        return sequence.isValidNR(nr: nr) && nr != sequence.va
+    }
+
     /// Legacy: returns send time regardless of Karn status (used only for
     /// compatibility during SABM RTT measurement where retransmit status is irrelevant).
     func sendTimeForAckedBy(nr: Int) -> TimeInterval? {
@@ -2644,17 +2651,26 @@ final class AX25SessionManager: ObservableObject {
         // might correspond to the original or the retransmit. Using the original
         // send time would overstate RTT by including the retransmit wait.
         // Bug F fix: use clock.currentTime instead of Date() for determinism.
-        if let sentAt = session.rttSendTime(ackedBy: nr) {
-            let rtt = clock.currentTime - sentAt
-            session.timers.updateRTT(sample: rtt)
-            TxLog.rttUpdate(
-                peer: source.display,
-                srtt: session.timers.srtt ?? rtt,
-                rttvar: session.timers.rttvar,
-                rto: session.timers.rto
-            )
+        //
+        // Only an N(R) that newly acknowledges something can time a frame.
+        // An RR repeating V(A), or one outside V(A)...V(S), names a frame
+        // acknowledged earlier, and when that ack came piggybacked on an
+        // I-frame or in a REJ its send time was never cleared: the sample
+        // was the time since that old frame went out, minutes on an idle
+        // link, and it pinned the RTO at rtoMax.
+        if session.newlyAcknowledges(nr: nr) {
+            if let sentAt = session.rttSendTime(ackedBy: nr) {
+                let rtt = clock.currentTime - sentAt
+                session.timers.updateRTT(sample: rtt)
+                TxLog.rttUpdate(
+                    peer: source.display,
+                    srtt: session.timers.srtt ?? rtt,
+                    rttvar: session.timers.rttvar,
+                    rto: session.timers.rto
+                )
+            }
+            session.clearSendTimesAcked(by: nr)
         }
-        session.clearSendTimesAcked(by: nr)
 
         // Capture V(A) BEFORE state machine update - RR only acks [V(A), N(R))
         let vaBefore = session.va
@@ -2958,12 +2974,15 @@ final class AX25SessionManager: ObservableObject {
         }
 
         // The N(R) in an RNR is a real acknowledgment, so it yields a valid RTT
-        // sample under the same Karn's-algorithm rules used for RR.
-        if let sentAt = session.rttSendTime(ackedBy: nr) {
-            let rtt = clock.currentTime - sentAt
-            session.timers.updateRTT(sample: rtt)
+        // sample under the same Karn's-algorithm rules used for RR, and only
+        // when it newly acknowledges something (see the RR handler).
+        if session.newlyAcknowledges(nr: nr) {
+            if let sentAt = session.rttSendTime(ackedBy: nr) {
+                let rtt = clock.currentTime - sentAt
+                session.timers.updateRTT(sample: rtt)
+            }
+            session.clearSendTimesAcked(by: nr)
         }
-        session.clearSendTimesAcked(by: nr)
 
         let vaBefore = session.va
         let oldState = session.state

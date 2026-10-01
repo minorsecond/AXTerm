@@ -206,6 +206,36 @@ final class AX25PropertyFindingsTests: XCTestCase {
         XCTAssertEqual(reply.displayInfo, "SREJ(2)", "the new gap is still asked for")
     }
 
+    // MARK: - Fixed: RTT samples only from frames newly acknowledged
+    //
+    // T5.rttSampleSource seed 0xFDC063FFDAB7FDA1: RR(2) with V(A)=7 and
+    // V(S)=0 acknowledged nothing new, yet took a 34.6 s RTT sample from a
+    // frame acknowledged a lap earlier by a piggybacked N(R), whose send
+    // time was never cleared. Spec 7.3 updates the estimator "on each acked
+    // frame"; Karn's rule likewise times only an unambiguous new ack.
+
+    func testRepeatedAckAfterAPiggybackedAckTakesNoRTTSample() throws {
+        let (manager, clock) = makeManager()
+        _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
+        let session = try XCTUnwrap(manager.existingSession(for: peer))
+
+        _ = manager.sendData(Data("hello".utf8), to: peer)
+        clock.advance(by: 0.5)
+        // The peer's reply acknowledges our frame by piggybacking N(R)=1.
+        _ = manager.handleInboundIFrame(from: peer, path: DigiPath(), radio: .primary,
+                                        ns: 0, nr: 1, pf: false, payload: Data("hi".utf8))
+        XCTAssertEqual(session.va, 1)
+        let srtt = session.timers.srtt
+
+        // A poll 25 s later (inside T3, so no timer of ours runs) repeats
+        // N(R)=1.
+        clock.advance(by: 25)
+        _ = manager.handleInboundRRFrames(from: peer, path: DigiPath(), radio: .primary,
+                                          nr: 1, pf: true, isCommand: true)
+        XCTAssertEqual(session.state, .connected)
+        XCTAssertEqual(session.timers.srtt, srtt, "a repeated N(R) was timed against a frame acked long ago")
+    }
+
     // MARK: - Fixed: a new link starts its N2 ladder at zero
     //
     // S1.hostile seed 0x036E22AFF228470A: retryCount 9 with N2=8 on a
