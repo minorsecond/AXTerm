@@ -31,12 +31,12 @@ struct LevelSeries {
 
     private mutating func add(_ level: Int, clipped wasClipped: Bool = false) {
         // More than the ADC can hold reads as full scale, clipped.
-        let vpp = min(level, 65_535)
+        let vpp = min(level, TNC4LevelSample.fullScale)
         let clipped = wasClipped || level >= 65_400
         let center = 32_768
         let half = vpp / 2
         let vmin = clipped ? 0 : max(1, center - half)
-        let vmax = clipped ? 65_535 : min(65_399, center + half)
+        let vmax = clipped ? TNC4LevelSample.fullScale : min(65_399, center + half)
         samples.append(TNC4LevelSample(t: t, vpp: vpp, vmin: vmin, vmax: vmax))
         t += Self.step
     }
@@ -66,7 +66,7 @@ struct LevelSeries {
     /// Reports pinned at one end, as after an IC-V8 unkeys.
     mutating func pinned(_ seconds: Double) {
         for _ in 0..<Int((seconds / Self.step).rounded()) {
-            samples.append(TNC4LevelSample(t: t, vpp: 900, vmin: 64_600, vmax: 65_535))
+            samples.append(TNC4LevelSample(t: t, vpp: 900, vmin: 64_600, vmax: TNC4LevelSample.fullScale))
             t += Self.step
         }
     }

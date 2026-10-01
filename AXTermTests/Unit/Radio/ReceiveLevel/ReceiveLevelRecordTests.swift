@@ -98,7 +98,7 @@ final class ReceiveLevelRecordTests: XCTestCase {
         let b = ReceiveLevelAnalysis.baseline(rec, packets: packets, noiseVpp: noise, at: t0, source: .beacon)
         XCTAssertEqual(b.gain, 1)
         XCTAssertEqual(Double(b.toneVpp ?? 0), 2 * Double(rec.measuredVpp), accuracy: 2)
-        XCTAssertEqual(b.noiseSaturated, Double(n) * 2 >= 0.9 * 65_535)
+        XCTAssertEqual(b.noiseSaturated, Double(n) * 2 >= 0.9 * Double(TNC4LevelSample.fullScale))
     }
 
     func testNothingHeardChangesNothing() {
@@ -113,7 +113,7 @@ final class ReceiveLevelRecordTests: XCTestCase {
         let rec = ReceiveGainAdvice.recommend(toneVpp: 10_500, measuredAt: 0, clipped: false)
         let b = ReceiveLevelAnalysis.baseline(rec, packets: 1, noiseVpp: 36_000, at: t0, source: .beacon)
         XCTAssertTrue(b.noiseSaturated)
-        XCTAssertEqual(b.noiseVpp, 65_535)
+        XCTAssertEqual(b.noiseVpp, TNC4LevelSample.fullScale)
     }
 
     func testFirstSampleAtTheBaselineGainFillsItsNoise() {

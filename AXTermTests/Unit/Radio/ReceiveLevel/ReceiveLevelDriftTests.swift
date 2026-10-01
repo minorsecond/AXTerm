@@ -102,8 +102,8 @@ final class ReceiveLevelDriftTests: XCTestCase {
 
     /// A saturated baseline can only show the audio got quieter.
     func testASaturatedBaselineShowsOnlyQuieter() {
-        let b = baseline(noise: 65_535, saturated: true)
-        let same = [obs(30, noise: 65_535, clipped: 0.8), obs(60, noise: 65_535, clipped: 0.8)]
+        let b = baseline(noise: TNC4LevelSample.fullScale, saturated: true)
+        let same = [obs(30, noise: TNC4LevelSample.fullScale, clipped: 0.8), obs(60, noise: TNC4LevelSample.fullScale, clipped: 0.8)]
         XCTAssertNil(ReceiveLevelDrift.assess(baseline: b, observations: same))
         let quieter = [obs(30, noise: 20_000), obs(60, noise: 21_000)]
         XCTAssertEqual(ReceiveLevelDrift.assess(baseline: b, observations: quieter)?.kind, .quieter)
@@ -131,9 +131,9 @@ final class ReceiveLevelDriftTests: XCTestCase {
 
     func testClippingPacketsAreAFinding() throws {
         let b = baseline(gain: 2)
-        let o = [obs(30, gain: 2, noise: 20_000, tones: [65_535], tonesClipped: true),
+        let o = [obs(30, gain: 2, noise: 20_000, tones: [TNC4LevelSample.fullScale], tonesClipped: true),
                  obs(90, gain: 2, noise: 20_000),
-                 obs(100, gain: 2, noise: 20_000, tones: [65_535], tonesClipped: true)]
+                 obs(100, gain: 2, noise: 20_000, tones: [TNC4LevelSample.fullScale], tonesClipped: true)]
         let f = try XCTUnwrap(ReceiveLevelDrift.assess(baseline: b, observations: o))
         XCTAssertEqual(f.kind, .clipping)
         XCTAssertEqual(f.suggestedGain, 1)
@@ -141,8 +141,8 @@ final class ReceiveLevelDriftTests: XCTestCase {
 
     func testClippingAtTheBottomSaysTurnTheVolumeDown() throws {
         let b = baseline(gain: 0)
-        let o = [obs(30, gain: 0, noise: 20_000, tones: [65_535], tonesClipped: true),
-                 obs(60, gain: 0, noise: 20_000, tones: [65_535], tonesClipped: true)]
+        let o = [obs(30, gain: 0, noise: 20_000, tones: [TNC4LevelSample.fullScale], tonesClipped: true),
+                 obs(60, gain: 0, noise: 20_000, tones: [TNC4LevelSample.fullScale], tonesClipped: true)]
         let f = try XCTUnwrap(ReceiveLevelDrift.assess(baseline: b, observations: o))
         XCTAssertNil(f.suggestedGain)
         XCTAssertEqual(f.turnVolume, .down)

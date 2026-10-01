@@ -120,7 +120,7 @@ final class PacketToneSignatureTests: XCTestCase {
     func testClippedTonesAreFoundAndMarked() {
         var s = LevelSeries()
         s.silence(1)
-        s.packet(tone: 65_535, seconds: 0.7, carrierReports: 1, clipped: true)
+        s.packet(tone: TNC4LevelSample.fullScale, seconds: 0.7, carrierReports: 1, clipped: true)
         s.silence(1)
         let segments = PacketToneSignature.segments(in: s.samples)
         XCTAssertEqual(segments.count, 1)

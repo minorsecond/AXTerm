@@ -135,8 +135,8 @@ struct MobilinkdSettingsSections: View {
             LabeledContent("Level") {
                 HStack(spacing: 8) {
                     if let level {
-                        let fraction = Double(level.vpp) / 65535
-                        let clipped = level.vmin == 0 || level.vmax >= 65_400
+                        let fraction = level.fraction
+                        let clipped = level.clipped
                         ProgressView(value: fraction)
                             .tint(clipped ? .red : fraction < 0.1 ? .orange : .green)
                             .frame(width: 120)

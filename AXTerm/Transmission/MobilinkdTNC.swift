@@ -261,6 +261,14 @@ enum MobilinkdTNC {
         let vmin = UInt16(data[6]) << 8 | UInt16(data[7])
         let vmax = UInt16(data[8]) << 8 | UInt16(data[9])
 
+        // A minimum above the maximum came from no samples at all. The
+        // firmware's level stream sends one when no ADC block arrives within
+        // its 1 s wait: vmin and vmax keep their starting values (0xFFFF and
+        // 0, shifted to 0xFFFC and 0), Vpp wraps to 4 and Vavg divides by
+        // zero (Core/TNC/AudioInput.cpp, streamLevels). Taken as a reading
+        // it is near-silence, which no input produced.
+        guard vmin <= vmax else { return nil }
+
         return MobilinkdInputLevel(vpp: vpp, vavg: vavg, vmin: vmin, vmax: vmax)
     }
     static let GET_INPUT_GAIN: UInt8 = 0x0D       // Reported by TNC after Auto-Adjust
@@ -308,6 +316,27 @@ struct MobilinkdInputLevel: Equatable, Sendable {
     let vavg: UInt16   // Average (DC offset)
     let vmin: UInt16   // Minimum
     let vmax: UInt16   // Maximum
+
+    /// The TNC4's ADC is 12 bits, oversampled 16 times and shifted right 2,
+    /// so its samples are 14 bits, 0...16383 (tnc4-firmware Core/Src/main.c,
+    /// MX_ADC2_Init).
+    static let adcMaximum = 16_383
+    /// Every level is shifted left by the demodulator's ADC exponent before
+    /// it is sent: 2 for AFSK 1200, 9600 and M17 (Core/TNC/AudioInput.cpp,
+    /// streamLevels and pollAmplifiedInputLevel).
+    static let adcExponent = 2
+    /// The largest value a report can carry: 65,532, in steps of 4.
+    static let fullScale = adcMaximum << adcExponent
+    /// A maximum at or above this is at the top rail: within about 33 ADC
+    /// counts of it.
+    static let topRail = 65_400
+
+    /// Peak to peak as a share of the range.
+    var fraction: Double { Double(vpp) / Double(Self.fullScale) }
+
+    /// The input touched an end of the ADC's range. The firmware's own gain
+    /// adjustment treats a minimum of 0 as clipping the same way.
+    var clipped: Bool { vmin == 0 || Int(vmax) >= Self.topRail }
 }
 
 /// What a link needs to know to treat its TNC as a Mobilinkd.

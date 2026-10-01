@@ -22,7 +22,7 @@ nonisolated struct TNC4LevelSample: Codable, Equatable, Sendable {
     var vmin: Int
     var vmax: Int
 
-    static let fullScale = 65_535
+    static let fullScale = MobilinkdInputLevel.fullScale
 
     init(t: Double, vpp: Int, vmin: Int, vmax: Int) {
         self.t = t
@@ -40,7 +40,7 @@ nonisolated struct TNC4LevelSample: Codable, Equatable, Sendable {
 
     /// The input touched an end of the ADC's range. The same test the level
     /// meter and the level assistant use.
-    var clipped: Bool { vmin == 0 || vmax >= 65_400 }
+    var clipped: Bool { vmin == 0 || vmax >= MobilinkdInputLevel.topRail }
 }
 
 /// What to record.

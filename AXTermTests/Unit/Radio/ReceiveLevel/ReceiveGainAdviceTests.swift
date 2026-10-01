@@ -11,7 +11,7 @@ import XCTest
 
 final class ReceiveGainAdviceTests: XCTestCase {
 
-    private let full = 65_535
+    private let full = TNC4LevelSample.fullScale
 
     private func vpp(_ fraction: Double) -> Int { Int(fraction * Double(full)) }
 
@@ -19,7 +19,7 @@ final class ReceiveGainAdviceTests: XCTestCase {
         XCTAssertEqual(ReceiveGainAdvice.predictedFraction(vpp: 10_500, measuredAt: 0, at: 1), 0.32, accuracy: 0.005)
         XCTAssertEqual(ReceiveGainAdvice.predictedFraction(vpp: 10_500, measuredAt: 0, at: 2), 0.64, accuracy: 0.005)
         XCTAssertEqual(ReceiveGainAdvice.predictedFraction(vpp: 10_500, measuredAt: 0, at: 4), 1.0)
-        XCTAssertEqual(ReceiveGainAdvice.predictedFraction(vpp: 20_000, measuredAt: 2, at: 1), 10_000 / 65_535, accuracy: 0.001)
+        XCTAssertEqual(ReceiveGainAdvice.predictedFraction(vpp: 20_000, measuredAt: 2, at: 1), 10_000 / Double(TNC4LevelSample.fullScale), accuracy: 0.001)
     }
 
     /// Today's packets: 16% at 0 dB. +6 dB (32%) and +12 dB (64%) are about
@@ -72,13 +72,13 @@ final class ReceiveGainAdviceTests: XCTestCase {
     }
 
     func testClippedStepsDownOne() {
-        let rec = ReceiveGainAdvice.recommend(toneVpp: 65_535, measuredAt: 3, clipped: true)
+        let rec = ReceiveGainAdvice.recommend(toneVpp: TNC4LevelSample.fullScale, measuredAt: 3, clipped: true)
         XCTAssertEqual(rec.action, .set(gain: 2))
         XCTAssertTrue(ReceiveGainAdvice.advice(rec).contains("Calibrate again"))
     }
 
     func testClippedAtTheBottomSaysTurnTheVolumeDown() {
-        let rec = ReceiveGainAdvice.recommend(toneVpp: 65_535, measuredAt: 0, clipped: true)
+        let rec = ReceiveGainAdvice.recommend(toneVpp: TNC4LevelSample.fullScale, measuredAt: 0, clipped: true)
         XCTAssertEqual(rec.action, .turnVolumeDown(gain: 0))
         XCTAssertEqual(ReceiveGainAdvice.advice(rec), "They clip even at 0 dB. Turn the radio's volume down and calibrate again.")
     }

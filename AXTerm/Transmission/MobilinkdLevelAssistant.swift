@@ -68,9 +68,9 @@ nonisolated struct MobilinkdLevelAssistant: Equatable, Sendable {
     enum Verdict: Equatable { case clipping, good, tooQuiet }
 
     static func judge(_ readings: [MobilinkdInputLevel]) -> Verdict {
-        let clipped = readings.filter { $0.vmin == 0 || $0.vmax >= 65_400 }.count
+        let clipped = readings.filter(\.clipped).count
         if Double(clipped) > Double(readings.count) * clipTolerance { return .clipping }
-        let fractions = readings.map { Double($0.vpp) / 65_535 }.sorted()
+        let fractions = readings.map(\.fraction).sorted()
         let median = fractions[fractions.count / 2]
         return median >= minimumFraction ? .good : .tooQuiet
     }
