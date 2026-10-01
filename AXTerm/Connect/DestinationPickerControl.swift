@@ -15,6 +15,8 @@ struct DestinationPickerControl: View {
     /// above their vertical center — the red border already flags an invalid
     /// callsign there.
     var showsInlineError: Bool = true
+    /// A destination was chosen: a suggestion picked, or Return pressed.
+    /// Not called while the operator is typing.
     let onDestinationChanged: (String) -> Void
     let onDestinationCommitted: (String) -> Void
     var onViewStationDetails: ((String) -> Void)? = nil
@@ -195,6 +197,12 @@ struct DestinationPickerControl: View {
 
     /// An edit to the field. Only a change that survives tidying reaches the
     /// view model; the draft always settles on the tidied text.
+    ///
+    /// Typing stays here until the operator picks a suggestion or presses
+    /// Return. Passing each keystroke on as the destination made "K", the
+    /// first letter of K0EPI-2, the terminal's destination, which bound it
+    /// to a live session and replaced this field with a locked label
+    /// (live RF test 2026-09-30).
     private func draftEdited(_ typed: String) {
         if DestinationPickerViewModel.sanitizeForTyping(typed) != viewModel.typedText {
             viewModel.handleTypedTextChanged(typed, autoOpenPopover: false)
@@ -205,7 +213,6 @@ struct DestinationPickerControl: View {
                     showPopover = true
                 }
             }
-            onDestinationChanged(DestinationPickerViewModel.normalizeCandidate(viewModel.typedText))
         }
         if draft != viewModel.typedText { draft = viewModel.typedText }
     }
@@ -258,6 +265,9 @@ struct DestinationPickerControl: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        // Nothing typed here was committed, so Cancel puts
+                        // back the destination that was.
+                        viewModel.syncExternalDestination(externalText, preserveSelection: false)
                         showPopover = false
                         textFieldFocused = false
                     }
