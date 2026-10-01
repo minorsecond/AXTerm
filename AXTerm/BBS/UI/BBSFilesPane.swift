@@ -27,7 +27,7 @@ struct BBSFilesPane: View {
     @State private var draftAbout = ""
     /// What the one importer is choosing, or nil when it is closed. See
     /// `BBSFilePickPurpose` for why there is only one.
-    @State private var picking: BBSFilePickPurpose?
+    @State private var picker = BBSFilePicker()
     @State private var pendingURL: URL?
     @State private var newAreaName = ""
     @State private var newAreaAbout = ""
@@ -40,12 +40,11 @@ struct BBSFilesPane: View {
             areaList.frame(minWidth: 220, idealWidth: 260)
             fileList.frame(minWidth: 380)
         }
-        .fileImporter(isPresented: Binding(get: { picking != nil },
-                                           set: { if !$0 { picking = nil } }),
-                      allowedContentTypes: picking?.contentTypes ?? [.folder],
-                      allowsMultipleSelection: picking?.allowsMultipleSelection ?? false) { result in
-            let purpose = picking
-            picking = nil
+        .fileImporter(isPresented: Binding(get: { picker.isPresented },
+                                           set: { if !$0 { picker.panelClosed() } }),
+                      allowedContentTypes: picker.contentTypes,
+                      allowsMultipleSelection: picker.allowsMultipleSelection) { result in
+            let purpose = picker.finish()
             guard let purpose, case .success(let urls) = result else { return }
             switch BBSFilePick.apply(purpose, urls: urls, library: library) {
             case .nameNewArea(let url):
@@ -107,7 +106,7 @@ struct BBSFilesPane: View {
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                             Button("Choose Folder Again…") {
-                                picking = .relocate(area: area.name)
+                                picker.begin(.relocate(area: area.name))
                             }
                             .controlSize(.small)
                         } else {
@@ -124,11 +123,11 @@ struct BBSFilesPane: View {
                     .contextMenu {
                         if !missing {
                             Button("Add Files to \(area.name)…") {
-                                picking = .addFiles(area: area.name)
+                                picker.begin(.addFiles(area: area.name))
                             }
                         }
                         Button("Choose Folder Again…") {
-                            picking = .relocate(area: area.name)
+                            picker.begin(.relocate(area: area.name))
                         }
                         Divider()
                         Button("Stop sharing \(area.name)", role: .destructive) {
@@ -150,7 +149,7 @@ struct BBSFilesPane: View {
             Divider()
             HStack {
                 Button {
-                    picking = .shareFolder
+                    picker.begin(.shareFolder)
                 } label: {
                     Label("Share a Folder…", systemImage: "plus")
                 }
@@ -184,7 +183,7 @@ struct BBSFilesPane: View {
                           systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.orange)
-                    Button("Choose Upload Folder Again…") { picking = .uploadInbox }
+                    Button("Choose Upload Folder Again…") { picker.begin(.uploadInbox) }
                         .controlSize(.small)
                 } else if let inbox = library.inboxName {
                     let box = BBSUploadInboxModel.make(count: library.inboxCount,
@@ -201,7 +200,7 @@ struct BBSFilesPane: View {
                             .font(.caption)
                             .foregroundStyle(box.isFull ? Color.orange : Color.secondary)
                         Spacer()
-                        Button("Change…") { picking = .uploadInbox }
+                        Button("Change…") { picker.begin(.uploadInbox) }
                             .controlSize(.small)
                     }
                     // Said plainly: an operator who assumes uploads are
@@ -212,7 +211,7 @@ struct BBSFilesPane: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Button("Choose Where Uploads Land…") { picking = .uploadInbox }
+                    Button("Choose Where Uploads Land…") { picker.begin(.uploadInbox) }
                         .controlSize(.small)
                     Text("Uploads are refused until you pick a folder.")
                         .font(.caption)
@@ -291,7 +290,7 @@ struct BBSFilesPane: View {
             }
             HStack {
                 Button {
-                    if let area = addableArea { picking = .addFiles(area: area) }
+                    if let area = addableArea { picker.begin(.addFiles(area: area)) }
                 } label: {
                     Label("Add Files…", systemImage: "doc.badge.plus")
                 }
@@ -321,7 +320,7 @@ struct BBSFilesPane: View {
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 280)
-                Button("Choose Folder Again…") { picking = .relocate(area: selectedArea) }
+                Button("Choose Folder Again…") { picker.begin(.relocate(area: selectedArea)) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if files.isEmpty {

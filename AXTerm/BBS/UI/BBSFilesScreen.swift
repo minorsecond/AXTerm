@@ -26,7 +26,7 @@ struct BBSAreaListScreen: View {
     /// One importer for every folder this screen picks. Two `.fileImporter`
     /// modifiers on one view behave like two sheets: the last one wins and
     /// the other silently never opens. What the pick is *for* is state.
-    @State private var picking: BBSFilePickPurpose?
+    @State private var picker = BBSFilePicker()
     @State private var pendingURL: URL?
     @State private var newAreaName = ""
     @State private var newAreaAbout = ""
@@ -53,18 +53,17 @@ struct BBSAreaListScreen: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    picking = .shareFolder
+                    picker.begin(.shareFolder)
                 } label: {
                     Label("Share a Folder", systemImage: "plus")
                 }
             }
         }
-        .fileImporter(isPresented: Binding(get: { picking != nil },
-                                           set: { if !$0 { picking = nil } }),
-                      allowedContentTypes: picking?.contentTypes ?? [.folder],
-                      allowsMultipleSelection: picking?.allowsMultipleSelection ?? false) { result in
-            let purpose = picking
-            picking = nil
+        .fileImporter(isPresented: Binding(get: { picker.isPresented },
+                                           set: { if !$0 { picker.panelClosed() } }),
+                      allowedContentTypes: picker.contentTypes,
+                      allowsMultipleSelection: picker.allowsMultipleSelection) { result in
+            let purpose = picker.finish()
             guard let purpose, case .success(let urls) = result else { return }
             if case .nameNewArea(let url) = BBSFilePick.apply(purpose, urls: urls, library: library) {
                 pendingURL = url
@@ -126,7 +125,7 @@ struct BBSAreaListScreen: View {
                             if selection == area.name { selection = nil }
                         }
                         Button("Choose Folder", systemImage: "folder") {
-                            picking = .relocate(area: area.name)
+                            picker.begin(.relocate(area: area.name))
                         }
                     }
                 }
@@ -188,7 +187,7 @@ struct BBSAreaListScreen: View {
 
             if settings.acceptUploads {
                 if library.inboxUnreachable {
-                    Button("Choose Upload Folder Again…") { picking = .uploadInbox }
+                    Button("Choose Upload Folder Again…") { picker.begin(.uploadInbox) }
                     Label("The upload folder can no longer be found, so uploads are refused "
                           + "until you choose it again.",
                           systemImage: "exclamationmark.triangle")
@@ -207,7 +206,7 @@ struct BBSAreaListScreen: View {
                                 .foregroundStyle(box.isFull ? Color.orange : Color.secondary)
                         }
                         Spacer()
-                        Button("Change") { picking = .uploadInbox }
+                        Button("Change") { picker.begin(.uploadInbox) }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
@@ -219,7 +218,7 @@ struct BBSAreaListScreen: View {
                             .foregroundStyle(.orange)
                     }
                 } else {
-                    Button("Choose Where Uploads Land…") { picking = .uploadInbox }
+                    Button("Choose Where Uploads Land…") { picker.begin(.uploadInbox) }
                     Label("Uploads are refused until you pick a folder.",
                           systemImage: "exclamationmark.triangle")
                         .font(.caption)
@@ -313,7 +312,7 @@ struct BBSFileListScreen: View {
     @State private var draftAbout = ""
     /// This screen's one importer: files to add, or the area's folder chosen
     /// again when it has gone missing.
-    @State private var picking: BBSFilePickPurpose?
+    @State private var picker = BBSFilePicker()
     /// What happened to the last files added, until dismissed.
     @State private var addMessage: String?
     @State private var dropTargeted = false
@@ -340,7 +339,7 @@ struct BBSFileListScreen: View {
                         systemImage: "folder.badge.questionmark",
                         title: "Folder can no longer be found",
                         detail: "Callers see \(area) as empty until you choose its folder again.")
-                    Button("Choose Folder Again…") { picking = .relocate(area: area) }
+                    Button("Choose Folder Again…") { picker.begin(.relocate(area: area)) }
                         .buttonStyle(.borderedProminent)
                 }
             } else if files.isEmpty {
@@ -397,19 +396,18 @@ struct BBSFileListScreen: View {
             if let area, !isMissing {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        picking = .addFiles(area: area)
+                        picker.begin(.addFiles(area: area))
                     } label: {
                         Label("Add Files", systemImage: "plus")
                     }
                 }
             }
         }
-        .fileImporter(isPresented: Binding(get: { picking != nil },
-                                           set: { if !$0 { picking = nil } }),
-                      allowedContentTypes: picking?.contentTypes ?? [.item],
-                      allowsMultipleSelection: picking?.allowsMultipleSelection ?? true) { result in
-            let purpose = picking
-            picking = nil
+        .fileImporter(isPresented: Binding(get: { picker.isPresented },
+                                           set: { if !$0 { picker.panelClosed() } }),
+                      allowedContentTypes: picker.contentTypes,
+                      allowsMultipleSelection: picker.allowsMultipleSelection) { result in
+            let purpose = picker.finish()
             guard let purpose, case .success(let urls) = result else { return }
             if case .finished(let message) = BBSFilePick.apply(purpose, urls: urls, library: library) {
                 addMessage = message

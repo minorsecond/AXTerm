@@ -47,6 +47,41 @@ nonisolated enum BBSFilePickPurpose: Equatable, Identifiable, Sendable {
     }
 }
 
+/// What the one importer on a Files screen is doing: open or not, and what
+/// the open pick is for.
+///
+/// SwiftUI closes a file importer by setting its `isPresented` binding to
+/// false before it calls the completion handler. Keeping the purpose in the
+/// same state that binding clears meant the handler found nothing to act on,
+/// and on 2026-10-01 "Share a Folder" closed the panel and shared nothing,
+/// silently. Closing the panel here only closes it; the purpose stays until
+/// the completion handler takes it with `finish()`.
+nonisolated struct BBSFilePicker: Equatable, Sendable {
+    private(set) var isPresented = false
+    private(set) var purpose: BBSFilePickPurpose?
+
+    mutating func begin(_ purpose: BBSFilePickPurpose) {
+        self.purpose = purpose
+        isPresented = true
+    }
+
+    /// The importer's binding setter: the panel went away.
+    mutating func panelClosed() {
+        isPresented = false
+    }
+
+    /// What the pick was for, handed out once, whether or not the panel
+    /// already closed.
+    mutating func finish() -> BBSFilePickPurpose? {
+        isPresented = false
+        defer { purpose = nil }
+        return purpose
+    }
+
+    var contentTypes: [UTType] { purpose?.contentTypes ?? [.folder] }
+    var allowsMultipleSelection: Bool { purpose?.allowsMultipleSelection ?? false }
+}
+
 /// What the view does next after a pick.
 nonisolated enum BBSFilePickResult: Equatable, Sendable {
     /// Ask for the new area's name before sharing it.
