@@ -89,14 +89,6 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Key is N(S) sequence number
     var sendBuffer: [Int: OutboundFrame] = [:]
 
-    /// A poll we sent (a command with P=1) is still waiting for its F=1
-    /// answer. No new I-frames go out until it arrives, as in AX.25 2.2's
-    /// timer recovery: on 2026-10-01 a peer's T2 ack, sent part-way through
-    /// a K3 burst, read as room in the window, and the next frame keyed over
-    /// the peer's F=1 answer (spec 7.6). An ack covering every outstanding
-    /// frame also clears it, so a peer that never sets F cannot stall us.
-    var pollOutstanding = false
-
     /// AIMD congestion window.
     /// Starts at the live K and grows back toward it as ACKs arrive. Halved on
     /// each T1 timeout or REJ (loss event). The effective send window is
@@ -502,7 +494,6 @@ nonisolated final class AX25Session: @unchecked Sendable {
     func clearPendingTransmission(reason: String) {
         pendingDataQueue.removeAll()
         sendBuffer.removeAll()
-        pollOutstanding = false
         clearSendTimes()
         consecutiveT1PollsWithoutAck = 0
         TxLog.debug(.session, "Cleared pending transmission state", [
@@ -1851,15 +1842,8 @@ final class AX25SessionManager: ObservableObject {
             let aimdEffectiveDirect = session.aimdWindow.effectiveWindow
             let effectiveSendWindowDirect = effectiveSendWindow(for: session)
             axDebugPrint("[DEBUG:AX25:SEND] sendData connected | dest=\(destination.display) totalChunks=\(chunks.count) paclen=\(paclen) canSend=\(session.canSendIFrame) aimdEffective=\(aimdEffectiveDirect) effectiveWindow=\(effectiveSendWindowDirect) va=\(session.va) vs=\(session.vs)")
-            if session.pollOutstanding && session.sendBuffer.isEmpty { session.pollOutstanding = false }
-            // Frames handed over in this call go out in one transmission with
-            // the poll, so they cannot land on its answer; the hold starts
-            // once the burst is out.
-            var burstPolled = false
-            defer { if burstPolled { session.pollOutstanding = true } }
             for (i, chunk) in chunks.enumerated() {
-                guard session.canSendIFrame, session.outstandingCount < effectiveSendWindowDirect,
-                      !session.pollOutstanding else {
+                guard session.canSendIFrame, session.outstandingCount < effectiveSendWindowDirect else {
                     let info = (i == 0) ? displayInfo : nil
                     remaining.append((data: chunk, pid: pid, displayInfo: info))
                     axDebugPrint("[DEBUG:AX25:SEND] window full, queue chunk \(i) | remaining=\(remaining.count)")
@@ -1885,7 +1869,6 @@ final class AX25SessionManager: ObservableObject {
                     displayInfo: info,
                     pf: polls
                 )
-                if polls { burstPolled = true }
                 frames.append(iFrame)
                 axDebugPrint("[DEBUG:AX25:SEND] immediate tx chunk \(i) | N(S)=\(ns) payload=\(chunk.count)")
 
@@ -2652,7 +2635,6 @@ final class AX25SessionManager: ObservableObject {
             }
             return []
         }
-        if pf && !isCommand { session.pollOutstanding = false }
 
         // Measure RTT from last acked frame so T1 (RTO) adapts during transfer.
         // Bug E fix (Karn's algorithm): rttSendTime(ackedBy:) returns nil for
@@ -2972,7 +2954,6 @@ final class AX25SessionManager: ObservableObject {
             }
             return []
         }
-        if pf && !isCommand { session.pollOutstanding = false }
 
         // The N(R) in an RNR is a real acknowledgment, so it yields a valid RTT
         // sample under the same Karn's-algorithm rules used for RR.
@@ -3141,7 +3122,6 @@ final class AX25SessionManager: ObservableObject {
             }
             return []
         }
-        if pf && !isCommand { session.pollOutstanding = false }
 
         let vaBefore = session.va
         let oldState = session.state
@@ -3524,16 +3504,6 @@ final class AX25SessionManager: ObservableObject {
             return
         }
 
-        // Our poll's answer is still due; keying now would land on it.
-        if session.pollOutstanding && session.sendBuffer.isEmpty { session.pollOutstanding = false }
-        guard !session.pollOutstanding else {
-            TxLog.debug(.session, "Drain held (poll outstanding)", [
-                "peer": session.remoteAddress.display,
-                "queueDepth": session.pendingDataQueue.count
-            ])
-            return
-        }
-
         TxLog.debug(.session, "Draining pending data queue", [
             "peer": session.remoteAddress.display,
             "queueDepth": session.pendingDataQueue.count
@@ -3573,9 +3543,6 @@ final class AX25SessionManager: ObservableObject {
         session.pendingDataQueue = remaining
 
         var wasIdle = session.outstandingCount == 0
-        // As in sendData: the hold starts once this burst is out.
-        var burstPolled = false
-        defer { if burstPolled { session.pollOutstanding = true } }
         for item in drained {
             // Checkpoint on window-full, as in sendData (§6.2).
             let fillsWindow = session.outstandingCount + 1 >= sendWindow
@@ -3588,7 +3555,6 @@ final class AX25SessionManager: ObservableObject {
                 displayInfo: item.displayInfo,
                 pf: polls
             )
-            if polls { burstPolled = true }
             debugTrace("TX I (drain queue)", ["frame": describeFrame(iFrame)])
             axDebugPrint("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
             // Use ns directly - (vs-1) wraps to -1 when vs goes 7->0, corrupting sendBuffer
@@ -3754,7 +3720,6 @@ final class AX25SessionManager: ObservableObject {
                 frames.append(frame)
 
             case .sendRR(let nr, let pf, let isCommand):
-                if pf && isCommand { session.pollOutstanding = true }
                 let frame = AX25FrameBuilder.buildRR(
                     from: session.localAddress,
                     to: session.remoteAddress,
@@ -3767,7 +3732,6 @@ final class AX25SessionManager: ObservableObject {
                 frames.append(frame)
 
             case .sendRNR(let nr, let pf, let isCommand):
-                if pf && isCommand { session.pollOutstanding = true }
                 let frame = AX25FrameBuilder.buildRNR(
                     from: session.localAddress,
                     to: session.remoteAddress,
