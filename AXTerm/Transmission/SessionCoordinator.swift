@@ -361,12 +361,22 @@ final class SessionCoordinator: ObservableObject {
     /// AXDP transfers with a chunk-loop turn already scheduled.
     var chunkLoopScheduled: Set<UUID> = []
 
-    /// Pending capability discovery requests (callsign -> timestamp)
-    /// Used to track which stations we've sent PING to but haven't received PONG from
-    private var pendingCapabilityDiscovery: [String: Date] = [:]
+    /// What a capability check put on the air, so it can be sent again.
+    private enum CapabilityProbeKind {
+        /// The plain-text `AXDP?` probe, a UI frame to a connected peer.
+        case textProbe(peer: AX25Address)
+        /// A binary PING, carried in the session when there is one.
+        case ping(destination: AX25Address, path: DigiPath, payload: Data)
+    }
 
-    /// Timeout for capability discovery (seconds)
-    private let capabilityDiscoveryTimeout: TimeInterval = 900.0
+    private struct PendingCapabilityCheck {
+        var probe: AXDPCapabilityProbe
+        let kind: CapabilityProbeKind
+    }
+
+    /// Capability checks waiting for a PONG, by callsign. Each is asked again
+    /// on the schedule in `AXDPCapabilityProbe` and dropped when it gives up.
+    private var pendingCapabilityDiscovery: [String: PendingCapabilityCheck] = [:]
     /// Cache for peers that did not respond to AXDP discovery
     private var axdpNotSupported: [String: Date] = [:]
     
@@ -2425,13 +2435,20 @@ final class SessionCoordinator: ObservableObject {
             capabilities: localCaps
         )
 
-        // Track that we're waiting for a response
-        pendingCapabilityDiscovery[peerCallsign] = Date()
-        scheduleCapabilityTimeout(for: peerCallsign)
+        let payload = pingMessage.encode()
+
+        // Track that we're waiting for a response. The PING rides the
+        // session's I-frames, but the PONG comes back as a UI frame that
+        // nothing retransmits, so this check is retried like the text probe.
+        startCapabilityCheck(
+            for: peerCallsign,
+            kind: .ping(destination: session.remoteAddress, path: session.path, payload: payload),
+            rto: session.timers.rto
+        )
 
         // For connected sessions, route through session manager (I-frames)
         _ = sendAXDPPayload(
-            pingMessage.encode(),
+            payload,
             to: session.remoteAddress,
             path: session.path,
             displayInfo: "AXDP PING"
@@ -2477,13 +2494,19 @@ final class SessionCoordinator: ObservableObject {
         if hasConfirmedAXDPCapability(for: peerCallsign) { return }
         if isCapabilityDiscoveryPending(for: peerCallsign) { return }
 
-        guard let probeData = Self.axdpTextProbe.data(using: .ascii) else { return }
-
         // Track that we're waiting for a response, and that we still need to send
         // our own capabilities after receiving theirs (bidirectional exchange).
-        pendingCapabilityDiscovery[peerCallsign] = Date()
+        startCapabilityCheck(for: peerCallsign, kind: .textProbe(peer: session.remoteAddress),
+                             rto: session.timers.rto)
         awaitingCapabilityExchange.insert(peerCallsign)
-        scheduleCapabilityTimeout(for: peerCallsign)
+
+        transmitTextProbe(to: session)
+    }
+
+    /// Put the text probe on the air for `session`. The first attempt and
+    /// every retry come through here.
+    private func transmitTextProbe(to session: AX25Session) {
+        guard let probeData = Self.axdpTextProbe.data(using: .ascii) else { return }
 
         // Send as UI frame — outside the connected-mode data flow. From the
         // session's own address, on the session's radio.
@@ -3473,17 +3496,95 @@ final class SessionCoordinator: ObservableObject {
         axdpNotSupported.removeValue(forKey: callsign.uppercased())
     }
 
-    private func scheduleCapabilityTimeout(for callsign: String) {
-        let call = callsign.uppercased()
-        Task { @MainActor in
-            let nanos = UInt64(capabilityDiscoveryTimeout * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: nanos)
-            guard let sentAt = pendingCapabilityDiscovery[call] else { return }
-            if Date().timeIntervalSince(sentAt) >= capabilityDiscoveryTimeout {
+    // MARK: - Capability Check Retries
+
+    /// Record a capability check that is going out now and start its timer.
+    private func startCapabilityCheck(for callsign: String, kind: CapabilityProbeKind, rto: TimeInterval?) {
+        let probe = AXDPCapabilityProbe(sentAt: Date(), rto: rto)
+        pendingCapabilityDiscovery[callsign.uppercased()] = PendingCapabilityCheck(probe: probe, kind: kind)
+        scheduleCapabilityProbeTimer(after: probe.interval)
+    }
+
+    private func scheduleCapabilityProbeTimer(after delay: TimeInterval) {
+        Task { @MainActor [weak self] in
+            // A moment past the deadline, so the pass finds the check due.
+            try? await Task.sleep(nanoseconds: UInt64((delay + 0.25) * 1_000_000_000))
+            self?.runCapabilityProbeTimers()
+        }
+    }
+
+    /// One pass over the checks still waiting for a PONG: ask again where an
+    /// interval has run out, and give up where the last one has. A peer that
+    /// gives up is recorded as not answering, which the spec (6.x.3) treats
+    /// as no AXDP extensions; a PONG that turns up later still confirms it.
+    /// The timers call this; tests call it with their own `now`.
+    func runCapabilityProbeTimers(now: Date = Date()) {
+        for (call, check) in pendingCapabilityDiscovery {
+            // Turning AXDP off ends the check quietly, without a verdict.
+            // Anything else from the peer may already have answered it.
+            if !globalAdaptiveSettings.axdpExtensionsEnabled || hasConfirmedAXDPCapability(for: call) {
+                pendingCapabilityDiscovery.removeValue(forKey: call)
+                continue
+            }
+            switch check.probe.step(at: now) {
+            case .wait:
+                continue
+            case .resend:
+                var next = check
+                next.probe.noteResent(at: now)
+                guard resendCapabilityProbe(next.kind, attempt: next.probe.attempts) else {
+                    pendingCapabilityDiscovery.removeValue(forKey: call)
+                    continue
+                }
+                pendingCapabilityDiscovery[call] = next
+                scheduleCapabilityProbeTimer(after: next.probe.interval)
+            case .giveUp:
                 pendingCapabilityDiscovery.removeValue(forKey: call)
                 markAXDPNotSupported(for: call)
+                TxLog.debug(.capability, "No answer to AXDP capability check", [
+                    "peer": call,
+                    "attempts": check.probe.attempts
+                ])
+                onCapabilityEvent?(CapabilityDebugEvent(type: .timeout, peer: call))
+                objectWillChange.send()
             }
         }
+    }
+
+    /// Send a check again. Returns false when there is nothing left to send
+    /// it on: a text probe needs the session, and the session has gone.
+    private func resendCapabilityProbe(_ kind: CapabilityProbeKind, attempt: Int) -> Bool {
+        switch kind {
+        case .textProbe(let peer):
+            guard let session = sessionManager.connectedSession(withPeer: peer) else { return false }
+            debugAXDP("Resending text probe", ["peer": peer.display, "attempt": attempt])
+            transmitTextProbe(to: session)
+        case .ping(let destination, let path, let payload):
+            _ = sendAXDPPayload(payload, to: destination, path: path, displayInfo: "AXDP PING")
+            TxLog.outbound(.capability, "Resent AXDP PING", [
+                "dest": destination.display,
+                "attempt": attempt
+            ])
+            onCapabilityEvent?(CapabilityDebugEvent(type: .pingSent, peer: destination.display))
+        }
+        return true
+    }
+
+    /// Start a check for a connected peer nobody has asked yet. Called when
+    /// the operator opens something that depends on the answer, such as the
+    /// Send File sheet: the station that answered the call never probes on
+    /// its own, so its sheet sat on "Unknown". A probe already scheduled or
+    /// running, a known answer, or a check that got no answer is left alone.
+    func requestCapabilityCheck(for callsign: String) {
+        guard globalAdaptiveSettings.axdpExtensionsEnabled,
+              globalAdaptiveSettings.autoNegotiateCapabilities else { return }
+        let parsed = CallsignNormalizer.parse(callsign)
+        let address = AX25Address(call: parsed.call, ssid: parsed.ssid)
+        guard let session = sessionManager.connectedSession(withPeer: address) else { return }
+        let peer = session.remoteAddress.display.uppercased()
+        guard !pendingTextProbe.contains(peer), capabilityStatus(for: peer) == .unknown else { return }
+        sendTextProbe(to: session)
+        objectWillChange.send()
     }
 
     /// Handle incoming FILE_META message - creates pending transfer request
@@ -4401,13 +4502,18 @@ final class SessionCoordinator: ObservableObject {
             capabilities: localCaps
         )
 
+        let payload = pingMessage.encode()
+
         // Track that we're waiting for a response
-        pendingCapabilityDiscovery[destAddress.display.uppercased()] = Date()
-        scheduleCapabilityTimeout(for: destAddress.display)
+        startCapabilityCheck(
+            for: destAddress.display,
+            kind: .ping(destination: destAddress, path: path, payload: payload),
+            rto: sessionManager.connectedSession(withPeer: destAddress)?.timers.rto
+        )
 
         // Manual discovery: prefer connected session, but do not force connection
         _ = sendAXDPPayload(
-            pingMessage.encode(),
+            payload,
             to: destAddress,
             path: path,
             displayInfo: "AXDP PING"
@@ -4442,6 +4548,8 @@ final class SessionCoordinator: ObservableObject {
         if !implicitlyConfirmedAXDP.contains(call) {
             implicitlyConfirmedAXDP.insert(call)
             clearAXDPNotSupported(for: call)
+            // The Send File sheet and the session badge read this.
+            objectWillChange.send()
             TxLog.debug(.capability, "Implicitly confirmed AXDP capability", [
                 "peer": callsign,
                 "reason": "Received AXDP message from peer"
@@ -4473,12 +4581,12 @@ final class SessionCoordinator: ObservableObject {
     #endif
 
     /// Check if capability discovery is pending for a station
-    func isCapabilityDiscoveryPending(for callsign: String) -> Bool {
-        guard let sentAt = pendingCapabilityDiscovery[callsign.uppercased()] else {
+    func isCapabilityDiscoveryPending(for callsign: String, now: Date = Date()) -> Bool {
+        guard let check = pendingCapabilityDiscovery[callsign.uppercased()] else {
             return false
         }
-        // Check if still within timeout window
-        return Date().timeIntervalSince(sentAt) < capabilityDiscoveryTimeout
+        // Pending until the last attempt's interval runs out
+        return check.probe.step(at: now) != .giveUp
     }
 
     /// Get capability status for display
@@ -4486,10 +4594,13 @@ final class SessionCoordinator: ObservableObject {
         case unknown       // Never checked
         case pending       // PING sent, waiting for PONG
         case confirmed     // PONG received, AXDP supported
-        case notSupported  // Timeout expired, no PONG received
+        case notSupported  // Asked as many times as the retry schedule allows, no PONG
     }
 
-    func capabilityStatus(for callsign: String) -> CapabilityStatus {
+    /// Views call this while they draw, so it changes nothing that publishes.
+    /// A check whose schedule has run out reads as no answer straight away;
+    /// the next timer pass records it.
+    func capabilityStatus(for callsign: String, now: Date = Date()) -> CapabilityStatus {
         let call = callsign.uppercased()
 
         if isAXDPNotSupported(for: call) {
@@ -4500,15 +4611,8 @@ final class SessionCoordinator: ObservableObject {
             return .confirmed
         }
 
-        if let sentAt = pendingCapabilityDiscovery[call] {
-            let elapsed = Date().timeIntervalSince(sentAt)
-            if elapsed < capabilityDiscoveryTimeout {
-                return .pending
-            } else {
-                pendingCapabilityDiscovery.removeValue(forKey: call)
-                markAXDPNotSupported(for: call)
-                return .notSupported
-            }
+        if let check = pendingCapabilityDiscovery[call] {
+            return check.probe.step(at: now) == .giveUp ? .notSupported : .pending
         }
 
         return .unknown

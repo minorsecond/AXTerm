@@ -758,6 +758,31 @@ private struct SectionHeader: View {
 
 // MARK: - Send File Sheet
 
+/// The words on the Send File sheet's AXDP badge and its tooltip.
+struct SendFileCapabilityBadgeText {
+    let label: String
+    let help: String
+
+    init(status: SessionCoordinator.CapabilityStatus, callsign: String) {
+        switch status {
+        case .confirmed:
+            label = "AXDP"
+            help = "Station supports AXDP file transfers"
+        case .pending:
+            label = "Checking\u{2026}"
+            help = "Asking \(callsign) whether it speaks AXDP, up to \(AXDPCapabilityProbe.maxAttempts) times. "
+                + "YAPP can be used while it waits."
+        case .notSupported:
+            label = "No answer"
+            help = "\(callsign) did not answer the AXDP check after \(AXDPCapabilityProbe.maxAttempts) tries. "
+                + "Send by YAPP, which most packet software understands."
+        case .unknown:
+            label = "Unknown"
+            help = "AXDP capability not yet checked"
+        }
+    }
+}
+
 /// Sheet for initiating a new file transfer with compression and protocol options
 struct SendFileSheet: View {
     @Binding var isPresented: Bool
@@ -770,6 +795,9 @@ struct SendFileSheet: View {
 
     /// Optional closure to get available protocols for a destination
     var availableProtocols: ((String) -> [TransferProtocolType])?
+
+    /// Optional closure to start an AXDP check for a station nobody has asked yet
+    var requestCapabilityCheck: ((String) -> Void)?
 
     @State private var selectedSessionIndex: Int = 0
     @State private var compressibilityAnalysis: CompressibilityAnalysis?
@@ -891,7 +919,18 @@ struct SendFileSheet: View {
         .modifier(PlatformSheetFrame(macWidth: 560, macHeight: 620))
         .onAppear {
             analyzeFile()
+            requestCheckForSelectedStation()
         }
+        .onChange(of: selectedSessionIndex) { _, _ in
+            requestCheckForSelectedStation()
+        }
+    }
+
+    /// Ask the selected station about AXDP if nobody has, so the badge does
+    /// not sit on "Unknown".
+    private func requestCheckForSelectedStation() {
+        guard let session = connectedSessions[safe: selectedSessionIndex] else { return }
+        requestCapabilityCheck?(session.remoteAddress.display)
     }
 
     // MARK: - File Info Content (for Form)
@@ -1248,12 +1287,13 @@ struct SendFileSheet: View {
     private func capabilityBadge(for callsign: String) -> some View {
         if let check = checkCapability {
             let status = check(callsign)
+            let text = SendFileCapabilityBadgeText(status: status, callsign: callsign)
             switch status {
             case .confirmed:
                 HStack(spacing: 2) {
                     Image(systemName: "checkmark.seal.fill")
                         .foregroundStyle(.blue)
-                    Text("AXDP")
+                    Text(text.label)
                         .font(.caption2)
                         .fontWeight(.medium)
                         .foregroundStyle(.blue)
@@ -1262,24 +1302,24 @@ struct SendFileSheet: View {
                 .padding(.vertical, 2)
                 .background(Color.blue.opacity(0.1))
                 .clipShape(Capsule())
-                .help("Station supports AXDP file transfers")
+                .help(text.help)
 
             case .pending:
                 HStack(spacing: 2) {
                     ProgressView()
                         .scaleEffect(0.5)
                         .frame(width: 10, height: 10)
-                    Text("Checking...")
+                    Text(text.label)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                .help("Checking AXDP capability...")
+                .help(text.help)
 
             case .notSupported:
                 HStack(spacing: 2) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.orange)
-                    Text("No AXDP")
+                    Text(text.label)
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
@@ -1287,17 +1327,17 @@ struct SendFileSheet: View {
                 .padding(.vertical, 2)
                 .background(Color.orange.opacity(0.1))
                 .clipShape(Capsule())
-                .help("This station does not speak AXDP. Send by YAPP, which most packet software understands.")
+                .help(text.help)
 
             case .unknown:
                 HStack(spacing: 2) {
                     Image(systemName: "questionmark.circle")
                         .foregroundStyle(.secondary)
-                    Text("Unknown")
+                    Text(text.label)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                .help("AXDP capability not yet checked")
+                .help(text.help)
             }
         } else {
             EmptyView()

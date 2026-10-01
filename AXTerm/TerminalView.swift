@@ -4807,6 +4807,9 @@ struct TerminalViewModifiers: ViewModifier {
                     },
                     availableProtocols: { callsign in
                         sessionCoordinator.availableProtocols(for: callsign)
+                    },
+                    requestCapabilityCheck: { callsign in
+                        sessionCoordinator.requestCapabilityCheck(for: callsign)
                     }
                 )
             }
