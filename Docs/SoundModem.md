@@ -92,9 +92,11 @@ access is p-persistence CSMA (PERSIST/SLOTTIME) against a carrier detect
 derived from the demodulator, not the radio's squelch (see below). **No
 audio plays until the PTT controller confirms**; the transmitter unkeys
 when the device has consumed every rendered sample plus the latency
-margin; a watchdog forces PTT off after `maxTransmitSeconds`. Receive is
+margin (no margin when Warbler stands in for the radio, see
+[Transmit tail through Warbler](#transmit-tail-through-warbler)); a
+watchdog forces PTT off after `maxTransmitSeconds`. Receive is
 muted while keyed and for 50 ms after (the codec's TX-time audio is not
-the on-air signal).
+the on-air signal); through Warbler, for the skipped margin as well.
 
 ### Carrier detect
 
@@ -590,6 +592,91 @@ the Mac's Keychain via `RadioSecrets`, never in the radio list or its JSON).
   radio. `IcomLAN.isLoginAnswer` / `isLoginRefusal` are the rule, pinned in
   `IcomLANPacketTests`; routine periodic status must *not* count as an
   answer, or the ladder burns its attempts on a radio that never said no.
+
+### Transmit tail through Warbler
+
+Warbler's virtual IC-705 (`localhost:50100` by default) speaks the same
+protocol as the radio, so the modem reaches it as a Wi-Fi radio. Warbler
+forwards the audio to the real radio and keys it for us. What happens after
+the last frame of a transmission is different for the two, and
+`ModemTransmitTail` holds the difference.
+
+Every transmission ends with TXTAIL worth of HDLC flags under both
+policies. They are part of the frame on the air, so the closing flag is not
+clipped. What follows them depends on the far end:
+
+| | radio (USB, or its own WLAN) | Warbler |
+|---|---|---|
+| silence after the flags | 300 ms (15 frames of 20 ms) | none |
+| unkey | radio buffer + 100 ms + key-up hint + 20 ms after the last sample is handed over (450 ms over the WLAN) | on the engine's next pass after the last sample is handed over |
+
+**Why Warbler needs neither.** Warbler holds a client's unkey until its own
+playout has drained, nothing new has arrived for its jitter cushion, and the
+radio has had time to play what it buffers (`Engine::acceptProgramCat` and
+`checkPendingUnkey` in Warbler's `engine.cpp`). It also holds an unkey that
+arrives within 100 ms of the client's last audio, which covers a PTT command
+on the CI-V stream overtaking the last audio packet. Both already go out on
+the session's one queue in order, so that should not happen. Silence we send
+after the flags counts as audio to Warbler: it moves Warbler's last-audio
+time later, and Warbler then waits out the radio's buffer after the
+silence. On 2026-09-30 that left the IC-705 transmitting an unmodulated
+carrier for about 0.7 s after each frame: our 300 ms of silence, then
+Warbler's 340 ms (an assumed 300 ms radio buffer plus 40 ms). A TNC4
+answered inside that window and was not heard, which is why its TX delay
+went up to 800 ms ([LiveRFTest-2026-09-30.md](LiveRFTest-2026-09-30.md),
+finding 3).
+
+**Why a radio keeps both.** A real IC-705 buffers `txBufferMs` (300 ms) of
+transmit audio before it plays it. Unkeying when the last sample leaves the
+Mac would cut the end of the frame, so the margin stays as it was. The
+trailing silence over the WLAN was kept as well. Nothing found in the code
+or its history says it keeps the stream alive: the audio stream has its own
+idle and ping packets, and an idle modem sends no audio at all. Its only
+stated job was to send silence briefly after audio and then stop.
+
+**How Warbler is recognized.** The capabilities packet the far end sends
+during login carries a sixteen-byte reply ID, and bytes 10 to 15 of it are
+a hardware address. A real IC-705 puts its own there (Icom's block starts
+`00:90:C7`). Warbler's virtual IC-705 always puts `02:57:42:4C:45:52`, a
+locally administered address spelling "WBLER", and Warbler checks the same
+six bytes to tell its own hub from a radio (`viaWarbler` in
+`icom_session.hpp`). `IcomLAN.isWarbler(replyID:)` is the rule;
+`IcomLANSession.viaWarbler` is set when the capabilities arrive, and
+`LANModemAudioIO.start()` reads it once, after login, to pick the policy.
+The radio name cannot tell them apart, since Warbler calls itself
+"IC-705". The `7F 57 41` CI-V command in Warbler's code is something
+Warbler sends to its hub, not to us.
+
+**Receive and the next transmission wait as before.** After an early
+unkey the radio is still on the air, playing what Warbler holds, and our
+own audio can come back on the receive stream. So through Warbler the
+engine's cooldown after the unkey runs for the drain margin it no longer
+waits plus the usual 50 ms: receive stays muted, and the next key-down
+waits, exactly as long after the last sample as they did before. Only PTT
+moves earlier. A peer's reply is not lost to this: it cannot start until
+Warbler has unkeyed the radio, and its own TX delay comes before any data.
+
+**Underruns are not the end.** The silence gate (`TrailingSilenceGate`)
+always sends a frame with audio in it, and sends silence whenever the
+engine says it still has audio coming for the transmission
+(`transmitAudioPending`). A late render mid-transmission is filled with
+silence that keeps the stream's timing, under either policy, so the policy
+can never open a gap inside a transmission. Only after the engine is done
+does a Warbler link go quiet.
+
+**In the log.** Each modem start logs `Transmit tail` from the engine
+(policy, TXTAIL, the unkey margin in ms, and why), and a Wi-Fi link also
+logs `LAN transmit tail` (policy, whether the far end is Warbler and how
+that was known, trailing silence in ms, and why). Both go to the
+operator's console and Sentry breadcrumbs under `tx.modem`.
+
+**What to expect.** Through Warbler the unkey now reaches Warbler about as
+soon as the last audio, and Warbler unkeys the radio about 340 ms after it
+forwards that audio, instead of about 640 ms. With the IC-705 really
+buffering around 100 ms, the carrier after each frame should drop from
+about 0.7 s to about 0.25 to 0.4 s. The rest is Warbler's radio tail, which
+is Warbler's to shorten (improvement I-2 in the live test log). Tests:
+`ModemTransmitTailTests`.
 
 ### Noticing that the radio has gone
 

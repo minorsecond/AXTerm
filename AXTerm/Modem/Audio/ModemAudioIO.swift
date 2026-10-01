@@ -45,6 +45,10 @@ nonisolated protocol ModemAudioSink: AnyObject {
     /// Fill mono output; return how many were written (the rest is silence).
     func audioIO(render into: UnsafeMutableBufferPointer<Float>) -> Int
     func audioIO(didReceive event: ModemAudioIOEvent)
+    /// True while the engine is still producing audio for the transmission
+    /// in progress. A short render then is an underrun, not the end of the
+    /// transmission. Safe on the real-time thread.
+    var transmitAudioPending: Bool { get }
 }
 
 nonisolated protocol ModemAudioIO: AnyObject {
@@ -55,6 +59,14 @@ nonisolated protocol ModemAudioIO: AnyObject {
     /// May block briefly; called off the main thread.
     func start() throws
     func stop()
+    /// What the engine does after the last sample of a transmission. Known
+    /// once started; see `ModemTransmitTail`.
+    var transmitTail: ModemTransmitTail { get }
+}
+
+extension ModemAudioIO {
+    /// A sound device drives the radio directly.
+    nonisolated var transmitTail: ModemTransmitTail { .radio }
 }
 
 nonisolated enum ModemAudioError: Error, Equatable, Sendable {

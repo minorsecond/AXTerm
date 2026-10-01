@@ -280,3 +280,11 @@ unkey on disagreement, never resend a superseded key-down, drop an unconfirmed
 key-down once an unkey is queued, and time the unkey from the last audible
 sample; in AXTerm, stop sending trailing silence. Filing the Warbler items
 needs a GitLab project token for `workshop/warbler`.
+
+AXTerm's part is done (2026-10-01): when the far end is Warbler, the modem
+sends no silence after the TXTAIL flags and unkeys as soon as the last
+sample is handed over, leaving the hold to Warbler. A radio reached
+directly keeps both. See "Transmit tail through Warbler" in
+[SoundModem.md](SoundModem.md). Expect the carrier after each frame to
+drop from about 0.7 s to about 0.25 to 0.4 s; confirm it on the air before
+bringing B's TX delay down.
