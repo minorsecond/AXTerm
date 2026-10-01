@@ -578,7 +578,9 @@ says so rather than returning an empty list.
 - `BBSTransferTests` — the file area driven end to end by a simulated caller
   (`BBSSimulatedCaller`) over the real session layer, acknowledging I-frames
   as a real peer does and sending in 128-byte frames: listings, a text file in
-  order, binaries from 1 byte to one under the cap checked byte for byte at
+  order between its markers, the count for a CRLF file with no final newline,
+  a marker-like line sent unchanged, a typed-out file packed into fewer frames
+  than lines, binaries from 1 byte to one under the cap checked byte for byte at
   `YAPPProtocol`'s own receiver, an emptied file, YAPP uploads, collisions,
   path names, policy refusals, a header that lies about its size, AXDP offers
   declined (whole and in pieces), AXDP chat, the operator's progress, and
@@ -587,8 +589,11 @@ says so rather than returning an empty list.
   joined, byte at a time, typed text between frames, and a block announcing
   an impossible size.
 - `BBSCircuitSessionTests` — the mailbox over a NET/ROM circuit: text files
-  typed out, listings, binaries and uploads refused with the callsign to
-  connect to.
+  typed out with their markers (a marker-like line inside one too), listings,
+  binaries and uploads refused with the callsign to connect to.
+- `TextDownloadMarkersTests` and `TextDownloadCaptureTests`: the marker
+  format and count, and a caller saving what the mailbox typed out; see
+  `Docs/PacketFileTransfer.md`.
 - `BBSFilePickingTests` — what each importer purpose accepts and does, and
   the note after adding files. `BBSTransferRowModelTests` — the progress row.
 - `SQLiteBBSMessageStoreTests` — promised message numbers, kill/restore,
@@ -653,7 +658,57 @@ frequency.
 
 The shell's own line ("Sending roster.bin (3m).") goes out before the first
 protocol byte, and a text file's "sending it as text" line before the text.
-Each reply is sent as one batch, so a command costs one burst of frames.
+Each reply is sent as one batch, so a command costs one burst of frames:
+the lines are joined, each ending in CR, and handed to the session in one
+piece, which cuts them into I-frames at the live paclen. A 46-byte line
+shares its frame with its neighbors instead of paying a frame header of its
+own (`BBSTransferTests.testATypedOutFileIsPackedIntoFewerFramesThanLines`).
+
+#### A typed-out text file is marked
+
+The text goes between two lines that name the file and give its exact size:
+
+```
+t3k_text.txt is text — sending it as text (1m).
+--- BEGIN t3k_text.txt (3010 bytes) ---
+...the file, one line per CR...
+--- END t3k_text.txt ---
+>
+```
+
+Any terminal shows them as two more lines. An AXTerm caller uses them to
+save the file in AXTerm Transfers with a row in its Transfers list
+(`Docs/PacketFileTransfer.md`, "Text from a session"), and to check that
+nothing went missing. `TextDownloadMarkers` builds and parses both lines;
+the same function serves a direct call and a NET/ROM caller.
+
+The count is defined so the caller can rebuild the file and check it:
+
+- The file is read as UTF-8, as typed-out files always were (a byte that is
+  not UTF-8 becomes U+FFFD).
+- Line endings are normalized: CRLF and a lone CR each become LF. Nothing
+  else is a line ending, so a form feed or a tab stays inside its line.
+- The count is the byte length of that normalized text, including its
+  final LF when it has one.
+- The text is split at each LF. A final LF ends the last line; it does not
+  start an empty one. Blank lines inside the file are lines.
+- Each line goes out followed by one CR.
+
+The caller puts an LF after each line it receives. That gives exactly the
+count, or one byte more when the file had no final newline, in which case
+that last LF is dropped. A file with LF line endings comes back byte for
+byte; one with CRLF comes back with LF endings and the same count.
+
+**The count governs, not the END line.** An END line only ends the file
+once the count has been reached, so a line in the file that reads like a
+marker is just text and nothing in the file is escaped. A caller without
+AXTerm sees the file exactly as it is on disk, apart from its line endings.
+
+The marker text is fixed: `--- BEGIN <name> (<n> bytes) ---` (`byte` when
+n is 1) and `--- END <name> ---`, with the name exactly as the area lists
+it. Earlier versions sent `--- <name> ---` and `--- end of <name> ---`, with
+no count, and split the file on every Unicode line separator, which doubled
+the blank lines of a CRLF file and sent an empty line for the final newline.
 
 While a transfer runs it owns the session's byte stream; the line assembler
 gets it back when the transfer ends. `YAPPProtocol` speaks YAPP as the
@@ -795,7 +850,10 @@ sends lines back, so text is all that link can carry. NET/ROM itself would
 carry binary, but no byte stream reaches the mailbox to run YAPP on. So:
 
 - `W`, `WN` and their aliases work unchanged.
-- `D` of a text file under 8 KB types it out, exactly as on a direct call.
+- `D` of a text file under 8 KB types it out, exactly as on a direct call,
+  between the same BEGIN and END lines with the same count. The node host
+  ends each line with CR and sends the reply in one piece, so the caller
+  rebuilds it the same way.
 - `D` of anything else, and `U`, are refused by the shell up front, with the
   callsign to connect to directly, before any airtime confirmation for a
   file that cannot be sent.

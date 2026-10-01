@@ -48,6 +48,15 @@ nonisolated enum ReceivedFileStore {
         }
     }
 
+    /// Where the folder is, in the words each platform uses, for a message
+    /// that says where a file went.
+    static func placeDescription(for platform: Platform) -> String {
+        switch platform {
+        case .macOS: return "Downloads \u{203A} \(folderName)"
+        case .iOS: return "the Files app, in AXTerm \u{203A} \(folderName)"
+        }
+    }
+
     /// The folder for this device, from the file manager's standard locations.
     static func defaultFolder(fileManager: FileManager = .default,
                               platform: Platform = .current) -> URL? {

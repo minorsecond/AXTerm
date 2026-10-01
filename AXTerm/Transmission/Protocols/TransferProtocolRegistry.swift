@@ -60,6 +60,10 @@ nonisolated final class TransferProtocolRegistry: @unchecked Sendable {
             return SevenPlusProtocol()
         case .rawBinary:
             return RawBinaryProtocol()
+        case .text:
+            // Text downloads and captures are read out of the terminal's
+            // lines (`ReceivedTextRecorder`); there is no driver to hand out.
+            return nil
         }
     }
 
@@ -88,6 +92,9 @@ nonisolated final class TransferProtocolRegistry: @unchecked Sendable {
                 if rawBinaryEnabled, RawBinaryProtocol.canHandle(data: data) {
                     return .rawBinary
                 }
+            case .text:
+                // Never registered: text is not detected from a packet.
+                break
         }
         }
         return nil

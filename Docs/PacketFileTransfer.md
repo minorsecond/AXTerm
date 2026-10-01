@@ -118,6 +118,81 @@ a second `report.txt` is saved as `report 2.txt`, then `report 3.txt`.
 A finished inbound transfer shows "Saved to AXTerm Transfers" with Quick
 Look on every platform, Show in Finder and Open on the Mac, and Share on iOS.
 
+## Text from a session
+
+Some files arrive as plain lines in the terminal rather than by a transfer
+protocol. Two kinds are kept as files, in the same folder and the same
+Transfers list as any other received file, with protocol shown as "Text".
+The lines still appear in the transcript as before. `ReceivedText.swift`
+holds the logic; the terminal model (`ObservableTerminalTxViewModel`) feeds
+it every byte it receives from a session, after AXDP envelopes and other
+protocol bytes are taken out, and `SessionCoordinator.saveReceivedText`
+saves and lists the result.
+
+Each station has its own state, keyed by callsign like the terminal's own
+line buffers, so two stations sending at once never mix. Line assembly here
+keeps blank lines (the transcript drops them): a CR ends a line, an LF just
+after a CR belongs to it even when the two arrive in different I-frames, and
+a lone LF ends a line.
+
+### A mailbox's text download
+
+When a mailbox types out a text file it puts a BEGIN line before it and an
+END line after it, carrying the name and the exact byte count
+(`Docs/PacketBBS.md` §14, "A typed-out text file is marked", defines the
+format and how the count is taken). On a BEGIN line from a station, AXTerm
+collects that station's following lines until the END line for the same
+name arrives at the point where the count has been reached. A marker-like
+line before that point is part of the file.
+
+It puts an LF after each line, drops the last one when the total is one
+more than the count (the file had no final newline), and saves the result
+under the name from the BEGIN line, sanitized and never overwriting
+(`ReceivedFileStore`, so a second copy is `t3k_text 2.txt`). The row is
+inbound and completed, with Quick Look, Show in Finder and Open, and the
+console says where the file went.
+
+When the file does not all arrive, AXTerm saves what did arrive under a
+name that says so, `t3k_text (incomplete).txt`, and marks the row failed
+with the reason, keeping the file's actions. On a 1200 baud link the part
+that arrived cost real airtime, and most of a net script is still worth
+reading; the name and the row keep it from passing for the whole file. It
+counts as incomplete when:
+
+| What happened | What is kept |
+|---|---|
+| more than the count arrives with no END line | the lines before the one that went past the count |
+| the END line came before the count was reached, and the count was then passed | the lines before that END line, since lines were lost before it |
+| the link closes or fails first | everything collected, the partial last line included; the lines before an early END line if one came |
+
+A link that closes right after the BEGIN line, before any of the file,
+saves nothing. A BEGIN line announcing more than 16 MB is not believed.
+
+### Capture
+
+The record button beside the message field turns Capture on for the session
+on screen, on the Mac and on iOS. While it is on, every line that station
+sends is kept: data only, so no frames, protocol bytes, AXDP envelopes,
+system lines or the operator's own lines. A complete AXDP chat message from
+the station counts as its lines. Turning it off saves the lines, each ending
+in LF, as `K0EPI-8 2026-10-01 0603.txt` (the station as the terminal names
+it, then the local date and time the capture began) with a Transfers row,
+and the console says where it went. A capture is per session: it stops and
+saves when that session's link closes or fails, and a capture with nothing
+in it saves no file and says so. A line still incomplete when Capture is
+turned off is not included; one cut off by the link closing is.
+
+Capture and a marked download can run at once over the same lines; each
+gets its own file.
+
+### Not covered
+
+Text arriving over one of AXTerm's own outbound NET/ROM circuits goes
+straight from the coordinator to the console and does not pass the terminal
+model, so neither a marked download nor Capture sees it. A caller reaching a
+mailbox through a node by AX.25 (connect to the node, then `BBS`) is covered,
+since that text arrives on an AX.25 session.
+
 ## Pause, resume, cancel
 
 - Pause stops sending after the chunk or block already handed to the link.
@@ -199,3 +274,14 @@ Transfers the operator ended themselves post nothing. The switch is
   names, dispatch, offers, the watchdog, notifications, device wording.
 - `TransferSheetHostingTests`: the sheets and list laid out off screen, with
   no publishing during view updates.
+- `TextDownloadMarkersTests`: the marker lines, the count (CRLF, a lone CR,
+  blank lines, a form feed, no final newline), line assembly across frames,
+  byte-identical rebuilding, marker-like lines inside a file, missing lines,
+  too many lines, a link closing mid-file, capture naming.
+- `TextDownloadCaptureTests`: a real mailbox typing a file to a simulated
+  caller whose frames go through the terminal model's own receive path. The
+  saved file is byte-identical, the Transfers row is right, a second copy is
+  saved beside the first, a hostile name is sanitized, a count mismatch and a
+  dropped link save an incomplete file, two stations interleaving stay apart,
+  and Capture keeps only the station's lines, stops when the link ends, and
+  saves nothing when nothing came.

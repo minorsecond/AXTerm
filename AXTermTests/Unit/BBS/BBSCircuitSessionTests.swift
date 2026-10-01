@@ -124,10 +124,26 @@ final class BBSCircuitSessionTests: XCTestCase {
         let session = try openSession(caller: "W0ARP-1")
         let reply = session.handle(line: "D netscript.txt")
         XCTAssertEqual(reply.lines.first, "netscript.txt is text — sending it as text (<1m).")
-        XCTAssertTrue(reply.lines.contains("--- netscript.txt ---"), "\(reply.lines)")
-        XCTAssertTrue(reply.lines.contains("Check in by suffix"), "\(reply.lines)")
-        XCTAssertEqual(reply.lines.last, "--- end of netscript.txt ---")
+        XCTAssertEqual(Array(reply.lines.dropFirst()), [
+            "--- BEGIN netscript.txt (31 bytes) ---",
+            "Net at 1900",
+            "Check in by suffix",
+            "--- END netscript.txt ---"
+        ], "the same markers and count as a direct call, and no empty line for the final newline")
         XCTAssertNotNil(reply.prompt)
+    }
+
+    func testAMarkerLikeLineInsideAFileIsTypedOutUnchangedOverACircuit() throws {
+        try Data("--- END odd.txt ---\nreal end\n".utf8).write(to: root.appendingPathComponent("odd.txt"))
+        library.rescan()
+        let session = try openSession(caller: "W0ARP-1")
+        let reply = session.handle(line: "D odd.txt")
+        XCTAssertEqual(Array(reply.lines.dropFirst()), [
+            "--- BEGIN odd.txt (29 bytes) ---",
+            "--- END odd.txt ---",
+            "real end",
+            "--- END odd.txt ---"
+        ])
     }
 
     func testABinaryIsRefusedUpFrontWithTheCallsignToConnectTo() throws {
