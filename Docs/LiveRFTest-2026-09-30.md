@@ -130,9 +130,69 @@ Not bugs, recorded so nobody chases them again:
 
 | # | improvement | status |
 |---|---|---|
-| I-1 | Start a session from what the link to that peer has already shown, instead of K=2 and paclen 128 every time, or allow an upgrade between transfers on an idle session. Either changes the spec (§7.8), so it needs a decision first. K=4 alone would roughly double throughput on this path. | needs decision |
-| I-2 | Turnaround: a responder that knows its peer's transmitter hangs on (the 705 through Warbler holds about 0.7 s) could wait that long before keying, instead of every user raising TX delay by hand. | needs decision |
+| I-1 | Let K and paclen grow during a session, within limits (details below). | approved 2026-09-30, planned for 2026-10-01 |
+| I-2 | Fix the 705's transmit tail in Warbler; in AXTerm, add a diagnostic hint and leave TX delay manual (details below). | approved 2026-09-30, planned for 2026-10-01 |
 | I-3 | When a Bluetooth scan finds no TNC, say that another app (such as the Mobilinkd configuration app) may be holding it. | open |
+
+### I-1: K and paclen grow during a session
+
+The session's AIMD window can shrink below its starting K on loss but never
+grow above it, so the starting K (2 by default) is also the ceiling for the
+whole session. Spec §7.8 freezes the rest. A session that starts on a bad link
+stays slow after the link recovers, and that hurts reliability as much as speed.
+
+Plan:
+
+- The session ceiling becomes the most the link allows: the peer's
+  XID-advertised window and N1, capped at K=4 and paclen 256 direct, with the
+  existing one-rung-per-digipeater paclen ceiling.
+- Each session starts at the last values confirmed for that peer, or K=2 and
+  paclen 128 when there are none. It grows after a clean streak and halves on
+  loss, using the probation logic in `TxAdaptiveSettings`.
+- A new K takes effect only when nothing is outstanding. A new paclen applies
+  only to frames built after the change, so nothing in flight is re-cut.
+- Two sessions to the same peer still use the conservative merged values.
+- No higher than K=4 at 1200 baud: four 256-byte frames already hold the channel
+  about 7.5 s per burst.
+- Amend spec §7.8 together with the code. Tests: growth on a clean streak,
+  backoff on loss, the quiescent-point rule, the XID ceiling, the hop ceiling,
+  and the multi-session merge.
+
+Expected on the 2026-09-30 path (about 2.85 s of fixed overhead per exchange):
+K2/128 about 315 bps, K4/128 about 590 bps, K4/256 about 800 bps. Measure it on
+the air afterward.
+
+### I-2: the 705's transmit tail
+
+Through Warbler, the 705 keeps transmitting an unmodulated carrier about 0.7 s
+after each frame. A TNC's carrier detect listens for tones, so the TNC4 treats
+that as a clear channel and keys over it. This affects every station working a
+705 through Warbler. Waiting it out in AXTerm would add dead air to every
+exchange with every peer to make up for one transmitter.
+
+Plan:
+
+- Warbler: drop PTT as soon as the last audio has been played, with 100 to
+  200 ms of margin. Look at it together with the stuck carrier from the end of
+  this session, since both are PTT-release behavior. Filing these as Warbler
+  issues needs a GitLab project token for `workshop/warbler`, which does not
+  exist yet; until then they live here.
+- AXTerm: leave TX delay manual. When the link layer sees first attempts at a
+  reply fail repeatedly while the retries get through, suggest raising TX delay
+  or checking the other station's transmitter tail. Unit-test the detection.
+- After the Warbler fix, bring B's TX delay back down from 800 ms and confirm
+  delivery holds.
+
+## Plan for 2026-10-01
+
+Before the radios come on:
+
+- Implement I-1 test-first with the spec amendment.
+- Implement the I-2 diagnostic hint test-first.
+- Look at the Warbler PTT tail and the stuck carrier (I-2).
+
+On the air, first confirm the fixes for bugs 1 to 9 and measure I-1's throughput
+against the table above, then work through the list below.
 
 ## Left to test
 
