@@ -385,6 +385,25 @@ final class BBSTransferTests: XCTestCase {
                      "uploads are never served")
     }
 
+    /// The confirmation waits until YAPP is done. On 2026-10-01 the mailbox
+    /// wrote "Received ..." the moment it acknowledged end of file, while
+    /// the caller's AXTerm was waiting for the acknowledgment of end of
+    /// transmission. AXTerm hands everything to its YAPP driver until the
+    /// transfer ends, so it read the line as a protocol error and marked a
+    /// file that had arrived intact as failed.
+    func testTheUploadIsConfirmedOnlyAfterTheYAPPExchangeEnds() async throws {
+        enableUploads()
+        try await connect()
+
+        let sender = try await upload("order.bin", binary(300, seed: 7))
+        let raw = sender.raw
+        let ackEndTransmission = try XCTUnwrap(raw.range(of: Data([0x06, 0x04])),
+                                               "the mailbox never acknowledged end of transmission")
+        let confirmation = try XCTUnwrap(raw.range(of: Data("Received order.bin".utf8)))
+        XCTAssertLessThan(ackEndTransmission.lowerBound, confirmation.lowerBound,
+                          "the confirmation went out in the middle of the YAPP handshake")
+    }
+
     func testAnUploadNeverReplacesAFileAlreadyInTheInbox() async throws {
         enableUploads()
         try Data("the operator's".utf8).write(to: inbox.appendingPathComponent("report.txt"))

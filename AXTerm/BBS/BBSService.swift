@@ -163,6 +163,11 @@ final class BBSService: ObservableObject {
         var acceptedBytes: Int?
         /// Set once an upload has been written to the inbox.
         var stored = false
+        /// What the caller is told about a stored upload, said once YAPP is
+        /// done. Said at end of file, it reached a caller still waiting for
+        /// the acknowledgment of end of transmission, whose YAPP driver read
+        /// it as a protocol error (2026-10-01).
+        var storedConfirmation: String?
         var framing = YAPPFrameAssembler()
         /// Text the caller typed during the transfer, kept only to spot `A`.
         var typed = Data()
@@ -905,15 +910,17 @@ final class BBSService: ObservableObject {
                 note("download of \(run.logName) stopped: \(reason)")
             }
         case .upload:
-            // A stored upload has already been announced by `storeUpload`.
             if !ok {
+                // A file already stored arrived whole even if the handshake
+                // after it did not finish; the caller should know both.
                 let reason = error ?? "no reason given"
-                write(["The upload stopped: \(reason).", BBSShell.commandPrompt])
+                write([run.storedConfirmation, "The upload stopped: \(reason).", BBSShell.commandPrompt]
+                    .compactMap { $0 })
                 note("upload stopped: \(reason)")
             } else if !run.stored {
                 write(["The upload ended without a file.", BBSShell.commandPrompt])
             } else {
-                write([BBSShell.commandPrompt])
+                write([run.storedConfirmation, BBSShell.commandPrompt].compactMap { $0 })
             }
         }
     }
@@ -1161,8 +1168,8 @@ final class BBSService: ObservableObject {
             return
         }
         running?.stored = true
+        running?.storedConfirmation = "Received \(saved) (\(BBSFileIndex.size(data.count)))."
         uploadsThisCall += 1
-        write(["Received \(saved) (\(BBSFileIndex.size(data.count)))."])
         // Named in the call log because an unattended station accepting files
         // is exactly the thing the operator wants to read about afterwards.
         note("uploaded \(saved)")

@@ -190,6 +190,40 @@ final class YAPPProtocolTests: XCTestCase {
         XCTAssertEqual(yapp.bytesTransferred, 6)
     }
 
+    /// Once the receiver has acknowledged end of file it has the whole
+    /// file. Some receivers print a line at that point instead of waiting
+    /// for end of transmission (AXTerm's own mailbox did until 2026-10-01),
+    /// and a transfer that delivered every byte must not be marked failed
+    /// over it.
+    func testTextAfterTheFileIsAcknowledgedStillCompletes() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        try yapp.startSending(fileName: "F.BIN", fileData: Data([1, 2, 3]))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(YAPPEncoder.receiveFile())
+        yapp.handleIncomingData(YAPPEncoder.ackEndFile())
+
+        yapp.handleIncomingData(Data("Received F.BIN (3 bytes).\r".utf8))
+
+        XCTAssertEqual(spy.completion?.ok, true, "the receiver had the whole file: \(String(describing: spy.completion))")
+        XCTAssertEqual(yapp.state, .completed)
+    }
+
+    /// Text before the file is acknowledged is still an error.
+    func testTextBeforeTheFileIsAcknowledgedIsStillAnError() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        try yapp.startSending(fileName: "F.BIN", fileData: Data([1, 2, 3]))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(YAPPEncoder.receiveFile())
+
+        yapp.handleIncomingData(Data("What?\r".utf8))
+
+        XCTAssertEqual(spy.completion?.ok, false)
+    }
+
     func testSenderAddsChecksumsWhenTheReceiverAnswersRT() throws {
         let yapp = YAPPProtocol()
         let spy = YAPPSpy()

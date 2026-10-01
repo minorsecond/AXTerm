@@ -533,6 +533,16 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
             timer?.invalidate()
             onCancelSettled?()
 
+        case (.awaitingEndTransmissionAck, .invalid):
+            // The receiver acknowledged end of file, so it has every byte.
+            // A line printed now instead of the end-of-transmission ack is a
+            // receiver speaking early, not a failed transfer (AXTerm's own
+            // mailbox did this until 2026-10-01).
+            senderPhase = .finished
+            timer?.invalidate()
+            setState(.completed)
+            delegate?.transferProtocol(self, didComplete: true, error: nil)
+
         case (_, .invalid):
             protocolError("The other station sent something that is not YAPP")
 

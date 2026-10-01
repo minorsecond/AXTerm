@@ -176,6 +176,8 @@ nonisolated final class CallerYAPPSender: FileTransferProtocolDelegate, @uncheck
     var framing = YAPPFrameAssembler()
     var toSend: [Data] = []
     var text = Data()
+    /// Everything the mailbox sent, in order, before any separating.
+    var raw = Data()
     var completed: Bool?
     var error: String?
 
@@ -184,6 +186,7 @@ nonisolated final class CallerYAPPSender: FileTransferProtocolDelegate, @uncheck
     /// Mailbox replies go to the sender's own stream, as the mailbox's
     /// download path does in the other direction.
     func consume(_ bytes: Data) {
+        raw.append(bytes)
         for piece in framing.push(bytes) {
             switch piece {
             case .frame(let frame): _ = driver.handleIncomingData(frame)
