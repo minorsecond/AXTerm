@@ -52,12 +52,14 @@ final class ConnectedModeStressTests: XCTestCase {
     private func runFamily(_ family: String, seeds: [UInt64], requireCompletion: Bool = false,
                            expectIncomplete: ((StressScenario) -> String?)? = nil,
                            file: StaticString = #filePath, line: UInt = #line,
-                           _ make: (UInt64) -> StressScenario) -> StressTally {
+                           _ make: (UInt64) -> StressScenario,
+                           onResult: (StressResult) -> Void = { _ in }) -> StressTally {
         var tally = StressTally()
         var lines: [String] = []
         for seed in seeds {
             let scenario = make(seed)
             let result = StressRunner(scenario).run()
+            onResult(result)
             tally.add(result)
             lines.append(result.summary)
             lines.append(contentsOf: result.gapFlushLosses.map { "  gap flush: \($0)" })
@@ -260,6 +262,49 @@ final class ConnectedModeStressTests: XCTestCase {
             return s
         }
         XCTAssertEqual(tally.failed, tally.runs, "every link must end failed")
+    }
+
+    /// One direction dies: the station whose frames no longer get through
+    /// exhausts N2. The other side still hears it and polls it; how long it
+    /// takes to learn the link is gone is recorded.
+    func testOneWayOutageFailsBothSides() {
+        var lags: [String] = []
+        let tally = runFamily("one-way-outage", seeds: seeds(8)) { seed in
+            var pick = Picker(seed, 0x1A7)
+            var s = StressScenario(name: "one-way-outage", seed: seed)
+            s.viaDigi = pick.chance(0.3)
+            s.traffic = .bulk(aToB: 20000, bToA: pick.pick([0, 4000]))
+            s.oneWayOutage = (from: pick.pick([0, 1]), start: pick.uniform(20, 60))
+            return s
+        } onResult: { result in
+            lags.append(String(format: "%.0f", result.failureLag ?? -1))
+        }
+        XCTAssertEqual(tally.failed, tally.runs)
+        StressReport.write(["failure lags (s): " + lags.joined(separator: " ")], name: "one-way-outage-lag")
+    }
+
+    /// The channel dies long enough for the sending side to exhaust N2,
+    /// then comes back while the receiving side, which only polls on T3,
+    /// still holds the link. Its polls now reach a station that has given
+    /// up; how long it takes to learn that is recorded.
+    func testTransientOutageLeavesNoStaleSession() {
+        var lags: [String] = []
+        let tally = runFamily("transient-outage", seeds: seeds(8)) { seed in
+            var pick = Picker(seed, 0x7A0)
+            var s = StressScenario(name: "transient-outage", seed: seed)
+            s.viaDigi = pick.chance(0.3)
+            s.traffic = .bulk(aToB: 40000, bToA: 0)
+            let start = pick.uniform(20, 40)
+            // Long enough for A's 15 retries to run out (about 400 s with
+            // the RTO backing off to 30 s), short enough that B, whose T3
+            // only starts polling after 30 s of quiet, is still trying.
+            s.outages = [start...(start + 420)]
+            return s
+        } onResult: { result in
+            lags.append(String(format: "%.0f", result.failureLag ?? -1))
+        }
+        StressReport.write(["failure lags (s): " + lags.joined(separator: " "), "TOTAL \(tally.row)"],
+                           name: "transient-outage-lag")
     }
 
     /// The far station crashes and comes back with no session, and does not

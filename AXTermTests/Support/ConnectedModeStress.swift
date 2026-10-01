@@ -64,6 +64,9 @@ struct StressScenario: CustomStringConvertible {
     var duplicate: Double = 0
     var fade: SimFadeModel? = nil
     var outages: [ClosedRange<TimeInterval>] = []
+    /// From this time on, nothing station `from` sends gets through to the
+    /// next hop; the other direction stays clear.
+    var oneWayOutage: (from: Int, start: TimeInterval)? = nil
     var hostDrop: Double = 0
     var viaDigi = false
     /// Nil keeps the adaptive defaults (K=2, paclen 128).
@@ -116,6 +119,9 @@ struct StressResult {
     /// UAs either station received while already connected.
     var unexpectedUAs = 0
     var firstUnexpectedUA: TimeInterval?
+    /// How long after the first side's link went down the second side's
+    /// did, when both did.
+    var failureLag: TimeInterval?
     var firstViolationAt: TimeInterval?
 
     var throughput: Double { dataTime > 0 ? Double(bytesDelivered * 8) / dataTime : 0 }
@@ -201,6 +207,14 @@ final class StressRunner {
         } else {
             channel.setLinks(between: nodeA.index, and: nodeB.index, impaired)
             path = DigiPath()
+        }
+
+        if let cut = scenario.oneWayOutage {
+            let from = cut.from == 0 ? nodeA.index : nodeB.index
+            let to = scenario.viaDigi ? 2 : (cut.from == 0 ? nodeB.index : nodeA.index)
+            var dead = channel.link(from: from, to: to)
+            dead.outages.append(cut.start...1e9)
+            channel.setLink(from: from, to: to, dead)
         }
 
         func source(_ call: AX25Address) -> SimConfigSource {
@@ -508,6 +522,11 @@ final class StressRunner {
                 violation("sequence state disagrees at rest: A vs=\(sa.vs) vr=\(sa.vr), B vs=\(sb.vs) vr=\(sb.vr)")
             }
         }
+
+        let downTimes = stations.compactMap { st in
+            st.stateLog.first(where: { $0.from == .connected && $0.to != .connected })?.time
+        }
+        if downTimes.count == 2 { result.failureLag = abs(downTimes[0] - downTimes[1]) }
 
         let stats = net.channel.stats
         result.elapsed = net.clock.currentTime
