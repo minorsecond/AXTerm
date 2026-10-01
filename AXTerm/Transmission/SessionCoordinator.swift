@@ -4299,20 +4299,15 @@ final class SessionCoordinator: ObservableObject {
 
         let display = peer.display.uppercased()
         let route = session.path.display.isEmpty ? "direct" : "via \(session.path.display)"
-        // Whether anything of ours has been acknowledged decides what this
-        // silence actually means, and the two readings point opposite ways.
-        // An ack proves both directions carry frames, so a link that acks and
-        // then says nothing is a peer whose *application* is not answering —
-        // reporting that as a one-way path would send the operator hunting for
-        // a better route they do not need.
+        // Whether anything of ours has been acknowledged, and whether the peer
+        // answers our polls, decide what this silence means. See IdleLinkNotice.
         let weWereHeard = session.stateMachine.sequenceState.va > 0
-        let detail = weWereHeard
-            ? "\(display) (\(route)) acknowledged what you sent but has not answered "
-              + "in \(polls) polls. The link is good. The far end is not replying."
-            : "\(display) (\(route)) is connected and polling, but nothing has passed "
-              + "in either direction. The far end may not be answering on this path."
+        let pollEvidence = session.stateMachine.pollEvidence
+        let detail = IdleLinkNotice.text(display: display, route: route, polls: polls,
+                                         acknowledged: weWereHeard, pollEvidence: pollEvidence)
         TxLog.warning(.session, "Link connected but carrying nothing", [
-            "peer": display, "polls": polls, "path": route, "acked": weWereHeard
+            "peer": display, "polls": polls, "path": route, "acked": weWereHeard,
+            "ourPoll": String(describing: pollEvidence)
         ])
         packetEngine?.appendSystemNotification(detail)
     }

@@ -507,6 +507,16 @@ nonisolated struct BufferedIFrame: Sendable {
 
 /// AX.25 connected-mode state machine
 /// Handles state transitions and generates actions in response to events
+/// What became of the last poll this station sent on a connected link.
+nonisolated enum AX25PollEvidence: Equatable, Sendable {
+    /// No poll of ours has been resolved yet.
+    case none
+    /// The peer answered with F=1.
+    case answered
+    /// T1 ran out before any answer came.
+    case unanswered
+}
+
 nonisolated struct AX25StateMachine: Sendable {
     /// Current session state
     private(set) var state: AX25SessionState = .disconnected {
@@ -539,6 +549,16 @@ nonisolated struct AX25StateMachine: Sendable {
     /// "connected". Field capture 2026-08-26, KB5YZB-7 direct: ten polls in
     /// ninety seconds, `vr` never left 0, the BBS never answered.
     private(set) var idlePollCount: Int = 0
+
+    /// What became of the most recent poll this station sent (a T3 enquiry or
+    /// a T1 poll with nothing outstanding).
+    ///
+    /// `idlePollCount` counts the peer's polls that we answered. Those show we
+    /// hear the peer and nothing about whether it hears us, so this is kept
+    /// separately: it is the only evidence that can say the far end is not
+    /// answering (live RF test 2026-09-30, where both stations answered every
+    /// keepalive and the idle note still doubted the far end).
+    private(set) var pollEvidence: AX25PollEvidence = .none
 
     /// Consecutive REJs that acknowledged nothing new and asked for a frame we
     /// have never sent.
@@ -680,6 +700,7 @@ nonisolated struct AX25StateMachine: Sendable {
         rejSent = false
         ackPending = false
         peerBusy = false
+        pollEvidence = .none
     }
 
     /// Force recovery from late UA. Called by session manager only when it determines
@@ -905,6 +926,7 @@ nonisolated struct AX25StateMachine: Sendable {
                 // F=1 RNR answers a poll we sent: the peer is alive, merely busy
                 // (§4.4.5.2 names RNR as a valid enquiry answer). Exit timer recovery.
                 retryCount = 0
+                pollEvidence = .answered
             }
             if !peerBusy {
                 // Warning so the busy period is visible in Sentry: a peer stuck
@@ -1075,6 +1097,11 @@ nonisolated struct AX25StateMachine: Sendable {
             // (handled at the SessionManager level).
             // When the peer is busy we must not retransmit I-frames into its full
             // buffer; poll it with RR(P=1) instead until it clears the condition.
+            if sequenceState.outstandingCount == 0 {
+                // T1 ran out with nothing of ours outstanding, so what it was
+                // timing is a poll, and that poll got no answer.
+                pollEvidence = .unanswered
+            }
             if sequenceState.outstandingCount == 0 || peerBusy {
                 actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: true))
             }
@@ -1405,6 +1432,7 @@ nonisolated struct AX25StateMachine: Sendable {
         // enquiry cycle would leak into the next and trip a premature N2 failure.
         if pf && !isCommand {
             retryCount = 0
+            pollEvidence = .answered
         }
         
         if pf && isCommand {
