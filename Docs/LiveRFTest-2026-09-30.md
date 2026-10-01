@@ -138,12 +138,13 @@ Status is filled in as each is fixed.
 | 8 | The receiver of a paused transfer keeps saying "Receiving" with a decaying rate and no sign that the sender paused. | A, 19:48 | fixed, 91e9324: AXDP and YAPP have no pause message, so after a silence longer than max(15 s, 4 times the usual chunk gap) the receiver shows "Waiting for" the sender and hides the rate |
 | 9 | The session log view would not scroll back reliably to earlier lines. | A, 17:38 | fixed, 8fa62c1: the console and raw log scrolled to the bottom on every new line; they now follow only while the reader is at the bottom |
 | 10 | Found while fixing 3 and 4: data arriving from a second connected station switched the terminal to that session but left the To field on the first, so the next message went down the wrong link. | code review | fixed, 0b1bb83: the terminal takes up the sending session only when it has no live session, and the To field follows |
-| 11 | Found on the air 2026-10-01: a single unpolled I-frame was resent before the peer's delayed ack could arrive. B's T1 fired after 4.3 s, while B's airtime plus A's 2 s T2 plus the 705's key-up path needs about 5.5 s, so the resend keyed over A's RR. The RTO is learned from polled exchanges, which are answered at once, so it does not cover the peer's T2 (spec: "T2 must sit inside every plausible peer T1"). | B, 10:44:53 UTC 2026-10-01 | open |
+| 11 | Found on the air 2026-10-01: a single unpolled I-frame was resent before the peer's delayed ack could arrive. B's T1 fired after 4.3 s, while B's airtime plus A's 2 s T2 plus the 705's key-up path needs about 5.5 s, so the resend keyed over A's RR. The RTO is learned from polled exchanges, which are answered at once, so it does not cover the peer's T2 (spec: "T2 must sit inside every plausible peer T1"). | B, 10:44:53 UTC 2026-10-01 | fixed, bafeeee: a first send of unpolled frames waits for SRTT, our airtime and 3 s of peer ack delay; a poll and every retry keep the plain RTO |
 | 12 | Pressing Return in the To field commits and connects, but the suggestion popover stays open over the transcript until Escape. | A, 10:42 UTC 2026-10-01 | open |
 | 13 | Transfer end states disagree: a declined offer is a red "Failed: Transfer declined by remote station" on the sender and "Canceled" on the receiver, and a cancel by the other station does not say who canceled. | A and B, 10:51 UTC 2026-10-01 | open |
 | 14 | After the receiver accepts, its own row reads "Pending permission" (the sender's wording) for a few seconds until data flows. | A, 10:53 UTC 2026-10-01 | open |
 | 15 | Narrow-window layout: at half-screen width with the sidebar open, the locked To field in the compose bar and the Map's station-list title both wrap one or two characters per line. | A, 10:55 UTC 2026-10-01 | open |
 | 16 | An auto-accepted transfer arriving while another view is on screen gives no visible sign that a file is coming in. | A, 10:55 UTC 2026-10-01 | open |
+| 17 | Every BBS file pick did nothing: SwiftUI clears the importer's isPresented binding before calling the completion handler, and the Files screens kept the pick's purpose in that state. "Share a Folder" closed the panel and shared nothing, with no message. | B, 10:58 UTC 2026-10-01 | fixed, 738f67b |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -159,8 +160,8 @@ Not bugs, recorded so nobody chases them again:
 
 | # | improvement | status |
 |---|---|---|
-| I-1 | Let K and paclen grow during a session, within limits (details below). | approved 2026-09-30, planned for 2026-10-01 |
-| I-2 | Fix the 705's transmit tail in Warbler; in AXTerm, add a diagnostic hint and leave TX delay manual (details below). | approved 2026-09-30, planned for 2026-10-01 |
+| I-1 | Let K and paclen grow during a session, within limits (details below). | done, b5de7e1; measure on the air |
+| I-2 | Fix the 705's transmit tail in Warbler; in AXTerm, add a diagnostic hint and leave TX delay manual (details below). | AXTerm hint done (962e1c5); AXTerm sends no trailing silence to Warbler (cba92c1); Warbler fixes on branch fix/ptt-safety, in progress |
 | I-3 | When a Bluetooth scan finds no TNC, say that another app (such as the Mobilinkd configuration app) may be holding it. | done, b8c4ded |
 
 ### I-1: K and paclen grow during a session
