@@ -2746,7 +2746,7 @@ struct TerminalView: View {
                 connectionMode: txViewModel.connectionMode,
                 useAXDP: useAXDPBinding,
                 sourceCall: txViewModel.sourceCall,
-                canSend: txViewModel.canSend,
+                canSend: txViewModel.viewModel.canSubmit(sessionConnected: txViewModel.sessionState == .connected),
                 characterCount: txViewModel.characterCount,
                 queueDepth: txViewModel.queueDepth,
                 isConnected: client.status == .connected,
@@ -3199,7 +3199,8 @@ struct TerminalView: View {
             sessionRecorder?.recorded(line: "> \(text)", for: id,
                                       sent: true, bytes: text.utf8.count)
         }
-        let useAXDP = txViewModel.viewModel.useAXDP
+        // A blank line is a bare CR, never an AXDP message.
+        let useAXDP = txViewModel.viewModel.useAXDP && !text.isEmpty
         
         // If AXDP is requested, verify capability is confirmed
         if useAXDP {

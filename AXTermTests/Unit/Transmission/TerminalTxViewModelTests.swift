@@ -264,4 +264,44 @@ final class TerminalTxViewModelTests: XCTestCase {
         let size = vm.estimatedPayloadSize
         XCTAssertGreaterThan(size, vm.composeText.utf8.count)
     }
+
+    // MARK: - A blank line in a session
+
+    /// A mailbox's "Press Return to skip anything", a node's prompt, a
+    /// pager's "more": each wants a bare CR. On 2026-10-01 the terminal sent
+    /// nothing for Return in an empty field, so the caller had to type a word
+    /// to get past every question.
+    func testAnEmptyLineCanBeSentInALiveSession() {
+        var vm = TerminalTxViewModel()
+        vm.connectionMode = .connected
+        vm.destinationCall = "K0EPI-8"
+
+        XCTAssertTrue(vm.canSubmit(sessionConnected: true))
+    }
+
+    func testAnEmptyLineNeedsTheSessionUp() {
+        var vm = TerminalTxViewModel()
+        vm.connectionMode = .connected
+        vm.destinationCall = "K0EPI-8"
+
+        XCTAssertFalse(vm.canSubmit(sessionConnected: false))
+    }
+
+    func testAnEmptyBroadcastIsNotSent() {
+        var vm = TerminalTxViewModel()
+        vm.connectionMode = .datagram
+
+        XCTAssertFalse(vm.canSubmit(sessionConnected: true))
+    }
+
+    func testTextStillNeedsAValidDestination() {
+        var vm = TerminalTxViewModel()
+        vm.connectionMode = .connected
+        vm.destinationCall = "K"
+        XCTAssertFalse(vm.canSubmit(sessionConnected: true), "\"K\" is not a station to send a blank line to")
+        vm.composeText = "hello"
+        XCTAssertFalse(vm.canSubmit(sessionConnected: true))
+        vm.destinationCall = "K0EPI-8"
+        XCTAssertTrue(vm.canSubmit(sessionConnected: true))
+    }
 }

@@ -84,6 +84,22 @@ nonisolated struct TerminalTxViewModel {
         (destinationCall.isEmpty || isValidCallsign(destinationCall))
     }
 
+    /// Whether Return or Send does anything.
+    ///
+    /// In a live session an empty line goes out as a bare CR: a mailbox's
+    /// "Press Return to skip", a node's prompt and a pager's "more" all want
+    /// one, and on 2026-10-01 the terminal sent nothing, so a caller had to
+    /// type a word to get past each question. A broadcast is never empty.
+    func canSubmit(sessionConnected: Bool) -> Bool {
+        switch connectionMode {
+        case .datagram:
+            return canSend
+        case .connected:
+            guard sessionConnected else { return false }
+            return canSend || (composeText.isEmpty && (destinationCall.isEmpty || isValidCallsign(destinationCall)))
+        }
+    }
+
     /// Effective destination (CQ if empty for broadcast)
     var effectiveDestination: String {
         destinationCall.isEmpty ? "CQ" : destinationCall
