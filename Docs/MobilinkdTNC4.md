@@ -343,7 +343,13 @@ AXTerm never changes the gain on its own after a finding. Retune does:
 4. Packets: on APRS, one calibration beacon (the ten-minute limit applies); on
    packet, a 30 s listen for other stations, which feeds the packet-based
    advice and offers its step once three packets are in. Either can be
-   skipped.
+   skipped. With the squelch open, packet tones usually arrive under the
+   receiver's noise, so the packets' gain can pin the noise the receive gain
+   step measured as clean; when the latest check's noise floor would reach
+   90% of full scale at that gain, the step says so and suggests closing the
+   squelch (`TNC4TuningFlow.pinsNoise`). On 2026-10-01 an ID-50 with its
+   squelch open measured noise at 44% and packets at 13% at +12 dB; with the
+   squelch on auto, +24 dB put packets at 53% with silence between them.
 5. Done: the radio's gain now against what it was.
 
 Every change goes into the radio's managed input gain through the radio

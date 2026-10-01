@@ -231,6 +231,11 @@ struct TNC4TuningSheet: View {
             if case .keep = rec.action {
                 Label("The input gain is right.", systemImage: "checkmark.circle")
             } else {
+                if let warning = noiseWarning(for: rec.gain) {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button("Use \(ReceiveGainAdvice.gainText(rec.gain))") { monitor.applyPassive(radioID) }
                     .disabled(!connected || monitor.isBusy(radioID))
             }
@@ -254,6 +259,20 @@ struct TNC4TuningSheet: View {
                 .foregroundStyle(.secondary)
         }
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Said when the packets' gain would pin the noise the latest level
+    /// check measured between packets: the squelch is open and the tones sit
+    /// under the noise, so the gain can suit one or the other.
+    private func noiseWarning(for gain: Int) -> String? {
+        guard let last = monitor.record(radioID).observations.last,
+              TNC4TuningFlow.pinsNoise(recommendedGain: gain, noiseVpp: last.noiseVpp, measuredGain: last.gain)
+        else { return nil }
+        let measured = last.noiseVpp.map { ReceiveGainAdvice.percent(Double($0) / Double(TNC4LevelSample.fullScale)) }
+            ?? "full scale"
+        return "With the squelch open, \(ReceiveGainAdvice.gainText(gain)) puts the noise between packets at the top of the range "
+            + "(it measured \(measured) at \(ReceiveGainAdvice.gainText(last.gain))). "
+            + "Close the squelch first, or keep the current gain."
     }
 
     // MARK: Actions

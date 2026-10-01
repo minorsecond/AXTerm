@@ -109,4 +109,43 @@ final class TNC4TuningFlowTests: XCTestCase {
         managedGain = nil
         XCTAssertEqual(f.gainSummary, "Input gain for ID-50: the TNC4's own. It was +6 dB.")
     }
+
+    /// Field case 2026-10-01: the radio had run on the TNC4's own +24 dB, the
+    /// packet check confirmed +24 dB, and the summary read "+24 dB. It was
+    /// the TNC4's own, +24 dB." The number is the same; what changed is that
+    /// the radio now has a gain of its own.
+    func testTheSummarySaysWhenTheSameGainBecameTheRadiosOwn() {
+        let f = flow(managed: nil, tncGain: 4)
+        managedGain = 4
+        XCTAssertEqual(f.gainSummary, "Input gain for ID-50: +24 dB, now set for this radio. The TNC4's own is the same.")
+    }
+
+    // MARK: Open-squelch noise against the packets' advice
+
+    /// Field case 2026-10-01: with the squelch open, noise measured 44% at
+    /// +12 dB and packets 13%. The packets' advice was +24 dB, which puts
+    /// that noise at four times its level, pinned at the top of the range.
+    func testAPacketGainThatPinsTheOpenSquelchNoiseIsFlagged() {
+        let noise = 29_060 // 44% at +12 dB
+        XCTAssertTrue(TNC4TuningFlow.pinsNoise(recommendedGain: 4, noiseVpp: noise, measuredGain: 2))
+        XCTAssertFalse(TNC4TuningFlow.pinsNoise(recommendedGain: 2, noiseVpp: noise, measuredGain: 2),
+                       "the gain the noise was measured at is fine by definition")
+    }
+
+    func testANoiseFloorWithHeadroomIsNotFlagged() {
+        // 10% at +6 dB doubles to 20% at +12 dB.
+        XCTAssertFalse(TNC4TuningFlow.pinsNoise(recommendedGain: 2, noiseVpp: 6_550, measuredGain: 1))
+    }
+
+    /// A closed squelch measures near-silence between packets, and no gain
+    /// makes silence clip.
+    func testAClosedSquelchIsNeverFlagged() {
+        XCTAssertFalse(TNC4TuningFlow.pinsNoise(recommendedGain: 4, noiseVpp: 148, measuredGain: 4))
+        XCTAssertFalse(TNC4TuningFlow.pinsNoise(recommendedGain: 4, noiseVpp: 900, measuredGain: 0))
+    }
+
+    func testANoiseFloorAlreadyPinnedIsFlagged() {
+        XCTAssertTrue(TNC4TuningFlow.pinsNoise(recommendedGain: 4, noiseVpp: nil, measuredGain: 4),
+                      "no noise floor because every report clipped")
+    }
 }

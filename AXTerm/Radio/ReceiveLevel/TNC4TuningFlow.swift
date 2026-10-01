@@ -133,7 +133,31 @@ final class TNC4TuningFlow: ObservableObject, Identifiable {
         if now == originalGain {
             return "Input gain for \(radioName): unchanged, \(describe(now))."
         }
+        // The same step, but now the radio's own rather than whatever the
+        // TNC4 happened to hold.
+        if originalGain == nil, let now, now == tncGain {
+            return "Input gain for \(radioName): \(ReceiveGainAdvice.gainText(now)), now set for this radio. The TNC4's own is the same."
+        }
         return "Input gain for \(radioName): \(describe(now)). It was \(describe(originalGain))."
+    }
+
+    // MARK: Open-squelch noise
+
+    /// Whether `recommendedGain` would put the noise between packets, measured
+    /// as `noiseVpp` at `measuredGain`, at the top of the range.
+    ///
+    /// With the squelch open, packet tones usually arrive well under the
+    /// receiver's noise (13% against 44% on 2026-10-01), and every gain step
+    /// doubles both. A gain chosen from the packets can then pin the noise
+    /// that the receive gain step just measured as clean. A closed squelch
+    /// leaves near-silence between packets, which no gain makes clip. A nil
+    /// floor means every report clipped: already pinned.
+    nonisolated static func pinsNoise(recommendedGain: Int, noiseVpp: Int?, measuredGain: Int) -> Bool {
+        let full = Double(TNC4LevelSample.fullScale)
+        guard let noiseVpp else { return true }
+        guard Double(noiseVpp) >= ReceiveLevelDrift.openSquelchFraction * full else { return false }
+        let predicted = Double(noiseVpp) * pow(2, Double(recommendedGain - measuredGain))
+        return predicted >= ReceiveLevelDrift.saturatedFraction * full
     }
 
     private func describe(_ gain: Int?) -> String {
