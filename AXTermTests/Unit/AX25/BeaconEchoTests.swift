@@ -43,7 +43,7 @@ final class BeaconEchoTests: XCTestCase {
         monitor.recordTransmitted(
             source: frame.source.display,
             destination: frame.destination.display,
-            control: frame.controlByte ?? 0,
+            control: frame.wireControlByte,
             info: frame.payload)
 
         let decoded = try XCTUnwrap(AX25.decodeFrame(ax25: repeated(frame.encodeAX25())))
@@ -94,7 +94,7 @@ final class BeaconEchoTests: XCTestCase {
         monitor.recordTransmitted(
             source: frame.source.display,
             destination: frame.destination.display,
-            control: frame.controlByte ?? 0,
+            control: frame.wireControlByte,
             info: frame.payload)
         let decoded = try XCTUnwrap(AX25.decodeFrame(ax25: frame.encodeAX25()))
 

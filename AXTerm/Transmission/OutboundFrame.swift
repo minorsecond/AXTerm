@@ -120,6 +120,11 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
     /// If nil, defaults to 0x03 (UI frame) for backwards compatibility
     let controlByte: UInt8?
 
+    /// The control byte this frame goes on the air with. Anything that
+    /// remembers a sent frame to recognize it later must use this, not
+    /// `controlByte`: a frame built without one is sent as UI.
+    var wireControlByte: UInt8 { controlByte ?? AX25Control.ui }
+
     /// N(S) - Send sequence number for I-frames (0-7 for mod 8, 0-127 for mod 128)
     let ns: Int?
 
@@ -343,8 +348,7 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         }
 
         // Control field
-        // Use explicit controlByte if provided, otherwise default to UI (0x03)
-        let control = controlByte ?? 0x03
+        let control = wireControlByte
         data.append(control)
 
         // PID (protocol identifier) - only for UI and I frames

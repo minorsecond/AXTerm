@@ -937,7 +937,7 @@ final class PacketEngine: ObservableObject {
         identityMonitor.recordTransmitted(
             source: frame.source.display,
             destination: frame.destination.display,
-            control: frame.controlByte ?? 0,
+            control: frame.wireControlByte,
             info: frame.payload)
         TxLog.hexDump(.kiss, "KISS frame", data: kissData)
 
