@@ -605,7 +605,7 @@ final class SessionCoordinator: ObservableObject {
             return cached.settings
         }
         var fresh = TxAdaptiveSettings()
-        if scope.route != nil, let seed = confirmedLinkMemory.values(for: scope) {
+        if inSessionLinkGrowth, scope.route != nil, let seed = confirmedLinkMemory.values(for: scope) {
             fresh.windowSize.currentAdaptive = seed.window
             fresh.paclen.currentAdaptive = seed.paclen
             fresh.windowSize.adaptiveReason = "Confirmed on this link earlier today"
@@ -795,10 +795,14 @@ final class SessionCoordinator: ObservableObject {
             let before = AdaptiveSnapshot(from: entry)
             let rollbacksBefore = entry.metrics.probeRollbacks
             let confirmationsBefore = entry.metrics.upgradesConfirmed
-            entry.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits, bytesInFlight: bytesInFlight)
+            // The airtime allowance on the round-trip ceiling belongs to
+            // in-session growth; with growth off the ceiling is the plain 5 s.
+            entry.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits, bytesInFlight: inSessionLinkGrowth ? bytesInFlight : nil)
             // What the next session to this link may start from: written
             // when a trial passes, lowered when the link backs off.
-            if entry.metrics.upgradesConfirmed > confirmationsBefore {
+            if !inSessionLinkGrowth {
+                // Off: nothing is remembered, as before §7.8.1.
+            } else if entry.metrics.upgradesConfirmed > confirmationsBefore {
                 confirmedLinkMemory.recordConfirmed(window: entry.confirmedWindow,
                                                     paclen: entry.confirmedPaclen,
                                                     for: normalizedKey)
@@ -1034,8 +1038,12 @@ final class SessionCoordinator: ObservableObject {
         let operatorK = globalAdaptiveSettings.windowSize
         let operatorP = globalAdaptiveSettings.paclen
         return AX25SessionConfig(
-            windowSize: ceilings.window == nil ? operatorK.effectiveValue : a.confirmedWindow,
-            paclen: ceilings.paclen == nil ? operatorP.effectiveValue : a.confirmedPaclen,
+            // With growth off a session starts from the route's learned
+            // values, exactly as before §7.8.1 existed.
+            windowSize: !inSessionLinkGrowth ? a.windowSize.effectiveValue
+                : (ceilings.window == nil ? operatorK.effectiveValue : a.confirmedWindow),
+            paclen: !inSessionLinkGrowth ? a.paclen.effectiveValue
+                : (ceilings.paclen == nil ? operatorP.effectiveValue : a.confirmedPaclen),
             maxReceiveBufferSize: nil,
             maxRetries: a.maxRetries.effectiveValue,
             extended: false,
@@ -2378,7 +2386,7 @@ final class SessionCoordinator: ObservableObject {
             }
             // Nothing in the last 30 minutes: the values this route last
             // confirmed, if within a day (§7.8.1).
-            if let seed = self.confirmedLinkMemory.values(for: key) {
+            if self.inSessionLinkGrowth, let seed = self.confirmedLinkMemory.values(for: key) {
                 var seeded = TxAdaptiveSettings()
                 seeded.windowSize.currentAdaptive = seed.window
                 seeded.paclen.currentAdaptive = seed.paclen

@@ -625,6 +625,19 @@ final class InSessionLinkCoordinatorTests: XCTestCase {
 
     // MARK: Seeding
 
+    /// With growth off, a session starts the way it did before §7.8.1:
+    /// confirmed-link memory is neither read nor written.
+    func testWithGrowthOffConfirmedMemoryDoesNotSeedTheStart() {
+        let coordinator = makeCoordinator()
+        coordinator.inSessionLinkGrowth = false
+        coordinator.confirmedLinkMemory.recordConfirmed(
+            window: 4, paclen: 256, for: directScope, at: Date().addingTimeInterval(-3600))
+
+        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary)
+        XCTAssertNotEqual(config?.windowSize, 4, "growth off, but the start came from confirmed memory")
+        XCTAssertNotEqual(config?.paclen, 256)
+    }
+
     func testSessionStartsAtValuesConfirmedWithinADay() {
         let coordinator = makeCoordinator()
         coordinator.confirmedLinkMemory.recordConfirmed(
