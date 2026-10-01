@@ -21,6 +21,20 @@ struct BulkTransferRow: View {
     @State private var showDetails = false
 
     var body: some View {
+        // A running transfer is redrawn every second, so a receiver that
+        // stops hearing from the sender says so even when nothing else on
+        // screen changes.
+        if isActive {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                rowContent(now: context.date)
+            }
+        } else {
+            rowContent(now: Date())
+        }
+    }
+
+    @ViewBuilder
+    private func rowContent(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             // Header row
             HStack {
@@ -63,7 +77,7 @@ struct BulkTransferRow: View {
                 Spacer()
 
                 // Status badge
-                statusBadge
+                statusBadge(now: now)
 
                 // Info button
                 Button {
@@ -117,8 +131,10 @@ struct BulkTransferRow: View {
 
                     Spacer()
 
-                    // Throughput (data rate)
-                    if transfer.throughputBytesPerSecond > 0 {
+                    // Throughput (data rate). Hidden while paused or while
+                    // waiting for the sender: there is no live rate then.
+                    let showsRate = transfer.showsLiveRate(now: now)
+                    if showsRate, transfer.throughputBytesPerSecond(now: now) > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "speedometer")
                                 .font(.caption2)
@@ -130,7 +146,7 @@ struct BulkTransferRow: View {
                     }
 
                     // Air throughput - shows actual bytes over the air
-                    if transfer.airThroughputBytesPerSecond > 0 {
+                    if showsRate, transfer.airThroughputBytesPerSecond > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "antenna.radiowaves.left.and.right")
                                 .font(.caption2)
@@ -144,7 +160,7 @@ struct BulkTransferRow: View {
                     }
 
                     // ETA
-                    if let eta = transfer.estimatedSecondsRemaining {
+                    if showsRate, let eta = transfer.estimatedSecondsRemaining(now: now) {
                         Text(etaText(eta))
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -487,7 +503,7 @@ struct BulkTransferRow: View {
     }
 
     @ViewBuilder
-    private var statusBadge: some View {
+    private func statusBadge(now: Date) -> some View {
         switch transfer.status {
         case .pending:
             if transfer.direction == .inbound {
@@ -505,7 +521,14 @@ struct BulkTransferRow: View {
                 .foregroundStyle(.orange)
         case .sending:
             // Show "Receiving" for inbound transfers, "Sending" for outbound
-            if transfer.direction == .inbound {
+            if let quiet = transfer.secondsWaitingForSender(now: now) {
+                // The sender may have paused; AXDP and YAPP have no way to
+                // say so, so this is what the receiver can see.
+                Label("Waiting for \(transfer.destination)", systemImage: "hourglass")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .help(Self.waitingHelp(peer: transfer.destination, quietSeconds: quiet))
+            } else if transfer.direction == .inbound {
                 Label("Receiving", systemImage: "arrow.down.circle")
                     .font(.caption)
                     .foregroundStyle(.green)
@@ -552,6 +575,13 @@ struct BulkTransferRow: View {
                 .font(.caption)
                 .foregroundStyle(.red)
         }
+    }
+
+    /// Tooltip for a receiver that has stopped hearing from the sender.
+    static func waitingHelp(peer: String, quietSeconds: TimeInterval) -> String {
+        "Nothing has arrived from \(peer) for \(Int(quietSeconds)) s. "
+            + "The sender may have paused the transfer, or the link may be struggling. "
+            + "This changes back to Receiving when data arrives."
     }
 
     private var backgroundColor: Color {
