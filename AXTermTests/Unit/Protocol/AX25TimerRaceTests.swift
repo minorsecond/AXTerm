@@ -485,12 +485,7 @@ final class AX25TimerRaceTests: XCTestCase {
 
         // Positive control: a T1 that was NOT stopped must still work end to end.
         _ = manager.sendData(Data("World".utf8), to: peer, path: path, radio: .primary)
-        // "World" does not poll, so its T1 also covers the peer's delayed
-        // ack (spec 7.6); "Hello", the first I-frame of a call we placed,
-        // polled and kept the plain 2 s.
-        let liveT1 = AX25SessionManager.t1Delay(rto: session.timers.rto, srtt: session.timers.srtt,
-                                                bytesInFlight: 5 + 18, awaitingDelayedAck: true)
-        clock.fireInFlight(matchingDelay: liveT1)   // live T1 fires, schedules grace
+        clock.fireInFlight(matchingDelay: 2.0)   // live T1 fires, schedules grace
         clock.fireInFlight(matchingDelay: 0.2)   // grace period elapses → retransmit
         XCTAssertEqual(session.stateMachine.retryCount, 1,
                        "a legitimate T1 fire must still be processed")

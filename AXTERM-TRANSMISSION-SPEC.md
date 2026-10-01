@@ -812,7 +812,14 @@ Maintain send buffer for unacked frames:
   against receivers that batch acks on T2. Only on window-full, not on every
   burst end: some node stacks (DRLNOD, live capture) DM a session that polls
   on every idle line.
-- Start T1 if not running. For a first send of I-frames none of which polls,
+- Start T1 if not running. **T1 = max(adaptive RTO, FRACK x (2 x digipeaters
+  + 1))**, as a TNC-2 sets it; FRACK is the operator's AX.25 T1 setting (4 s
+  by default) and the adaptive RTO can only lengthen it (2026-10-01). On a
+  path with a slow turnaround (the IC-705 through Warbler measured about
+  5.3 s for an unpolled frame's ack) the operator raises FRACK, as on any
+  TNC. The delayed-ack formula below is kept behind
+  `AX25SessionManager.useDelayedAckT1`, off by default: for a first send of
+  I-frames none of which polls,
   T1 = max(RTO, SRTT + airtime of our outstanding frames + 3 s): the peer may
   hold its ack for its own T2 (AXTerm 2 s, Linux AX.25 3 s), and the RTO is
   learned from exchanges answered at once. Sending a P=1 frame re-arms T1

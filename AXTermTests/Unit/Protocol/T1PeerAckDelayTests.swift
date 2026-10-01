@@ -32,6 +32,7 @@ final class T1PeerAckDelayTests: XCTestCase {
         let clock = AX25VirtualClock()
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0), clock: clock)
         manager.localCallsign = local
+        manager.useDelayedAckT1 = true   // the formula is kept, off by default
         let log = SentLog()
         manager.onSendFrame = { log.frames.append($0) }
         // B answered A's call, as in the field; the station that placed a

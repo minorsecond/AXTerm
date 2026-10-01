@@ -1884,7 +1884,7 @@ final class AX25SessionManager: ObservableObject {
                     // there are outstanding unacked frames.
                     stopT3Timer(for: session)
                     startT1Timer(for: session)
-                } else if polls {
+                } else if polls && useDelayedAckT1 {
                     // The poll is answered at once: T1 was armed for an
                     // unpolled frame's delayed ack and is too long for it now.
                     startT1Timer(for: session)
@@ -3303,6 +3303,19 @@ final class AX25SessionManager: ObservableObject {
     // MARK: - Timer Management
 
     /// Start T1 (retransmit) timer for a session
+    /// Whether T1 uses the delayed-ack formula (`t1Delay`) instead of the
+    /// standard rule. Off by default since 2026-10-01: T1 is the larger of
+    /// the adaptive RTO and the FRACK floor, as on a classic TNC. The
+    /// formula is kept for later evaluation.
+    var useDelayedAckT1 = false
+
+    /// The standard floor under T1: FRACK times (2 x digipeaters + 1), as
+    /// a TNC-2 computes it. FRACK is the operator's AX.25 T1 setting (the
+    /// session's initial RTO), 4 s by default.
+    nonisolated static func frackFloor(frack: Double, digipeaters: Int) -> Double {
+        frack * Double(2 * max(0, digipeaters) + 1)
+    }
+
     /// How long a peer may hold its acknowledgment of an I-frame sent
     /// without P=1, waiting for its own T2. AXTerm's T2 is 2 s; Linux AX.25
     /// defaults to 3 s, and that is the longer one assumed here.
@@ -3339,9 +3352,14 @@ final class AX25SessionManager: ObservableObject {
             && session.stateMachine.retryCount == 0
             && !session.hasRetransmittedOutstanding
             && !session.sendBuffer.values.contains { ($0.controlByte ?? 0) & 0x10 != 0 }
-        let rto = Self.t1Delay(rto: session.timers.rto, srtt: session.timers.srtt,
-                               bytesInFlight: session.bytesInFlight,
-                               awaitingDelayedAck: awaitingDelayedAck)
+        let adaptive = useDelayedAckT1
+            ? Self.t1Delay(rto: session.timers.rto, srtt: session.timers.srtt,
+                           bytesInFlight: session.bytesInFlight,
+                           awaitingDelayedAck: awaitingDelayedAck)
+            : session.timers.rto
+        let floor = Self.frackFloor(frack: session.stateMachine.config.initialRto ?? 4.0,
+                                    digipeaters: session.path.digis.count)
+        let rto = max(adaptive, floor)
         let sessionId = session.id
 
         TxLog.debug(.session, "Starting T1 timer", [
@@ -3566,7 +3584,7 @@ final class AX25SessionManager: ObservableObject {
             if wasIdle {
                 startT1Timer(for: session)
                 wasIdle = false
-            } else if polls {
+            } else if polls && useDelayedAckT1 {
                 // As in sendData: a poll gets the plain RTO.
                 startT1Timer(for: session)
             }
