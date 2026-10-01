@@ -2503,20 +2503,22 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
-        if session.state == .connecting {
-            // Stale remote state: the peer is sending numbered traffic before
-            // accepting our SABM. Let the state machine emit DM to reset the
-            // remote phantom session while our connect attempt continues.
+        guard session.state == .connected else {
+            // The state machine owns what a link that is not up does with an
+            // I-frame. Connecting: §6.3.1, ignored. Disconnecting,
+            // disconnected and error: a P=1 command is answered DM(F=1)
+            // (§6.3.5, SDL C4.3), so a peer still holding the link learns it
+            // is gone instead of polling until its N2. This path used to hand
+            // only the connecting case to the state machine, which left the
+            // DM rule unreachable.
+            if session.state != .connecting {
+                TxLog.warning(.session, "I-frame received but not connected", [
+                    "state": session.state.rawValue, "pf": pf ? 1 : 0
+                ])
+            }
             let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
             session.touch()
             return processActions(actions, for: session).first
-        }
-
-        guard session.state == .connected else {
-            TxLog.warning(.session, "I-frame received but not connected", [
-                "state": session.state.rawValue
-            ])
-            return nil
         }
 
         // Capture V(A) before state machine updates it - piggybacked N(R) acks [V(A), N(R))

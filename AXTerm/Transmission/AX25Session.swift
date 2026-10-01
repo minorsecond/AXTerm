@@ -1273,6 +1273,18 @@ nonisolated struct AX25StateMachine: Sendable {
             state = .disconnected
             return [.stopT1, .stopT3, .notifyDisconnected]
 
+        case (.error, .receivedIFrame(_, _, let pf, _, _)):
+            // A failed link is a disconnected one (the SDL leaves for the
+            // disconnected state on N2), so the §6.3.5 rule applies: a P=1
+            // command draws DM(F=1). Without it a peer that still holds the
+            // link polls us until its own N2 runs out.
+            return pf ? [.sendDM] : []
+
+        case (.error, .receivedRR(_, let pf, let isCommand)),
+             (.error, .receivedRNR(_, let pf, let isCommand)),
+             (.error, .receivedREJ(_, let pf, let isCommand)):
+            return (pf && isCommand) ? [.sendDM] : []
+
         case (.error, _):
             return []
         }
