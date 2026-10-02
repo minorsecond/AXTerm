@@ -4,8 +4,8 @@ import SwiftUI
 import AppKit
 #else
 import UIKit
-import AudioToolbox
 #endif
+import AudioToolbox
 
 /// The seam between AXTerm and whichever OS it is running on.
 ///
@@ -322,25 +322,38 @@ nonisolated enum PlatformSound {
     nonisolated(unsafe) static var isMuted =
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
-    /// Somebody connected to us.
+    /// Somebody connected to us. Safe to call from any thread.
     static func playInboundConnection() {
         guard !isMuted else { return }
         #if os(macOS)
-        NSSound(named: "Glass")?.play()
+        if let glass { AudioServicesPlaySystemSound(glass) }
         #else
         AudioServicesPlaySystemSound(1013)
         #endif
     }
 
-    /// Our own outbound connection came up.
+    /// Our own outbound connection came up. Safe to call from any thread.
     static func playOutboundConnection() {
         guard !isMuted else { return }
         #if os(macOS)
-        NSSound(named: "Ping")?.play()
+        if let ping { AudioServicesPlaySystemSound(ping) }
         #else
         AudioServicesPlaySystemSound(1057)
         #endif
     }
+
+    #if os(macOS)
+    // System sounds rather than NSSound, so the connection chimes can play
+    // off the main thread (live test log, bug 44).
+    private static let glass = systemSound("Glass")
+    private static let ping = systemSound("Ping")
+
+    private static func systemSound(_ name: String) -> SystemSoundID? {
+        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")
+        var id: SystemSoundID = 0
+        return AudioServicesCreateSystemSoundID(url as CFURL, &id) == noErr ? id : nil
+    }
+    #endif
 }
 
 extension View {

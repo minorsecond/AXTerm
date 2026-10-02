@@ -75,6 +75,48 @@ final class SessionCoordinator: ObservableObject {
     /// on which view was built last. Subscribers are additive; each decides
     /// for itself whether the call is theirs.
     private var inboundSubscribers: [UUID: (AX25Session) -> Void] = [:]
+    /// Tells the operator a link came up: the chime, and for an inbound call
+    /// a notification. Runs after the services that answer calls have been
+    /// told, never before (live test log, bug 44).
+    lazy var announceConnection: (_ callsign: String, _ inbound: Bool) -> Void = { [weak self] callsign, inbound in
+        Self.playConnectionSound(inbound: inbound)
+        if inbound {
+            self?.packetEngine?.notificationScheduler?.scheduleConnectionNotification(callsign: callsign)
+        }
+    }
+
+    /// Plays the connection chime on a background queue. On 2026-10-01 the
+    /// first inbound call after a relaunch waited 8.8 s for its greeting
+    /// (bug 35), and on 2026-10-02 a minute while a microphone prompt was up
+    /// (bug 44); neither may hold up the app.
+    nonisolated static func playConnectionSound(
+        inbound: Bool,
+        player: @escaping (Bool) -> Void = { inbound in
+            inbound ? PlatformSound.playInboundConnection() : PlatformSound.playOutboundConnection()
+        }
+    ) {
+        DispatchQueue.global(qos: .utility).async { player(inbound) }
+    }
+
+    /// Runs one step of the inbound-connect path and names it in the log if
+    /// it took longer than `threshold` seconds, so a stall says what it was.
+    static func timedInboundStep(
+        _ name: String,
+        threshold: TimeInterval = 1,
+        now: () -> Date = Date.init,
+        report: (String, TimeInterval) -> Void = { step, seconds in
+            TxLog.warning(.session, "Inbound connect step was slow", [
+                "step": step, "seconds": String(format: "%.1f", seconds)
+            ])
+        },
+        _ body: () -> Void
+    ) {
+        let start = now()
+        body()
+        let elapsed = now().timeIntervalSince(start)
+        if elapsed > threshold { report(name, elapsed) }
+    }
+
     /// Every frame `sendFrame` is given, in order, before it reaches the
     /// packet engine. For tests that check what goes on the air in what order.
     var onFrameHandedToRadio: ((OutboundFrame) -> Void)?
@@ -2436,16 +2478,19 @@ final class SessionCoordinator: ObservableObject {
                 let peer = session.remoteAddress.display.uppercased()
 
                 if !isInitiator {
-                    PlatformSound.playInboundConnection()
-                    self.packetEngine?.notificationScheduler?.scheduleConnectionNotification(callsign: peer)
                     // Someone called us. Whoever wants to answer decides
                     // what that means — the Winlink P2P listener is one
                     // subscriber, and it only acts when the operator has
-                    // armed it.
-                    self.onInboundSessionConnected?(session)
-                    for handler in self.inboundSubscribers.values { handler(session) }
+                    // armed it. They go first: the caller is waiting.
+                    Self.timedInboundStep("Winlink P2P listener") { self.onInboundSessionConnected?(session) }
+                    for handler in self.inboundSubscribers.values {
+                        Self.timedInboundStep("inbound-call subscriber") { handler(session) }
+                    }
+                    Self.timedInboundStep("connection sound and notification") {
+                        self.announceConnection(peer, true)
+                    }
                 } else {
-                    PlatformSound.playOutboundConnection()
+                    self.announceConnection(peer, false)
                 }
 
                 if isInitiator && axdpEnabled && autoNegotiate {
