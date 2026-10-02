@@ -1,0 +1,38 @@
+# Every push and pull request: the macOS build and unit suite, and the iOS
+# build. Runs on the self-hosted macOS runner (label "axterm"); see
+# Docs/CI.md for setting one up.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, macOS, axterm]
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests (macOS)
+        run: Scripts/ci/run.sh unit
+
+      - name: iOS build
+        if: always()
+        run: Scripts/ci/run.sh ios
+
+      - name: Keep the logs and result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-${{ github.run_number }}
+          path: |
+            build/ci/*.log
+            build/ci/*.xcresult
+          retention-days: 7
+          if-no-files-found: ignore

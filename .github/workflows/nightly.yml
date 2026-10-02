@@ -1,0 +1,50 @@
+# Nightly soaks: the growth fuzz at 5,000 seeds, every stress family at 200,
+# the property tests at 20,000 cases with a fresh seed base, the sound modem
+# under noise, and the full-stack fuzz (transfers, Winlink, mailbox, node).
+# A night the runner is asleep, the job waits for it.
+# Scheduled workflows run from the default branch only.
+name: Nightly soak
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # 02:00 Mountain daylight time
+  workflow_dispatch:
+    inputs:
+      growth_fuzz_seeds:
+        description: Growth fuzz seeds
+        default: "5000"
+      stress_seeds:
+        description: Seeds per stress family
+        default: "200"
+      fuzz_iterations:
+        description: Cases per property
+        default: "20000"
+      fullstack_seeds:
+        description: Full-stack fuzz seeds
+        default: "200"
+
+jobs:
+  soak:
+    runs-on: [self-hosted, macOS, axterm]
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Soaks
+        env:
+          AXTERM_GROWTH_FUZZ_SEEDS: ${{ inputs.growth_fuzz_seeds || '5000' }}
+          AXTERM_STRESS_SEEDS: ${{ inputs.stress_seeds || '200' }}
+          AXTERM_FUZZ_ITERATIONS: ${{ inputs.fuzz_iterations || '20000' }}
+          AXTERM_FULLSTACK_FUZZ_SEEDS: ${{ inputs.fullstack_seeds || '200' }}
+        run: Scripts/ci/run.sh soak
+
+      - name: Keep the reports and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-${{ github.run_number }}
+          path: |
+            build/ci/reports
+            build/ci/*.log
+          retention-days: 30
+          if-no-files-found: ignore
