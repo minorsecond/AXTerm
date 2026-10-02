@@ -2685,13 +2685,13 @@ final class AX25SessionManager: ObservableObject {
         // Record the actual inbound via path so callbacks can thread it to the UI.
         session.lastReceivedVia = path.digis.map { $0.display }
 
-        notifyOutboundAck(session, upTo: session.va)
-
         // Execute the state machine's actions BEFORE draining: the actions can carry
         // .stopT1 (computed while nothing was outstanding), and the drain below may
         // transmit fresh I-frames and start T1 for them. Running the stale stopT1
-        // after the drain cancels the timer protecting the new frames.
+        // after the drain cancels the timer protecting the new frames. The ack
+        // notification waits for the same reason: its handler may send at once.
         let responseFrame = processActions(actions, for: session).first
+        notifyOutboundAck(session, upTo: session.va)
 
         if session.state == .connected && !session.hasReceiveSequenceGap && !session.pendingDataQueue.isEmpty {
             let queueBeforeDrain = session.pendingDataQueue.count
@@ -2854,7 +2854,6 @@ final class AX25SessionManager: ObservableObject {
         session.touch()
 
         axDebugPrint("[DEBUG:AX25:RR] rx | nr=\(nr) va=\(session.va) vs=\(session.vs) sendBufBefore=\(sendBufKeysBefore) sendBufAfter=\(sendBufKeysAfter) outstanding=\(session.outstandingCount)")
-        notifyOutboundAck(session, upTo: session.va)
 
         TxLog.debug(.session, "RR ACK state", [
             "peer": source.display,
@@ -2930,6 +2929,12 @@ final class AX25SessionManager: ObservableObject {
                 startT1Timer(for: session)
             }
         }
+
+        // Last of all: a claim's ack handler may send at once (YAPP pumps its
+        // next blocks here). Run before the actions, the stale stopT1 left
+        // that burst and its poll unprotected (full-stack fuzz, 2026-10-02);
+        // run before the poll retransmit above, its new frames went out twice.
+        notifyOutboundAck(session, upTo: session.va)
 
         checkInvariants(session: session)
 
@@ -3161,7 +3166,6 @@ final class AX25SessionManager: ObservableObject {
         }
 
         session.touch()
-        notifyOutboundAck(session, upTo: session.va)
 
         TxLog.debug(.session, "RNR ACK state (peer busy)", [
             "peer": source.display,
@@ -3176,6 +3180,7 @@ final class AX25SessionManager: ObservableObject {
         debugDumpSessionState(session, context: "inbound-RNR")
 
         let frames = processActions(actions, for: session)
+        notifyOutboundAck(session, upTo: session.va)
         checkInvariants(session: session)
         emitLinkQualitySampleIfNeeded(for: session)
         return frames
@@ -3345,9 +3350,7 @@ final class AX25SessionManager: ObservableObject {
         // outbound-progress UI must hear about it. Without this, a message whose
         // final ack arrives via REJ (e.g. the peer REJs a duplicate retransmission
         // that crossed its ack in flight) stays stuck at "Sending…" forever.
-        if session.va != vaBefore {
-            notifyOutboundAck(session, upTo: session.va)
-        }
+        let ackAdvanced = session.va != vaBefore
 
         // Bug A fix: suppress retransmission amplification from duplicate REJ storms.
         // After the first REJ(nr) triggers an immediate retransmit, T1 owns the retry
@@ -3398,6 +3401,11 @@ final class AX25SessionManager: ObservableObject {
         for frame in retransmitFrames {
             let updatedFrame = frame.withUpdatedNR(session.vr)
             frames.append(updatedFrame)
+        }
+        // Last: a handler that sends at once must neither lose its T1 to the
+        // actions above nor have its new frames picked up as retransmissions.
+        if ackAdvanced {
+            notifyOutboundAck(session, upTo: session.va)
         }
 
         // REJ-driven retransmission is loss evidence the controller must hear
@@ -3880,7 +3888,6 @@ final class AX25SessionManager: ObservableObject {
         }
     }
 
-    /// Process actions from the state machine and return frames to send
     /// Unsticks a session whose receive window is blocked behind a lost frame,
     /// for a caller that knows the missing bytes can be spared.
     ///
@@ -3895,8 +3902,19 @@ final class AX25SessionManager: ObservableObject {
         return (processActions(actions, for: session), true)
     }
 
+    /// Process actions from the state machine and return frames to send.
+    ///
+    /// Data is handed up after every other action has run. Whoever receives
+    /// it may answer on the spot (YAPP's AF, AXDP's completion ack, the next
+    /// line of a Winlink exchange), and that answer starts T1. Delivered in
+    /// list order, it was followed by the stopT1 the state machine computed
+    /// while nothing was outstanding, which canceled the answer's timer: one
+    /// lost answer then stalled the exchange until the protocol above gave up
+    /// (full-stack fuzz, 2026-10-02). In the SDL a DL-DATA request is queued
+    /// and handled after the transition in progress; this is the same order.
     private func processActions(_ actions: [AX25SessionAction], for session: AX25Session) -> [OutboundFrame] {
         var frames: [OutboundFrame] = []
+        var deliveries: [(data: Data, pid: UInt8?)] = []
 
         for action in actions {
             switch action {
@@ -4005,38 +4023,7 @@ final class AX25SessionManager: ObservableObject {
                 frames.append(frame)
 
             case .deliverData(let data, let pid):
-                // PID is the protocol demux (AX.25 §3.3): 0xCF payloads
-                // are NET/ROM L3 datagrams for the transport engine —
-                // never terminal text, never AXDP, never a claim's bytes.
-                if pid == NetRomWire.pid {
-                    TxLog.debug(.session, "NET/ROM datagram delivered from L2", [
-                        "peer": session.remoteAddress.display,
-                        "size": data.count
-                    ])
-                    onNetRomDatagram?(session, data)
-                    continue
-                }
-                let prefixHex = data.prefix(8).map { String(format: "%02X", $0) }.joined()
-                let hasMagic = AXDP.hasMagic(data)
-                axDebugPrint("[DEBUG:AX25:DELIVER] I-frame payload to reassembly | from=\(session.remoteAddress.display) size=\(data.count) hasMagic=\(hasMagic) prefix=\(prefixHex)")
-                TxLog.debug(.axdp, "I-frame payload delivered to reassembly", [
-                    "peer": session.remoteAddress.display,
-                    "size": data.count,
-                    "hasMagic": hasMagic,
-                    "prefixHex": prefixHex
-                ])
-                onLinkVizEvent?(.delivered(peer: session.remoteAddress.display, bytes: data.count))
-                if let claim = deliveryClaims[session.key] {
-                    // A protocol conversation (e.g. Winlink B2F) owns this
-                    // session's bytes; terminal and AXDP must not see them.
-                    claim.handler(session, data)
-                } else if onUnclaimedDelivery?(session, data) == true {
-                    // Taken by whoever recognized it; see onUnclaimedDelivery.
-                    continue
-                } else {
-                    onDataDeliveredForReassembly?(session, data)
-                    onDataReceived?(session, data)
-                }
+                deliveries.append((data, pid))
 
             case .notifyConnected:
                 TxLog.sessionOpen(
@@ -4089,8 +4076,49 @@ final class AX25SessionManager: ObservableObject {
             }
         }
 
+        for delivery in deliveries {
+            deliver(delivery.data, pid: delivery.pid, to: session)
+        }
+
         // Every frame a session produces leaves on the session's channel; the
         // builders above know nothing about ports.
         return frames.map { $0.onRadio(session.radio) }
+    }
+
+    /// Hands one delivered payload to whoever takes it: the NET/ROM engine,
+    /// a claim on the session's stream, a recognizer, or the terminal.
+    private func deliver(_ data: Data, pid: UInt8?, to session: AX25Session) {
+        // PID is the protocol demux (AX.25 §3.3): 0xCF payloads
+        // are NET/ROM L3 datagrams for the transport engine —
+        // never terminal text, never AXDP, never a claim's bytes.
+        if pid == NetRomWire.pid {
+            TxLog.debug(.session, "NET/ROM datagram delivered from L2", [
+                "peer": session.remoteAddress.display,
+                "size": data.count
+            ])
+            onNetRomDatagram?(session, data)
+            return
+        }
+        let prefixHex = data.prefix(8).map { String(format: "%02X", $0) }.joined()
+        let hasMagic = AXDP.hasMagic(data)
+        axDebugPrint("[DEBUG:AX25:DELIVER] I-frame payload to reassembly | from=\(session.remoteAddress.display) size=\(data.count) hasMagic=\(hasMagic) prefix=\(prefixHex)")
+        TxLog.debug(.axdp, "I-frame payload delivered to reassembly", [
+            "peer": session.remoteAddress.display,
+            "size": data.count,
+            "hasMagic": hasMagic,
+            "prefixHex": prefixHex
+        ])
+        onLinkVizEvent?(.delivered(peer: session.remoteAddress.display, bytes: data.count))
+        if let claim = deliveryClaims[session.key] {
+            // A protocol conversation (e.g. Winlink B2F) owns this
+            // session's bytes; terminal and AXDP must not see them.
+            claim.handler(session, data)
+        } else if onUnclaimedDelivery?(session, data) == true {
+            // Taken by whoever recognized it; see onUnclaimedDelivery.
+            return
+        } else {
+            onDataDeliveredForReassembly?(session, data)
+            onDataReceived?(session, data)
+        }
     }
 }
