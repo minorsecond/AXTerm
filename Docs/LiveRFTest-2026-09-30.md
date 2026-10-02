@@ -188,12 +188,12 @@ Status is filled in as each is fixed.
 | 36 | The B2F engine dropped every line it received before the runner told it the link was up. B's banner arrived 321 ms after the UA, inside that window, so A waited 90 s for a banner it already had. | A, 01:00 UTC 2026-10-02 | fixed, 1ad624e: lines received while idle are held and processed once the engine starts, calling and answering. Confirmed in test 34, where the banner came 60 s after the UA |
 | 37 | The only way to call a Winlink peer was to add it to the RMS gateway ladder, which also put it in line for every gateway exchange, and the exchange refused to start without a Winlink password although a peer has no CMS to check one. | A, 01:00 UTC 2026-10-02 | fixed, b616027: Connect & Exchange › Peer-to-Peer… asks for the station, suggests the last peer or the queued To address, remembers five, needs no password and leaves the ladder alone. Confirmed in test 34 |
 | 38 | A peer exchange offered the peer the whole Outbox, so mail for the internet would be marked sent to a station that never forwards it. Found reading the runner while fixing 37. | code review, 2026-10-02 | fixed, b616027: both sides offer only mail addressed to the peer's callsign or its bare account callsign. Confirmed in test 34 |
-| 39 | In test 33, A handed its SABM to the radio at 01:00:17.776 UTC and the hub keyed at 01:00:21.37, 3.6 s later. T1 fired in between and A sent a second SABM, which B treated as a link reset after it had already answered the first. | A and Warbler, 01:00 UTC 2026-10-02 | open, needs the owner's call. This is the deviation ConnectedModeStressTests already carries as an expected failure: AX.25 2.2 answers a UA in the connected state with error C and a fresh SABM, AXTerm ignores it, so a reset the peer made for a stale SABM leaves the sequence states apart. Options: (1) follow the SDL and re-establish on that UA, which also clears the stress-test deviation; (2) keep ignoring it and rely on the bug 40 fix to recover the Winlink layer. T1 cannot count from when the frame is on the air: Warbler gives AXTerm no signal for that |
+| 39 | In test 33, A handed its SABM to the radio at 01:00:17.776 UTC and the hub keyed at 01:00:21.37, 3.6 s later. T1 fired in between and A sent a second SABM, which B treated as a link reset after it had already answered the first. | A and Warbler, 01:00 UTC 2026-10-02 | fixed, 1e151b6, following the AX.25 2.2 SDL (figures C4.2 to C4.5) as the owner asked. A UA while connected is error C: the station sends SABM again, clears layer 3 initiated and awaits connection, telling the layer above nothing; the answering UA zeroes the state variables and, if frames were unacknowledged, discards the queue and gives DL-CONNECT indication. Two neighbors had to follow: a SABM while connecting is now answered UA without leaving connecting (the old shortcut to connected only worked while the peer's UA was ignored, and the stress tests caught the loop), and RR, RNR and REJ are discarded while connecting (§6.3.1; the property tests caught a REJ resending an I-frame). Section 6.3.6.2's prose says both stations of a SABM collision "enter the indicated state"; the SDL and §6.3.1 have each wait for its own UA, which is what AXTerm does now. Two stress seeds (chat-slow-peer-frack3 seed 1, restart-reconnect seed 8) also fail under the old code once the old allowance is removed: the stress check cannot follow a reset only one side reports, since the SDL tells a station that lost nothing nothing. The allowance stays, now with that reason. A signal from Warbler when the radio actually keys would also have prevented this duplicate SABM; see the note under Overnight fixes |
 | 40 | After that reset, B's peer-to-peer service never sent its banner again, so the caller had nothing to answer. | B, 01:00 UTC 2026-10-02 | fixed, 3f2c9e6: a new link from the station the running exchange is with waits up to 15 s for that exchange to close, then is answered; anyone else is still refused as busy. Confirm on the air |
 | 41 | The Outbox Size column leaves out attachments: 104 bytes for the photo message in test 33, 84 bytes for a 9.5 KB photo in test 34. | A, 2026-10-02 | fixed, 811408d: the store adds up attachment bytes and the Size column and compact row show body plus attachments |
 | 42 | In test 34, A's first pair of I-frames polled only on the second, as it should. From 01:48:16 UTC every I-frame carried the poll bit, B answered each with its own RR, and A sent one new frame per RR. The window stayed at two 128-byte frames for the whole exchange and never grew; this morning's AXDP transfer grew to three 174-byte frames and reached 557 bps. Each round trip took about 5 s for 256 bytes, about 2 s of it airtime. | A, 01:48 UTC 2026-10-02 | fixed, 0d2dc5d: the first-frame poll is recognized by a flag the link reset clears, not by V(A) = V(S) = 0. The window staying at two frames is in-session growth being off (e2c6e35), not this bug. Still possible: anything else that leaves two polled frames outstanding falls into the same one-frame-per-RR pattern, since each refill frame fills the window and polls; no fix proposed without the owner. Rerun test 34 to measure |
 | 43 | Winlink views show rates in bytes per second ("47 B/s"), the transfer views in bits per second ("333 bps"), with nothing to say they differ. The operator read 47 B/s as about seven times slower than YAPP and AXDP; it is about 380 bps. | A, 2026-10-02 | fixed, b4ab732: every rate on screen goes through LinkRateText in bits per second; tooltips that divide by the rate show both units |
-| 44 | During test 34 a macOS microphone permission prompt appeared and held things up until the operator answered it; B's banner went out 60 s after the UA. Only the USB sound modem (`CoreAudioModemIO`) opens an audio input, and neither station uses one, so which instance asked and why is not known. It may be the slow first greeting of bug 35. | A or B, 01:47 UTC 2026-10-02 | open. The system log kept no record of the prompt |
+| 44 | During test 34 a macOS microphone permission prompt appeared and held things up until the operator answered it; B's banner went out 60 s after the UA. Only the USB sound modem (`CoreAudioModemIO`) opens an audio input, and neither station uses one, so which instance asked and why is not known. It may be the slow first greeting of bug 35. | A or B, 01:47 UTC 2026-10-02 | fixed in effect, e5d3d8d: on 2026-10-02 B's exchange started 13 ms before its banner, a minute after the UA, so B's main thread was blocked before the answering service ran. The coordinator played the connection sound and posted the notification before telling the services that answer calls. Those services now go first, the chimes play as system sounds on a background queue, and any inbound-connect step over 1 s is logged by name. Which call raised the microphone prompt is still unknown: the system log had rotated past it and no hang report was written |
 | 45 | Abort never ended a Winlink exchange. The engine moved to closing, sent FQ and asked for a disconnect; when the disconnect landed it moved to closed and returned nothing, so the runner stayed "running" until the app quit. | unit test, 2026-10-02 | fixed, bcdddf0: the session ends, marked aborted, once the link is down |
 | 46 | Abort pressed while mail was being prepared or the call placed did nothing: it went to an engine that was not talking to anyone yet. | unit test, 2026-10-02 | fixed, a4275b1: Abort in those phases is remembered and ends the exchange as aborted at the next step, hanging up a call being placed. With a real AX.25 call the hang-up is a DISC, so on a dead path the abort takes as long as the DISC retries |
 
@@ -327,6 +327,33 @@ purpose, and the remaining one-frame-per-RR pattern noted under bug 42.
 
 Waiting on the radios: rerun test 34 to measure the speed after bug 42
 and to see bug 40 recover a reset, then tests 8, 9 and 11 above.
+
+## Two design questions, 2026-10-02
+
+**Should Warbler tell a client when the radio keys?** Yes. AX.25 2.2's
+own model has the physical layer confirm when it has the channel
+(PH-SEIZE confirm, HW-TON and HW-TOFF), and KISS throws that away, so a
+client has to start T1 when it hands a frame over. Through Warbler that
+hand-off came 3.6 s before the 705 keyed in test 33. If Warbler answered
+the CI-V PTT-on only once the hub had keyed, and sent an unsolicited
+PTT-off when it unkeyed, AXTerm could time T1 and RTT from the real end
+of the transmission. That alone would have prevented test 33's duplicate
+SABM (the UA came back about 1 s after the frame was really sent). It
+does not replace the bug 39 fix: a lost UA produces the same duplicate
+SABM on any radio.
+
+**Should the window grow during a session?** Not as it stood (bug 25,
+switched off in e2c6e35). At K3 with 174-byte frames a burst held the
+1200-baud channel about 4 s, longer than the receiver's 2 s T2, so the
+receiver's delayed RR went out in a gap mid-burst; the sender took the
+freed slot at once and keyed over the receiver's answer to its poll, and
+the losses collapsed the session to K1, paclen 64. With growth on, a
+receiver should hold its delayed ack while the sender's burst is still
+arriving (restart T2 on each in-sequence frame; the poll at the end of
+the burst gets its RR F=1 at once anyway). The sender side the owner
+reverted (fde9358, a hold on new frames until the poll is answered) is
+the other half. The I-1 estimate for this path: K2/128 about 315 bps,
+K4/128 about 590, K4/256 about 800.
 
 ## Resuming
 
