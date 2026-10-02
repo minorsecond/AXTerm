@@ -377,6 +377,45 @@ toward AXTerm peers only. To see it on the air, a session has to start after
 AXDP is confirmed for the peer, for example a second connect after an AXDP
 file transfer in the same run.
 
+## Simulator fuzzing, 2026-10-02
+
+After growth was switched on, a fuzz campaign in the two-station simulator
+(a0feaec):
+
+- **Random scenarios.** `testFuzzedChannelsKeepEveryInvariantWithAndWithoutGrowth`
+  draws a random channel, pair of stations and traffic per seed and runs it
+  with growth off and on under every stress invariant. The first 2,000-seed
+  soak failed 16 seeds, the same ones in both modes; all 16 were the
+  harness or the generator (a re-establishing session counted as down, a
+  reset-window allowance that missed stale SABMs from a TNC queue, a revived
+  link never hung up again, disconnects scheduled before the link was up).
+  After those fixes 5,000 seeds passed: 3,906 complete with growth off and
+  3,905 with it on, 67 against 68 bps. Single runs vary a lot (a probe that
+  costs one burst can push a short transfer into a scheduled outage), so the
+  totals are the comparison.
+- **Property tests**, 20,000 cases per property with a fresh seed base: all
+  20 properties passed (decoding, T1, session state machine).
+- **Every stress family at 200 seeds**: all passed, with none of the
+  documented deviations even triggered. Mode comparison over 2,400 runs per
+  mode: growth off 274 bps, growth on 290, every scenario at or above growth
+  off (the 705 setup 476 to 731, 9600 baud 1142 to 1688, 20% loss 192 to 194).
+
+What the fuzzing showed about behavior, none of it a protocol defect:
+
+- A transmitter hang longer than the other station's TX delay makes most
+  answers arrive while the first station is still keyed. The link crawls
+  (acks get through now and then, so N2 never trips) instead of failing.
+- A duplicated SABM (two digipeaters) draws two UAs; the caller takes the
+  second as error C and re-establishes straight after connecting, as the
+  AX.25 2.2 SDL says. Runs recover cleanly.
+- A SABM retry held in a TNC's queue can go out after the link is up and
+  reset it; only a "frame sent" signal from the TNC (or Warbler) avoids that.
+- Through a digipeater at persistence 255 (hidden stations), growth's longer
+  bursts collide more: 3 of 5,000 runs completed with growth off but not on.
+- After a peer restarts, the next session starts from whatever the route's
+  learner holds, so if bigger bursts had drawn retransmissions just before,
+  that session starts at K=1.
+
 ## Resuming
 
 1. Warbler: re-enable transmit for the 705 (turned off for the night).
