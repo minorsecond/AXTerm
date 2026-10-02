@@ -201,6 +201,7 @@ Status is filled in as each is fixed.
 | 49 | A YAPP cancel after the receiver's AF went unanswered, held the session for the 10 s CA wait and could print the CN on the other terminal. | full-stack fuzz, 2026-10-02 | fixed, 1bdfa62: too late to cancel once AF is in, so the transfer finishes |
 | 50 | Winlink P2P: a caller with nothing to send opens with FF, and the answering station quit on it with its own outbox untouched. | full-stack fuzz, 2026-10-02 | fixed, 3d55843 |
 | 51 | The TNC4's extended modem-type reply was accepted at any length. | property test, 2026-10-02 | fixed, a426ada |
+| 52 | A mailbox caller could not kill private mail they sent to someone else: K looked the message up through the read rule, which hides mail not addressed to the caller, and answered "not found". | full-stack fuzz, 2026-10-02 | fixed, f95e8d4: K finds what the caller can read or kill; other people's mail still answers "not found" |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -458,6 +459,8 @@ Bugs found and fixed:
   and quit with its outbox untouched.
 - **51. TNC4 modem-type reply of any length (a426ada).** Now held to one byte
   like every other single-value reply.
+- **52. Mailbox K could not take back mail the caller sent (f95e8d4).** The
+  rule allowed it; the lookup went through the read rule first.
 
 Not bugs, but worth knowing:
 
@@ -476,10 +479,18 @@ Not bugs, but worth knowing:
   enabled on iOS it would greet callers as NODE:N0CALL. Filed as a separate
   task.
 
+A fake TNC4 (`AXTermTests/Support/FakeTNC4.swift`, written from the
+firmware's source without copying it) now stands in for the hardware:
+AXTerm's session driver runs whole sessions against it, and the tests fail if
+it ever saves to the TNC4's EEPROM, leaves it deaf or keyed, or fails to put
+its settings back.
+
 Results after the fixes: the first 300-seed transfer run had 67 problems and
 the next 7, all the harness starting a transfer during a cancel handshake;
 Winlink went from 15 to 0 once bug 50 was fixed and the harness answered calls
-the way the app does.
+the way the app does. A confirming run on 150 fresh seeds per suite had no
+problems in transfers, Winlink or the node, and in the mailbox only bug 52
+and a harness mistake. The full unit suite then passed, 8,580 tests.
 
 ## Resuming
 
