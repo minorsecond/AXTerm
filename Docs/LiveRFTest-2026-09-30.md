@@ -174,7 +174,7 @@ Status is filled in as each is fixed.
 | 22 | The mailbox wrote "Received <file>" as soon as it acknowledged end of file, while the caller waited for the end-of-transmission ack; AXTerm's YAPP sender read the line as a protocol error and marked an intact upload failed. | A and B, 12:07 UTC 2026-10-01 | fixed, e31615c |
 | 23 | A's AXDP check now retries three times, so every connect to a station without AXDP (most BBSes and nodes) sends three `AXDP?` UI frames instead of one. | A, 11:53 UTC 2026-10-01 | open, consider stopping after one try on a station already known not to answer |
 | 24 | Warbler's IC-705 radio loop stalled at 11:42:26 UTC; its watchdog exited (code 70) and launchd restarted it 30 s later. B heard none of the three SABMs Warbler logged as keyed. | Warbler, 11:42 UTC 2026-10-01 | the hub journal shows it keyed all four transmissions and played their audio with nothing lost or late, then logged the Mac's warblerd going quiet at 11:42:41; the stall was in the Mac warblerd. Why B missed the SABMs is still open; B's serial logs for that minute had aged out |
-| 25 | With the window grown to K3, the peer's T2 ack arrived mid-burst as RR F=0; the sender filled the freed slot at once and keyed over the peer's F=1 answer, and the losses dropped the session to K1, paclen 64. | A, 12:16 to 12:26 UTC 2026-10-01 | not fixed in the AX.25 layer: a poll hold (fde9358) was tried and reverted (14643a3) on the owner's call; growth switched off instead (e2c6e35), pending a receiver-side design |
+| 25 | With the window grown to K3, the peer's T2 ack arrived mid-burst as RR F=0; the sender filled the freed slot at once and keyed over the peer's F=1 answer, and the losses dropped the session to K1, paclen 64. | A, 12:16 to 12:26 UTC 2026-10-01 | fixed 2026-10-02 without the poll hold: the receiver restarts T2 on each frame of a burst within 3 × T2 (a148309); growth applies only toward peers that confirmed AXDP (23974c6) and never below the session's growth-off values (a50bce3); growth is on by default again. Confirm on the air |
 | 26 | A heard six of its own frames back through the IC-705 between 16:32:54 and 16:34:29 UTC, each decoded within 6 ms of the moment B's TNC4 decoded the same frame. The echo of the AXDP text probe raised "Another station is transmitting as K0EPI-2": the probe is built without a control byte, the encoder sends 0x03 for that, and the echo memory recorded 0, so the copy matched nothing sent. The echo also put K0EPI-2 in A's own heard-stations list. | A, 16:33:12 UTC 2026-10-01 | false alarm fixed, 6436adf. Why the 705's receive stream carried our own transmissions for those 95 s is open. The 705 cannot receive while keyed, so its transmit monitor audio over LAN is the likeliest source |
 | 27 | After 23 quiet minutes, B missed A's first five SABMs (16:31:21 to 16:32:22 UTC), decoded the sixth, and heard every frame after that. The hub logged all six keyed and played with nothing lost or late. Same pattern as bug 24. A receive level check on B at 16:21:41 found the TNC4 input fully clipped (clipped share 1.00 at gain 4, ID-50 volume 5) and no packets. | B, 16:31 UTC 2026-10-01 | mostly resolved. Two causes found. (1) The ID-50 ran all day with its squelch open at volume 5 into the TNC4's own +24 dB, so receiver noise held the TNC4 input pinned (clipped share 1.00 in every check); with the squelch on auto and +24 dB, packets arrive at 53% with silence between. (2) Gaps in the IC-705's transmit audio: Warbler's hub plays each over from a jitter buffer, and when audio from the Mac pauses mid-over longer than the buffer ("ran dry") it inserts silence, which ruins a packet; it then raises its cushion (to 539 ms at 19:03) and holds it. Since the squelch change, controlled runs decoded 47 of 48 frames: 20 of 20 at a cushion forced to 540 ms (a debug knob on the hub, 19:49 to 19:53 UTC), 19 of 20 at the learned cushion, 3 of 3 and 5 of 5 at 0 ms; the first SABM after 20 and 22 quiet minutes was decoded both times. A long cushion, a long quiet spell and the auto squelch are each ruled out. The 3 misses of 7 at 19:03 came while the hub was logging gaps from the Mac. Still open: what makes the Mac's audio to the hub pause now and then (Warbler on the Mac or AXTerm's pacing under load); the one miss at 19:16:04 is unexplained |
 | 28 | At 16:51:16 UTC, mid-transfer, the hub took a new login for the virtual IC-705 from this Mac's Tailscale address (100.80.112.57) while the Mac's LAN session (192.168.3.14) still held the 705 keyed. The hub refused the new session's unkeys, then unkeyed the LAN session after it sent nothing for 3 s. AXTerm on A heard nothing for 10 s, dropped the radio link, and reconnected at 16:51:31; the AX.25 session survived and the transfer finished. Warbler's Mac log records no reconnect at that time. | Warbler, 16:51 UTC 2026-10-01 | explained: by design. The IC-705's hub address in Warbler's settings is the hub's Tailscale address (100.77.243.13); the LAN address (192.168.3.218) is learned as a fallback that is tried only when the Tailscale address does not answer (shared/Where.swift, LearnedHosts). Warbler was on the LAN earlier only because Tailscale had stopped answering, and went back to Tailscale at 16:51 when it recovered. Tailscale's path to the hub is direct over the LAN. Still open: the duplicate `warblerd --radio ft710`, and Warbler.log's `Z` suffix on local times |
@@ -326,7 +326,9 @@ Waiting on the owner: bug 39, which reverses a deviation kept on
 purpose, and the remaining one-frame-per-RR pattern noted under bug 42.
 
 Waiting on the radios: rerun test 34 to measure the speed after bug 42
-and to see bug 40 recover a reset, then tests 8, 9 and 11 above.
+and to see bug 40 recover a reset; an AXDP transfer, then a second session
+to the same station to see growth (bug 25) on the air; then tests 8, 9 and
+11 above.
 
 ## Two design questions, 2026-10-02
 
@@ -363,6 +365,17 @@ links and losing two to four times on lossy ones (121 bps against 271
 overall), and the same without the T2 change, so its backoff on loss is the
 next thing to fix before it is switched on. The T2 change on its own is
 neutral to slightly better (defaults 267 to 271 bps).
+
+Fixed the same day (a50bce3). Tracing a 10% loss run in the simulator showed
+the cause: the route's learner reads one sample with two retransmissions as
+100% loss and asks for K1, paclen 64. With growth off a session ignores that
+until the next session; with growth on the live session followed it down. A
+growing session now never runs below its growth-off values, and growth beats
+or matches growth off everywhere in the comparison (271 to 286 bps overall;
+the 705 setup 469 to 721; 10% loss 309 to 302). Growth is on by default,
+toward AXTerm peers only. To see it on the air, a session has to start after
+AXDP is confirmed for the peer, for example a second connect after an AXDP
+file transfer in the same run.
 
 ## Resuming
 
