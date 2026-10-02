@@ -120,6 +120,10 @@ struct StressResult {
     /// UAs either station received while already connected.
     var unexpectedUAs = 0
     var firstUnexpectedUA: TimeInterval?
+    /// Times either station told its application the link was reset (the
+    /// old link ended and a new one began in the same instant), which the
+    /// AX.25 2.2 SDL does only on the side that lost frames.
+    var resetIndications: [TimeInterval] = []
     /// How long after the first side's link went down the second side's
     /// did, when both did.
     var failureLag: TimeInterval?
@@ -335,8 +339,17 @@ final class StressRunner {
     }
 
     private func connected(_ i: Int) -> AX25Session? {
-        guard let s = stations[i].session(with: peer(of: i), path: path), s.state == .connected else { return nil }
+        guard let s = stations[i].session(with: peer(of: i), path: path), Self.isUp(s) else { return nil }
         return s
+    }
+
+    /// Up as the layer above sees it. A session establishing the link again
+    /// after an unexpected UA is internally connecting, but the AX.25 2.2 SDL
+    /// tells layer 3 nothing until that ends (live test log, bug 39), so the
+    /// application still has its link. Counting it as down ended runs a
+    /// moment after the re-establishing SABM went out.
+    static func isUp(_ s: AX25Session) -> Bool {
+        s.state == .connected || (s.state == .connecting && s.isReestablishing)
     }
 
     private func pumpTraffic() {
@@ -476,6 +489,17 @@ final class StressRunner {
            a.stateLog.contains(where: { $0.from == .connecting }) {
             return true
         }
+        // The application is done and hung up, but the link came back: the
+        // peer's link layer was still establishing it again after an
+        // unexpected UA, answered the DISC with DM as the SDL says, and A
+        // accepted its next SABM (fuzz seed 1270). Hang up again, as an
+        // operator would.
+        if dataDone, scenario.disconnectAtEnd, up[0], up[1], quiescent(0), quiescent(1),
+           let asked = disconnectRequestedAt, now - asked > 60 {
+            a.disconnect(from: b, path: path)
+            disconnectRequestedAt = now
+            return false
+        }
         guard scenario.events.isEmpty || disconnectRequestedAt == nil else { return false }
         if !dataDone, allWritten, everythingDelivered(), quiescent(0), quiescent(1) {
             dataDone = true
@@ -501,8 +525,7 @@ final class StressRunner {
 
     private func finish() {
         checkStreams()
-        let states = (0..<2).map { stations[$0].session(with: peer(of: $0), path: path)?.state }
-        let up = states.map { $0 == .connected }
+        let up = (0..<2).map { stations[$0].session(with: peer(of: $0), path: path).map(Self.isUp) ?? false }
         result.linkFailed = !result.completed
             && ((0..<2).contains { everConnected($0) && !up[$0] }
                 || (!everConnected(0) && !everConnected(1)))
@@ -558,6 +581,14 @@ final class StressRunner {
         result.trace = net.channel.trace
         result.unexpectedUAs = a.unexpectedUAs.count + b.unexpectedUAs.count
         result.firstUnexpectedUA = (a.unexpectedUAs + b.unexpectedUAs).min()
+        for station in [a, b] {
+            let log = station.stateLog
+            for (down, up) in zip(log, log.dropFirst())
+            where down.from == .connected && down.to == .disconnected
+                && up.from == .disconnected && up.to == .connected && up.time == down.time {
+                result.resetIndications.append(down.time)
+            }
+        }
         result.fingerprint = [
             String(format: "%.3f", result.elapsed), "\(result.bytesDelivered)", "\(result.newIFrames)",
             "\(result.retransmittedIFrames)", "\(stats.framesOnAir)", "\(stats.collisions)",

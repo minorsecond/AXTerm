@@ -27,6 +27,22 @@ import XCTest
 @MainActor
 final class ConnectedModeStressTests: XCTestCase {
 
+    // Debug builds capture every frame for the wire log by default. A soak
+    // logs millions, and each capture copies the whole 2,000-event buffer, so
+    // a 5,000-seed fuzz run spent its last 18 minutes there. Nothing here
+    // reads the wire log.
+    override func setUp() {
+        super.setUp()
+        WireLogStore.shared.isEnabled = false
+        TxLog.shared.captureWireEvents = false
+        TxLog.shared.verboseConsole = false
+    }
+
+    override func tearDown() {
+        TxLog.configure(wireDebugEnabled: WireDebugSettings.isEnabled)
+        super.tearDown()
+    }
+
     // MARK: Seeds
 
     private static var soakSeeds: Int? {
@@ -77,7 +93,11 @@ final class ConnectedModeStressTests: XCTestCase {
             // The stale frames that cause it ride the same transmission as
             // the UA, so the break can show a moment before the UA is read.
             let afterUA = result.firstUnexpectedUA.map { ua in (result.firstViolationAt ?? 0) >= ua - 5 } ?? false
-            if !result.violations.isEmpty, afterUA, streamOnly {
+            // Or within 30 s of a reset one station reported, however it came
+            // about (a stale SABM from a TNC's queue resets the link with no
+            // unexpected UA first).
+            let nearReset = result.resetIndications.contains { abs($0 - (result.firstViolationAt ?? 0)) <= 30 }
+            if !result.violations.isEmpty, afterUA || nearReset, streamOnly {
                 // A limit of this harness, not of the protocol. Since bug 39
                 // (live test log) AXTerm answers a UA in the connected state
                 // as the AX.25 2.2 SDL does: error C, establish the link
@@ -467,6 +487,108 @@ final class ConnectedModeStressTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(growth.bps, defaults.bps,
                                         "overall: growth \(Int(growth.bps)) bps against the defaults' \(Int(defaults.bps))")
         }
+    }
+
+    // MARK: Fuzzing
+
+    /// Seeds for the fuzz test: a handful in the normal run,
+    /// AXTERM_GROWTH_FUZZ_SEEDS=<n> (TEST_RUNNER_ prefix through xcodebuild)
+    /// for a soak.
+    private static var fuzzSeeds: Int {
+        ProcessInfo.processInfo.environment["AXTERM_GROWTH_FUZZ_SEEDS"].flatMap(Int.init) ?? 12
+    }
+
+    /// A random channel, pair of stations and traffic for one seed. The same
+    /// seed gives the same scenario in every mode, so the modes can be
+    /// compared run for run.
+    private func fuzzScenario(_ seed: UInt64, mode: StressMode) -> StressScenario {
+        var p = Picker(seed, 0xF022_6A0B)
+        var s = StressScenario(name: "fuzz", seed: seed)
+        s.mode = mode
+        s.bitRate = p.chance(0.15) ? 9600 : 1200
+        s.txDelay = (p.uniform(0.05, 1.0), p.uniform(0.05, 1.0))
+        s.hang = (p.pick([0, 0, 0.3, 0.7, 1.0]), p.pick([0, 0, 0.3, 0.7]))
+        s.persistence = p.pick([32, 63, 128, 255])
+        s.slotTime = p.pick([0.05, 0.1, 0.2])
+        s.loss = p.pick([0, 0, 0.02, 0.05, 0.1, 0.2, 0.3])
+        s.duplicate = p.chance(0.2) ? p.uniform(0, 0.1) : 0
+        if p.chance(0.2) { s.fade = SimFadeModel(meanClear: p.uniform(10, 80), meanFade: p.uniform(1, 10)) }
+        if p.chance(0.15) {
+            let start = p.uniform(10, 200)
+            s.outages = [start...(start + p.uniform(5, 60))]
+        }
+        if p.chance(0.05) { s.oneWayOutage = (from: p.pick([0, 1]), start: p.uniform(20, 200)) }
+        s.hostDrop = p.chance(0.15) ? p.uniform(0, 0.05) : 0
+        s.viaDigi = p.chance(0.25)
+        if p.chance(0.2) { s.window = p.pick([1, 2, 3, 4, 7]) }
+        if p.chance(0.2) { s.paclen = p.pick([32, 64, 128, 192, 256]) }
+        s.frack = p.pick([2, 3, 4, 6, 8])
+        if p.chance(0.75) {
+            var aToB = p.pick([0, 500, 4000, 12000, 30000])
+            let bToA = p.pick([0, 0, 500, 4000, 12000])
+            if aToB == 0 && bToA == 0 { aToB = 2000 }
+            s.traffic = .bulk(aToB: aToB, bToA: bToA)
+        } else {
+            s.traffic = .chat(linesEach: p.pick([5, 15, 30]), meanGap: p.uniform(2, 15), bothWays: p.chance(0.5))
+        }
+        let at = p.uniform(10, 120)
+        let station = p.pick([0, 1])
+        if p.chance(0.1) {
+            s.events = [.restart(at: at, station: station, reconnect: p.chance(0.7))]
+        } else if p.chance(0.06) {
+            s.events = [.power(at: at, station: station, on: false),
+                        .power(at: at + p.uniform(5, 90), station: station, on: true)]
+        } else {
+            // Kept so every seed still draws the same scenario as before
+            // scheduled disconnects were dropped.
+            _ = p.chance(0.06)
+        }
+        // No scheduled disconnects: at a fixed time the link may not be up
+        // yet, and the harness then stops that station's traffic and reports
+        // a deadlock (seeds 687 and 834). testDisconnectMidTransferEndsCleanlyOnBothSides covers
+        // disconnects.
+        if p.chance(0.08) { s.connectOffset = p.pick([0, 0.05, 0.2, 0.6]) }
+        // Hostile channels (30% loss, a transmitter hang longer than the other
+        // side's TX delay) still move data, slowly; the 900 s no-progress
+        // check catches a real livelock.
+        s.timeLimit = 24 * 3600
+        return s
+    }
+
+    /// Random scenarios with growth on and with it off: every invariant holds
+    /// in both, and growth is not slower over the mix or worse at getting
+    /// data through.
+    func testFuzzedChannelsKeepEveryInvariantWithAndWithoutGrowth() {
+        let seeds = (1...Self.fuzzSeeds).map(UInt64.init)
+        var off: [StressResult] = []
+        var growth: [StressResult] = []
+        let offTally = runFamily("fuzz-growth-off", seeds: seeds,
+                                 { self.fuzzScenario($0, mode: .defaults) }, onResult: { off.append($0) })
+        let growthTally = runFamily("fuzz-growth-on", seeds: seeds,
+                                    { self.fuzzScenario($0, mode: .growth) }, onResult: { growth.append($0) })
+
+        func bps(_ r: StressResult) -> Double { r.dataTime > 0 ? Double(r.bytesDelivered * 8) / r.dataTime : 0 }
+        var lines = ["off:    \(offTally.row)", "growth: \(growthTally.row)", ""]
+        let pairs = zip(off, growth).enumerated().map { (seeds[$0.offset], $0.element.0, $0.element.1) }
+        let ranked = pairs.filter { bps($0.1) > 0 }.sorted { bps($0.2) / bps($0.1) < bps($1.2) / bps($1.1) }
+        lines.append("Worst growth/off ratios:")
+        for (seed, o, g) in ranked.prefix(15) {
+            lines.append(String(format: "seed %llu: %.0f -> %.0f bps (%.2f) completed %@/%@ | %@",
+                                seed, bps(o), bps(g), bps(g) / bps(o),
+                                o.completed ? "y" : "n", g.completed ? "y" : "n", o.scenario))
+        }
+        let lostCompletions = pairs.filter { $0.1.completed && !$0.2.completed }
+        lines.append("")
+        lines.append("Completed with growth off but not on: \(lostCompletions.count)")
+        for (seed, o, g) in lostCompletions.prefix(15) {
+            lines.append("seed \(seed): \(g.summary) | off: \(o.summary)")
+        }
+        StressReport.write(lines, name: "fuzz-growth")
+
+        XCTAssertGreaterThanOrEqual(growthTally.bps, offTally.bps * 0.95,
+                                    "growth \(Int(growthTally.bps)) bps against \(Int(offTally.bps)) with it off")
+        XCTAssertLessThanOrEqual(lostCompletions.count, max(1, seeds.count / 50),
+                                 "runs that finished with growth off but not with it on: \(lostCompletions.map(\.0))")
     }
 
     // MARK: Determinism
