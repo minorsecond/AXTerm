@@ -258,9 +258,12 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
                 guard let record = try WinlinkMessageRecord.fetchOne(db, key: state.messageId) else {
                     return nil
                 }
-                let attachmentCount = try WinlinkAttachmentRecord
-                    .filter(Column("messageId") == state.messageId)
-                    .fetchCount(db)
+                let attachments = try Row.fetchOne(db, sql: """
+                    SELECT COUNT(*) AS count, COALESCE(SUM(LENGTH(data)), 0) AS bytes
+                    FROM winlinkAttachment WHERE messageId = ?
+                    """, arguments: [state.messageId])
+                let attachmentCount: Int = attachments?["count"] ?? 0
+                let attachmentBytes: Int = attachments?["bytes"] ?? 0
                 return WinlinkMessageSummary(
                     mid: record.id,
                     direction: WinlinkMessageRecord.Direction(rawValue: record.direction) ?? .inbound,
@@ -270,6 +273,7 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
                     subject: record.subject,
                     bodySize: record.body.count,
                     attachmentCount: attachmentCount,
+                    attachmentBytes: attachmentBytes,
                     isRead: state.isRead,
                     deliveryState: state.state ?? .received,
                     folderId: state.folderId,

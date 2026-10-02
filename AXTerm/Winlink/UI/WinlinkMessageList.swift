@@ -140,7 +140,7 @@ struct WinlinkMessageList: View {
                     .width(min: 60, ideal: 80)
 
                     TableColumn("Size") { summary in
-                        Text(ByteCount.string(Int64(summary.bodySize)))
+                        Text(ByteCount.string(Int64(summary.totalSize)))
                             .foregroundStyle(.secondary)
                     }
                     .width(min: 50, ideal: 70)

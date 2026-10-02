@@ -24,13 +24,14 @@ final class WinlinkMessageRowModelTests: XCTestCase {
                          subject: String = "Net check-in",
                          bodySize: Int = 512,
                          attachments: Int = 0,
+                         attachmentBytes: Int = 0,
                          isRead: Bool = true,
                          state: WinlinkMessageStateRecord.DeliveryState = .received,
                          on when: Date = Date()) -> WinlinkMessageSummary {
         WinlinkMessageSummary(
             mid: "TESTMID1", direction: direction, date: when,
             fromAddr: from, toAddrs: to, subject: subject,
-            bodySize: bodySize, attachmentCount: attachments,
+            bodySize: bodySize, attachmentCount: attachments, attachmentBytes: attachmentBytes,
             isRead: isRead, deliveryState: state, folderId: 1, lastError: nil)
     }
 
@@ -188,6 +189,13 @@ final class WinlinkMessageRowModelTests: XCTestCase {
         // 408 bytes matters on a packet link; "0 KB" would erase it.
         let model = WinlinkMessageRowModel.make(summary(bodySize: 408))
         XCTAssertEqual(model.sizeLabel, "408 B")
+    }
+
+    /// The size is what the message costs on the air, attachments included
+    /// (live test log, bug 41).
+    func testTheSizeIncludesAttachments() {
+        let model = WinlinkMessageRowModel.make(summary(bodySize: 84, attachments: 1, attachmentBytes: 9_551))
+        XCTAssertEqual(model.sizeLabel, WinlinkExchangeStatus.compact(9_635))
     }
 
     func testKilobyteSizesKeepOneDecimalWhileSmall() {

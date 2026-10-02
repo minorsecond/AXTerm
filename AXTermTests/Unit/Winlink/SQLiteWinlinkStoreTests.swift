@@ -31,6 +31,26 @@ final class SQLiteWinlinkStoreTests: XCTestCase {
             attachments: attachments)
     }
 
+    // MARK: - Size
+
+    /// Field case 2026-10-02 (live test log, bug 41): the Outbox showed
+    /// 84 bytes for a message carrying a 9.5 KB photo. Airtime is what the
+    /// column is for, and the photo is nearly all of it.
+    func testTheMailboxListCountsAttachmentsInTheSize() throws {
+        let store = try makeStore()
+        let photo = WinlinkB2Message.Attachment(name: "p2p_photo.jpg", data: Data(repeating: 0xff, count: 9_551))
+        try store.saveInbound(makeMessage(mid: "SIZEWITHATT1", attachments: [photo]))
+        try store.saveInbound(makeMessage(mid: "SIZEPLAIN001"))
+
+        let rows = try store.messages(inFolder: try store.folderID(for: .inbox))
+        let withPhoto = try XCTUnwrap(rows.first { $0.mid == "SIZEWITHATT1" })
+        let plain = try XCTUnwrap(rows.first { $0.mid == "SIZEPLAIN001" })
+        XCTAssertEqual(withPhoto.attachmentBytes, 9_551)
+        XCTAssertEqual(withPhoto.totalSize, withPhoto.bodySize + 9_551)
+        XCTAssertEqual(plain.attachmentBytes, 0)
+        XCTAssertEqual(plain.totalSize, plain.bodySize)
+    }
+
     // MARK: - Trash metadata
 
     /// The Trash needs to say when something went in — `updatedAt` cannot,

@@ -11,6 +11,8 @@ nonisolated struct WinlinkMessageSummary: Hashable, Sendable, Identifiable {
     var subject: String
     var bodySize: Int
     var attachmentCount: Int
+    /// The attachments' bytes, which the body size leaves out.
+    var attachmentBytes: Int = 0
     var isRead: Bool
     var deliveryState: WinlinkMessageStateRecord.DeliveryState
     var folderId: Int64
@@ -18,6 +20,11 @@ nonisolated struct WinlinkMessageSummary: Hashable, Sendable, Identifiable {
     /// Set only while the message is in the Trash. Drives the Deleted
     /// column, which exists only in that folder.
     var trashedAt: Date?
+
+    /// What the message costs on the air before compression: the body and
+    /// every attachment. The Size column showed the body alone, 84 bytes for
+    /// a message carrying a 9.5 KB photo (live test log, bug 41).
+    var totalSize: Int { bodySize + attachmentBytes }
 }
 
 /// A fully loaded message with its mutable state and attachments.

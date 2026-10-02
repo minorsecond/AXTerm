@@ -31,7 +31,7 @@ nonisolated struct WinlinkMessageRowModel: Equatable {
             subject: summary.subject.isEmpty ? "(no subject)" : summary.subject,
             subjectIsPlaceholder: summary.subject.isEmpty,
             dateLabel: dateLabel(summary.date, now: now, calendar: calendar),
-            sizeLabel: WinlinkExchangeStatus.compact(summary.bodySize),
+            sizeLabel: WinlinkExchangeStatus.compact(summary.totalSize),
             showsAttachmentIndicator: summary.attachmentCount > 0,
             isUnread: !summary.isRead,
             badge: badge(for: summary.deliveryState))
