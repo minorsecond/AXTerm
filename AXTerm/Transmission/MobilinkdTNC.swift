@@ -41,9 +41,12 @@ enum MobilinkdTNC {
     static let EXT_SET_MODEM_TYPE: UInt8 = 0x82
     static let EXT_GET_MODEM_TYPES: UInt8 = 0x83  // Lists the types this firmware accepts
 
-    // None of the SET commands above is written to the TNC4's flash. The
-    // firmware stores settings only on SAVE_EEPROM_SETTINGS (42), which AXTerm
-    // never sends, so a power cycle always brings back what the owner saved.
+    // None of the SET commands above is written to the TNC4's EEPROM. The
+    // firmware stores its settings on SAVE (0) or SAVE_EEPROM_SETTINGS (42),
+    // and also at the end of ADJUST_INPUT_LEVELS (43). AXTerm sends 42 only
+    // when the operator confirms "Make these the TNC4's own settings", and
+    // never 0 or 43, so otherwise a power cycle brings back what the owner
+    // saved.
 
     // Modem Types
     enum ModemType: UInt8, CaseIterable, Identifiable {
