@@ -312,6 +312,11 @@ final class ModemRadioLinkTests: XCTestCase {
             audio.pump(blocks: 10)
             try? await Task.sleep(for: .milliseconds(10))
         }
+        // The unkey goes out over CI-V just after the modem stops keying.
+        // Under the full suite's load it landed after the loop above three
+        // times (2026-09-30 to 10-02), with the modem already reporting
+        // ptt=false.
+        await waitUntil("PTT off over CI-V") { transport.written.map(self.hex).contains("FE FE A4 E0 1C 00 00 FD") }
         let diag = "written=\(transport.written.map(hex)) ptt=\(link.modem.telemetry.ptt) "
             + "rendered=\(audio.renderedOutput.count) underfilled=\(audio.underfilledBlocks)"
         XCTAssertTrue(transport.written.map(hex).contains("FE FE A4 E0 1C 00 00 FD"), "PTT off | \(diag)")
