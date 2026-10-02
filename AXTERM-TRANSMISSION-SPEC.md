@@ -715,6 +715,16 @@ Use `RTO` as your T1 timeout for retransmission.
   - reduce paclen
   - consider alternate path (if you support path selection)
 - If `N2` exceeded → disconnect, show “No response” with details.
+- **A gap the peer never fills ends at N2 − 1.** After a REJ or SREJ, T1 keeps
+  running to time the retransmission we asked for, and each expiry polls. The
+  peer's F=1 answer resets the retry count (the SDL's exit from timer
+  recovery) but does not fill the gap, so expiries spent chasing a gap, with
+  nothing of ours outstanding, are counted separately and cleared when the gap
+  fills. At N2 − 1 of them the last-ditch flush runs: the frames buffered past
+  the gap are delivered and the chase ends. Without the count, a peer with
+  nothing to resend (its V(S) started again after a link reset, and a late
+  duplicate of an old frame sat out of sequence here) answered RR P with RR F
+  every T1 for as long as the link lasted (full-stack fuzz, 2026-10-02).
 
 ### 7.5 Receive logic (I frames)
 On receiving an I-frame with seq `ns`:
@@ -732,6 +742,18 @@ On receiving an I-frame with seq `ns`:
 - Else (outside the span — most likely a duplicate):
   - discard; re-advertise `VR` cumulatively (immediately with F=1 on P=1,
     otherwise via T2 like any other ack)
+
+**The layer above hears last.** A delivered payload, and the news that an
+inbound frame acknowledged some of ours, reach the terminal, a claim or AXDP
+only after the frame's own actions (acks, T1, T2, T3, a REJ's retransmission)
+have run. Whoever is told may send at once: YAPP's AF on EF, AXDP's completion
+ack, a Winlink line, or YAPP's next blocks pumped from the claim's ack handler.
+Told first, those frames were followed by the stop of T1 computed while
+nothing was outstanding, so a lost one was never resent and the exchange sat
+until the protocol above timed out; and a block pumped on a REJ's ack was also
+picked up as a retransmission and sent twice (full-stack fuzz, 2026-10-02).
+The SDL queues a layer 3 request and handles it after the transition in
+progress, which is the same order.
 
 #### T2 delayed acknowledgment
 

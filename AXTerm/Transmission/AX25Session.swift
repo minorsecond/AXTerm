@@ -743,6 +743,7 @@ nonisolated struct AX25StateMachine: Sendable {
             actions.append(.deliverData(buffered.payload, pid: buffered.pid))
         }
         rejSent = false
+        unansweredGapPolls = 0
         retryCount = 0
         return actions
     }
@@ -775,6 +776,15 @@ nonisolated struct AX25StateMachine: Sendable {
     /// Flag indicating we've sent REJ and are waiting for retransmission
     /// This prevents sending multiple REJs for the same gap
     private(set) var rejSent: Bool = false
+
+    /// T1 expiries spent chasing a gap in what the peer sent us, with
+    /// nothing of ours outstanding. The peer's F=1 answer resets
+    /// `retryCount` (the SDL's exit from timer recovery) but does not fill
+    /// the gap, so these are counted on their own and the chase ends at the
+    /// same threshold as the last-ditch flush. Without the count a peer
+    /// with nothing to resend answered our polls forever (full-stack fuzz,
+    /// 2026-10-02). Cleared when the gap fills.
+    private(set) var unansweredGapPolls = 0
 
     /// True while an in-sequence delivery is still unacknowledged — the T2
     /// delayed-ack debt. Settled by the F=1 poll response, by T2 expiry, by
@@ -816,6 +826,7 @@ nonisolated struct AX25StateMachine: Sendable {
         receiveBuffer.removeAll()
         lastDeliveredByNS.removeAll()
         rejSent = false
+        unansweredGapPolls = 0
         ackPending = false
         peerBusy = false
         pollEvidence = .none
@@ -1234,8 +1245,18 @@ nonisolated struct AX25StateMachine: Sendable {
             // frames the peer was still actively retransmitting.
             var actions: [AX25SessionAction] = []
             let flushThreshold = max(2, config.maxRetries - 1)
+            if rejSent && sequenceState.outstandingCount == 0 && !peerBusy {
+                unansweredGapPolls += 1
+            }
             if retryCount >= flushThreshold {
                 actions.append(contentsOf: skipReceiveGap(reason: "n2-exhaustion"))
+            } else if unansweredGapPolls >= flushThreshold {
+                // The peer answers but never sends the frame. Nothing it
+                // holds can fill the gap (after a reset its V(S) starts
+                // again), so take what is buffered past it, as at N2.
+                actions.append(contentsOf: skipReceiveGap(reason: "gap-polls-answered-unfilled"))
+                rejSent = false
+                unansweredGapPolls = 0
             }
 
             // Per AX.25 spec §6.4.1: on T1 timeout, send RR with P=1 (poll)
@@ -1486,6 +1507,7 @@ nonisolated struct AX25StateMachine: Sendable {
 
         // Clear REJ flag since we're receiving the expected frame
         rejSent = false
+        unansweredGapPolls = 0
 
         // Deliver the current frame
         noteDelivered(ns: ns, payload: payload, pid: pid)
