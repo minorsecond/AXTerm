@@ -63,6 +63,8 @@ files and their SHA-256 sums are in the session scratchpad (`rf/sums.txt`):
 | 30 | BBS: `U`, then a YAPP upload of t256_allbytes.bin from A | pass: byte-identical in B's inbox (40aff2…) and A shows Completed (bug 22 fix confirmed). Send File defaulted to AXDP and had to be switched to YAPP by hand (bug 34) |
 | 31 | Smoke test of the UA-order fix (bug 30): A calls B's mailbox twice | pass. Second call: B sent UA, then the greeting 29 ms later; A received them in order and acked with one RR. First call after B's relaunch: correct order, but the greeting came 8.8 s after the UA (bug 35) |
 | 32 | TNC4 tuning wizard (9751d9c) on B, started from the never-tuned suggestion | works end to end. Receive gain picked +12 dB on open-squelch noise; the packet check, with three frames sent from A, advised +24 dB, which with the squelch open would pin the noise. The operator set the squelch to auto; a confirming listen at +24 dB read packets 53%, silence between, 1% of reports clipped. The summary worded an unchanged step badly; the warning and the wording are fixed after this run |
+| 33 | Winlink peer-to-peer, A calls B (armed, answering as K0EPI-3) with a photo, reached by adding K0EPI-3 to the RMS gateway ladder | failed: "timed out waiting for the gateway banner" after 90 s. B's banner reached A 321 ms after the UA, before the session manager told the runner the link was up, and the engine threw away every line received while idle (bug 36). A duplicate SABM had also reset B's side once (bug 39), and B did not greet again after the reset (bug 40). Calling a peer through the ladder and needing a Winlink password for it (bug 37) made the setup awkward |
+| 34 | Rerun of 33 on the fixed build (1ad624e, b616027): Connect & Exchange › Peer-to-Peer…, one photo message to K0EPI-3 and one to N0CALL queued on A | pass. The sheet suggested K0EPI-3 from the queued message, asked for no password and left the ladder empty. B's photo is byte-identical to the copy A stored (9,551 bytes after A's compose step shrank the 10,174-byte JPEG). The N0CALL message stayed queued on A (bug 38 fix confirmed). Session logged as P2P, success, 1 sent, 7,439 bytes, link up at 01:46:57 UTC on 2026-10-02 and done at 01:50:35. B's banner came 60 s after the UA, while the operator answered a macOS microphone prompt (bug 44), and the held banner kept the exchange alive. The body moved at 48 bytes/s (about 385 bps); every I-frame polled from 01:48:16 on and the window stayed at two 128-byte frames (bug 42) |
 
 Setup notes: Station B ran from a copy of the app with its own bundle ID
 (`com.rosswardrup.AXTerm.stationb`, ad hoc signed without the iCloud
@@ -70,6 +72,13 @@ entitlements) so background UI control can address each station's windows.
 Station A first failed with "This radio's link could not be created": the link
 trusted the profile's saved-password flag, which test mode had reset, instead
 of the Keychain (fixed, fc70878).
+
+Relaunching the test instances (2026-10-02, 01:2x UTC). A `pkill` meant as a
+harmless check closed both test instances. Test mode wipes each instance's
+settings and its database on launch, so both stations had to be set up again
+and the photo queued for test 33 was lost. Each fresh ad hoc signed copy of B
+also brings up two macOS Keychain prompts (one when it connects, one when its
+Winlink settings open) that only the operator can answer.
 
 ## Findings
 
@@ -176,6 +185,15 @@ Status is filled in as each is fixed.
 | 33 | The upload-folder help under "Let callers send me files" shows literal asterisks: "Uploads land here and are **not** shared". | B, 17:12 UTC 2026-10-01 | open |
 | 34 | After a mailbox answers `U` with "start your upload now", Send File still defaults to AXDP for a station that supports it, which would bypass the mailbox. The operator has to know to pick YAPP. | A, 17:14 UTC 2026-10-01 | open, consider defaulting to YAPP while the session's mailbox is waiting for an upload |
 | 35 | On B's first inbound call after a relaunch (17:41 UTC), the greeting went out 8.8 s after the UA. The second call, 2.5 min later, had 29 ms between them. Something in the inbound-connect notification path is slow the first time after launch (candidates: the inbound-call sound, the connection notification, a first licence lookup). Before 3d0c6ba the same pause would have delayed the UA itself, past the caller's T1. | B, 17:41 UTC 2026-10-01 | open |
+| 36 | The B2F engine dropped every line it received before the runner told it the link was up. B's banner arrived 321 ms after the UA, inside that window, so A waited 90 s for a banner it already had. | A, 01:00 UTC 2026-10-02 | fixed, 1ad624e: lines received while idle are held and processed once the engine starts, calling and answering. Confirmed in test 34, where the banner came 60 s after the UA |
+| 37 | The only way to call a Winlink peer was to add it to the RMS gateway ladder, which also put it in line for every gateway exchange, and the exchange refused to start without a Winlink password although a peer has no CMS to check one. | A, 01:00 UTC 2026-10-02 | fixed, b616027: Connect & Exchange › Peer-to-Peer… asks for the station, suggests the last peer or the queued To address, remembers five, needs no password and leaves the ladder alone. Confirmed in test 34 |
+| 38 | A peer exchange offered the peer the whole Outbox, so mail for the internet would be marked sent to a station that never forwards it. Found reading the runner while fixing 37. | code review, 2026-10-02 | fixed, b616027: both sides offer only mail addressed to the peer's callsign or its bare account callsign. Confirmed in test 34 |
+| 39 | In test 33, A handed its SABM to the radio at 01:00:17.776 UTC and the hub keyed at 01:00:21.37, 3.6 s later. T1 fired in between and A sent a second SABM, which B treated as a link reset after it had already answered the first. | A and Warbler, 01:00 UTC 2026-10-02 | open. T1 counts from the handoff, not from when the frame is on the air |
+| 40 | After that reset, B's peer-to-peer service never sent its banner again, so the caller had nothing to answer. | B, 01:00 UTC 2026-10-02 | open |
+| 41 | The Outbox Size column leaves out attachments: 104 bytes for the photo message in test 33, 84 bytes for a 9.5 KB photo in test 34. | A, 2026-10-02 | open |
+| 42 | In test 34, A's first pair of I-frames polled only on the second, as it should. From 01:48:16 UTC every I-frame carried the poll bit, B answered each with its own RR, and A sent one new frame per RR. The window stayed at two 128-byte frames for the whole exchange and never grew; this morning's AXDP transfer grew to three 174-byte frames and reached 557 bps. Each round trip took about 5 s for 256 bytes, about 2 s of it airtime. | A, 01:48 UTC 2026-10-02 | open, fixing first. Suspects: the poll hold and the "already resent counts as polled" rule added on 2026-10-01, and the AXDP probe frame sent at 01:48:11 |
+| 43 | Winlink views show rates in bytes per second ("47 B/s"), the transfer views in bits per second ("333 bps"), with nothing to say they differ. The operator read 47 B/s as about seven times slower than YAPP and AXDP; it is about 380 bps. | A, 2026-10-02 | open |
+| 44 | During test 34 a macOS microphone permission prompt appeared and held things up until the operator answered it; B's banner went out 60 s after the UA. Only the USB sound modem (`CoreAudioModemIO`) opens an audio input, and neither station uses one, so which instance asked and why is not known. It may be the slow first greeting of bug 35. | A or B, 01:47 UTC 2026-10-02 | open |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -284,11 +302,19 @@ and a capability check that gave up is not retried until the session ends (a
 4. An offer declined
 5. Auto-accept from the allow list while the terminal is not on screen
 6. BBS in both directions: list files, download text, download binary, upload
-7. Winlink peer-to-peer message with a photo attachment
+7. ~~Winlink peer-to-peer message with a photo attachment~~ done, test 34
 8. Link dropped mid-transfer (turn one radio off), both sides fail cleanly
 9. The same matrix with AXDP turned off in Settings (forces YAPP everywhere)
 10. Repeat after the fixes above, to confirm them on the air
 11. Bluetooth TNC4 path (USB was used for everything today)
+
+## Overnight fixes, 2026-10-02
+
+Radios off. Each fix gets a failing test first, then the full suite, then
+its own commit, in this order: bug 42 (every frame polls), 43 (rate units),
+41 (Outbox size), 40 (no greeting after a reset), 39 (T1 before the frame
+is on the air). Tests 8, 9 and 11 above wait for the radios, and 34 is
+rerun after 42 to measure the speed.
 
 ## Resuming
 
