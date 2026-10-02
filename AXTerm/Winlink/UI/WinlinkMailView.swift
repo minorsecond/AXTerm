@@ -622,10 +622,24 @@ struct WinlinkMailView: View {
                     // Refuses to answer when another of the operator's devices
                     // already holds this callsign on this TNC — otherwise both
                     // reply to the same caller with nobody watching.
-                    contestedBy: context.contestedIdentityHolder)
+                    contestedBy: context.contestedIdentityHolder,
+                    runningExchangePeer: context.runner?.currentPeer)
                 let called = session.localAddress.display
                 let decision = listener.decide(
-                    called: called, isInitiator: session.isInitiator)
+                    called: called, isInitiator: session.isInitiator,
+                    caller: session.remoteAddress.display)
+                if decision == .answerWhenFree {
+                    context.runner?.note(
+                        "Inbound call from \(session.remoteAddress.display): \(decision.explanation)")
+                    guard await context.runner?.waitUntilIdle(timeout: 15) == true,
+                          session.state == .connected else {
+                        context.runner?.note(
+                            "Did not answer \(session.remoteAddress.display) again: the old exchange did not close in time or the link went down")
+                        return
+                    }
+                    await answerP2PCall(session)
+                    return
+                }
                 guard decision == .answer else {
                     if case .weInitiated = decision { return }
                     context.runner?.note(

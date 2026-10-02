@@ -5,8 +5,10 @@ final class WinlinkP2PListenerTests: XCTestCase {
 
     private func listener(armed: Bool = true,
                           callsign: String = "K0EPI-7",
-                          busy: Bool = false) -> WinlinkP2PListener {
-        WinlinkP2PListener(isArmed: armed, myCallsign: callsign, isExchangeRunning: busy)
+                          busy: Bool = false,
+                          runningWith: String? = nil) -> WinlinkP2PListener {
+        WinlinkP2PListener(isArmed: armed, myCallsign: callsign, isExchangeRunning: busy,
+                           runningExchangePeer: runningWith)
     }
 
     // MARK: - Arming
@@ -71,6 +73,24 @@ final class WinlinkP2PListenerTests: XCTestCase {
         XCTAssertEqual(listener(busy: true).decide(called: "K0EPI-7", isInitiator: false), .busy)
     }
 
+    /// Field case 2026-10-02 (live test log, bug 40): the caller's second
+    /// SABM reset the link while B's banner was still unacked. The reset
+    /// ends the old link and starts a new one, so the listener is asked
+    /// again, but the exchange on the old link had not finished closing and
+    /// B refused its own caller as busy. A new link from the station the
+    /// running exchange is with replaces that exchange.
+    func testTheSameCallerAfterALinkResetIsAnsweredOnceTheOldExchangeEnds() {
+        let decision = listener(busy: true, runningWith: "K0EPI-2")
+            .decide(called: "K0EPI-7", isInitiator: false, caller: "k0epi-2")
+        XCTAssertEqual(decision, .answerWhenFree)
+    }
+
+    func testAnotherCallerIsStillRefusedWhileAnExchangeRuns() {
+        XCTAssertEqual(listener(busy: true, runningWith: "W1AW")
+                        .decide(called: "K0EPI-7", isInitiator: false, caller: "K0EPI-2"),
+                       .busy)
+    }
+
     /// Arming is checked before the callsign so a station that is not
     /// armed never reports why it declined a call it was not listening
     /// for in the first place.
@@ -88,6 +108,7 @@ final class WinlinkP2PListenerTests: XCTestCase {
             .notArmed,
             .wrongCallsign(called: "W0ARP-10", expected: "K0EPI-7"),
             .busy,
+            .answerWhenFree,
             .weInitiated,
         ]
         for decision in decisions {

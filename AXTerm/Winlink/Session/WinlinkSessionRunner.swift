@@ -264,6 +264,23 @@ final class WinlinkSessionRunner: ObservableObject {
     }
 
     /// Requests a polite abort of the running exchange.
+    /// The station the running exchange is with, uppercased; nil when idle.
+    var currentPeer: String? {
+        isRunning ? sessionGatewayName.trimmingCharacters(in: .whitespaces).uppercased() : nil
+    }
+
+    /// Waits for the running exchange to finish, up to `timeout` seconds.
+    /// True once nothing is running. An exchange whose link has gone still
+    /// takes a moment to close, because it writes its session log first.
+    func waitUntilIdle(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while isRunning {
+            guard Date() < deadline else { return false }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return true
+    }
+
     func abort() {
         guard isRunning else { return }
         dispatch(.abortRequested)

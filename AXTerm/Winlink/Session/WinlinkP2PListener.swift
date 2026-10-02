@@ -27,6 +27,10 @@ nonisolated struct WinlinkP2PListener {
         case weInitiated
         /// A mail exchange is already running — one radio, one session.
         case busy
+        /// The running exchange is with this same caller, whose link was
+        /// just reset by a second SABM. That exchange is ending with the old
+        /// link; answer the new one once it has.
+        case answerWhenFree
         /// Another of the operator's devices is already using this callsign
         /// on this TNC. Answering would put two stations on the same address
         /// replying to the same caller.
@@ -43,12 +47,16 @@ nonisolated struct WinlinkP2PListener {
     /// TNC — see `StationIdentityLease`. Named rather than boolean so the
     /// refusal can say which device.
     var contestedBy: String?
+    /// The station the running exchange is with, when one is running.
+    var runningExchangePeer: String?
 
     /// - Parameters:
     ///   - called: the destination address of the inbound connection —
     ///     what the caller actually asked for.
     ///   - isInitiator: true when *we* placed the call.
-    func decide(called: String, isInitiator: Bool) -> Decision {
+    ///   - caller: the station calling, used to tell a reset link from a
+    ///     second caller while an exchange runs.
+    func decide(called: String, isInitiator: Bool, caller: String? = nil) -> Decision {
         if isInitiator { return .weInitiated }
         guard isArmed else { return .notArmed }
 
@@ -71,9 +79,20 @@ nonisolated struct WinlinkP2PListener {
         }
 
         // One radio, one session: answering while an exchange is running
-        // would interleave two conversations on the same channel.
-        guard !isExchangeRunning else { return .busy }
-        return .answer
+        // would interleave two conversations on the same channel. The
+        // exception is the caller the running exchange is with: a new link
+        // from them means a SABM reset the old one (live test log, bug 40),
+        // and the exchange on it is already ending.
+        guard isExchangeRunning else { return .answer }
+        if let caller, let running = runningExchangePeer,
+           Self.normalized(caller) == Self.normalized(running) {
+            return .answerWhenFree
+        }
+        return .busy
+    }
+
+    private static func normalized(_ callsign: String) -> String {
+        callsign.trimmingCharacters(in: .whitespaces).uppercased()
     }
 }
 
@@ -95,6 +114,8 @@ extension WinlinkP2PListener.Decision {
             "not an inbound call"
         case .busy:
             "ignored: an exchange is already running"
+        case .answerWhenFree:
+            "the caller's link was reset; answering again once the exchange on the old link has closed"
         }
     }
 }

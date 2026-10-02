@@ -28,6 +28,8 @@ final class WinlinkSessionRunnerTests: XCTestCase {
         var dropAfterFS = false
         /// When true, refuse to open.
         var failToOpen = false
+        /// When true, open succeeds but the banner never comes.
+        var holdBanner = false
 
         private var lineBuffer = Data()
         private var expectedBodies = 0
@@ -39,6 +41,7 @@ final class WinlinkSessionRunnerTests: XCTestCase {
             if failToOpen {
                 throw WinlinkTransportError.connectTimeout("FAKE-RMS")
             }
+            guard !holdBanner else { return }
             emit("FAKE-RMS Gateway\r[WL2K-5.0-B2FWIHJM$]\r;PQ: 23753528\r>\r")
         }
 
@@ -206,6 +209,48 @@ final class WinlinkSessionRunnerTests: XCTestCase {
             password: "SECRET",
             gatewayName: "FAKE-RMS",
             transportName: "test")
+    }
+
+    // MARK: - Waiting for an exchange to end
+
+    /// Bug 40: after a link reset the answering side has to wait for the
+    /// exchange on the old link to finish closing before it answers again.
+    func testWaitUntilIdleReturnsOnceTheExchangeHasEnded() async throws {
+        let store = try makeStore()
+        let runner = WinlinkSessionRunner(store: store)
+        let idleAtStart = await runner.waitUntilIdle(timeout: 1)
+        XCTAssertTrue(idleAtStart, "nothing running")
+        XCTAssertNil(runner.currentPeer)
+
+        let transport = FakeRMSTransport()
+        let exchange = Task { @MainActor in
+            await runner.runExchange(transport: transport, myCallsign: "K0EPI-3", password: nil,
+                                     gatewayName: "k0epi-2", transportName: "P2P")
+        }
+        while !runner.isRunning { await Task.yield() }
+        XCTAssertEqual(runner.currentPeer, "K0EPI-2")
+
+        let idle = await runner.waitUntilIdle(timeout: 10)
+        XCTAssertTrue(idle)
+        XCTAssertFalse(runner.isRunning)
+        XCTAssertNil(runner.currentPeer)
+        _ = await exchange.value
+    }
+
+    func testWaitUntilIdleGivesUpAtTheTimeout() async throws {
+        let store = try makeStore()
+        let runner = WinlinkSessionRunner(store: store)
+        let transport = FakeRMSTransport()
+        transport.holdBanner = true
+        let exchange = Task { @MainActor in
+            await runner.runExchange(transport: transport, myCallsign: "K0EPI-3", password: nil,
+                                     gatewayName: "K0EPI-2", transportName: "P2P")
+        }
+        while !runner.isRunning { await Task.yield() }
+        let idle = await runner.waitUntilIdle(timeout: 0.3)
+        XCTAssertFalse(idle, "the exchange is still waiting for a banner")
+        transport.dropLink()
+        _ = await exchange.value
     }
 
     // MARK: - Peer-to-peer
