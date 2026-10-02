@@ -355,6 +355,15 @@ reverted (fde9358, a hold on new frames until the poll is answered) is
 the other half. The I-1 estimate for this path: K2/128 about 315 bps,
 K4/128 about 590, K4/256 about 800.
 
+Done on 2026-10-02, test first: the receiver now restarts T2 on each frame
+of a burst, within 3 × T2 (a148309), and growth, when switched on, applies
+only toward a peer that has confirmed AXDP (23974c6). Growth itself stays
+off. The stress harness's mode comparison has it gaining 30 to 50% on clean
+links and losing two to four times on lossy ones (121 bps against 271
+overall), and the same without the T2 change, so its backoff on loss is the
+next thing to fix before it is switched on. The T2 change on its own is
+neutral to slightly better (defaults 267 to 271 bps).
+
 ## Resuming
 
 1. Warbler: re-enable transmit for the 705 (turned off for the night).
