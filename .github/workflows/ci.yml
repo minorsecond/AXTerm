@@ -14,6 +14,10 @@ concurrency:
 
 jobs:
   test:
+    # The repository is public and the runner is a personal Mac: a pull
+    # request from a fork would run its own code there. Only branches of
+    # this repository run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, axterm]
     timeout-minutes: 75
     steps:

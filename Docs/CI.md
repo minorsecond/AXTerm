@@ -61,3 +61,9 @@ mkdir -p ~/actions-runner && cd ~/actions-runner
 
 Jobs run as the logged-in user, launch the AXTerm test host as an app and
 use the CPU heavily while they run.
+
+The repository is public, so the runner must never run a fork's code. The
+CI job skips pull requests whose branch lives in a fork, and the
+repository setting Settings › Actions › General › "Fork pull request
+workflows" should be set to require approval for all outside
+collaborators as a second guard.
