@@ -715,9 +715,11 @@ final class AX25SessionManager: ObservableObject {
     /// (manual, adaptive off) does not move.
     func updateLinkTargets(for session: AX25Session, window: Int, paclen: Int,
                            reason: String, evidence: [String: Any] = [:]) {
-        guard session.stateMachine.config.adaptsInSession else { return }
-        session.targetWindowSize = max(1, window)
-        session.targetPaclen = max(32, paclen)
+        let config = session.stateMachine.config
+        guard config.adaptsInSession else { return }
+        // Never below what the session would run with growth off (§7.8.1).
+        session.targetWindowSize = max(config.minWindowSize ?? 1, window)
+        session.targetPaclen = max(config.minPaclen ?? 32, paclen)
         session.liveLinkReason = reason
         for affected in mergeGroup(for: session) {
             reconcileLiveLink(affected, reason: reason, evidence: evidence)

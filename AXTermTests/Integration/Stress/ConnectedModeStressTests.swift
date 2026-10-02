@@ -432,6 +432,7 @@ final class ConnectedModeStressTests: XCTestCase {
         ]
         var lines: [String] = []
         var totals: [StressMode: StressTally] = [:]
+        var byCase: [String: [StressMode: StressTally]] = [:]
         for c in cases {
             for mode in StressMode.allCases {
                 let tally = runFamily("mode-\(c.name)-\(mode.rawValue)", seeds: seeds(4)) { seed in
@@ -441,6 +442,7 @@ final class ConnectedModeStressTests: XCTestCase {
                     return s
                 }
                 lines.append("\(c.name) \(mode.rawValue): \(tally.row)")
+                byCase[c.name, default: [:]][mode] = tally
                 var total = totals[mode] ?? StressTally()
                 total.merge(tally)
                 totals[mode] = total
@@ -450,6 +452,21 @@ final class ConnectedModeStressTests: XCTestCase {
             lines.append("ALL \(mode.rawValue): \(totals[mode]?.row ?? "")")
         }
         StressReport.write(lines, name: "mode-comparison")
+
+        // Growth has to be worth switching on: never much slower than the
+        // defaults it grows from, and no slower over the whole mix. On
+        // 2026-10-02 it averaged 121 bps against 271, losing two to four times
+        // on lossy links, because the live session shrank below where the
+        // defaults would have held it.
+        for c in cases {
+            guard let defaults = byCase[c.name]?[.defaults], let growth = byCase[c.name]?[.growth] else { continue }
+            XCTAssertGreaterThanOrEqual(growth.bps, defaults.bps * 0.9,
+                                        "\(c.name): growth \(Int(growth.bps)) bps against the defaults' \(Int(defaults.bps))")
+        }
+        if let defaults = totals[.defaults], let growth = totals[.growth] {
+            XCTAssertGreaterThanOrEqual(growth.bps, defaults.bps,
+                                        "overall: growth \(Int(growth.bps)) bps against the defaults' \(Int(defaults.bps))")
+        }
     }
 
     // MARK: Determinism

@@ -1102,6 +1102,10 @@ final class SessionCoordinator: ObservableObject {
             learnedPathRto: clampedLearned,
             maxWindowSize: ceilings.window,
             maxPaclen: ceilings.paclen,
+            // What the session would run with growth off: it backs off to
+            // these, not under them.
+            minWindowSize: ceilings.window == nil ? nil : a.windowSize.effectiveValue,
+            minPaclen: ceilings.paclen == nil ? nil : a.paclen.effectiveValue,
             startSource: startSource
         )
     }
@@ -1114,15 +1118,16 @@ final class SessionCoordinator: ObservableObject {
     /// Whether K and paclen may grow during a session (§7.8.1), and then
     /// only toward a peer that allows it (`growsInSession(toward:)`).
     ///
-    /// Off by default. On 2026-10-01 a session that grew to K3 drew the
-    /// receiver's T2 ack mid-burst and fell to K1 (live test log, bug 25);
-    /// AXTerm's receiver now holds that ack until a burst pauses (a148309).
-    /// But in the stress harness's mode comparison growth still averages
-    /// 121 bps against 271 for the defaults: it gains 30 to 50% on clean
-    /// links and loses two to four times on lossy ones, where a lost ack
-    /// costs a whole larger burst. It stays off until its backoff on loss
-    /// is fixed.
-    var inSessionLinkGrowth = false
+    /// On 2026-10-01 a session that grew to K3 drew the receiver's T2 ack
+    /// mid-burst and fell to K1 (live test log, bug 25), and growth was
+    /// switched off. Two things changed: AXTerm's receiver holds that ack
+    /// until a burst pauses (a148309), and a growing session never runs below
+    /// what it would run with growth off (`AX25SessionConfig.minWindowSize`,
+    /// `minPaclen`). Before the floor the live session followed the learner
+    /// down to K1, paclen 64 on lossy links and growth averaged 121 bps
+    /// against 271 in the stress comparison; with it, growth matches the
+    /// defaults on lossy links and beats them on clean ones (286 overall).
+    var inSessionLinkGrowth = true
 
     /// Whether `destination`'s receiver is known to hold its delayed ack
     /// until our burst has paused, which growth needs. Defaults to "has
@@ -1199,6 +1204,8 @@ final class SessionCoordinator: ObservableObject {
             adaptiveTimeout: adaptiveTransmissionEnabled,
             maxWindowSize: ceilings.window,
             maxPaclen: ceilings.paclen,
+            minWindowSize: configs.compactMap(\.minWindowSize).min(),
+            minPaclen: configs.compactMap(\.minPaclen).min(),
             startSource: .merged
         )
     }

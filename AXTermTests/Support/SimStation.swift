@@ -562,6 +562,7 @@ extension AX25SessionConfig {
             maxRetries: maxRetries, extended: extended, srejEnabled: srejEnabled,
             rtoMin: rtoMin, rtoMax: rtoMax, initialRto: max(lo, min(hi, frack)),
             t2AckDelay: t2AckDelay, adaptiveTimeout: adaptiveTimeout, learnedPathRto: learnedPathRto,
-            maxWindowSize: maxWindowSize, maxPaclen: maxPaclen, startSource: startSource)
+            maxWindowSize: maxWindowSize, maxPaclen: maxPaclen,
+            minWindowSize: minWindowSize, minPaclen: minPaclen, startSource: startSource)
     }
 }

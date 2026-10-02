@@ -25,7 +25,8 @@ import XCTest
 
 /// Which link behavior a run uses.
 enum StressMode: String, CaseIterable {
-    /// Production defaults: FRACK floor under T1, in-session growth off.
+    /// Production defaults toward a station not known to hold its acks
+    /// (no AXDP): FRACK floor under T1, in-session growth off.
     case defaults
     /// SessionCoordinator.inSessionLinkGrowth on.
     case growth
@@ -222,6 +223,8 @@ final class StressRunner {
             let brain = SessionCoordinator()
             brain.localCallsign = call.display
             brain.adaptiveTransmissionEnabled = true
+            // "defaults" is growth off: what a session runs toward a station
+            // not known to hold its acks, or before AXDP is confirmed.
             brain.inSessionLinkGrowth = scenario.mode == .growth
             // Both simulated stations are AXTerm, whose receiver holds its
             // delayed ack until a burst pauses (a148309).
@@ -607,8 +610,10 @@ struct StressTally {
         maxQueue = max(maxQueue, o.maxQueue); backlogRuns += o.backlogRuns
     }
 
+    /// Delivered data rate across the tallied runs.
+    var bps: Double { dataTime > 0 ? Double(bytes * 8) / dataTime : 0 }
+
     var row: String {
-        let bps = dataTime > 0 ? Double(bytes * 8) / dataTime : 0
         let ratio = newI > 0 ? Double(retx) / Double(newI) : 0
         return String(format: "runs %d ok %d failed %d gapflush %d | %.0f bps | retx %.3f | coll %d deaf %d | T1 %d early %d (own %d, peerT2 %d, ackInFlight %d) ackLost %d needed %d | T2 %d mid-burst %d (lost %d) | tnc max %d, runs over 24: %d",
                       runs, completed, failed, gapFlushRuns, bps, ratio, collisions, deaf,

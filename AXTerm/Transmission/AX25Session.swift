@@ -123,6 +123,14 @@ nonisolated struct AX25SessionConfig: Sendable {
     /// paclen fixed. Never below `paclen`.
     let maxPaclen: Int?
 
+    /// The least K and paclen a growing session runs (spec §7.8.1): what it
+    /// would run with growth off. Growth adds upside above these and backs
+    /// off down to them, not under them; shrinking further is left to the
+    /// between-session learner, as with growth off. Nil means no floor.
+    /// Never above the start or the peer's XID limits.
+    let minWindowSize: Int?
+    let minPaclen: Int?
+
     /// Where `windowSize` and `paclen` came from.
     let startSource: LinkStartSource
 
@@ -175,6 +183,8 @@ nonisolated struct AX25SessionConfig: Sendable {
         learnedPathRto: Double? = nil,
         maxWindowSize: Int? = nil,
         maxPaclen: Int? = nil,
+        minWindowSize: Int? = nil,
+        minPaclen: Int? = nil,
         startSource: LinkStartSource = .configured
     ) {
         // Clamp window size to valid range
@@ -186,8 +196,11 @@ nonisolated struct AX25SessionConfig: Sendable {
         self.windowSize = ws
         self.maxWindowSize = ceilingWindow
         let ceilingPaclen = maxPaclen.map { max(32, min($0, 256)) }
-        self.paclen = max(32, min(paclen, ceilingPaclen ?? 256))
+        let startPaclen = max(32, min(paclen, ceilingPaclen ?? 256))
+        self.paclen = startPaclen
         self.maxPaclen = ceilingPaclen
+        self.minWindowSize = minWindowSize.map { max(1, min($0, ws)) }
+        self.minPaclen = minPaclen.map { max(32, min($0, startPaclen)) }
         self.startSource = startSource
         // Bounded by the receive span, not by ws: the two are unrelated (see
         // `receiveWindowSpan`).
@@ -227,6 +240,8 @@ nonisolated struct AX25SessionConfig: Sendable {
             learnedPathRto: learnedPathRto,
             maxWindowSize: maxWindowSize.map { min($0, peer.windowSizeRx ?? $0) },
             maxPaclen: maxPaclen.map { min($0, peer.iFieldLengthRx ?? $0) },
+            minWindowSize: minWindowSize,
+            minPaclen: minPaclen,
             startSource: startSource
         )
     }

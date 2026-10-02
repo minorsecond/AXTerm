@@ -276,6 +276,36 @@ final class InSessionLinkManagerTests: XCTestCase {
         XCTAssertEqual(session.outstandingCount, 2)
     }
 
+    /// A growing session never runs below its floor, the K and paclen it
+    /// would run with growth off: growth adds upside and backs off down to
+    /// the defaults, not under them. On 2026-10-02 the live session shrank
+    /// to K1, paclen 64 on lossy links and growth averaged 121 bps against
+    /// the defaults' 271 in the stress comparison.
+    func testTargetsNeverGoBelowTheFloor() {
+        manager.defaultConfig = AX25SessionConfig(windowSize: 4, paclen: 256,
+                                                  rtoMin: 1.0, rtoMax: 16.0, initialRto: 2.0,
+                                                  maxWindowSize: 4, maxPaclen: 256,
+                                                  minWindowSize: 2, minPaclen: 128)
+        let session = connected()
+        manager.updateLinkTargets(for: session, window: 1, paclen: 64, reason: "loss")
+        XCTAssertEqual(session.liveWindowSize, 2)
+        XCTAssertEqual(session.livePaclen, 128)
+    }
+
+    /// The floor is never above the start or the peer's XID limits.
+    func testTheFloorFollowsTheStartAndTheXIDDown() {
+        let config = AX25SessionConfig(windowSize: 2, paclen: 128, maxWindowSize: 4, maxPaclen: 256,
+                                       minWindowSize: 3, minPaclen: 192)
+        XCTAssertEqual(config.minWindowSize, 2)
+        XCTAssertEqual(config.minPaclen, 128)
+        var peer = AX25XIDParameters()
+        peer.windowSizeRx = 1
+        peer.iFieldLengthRx = 64
+        let negotiated = config.negotiating(with: peer)
+        XCTAssertEqual(negotiated.minWindowSize, 1)
+        XCTAssertEqual(negotiated.minPaclen, 64)
+    }
+
     /// A raise waiting for quiescence is dropped when the target falls back.
     func testPendingRaiseIsCanceledByALowerTarget() {
         let session = connected()
@@ -469,16 +499,21 @@ final class InSessionLinkCoordinatorTests: XCTestCase {
         return coordinator
     }
 
-    /// Off by default: in the stress harness growth loses two to four times
-    /// on lossy links (see `SessionCoordinator.inSessionLinkGrowth`).
-    func testGrowthIsOffByDefault() {
+    /// On by default since 2026-10-02, toward AXTerm peers: their receiver
+    /// holds its delayed ack until a burst pauses (a148309), and a growing
+    /// session never runs below its growth-off values, so in the stress
+    /// comparison growth matches the defaults on lossy links and beats them
+    /// on clean ones.
+    func testGrowthIsOnByDefaultTowardAnAXTermPeer() {
         let coordinator = SessionCoordinator()
         coordinator.adaptiveTransmissionEnabled = true
         coordinator.localCallsign = "LOCAL-0"
-        XCTAssertFalse(coordinator.inSessionLinkGrowth)
+        XCTAssertTrue(coordinator.inSessionLinkGrowth)
+        let other = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary)
+        XCTAssertEqual(other?.adaptsInSession, false, "grew toward a station whose ack timing is unknown")
         coordinator.markImplicitlyConfirmedAXDP(for: "PEER-0")
-        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary)
-        XCTAssertEqual(config?.adaptsInSession, false, "a session got growth ceilings with growth off")
+        let axterm = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary)
+        XCTAssertEqual(axterm?.adaptsInSession, true)
     }
 
     /// Switched on, growth applies only toward a peer known to hold its
@@ -635,6 +670,19 @@ final class InSessionLinkCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.confirmedLinkMemory.values(for: directScope)?.window, 2,
                        "a backoff lowers what the next session starts from")
         XCTAssertEqual(coordinator.confirmedLinkMemory.values(for: directScope)?.paclen, 192)
+    }
+
+    /// A growing session's floor is what it would start from with growth
+    /// off, and loss after loss does not take the live session below it.
+    func testRepeatedLossStopsAtTheGrowthOffValues() {
+        let coordinator = makeCoordinator()
+        let session = connect(coordinator)
+        let config = session.stateMachine.config
+        XCTAssertEqual(config.minWindowSize, coordinator.globalAdaptiveSettings.windowSize.effectiveValue)
+        XCTAssertEqual(config.minPaclen, coordinator.globalAdaptiveSettings.paclen.effectiveValue)
+        for _ in 0..<6 { retransmission(coordinator, session) }
+        XCTAssertEqual(session.liveWindowSize, config.minWindowSize)
+        XCTAssertEqual(session.livePaclen, config.minPaclen)
     }
 
     /// The hop ceiling holds through growth on a digipeated route.

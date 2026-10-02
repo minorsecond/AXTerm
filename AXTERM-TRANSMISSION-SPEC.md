@@ -940,30 +940,36 @@ evidence.
 
 ### 7.8.1 K and paclen during a session
 
-**Status (2026-10-02): implemented, switched off by default**
-(`SessionCoordinator.inSessionLinkGrowth`). On the air a session grew to K=3
-with 174-byte frames, so each burst ran about 4 s, longer than the
-receiver's 2 s T2. The receiver's delayed ack went out part-way through the
-burst, the stations keyed over each other, and the session fell back to K=1,
-paclen 64.
+**Status (2026-10-02): on by default, toward AXTerm peers only**
+(`SessionCoordinator.inSessionLinkGrowth`, `growsInSession(toward:)`).
 
-The receiver side is now fixed: T2 restarts on each frame of a burst, within
-3 × T2 (§7.5, T2 delayed acknowledgment). When growth is switched on it
-applies only toward a peer known to hold its delayed ack the same way
-(`growsInSession(toward:)`): one that has confirmed AXDP, which only AXTerm
-does. Any other station keeps the K and paclen its session started with.
-Our XID still advertises the ceilings whenever growth is on, since they say
-what we can receive.
+History: on the air on 2026-10-01 a session grew to K=3 with 174-byte frames,
+so each burst ran about 4 s, longer than the receiver's 2 s T2. The
+receiver's delayed ack went out part-way through the burst, the stations
+keyed over each other, and the session fell back to K=1, paclen 64. Growth
+was switched off. Three changes since:
 
-It stays off because of the stress harness's mode comparison
-(`ConnectedModeStressTests.testModeComparison`, 2026-10-02): growth gains 30
-to 50% on clean links (clean 1200 baud 522 to 680 bps, 9600 baud 1113 to 1656)
-and loses two to four times on lossy ones (10% loss 309 to 124 bps, 20% loss
-215 to 55, fades 350 to 228), 121 bps against 271 overall. A lost ack costs a
-whole larger burst, and the backoff on loss is not fast enough. The same
-figures hold without the T2 change (121 against 267), so this is growth's own
-behavior. With it off, a session keeps the K and paclen it started with, as
-§7.8 described before this section.
+- **The receiver holds its ack.** T2 restarts on each frame of a burst,
+  within 3 × T2 (§7.5, T2 delayed acknowledgment).
+- **Only toward a peer that holds its ack the same way**: one that has
+  confirmed AXDP, which only AXTerm does. Any other station keeps the K and
+  paclen its session started with. Our XID still advertises the ceilings
+  whenever growth is on, since they say what we can receive.
+- **A floor.** A growing session never runs below what it would run with
+  growth off (`AX25SessionConfig.minWindowSize`, `minPaclen`, set from the
+  route's learned values). Growth climbs above them and backs off down to
+  them; shrinking further is left to the between-session learner, as with
+  growth off. Without the floor the live session followed the learner to
+  K=1, paclen 64 on lossy links (a single sample with two retransmissions
+  reads as 100% loss), and growth averaged 121 bps against 271 for growth off
+  in the stress harness's mode comparison.
+
+Mode comparison with all three (`ConnectedModeStressTests.testModeComparison`,
+2026-10-02), growth off against growth on: the 705 field setup 469 to 721
+bps, clean 1200 baud 522 to 660, 9600 baud 1113 to 1656, via a digipeater 251
+to 287; 10% loss 309 to 302, 20% loss 215 to 215, fades 350 to 342; 271 to 286
+overall. The test now fails if growth falls more than 10% behind growth off
+in any scenario, or behind it overall.
 
 **Ceilings**, fixed when the session is created (`AX25SessionConfig.maxWindowSize`, `maxPaclen`):
 - K: 4. Four 256-byte frames already hold a 1200 baud channel about 7.5 s per burst, so 4 is the most we allow at 1200 baud, and since AXTerm cannot see a KISS TNC's modem rate it is the most we allow at all.
