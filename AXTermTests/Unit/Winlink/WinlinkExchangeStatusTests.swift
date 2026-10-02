@@ -114,8 +114,8 @@ final class WinlinkExchangeStatusTests: XCTestCase {
         let status = WinlinkExchangeStatus.make(
             phase: .exchanging, statusText: "", progress: progress, summary: nil,
             now: start.addingTimeInterval(10))
-        // 1000 bytes in 10s → 100 B/s, 1000 left → about 10s.
-        XCTAssertEqual(status.rateSummary, "100 B/s · about 10s left")
+        // 1000 bytes in 10s → 100 B/s (800 bps), 1000 left → about 10s.
+        XCTAssertEqual(status.rateSummary, "800 bps · about 10s left")
     }
 
     func testResumedBytesDoNotInflateTheRate() {
@@ -127,8 +127,8 @@ final class WinlinkExchangeStatusTests: XCTestCase {
         let status = WinlinkExchangeStatus.make(
             phase: .exchanging, statusText: "", progress: progress, summary: nil,
             now: start.addingTimeInterval(10))
-        // 100 real bytes in 10s → 10 B/s; 900 left → 90s, which reads as "1m 30s".
-        XCTAssertEqual(status.rateSummary, "10 B/s · about 1m 30s left")
+        // 100 real bytes in 10s → 10 B/s (80 bps); 900 left → 90s, which reads as "1m 30s".
+        XCTAssertEqual(status.rateSummary, "80 bps · about 1m 30s left")
     }
 
     func testNoRateBeforeAnyTimeHasPassed() {

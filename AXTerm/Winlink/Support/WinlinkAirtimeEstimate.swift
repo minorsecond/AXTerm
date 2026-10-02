@@ -152,7 +152,7 @@ nonisolated struct WinlinkAirtimeEstimate: Equatable, Sendable {
         \(size) of text, roughly \(airtimeText(bytes: bytes)) of airtime.
 
         Estimated as \(size) ÷ \(ratio) (B2F compresses text about \
-        \(ratio):1) ÷ \(Self.rateText(compressedBytesPerSecond)), \(rateProvenance).
+        \(ratio):1) ÷ \(LinkRateText.withBytes(compressedBytesPerSecond)), \(rateProvenance).
         """
         if let capNote = capNote(bytes: bytes) {
             text += "\n\n" + capNote
@@ -218,9 +218,7 @@ nonisolated struct WinlinkAirtimeEstimate: Equatable, Sendable {
     // MARK: - Formatting
 
     static func rateText(_ bytesPerSecond: Double) -> String {
-        bytesPerSecond >= 10
-            ? "\(Int(bytesPerSecond.rounded())) B/s"
-            : String(format: "%.1f B/s", bytesPerSecond)
+        LinkRateText.bytesPerSecond(bytesPerSecond)
     }
 
     static func durationText(_ seconds: Double) -> String {

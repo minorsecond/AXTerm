@@ -292,7 +292,7 @@ private struct OfferRow: View {
         The proposal states it exactly, so nothing here is guessed from \
         the \(byteText(offer.uncompressedSize)) of decoded text.
 
-        \(size) ÷ \(WinlinkAirtimeEstimate.rateText(airtime.compressedBytesPerSecond)) (\(airtime.provenance)).
+        \(size) ÷ \(LinkRateText.withBytes(airtime.compressedBytesPerSecond)) (\(airtime.provenance)).
         """
         if offer.resumeFrom > 0 {
             text += "\n\nAn interrupted session already left \(byteText(offer.resumeFrom)) here; only the remainder is requested."

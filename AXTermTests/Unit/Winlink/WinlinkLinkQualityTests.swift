@@ -118,7 +118,7 @@ final class WinlinkLinkQualityTests: XCTestCase {
         XCTAssertEqual(presentation?.tint, .neutral, "no color-coded verdict without provenance")
         XCTAssertNotEqual(presentation?.systemImage, "location.slash",
                           "a location-slash icon claims the samples came from elsewhere")
-        XCTAssertTrue(presentation?.text.contains("B/s") ?? false,
+        XCTAssertTrue(presentation?.text.contains("bps") ?? false,
                       "the measurement is still reported: \(presentation?.text ?? "")")
         XCTAssertFalse(presentation?.text.contains("elsewhere") ?? true)
     }
@@ -335,7 +335,7 @@ final class WinlinkLinkQualityTests: XCTestCase {
         XCTAssertTrue(tooltip.contains("W0ARP-10"), tooltip)
         XCTAssertTrue(tooltip.contains("145.050 MHz"), tooltip)
         XCTAssertTrue(tooltip.contains("Answered 1 of 2"), tooltip)
-        XCTAssertTrue(tooltip.contains("B/s"), tooltip)
+        XCTAssertTrue(tooltip.contains("bps"), tooltip)
         XCTAssertTrue(tooltip.contains("Longest session"), tooltip)
         XCTAssertTrue(tooltip.contains("where you are now"), tooltip)
         XCTAssertTrue(tooltip.contains("not the CMS directory"), tooltip)

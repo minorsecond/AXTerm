@@ -28,7 +28,7 @@ nonisolated struct WinlinkExchangeStatus: Equatable {
     var fraction: Double?
     /// Right-aligned byte counter, e.g. "1.2 KB of 4.6 KB".
     var byteSummary: String?
-    /// Rate and estimate, e.g. "112 B/s · about 30s left".
+    /// Rate and estimate, e.g. "896 bps · about 30s left".
     var rateSummary: String?
 
     var isWorking: Bool { kind == .working }
@@ -134,7 +134,7 @@ nonisolated struct WinlinkExchangeStatus: Equatable {
     private static func rateSummary(_ progress: WinlinkExchangeProgress, now: Date) -> String? {
         var parts: [String] = []
         if let rate = progress.bytesPerSecond(now: now) {
-            parts.append("\(compact(Int(rate.rounded())))/s")
+            parts.append(LinkRateText.bytesPerSecond(rate))
         }
         if let remaining = progress.estimatedSecondsRemaining(now: now) {
             parts.append("about \(duration(remaining)) left")

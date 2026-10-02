@@ -317,10 +317,17 @@ soften:
   estimate must not claim precision the position does not have.
 - Below ten seconds of measured traffic there is no rate at all.
 
-The footer states which basis is in play (`provenance`: "measured 34 B/s
-to K0NTS-10" or "assumed 30 B/s"), the tooltip explains why in a
+The footer states which basis is in play (`provenance`: "measured 272 bps
+to K0NTS-10" or "assumed 240 bps"), the tooltip explains why in a
 sentence, and selections estimated at ten minutes or more mark the clock
 amber.
+
+Rates are computed and stored in bytes per second but always shown in
+bits per second through `LinkRateText`, the same unit the file-transfer
+views use. Where a tooltip divides a size by the rate it shows both,
+"240 bps (30 bytes/s)", so the arithmetic still works. Winlink used to
+show "47 B/s" beside a transfer's "333 bps", and the faster one read as
+seven times slower (live test log, bug 43).
 
 **Session caps.** `longestSessionSeconds` records that W0ARP-10
 disconnects at ~17 minutes. When a selection needs more airtime than the

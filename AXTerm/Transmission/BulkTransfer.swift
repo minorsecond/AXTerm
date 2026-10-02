@@ -734,13 +734,7 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
 
     /// Format bit rate for human readable display
     private func formatBitRate(_ bitsPerSecond: Double) -> String {
-        if bitsPerSecond < 1000 {
-            return String(format: "%.0f bps", bitsPerSecond)
-        } else if bitsPerSecond < 1_000_000 {
-            return String(format: "%.1f kbps", bitsPerSecond / 1000)
-        } else {
-            return String(format: "%.2f Mbps", bitsPerSecond / 1_000_000)
-        }
+        LinkRateText.bitsPerSecond(bitsPerSecond)
     }
 
     /// Bandwidth efficiency (actual data / transmitted)

@@ -79,7 +79,7 @@ final class WinlinkAirtimeEstimateTests: XCTestCase {
 
     func testTooltipShowsTheDerivationAndSaysItIsAnAssumption() {
         let text = WinlinkAirtimeEstimate.assumed.tooltip(bytes: 90_000)
-        XCTAssertTrue(text.contains("30 B/s"), text)
+        XCTAssertTrue(text.contains("240 bps"), text)
         XCTAssertTrue(text.contains("3:1"), text)
         // The operator must be able to tell a default from a measurement.
         XCTAssertTrue(text.lowercased().contains("assum") || text.lowercased().contains("typical"),

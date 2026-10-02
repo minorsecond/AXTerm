@@ -221,7 +221,7 @@ struct WinlinkExchangeDashboardView: View {
     private func rateLine(_ progress: WinlinkExchangeProgress) -> String {
         var parts = ["\(bytes(progress.bytesDone)) of \(bytes(progress.bytesTotal))"]
         if let rate = progress.bytesPerSecond(now: now), rate >= 1 {
-            parts.append("\(Int(rate.rounded())) B/s")
+            parts.append(LinkRateText.bytesPerSecond(rate))
         }
         if let seconds = progress.estimatedSecondsRemaining(now: now), seconds > 2 {
             parts.append("\(SessionBudgetView.clock(Double(seconds))) left")

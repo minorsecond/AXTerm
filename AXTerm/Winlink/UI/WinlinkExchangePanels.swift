@@ -291,12 +291,12 @@ struct SessionBudgetView: View {
 
         guard let secondsToCap, let bytesBeforeCap else {
             return "\(remainingText) to go. About \(Self.clock(secondsNeeded)) at "
-                + "\(Int(bytesPerSecond.rounded())) B/s. No session cap observed for this gateway yet."
+                + "\(LinkRateText.bytesPerSecond(bytesPerSecond)). No session cap observed for this gateway yet."
         }
 
         if secondsNeeded <= secondsToCap {
             return "\(remainingText) to go. About \(Self.clock(secondsNeeded)) at "
-                + "\(Int(bytesPerSecond.rounded())) B/s, finishing with "
+                + "\(LinkRateText.bytesPerSecond(bytesPerSecond)), finishing with "
                 + "\(Self.clock(secondsToCap - secondsNeeded)) of session budget to spare."
         }
 

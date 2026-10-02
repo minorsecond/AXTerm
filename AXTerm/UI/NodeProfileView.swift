@@ -1235,7 +1235,7 @@ struct NodeProfileView: View {
                     row("Answer rate", "\(Int((rate * 100).rounded()))%")
                 }
                 if let bps = quality.effectiveBytesPerSecond {
-                    row("Throughput", String(format: "%.0f B/s", bps))
+                    row("Throughput", LinkRateText.bytesPerSecond(bps))
                 }
                 if let last = quality.lastAnsweredAt {
                     row("Last answered", last.formatted(date: .abbreviated, time: .shortened))

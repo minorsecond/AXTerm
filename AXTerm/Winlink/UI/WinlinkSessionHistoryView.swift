@@ -87,7 +87,7 @@ struct WinlinkSessionHistoryView: View {
                 LabeledContent("Bytes", value: "\(summary.log.bytesSent) sent · "
                                              + "\(summary.log.bytesReceived) received")
                 if let rate = summary.bytesPerSecond {
-                    LabeledContent("Throughput", value: String(format: "%.0f B/s", rate))
+                    LabeledContent("Throughput", value: LinkRateText.bytesPerSecond(rate))
                 } else {
                     // Saying why beats an empty row: a session too short to
                     // measure is a fact about the session.

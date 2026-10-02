@@ -53,7 +53,7 @@ extension WinlinkLinkQuality {
         // reading them as a prediction, which is exactly the mistake this
         // column exists to prevent.
         if case .elsewhere = placement {
-            let value = effectiveBytesPerSecond.map { "\(Int($0.rounded())) B/s" } ?? "seen"
+            let value = effectiveBytesPerSecond.map { LinkRateText.bytesPerSecond($0) } ?? "seen"
             return Presentation(
                 text: "\(value) elsewhere",
                 systemImage: "location.slash",
@@ -84,10 +84,10 @@ extension WinlinkLinkQuality {
 
         // 1200-baud AX.25 tops out near 150 B/s of payload; anything above
         // ~40 B/s is a healthy packet path, and under ~15 B/s means most
-        // of the airtime is going to retries.
+        // of the airtime is going to retries. Shown in bits per second.
         let tint: LinkTint = rate >= 40 ? .good : (rate >= 15 ? .marginal : .bad)
         return Presentation(
-            text: "\(Int(rate.rounded())) B/s · \(age)",
+            text: "\(LinkRateText.bytesPerSecond(rate)) · \(age)",
             systemImage: "antenna.radiowaves.left.and.right",
             tint: unverifiedPlace ? .neutral : tint,
             tooltip: tooltip(age: age, now: now))
@@ -105,7 +105,7 @@ extension WinlinkLinkQuality {
 
         if let rate = effectiveBytesPerSecond {
             let bytes = ByteCount.string(Int64(bytesSent + bytesReceived))
-            lines.append("Goodput \(Int(rate.rounded())) B/s: \(bytes) of mail over "
+            lines.append("Goodput \(LinkRateText.withBytes(rate)): \(bytes) of mail over "
                          + "\(Self.durationText(measuredSeconds)) connected. "
                          + "That is payload divided by wall-clock link time, so "
                          + "retries, ACK waits, and a busy channel are all counted "
