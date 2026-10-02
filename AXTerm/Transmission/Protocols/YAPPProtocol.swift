@@ -425,9 +425,18 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
         pumpData()
     }
 
+    /// The receiver answered EF with AF: it holds the whole file and has
+    /// handed it over, and only the closing ET/AT exchange is left.
+    var fileAcknowledged: Bool { senderPhase == .awaitingEndTransmissionAck }
+
     /// Stops the transfer and tells the other side with CN.
+    ///
+    /// Does nothing once the file is acknowledged: there is nothing left to
+    /// stop, and a receiver that ends on ET never answers the CN, which kept
+    /// the stream claimed for the whole CA wait and could put the CN in the
+    /// other station's terminal (full-stack fuzz, 2026-10-02).
     func cancel() {
-        guard !state.isTerminal else { return }
+        guard !state.isTerminal, !fileAcknowledged else { return }
         let wasActive = senderPhase != .idle || receiverPhase != .idle
         if senderPhase != .idle { senderPhase = .awaitingCancelAck }
         if receiverPhase != .idle { receiverPhase = .awaitingCancelAck }

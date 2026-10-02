@@ -315,6 +315,43 @@ final class YAPPProtocolTests: XCTestCase {
         XCTAssertEqual(yapp.senderPhase, .finished)
     }
 
+    /// After AF the receiver holds the whole file and has delivered it, so a
+    /// cancel has nothing left to stop. Sending CN then went unanswered (the
+    /// receiver ends on ET), held the session for the CA wait, and could
+    /// print the CN into the other station's terminal (full-stack fuzz,
+    /// 2026-10-02). The transfer finishes instead.
+    func testACancelAfterTheFileIsAcknowledgedIsTooLateAndTheTransferFinishes() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        try yapp.startSending(fileName: "F", fileData: Data([1, 2]))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(YAPPEncoder.receiveFile())
+        yapp.handleIncomingData(YAPPEncoder.ackEndFile())
+        XCTAssertTrue(yapp.fileAcknowledged)
+
+        yapp.cancel()
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.endTransmission(), "no CN after AF")
+        XCTAssertNotEqual(yapp.state, .cancelled)
+        XCTAssertNil(spy.completion)
+
+        yapp.handleIncomingData(YAPPEncoder.ackEndTransmission())
+        XCTAssertEqual(spy.completion?.ok, true)
+    }
+
+    func testACancelBeforeAFStillCancels() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        try yapp.startSending(fileName: "F", fileData: Data([1, 2]))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(YAPPEncoder.receiveFile())
+        XCTAssertFalse(yapp.fileAcknowledged, "EF sent, AF not yet back")
+        yapp.cancel()
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.cancel(reason: "Canceled"))
+        XCTAssertEqual(yapp.state, .cancelled)
+    }
+
     func testACancelSettlesWhenCAArrivesOrTheWaitRunsOut() throws {
         let answered = YAPPProtocol()
         var settled = 0
