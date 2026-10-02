@@ -397,16 +397,12 @@ struct ContentView: View {
             // `SessionCoordinator.localCallsign`.
             coordinator.localCallsign = settings.primaryCallsign
         }
+        // Also restores the NET/ROM node policy; see `appSettings`.
         coordinator.appSettings = settings
         // An APRS position beacon that follows the station reads the station
         // position at send time, from the same resolver the map uses.
         coordinator.aprsLocationProvider = StationPositionResolver.beaconProvider(
             defaults: settings.defaults, locationService: winlinkContext.locationService)
-        // Restore the operator's NET/ROM node policy. Both switches
-        // default off, so on a station that has never enabled them this
-        // does nothing at all; on one that has, it resumes announcing at
-        // launch rather than waiting for a visit to Settings.
-        coordinator.applyNetRomNodeSettings(settings)
         coordinator.subscribeToPackets(from: client)
         // APRS messaging: wire the transmit funnel, the query-answer
         // providers, and start the ACK-retry sweep. Auto-reply defaults to

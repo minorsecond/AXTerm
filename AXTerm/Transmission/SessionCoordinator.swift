@@ -278,6 +278,16 @@ final class SessionCoordinator: ObservableObject {
             // every toggle (AppSettingsStore.didSet pushes via `shared`).
             sessionManager.negotiateV22 = appSettings?.ax25NegotiateV22 ?? false
             observeRadioAddresses()
+            // Restore the operator's NET/ROM node policy: the node itself,
+            // announcing, forwarding, the node alias and the beacons. Both
+            // app shells hand over their settings once at launch, so doing it
+            // here is what brings the node back on iOS as well as the Mac.
+            // Everything defaults off, so a station that never turned any of
+            // it on gets nothing. Only for a new store, so a second Mac window
+            // with the same settings does not apply them again.
+            if let appSettings, appSettings !== oldValue {
+                applyNetRomNodeSettings(appSettings)
+            }
         }
     }
 

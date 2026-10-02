@@ -281,6 +281,7 @@ struct AXTermiOSRootView: View {
         // The primary radio's address, SSID included; see
         // `SessionCoordinator.localCallsign`.
         coordinator.applyLocalCallsign(settings.primaryCallsign)
+        // Also restores the NET/ROM node policy; see `appSettings`.
         coordinator.appSettings = settings
         // As on the Mac: a position beacon that follows the station reads the
         // position the map draws. Missing here, such a beacon never went out.

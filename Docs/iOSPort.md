@@ -1094,3 +1094,26 @@ inside compose.
 The iOS map now gets `onSendLayer`, so Send by Winlink appears in the layer
 menu. It builds the Mac's draft (see `ContentView.sendLayerViaWinlink`) and
 opens compose on it.
+
+## The NET/ROM node on iOS (2026-10-02)
+
+The packet node settings, "Run the node" included, are reachable on iOS, but
+two pieces of the node's setup only ever ran on the Mac.
+
+- **Who the node is.** The host's alias, callsign, NODES/ROUTES/MH/INFO
+  snapshot and mailbox handoff were set in `ContentView`. On iOS a caller to
+  the node alias was greeted as `NODE:N0CALL`, saw empty tables and was told
+  the mailbox was off the air. The coordinator now sets these up itself
+  (`SessionCoordinator+NodeHost.swift`) from its own `appSettings`,
+  `packetEngine` and `nodeAliases`, and `BBSService` registers itself with
+  the coordinator when it is built. The iOS root also hands the coordinator
+  its alias store now, as the Mac does.
+- **Turning it back on at launch.** The Mac called `applyNetRomNodeSettings`
+  after building the coordinator and iOS did not, so after a relaunch the
+  node, announcing, forwarding, the node alias and the radio beacons stayed
+  off on iOS, with the switches still showing on, until a settings screen was
+  opened. The coordinator now applies the policy when it is given its
+  settings store, which both shells do once at launch. Everything defaults
+  off, and a restored "Announce" waits for the launch warm-up as before.
+
+Tests: `NetRomNodeHostWiringTests`, `NodePolicyRestoreTests`.
