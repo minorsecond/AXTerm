@@ -196,6 +196,11 @@ Status is filled in as each is fixed.
 | 44 | During test 34 a macOS microphone permission prompt appeared and held things up until the operator answered it; B's banner went out 60 s after the UA. Only the USB sound modem (`CoreAudioModemIO`) opens an audio input, and neither station uses one, so which instance asked and why is not known. It may be the slow first greeting of bug 35. | A or B, 01:47 UTC 2026-10-02 | fixed in effect, e5d3d8d: on 2026-10-02 B's exchange started 13 ms before its banner, a minute after the UA, so B's main thread was blocked before the answering service ran. The coordinator played the connection sound and posted the notification before telling the services that answer calls. Those services now go first, the chimes play as system sounds on a background queue, and any inbound-connect step over 1 s is logged by name. Which call raised the microphone prompt is still unknown: the system log had rotated past it and no hang report was written |
 | 45 | Abort never ended a Winlink exchange. The engine moved to closing, sent FQ and asked for a disconnect; when the disconnect landed it moved to closed and returned nothing, so the runner stayed "running" until the app quit. | unit test, 2026-10-02 | fixed, bcdddf0: the session ends, marked aborted, once the link is down |
 | 46 | Abort pressed while mail was being prepared or the call placed did nothing: it went to an engine that was not talking to anyone yet. | unit test, 2026-10-02 | fixed, a4275b1: Abort in those phases is remembered and ends the exchange as aborted at the next step, hanging up a call being placed. With a real AX.25 call the hang-up is a DISC, so on a dead path the abort takes as long as the DISC retries |
+| 47 | A frame sent while an inbound frame was being handled lost its T1: YAPP's AF on EF, AXDP's completion ack, YAPP blocks pumped on an ack. One loss and the transfer sat until YAPP's or AXDP's own timeout, with the file already delivered. A block pumped on a REJ's ack was also sent twice. | full-stack fuzz, 2026-10-02 | fixed, 7e8adfa: the layer above hears about a frame after its timer actions (spec §7.5) |
+| 48 | Two stations polled each other forever: after a link reset a late duplicate of an old I-frame sat out of sequence, every gap poll was answered, and each answer reset the retry count. | full-stack fuzz, 2026-10-02 | fixed, 89620f0: gap polls counted on their own, last-ditch flush at N2 − 1 (spec §7.4). Changes when a stuck link gives up; needs review |
+| 49 | A YAPP cancel after the receiver's AF went unanswered, held the session for the 10 s CA wait and could print the CN on the other terminal. | full-stack fuzz, 2026-10-02 | fixed, 1bdfa62: too late to cancel once AF is in, so the transfer finishes |
+| 50 | Winlink P2P: a caller with nothing to send opens with FF, and the answering station quit on it with its own outbox untouched. | full-stack fuzz, 2026-10-02 | fixed, 3d55843 |
+| 51 | The TNC4's extended modem-type reply was accepted at any length. | property test, 2026-10-02 | fixed, a426ada |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -415,6 +420,66 @@ What the fuzzing showed about behavior, none of it a protocol defect:
 - After a peer restarts, the next session starts from whatever the route's
   learner holds, so if bigger bursts had drawn retransmissions just before,
   that session starts at K=1.
+
+## Full-stack fuzzing, 2026-10-02
+
+The simulator above covers the link layer only. To cover what sits on it,
+`AXTermTests/Integration/Fuzz` joins two complete stations (a real
+PacketEngine and SessionCoordinator each) over an in-memory KISS link that
+loses, duplicates, delays and chops up frames, or goes silent for a few
+seconds. Four suites run random sessions on it: AXDP and YAPP transfers with
+chat, Winlink peer-to-peer, the mailbox, and the NET/ROM node shell over plain
+AX.25. Property tests were added for the TNC4's hardware replies, NODES
+broadcasts and the sound modem under noise. All of it is in the nightly CI
+soak (see [CI.md](CI.md)).
+
+Bugs found and fixed:
+
+- **47. A reply sent while a frame was being handled lost its T1 (7e8adfa).**
+  YAPP's AF on EF, AXDP's completion ack and YAPP blocks pumped on an ack all
+  went out before the stop of T1 the state machine had worked out for the
+  inbound frame, which then canceled the new frame's timer. One loss and the
+  transfer sat until YAPP's or AXDP's own timeout, with the file already
+  delivered. On the air this would look like a transfer that hangs or fails
+  right at the end. A block pumped on a REJ's ack was also sent twice. The
+  layer above now hears about a frame after its timer actions, which is the
+  order the SDL gives.
+- **48. Endless polling for a frame the peer would never send (89620f0).**
+  After a link reset, a late duplicate of an old I-frame sat out of sequence;
+  the receiver polled for the gap every T1, the peer answered each poll, and
+  each answer reset the retry count, so it never ended. Gap polls are now
+  counted on their own and the existing last-ditch flush runs at N2 − 1. This
+  changes when a stuck link gives up, so it needs the operator's review.
+- **49. YAPP cancel after AF (1bdfa62).** The receiver already had the file;
+  the CN went unanswered, held the session for the CA wait, and could print
+  on the other terminal. Too late to cancel now, so the transfer finishes.
+- **50. Winlink P2P answering side kept its mail (3d55843).** A caller with
+  nothing to send opens with FF; the answering station took that as the end
+  and quit with its outbox untouched.
+- **51. TNC4 modem-type reply of any length (a426ada).** Now held to one byte
+  like every other single-value reply.
+
+Not bugs, but worth knowing:
+
+- A duplicated UA (two digipeaters) makes the caller re-establish the link,
+  as the SDL says, and the reset discards whatever was queued on both sides.
+  Transfers fail honestly with "link closed"; chat typed in that moment is
+  lost.
+- A lost UA followed by the caller's SABM retry resets the link under the
+  answering side's first frame. Winlink P2P recovers through the bug 40
+  handling (the exchange is answered again once the old one closes).
+- A canceled YAPP transfer shows "canceled" at once but holds the session up
+  to 10 s for the other side's CA; a new transfer in that gap is refused as
+  busy.
+- Found while writing the node fuzz: the node's identity and routing
+  snapshot are wired in the macOS ContentView only. If the node can be
+  enabled on iOS it would greet callers as NODE:N0CALL. Filed as a separate
+  task.
+
+Results after the fixes: the first 300-seed transfer run had 67 problems and
+the next 7, all the harness starting a transfer during a cancel handshake;
+Winlink went from 15 to 0 once bug 50 was fixed and the harness answered calls
+the way the app does.
 
 ## Resuming
 
