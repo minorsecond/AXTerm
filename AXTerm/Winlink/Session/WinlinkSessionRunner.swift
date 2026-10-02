@@ -116,7 +116,9 @@ final class WinlinkSessionRunner: ObservableObject {
     // MARK: - Public entry points
 
     /// Runs a full exchange over `transport`. Returns the session summary
-    /// (also published as `lastSummary`).
+    /// (also published as `lastSummary`). With `peer` set, the exchange is
+    /// peer-to-peer and offers only the queued mail addressed to that
+    /// station.
     @discardableResult
     func runExchange(
         transport: WinlinkTransport,
@@ -129,7 +131,8 @@ final class WinlinkSessionRunner: ObservableObject {
         role: B2FSessionEngine.Role = .initiator,
         preserveTranscript: Bool = false,
         inboundSelection: B2FSessionEngine.InboundSelectionPolicy = .acceptAll,
-        airtime: WinlinkAirtimeEstimate = .assumed
+        airtime: WinlinkAirtimeEstimate = .assumed,
+        peer: String? = nil
     ) async -> WinlinkExchangeSummary {
         guard !isRunning else {
             var summary = WinlinkExchangeSummary()
@@ -164,7 +167,11 @@ final class WinlinkSessionRunner: ObservableObject {
             : "Exchange started: \(transportName) via \(gatewayName)")
 
         // Compress queued mail off the main actor — LZHUF is CPU work.
-        let queued = (try? await worker.queuedOutboundMessages()) ?? []
+        // A peer gets only the mail addressed to it; the rest waits for a
+        // gateway. See WinlinkPeerCall.isAddressed.
+        let queued = ((try? await worker.queuedOutboundMessages()) ?? []).filter { message in
+            peer.map { WinlinkPeerCall.isAddressed(message, to: $0) } ?? true
+        }
         let prepared: [B2FSessionEngine.PreparedOutbound]
         do {
             prepared = try await Task.detached(priority: .userInitiated) {

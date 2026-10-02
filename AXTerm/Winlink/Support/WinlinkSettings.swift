@@ -23,6 +23,8 @@ final class WinlinkSettings: ObservableObject {
     static let gatewayPathKey = "winlinkGatewayPath"
     static let p2pListenEnabledKey = "winlinkP2PListenEnabled"
     static let p2pListenCallsignKey = "winlinkP2PListenCallsign"
+    static let recentP2PPeersKey = "winlinkRecentP2PPeers"
+    static let recentP2PPeerLimit = 5
     static let stationPreferencesKey = "winlinkStationPreferences"
     static let callsignLookupEnabledKey = "winlinkCallsignLookupEnabled"
     static let preferredTransportKey = "winlinkPreferredTransport"
@@ -208,6 +210,19 @@ final class WinlinkSettings: ObservableObject {
     /// by the callsign they dial.
     @Published var p2pListenCallsign: String {
         didSet { defaults.set(p2pListenCallsign, forKey: Self.p2pListenCallsignKey) }
+    }
+
+    /// Stations called for peer-to-peer mail, newest first.
+    var recentP2PPeers: [String] {
+        defaults.stringArray(forKey: Self.recentP2PPeersKey) ?? []
+    }
+
+    /// Put `callsign` at the top of the recent peers, keeping a handful.
+    func rememberP2PPeer(_ callsign: String) {
+        let call = CallsignValidator.normalize(callsign)
+        guard !call.isEmpty else { return }
+        let peers = [call] + recentP2PPeers.filter { $0 != call }
+        defaults.set(Array(peers.prefix(Self.recentP2PPeerLimit)), forKey: Self.recentP2PPeersKey)
     }
 
     /// The address P2P actually answers on, given the station callsign.

@@ -208,6 +208,31 @@ final class WinlinkSessionRunnerTests: XCTestCase {
             transportName: "test")
     }
 
+    // MARK: - Peer-to-peer
+
+    /// Field case 2026-10-01: a peer exchange offered the peer the whole
+    /// Outbox. Only mail addressed to the peer may go; the rest waits for a
+    /// gateway.
+    func testAPeerExchangeSendsOnlyMailAddressedToThePeer() async throws {
+        let store = try makeStore()
+        var forPeer = makeMessage(mid: "PEERONLY0001", subject: "For the peer")
+        forPeer.to = ["K0EPI-3"]
+        try store.saveDraft(forPeer)
+        try store.queueDraft(mid: "PEERONLY0001")
+        try store.saveDraft(makeMessage(mid: "PEERONLY0002", subject: "For the CMS"))
+        try store.queueDraft(mid: "PEERONLY0002")
+
+        let transport = FakeRMSTransport()
+        let runner = WinlinkSessionRunner(store: store)
+        let summary = await runner.runExchange(
+            transport: transport, myCallsign: "K0EPI-2", password: nil,
+            gatewayName: "K0EPI-3", transportName: "P2P", peer: "K0EPI-3")
+
+        XCTAssertEqual(summary.sentMIDs, ["PEERONLY0001"])
+        XCTAssertEqual(transport.rmsInbox.map(\.mid), ["PEERONLY0001"])
+        XCTAssertEqual(try store.queuedOutboundMessages().map(\.mid), ["PEERONLY0002"])
+    }
+
     // MARK: - Tests
 
     func testEmptyPollSucceeds() async throws {

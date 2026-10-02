@@ -418,6 +418,33 @@ callback so the coordinator needs to know nothing about mail;
 answering needs no new transport — `open()` finds the session and
 returns.
 
+### Peer-to-peer (calling role)
+
+Connect & Exchange › Peer-to-Peer… calls one station directly
+(`WinlinkPeerCallSheet`). It asks for the callsign, suggests the station
+last called or else the first queued recipient that is a callsign, offers
+the last five peers under Recent, and takes an optional digipeater path.
+Before 2026-10-01 the only way to call a peer was to add it to the RMS
+gateway ladder, which also put it in line for every gateway exchange; the
+peer call leaves the ladder alone.
+
+A peer call needs no Winlink password. There is no CMS behind a peer, and
+an answering AXTerm sends no `;PQ:`. If a password is saved it is passed
+along anyway, so a peer that does challenge still gets a `;PR:`.
+
+**Only mail addressed to the peer goes.** A peer delivers nothing onward,
+so handing it mail for anyone else would mark that mail sent when it will
+never arrive. `WinlinkSessionRunner.runExchange(peer:)` filters the queue
+through `WinlinkPeerCall.isAddressed`, on both the calling and answering
+sides. A recipient matches when it is the peer's callsign exactly, or the
+peer's bare callsign (the Winlink account) when the peer listens on an
+SSID; `K0EPI-5` does not match a peer at `K0EPI-3`. Everything else stays
+in the Outbox for the next gateway exchange. Peer sessions are logged with
+transport `P2P`.
+
+Tests: `WinlinkPeerCallTests`, `WinlinkPeerAddressingTests`,
+`WinlinkSessionRunnerTests.testAPeerExchangeSendsOnlyMailAddressedToThePeer`.
+
 ### ICS-309 Communications Log
 
 Every activation ends with someone asking for the message log, and unlike
@@ -945,7 +972,6 @@ Tests: `WinlinkLinkQualityTests`.
 ## Known limitations / future work
 
 - B1F-only gateways are refused (clean error) rather than spoken to.
-- No P2P (client-to-client) sessions yet; RMS/CMS only.
 - Pacing: bulk B2F sends ride the normal session queue; §4.3 token-bucket
   enforcement is a codebase-wide gap (spec §16 checklist).
 - The Link column is descriptive only — it does not yet reorder the

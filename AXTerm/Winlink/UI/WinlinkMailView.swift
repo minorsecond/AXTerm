@@ -42,6 +42,7 @@ struct WinlinkMailView: View {
     @State private var focusedSessionID: Int64?
     @State private var showingFieldStatus = false
     @State private var showingPositionReport = false
+    @State private var showingPeerCall = false
     @State private var fieldStatusLocation: StationLocation?
     /// The activation reference sent with a position report — a park or
     /// summit ID that stays the same all day, so it is remembered.
@@ -186,6 +187,15 @@ struct WinlinkMailView: View {
         }
         .sheet(isPresented: $showingPositionReport) {
             positionReportSheet
+        }
+        .sheet(isPresented: $showingPeerCall) {
+            WinlinkPeerCallSheet(
+                myCallsign: appSettings.myCallsign,
+                suggestion: WinlinkPeerCall.suggestion(
+                    recentPeers: winlinkSettings.recentP2PPeers,
+                    outboxRecipients: queuedRecipients()),
+                recentPeers: winlinkSettings.recentP2PPeers,
+                onCall: { callsign, path in startPeerExchange(callsign: callsign, path: path) })
         }
         .sheet(isPresented: $showingCommsLog) {
             WinlinkICS309Sheet(
@@ -382,6 +392,11 @@ struct WinlinkMailView: View {
                 Button("Telnet (Internet)") {
                     startExchange(useTelnet: true)
                 }
+
+                Button("Peer-to-Peer\u{2026}") {
+                    showingPeerCall = true
+                }
+                .help("Call another Winlink station directly, with no gateway.")
 
                 if appSettings.hasMultipleRadios {
                     Divider()
@@ -640,7 +655,8 @@ struct WinlinkMailView: View {
             password: nil,          // P2P carries no CMS account
             gatewayName: peer,
             transportName: "P2P",
-            role: .answering)
+            role: .answering,
+            peer: peer)
         mailboxVM.refresh()
         context.exchangeFinished()
         stationsVM.reloadLinkQuality()
@@ -989,6 +1005,49 @@ struct WinlinkMailView: View {
         }
     }
 
+    /// Calls one station directly for peer-to-peer mail. Unlike a gateway
+    /// exchange this needs no Winlink password, since there is no CMS
+    /// behind a peer, and it leaves the gateway ladder alone.
+    private func startPeerExchange(callsign: String, path: String) {
+        guard let runner = context.runner else {
+            exchangeAlert = "The mailbox is not ready yet: the Winlink store failed to open on this device. Reopening the app usually clears it."
+            return
+        }
+        guard !runner.isRunning else {
+            exchangeAlert = "An exchange is already running. Open the exchange console to watch it, or wait for it to finish."
+            return
+        }
+        let myCall = appSettings.myCallsign
+        guard !myCall.isEmpty, myCall != "NOCALL" else {
+            exchangeAlert = "Set your callsign in Settings › General before exchanging mail."
+            return
+        }
+        guard client.status == .connected else {
+            exchangeAlert = "Connect to your TNC before starting a packet exchange."
+            return
+        }
+        winlinkSettings.rememberP2PPeer(callsign)
+        let product = winlinkSettings.clientProduct.trimmingCharacters(in: .whitespaces)
+        let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
+        let sid = WinlinkSID(
+            product: product.isEmpty ? "AXTerm" : product,
+            version: version,
+            features: "B2FHM$")
+        showConsole = true
+        Task {
+            await runLadder([.init(callsign: callsign, path: path)], runner: runner,
+                            myCallsign: myCall, password: winlinkSettings.password,
+                            sid: sid, peer: true)
+        }
+    }
+
+    /// The To and Cc addresses of everything waiting in the Outbox, oldest
+    /// message first, for the peer call's suggestion.
+    private func queuedRecipients() -> [String] {
+        let queued = (try? context.store?.queuedOutboundMessages()) ?? []
+        return queued.flatMap { $0.to + $0.cc }
+    }
+
     /// Walks the gateway ladder: tries each rung until a session
     /// completes. Gateway-specific failures (no answer, busy, link lost)
     /// fall through to the next rung; CMS-level failures stop the ladder
@@ -998,7 +1057,8 @@ struct WinlinkMailView: View {
         runner: WinlinkSessionRunner,
         myCallsign: String,
         password: String,
-        sid: WinlinkSID
+        sid: WinlinkSID,
+        peer: Bool = false
     ) async {
         var lastFailure: String?
         var lastFailedCallsign = rungs[0].callsign
@@ -1036,7 +1096,7 @@ struct WinlinkMailView: View {
                 myCallsign: myCallsign,
                 password: password.isEmpty ? nil : password,
                 gatewayName: rung.callsign,
-                transportName: "ax25",
+                transportName: peer ? "P2P" : "ax25",
                 frequencyHz: rung.frequencyHz,
                 sid: sid,
                 preserveTranscript: index > 0,
@@ -1044,7 +1104,8 @@ struct WinlinkMailView: View {
                 airtime: WinlinkAirtimeEstimate.forGateway(
                     callsign: rung.callsign,
                     frequencyHz: rung.frequencyHz,
-                    quality: stationsVM.linkQuality))
+                    quality: stationsVM.linkQuality),
+                peer: peer ? rung.callsign.uppercased() : nil)
 
             mailboxVM.refresh()
             context.exchangeFinished()
