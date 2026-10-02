@@ -3235,7 +3235,11 @@ final class SessionCoordinator: ObservableObject {
 
         switch uType {
         case .UA:
-            sessionManager.handleInboundUA(from: from, path: path, radio: radio)
+            // Usually nothing to send; a UA on a link already up makes the
+            // session establish it again with a SABM (live test log, bug 39).
+            for frame in sessionManager.handleInboundUA(from: from, path: path, radio: radio) {
+                sendFrame(frame)
+            }
         case .DM:
             // A DM answering our XID is a pre-2.2 peer saying "I hold no
             // link to you", not a refusal. It resolves the negotiation and

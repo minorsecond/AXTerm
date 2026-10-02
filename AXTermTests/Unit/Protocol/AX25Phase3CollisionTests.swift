@@ -445,8 +445,13 @@ final class AX25Phase3CollisionTests: XCTestCase {
     }
 
     /// SABM collision: we send SABM (connecting) and receive SABM simultaneously.
-    /// Per §6.3.3 we must respond with UA and transition to connected.
-    func testSABM_OutboundCollision_TransitionsToConnected() {
+    /// AX.25 2.2 SDL C4.2 (awaiting connection): answer UA and stay; the link
+    /// is up when our own SABM is answered. §6.3.1 agrees: after a SABM,
+    /// frames other than UA and DM go out only once the link is set up "and
+    /// if no outstanding SABM(E) exists". Entering connected at once, as
+    /// AXTerm did, only worked while it ignored the peer's UA that follows,
+    /// which the SDL treats as error C (live test log, bug 39).
+    func testSABM_OutboundCollision_AnswersUAAndConnectsOnOurUA() {
         let (manager, _) = makeManager()
 
         _ = manager.connect(to: peer, path: path, radio: .primary)
@@ -457,12 +462,15 @@ final class AX25Phase3CollisionTests: XCTestCase {
         // Peer sends SABM back (collision)
         let ua = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
 
-        XCTAssertEqual(session.state, .connected,
-            "SABM collision must transition to connected")
-        XCTAssertNotNil(ua, "SABM collision must generate UA response")
-        XCTAssertEqual(ua?.displayInfo, "UA")
-        XCTAssertNil(session.t1TimerTask, "T1 must stop after SABM collision resolved")
-        XCTAssertNotNil(session.t3TimerTask, "T3 must start after SABM collision resolved")
+        XCTAssertEqual(ua?.displayInfo, "UA", "SABM collision must generate UA response")
+        XCTAssertEqual(session.state, .connecting, "still awaiting the answer to our own SABM")
+        XCTAssertNotNil(session.t1TimerTask, "T1 keeps timing our SABM")
+
+        // The peer's UA answers our SABM.
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        XCTAssertEqual(session.state, .connected)
+        XCTAssertNil(session.t1TimerTask, "T1 must stop once the link is up")
+        XCTAssertNotNil(session.t3TimerTask, "T3 must start once the link is up")
     }
 
     /// No duplicate sessions from multiple SABM receptions.

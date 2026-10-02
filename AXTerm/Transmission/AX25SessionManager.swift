@@ -249,6 +249,11 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// subsequent T3 poll then waited 30s on a healthy path.
     var sabmRetransmitted = false
 
+    /// Set while the station re-establishes the link after an unexpected UA
+    /// (SDL error C). The layer above was last told the link is connected,
+    /// and hears nothing more until the re-establishment succeeds or fails.
+    var isReestablishing = false
+
     /// Timestamp when session was established
     var connectedAt: Date?
 
@@ -948,6 +953,24 @@ final class AX25SessionManager: ObservableObject {
     /// Routes a state transition to the claim holder (if any) and the
     /// regular observers. All notify sites funnel through here.
     private func notifyStateChanged(_ session: AX25Session, from oldState: AX25SessionState, to newState: AX25SessionState) {
+        var oldState = oldState
+        if session.isReestablishing {
+            // The layer above never saw the link leave connected: the SDL
+            // gives layer 3 no indication while it re-establishes.
+            switch newState {
+            case .connecting:
+                return
+            case .connected:
+                // Up again some other way than our UA (a SABM from the peer).
+                // The same rule as the UA path applies.
+                session.isReestablishing = false
+                reportReestablished(session, lostFrames: !session.sendBuffer.isEmpty)
+                return
+            case .disconnected, .error, .disconnecting:
+                session.isReestablishing = false
+                oldState = .connected
+            }
+        }
         deliveryClaims[session.key]?.stateHandler?(session, oldState, newState)
 
         // A claim cannot outlive its session. Claim holders release their
@@ -961,6 +984,21 @@ final class AX25SessionManager: ObservableObject {
         }
 
         onSessionStateChanged?(session, oldState, newState)
+    }
+
+    /// The link is up again after an unexpected UA. SDL C4.2: when frames were
+    /// unacknowledged the I-frame queue is discarded and layer 3 gets
+    /// DL-CONNECT indication, which the layer above sees as the old link
+    /// ending and a new one beginning (as for a peer's SABM reset). When
+    /// nothing was lost, layer 3 hears nothing.
+    private func reportReestablished(_ session: AX25Session, lostFrames: Bool) {
+        guard lostFrames else { return }
+        session.clearPendingTransmission(reason: "Link established again with frames unacknowledged")
+        TxLog.warning(.session, "Link established again: unacknowledged frames discarded", [
+            "peer": session.remoteAddress.display
+        ])
+        notifyStateChanged(session, from: .connected, to: .disconnected)
+        notifyStateChanged(session, from: .disconnected, to: .connected)
     }
 
     /// Waits until a connect attempt resolves: the session leaves the
@@ -2124,11 +2162,12 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Handle an inbound UA (unnumbered acknowledge)
+    @discardableResult
     func handleInboundUA(
         from source: AX25Address,
         path: DigiPath,
         radio: RadioID
-    ) {
+    ) -> [OutboundFrame] {
         debugTrace("UA received", [
             "from": source.display,
             "path": path.display.isEmpty ? "(empty)" : path.display,
@@ -2194,7 +2233,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": source.display
             ])
             TxLog.warning(.session, "UA received for unknown session", ["from": source.display])
-            return
+            return []
         }
 
         // If we timed out and fell back to disconnected, allow a late UA to complete the connect.
@@ -2219,7 +2258,7 @@ final class AX25SessionManager: ObservableObject {
                     "peer": source.display,
                     "state": session.state.rawValue
                 ])
-                return
+                return []
             }
         }
 
@@ -2243,9 +2282,25 @@ final class AX25SessionManager: ObservableObject {
             )
         }
 
+        // Measured before the UA zeroes them: whether the link being
+        // re-established still had frames unacknowledged.
+        let completingReestablish = session.isReestablishing && oldState == .connecting
+        let lostFrames = completingReestablish
+            && session.stateMachine.sequenceState.vs != session.stateMachine.sequenceState.va
         let actions = session.stateMachine.handle(event: .receivedUA)
 
-        if oldState != session.state {
+        if oldState == .connected && session.state == .connecting {
+            // Error C: the state machine is establishing the link again.
+            session.isReestablishing = true
+            session.sabmSentAt = clock.currentTime
+            session.sabmRetransmitted = false
+            TxLog.warning(.session, "Unexpected UA while connected: establishing the link again", [
+                "peer": source.display
+            ])
+        } else if completingReestablish && session.state == .connected {
+            session.isReestablishing = false
+            reportReestablished(session, lostFrames: lostFrames)
+        } else if oldState != session.state {
             debugTrace("state change (UA)", [
                 "peer": source.display,
                 "from": oldState.rawValue,
@@ -2261,7 +2316,7 @@ final class AX25SessionManager: ObservableObject {
         // and leave unacknowledged frames with no retransmit protection (field
         // capture 2026-08-22: "Starting T1 timer" from the drain immediately
         // followed by "Stopping T1 timer" from the stale action).
-        _ = processActions(actions, for: session)
+        let frames = processActions(actions, for: session)
 
         if session.state == .connected {
             session.connectedAt = Date()
@@ -2283,6 +2338,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         session.touch()
+        return frames
     }
 
     /// Handle an inbound DM (disconnected mode)
@@ -2709,6 +2765,16 @@ final class AX25SessionManager: ObservableObject {
             return []
         }
 
+        // §6.3.1: a station awaiting the answer to its SABM "ignores and
+        // discards any frames except SABM, DISC, UA and DM". While a link is
+        // re-established its old frames are still held for the answering UA
+        // to decide on (live test log, bug 39), so an ack must not release
+        // them and a REJ must not resend them.
+        if session.state == .connecting {
+            debugTrace("RR discarded while awaiting connection", ["peer": source.display])
+            return []
+        }
+
         // Measure RTT from last acked frame so T1 (RTO) adapts during transfer.
         // Bug E fix (Karn's algorithm): rttSendTime(ackedBy:) returns nil for
         // any frame that was retransmitted, because the ACK is ambiguous — it
@@ -3038,6 +3104,16 @@ final class AX25SessionManager: ObservableObject {
             return []
         }
 
+        // §6.3.1: a station awaiting the answer to its SABM "ignores and
+        // discards any frames except SABM, DISC, UA and DM". While a link is
+        // re-established its old frames are still held for the answering UA
+        // to decide on (live test log, bug 39), so an ack must not release
+        // them and a REJ must not resend them.
+        if session.state == .connecting {
+            debugTrace("RNR discarded while awaiting connection", ["peer": source.display])
+            return []
+        }
+
         // The N(R) in an RNR is a real acknowledgment, so it yields a valid RTT
         // sample under the same Karn's-algorithm rules used for RR, and only
         // when it newly acknowledges something (see the RR handler).
@@ -3207,6 +3283,16 @@ final class AX25SessionManager: ObservableObject {
             if pf && isCommand {
                 return [AX25FrameBuilder.buildDM(from: answeringAddress(for: destination, radio: radio), to: source, via: path).onRadio(radio)]
             }
+            return []
+        }
+
+        // §6.3.1: a station awaiting the answer to its SABM "ignores and
+        // discards any frames except SABM, DISC, UA and DM". While a link is
+        // re-established its old frames are still held for the answering UA
+        // to decide on (live test log, bug 39), so an ack must not release
+        // them and a REJ must not resend them.
+        if session.state == .connecting {
+            debugTrace("REJ discarded while awaiting connection", ["peer": source.display])
             return []
         }
 

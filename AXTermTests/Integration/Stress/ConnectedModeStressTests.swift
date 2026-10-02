@@ -78,11 +78,18 @@ final class ConnectedModeStressTests: XCTestCase {
             // the UA, so the break can show a moment before the UA is read.
             let afterUA = result.firstUnexpectedUA.map { ua in (result.firstViolationAt ?? 0) >= ua - 5 } ?? false
             if !result.violations.isEmpty, afterUA, streamOnly {
-                // AX.25 2.2's SDL answers a UA in the connected state with
-                // error C and a fresh SABM; AXTerm ignores it, so a link reset
-                // the other side made (for a stale, retransmitted SABM) leaves
-                // the two sequence states apart. Reported, not changed here.
-                XCTExpectFailure("UA received while connected was ignored (AX.25 2.2 SDL: re-establish, error C); the peer's reset left the sequence states apart; reported, not fixed") {
+                // A limit of this harness, not of the protocol. Since bug 39
+                // (live test log) AXTerm answers a UA in the connected state
+                // as the AX.25 2.2 SDL does: error C, establish the link
+                // again. The stream check compares data per link epoch and
+                // assumes both stations start a new epoch together, but the
+                // SDL gives a station that lost nothing in a reset no
+                // indication, so for a while one side is on a new link and
+                // the other is not (chat-slow-peer-frack3 seed 1, restart-
+                // reconnect seed 8: both sides' sequence numbers stay
+                // consistent, and only data the sender was told it lost is
+                // missing). Fixing it means epoch tracking on each side.
+                XCTExpectFailure("Stream check cannot follow a link reset only one side reports (SDL: no indication when nothing was lost); harness limit, see bug 39") {
                     XCTFail("\(family) seed \(seed): \(scenario)\n\(result.violations.joined(separator: "\n"))",
                             file: file, line: line)
                 }

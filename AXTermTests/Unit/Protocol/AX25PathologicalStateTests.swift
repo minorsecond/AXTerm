@@ -14,9 +14,9 @@ final class AX25PathologicalStateTests: XCTestCase {
     // MARK: - Collision Tests
     
     /// Tests simultaneous connection requests where both sides send SABM at the same time.
-    /// According to AX.25 v2.2 spec §6.3.3:
-    /// "If a SABM command is received while in the Connecting State, a UA response
-    /// is sent and the state changes to Connected."
+    /// AX.25 2.2 SDL C4.2: a SABM received while awaiting connection is
+    /// answered with UA and the station stays there; each side's link comes up
+    /// when its own SABM is answered (§6.3.6.2, §6.3.1).
     func testSimultaneousSABMCollision() {
         var smA = AX25StateMachine(config: AX25SessionConfig())
         var smB = AX25StateMachine(config: AX25SessionConfig())
@@ -31,19 +31,19 @@ final class AX25PathologicalStateTests: XCTestCase {
         
         // Node A receives Node B's SABM while connecting
         let collA = smA.handle(event: .receivedSABM)
-        XCTAssertEqual(smA.state, .connected, "Node A should transition to connected on SABM collision")
+        XCTAssertEqual(smA.state, .connecting, "Node A answers and keeps waiting for its own UA")
         XCTAssertTrue(collA.contains(.sendUA), "Node A must respond with UA")
         
         // Node B receives Node A's SABM while connecting
         let collB = smB.handle(event: .receivedSABM)
-        XCTAssertEqual(smB.state, .connected, "Node B should transition to connected on SABM collision")
+        XCTAssertEqual(smB.state, .connecting, "Node B answers and keeps waiting for its own UA")
         XCTAssertTrue(collB.contains(.sendUA), "Node B must respond with UA")
         
         // They both receive each other's UA
         let finalA = smA.handle(event: .receivedUA)
         let finalB = smB.handle(event: .receivedUA)
         
-        // They should remain connected and happy
+        // Each UA answers that side's own SABM: both links are up.
         XCTAssertEqual(smA.state, .connected)
         XCTAssertEqual(smB.state, .connected)
     }

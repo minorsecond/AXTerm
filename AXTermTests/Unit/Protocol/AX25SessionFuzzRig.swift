@@ -242,7 +242,13 @@ final class AX25SessionFuzzRig {
         // The state the manager last announced is the state it is in, unless
         // this session never announced one (it is then still disconnected).
         if let announced = lastAnnounced[s.id] {
-            v.check(announced == s.state, "state is \(s.state.rawValue) but the last announced was \(announced.rawValue) \(ctx)")
+            // Except while the session re-establishes the link after an
+            // unexpected UA: the SDL tells layer 3 nothing until that ends,
+            // so the layer above still holds "connected" (live test log,
+            // bug 39).
+            let reestablishing = announced == .connected && s.state == .connecting && s.isReestablishing
+            v.check(announced == s.state || reestablishing,
+                    "state is \(s.state.rawValue) but the last announced was \(announced.rawValue) \(ctx)")
         } else {
             v.check(s.state == .disconnected, "state \(s.state.rawValue) reached without an announcement \(ctx)")
         }

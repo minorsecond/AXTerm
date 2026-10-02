@@ -640,6 +640,43 @@ Events:
 - Timer T1 expiration
 - Idle timer T3 expiration
 
+### 7.1.1 Link setup, collisions and resets (AX.25 2.2 SDL, figures C4.2 to C4.5)
+AXTerm folds the SDL's Timer Recovery state into `CONNECTED` (retry count
+above zero) and calls Awaiting Connection `CONNECTING`. These transitions
+follow the SDL:
+
+- **SABM while `CONNECTING`** (both stations called at once): answer UA with
+  F = P and stay in `CONNECTING`. The link is up when our own SABM is
+  answered. §6.3.1: after a SABM, frames other than UA and DM go out only
+  once the link is set up "and if no outstanding SABM(E) exists".
+- **SABM while `CONNECTED`**: the peer is resetting the link. Answer UA and
+  zero V(S), V(A) and V(R). If frames were unacknowledged, discard the
+  I-frame queue and give DL-CONNECT indication.
+- **UA while `CONNECTED`**: unexpected, error C. The peer reset its link,
+  usually for a stale or retransmitted SABM of ours. Establish the data link
+  again (clear exception conditions, RC := 0, SABM with P = 1, stop T3,
+  start T1), clear "layer 3 initiated" and go to `CONNECTING`. Layer 3 is
+  told nothing yet.
+- **UA while `CONNECTING`, layer 3 initiated**: DL-CONNECT confirm, the
+  ordinary connect.
+- **UA while `CONNECTING`, layer 3 not initiated** (the link we re-established
+  ourselves): zero V(S), V(A) and V(R). If frames were unacknowledged
+  (V(S) ≠ V(A)), discard the I-frame queue and give DL-CONNECT indication.
+  If nothing was lost, layer 3 hears nothing. If the re-establishment fails
+  (N2, or DM), layer 3 hears that the link went down.
+
+DL-CONNECT indication on a link that layer 3 believed was up reaches the
+layer above as the old link ending and a new one beginning (`connected` to
+`disconnected` to `connected`), so a transfer riding it fails instead of
+continuing with a hole in its stream. Only the station that lost frames
+gives the indication: the SDL says nothing to a station that lost nothing,
+so for a while one side can be on a new link while the other carries on.
+Both sides' sequence numbers stay consistent throughout.
+
+The field case for these rules is in Docs/LiveRFTest-2026-09-30.md, bug 39:
+Warbler held a SABM 3.6 s before keying, T1 sent a second one, the peer
+reset for it, and AXTerm used to ignore the second UA.
+
 ### 7.2 Sequence numbers + window
 AX.25 uses `N(S)` (send seq) and `N(R)` (recv expected) mod 8 or 128 depending on extended mode.
 Implement both, default to **mod 8** unless you detect/choose extended.

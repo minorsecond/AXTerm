@@ -784,6 +784,11 @@ nonisolated struct AX25StateMachine: Sendable {
         self.sequenceState = AX25SequenceState(modulo: config.modulo)
     }
 
+    /// SDL "layer 3 initiated": the link being set up is one layer 3 asked
+    /// for. Cleared when the station re-establishes a link on its own after an
+    /// unexpected UA, which decides what the answering UA tells layer 3.
+    private(set) var layer3Initiated = false
+
     /// Reset all session state for a new connection
     mutating func resetSessionState() {
         // A new link starts its N2 ladders from zero. A count left over
@@ -857,6 +862,7 @@ nonisolated struct AX25StateMachine: Sendable {
             state = .connecting
             retryCount = 0
             resetSessionState()
+            layer3Initiated = true
             TxLog.outbound(.ax25, "Initiating connection (SABM)")
             return [.sendSABM, .startT1]
 
@@ -901,15 +907,28 @@ nonisolated struct AX25StateMachine: Sendable {
         case (.connecting, .receivedUA):
             state = .connected
             retryCount = 0
+            guard layer3Initiated else {
+                // SDL C4.2 (awaiting connection), UA with layer 3 initiated
+                // clear: the link we re-established after an unexpected UA is
+                // up. V(S) = V(A) = V(R) = 0. Whether layer 3 hears of it
+                // (DL-CONNECT indication, when frames were unacknowledged) is
+                // the manager's to report, since it holds the queue.
+                resetSessionState()
+                TxLog.inbound(.ax25, "Link established again (UA received)")
+                return [.stopT1, .startT3]
+            }
             TxLog.inbound(.ax25, "Connection established (UA received)")
             return [.stopT1, .startT3, .notifyConnected]
 
         case (.connecting, .receivedSABM):
-            // SABM Collision (Section 6.3.3)
-            state = .connected
-            retryCount = 0
-            TxLog.inbound(.ax25, "SABM collision - Connection established")
-            return [.stopT1, .sendUA, .startT3, .notifyConnected]
+            // SABM collision. SDL C4.2 (awaiting connection): answer UA and
+            // stay; the link is up when our own SABM is answered. §6.3.1 has
+            // frames other than UA and DM wait until the link is set up "and
+            // no outstanding SABM(E) exists". Going straight to connected only
+            // worked while the peer's UA that follows was ignored; the SDL
+            // treats that UA as error C (live test log, bug 39).
+            TxLog.inbound(.ax25, "SABM collision - answered UA, awaiting our UA")
+            return [.sendUA]
 
         case (.connecting, .receivedDM):
             state = .disconnected
@@ -989,6 +1008,22 @@ nonisolated struct AX25StateMachine: Sendable {
             // Without it, the timer fires after disconnect and incorrectly triggers
             // a retransmit or state-machine event against a dead session.
             return [.sendUA, .stopT1, .stopT3, .notifyDisconnected]
+
+        case (.connected, .receivedUA):
+            // SDL C4.4/C4.5 (connected, timer recovery): a UA here is
+            // unexpected, error C. Establish data link: clear exception
+            // conditions, RC := 0, send SABM with P=1, stop T3, start T1.
+            // Clear layer 3 initiated and go to awaiting connection. The peer
+            // reset its link (for a stale SABM of ours, live test log bug
+            // 39), and ignoring this left the two sequence states apart.
+            TxLog.warning(.ax25, "Unexpected UA (error C): establishing the link again")
+            peerBusy = false
+            rejSent = false
+            ackPending = false
+            retryCount = 0
+            layer3Initiated = false
+            state = .connecting
+            return [.stopT3, .sendSABM, .startT1]
 
         case (.connected, .receivedSABM):
             // Remote is re-establishing the link from scratch per AX.25 §4.3.3.1.
@@ -1301,6 +1336,7 @@ nonisolated struct AX25StateMachine: Sendable {
             state = .connecting
             retryCount = 0
             resetSessionState()
+            layer3Initiated = true
             return [.sendSABM, .startT1]
 
         case (.error, .forceDisconnect):
