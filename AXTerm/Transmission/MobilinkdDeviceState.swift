@@ -101,7 +101,10 @@ nonisolated enum MobilinkdReply: Equatable, Sendable {
             guard b.count >= 3 else { return nil }
             let ev = Array(b.dropFirst(3))
             switch b[2] {
-            case MobilinkdTNC.EXT_GET_MODEM_TYPE: return ev.first.map(MobilinkdReply.modemType)
+            // One byte, like every other single-value reply. Taking the
+            // first byte of anything longer let a longer frame read as a
+            // modem type (seeded property test, 2026-10-02).
+            case MobilinkdTNC.EXT_GET_MODEM_TYPE: return ev.count == 1 ? .modemType(ev[0]) : nil
             case MobilinkdTNC.EXT_GET_MODEM_TYPES: return .supportedModemTypes(ev)
             default: return nil
             }
