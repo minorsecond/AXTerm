@@ -735,8 +735,15 @@ nonisolated final class B2FSessionEngine {
         }
 
         if upper == "FF" {
-            // Remote has no (more) traffic. Everything we had is already
-            // proposed, so the session is over.
+            // Remote has no (more) traffic, and the turn is ours. Mail not
+            // yet proposed goes now; with none left the session is over.
+            // Only the answering side reaches here with mail unproposed: a
+            // caller with nothing opens with FF, and ending on it left the
+            // answering station's outbox behind (full-stack fuzz,
+            // 2026-10-02).
+            if !pendingOutbound.isEmpty {
+                return [.cancelTimer(.response)] + sendNextProposalBatchOrFF()
+            }
             return completeSession(disconnectRequested: true)
         }
 

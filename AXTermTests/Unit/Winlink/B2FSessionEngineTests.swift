@@ -697,6 +697,40 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertEqual(summary.sentMIDs, ["OUTMSG000001"])
     }
 
+    /// A caller with nothing to send opens with FF, which hands the turn
+    /// over: the answering side then offers its own mail. It used to read
+    /// FF as the end of the session and quit with its outbox untouched
+    /// (full-stack fuzz, 2026-10-02).
+    func testACallerWithNothingToSendStillGetsTheAnsweringSidesMail() throws {
+        let outbound = try prepare(makeMessage(mid: "OUTMSG000001"))
+        let harness = makeAnsweringHarness(outbound: [outbound])
+        harness.fire(.connected)
+        harness.receive(";FW: W0ARP\r\n[Winlink Express-1.7.6.0-B2FHM$]\r\n")
+
+        harness.receive("FF\r\n")
+        XCTAssertNil(harness.completion, "the session ended before we offered our mail")
+        XCTAssertTrue(harness.sentText.contains("FC EM OUTMSG000001"), harness.sentText)
+        XCTAssertFalse(harness.sentText.hasSuffix("FQ\r"))
+
+        harness.receive("FS Y\r\n")
+        XCTAssertTrue(harness.contains(.outboundBodySent(mid: "OUTMSG000001")))
+        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"), "outbox drained → FF")
+        harness.receive("FQ\r\n")
+        let summary = try XCTUnwrap(harness.completion)
+        XCTAssertEqual(summary.sentMIDs, ["OUTMSG000001"])
+        XCTAssertTrue(summary.succeeded)
+    }
+
+    /// Nothing on either side: FF is answered with FQ and the session ends.
+    func testAnsweringWithNothingToSendAnswersFFWithFQ() {
+        let harness = makeAnsweringHarness()
+        harness.fire(.connected)
+        harness.receive(";FW: W0ARP\r\n[Winlink Express-1.7.6.0-B2FHM$]\r\n")
+        harness.receive("FF\r\n")
+        XCTAssertNotNil(harness.completion)
+        XCTAssertTrue(harness.sentText.hasSuffix("FQ\r"))
+    }
+
     /// A caller whose SID lacks B2F cannot be talked to safely, and the
     /// answering side must say so rather than risk a B1 exchange.
     func testAnsweringStationRejectsANonB2FCaller() {
