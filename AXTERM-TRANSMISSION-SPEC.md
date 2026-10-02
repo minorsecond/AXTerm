@@ -740,10 +740,16 @@ spends a key-up (~0.5 s of channel at 1200 baud) per frame and, on simplex,
 risks colliding with the peer's next I-frame, converting the ack itself into
 inbound loss and a go-back-N resend. Rules:
 
-- An in-sequence P=0 delivery **arms T2 once**; frames arriving while it runs
-  do not push the deadline back. Re-arming per frame is unbounded — any
-  arrival cadence faster than T2 defers the ack forever and the peer's T1
-  fires first (observed as RTO oscillation in the adaptive harness).
+- Each in-sequence P=0 delivery **restarts T2**, so the delayed ack goes out
+  once the peer's burst has paused, never in a gap partway through it. On
+  2026-10-01 an arm-once T2 drew an RR 2 s into a 4 s burst; the sender
+  filled the freed slot and keyed over our answer to its poll, and the
+  session fell to K1 (live test log, bug 25).
+- The restart is bounded: the ack goes out no later than **3 × T2** (6 s)
+  after the first delivery it is owed for. Unbounded restarting was tried
+  before and rejected, since arrivals faster than T2 put the ack off until the
+  peer's T1 fired first (RTO oscillation in the adaptive harness). A lone
+  frame is still acked one T2 after it.
 - The debt is settled by whatever carries `N(R)` first: the F=1 response to a
   P=1 poll, an outgoing I-frame's piggybacked `N(R)`, a REJ, or the RR that
   T2 itself fires (F=0). A settled debt disarms T2; a stale T2 expiry with

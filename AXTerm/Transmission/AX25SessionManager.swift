@@ -254,6 +254,11 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// and hears nothing more until the re-establishment succeeds or fails.
     var isReestablishing = false
 
+    /// When T2 was first armed for the ack now owed, on the injected clock.
+    /// Restarting T2 for each frame of a burst never holds the ack past
+    /// `AX25SessionManager.t2MaxHoldPeriods` T2 periods from here.
+    var t2HoldStartedAt: TimeInterval?
+
     /// Timestamp when session was established
     var connectedAt: Date?
 
@@ -3593,27 +3598,44 @@ final class AX25SessionManager: ObservableObject {
         session.t1PendingRetransmitTask = nil
     }
 
-    /// Arm T2, the response-delay timer — once. The first unacknowledged
-    /// delivery starts the clock; later frames in the burst leave the
-    /// deadline alone. Re-arming per frame looked attractive (transmit
-    /// only when the channel goes quiet) but is unbounded: any arrival
-    /// cadence faster than T2 defers the ack forever, and the sender's T1
-    /// (rtoMin 3 s) fires spuriously first — observed directly as RTO
-    /// oscillation in the adaptive harness. Arm-once bounds the deferral
-    /// at t2AckDelay, comfortably inside any sane peer's T1, and on the
-    /// air it rarely matters anyway: gateways end every burst with a P=1
-    /// poll (field capture 2026-08-24) whose F=1 response carries the ack.
+    /// How many T2 periods, counted from the first frame owed an ack, a
+    /// restarted T2 may hold that ack.
+    nonisolated static let t2MaxHoldPeriods: Double = 3
+
+    /// Arm T2, the response-delay timer, or restart it.
+    ///
+    /// Each frame that arms it restarts it, so the delayed ack goes out when
+    /// the peer's burst has paused, not in a gap partway through. On
+    /// 2026-10-01 a 4 s burst drew the arm-once ack 2 s in, the sender filled
+    /// the freed slot at once and keyed over our answer to its poll, and the
+    /// session fell to K1 (live test log, bug 25). A burst that ends with a
+    /// poll is answered at once and never waits for T2.
+    ///
+    /// Restarting without a limit was tried before and rejected: arrivals
+    /// faster than T2 put the ack off until the sender's T1 fired first,
+    /// which showed as RTO oscillation in the adaptive harness. So the hold
+    /// ends `t2MaxHoldPeriods` T2 periods (6 s) after the first frame it owes
+    /// an ack for. A lone frame is still acked one T2 after it.
     private func startT2Timer(for session: AX25Session) {
-        guard session.t2TimerTask == nil else { return }
+        let now = clock.currentTime
+        let t2 = session.timers.t2AckDelay
+        if session.t2TimerTask == nil || session.t2HoldStartedAt == nil {
+            session.t2HoldStartedAt = now
+        }
+        let holdEnds = (session.t2HoldStartedAt ?? now) + t2 * Self.t2MaxHoldPeriods
+        let delay = max(0, min(now + t2, holdEnds) - now)
+
+        session.t2TimerTask?.cancel()
         session.t2Generation &+= 1
         let generation = session.t2Generation
         let sessionId = session.id
 
-        session.t2TimerTask = clock.schedule(delay: session.timers.t2AckDelay) { [weak self] in
+        session.t2TimerTask = clock.schedule(delay: delay) { [weak self] in
             guard let self = self else { return }
             guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else { return }
             guard session.t2Generation == generation else { return }
             session.t2TimerTask = nil
+            session.t2HoldStartedAt = nil
             let actions = session.stateMachine.handle(event: .t2Timeout)
             let frames = self.processActions(actions, for: session)
             for frame in frames {
@@ -3626,6 +3648,7 @@ final class AX25SessionManager: ObservableObject {
         session.t2Generation &+= 1
         session.t2TimerTask?.cancel()
         session.t2TimerTask = nil
+        session.t2HoldStartedAt = nil
     }
 
     /// Start T3 (idle) timer for a session
