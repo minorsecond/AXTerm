@@ -274,7 +274,7 @@ nonisolated final class B2FSessionEngine {
             guard state == .idle else { return [] }
             guard config.role == .answering else {
                 state = .awaitingBanner
-                return [.startTimer(.banner, seconds: 90)]
+                return [.startTimer(.banner, seconds: 90)] + consumeEarlyLines()
             }
             // The answering station speaks first — the caller has
             // nothing to handshake against until it does. No `;PQ:`
@@ -285,7 +285,7 @@ nonisolated final class B2FSessionEngine {
             return [
                 sendText(config.sid.rendered + "\r" + config.myCallsign + ">\r"),
                 .startTimer(.banner, seconds: 90),
-            ]
+            ] + consumeEarlyLines()
 
         case .bytesReceived(let data):
             summary.bytesReceived += data.count
@@ -359,12 +359,29 @@ nonisolated final class B2FSessionEngine {
         return actions
     }
 
+    /// Handles what arrived before the link was known to be up.
+    ///
+    /// A gateway speaks the moment it accepts the connection, and the
+    /// runner learns of the connection by polling, so the banner can reach
+    /// the engine while it is still idle. Lines are kept until then
+    /// (consumeLines) and handled here, in the state the connection put
+    /// the engine in.
+    private func consumeEarlyLines() -> [Action] {
+        guard !lineBuffer.isEmpty else { return [] }
+        var actions = [Action]()
+        let leftover = consumeLines(Data(), into: &actions)
+        if !leftover.isEmpty { actions.append(contentsOf: consume(leftover)) }
+        return actions
+    }
+
     /// Line mode: append to the buffer, then process each complete line.
     /// Returns unconsumed bytes when the engine switched to binary mode.
+    /// While idle, lines wait in the buffer for the connection
+    /// (consumeEarlyLines).
     private func consumeLines(_ data: Data, into actions: inout [Action]) -> Data {
         lineBuffer.append(data)
 
-        while state != .receivingBodies, state != .failed, state != .closed {
+        while state != .idle, state != .receivingBodies, state != .failed, state != .closed {
             if let lineEnd = lineBuffer.firstIndex(where: { $0 == 0x0d || $0 == 0x0a }) {
                 let lineData = lineBuffer.prefix(upTo: lineEnd)
                 var rest = lineBuffer.suffix(from: lineBuffer.index(after: lineEnd))

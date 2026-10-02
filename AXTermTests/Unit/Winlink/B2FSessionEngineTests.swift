@@ -125,6 +125,36 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertTrue(sent.hasSuffix("FF\r"), "empty outbox ends handshake with FF: \(sent)")
     }
 
+    /// The banner can arrive before the engine hears the link is up: the
+    /// gateway speaks the moment it sends UA, and the runner learns of the
+    /// connection by polling. On the air on 2026-10-01 an AXTerm peer's
+    /// banner arrived 0.3 s after its UA, was dropped while the engine was
+    /// still idle, and the exchange timed out "waiting for the gateway
+    /// banner" 90 s later.
+    func testABannerThatArrivesBeforeConnectedIsKept() {
+        let harness = makeHarness()
+        harness.receive(standardBanner)
+        XCTAssertEqual(harness.sentText, "", "nothing goes out before the link is up")
+
+        harness.fire(.connected)
+
+        let sent = harness.sentText
+        XCTAssertTrue(sent.contains(";FW: K0EPI\r"), sent)
+        let expected = WinlinkSecureLogin.response(challenge: "23753528", password: "SECRET")
+        XCTAssertTrue(sent.contains(";PR: \(expected)\r"), sent)
+        XCTAssertTrue(sent.hasSuffix("FF\r"), sent)
+    }
+
+    /// The same with an AXTerm P2P peer's banner: its SID and a prompt, no
+    /// challenge.
+    func testAPeersBannerThatArrivesBeforeConnectedIsKept() {
+        let harness = makeHarness()
+        harness.receive("[AXTerm-1.0-B2FHM$]\rK0EPI>\r")
+        harness.fire(.connected)
+        XCTAssertTrue(harness.sentText.contains(";FW: K0EPI\r"), harness.sentText)
+        XCTAssertNil(harness.failureReason)
+    }
+
     func testHandshakeWithoutChallengeOmitsPR() {
         let harness = makeHarness()
         harness.fire(.connected)
