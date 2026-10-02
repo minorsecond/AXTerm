@@ -302,6 +302,12 @@ nonisolated final class B2FSessionEngine {
 
         case .linkDisconnected:
             switch state {
+            case .closing where summary.aborted:
+                // An abort ends the session here, once the link is down.
+                // Returning nothing left the runner waiting for an end that
+                // never came, still "running".
+                state = .closed
+                return [.complete(summary)]
             case .closing, .closed:
                 state = .closed
                 return []

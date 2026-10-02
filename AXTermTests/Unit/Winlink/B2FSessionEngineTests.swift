@@ -582,6 +582,43 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertEqual(harness.completion, nil, "aborted sessions do not complete")
     }
 
+    /// Found 2026-10-02 while testing bug 40: after an abort the engine went
+    /// to closing, and when the disconnect landed it moved to closed and
+    /// returned nothing, so the runner waited for the session to end forever
+    /// and stayed "running". The session ends, marked aborted, once the link
+    /// is down.
+    func testAnAbortedSessionEndsWhenTheLinkGoesDown() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.fire(.abortRequested)
+        harness.fire(.linkDisconnected)
+        let summary = harness.completion
+        XCTAssertEqual(summary?.aborted, true)
+        XCTAssertNil(summary?.failureReason)
+        XCTAssertNil(harness.failureReason)
+        XCTAssertEqual(harness.engine.state, .closed)
+    }
+
+    func testAnAbortBeforeTheBannerAlsoEnds() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.fire(.abortRequested)
+        harness.fire(.linkDisconnected)
+        XCTAssertEqual(harness.completion?.aborted, true)
+    }
+
+    /// A session that completed normally ends once, not again when the link drops.
+    func testACompletedSessionIsNotEndedTwice() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.receive("FQ\r\n")
+        harness.fire(.linkDisconnected)
+        let completions = harness.actions.filter { if case .complete = $0 { return true }; return false }
+        XCTAssertEqual(completions.count, 1)
+    }
+
     // MARK: - P2P (answering role)
 
     /// In a grid-down there is no CMS and no gateway to call. Two

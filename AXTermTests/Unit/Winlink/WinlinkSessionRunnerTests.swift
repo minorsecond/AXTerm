@@ -253,6 +253,26 @@ final class WinlinkSessionRunnerTests: XCTestCase {
         _ = await exchange.value
     }
 
+    /// Pressing Abort while waiting for the banner has to end the exchange.
+    func testAbortWhileWaitingForTheBannerEndsTheExchange() async throws {
+        let store = try makeStore()
+        let runner = WinlinkSessionRunner(store: store)
+        let transport = FakeRMSTransport()
+        transport.holdBanner = true
+        let exchange = Task { @MainActor in
+            await runner.runExchange(transport: transport, myCallsign: "K0EPI-3", password: nil,
+                                     gatewayName: "K0EPI-2", transportName: "P2P")
+        }
+        while runner.phase != .exchanging { await Task.yield() }
+        runner.abort()
+        let idle = await runner.waitUntilIdle(timeout: 5)
+        // Without this guard a regression hangs the whole test run.
+        guard idle else { return XCTFail("the exchange must end after Abort") }
+        let summary = await exchange.value
+        XCTAssertTrue(summary.aborted)
+        XCTAssertEqual(try store.sessionLogs(limit: 1).first?.result, "aborted")
+    }
+
     // MARK: - Peer-to-peer
 
     /// Field case 2026-10-01: a peer exchange offered the peer the whole
