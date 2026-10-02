@@ -197,7 +197,7 @@ Status is filled in as each is fixed.
 | 45 | Abort never ended a Winlink exchange. The engine moved to closing, sent FQ and asked for a disconnect; when the disconnect landed it moved to closed and returned nothing, so the runner stayed "running" until the app quit. | unit test, 2026-10-02 | fixed, bcdddf0: the session ends, marked aborted, once the link is down |
 | 46 | Abort pressed while mail was being prepared or the call placed did nothing: it went to an engine that was not talking to anyone yet. | unit test, 2026-10-02 | fixed, a4275b1: Abort in those phases is remembered and ends the exchange as aborted at the next step, hanging up a call being placed. With a real AX.25 call the hang-up is a DISC, so on a dead path the abort takes as long as the DISC retries |
 | 47 | A frame sent while an inbound frame was being handled lost its T1: YAPP's AF on EF, AXDP's completion ack, YAPP blocks pumped on an ack. One loss and the transfer sat until YAPP's or AXDP's own timeout, with the file already delivered. A block pumped on a REJ's ack was also sent twice. | full-stack fuzz, 2026-10-02 | fixed, 7e8adfa: the layer above hears about a frame after its timer actions (spec §7.5) |
-| 48 | Two stations polled each other forever: after a link reset a late duplicate of an old I-frame sat out of sequence, every gap poll was answered, and each answer reset the retry count. | full-stack fuzz, 2026-10-02 | fixed, 89620f0: gap polls counted on their own, last-ditch flush at N2 − 1 (spec §7.4). Changes when a stuck link gives up; needs review |
+| 48 | Two stations polled each other forever: after a link reset a late duplicate of an old I-frame sat out of sequence, every gap poll was answered, and each answer reset the retry count. | full-stack fuzz, 2026-10-02 | fixed, 89620f0: gap polls counted on their own, last-ditch flush at N2 − 1 (spec §7.4). Changes when a stuck link gives up; reviewed and kept by the operator, 2026-10-02 |
 | 49 | A YAPP cancel after the receiver's AF went unanswered, held the session for the 10 s CA wait and could print the CN on the other terminal. | full-stack fuzz, 2026-10-02 | fixed, 1bdfa62: too late to cancel once AF is in, so the transfer finishes |
 | 50 | Winlink P2P: a caller with nothing to send opens with FF, and the answering station quit on it with its own outbox untouched. | full-stack fuzz, 2026-10-02 | fixed, 3d55843 |
 | 51 | The TNC4's extended modem-type reply was accepted at any length. | property test, 2026-10-02 | fixed, a426ada |
@@ -450,7 +450,9 @@ Bugs found and fixed:
   the receiver polled for the gap every T1, the peer answered each poll, and
   each answer reset the retry count, so it never ended. Gap polls are now
   counted on their own and the existing last-ditch flush runs at N2 − 1. This
-  changes when a stuck link gives up, so it needs the operator's review.
+  changes when a stuck link gives up; the operator reviewed it and kept it.
+  Each flush is logged as a data-loss event, so one seen after an on-air
+  session means a real station reached this state.
 - **49. YAPP cancel after AF (1bdfa62).** The receiver already had the file;
   the CN went unanswered, held the session for the CA wait, and could print
   on the other terminal. Too late to cancel now, so the transfer finishes.
