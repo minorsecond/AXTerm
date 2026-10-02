@@ -317,9 +317,10 @@ the iOS build, then its own commit: bug 42 (0d2dc5d), 43 (b4ab732), 41
 (811408d), 40 (3f2c9e6), and two Abort bugs found on the way, 45
 (bcdddf0) and 46 (a4275b1). The last full suite ran 8,505 tests;
 the one failure was `ModemRadioLinkTests.testATransmissionKeysAndUnkeysOverCIV`,
-which passed 5 of 5 on its own. It has now failed under full-suite load
-three times in two days and waits in real time, so it needs its timing
-made load-proof.
+which passed 5 of 5 on its own. It had failed under full-suite load
+three times in two days: the CI-V unkey goes out just after the modem
+stops keying and landed after the test's fixed wait. The test now waits
+for the write, and the next full suite passed all 8,505.
 
 Waiting on the owner: bug 39, which reverses a deviation kept on
 purpose, and the remaining one-frame-per-RR pattern noted under bug 42.
