@@ -76,6 +76,9 @@ final class WinlinkSessionRunner: ObservableObject {
 
     private let worker: WinlinkPersistenceWorker
     private var engine: B2FSessionEngine?
+    /// Abort pressed before the engine is talking to anyone: while mail is
+    /// being prepared or the call placed. Acted on at the next step.
+    private var abortPending = false
     private var transport: WinlinkTransport?
     private var timerTasks: [B2FSessionEngine.TimerKind: Task<Void, Never>] = [:]
     private var completion: CheckedContinuation<WinlinkExchangeSummary, Never>?
@@ -141,6 +144,7 @@ final class WinlinkSessionRunner: ObservableObject {
         }
 
         phase = .preparing
+        abortPending = false
         statusText = "Preparing outbound mail…"
         startedAt = Date()
         sessionFrequencyHz = frequencyHz
@@ -227,6 +231,10 @@ final class WinlinkSessionRunner: ObservableObject {
         lastSubmittedBytes = 0
         sendBaselineBytes = 0
 
+        if abortPending {
+            return await finishAborted(gatewayName: gatewayName, transportName: transportName)
+        }
+
         phase = .connecting
         statusText = role == .answering
             ? "Answering \(gatewayName)…"
@@ -236,8 +244,16 @@ final class WinlinkSessionRunner: ObservableObject {
             try await transport.open()
         } catch {
             transport.onClose = nil
+            if abortPending {
+                return await finishAborted(gatewayName: gatewayName, transportName: transportName)
+            }
             return await finish(failure: "connect failed: \(describeTransportError(error))",
                                 gatewayName: gatewayName, transportName: transportName)
+        }
+        if abortPending {
+            transport.onClose = nil
+            transport.close()
+            return await finishAborted(gatewayName: gatewayName, transportName: transportName)
         }
 
         phase = .exchanging
@@ -283,7 +299,21 @@ final class WinlinkSessionRunner: ObservableObject {
 
     func abort() {
         guard isRunning else { return }
-        dispatch(.abortRequested)
+        switch phase {
+        case .preparing, .connecting:
+            // The engine is not talking to anyone yet, so it has nothing to
+            // say FQ to (live test log, bug 46). Hang up a call being placed;
+            // runExchange ends the exchange at its next step.
+            abortPending = true
+            log(.event, "Abort requested")
+            if phase == .connecting {
+                // The hang-up's own "link closed" is not a failure.
+                transport?.onClose = nil
+                transport?.close()
+            }
+        default:
+            dispatch(.abortRequested)
+        }
     }
 
     // MARK: - Engine pump
@@ -550,6 +580,12 @@ final class WinlinkSessionRunner: ObservableObject {
     }
 
     // MARK: - Finalization
+
+    private func finishAborted(gatewayName: String, transportName: String) async -> WinlinkExchangeSummary {
+        var summary = engine?.currentSummary ?? WinlinkExchangeSummary()
+        summary.aborted = true
+        return await finish(summary: summary, gatewayName: gatewayName, transportName: transportName)
+    }
 
     private func finish(failure reason: String, gatewayName: String, transportName: String) async -> WinlinkExchangeSummary {
         let summary = engineSummaryForFailure(reason: reason)

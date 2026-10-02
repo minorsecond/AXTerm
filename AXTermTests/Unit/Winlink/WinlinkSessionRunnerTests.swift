@@ -30,6 +30,10 @@ final class WinlinkSessionRunnerTests: XCTestCase {
         var failToOpen = false
         /// When true, open succeeds but the banner never comes.
         var holdBanner = false
+        /// When set, open takes this long to connect, like a SABM waiting
+        /// for its UA, and fails if the transport is closed meanwhile.
+        var connectDelay: TimeInterval = 0
+        private(set) var openCalls = 0
 
         private var lineBuffer = Data()
         private var expectedBodies = 0
@@ -38,6 +42,12 @@ final class WinlinkSessionRunnerTests: XCTestCase {
         private var closed = false
 
         func open() async throws {
+            openCalls += 1
+            let deadline = Date().addingTimeInterval(connectDelay)
+            while Date() < deadline {
+                if closed { throw WinlinkTransportError.connectTimeout("FAKE-RMS") }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
             if failToOpen {
                 throw WinlinkTransportError.connectTimeout("FAKE-RMS")
             }
@@ -270,6 +280,50 @@ final class WinlinkSessionRunnerTests: XCTestCase {
         guard idle else { return XCTFail("the exchange must end after Abort") }
         let summary = await exchange.value
         XCTAssertTrue(summary.aborted)
+        XCTAssertEqual(try store.sessionLogs(limit: 1).first?.result, "aborted")
+    }
+
+    /// Bug 46: Abort during "Preparing outbound mail…" went to an engine
+    /// that did not exist yet and was dropped.
+    func testAbortWhilePreparingEndsWithoutConnecting() async throws {
+        let store = try makeStore()
+        let runner = WinlinkSessionRunner(store: store)
+        let transport = FakeRMSTransport()
+        let exchange = Task { @MainActor in
+            await runner.runExchange(transport: transport, myCallsign: "K0EPI-2", password: nil,
+                                     gatewayName: "K0EPI-3", transportName: "P2P")
+        }
+        while runner.phase != .preparing { await Task.yield() }
+        runner.abort()
+        let idle = await runner.waitUntilIdle(timeout: 5)
+        guard idle else { return XCTFail("Abort while preparing must end the exchange") }
+        let summary = await exchange.value
+        XCTAssertTrue(summary.aborted)
+        XCTAssertNil(summary.failureReason)
+        XCTAssertEqual(transport.openCalls, 0, "an aborted exchange does not call anyone")
+    }
+
+    /// Bug 46: Abort while the call is being placed has to stop the call,
+    /// not wait out the connect timeout.
+    func testAbortWhileConnectingCancelsTheCall() async throws {
+        let store = try makeStore()
+        let runner = WinlinkSessionRunner(store: store)
+        let transport = FakeRMSTransport()
+        transport.connectDelay = 30
+        let exchange = Task { @MainActor in
+            await runner.runExchange(transport: transport, myCallsign: "K0EPI-2", password: nil,
+                                     gatewayName: "K0EPI-3", transportName: "P2P")
+        }
+        while runner.phase != .connecting { await Task.yield() }
+        runner.abort()
+        let idle = await runner.waitUntilIdle(timeout: 5)
+        guard idle else {
+            transport.close()
+            return XCTFail("Abort while connecting must end the exchange")
+        }
+        let summary = await exchange.value
+        XCTAssertTrue(summary.aborted)
+        XCTAssertNil(summary.failureReason, "the operator stopped it; it did not fail")
         XCTAssertEqual(try store.sessionLogs(limit: 1).first?.result, "aborted")
     }
 
