@@ -218,7 +218,8 @@ struct FuzzPicker {
 
 /// Seeds for a full-stack fuzz test: a few in the normal run,
 /// AXTERM_FULLSTACK_FUZZ_SEEDS=<n> (TEST_RUNNER_ prefix through xcodebuild)
-/// for a soak, AXTERM_FULLSTACK_FUZZ_SEED=<n>[,<n>...] to replay some.
+/// for a soak, AXTERM_FULLSTACK_FUZZ_BASE=<n> to start past seed n, and
+/// AXTERM_FULLSTACK_FUZZ_SEED=<n>[,<n>...] to replay some.
 enum FullStackFuzz {
     /// AXTERM_FULLSTACK_FUZZ_TRACE=1 adds the frames around each problem
     /// to the report.
@@ -233,7 +234,10 @@ enum FullStackFuzz {
             if !seeds.isEmpty { return seeds }
         }
         let count = env["AXTERM_FULLSTACK_FUZZ_SEEDS"].flatMap(Int.init) ?? normal
-        return (1...max(1, count)).map(UInt64.init)
+        // A base moves the run to fresh scenarios (the nightly soak uses the
+        // date); reports print absolute seeds, so replay is unchanged.
+        let base = env["AXTERM_FULLSTACK_FUZZ_BASE"].flatMap(UInt64.init) ?? 0
+        return (1...max(1, count)).map { base &+ UInt64($0) }
     }
 
     /// Both stations' frames since `since`, merged in time order, the last

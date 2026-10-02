@@ -129,6 +129,8 @@ case "${1:-}" in
     # Two complete stations over an impaired link: transfers and chat,
     # Winlink, the mailbox and the node shell.
     ( export TEST_RUNNER_AXTERM_FULLSTACK_FUZZ_SEEDS="${AXTERM_FULLSTACK_FUZZ_SEEDS:-200}"
+      export TEST_RUNNER_AXTERM_FULLSTACK_FUZZ_BASE="${AXTERM_FULLSTACK_FUZZ_BASE:-$(date +%Y%m%d)000}"
+      export TEST_RUNNER_AXTERM_FULLSTACK_FUZZ_TRACE=1
       xcode_test soak-fullstack \
         -only-testing:AXTermTests/FullStackTransferFuzzTests \
         -only-testing:AXTermTests/FullStackWinlinkFuzzTests \

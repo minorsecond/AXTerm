@@ -130,19 +130,35 @@ final class FullStackWinlinkFuzzTests: XCTestCase {
 
         var report = ["seed \(seed): \(impairment) action=\(action.rawValue) A queued \(sentByA.count), B queued \(sentByB.count)"]
         var problems: [String] = []
-        func problem(_ text: String) { problems.append("seed \(seed): \(text)") }
+        let started = Date()
+        func problem(_ text: String) {
+            problems.append("seed \(seed): \(text)")
+            if FullStackFuzz.tracing { problems += FullStackFuzz.trace(a, b, since: started, limit: 200) }
+        }
 
-        // B answers inbound calls as a P2P peer, as WinlinkMailView does.
-        var answerTask: Task<Void, Never>?
+        // B answers inbound calls as a P2P peer with the production decision
+        // and the same wait WinlinkMailView uses: a SABM that resets the link
+        // under a running exchange is answered once that exchange has ended.
+        var answerTasks: [Task<Void, Never>] = []
         b.coordinator.onInboundSessionConnected = { [weak self] session in
-            guard let self, !runnerB.isRunning else { return }
+            guard let self else { return }
+            let decision = WinlinkP2PListener(
+                isArmed: true, myCallsign: "K0BBB-2",
+                isExchangeRunning: runnerB.isRunning, contestedBy: nil,
+                runningExchangePeer: runnerB.currentPeer)
+                .decide(called: session.localAddress.display, isInitiator: session.isInitiator,
+                        caller: session.remoteAddress.display)
+            guard decision == .answer || decision == .answerWhenFree else { return }
             let peer = session.remoteAddress.display.uppercased()
             let t = self.transport(b, to: session.remoteAddress, radio: session.radio)
-            answerTask = Task { @MainActor in
+            answerTasks.append(Task { @MainActor in
+                if decision == .answerWhenFree {
+                    guard await runnerB.waitUntilIdle(timeout: 15), session.state == .connected else { return }
+                }
                 _ = await runnerB.runExchange(transport: t, myCallsign: "K0BBB-2", password: nil,
                                               gatewayName: peer, transportName: "P2P",
                                               role: .answering, peer: peer)
-            }
+            })
         }
 
         let callerTask = Task { @MainActor in
@@ -177,7 +193,7 @@ final class FullStackWinlinkFuzzTests: XCTestCase {
 
         let summaryA = await callerTask.value
         let finished = await FullStackFuzz.wait(150) { !runnerA.isRunning && !runnerB.isRunning }
-        _ = await answerTask?.value
+        for task in answerTasks { _ = await task.value }
         report.append("  caller: \(summaryA.failureReason.map { "failed: \($0)" } ?? (summaryA.aborted ? "aborted" : "ok")) sent \(summaryA.sentMIDs.count) received \(summaryA.receivedMIDs.count)")
         if !finished {
             problem("a runner is still running after 150 s (A \(runnerA.isRunning), B \(runnerB.isRunning))")

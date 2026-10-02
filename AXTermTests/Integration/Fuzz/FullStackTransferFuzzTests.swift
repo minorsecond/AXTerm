@@ -216,6 +216,17 @@ final class FullStackTransferFuzzTests: XCTestCase {
             if !offered, sender.session != nil, receiver.session != nil, mild, !reset {
                 problem("op \(index) \(kind.rawValue): the offer never reached the receiver on a live link (\(impairment)): sender \(String(describing: s))")
             }
+            // A YAPP cancel keeps the session claimed until the other side's
+            // CA arrives (up to 10 s), so the CA is not typed into the
+            // terminal; the row says canceled before that. Starting the next
+            // transfer in that gap is refused as busy, rightly, so wait it
+            // out. Still held after 15 s is a leak.
+            if kind == .yapp {
+                let released = await FullStackFuzz.wait(15) {
+                    a.coordinator.yappTransfers.isEmpty && b.coordinator.yappTransfers.isEmpty
+                }
+                if !released, settled { problem("op \(index) yapp: a runner still holds the session 15 s after the transfer ended") }
+            }
             if !settled {
                 problem("op \(index) \(kind.rawValue) \(actionTaken.rawValue): not final after 120 s: sender \(String(describing: s)), receiver \(String(describing: r))")
                 continue
