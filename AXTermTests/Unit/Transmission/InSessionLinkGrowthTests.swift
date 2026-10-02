@@ -462,20 +462,66 @@ final class InSessionLinkCoordinatorTests: XCTestCase {
         let coordinator = SessionCoordinator()
         coordinator.adaptiveTransmissionEnabled = true
         coordinator.inSessionLinkGrowth = true
+        // These tests are about growth itself, toward a peer that holds its
+        // acks through a burst (an AXTerm since a148309).
+        coordinator.peerHoldsAcksThroughBursts = { _ in true }
         coordinator.localCallsign = "LOCAL-0"
         return coordinator
     }
 
-    /// Off by default since 2026-10-01 (bursts longer than the receiver's T2
-    /// collided with its acks): a session keeps the K and paclen it started
-    /// with unless growth is switched on.
+    /// Off by default: in the stress harness growth loses two to four times
+    /// on lossy links (see `SessionCoordinator.inSessionLinkGrowth`).
     func testGrowthIsOffByDefault() {
         let coordinator = SessionCoordinator()
         coordinator.adaptiveTransmissionEnabled = true
         coordinator.localCallsign = "LOCAL-0"
         XCTAssertFalse(coordinator.inSessionLinkGrowth)
+        coordinator.markImplicitlyConfirmedAXDP(for: "PEER-0")
         let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary)
         XCTAssertEqual(config?.adaptsInSession, false, "a session got growth ceilings with growth off")
+    }
+
+    /// Switched on, growth applies only toward a peer known to hold its
+    /// delayed ack until a burst pauses, which AXTerm's receiver does since
+    /// a148309: one that has confirmed AXDP. Toward anyone else bug 25 could
+    /// happen again, so a session keeps the K and paclen it started with.
+    func testWhenOnGrowthAppliesOnlyTowardAPeerThatConfirmedAXDP() {
+        let coordinator = SessionCoordinator()
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.localCallsign = "LOCAL-0"
+        coordinator.inSessionLinkGrowth = true
+
+        let other = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary)
+        XCTAssertEqual(other?.adaptsInSession, false, "grew toward a station whose ack timing is unknown")
+
+        coordinator.markImplicitlyConfirmedAXDP(for: "PEER-0")
+        let axterm = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary)
+        XCTAssertEqual(axterm?.adaptsInSession, true, "no growth toward a peer running AXTerm")
+    }
+
+    /// Toward a station that is not known to hold its acks, a session starts
+    /// as it did before §7.8.1: confirmed-link memory is not read.
+    func testTowardAnUnconfirmedPeerConfirmedMemoryDoesNotSeedTheStart() {
+        let coordinator = makeCoordinator()
+        coordinator.peerHoldsAcksThroughBursts = { _ in false }
+        coordinator.confirmedLinkMemory.recordConfirmed(
+            window: 4, paclen: 256, for: directScope, at: Date().addingTimeInterval(-3600))
+
+        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "", .primary)
+        XCTAssertEqual(config?.adaptsInSession, false)
+        XCTAssertNotEqual(config?.windowSize, 4)
+        XCTAssertNotEqual(config?.paclen, 256)
+    }
+
+    /// What this station can receive is advertised in its XID whatever the
+    /// peer, so an AXTerm peer can grow toward us.
+    func testTheDefaultConfigAdvertisesGrowthCeilingsWhenGrowthIsOn() {
+        let coordinator = SessionCoordinator()
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.localCallsign = "LOCAL-0"
+        coordinator.inSessionLinkGrowth = true
+        coordinator.syncSessionManagerConfigFromAdaptive()
+        XCTAssertEqual(coordinator.sessionManager.defaultConfig.adaptsInSession, true)
     }
 
     override func tearDown() {

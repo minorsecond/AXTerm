@@ -223,6 +223,9 @@ final class StressRunner {
             brain.localCallsign = call.display
             brain.adaptiveTransmissionEnabled = true
             brain.inSessionLinkGrowth = scenario.mode == .growth
+            // Both simulated stations are AXTerm, whose receiver holds its
+            // delayed ack until a burst pauses (a148309).
+            brain.peerHoldsAcksThroughBursts = { _ in true }
             if let k = scenario.window {
                 brain.globalAdaptiveSettings.windowSize.mode = .manual
                 brain.globalAdaptiveSettings.windowSize.manualValue = k

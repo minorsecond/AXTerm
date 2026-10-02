@@ -650,7 +650,8 @@ final class SessionCoordinator: ObservableObject {
             return cached.settings
         }
         var fresh = TxAdaptiveSettings()
-        if inSessionLinkGrowth, scope.route != nil, let seed = confirmedLinkMemory.values(for: scope) {
+        if let route = scope.route, growsInSession(toward: route.destination),
+           let seed = confirmedLinkMemory.values(for: scope) {
             fresh.windowSize.currentAdaptive = seed.window
             fresh.paclen.currentAdaptive = seed.paclen
             fresh.windowSize.adaptiveReason = "Confirmed on this link earlier today"
@@ -708,7 +709,7 @@ final class SessionCoordinator: ObservableObject {
         // Ceilings as well as starts: the default config is also what an
         // inbound XID is answered from, and N1 and k there are what this
         // station can receive (§7.8.1).
-        let ceilings = linkCeilings(hops: 0)
+        let ceilings = linkCeilings(hops: 0, growth: inSessionLinkGrowth)
         sessionManager.defaultConfig = AX25SessionConfig(
             windowSize: a.windowSize.effectiveValue,
             paclen: a.paclen.effectiveValue,
@@ -842,10 +843,11 @@ final class SessionCoordinator: ObservableObject {
             let confirmationsBefore = entry.metrics.upgradesConfirmed
             // The airtime allowance on the round-trip ceiling belongs to
             // in-session growth; with growth off the ceiling is the plain 5 s.
-            entry.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits, bytesInFlight: inSessionLinkGrowth ? bytesInFlight : nil)
+            let grows = normalizedKey.route.map { growsInSession(toward: $0.destination) } ?? false
+            entry.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits, bytesInFlight: grows ? bytesInFlight : nil)
             // What the next session to this link may start from: written
             // when a trial passes, lowered when the link backs off.
-            if !inSessionLinkGrowth {
+            if !grows {
                 // Off: nothing is remembered, as before §7.8.1.
             } else if entry.metrics.upgradesConfirmed > confirmationsBefore {
                 confirmedLinkMemory.recordConfirmed(window: entry.confirmedWindow,
@@ -1070,6 +1072,7 @@ final class SessionCoordinator: ObservableObject {
     /// parameter the operator set by hand stays exactly that for the session,
     /// with no ceiling to grow toward. XID can only lower both, later.
     private func configFromAdaptive(_ a: TxAdaptiveSettings, hops: Int = 0,
+                                    growth: Bool = false,
                                     startSource: LinkStartSource = .configured,
                                     learnedPathRto: Double? = nil) -> AX25SessionConfig {
         let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
@@ -1079,15 +1082,15 @@ final class SessionCoordinator: ObservableObject {
             min(a.rtoMax.effectiveValue,
                 max(max(a.rtoMin.effectiveValue, Self.learnedSeedFloorSeconds), learned))
         }
-        let ceilings = linkCeilings(hops: hops)
+        let ceilings = linkCeilings(hops: hops, growth: growth)
         let operatorK = globalAdaptiveSettings.windowSize
         let operatorP = globalAdaptiveSettings.paclen
         return AX25SessionConfig(
             // With growth off a session starts from the route's learned
             // values, exactly as before §7.8.1 existed.
-            windowSize: !inSessionLinkGrowth ? a.windowSize.effectiveValue
+            windowSize: !growth ? a.windowSize.effectiveValue
                 : (ceilings.window == nil ? operatorK.effectiveValue : a.confirmedWindow),
-            paclen: !inSessionLinkGrowth ? a.paclen.effectiveValue
+            paclen: !growth ? a.paclen.effectiveValue
                 : (ceilings.paclen == nil ? operatorP.effectiveValue : a.confirmedPaclen),
             maxReceiveBufferSize: nil,
             maxRetries: a.maxRetries.effectiveValue,
@@ -1108,16 +1111,35 @@ final class SessionCoordinator: ObservableObject {
     /// or adaptive transmission is off. K=4; paclen 256 direct and one ladder
     /// rung less per digipeater (spec §7.8.1). The peer's XID can only lower
     /// these.
-    /// Whether K and paclen may grow during a session (§7.8.1). Off by
-    /// default since 2026-10-01: on the air a session that grew to K3 sent
-    /// bursts of about 4 s, longer than the receiver's 2 s T2, so acks came
-    /// back mid-burst, the stations keyed over each other and the session
-    /// fell to K1. Growth stays off until the receiver side is designed to
-    /// match. With it off a session keeps the K and paclen it started with.
+    /// Whether K and paclen may grow during a session (§7.8.1), and then
+    /// only toward a peer that allows it (`growsInSession(toward:)`).
+    ///
+    /// Off by default. On 2026-10-01 a session that grew to K3 drew the
+    /// receiver's T2 ack mid-burst and fell to K1 (live test log, bug 25);
+    /// AXTerm's receiver now holds that ack until a burst pauses (a148309).
+    /// But in the stress harness's mode comparison growth still averages
+    /// 121 bps against 271 for the defaults: it gains 30 to 50% on clean
+    /// links and loses two to four times on lossy ones, where a lost ack
+    /// costs a whole larger burst. It stays off until its backoff on loss
+    /// is fixed.
     var inSessionLinkGrowth = false
 
-    private func linkCeilings(hops: Int) -> (window: Int?, paclen: Int?) {
-        guard adaptiveTransmissionEnabled, inSessionLinkGrowth else { return (nil, nil) }
+    /// Whether `destination`'s receiver is known to hold its delayed ack
+    /// until our burst has paused, which growth needs. Defaults to "has
+    /// confirmed AXDP": only AXTerm does, and AXTerm holds it. Any other
+    /// station's ack timing is unknown, and bug 25 could happen again. The
+    /// stress harness replaces this for its simulated AXTerm stations.
+    lazy var peerHoldsAcksThroughBursts: (String) -> Bool = { [weak self] destination in
+        self?.hasConfirmedAXDPCapability(for: destination) ?? false
+    }
+
+    /// Whether a session to `destination` may grow its K and paclen.
+    func growsInSession(toward destination: String) -> Bool {
+        inSessionLinkGrowth && peerHoldsAcksThroughBursts(destination)
+    }
+
+    private func linkCeilings(hops: Int, growth: Bool) -> (window: Int?, paclen: Int?) {
+        guard adaptiveTransmissionEnabled, growth else { return (nil, nil) }
         let window = globalAdaptiveSettings.windowSize.mode == .auto
             ? TxAdaptiveSettings.autoWindowCap : nil
         let paclen = globalAdaptiveSettings.paclen.mode == .auto
@@ -1147,12 +1169,13 @@ final class SessionCoordinator: ObservableObject {
     private func mergedConfigForDestination(_ destination: String, path pathSignature: String,
                                             radio: RadioID) -> AX25SessionConfig {
         let hops = hopCount(inPathSignature: pathSignature)
-        var configs: [AX25SessionConfig] = [configFromAdaptive(globalAdaptiveSettings, hops: hops)]
+        let growth = growsInSession(toward: destination)
+        var configs: [AX25SessionConfig] = [configFromAdaptive(globalAdaptiveSettings, hops: hops, growth: growth)]
         let canon = canonicalDestination(destination)
         for (key, entry) in adaptiveByScope
         where key.radio == radio && key.route?.destination == canon
               && !isAdaptiveCacheEntryExpired(entry) {
-            configs.append(configFromAdaptive(entry.settings, hops: hops))
+            configs.append(configFromAdaptive(entry.settings, hops: hops, growth: growth))
         }
         guard let first = configs.first else { return AX25SessionConfig() }
         let windowSize = configs.map(\.windowSize).min() ?? first.windowSize
@@ -1163,7 +1186,7 @@ final class SessionCoordinator: ObservableObject {
         let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
             appSettings?.ax25T1TimeoutSeconds ?? AppSettingsStore.defaultAX25T1TimeoutSeconds
         )
-        let ceilings = linkCeilings(hops: hops)
+        let ceilings = linkCeilings(hops: hops, growth: growth)
         return AX25SessionConfig(
             windowSize: windowSize,
             paclen: paclen,
@@ -2421,28 +2444,29 @@ final class SessionCoordinator: ObservableObject {
             let key = self.canonicalScope(.route(radio: radio, destination: destination,
                                                  path: pathSignature))
             let hops = hopCount(inPathSignature: pathSignature)
+            let growth = self.growsInSession(toward: destination)
             if let cached = self.adaptiveByScope[key], !self.isAdaptiveCacheEntryExpired(cached) {
                 // Single writer of learnedPathRto: a fresh entry for THIS
                 // exact route seeds the connect timer with its measured
                 // full-path RTO (clamped; never hop-scaled downstream).
-                return self.configFromAdaptive(cached.settings, hops: hops,
+                return self.configFromAdaptive(cached.settings, hops: hops, growth: growth,
                                                startSource: .recentEvidence,
                                                learnedPathRto: cached.settings.currentRto)
             }
             // Nothing in the last 30 minutes: the values this route last
             // confirmed, if within a day (§7.8.1).
-            if self.inSessionLinkGrowth, let seed = self.confirmedLinkMemory.values(for: key) {
+            if growth, let seed = self.confirmedLinkMemory.values(for: key) {
                 var seeded = TxAdaptiveSettings()
                 seeded.windowSize.currentAdaptive = seed.window
                 seeded.paclen.currentAdaptive = seed.paclen
-                return self.configFromAdaptive(seeded, hops: hops,
+                return self.configFromAdaptive(seeded, hops: hops, growth: growth,
                                                startSource: .confirmed(seed.recordedAt))
             }
             // Nothing for this exact route: inherit the channel before the
             // baseline, so a new route on a known radio does not start over.
             let channelKnown = self.adaptiveByScope[.radio(radio)]
                 .map { !self.isAdaptiveCacheEntryExpired($0) } ?? false
-            return self.configFromAdaptive(self.resolvedSettings(for: key), hops: hops,
+            return self.configFromAdaptive(self.resolvedSettings(for: key), hops: hops, growth: growth,
                                            startSource: channelKnown ? .channel : .configured)
         }
 
