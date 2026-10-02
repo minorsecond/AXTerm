@@ -228,6 +228,10 @@ final class SessionCoordinator: ObservableObject {
     /// Weak: the store is owned by the app shell, which outlives this.
     weak var nodeAliases: NodeAliasStore?
 
+    /// The mailbox the node hands callers to when they type BBS. The mailbox
+    /// sets this itself when it is built; see `BBSService.init`.
+    weak var nodeMailbox: BBSService?
+
     /// Bulk transfers in progress
     ///
     /// Every change is compared with what it replaced, so the moment a
@@ -546,6 +550,7 @@ final class SessionCoordinator: ObservableObject {
         SessionCoordinator.shared = self
         setupCallbacks()
         wirePingProber()
+        wireNodeHost()
         adaptiveStatusStore.updateGlobal(settings: globalAdaptiveSettings, lossRate: nil, etx: nil, srtt: nil)
     }
 

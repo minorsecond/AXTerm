@@ -81,7 +81,9 @@ final class BBSService: ObservableObject {
     /// to run rather than serving callers from memory and losing what they
     /// left when the app quits.
     private let store: BBSMessageStore?
-    private let settings: BBSSettings
+    /// Read by the node, which tells its callers whether the mailbox is on
+    /// the air and shows its station text under INFO.
+    let settings: BBSSettings
     private let coordinator: SessionCoordinator
     private let sendFrames: ([OutboundFrame]) -> Void
     private let stationCallsign: () -> String
@@ -218,6 +220,10 @@ final class BBSService: ObservableObject {
         self.resolveLicences = resolveLicences
         self.contestedIdentityHolder = contestedIdentityHolder
         self.now = now
+        // How the node finds the mailbox to hand callers to, on either
+        // platform. A second Mac window builds a second mailbox, and the
+        // newest one takes over, as it did when each window wired the node.
+        coordinator.nodeMailbox = self
     }
 
     // MARK: - Lifecycle

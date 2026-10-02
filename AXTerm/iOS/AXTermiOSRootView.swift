@@ -493,6 +493,10 @@ struct AXTermiOSRootView: View {
                 settingsPath = [.bbs]
             }
         }
+        // The node directory turns aliases (COSCO, EVANS) into the callsigns
+        // NET/ROM addresses by, and names the routes the node lists. Set
+        // here as on the Mac, because the store is a @StateObject.
+        .task { sessionCoordinator.nodeAliases = nodeAliases }
         // Attaching the station: which addresses it answers on. The mailbox
         // registers itself only while on air; the address set is watched as
         // one value rather than five modifiers.
