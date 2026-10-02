@@ -1629,6 +1629,33 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(commandIFrame?.controlByte.map { Int($0 & 0x10) }, 0x00, "Second idle command must not poll")
     }
 
+    /// Field case 2026-10-02 (live test log, bug 42): the "first frame of the
+    /// session" check read V(A) = V(S) = 0, which is true again every time the
+    /// sequence numbers wrap past 7 with everything acked. The ninth frame of
+    /// a Winlink exchange polled as if it were the first, its window-filling
+    /// partner polled too, and from then on every frame went out with P=1.
+    func testFirstFramePollIsNotRepeatedWhenSequenceNumbersWrap() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 2))
+        let destination = AX25Address(call: "K0EPI", ssid: 3)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        for n in 0..<8 {
+            let frames = manager.sendData(Data("line \(n)\r".utf8), to: destination, path: path, radio: .primary)
+            XCTAssertEqual(frames.filter { $0.frameType == "i" }.count, 1)
+            _ = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: session.vs, isPoll: false)
+            XCTAssertEqual(session.outstandingCount, 0)
+        }
+        XCTAssertEqual(session.vs, 0, "eight frames wrap V(S) back to 0")
+        XCTAssertEqual(session.va, 0)
+
+        let ninth = manager.sendData(Data("line 8\r".utf8), to: destination, path: path, radio: .primary)
+            .first { $0.frameType == "i" }
+        XCTAssertEqual(ninth?.ns, 0)
+        XCTAssertEqual(ninth?.controlByte.map { Int($0 & 0x10) }, 0x00,
+                       "only the session's real first I-frame polls; a wrapped V(S) is not a new session")
+    }
+
     func testInboundRRPollWithoutAckRetransmitsOutstandingFrame() {
         let clock = AX25VirtualClock()
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7), clock: clock)

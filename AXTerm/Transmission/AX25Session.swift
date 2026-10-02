@@ -248,6 +248,11 @@ nonisolated struct AX25SequenceState: Sendable {
     /// V(A) - Acknowledge state variable (oldest unacked sequence number)
     var va: Int = 0
 
+    /// Whether this link has numbered an I-frame since it was set up.
+    /// V(A) = V(S) = 0 can't answer that: it holds again every time the
+    /// sequence numbers wrap with everything acked.
+    private(set) var hasSentIFrame = false
+
     init(modulo: Int = 8) {
         self.modulo = modulo
     }
@@ -255,6 +260,7 @@ nonisolated struct AX25SequenceState: Sendable {
     /// Increment V(S) with wraparound
     mutating func incrementVS() {
         vs = (vs + 1) % modulo
+        hasSentIFrame = true
     }
 
     /// Increment V(R) with wraparound
@@ -324,6 +330,7 @@ nonisolated struct AX25SequenceState: Sendable {
         vs = 0
         vr = 0
         va = 0
+        hasSentIFrame = false
     }
 }
 

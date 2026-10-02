@@ -210,9 +210,17 @@ poll I-frame. DRLNOD acknowledged slowly, then sent `DM`, tearing the session do
   empty.
 - Continue to use RR(P=1) for T1 link-state polling and recovery.
 
+"First" means the first I-frame numbered since the link was set up, tracked by
+`AX25SequenceState.hasSentIFrame`. The check used to be V(A) = V(S) = 0, which
+holds again every time the sequence numbers wrap past 7 with everything acked,
+so every ninth idle command polled again: the pattern above that makes DRLNOD
+send DM. In a Winlink exchange on 2026-10-02 the same repeat put the poll bit
+on every frame that followed (live test log, bug 42).
+
 ### Tests
 - `AX25SessionTests.testFirstSessionIFrameHasPollBit`
 - `AX25SessionTests.testSecondIdleCommandDoesNotCarryPollBit`
+- `AX25SessionTests.testFirstFramePollIsNotRepeatedWhenSequenceNumbersWrap`
 - `DRLNODDisconnectRegressionTests`
 - `DRLNODLiveTest.testConnectHelpThenConnectKB5YZB7` gated by
   `/tmp/axterm_net_tests_enabled`

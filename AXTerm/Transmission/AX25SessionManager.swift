@@ -3698,7 +3698,9 @@ final class AX25SessionManager: ObservableObject {
         // on the first user I-frame after SABM/UA so they ACK promptly, but will
         // DM if every later idle line is also sent as a poll.  Keep the compatibility
         // nudge scoped to the first outbound numbered I-frame of an initiated session.
-        wasIdle && session.isInitiator && session.va == 0 && session.vs == 0
+        // Not V(A) = V(S) = 0, which recurs whenever the numbers wrap with
+        // everything acked (live test log, bug 42).
+        wasIdle && session.isInitiator && !session.stateMachine.sequenceState.hasSentIFrame
     }
 
     /// Build an I-frame for the session with current sequence numbers
