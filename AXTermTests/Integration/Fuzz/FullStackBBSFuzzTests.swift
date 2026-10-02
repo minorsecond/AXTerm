@@ -232,7 +232,11 @@ final class FullStackBBSFuzzTests: XCTestCase {
                 }
 
             case .read:
-                let live = stored.filter { !killed.contains($0.value.id) }.sorted { $0.value.id < $1.value.id }
+                // Only mail addressed to the caller or to everyone is
+                // readable; private mail they sent someone else is not.
+                let live = stored.filter {
+                    !killed.contains($0.value.id) && ["ALL", "K0AAA"].contains($0.value.to)
+                }.sorted { $0.value.id < $1.value.id }
                 guard let (subject, message) = pick.element(live) else {
                     type("R 999\r")
                     _ = await FullStackFuzz.wait(40) { prompted(since()) }

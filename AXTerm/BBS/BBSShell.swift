@@ -642,8 +642,11 @@ nonisolated struct BBSShell {
         guard let argument, let id = Int64(argument) else {
             return Output(lines: ["Usage: K n"])
         }
+        // Readable or killable: mail a caller sent to someone else is theirs
+        // to take back though they cannot read it. Anything else gets the
+        // same "not found" as a number that does not exist.
         guard let message = mailbox.messages.first(where: { $0.id == id }),
-              message.isReadable(by: caller) else {
+              message.isReadable(by: caller) || message.isKillable(by: caller) else {
             return Output(lines: ["Message \(id) not found."])
         }
         guard message.isKillable(by: caller) else {

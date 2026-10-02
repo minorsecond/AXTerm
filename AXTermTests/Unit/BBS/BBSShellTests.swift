@@ -133,6 +133,20 @@ final class BBSShellTests: XCTestCase {
         XCTAssertEqual(out.lines, ["Message 1 is not yours to kill."])
     }
 
+    /// Mail a caller sent to someone else is theirs to take back, as
+    /// `isKillable` says, though they cannot read it. K looked the message
+    /// up through the read rule first and answered "not found", so this
+    /// never worked (full-stack fuzz, 2026-10-02).
+    func testCallerKillsPrivateMailTheySentToSomeoneElse() {
+        var sut = shell(caller: "K0XYZ-1")
+        let box = BBSShell.Mailbox(messages: [message(1, from: "K0XYZ-1", to: "K0EPI")], nextID: 2)
+        let out = sut.handle(line: "K 1", mailbox: box, now: t(60))
+        XCTAssertEqual(out.effects, [.kill(id: 1, at: t(60))])
+        XCTAssertEqual(out.lines, ["Message 1 killed."])
+        XCTAssertEqual(sut.handle(line: "R 1", mailbox: box, now: t(60)).lines, ["Message 1 not found."],
+                       "still not readable by the sender")
+    }
+
     func testKillingInvisibleMailReportsNotFound() {
         var sut = shell(caller: "K0XYZ")
         let box = BBSShell.Mailbox(messages: [message(1, to: "K0EPI")], nextID: 2)
