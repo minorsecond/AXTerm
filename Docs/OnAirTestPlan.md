@@ -11,13 +11,17 @@ itself, which is why the plan starts again from the bottom.
 
 ## Who does what
 
-Each test is marked with who runs it.
+Each test is marked with who runs it. Every test runs live, on the TNC4 and
+ID-50 and on the 705 through Warbler: the point is to know AXTerm works on
+the air, not just in a simulator. The Docker test rig (`TestRig/`, LinBPQ
+nodes on a simulated channel) can rehearse a test off the air first, but it
+never stands in for the live run.
 
 | Mark | Meaning |
 |---|---|
 | **C** | Claude runs it alone over the radio harness: drives both test instances on screen, reads their logs and packet databases, checks received files by SHA-256, and controls the 705 through AXTerm's rig control. |
 | **Y** | Needs the operator. The test says exactly what for (a radio knob, a password, a macOS prompt, a decision). |
-| **R** | Off the air, against the Docker test rig (`TestRig/`: LinBPQ nodes, a KA-node, a shared simulated channel). Claude runs it alone; no transmitter keys. Used where a third station is needed and none is on the air. |
+| **L** | Live on the air against real stations beyond the harness (DRL, KB5YZB-7, live APRS on 144.390). The operator picks when, and the radio, frequency and power; Claude runs the test once set up. |
 
 ## The harness
 
@@ -110,7 +114,7 @@ starting state of the 705 and the TNC4 to check they are restored at the end.
 | 4.3 | Object placed, moved, killed | the other station follows each change | C |
 | 4.4 | Bulletin, weather report, telemetry | decoded and shown | C |
 | 4.5 | Directed query and ping/reachability probe | answered; the answer is attributed correctly | C |
-| 4.6 | Mic-E position | decoded correctly; needs a Mic-E sender (another APRS app on the ID-50, or the test rig's Xastir) | Y or R |
+| 4.6 | Live APRS, receive only: the 705 listens on 144.390 for 15 minutes (AXTerm sends no Mic-E and the radios do no AFSK APRS themselves, but the live channel is full of it) | positions, Mic-E, weather, objects, telemetry and messages decoded without errors and placed correctly; nothing transmitted | L |
 
 ## 5. Winlink
 
@@ -148,7 +152,7 @@ Nobody nearby broadcasts NODES, so both test stations do it themselves.
 | 7.3 | Node shell over plain AX.25: A connects to B's alias, walks NODES, ROUTES, MH, INFO, BYE | each answered with the prompt; BYE hangs up | C |
 | 7.4 | From B's node, `BBS` into B's mailbox | the mailbox answers over the node | C |
 | 7.5 | Connect onward through B's node to a station that is not there | caller returned to the prompt | C |
-| 7.6 | Against real LinBPQ: NODES learning, circuits to TSTNOD, BPQ dialing our node | as in TestRig/README.md | R |
+| 7.6 | Against a real BPQ node: connect to KB5YZB-7 through DRL, walk `NODES` and `ROUTES` | answers arrive whole; the routes AXTerm scrapes reach the Nodes page | L |
 | 7.7 | Turn advertising off at the end | no more NODES broadcasts | C |
 
 ## 8. Digipeating and paths
@@ -156,8 +160,7 @@ Nobody nearby broadcasts NODES, so both test stations do it themselves.
 | ID | Test | Pass | Who |
 |---|---|---|---|
 | 8.1 | A as digipeater: B sends a UI frame via K0EPI-2 | A repeats it with the H bit set; B hears its own frame repeated | C |
-| 8.2 | Connected mode through a digipeater | needs a third station; on the rig, BPQ connects via AXTerm | R |
-| 8.3 | Connect through a real digipeater on the air | only if one is in range; operator's choice | Y |
+| 8.2 | Connected mode through a real digipeater: A connects through DRL (to DRLNOD's node or KB5YZB-7) | session up through the digipeater, data both ways, the path shown | L |
 
 ## 9. Radio, TNC and modem
 
@@ -196,17 +199,16 @@ Nobody nearby broadcasts NODES, so both test stations do it themselves.
 | 12.1 | Bug 47: a lost reply at the end of a transfer is resent (watch for it in 3.x) | no transfer hangs at the end | C |
 | 12.2 | Bug 53: YAPP start with no header, then chat | chat arrives; no "not YAPP" text on the other terminal | C |
 | 12.3 | Bug 48: no endless gap polling over a long session | none seen; any data-loss event in the log is reported | C |
-| 12.4 | RR-poll change (dc29aaa) against the rig's LinBPQ on a lossy channel (`LOSS=0.15`): chat and a transfer to TSTNOD | no duplicate resends on BPQ's polls, no DM, everything delivered. LinBPQ is a real AX.25 stack whose T1 polls exercise the change; the rig's KA-node is a minimal emulation that never polls, so it cannot stand in for DRLNOD | R |
-| 12.5 | RR-poll change against DRLNOD: connect, send `Help`, keep the session a few minutes | no DM after DRLNOD's first poll. A real node on its own frequency: operator picks the radio, power and time | Y |
+| 12.4 | RR-poll change (dc29aaa) against DRLNOD: connect, send `Help`, keep the session a few minutes, then the same with KB5YZB-7 through DRL | no DM after a poll; no duplicate resends; everything delivered | L |
 | 12.6 | Everything in 3 again with AXDP turned off | YAPP everywhere, all pass | C |
 
-## 13. Off the air, needing the internet or other hardware
+## 13. Other checks
 
 | ID | Test | Who |
 |---|---|---|
 | 13.1 | Callsign lookup, elevation downloads, solar conditions | C (needs internet) |
 | 13.2 | Network graph and link metrics (df, dr, ETX, quality) after a long session: values and tooltips make sense | C, with Y to look |
-| 13.3 | iOS app with the TNC4 over Bluetooth | Y (iPhone) |
+| 13.3 | iOS app on the air: the iPhone as station B with the TNC4 over Bluetooth, repeating 1 to 3 against A | as in 1 to 3 | Y (iPhone), C (checks on A) |
 
 ## At the end (C, then Y)
 
@@ -224,12 +226,12 @@ In order of appearance:
 1. Before starting: re-enable 705 transmit in Warbler; ID-50 to 145.070 low
    power; quit the main AXTerm; close the Mobilinkd app; answer Warbler's
    password and macOS prompts.
-2. 4.6: a Mic-E sender, if testing Mic-E on the air.
+2. The live tests marked L (4.6, 7.6, 8.2, 12.4): pick when, and the radio,
+   frequency and power for reaching DRL, DRLNOD and KB5YZB-7, and for
+   listening on 144.390.
 3. 5.6 and 5.7: the Winlink password, and a gateway in range for 5.6.
-4. 8.3: a real digipeater, optional.
-5. 9.3: unplug the TNC4's USB data and pair it over Bluetooth.
-6. 9.6: switch the ID-50 off mid-transfer when asked, then back on.
-7. 10.4 and 11.2: possibly run the main app for the restart test.
-8. 12.5: pick when and how to reach DRLNOD.
-9. 13.2: look over the graph and metrics; 13.3: the iPhone.
-10. At the end: the ID-50 back to its usual channel.
+4. 9.3: unplug the TNC4's USB data and pair it over Bluetooth.
+5. 9.6: switch the ID-50 off mid-transfer when asked, then back on.
+6. 10.4 and 11.2: possibly run the main app for the restart test.
+7. 13.2: look over the graph and metrics; 13.3: the iPhone as station B.
+8. At the end: the ID-50 back to its usual channel.
