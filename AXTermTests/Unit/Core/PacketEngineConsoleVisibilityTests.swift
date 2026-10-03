@@ -101,6 +101,27 @@ final class PacketEngineConsoleVisibilityTests: XCTestCase {
         XCTAssertEqual(lines.map(\.text), ["[AXDP ping]"])
     }
 
+    /// The parts of a broadcast split to paclen (spec §6.3) each show as they
+    /// arrive, numbered, so a lost part shows as a gap.
+    func testEachPartOfASplitBroadcastShowsNumbered() {
+        let engine = PacketEngine(settings: makeSettings())
+        let parts = ["first part, ", "second part"]
+        for (index, text) in parts.enumerated() {
+            let message = AXDP.Message(type: .chat, sessionId: 0, messageId: 99,
+                                       chunkIndex: UInt32(index), totalChunks: 2,
+                                       payload: Data(text.utf8))
+            engine.handleIncomingPacket(Packet(
+                from: AX25Address(call: "K0EPI", ssid: 3),
+                to: AX25Address(call: "CQ"),
+                frameType: .ui, control: 0x03, pid: 0xF0,
+                info: message.encode()
+            ))
+        }
+
+        let lines = engine.consoleLines.filter { $0.kind == .packet && $0.from == "K0EPI-3" }
+        XCTAssertEqual(lines.map(\.text), ["(1/2) first part, ", "(2/2) second part"])
+    }
+
     private func makeSettings() -> AppSettingsStore {
         let suiteName = TestDefaults.name("AXTermTests")
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard

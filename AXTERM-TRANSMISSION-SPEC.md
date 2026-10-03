@@ -383,6 +383,8 @@ Overhead includes: magic+ver, TLVs for type/session/msg/chunk/crc.
 
 **Default**: chunk size 64–192 bytes depending on link quality.
 
+Decision (2026-10-03, smoke run issue 3): a terminal broadcast longer than the UI paclen (128 by default) goes out as several AXDP CHAT messages that share one MessageId and carry ChunkIndex and TotalChunks, each frame within paclen. A plain-text broadcast is cut at paclen. Neither is cut inside a UTF-8 character. A message that fits is sent as before, with no chunk TLVs. The receiver shows each part as it arrives, as "(1/3) text"; it does not hold parts back to join them, so a lost part shows as a gap and nothing waits on a timer.
+
 ### 6.4 App-level ACKs (selective, efficient)
 For bulk transfers over UI:
 - Receiver sends periodic **SACK** acknowledgments:

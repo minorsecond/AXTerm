@@ -197,18 +197,83 @@ nonisolated struct TerminalTxViewModel {
         )
     }
 
+    /// The frames the current message goes out as. A broadcast longer than
+    /// `paclen` is split into several UI frames, each within it (spec §6.3):
+    /// AXDP chat as numbered parts of one message, plain text cut at paclen.
+    /// A connected-mode message stays whole; the session cuts it into
+    /// I-frames itself.
+    func buildOutboundFrames(radio: RadioID = .primary, source: AX25Address? = nil,
+                             destination: String? = nil,
+                             paclen: Int = AX25Constants.defaultPacketLength) -> [OutboundFrame] {
+        guard let whole = buildOutboundFrame(radio: radio, source: source, destination: destination) else { return [] }
+        guard connectionMode == .datagram, whole.payload.count > paclen else { return [whole] }
+
+        let payloads: [Data]
+        if useAXDP {
+            let pieces = Self.utf8Pieces(of: composeText, maxBytes: max(1, paclen - Self.axdpChunkOverhead))
+            let messageId = UInt32.random(in: 1...UInt32.max)
+            payloads = pieces.enumerated().map { index, piece in
+                AXDP.Message(type: .chat, sessionId: 0, messageId: messageId,
+                             chunkIndex: UInt32(index), totalChunks: UInt32(pieces.count),
+                             payload: piece).encode()
+            }
+        } else {
+            payloads = Self.utf8Pieces(of: composeText, maxBytes: paclen)
+        }
+        return payloads.map { payload in
+            OutboundFrame(radio: whole.radio, destination: whole.destination, source: whole.source,
+                          path: whole.path, payload: payload, priority: whole.priority,
+                          frameType: whole.frameType, pid: whole.pid, controlByte: whole.controlByte,
+                          displayInfo: whole.displayInfo, isUserPayload: true)
+        }
+    }
+
+    /// AXDP bytes around the text of one part: magic (4), then the type (4),
+    /// session (7), message (7), chunk index (7) and total (7) TLVs and the
+    /// payload TLV header (3).
+    static let axdpChunkOverhead = 39
+
+    /// `text` as UTF-8 cut into pieces of at most `maxBytes`, never inside a
+    /// character.
+    static func utf8Pieces(of text: String, maxBytes: Int) -> [Data] {
+        var pieces: [Data] = []
+        var current = Data()
+        for character in text {
+            let bytes = Data(String(character).utf8)
+            if !current.isEmpty && current.count + bytes.count > maxBytes {
+                pieces.append(current)
+                current = Data()
+            }
+            current.append(bytes)
+        }
+        if !current.isEmpty { pieces.append(current) }
+        return pieces
+    }
+
     /// Enqueue the current message for transmission.
-    /// Returns the frame ID if successful, nil if invalid.
+    /// Returns the frame ID if successful, nil if invalid. A message split into
+    /// parts returns the first part's ID; `enqueueCurrentMessageParts` returns all.
     @discardableResult
     mutating func enqueueCurrentMessage(radio: RadioID = .primary, source: AX25Address? = nil,
                                         destination: String? = nil) -> UUID? {
-        guard let frame = buildOutboundFrame(radio: radio, source: source, destination: destination) else { return nil }
+        enqueueCurrentMessageParts(radio: radio, source: source, destination: destination).first
+    }
 
-        scheduler.enqueue(frame)
+    /// Enqueue the current message, split to `paclen` as `buildOutboundFrames`
+    /// does. Returns the queued frame IDs in sending order.
+    @discardableResult
+    mutating func enqueueCurrentMessageParts(radio: RadioID = .primary, source: AX25Address? = nil,
+                                             destination: String? = nil,
+                                             paclen: Int = AX25Constants.defaultPacketLength) -> [UUID] {
+        let frames = buildOutboundFrames(radio: radio, source: source, destination: destination, paclen: paclen)
+        guard !frames.isEmpty else { return [] }
 
-        // Update queue entries for UI
-        if let entry = scheduler.getEntry(for: frame.id) {
-            queueEntries.append(entry)
+        for frame in frames {
+            scheduler.enqueue(frame)
+            // Update queue entries for UI
+            if let entry = scheduler.getEntry(for: frame.id) {
+                queueEntries.append(entry)
+            }
         }
 
         // Add to history (use effective destination for broadcast)
@@ -217,7 +282,7 @@ nonisolated struct TerminalTxViewModel {
         // Clear compose text but keep destination
         composeText = ""
 
-        return frame.id
+        return frames.map(\.id)
     }
 
     /// Cancel a queued frame.

@@ -1749,6 +1749,11 @@ final class PacketEngine: ObservableObject {
            let message = AXDP.Message.decodeMessage(from: packet.info) {
             if message.type == .chat, let payload = message.payload,
                let text = String(data: payload, encoding: .utf8) {
+                // A broadcast split to paclen (spec §6.3): each part shows as
+                // it arrives, numbered, so a lost one shows as a gap.
+                if let index = message.chunkIndex, let total = message.totalChunks, total > 1 {
+                    return "(\(index + 1)/\(total)) \(text)"
+                }
                 return text
             }
             return "[AXDP \(message.type)]"

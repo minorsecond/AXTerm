@@ -1623,7 +1623,10 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         }
     }
 
-    func enqueueCurrentMessage() {
+    /// Returns the queued frame IDs; a broadcast longer than paclen is
+    /// several UI frames (spec §6.3).
+    @discardableResult
+    func enqueueCurrentMessage() -> [UUID] {
         // A datagram leaves on the radio the picker (or the route) names, and
         // carries that radio's address as its source.
         let destination = viewModel.connectionMode == .datagram
@@ -1631,8 +1634,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         let dest = parseCallsign(destination)
         let path = parsePath(viewModel.digiPath)
         let radio = radio(for: dest, path: path)
-        viewModel.enqueueCurrentMessage(radio: radio, source: sessionManager.localAddress(for: radio),
-                                        destination: destination)
+        return viewModel.enqueueCurrentMessageParts(radio: radio, source: sessionManager.localAddress(for: radio),
+                                                    destination: destination)
     }
 
     func clearCompose() {
@@ -3212,35 +3215,38 @@ struct TerminalView: View {
     /// Send message as UI datagram (no connection required)
     private func sendDatagramMessage() {
         // Add to queue (for UI display)
-        txViewModel.enqueueCurrentMessage()
+        let ids = Set(txViewModel.enqueueCurrentMessage())
 
-        // Get the last queued entry and actually send it
-        guard let entry = txViewModel.queueEntries.last else { return }
+        // The queued parts, in order, are what actually goes out
+        let entries = txViewModel.queueEntries.filter { ids.contains($0.frame.id) }
+        guard let first = entries.first else { return }
 
         // Start outbound progress (datagram has no ACKs; fire-and-forget)
         // For datagrams, vs/paclen don't matter since we don't track acks
-        let text = entry.frame.displayInfo ?? String(data: entry.frame.payload, encoding: .utf8) ?? ""
+        let text = first.frame.displayInfo ?? String(data: first.frame.payload, encoding: .utf8) ?? ""
         txViewModel.startOutboundProgress(
             text: text,
-            totalBytes: entry.frame.payload.count,
-            destination: txViewModel.viewModel.destinationCall.isEmpty ? "BROADCAST" : txViewModel.viewModel.destinationCall,
+            totalBytes: entries.reduce(0) { $0 + $1.frame.payload.count },
+            destination: "BROADCAST",  // a datagram from the terminal always goes to CQ
             hasAcks: false,
             startingVs: 0,
             paclen: AX25Constants.defaultPacketLength
         )
 
         // Send via PacketEngine (bytesSent for I-frame via onUserFrameTransmitted; UI frames use payload)
-        client.send(frame: entry.frame) { [weak txViewModel] result in
-            Task { @MainActor in
-                switch result {
-                case .success:
-                    txViewModel?.updateFrameStatus(entry.frame.id, status: .sent)
-                    // For UI frames (datagram), update progress when sent
-                    if entry.frame.frameType.lowercased() == "ui" {
-                        txViewModel?.updateOutboundBytesSent(additionalBytes: entry.frame.payload.count)
+        for entry in entries {
+            client.send(frame: entry.frame) { [weak txViewModel] result in
+                Task { @MainActor in
+                    switch result {
+                    case .success:
+                        txViewModel?.updateFrameStatus(entry.frame.id, status: .sent)
+                        // For UI frames (datagram), update progress when sent
+                        if entry.frame.frameType.lowercased() == "ui" {
+                            txViewModel?.updateOutboundBytesSent(additionalBytes: entry.frame.payload.count)
+                        }
+                    case .failure:
+                        txViewModel?.updateFrameStatus(entry.frame.id, status: .failed)
                     }
-                case .failure:
-                    txViewModel?.updateFrameStatus(entry.frame.id, status: .failed)
                 }
             }
         }
