@@ -352,11 +352,13 @@ For your own app protocol, use a PID that legacy nodes will ignore or treat as �
 UI frames have no built-in ack/retransmit. But we can add **optional app reliability** while remaining compatible.
 
 ### 6.2 Message envelope (TLV, versioned)
-All AXDP payloads start with a short ASCII magic + version:
+Every AXDP message starts with a 6-byte header, then its TLVs:
 ```
-b"AXT1"
+b"AXT1"                     magic and version (4 bytes)
+length: UInt16 (big endian) the whole message in bytes, header included
+TLV …                       exactly length - 6 bytes of them
 ```
-Then a TLV stream:
+Each TLV:
 - `type: UInt8`
 - `len: UInt16 (big endian)`
 - `value: [UInt8]`
@@ -427,7 +429,7 @@ Compatibility
 
 Header
 	•	Prefer ASCII header that prints in legacy monitors:
-	•	b"AXT1" (4 bytes) as the prefix
+	•	b"AXT1" (4 bytes) as the prefix, followed by the 2-byte message length (§6.2)
 	•	This prints cleanly. Avoid a raw 0x01 version byte if you care about human display.
 
 UI display requirement

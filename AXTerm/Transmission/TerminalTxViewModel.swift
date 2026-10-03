@@ -119,9 +119,9 @@ nonisolated struct TerminalTxViewModel {
 
     /// Estimated payload size in bytes (with AXDP overhead)
     var estimatedPayloadSize: Int {
-        // AXDP header (4) + TLVs overhead (~20) + text
+        // AXDP header (6) + TLVs overhead (~20) + text
         let textBytes = composeText.utf8.count
-        return 4 + 20 + textBytes
+        return AXDP.headerLength + 20 + textBytes
     }
 
     /// Recent destinations for quick selection
@@ -228,10 +228,10 @@ nonisolated struct TerminalTxViewModel {
         }
     }
 
-    /// AXDP bytes around the text of one part: magic (4), then the type (4),
-    /// session (7), message (7), chunk index (7) and total (7) TLVs and the
-    /// payload TLV header (3).
-    static let axdpChunkOverhead = 39
+    /// AXDP bytes around the text of one part: the header (6), then the type
+    /// (4), session (7), message (7), chunk index (7) and total (7) TLVs and
+    /// the payload TLV header (3).
+    static let axdpChunkOverhead = 41
 
     /// `text` as UTF-8 cut into pieces of at most `maxBytes`, never inside a
     /// character.

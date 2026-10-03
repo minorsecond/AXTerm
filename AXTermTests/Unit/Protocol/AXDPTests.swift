@@ -109,7 +109,7 @@ final class AXDPTests: XCTestCase {
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())  // CHAT
         data.append(AXDP.TLV(type: 0x02, value: AXDP.encodeUInt32(12345)).encode())
 
-        let (tlvs, _, _, _) = AXDP.decodeTLVs(from: data)
+        let tlvs = AXDP.decodeTLVs(from: data) ?? []
 
         XCTAssertEqual(tlvs.count, 2)
         XCTAssertEqual(tlvs[0].type, 0x01)
@@ -123,7 +123,7 @@ final class AXDPTests: XCTestCase {
         data.append(AXDP.TLV(type: 0x99, value: Data([0xDE, 0xAD, 0xBE, 0xEF])).encode())  // Unknown
         data.append(AXDP.TLV(type: 0x03, value: AXDP.encodeUInt32(42)).encode())
 
-        let (tlvs, _, _, _) = AXDP.decodeTLVs(from: data)
+        let tlvs = AXDP.decodeTLVs(from: data) ?? []
 
         // Should parse all three, including unknown
         XCTAssertEqual(tlvs.count, 3)
@@ -257,10 +257,10 @@ final class AXDPTests: XCTestCase {
 
     func testDecodeOlderVersionSafely() {
         // Simulate older version with fewer TLVs
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())  // Just type
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         // Should parse what it can
         XCTAssertNotNil(decoded)
@@ -269,14 +269,14 @@ final class AXDPTests: XCTestCase {
 
     func testDecodeNewerVersionWithUnknownTLVs() {
         // Simulate newer version with unknown future TLVs
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())
         data.append(AXDP.TLV(type: 0x02, value: AXDP.encodeUInt32(1)).encode())
         data.append(AXDP.TLV(type: 0x03, value: AXDP.encodeUInt32(1)).encode())
         // Future unknown TLV type
         data.append(AXDP.TLV(type: 0x8F, value: Data([0x01, 0x02, 0x03, 0x04])).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         // Should decode successfully, ignoring unknown TLV
         XCTAssertNotNil(decoded)

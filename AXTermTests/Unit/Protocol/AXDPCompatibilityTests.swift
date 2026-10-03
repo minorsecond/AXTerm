@@ -18,10 +18,10 @@ final class AXDPCompatibilityTests: XCTestCase {
 
     func testDecodeAXDPv1MinimalMessage() {
         // Simulate oldest possible v1 message: just magic + messageType
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         XCTAssertNotNil(decoded, "Should decode minimal v1 message")
         XCTAssertEqual(decoded?.type, .chat)
@@ -32,11 +32,11 @@ final class AXDPCompatibilityTests: XCTestCase {
 
     func testDecodeAXDPv1WithoutSessionId() {
         // v1 message with type and messageId but no sessionId
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.ack.rawValue])).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(42)).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ack)
@@ -46,12 +46,12 @@ final class AXDPCompatibilityTests: XCTestCase {
 
     func testDecodeAXDPv1WithoutCapabilities() {
         // Old peer sending PING without capabilities TLV
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.ping.rawValue])).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(0)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(1)).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ping)
@@ -61,7 +61,7 @@ final class AXDPCompatibilityTests: XCTestCase {
     func testDecodeAXDPv1FileChunkWithoutCompression() {
         // Old-style file chunk without compression TLVs
         let payload = Data(repeating: 0x42, count: 64)
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.fileChunk.rawValue])).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(100)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(5)).encode())
@@ -70,7 +70,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(AXDP.TLV(type: AXDP.TLVType.payload.rawValue, value: payload).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.payloadCRC32.rawValue, value: AXDP.encodeUInt32(AXDP.crc32(payload))).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .fileChunk)
@@ -82,7 +82,7 @@ final class AXDPCompatibilityTests: XCTestCase {
 
     func testDecodeAXDPWithUnknownTLVTypes() {
         // Future version with TLVs we don't understand (0x40-0x7F range)
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(1)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(1)).encode())
@@ -93,7 +93,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         // Known TLV after unknown ones
         data.append(AXDP.TLV(type: AXDP.TLVType.payload.rawValue, value: Data("Hello".utf8)).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         XCTAssertNotNil(decoded, "Should decode despite unknown TLVs")
         XCTAssertEqual(decoded?.type, .chat)
@@ -103,13 +103,13 @@ final class AXDPCompatibilityTests: XCTestCase {
 
     func testDecodeAXDPWithExperimentalTLVs() {
         // Experimental/private range: 0x80-0xFF
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
         data.append(AXDP.TLV(type: 0x80, value: Data([0xDE, 0xAD])).encode())
         data.append(AXDP.TLV(type: 0xFE, value: Data([0xBE, 0xEF])).encode())
         data.append(AXDP.TLV(type: 0xFF, value: Data()).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.unknownTLVs.count, 3)
@@ -117,10 +117,10 @@ final class AXDPCompatibilityTests: XCTestCase {
 
     func testDecodeAXDPWithFutureMessageType() {
         // Message type value that doesn't exist yet (0x10+)
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([0x10])).encode())  // Unknown type
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         // Should fail gracefully for completely unknown message type
         XCTAssertNil(decoded, "Unknown message type should return nil")
@@ -146,13 +146,13 @@ final class AXDPCompatibilityTests: XCTestCase {
         capData.append(contentsOf: AXDP.encodeUInt16(4))
         capData.append(contentsOf: AXDP.encodeUInt32(0xFFFFFFFF))  // All flags set including future ones
 
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.pong.rawValue])).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(0)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(1)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.capabilities.rawValue, value: capData).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .pong)
@@ -164,7 +164,7 @@ final class AXDPCompatibilityTests: XCTestCase {
 
     func testDecodeAXDPWithFutureCompressionAlgorithm() {
         // Peer using unknown compression algorithm
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.fileChunk.rawValue])).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(1)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(1)).encode())
@@ -173,7 +173,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(AXDP.TLV(type: AXDP.TLVType.originalLength.rawValue, value: AXDP.encodeUInt32(100)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.payloadCompressed.rawValue, value: Data(repeating: 0x42, count: 50)).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         // Should decode but payload might be nil (can't decompress unknown algo)
         XCTAssertNotNil(decoded)
@@ -275,42 +275,44 @@ final class AXDPCompatibilityTests: XCTestCase {
     // MARK: - TLV Length Edge Cases
 
     func testDecodeTLVWithExactlyZeroLength() {
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
         // TLV with zero-length value (valid)
         data.append(Data([0x09, 0x00, 0x00]))  // metadata TLV with empty value
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
         XCTAssertNotNil(decoded)
     }
 
     func testDecodeTLVWithMaxUInt16Length() {
-        // TLV claiming maximum length (65535 bytes)
-        var data = AXDP.magic
+        // The longest message the length field allows: header (6), type
+        // TLV (4), payload TLV header (3) and 65,522 payload bytes.
+        let payloadLength = AXDP.maxMessageLength - AXDP.headerLength - 4 - 3
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
-        // Very large TLV
-        data.append(Data([0x06, 0xFF, 0xFF]))  // payload type, length 65535
-        data.append(Data(repeating: 0x42, count: 65535))
+        data.append(AXDP.TLV(type: AXDP.TLVType.payload.rawValue, value: Data(repeating: 0x42, count: payloadLength)).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let message = AXDP.envelope(data)
+        XCTAssertEqual(message.count, AXDP.maxMessageLength)
+        let decoded = AXDP.Message.decodeMessage(from: message)
         XCTAssertNotNil(decoded)
-        XCTAssertEqual(decoded?.payload?.count, 65535)
+        XCTAssertEqual(decoded?.payload?.count, payloadLength)
     }
 
     func testDecodeTLVWithLengthExceedingData() {
         // Malformed: TLV claims more bytes than available (using unknown type to represent garbage)
         // Note: Using unknown type 0x99 (not a known TLV type) so the decoder treats this as
         // corruption/garbage rather than a truncated known TLV that might need more data.
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
         // Claims 1000 bytes but only provides 10 (using unknown type 0x99)
         data.append(Data([0x99, 0x03, 0xE8]))  // type=0x99 (unknown), length=1000
         data.append(Data(repeating: 0x42, count: 10))
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
-        // Should handle gracefully - return partial decode since the garbage is at an unknown type
-        // The important thing is no crash
-        XCTAssertNotNil(decoded)  // Should still decode the chat type
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
+        // A TLV that runs past the message's own length means the message is
+        // damaged: it is rejected without a crash, not half read.
+        XCTAssertNil(decoded)
     }
 
     // MARK: - Version Negotiation Edge Cases
@@ -412,27 +414,26 @@ final class AXDPCompatibilityTests: XCTestCase {
 
     func testDecodePartiallyCorruptedMessage() {
         // Valid start, then garbage in middle, then valid TLV
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
         // Garbage bytes that look like a TLV header but with invalid length
         data.append(Data([0x50, 0xFF, 0xFE]))  // Claims huge length
         // This won't be reached due to above
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
-        // Should at least decode the message type
-        XCTAssertNotNil(decoded)
-        XCTAssertEqual(decoded?.type, .chat)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
+        // The garbage TLV overruns the message, so the message is rejected.
+        XCTAssertNil(decoded)
     }
 
     func testDecodeRepeatedTLVTypes() {
         // Same TLV type appearing multiple times (should use last or first consistently)
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(100)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(200)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(300)).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
         XCTAssertNotNil(decoded)
         // Implementation-dependent: check it handles consistently without crash
     }

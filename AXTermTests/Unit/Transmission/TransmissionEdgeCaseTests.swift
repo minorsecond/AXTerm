@@ -133,16 +133,16 @@ final class TransmissionEdgeCaseTests: XCTestCase {
 
     func testAXDPDecodeCorruptedTLVInMiddle() {
         // Valid TLV, then corrupted TLV, then another valid TLV
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())
         // Corrupted: claims 100 bytes but only has 2
         data.append(Data([0x99, 0x00, 0x64, 0x01, 0x02]))
 
-        let result = AXDP.Message.decodeMessage(from: data)
+        let result = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
-        // Should decode the first TLV at minimum
-        XCTAssertNotNil(result)
-        XCTAssertEqual(result?.type, .chat)
+        // A TLV that runs past the message's own length means the message
+        // is damaged: it is rejected, not half read.
+        XCTAssertNil(result)
     }
 
     func testAXDPDecodeMissingRequiredField() {
@@ -167,11 +167,11 @@ final class TransmissionEdgeCaseTests: XCTestCase {
 
     func testAXDPDecodeSessionIdTooShort() {
         // SessionId TLV with only 2 bytes instead of 4
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())
         data.append(AXDP.TLV(type: 0x02, value: Data([0x01, 0x02])).encode())  // Too short
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         // Should decode with sessionId=0 (graceful degradation)
         XCTAssertNotNil(decoded)
@@ -179,13 +179,13 @@ final class TransmissionEdgeCaseTests: XCTestCase {
 
     func testAXDPUnknownTLVsInFutureRange() {
         // Unknown TLVs in the 0x80-0xFF experimental range
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())
         data.append(AXDP.TLV(type: 0x80, value: Data([0x01, 0x02, 0x03])).encode())
         data.append(AXDP.TLV(type: 0xFE, value: Data([0xFF])).encode())
         data.append(AXDP.TLV(type: 0x03, value: AXDP.encodeUInt32(42)).encode())
 
-        let result = AXDP.Message.decodeMessage(from: data)
+        let result = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.unknownTLVs.count, 2)

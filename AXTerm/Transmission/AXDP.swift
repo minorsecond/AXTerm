@@ -19,6 +19,18 @@ nonisolated enum AXDP {
     /// Magic header identifying AXDP payloads: "AXT1"
     static let magic = Data("AXT1".utf8)
 
+    /// Every message starts with the magic and then its own length: the
+    /// whole message in bytes, magic and length included, as a big-endian
+    /// UInt16. The TLVs follow. A receiver therefore never guesses where a
+    /// message ends, however the bytes were cut into frames on the way.
+    static let headerLength = 6
+
+    /// The longest message the length field can describe.
+    static let maxMessageLength = Int(UInt16.max)
+
+    /// The shortest valid message: the header and a MessageType TLV.
+    static let minMessageLength = headerLength + 4
+
     /// Current protocol version
     static let version: UInt8 = 1
 
@@ -89,6 +101,8 @@ nonisolated enum AXDP {
         /// Decode a TLV from data at given offset.
         /// Returns nil if data is truncated or malformed.
         static func decode(from data: Data, at offset: Int) -> DecodeResult? {
+            // Offsets count from the first byte; a slice may not start at 0.
+            let data = AXDP.zeroBased(data)
             // Need at least 3 bytes: type (1) + length (2)
             guard offset + 3 <= data.count else {
                 axDebugPrint("[DEBUG:AXDP:TLV] truncate header | offset=\(offset) need=3 dataLen=\(data.count)")
@@ -177,7 +191,7 @@ nonisolated enum AXDP {
 
         /// Encode message to bytes with magic header + TLVs
         func encode() -> Data {
-            var data = AXDP.magic
+            var data = Data()
 
             TxLog.axdpEncode(
                 type: String(describing: type),
@@ -253,6 +267,8 @@ nonisolated enum AXDP {
                 data.append(TLV(type: TLVType.transferMetrics.rawValue, value: metrics.encode()).encode())
             }
 
+            data = AXDP.envelope(data)
+
             #if DEBUG
             let hex = AXDP.hexPrefix(data)
             print("[AXDP WIRE][ENC] type=\(type) sessionId=\(sessionId) messageId=\(messageId) bytes=\(data.count) hex=\(hex)")
@@ -261,24 +277,43 @@ nonisolated enum AXDP {
             return data
         }
 
-        /// Decode message from bytes.
-        /// Returns (message, consumedBytes) or nil if magic header is missing or data is malformed.
-        /// Unknown TLVs are safely skipped (forward compatibility).
-        static func decode(from data: Data) -> (Message, Int)? {
-            // Check magic header
-            guard hasMagic(data) else {
-                axDebugPrint("[DEBUG:AXDP:DECODE] no magic | dataLen=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined())")
-                TxLog.debug(.axdp, "No AXDP magic header", ["size": data.count])
-                return nil
+        /// What the bytes at the front of a buffer hold.
+        enum Framing {
+            /// A whole message, `consumed` bytes long.
+            case message(Message, consumed: Int)
+            /// The start of a message whose remaining bytes have not arrived.
+            case needMore
+            /// Not a message. Drop `skip` bytes and look for the next magic.
+            case invalid(skip: Int)
+        }
+
+        /// Reads the message at the front of `data`, which must start with
+        /// the magic. The length in the header says where the message ends;
+        /// nothing after it is looked at.
+        ///
+        /// A header whose length is impossible, or TLVs that do not fill the
+        /// message exactly, cannot be trusted, so only the magic is skipped
+        /// and the reader looks for the next one. A well-formed message the
+        /// app cannot use (no type, or a type it does not know) is skipped
+        /// whole. Unknown TLVs inside a message are kept (forward
+        /// compatibility).
+        static func frame(_ data: Data) -> Framing {
+            // Offsets count from the first byte; a slice may not start at 0.
+            let data = AXDP.zeroBased(data)
+            guard data.count >= AXDP.magic.count else { return .needMore }
+            guard hasMagic(data) else { return .invalid(skip: 1) }
+            guard data.count >= AXDP.headerLength else { return .needMore }
+
+            let length = Int(decodeUInt16(data.subdata(in: AXDP.magic.count..<AXDP.headerLength)))
+            guard length >= AXDP.minMessageLength else {
+                TxLog.axdpDecodeError(reason: "Length \(length) shorter than any message", data: data)
+                return .invalid(skip: AXDP.magic.count)
             }
+            guard data.count >= length else { return .needMore }
 
-            // Parse TLVs after magic
-            let tlvData = data.subdata(in: magic.count..<data.count)
-            let (tlvs, truncated, tlvConsumedBytes, truncatedAtKnownType) = decodeTLVs(from: tlvData)
-
-            guard !tlvs.isEmpty else {
-                axDebugPrint("[DEBUG:AXDP:DECODE] empty tlvs | dataLen=\(data.count) tlvDataLen=\(tlvData.count)")
-                return nil
+            guard let tlvs = decodeTLVs(from: data.subdata(in: AXDP.headerLength..<length)) else {
+                TxLog.axdpDecodeError(reason: "TLVs do not fill the message's \(length) bytes", data: data)
+                return .invalid(skip: AXDP.magic.count)
             }
 
             // Build message from TLVs
@@ -368,33 +403,10 @@ nonisolated enum AXDP {
                 }
             }
 
-            // Truncated buffer handling:
-            // - If truncation happened at a KNOWN TLV type (like payload), we might be waiting
-            //   for more data to arrive → return nil so reassembly can accumulate
-            // - If truncation happened at an UNKNOWN TLV type, it's likely garbage/corruption
-            //   after valid TLVs → return what we have for graceful degradation
-            // - If we haven't parsed messageType yet (no valid TLVs), always wait for more data
-            if truncated {
-                if !hasType {
-                    // No messageType parsed yet - definitely need more data
-                    TxLog.debug(.axdp, "Truncated buffer without message type - return nil for reassembly", [
-                        "bufferLen": data.count
-                    ])
-                    return nil
-                }
-                if truncatedAtKnownType {
-                    // Truncation at a known type (like payload) - might be waiting for real data
-                    TxLog.debug(.axdp, "Truncated at known TLV type - return nil for reassembly", [
-                        "type": String(describing: msg.type),
-                        "bufferLen": data.count
-                    ])
-                    return nil
-                }
-                // Truncation at unknown type with valid messageType - likely garbage, return what we have
+            guard hasType else {
+                TxLog.axdpDecodeError(reason: "Missing or unknown message type", data: data)
+                return .invalid(skip: length)
             }
-            
-            // Calculate total consumed bytes: magic header + TLV data consumed
-            let consumedBytes = magic.count + tlvConsumedBytes
 
             // Handle compressed payload
             if let compressed = compressedPayload,
@@ -412,28 +424,6 @@ nonisolated enum AXDP {
                 }
             }
 
-            // Must have at least message type
-            guard hasType else {
-                TxLog.axdpDecodeError(reason: "Missing message type", data: data)
-                return nil
-            }
-
-            // Chat and fileChunk: prefer full decode with payload. If payload is nil (truncated/corrupt),
-            // return message anyway for graceful degradation so callers can handle (e.g. skip display).
-            // Reassembly still accumulates when decode returns nil for truly incomplete buffers.
-            switch msg.type {
-            case .chat, .fileChunk:
-                if msg.payload == nil {
-                    axDebugPrint("[DEBUG:AXDP:DECODE] incomplete msg | type=\(msg.type) bufferLen=\(data.count) payload=nil (graceful)")
-                    TxLog.debug(.axdp, "Message decoded without payload (truncated/corrupt)", [
-                        "type": String(describing: msg.type),
-                        "bufferLen": data.count
-                    ])
-                }
-            default:
-                break
-            }
-
             TxLog.axdpDecode(
                 type: String(describing: msg.type),
                 sessionId: UInt16(msg.sessionId & 0xFFFF),
@@ -441,20 +431,24 @@ nonisolated enum AXDP {
                 payloadSize: msg.payload?.count ?? 0
             )
 
-            if !msg.unknownTLVs.isEmpty {
-                TxLog.debug(.axdp, "Message contains unknown TLVs (preserved for forward compatibility)", [
-                    "count": msg.unknownTLVs.count
-                ])
-            }
-
             #if DEBUG
             let hex = AXDP.hexPrefix(data)
-            print("[AXDP WIRE][DEC] type=\(msg.type) sessionId=\(msg.sessionId) messageId=\(msg.messageId) bytes=\(data.count) hex=\(hex)")
+            print("[AXDP WIRE][DEC] type=\(msg.type) sessionId=\(msg.sessionId) messageId=\(msg.messageId) bytes=\(length) hex=\(hex)")
             #endif
 
-            return (msg, consumedBytes)
+            return .message(msg, consumed: length)
         }
-        
+
+        /// Decode the message at the front of `data`.
+        /// Returns (message, consumedBytes), or nil when there is no whole,
+        /// usable message there.
+        static func decode(from data: Data) -> (Message, Int)? {
+            if case let .message(message, consumed) = frame(data) {
+                return (message, consumed)
+            }
+            return nil
+        }
+
         /// Convenience method that returns just the message (discarding consumed bytes).
         /// Useful for tests and callers that don't need reassembly tracking.
         static func decodeMessage(from data: Data) -> Message? {
@@ -523,6 +517,20 @@ nonisolated enum AXDP {
     }
 
     /// Check if data starts with AXDP magic header
+    /// A message from its TLV bytes: the magic, the length of the whole
+    /// message, then `body`.
+    static func envelope(_ body: Data) -> Data {
+        let length = headerLength + body.count
+        assert(length <= maxMessageLength, "AXDP message of \(length) bytes exceeds the length field")
+        return magic + encodeUInt16(UInt16(clamping: length)) + body
+    }
+
+    /// `data` with indices starting at 0; copied only when it is a slice
+    /// that starts later.
+    static func zeroBased(_ data: Data) -> Data {
+        data.startIndex == 0 ? data : Data(data)
+    }
+
     static func hasMagic(_ data: Data) -> Bool {
         guard data.count >= magic.count else { return false }
         return data.prefix(magic.count) == magic
@@ -534,52 +542,18 @@ nonisolated enum AXDP {
         return data.prefix(limit).map { String(format: "%02X", $0) }.joined()
     }
 
-    /// Decode all TLVs from data, stopping on first malformed or truncated TLV.
-    /// Returns (parsed TLVs, wasTruncated, consumedBytes, truncatedAtKnownType).
-    /// - wasTruncated: true when parsing stopped because a TLV header or value extended past end of data
-    /// - truncatedAtKnownType: true if truncation happened at a known TLV type (like payload),
-    ///   meaning we should wait for more data. False if it was an unknown type (likely garbage).
-    ///
-    /// IMPORTANT: If parsing stops because we encounter another AXDP magic header ("AXT1"),
-    /// that means the current message is COMPLETE - not truncated. The magic header of the next
-    /// message looks like a malformed TLV (type='A', length='XT'), but it's actually a message boundary.
-    static func decodeTLVs(from data: Data) -> (tlvs: [TLV], truncated: Bool, consumedBytes: Int, truncatedAtKnownType: Bool) {
+    /// The TLVs of one message body, which must fill `data` exactly.
+    /// Returns nil if a TLV runs past the end.
+    static func decodeTLVs(from data: Data) -> [TLV]? {
+        let data = zeroBased(data)
         var tlvs: [TLV] = []
         var offset = 0
-
         while offset < data.count {
-            // Check if we've reached another AXDP message boundary (back-to-back messages)
-            // The next message's "AXT1" magic would look like a malformed TLV to the parser:
-            // - type = 'A' (0x41)
-            // - length = 'XT' (0x5854 = 22612 bytes) - exceeds available data
-            // If we see another magic header, the CURRENT message is complete - not truncated.
-            let remaining = data.suffix(from: offset)
-            if remaining.count >= magic.count && remaining.prefix(magic.count) == magic {
-                // Another AXDP message starts here - current message is complete
-                return (tlvs, false, offset, false)
-            }
-            
-            guard let result = TLV.decode(from: data, at: offset) else {
-                // Parsing failed - check if it's because of actual truncation or just message boundary
-                // If we have data remaining but it's not a magic header, it's truly truncated
-                let isTruncated = offset < data.count
-                
-                // Check if truncation happened at a known TLV type
-                // Known types indicate we might be waiting for real data (e.g., payload)
-                // Unknown types (like garbage) suggest we should return what we have
-                var truncatedAtKnown = false
-                if isTruncated && offset < data.count {
-                    let typeAtOffset = data[offset]
-                    truncatedAtKnown = TLVType(rawValue: typeAtOffset) != nil
-                }
-                
-                return (tlvs, isTruncated, offset, truncatedAtKnown)
-            }
+            guard let result = TLV.decode(from: data, at: offset) else { return nil }
             tlvs.append(result.tlv)
             offset = result.nextOffset
         }
-
-        return (tlvs, false, offset, false)
+        return tlvs
     }
 
     // MARK: - Integer Encoding (Big-Endian)

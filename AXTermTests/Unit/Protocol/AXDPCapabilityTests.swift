@@ -438,12 +438,12 @@ final class AXDPCapabilityTests: XCTestCase {
 
     func testDecodePeerWithoutCapabilities() {
         // Simulate older peer sending PING without capabilities TLV
-        var data = AXDP.magic
+        var data = Data()
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.ping.rawValue])).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(0)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(1)).encode())
 
-        let decoded = AXDP.Message.decodeMessage(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: AXDP.envelope(data))
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ping)
