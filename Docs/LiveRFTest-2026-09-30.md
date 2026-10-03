@@ -315,6 +315,11 @@ and a capability check that gave up is not retried until the session ends (a
 9. The same matrix with AXDP turned off in Settings (forces YAPP everywhere)
 10. Repeat after the fixes above, to confirm them on the air
 11. Bluetooth TNC4 path (USB was used for everything today)
+12. Connect to DRLNOD and send `Help`, and keep the session up a few minutes.
+    Since dc29aaa AXTerm answers a poll that acknowledges nothing with RR F=1
+    only and resends at T1, as AX.25 2.2 says; before, it resent at once on
+    the poll. A DM from DRLNOD soon after its first poll means DRLNOD needs
+    the old behavior after all.
 
 ## Overnight fixes, 2026-10-02
 
