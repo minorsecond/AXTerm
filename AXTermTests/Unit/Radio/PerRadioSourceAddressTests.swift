@@ -329,6 +329,26 @@ final class PerRadioSourceAddressTests: XCTestCase {
         XCTAssertEqual(terminal.queueEntries.last?.frame.source.display, "K0EPI-7")
         XCTAssertEqual(terminal.queueEntries.last?.frame.radio, uhf)
     }
+
+    /// Smoke run 2026-10-03-1, issue 8: Broadcast has no destination field
+    /// (Docs/CONNECT_BAR_V3_BEHAVIORAL_SPEC.md), but the destination left in
+    /// the draft by the last session went out as the UI frame's destination.
+    func testABroadcastGoesToCQWhateverTheDraftDestination() async {
+        let (engine, coordinator, settings) = makeStation()
+        defer { withExtendedLifetime((engine, coordinator)) {} }
+        await connect(engine)
+        let terminal = ObservableTerminalTxViewModel(client: engine, settings: settings,
+                                                     sourceCall: settings.primaryCallsign,
+                                                     sessionManager: coordinator.sessionManager)
+        terminal.destinationCall.wrappedValue = "PEER-1"
+        terminal.connectionMode.wrappedValue = .datagram
+        terminal.composeText.wrappedValue = "smoke 1.6 broadcast"
+
+        terminal.enqueueCurrentMessage()
+
+        XCTAssertEqual(terminal.queueEntries.last?.frame.destination.display, "CQ")
+        XCTAssertEqual(terminal.queueEntries.last?.frame.frameType, "ui")
+    }
 }
 
 /// The station an older build left behind: one radio, and the SSID on the

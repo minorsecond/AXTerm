@@ -105,6 +105,13 @@ nonisolated struct TerminalTxViewModel {
         destinationCall.isEmpty ? "CQ" : destinationCall
     }
 
+    /// Where the terminal's Broadcast mode sends. Broadcast has no destination
+    /// field (Docs/CONNECT_BAR_V3_BEHAVIORAL_SPEC.md), so whatever the draft
+    /// still holds from the last session is not used: on 2026-10-03 (smoke
+    /// run issue 8) a broadcast went to that session's peer.
+    static let broadcastDestination = "CQ"
+
+
     /// Current character count
     var characterCount: Int {
         composeText.count
@@ -139,11 +146,12 @@ nonisolated struct TerminalTxViewModel {
     ///   - source: that radio's address. A frame's source must be the address
     ///     of the radio carrying it, so the caller that picks the radio passes
     ///     its address too; nil falls back to `sourceCall`.
-    func buildOutboundFrame(radio: RadioID = .primary, source sourceOverride: AX25Address? = nil) -> OutboundFrame? {
+    func buildOutboundFrame(radio: RadioID = .primary, source sourceOverride: AX25Address? = nil,
+                            destination destinationOverride: String? = nil) -> OutboundFrame? {
         guard canSend else { return nil }
 
         let source = sourceOverride ?? parseCallsign(sourceCall.isEmpty ? "NOCALL" : sourceCall)
-        let destination = parseCallsign(effectiveDestination)
+        let destination = parseCallsign(destinationOverride ?? effectiveDestination)
         let path = parsePath(digiPath)
 
         // Build payload based on AXDP setting
@@ -192,8 +200,9 @@ nonisolated struct TerminalTxViewModel {
     /// Enqueue the current message for transmission.
     /// Returns the frame ID if successful, nil if invalid.
     @discardableResult
-    mutating func enqueueCurrentMessage(radio: RadioID = .primary, source: AX25Address? = nil) -> UUID? {
-        guard let frame = buildOutboundFrame(radio: radio, source: source) else { return nil }
+    mutating func enqueueCurrentMessage(radio: RadioID = .primary, source: AX25Address? = nil,
+                                        destination: String? = nil) -> UUID? {
+        guard let frame = buildOutboundFrame(radio: radio, source: source, destination: destination) else { return nil }
 
         scheduler.enqueue(frame)
 
@@ -203,7 +212,7 @@ nonisolated struct TerminalTxViewModel {
         }
 
         // Add to history (use effective destination for broadcast)
-        addToHistory(effectiveDestination)
+        addToHistory(destination ?? effectiveDestination)
 
         // Clear compose text but keep destination
         composeText = ""

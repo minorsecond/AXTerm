@@ -1626,10 +1626,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     func enqueueCurrentMessage() {
         // A datagram leaves on the radio the picker (or the route) names, and
         // carries that radio's address as its source.
-        let dest = parseCallsign(viewModel.effectiveDestination)
+        let destination = viewModel.connectionMode == .datagram
+            ? TerminalTxViewModel.broadcastDestination : viewModel.effectiveDestination
+        let dest = parseCallsign(destination)
         let path = parsePath(viewModel.digiPath)
         let radio = radio(for: dest, path: path)
-        viewModel.enqueueCurrentMessage(radio: radio, source: sessionManager.localAddress(for: radio))
+        viewModel.enqueueCurrentMessage(radio: radio, source: sessionManager.localAddress(for: radio),
+                                        destination: destination)
     }
 
     func clearCompose() {
