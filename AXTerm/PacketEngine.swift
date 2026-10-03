@@ -1743,6 +1743,16 @@ final class PacketEngine: ObservableObject {
     /// Returns the text to render in terminal for packet payload.
     /// Falls back to placeholders so empty/binary UI/I frames remain visible.
     private func packetConsoleDisplayText(_ packet: Packet) -> String? {
+        // An AXTerm broadcast is AXDP chat in a UI frame (spec §6). Show what
+        // was typed; other AXDP gets its type as a label.
+        if packet.frameType == .ui, AXDP.hasMagic(packet.info),
+           let message = AXDP.Message.decodeMessage(from: packet.info) {
+            if message.type == .chat, let payload = message.payload,
+               let text = String(data: payload, encoding: .utf8) {
+                return text
+            }
+            return "[AXDP \(message.type)]"
+        }
         if let text = packet.infoText {
             return text
         }
