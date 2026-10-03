@@ -352,7 +352,9 @@ Now everything is keyed by scope:
 - The network-inference fallback produces **one sample per radio**
   (`aggregateLinkQualityPerRadio`), each filed against that radio's channel. A
   radio with too little evidence is simply absent; it must never borrow
-  another's.
+  another's. These samples are `.observed` evidence: they update the channel's
+  loss and ETX figures and never its K or paclen, which only sessions' own
+  acks and retransmissions move (smoke run 2026-10-03-1, issue 5).
 - `getConfigForDestination` takes the radio, so the same station reached on two
   radios gets two answers.
 

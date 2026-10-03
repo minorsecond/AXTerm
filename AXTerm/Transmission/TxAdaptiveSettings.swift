@@ -416,7 +416,8 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         srtt: Double?,
         newFrames: Int = 1,
         retransmits: Int? = nil,
-        bytesInFlight: Int? = nil
+        bytesInFlight: Int? = nil,
+        evidence: AdaptiveEvidence = .ownFrames
     ) {
         // Sanitize: a NaN/Inf sample must not poison the EWMAs.
         guard lossRate.isFinite, etx.isFinite else { return }
@@ -430,8 +431,14 @@ nonisolated struct TxAdaptiveSettings: Sendable {
 
         // EWMA update (spec 4.2: "Keep an EWMA of loss_rate …").
         lossRateEWMA = Self.blend(lossRateEWMA, sample: loss)
-        forwardLossEWMA = Self.blend(forwardLossEWMA, sample: forward)
         etxEWMA = Self.blend(etxEWMA, sample: sampleEtx)
+        // Other stations' links say nothing about our frames: an observed
+        // sample feeds the figures the operator sees and stops there. It
+        // stays out of the forward average, which our own first sample would
+        // otherwise inherit, and it resizes nothing (smoke run 2026-10-03-1,
+        // issue 5).
+        guard evidence == .ownFrames else { return }
+        forwardLossEWMA = Self.blend(forwardLossEWMA, sample: forward)
         let smoothedEtx = etxEWMA ?? sampleEtx
         // What paclen and K are *backed off* from. Upgrades still consult
         // `smoothedLoss`, and so do route ranking and the operator's
@@ -634,4 +641,15 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         upgradeStreakRequirement = Self.baselineStreakRequirement
         metrics = AdaptiveLearningMetrics()
     }
+}
+
+/// What a link-quality sample is evidence about.
+nonisolated enum AdaptiveEvidence: Equatable, Sendable {
+    /// Our own frames: acknowledged, or retransmitted, in a session we ran.
+    /// Only this kind moves K and paclen.
+    case ownFrames
+    /// Inferred from link statistics: the network poll's figure for a
+    /// channel, re-filed every cycle and largely about other stations'
+    /// links. It feeds the loss and ETX figures the operator sees.
+    case observed
 }

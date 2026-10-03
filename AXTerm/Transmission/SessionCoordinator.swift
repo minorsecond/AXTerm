@@ -813,7 +813,8 @@ final class SessionCoordinator: ObservableObject {
         retransmits: Int? = nil,
         windowCeiling: Int? = nil,
         paclenCeiling: Int? = nil,
-        bytesInFlight: Int? = nil
+        bytesInFlight: Int? = nil,
+        evidence: AdaptiveEvidence = .ownFrames
     ) {
         guard adaptiveTransmissionEnabled else {
             TxLog.adaptiveSampleIgnored(reason: "adaptive disabled", lossRate: lossRate, etx: etx)
@@ -828,7 +829,8 @@ final class SessionCoordinator: ObservableObject {
                 var channel = learningEntry(for: taught)
                 channel.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss,
                                               etx: etx, srtt: srtt,
-                                              newFrames: newFrames, retransmits: retransmits)
+                                              newFrames: newFrames, retransmits: retransmits,
+                                              evidence: evidence)
                 adaptiveByScope[taught] = CachedAdaptiveEntry(settings: channel, lastUpdated: Date())
             }
             let normalizedKey = scope
@@ -859,7 +861,7 @@ final class SessionCoordinator: ObservableObject {
             // The airtime allowance on the round-trip ceiling belongs to
             // in-session growth; with growth off the ceiling is the plain 5 s.
             let grows = normalizedKey.route.map { growsInSession(toward: $0.destination) } ?? false
-            entry.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits, bytesInFlight: grows ? bytesInFlight : nil)
+            entry.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits, bytesInFlight: grows ? bytesInFlight : nil, evidence: evidence)
             // What the next session to this link may start from: written
             // when a trial passes, lowered when the link backs off.
             if !grows {
@@ -953,7 +955,7 @@ final class SessionCoordinator: ObservableObject {
             }
         } else {
             let before = AdaptiveSnapshot(from: globalAdaptiveSettings)
-            globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
+            globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits, evidence: evidence)
             if Self.didCollapseToStopAndWait(beforeK: before.k, afterK: globalAdaptiveSettings.windowSize.currentAdaptive) {
                 TxLog.warning(.adaptive, "Adaptive collapsed to stop-and-wait", [
                     "scope": "global",

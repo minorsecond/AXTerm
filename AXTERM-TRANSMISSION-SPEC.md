@@ -195,6 +195,7 @@ This avoids oscillation.
 
 Edge cases you should decide now
 	•	UI best-effort messages (no ACKs): don’t treat as success/failure for adaptation. Otherwise you’ll “learn” nonsense.
+	•	Decision (2026-10-03, smoke run issue 5): only samples about our own frames (a session's acks and retransmissions) move K and paclen. The network poll's per-radio figure is inferred from stored link statistics, re-filed every cycle and largely about other stations' links; it is an observed sample. It feeds the loss and ETX figures the operator sees, and stays out of the forward-loss average, the streaks, K and paclen. Before this, other stations' links on 145.070 read as "Our frames losing 23%" and a new route opened at K=1 paclen 64 before we had sent a frame. A route nobody has used opens at the operator's baseline and backs off on its first retransmission.
 	•	No data yet for this LinkKey: start conservative (64 or 128) and probe upward.
 	•	Different traffic classes: optionally have two paclen targets:
 	•	paclenInteractive (smaller, safer)

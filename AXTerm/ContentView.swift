@@ -737,7 +737,7 @@ struct ContentView: View {
                         coordinator.applyLinkQualitySample(
                             lossRate: sample.lossRate, etx: sample.etx, srtt: nil,
                             source: sample.scope.sourceLabel,
-                            scope: .radio(radio))
+                            scope: .radio(radio), evidence: .observed)
                     }
                     didSampleEver = true
                 }
