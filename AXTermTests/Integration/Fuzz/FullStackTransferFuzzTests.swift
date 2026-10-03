@@ -106,6 +106,12 @@ final class FullStackTransferFuzzTests: XCTestCase {
             func resetUnder() -> Bool {
                 impairment.duplicate > 0 && a.link.sabmsSent + b.link.sabmsSent > sabmsBefore
             }
+            // A YAPP receive still waiting for its header owns the byte
+            // stream; noted so a lost offer or chat can be traced to it.
+            let waitingYAPP = [(a, "A"), (b, "B")].filter { !$0.0.coordinator.yappAwaitingHeader.isEmpty }.map(\.1)
+            if !waitingYAPP.isEmpty {
+                report.append("  (op \(index) starts with a YAPP receive waiting for its header on \(waitingYAPP.joined(separator: ", ")))")
+            }
             let kind = pick.pick([Kind.axdp, .axdp, .yapp, .yapp, .chat])
             let forward = pick.chance(0.6)
             let (sender, receiver) = forward ? (a, b) : (b, a)
