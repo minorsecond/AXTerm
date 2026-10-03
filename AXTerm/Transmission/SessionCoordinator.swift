@@ -3595,9 +3595,26 @@ final class SessionCoordinator: ObservableObject {
 
     // MARK: - AXDP Send Helper
 
+    /// File bytes per AXDP chunk: with the 48 bytes of AXDP framing around
+    /// it a FILE_CHUNK message is 768 bytes, which every rung of the paclen
+    /// ladder (64, 128, 192, 256) divides exactly. Each message is cut into
+    /// I-frames on its own, so every frame of a chunk is full whatever paclen
+    /// does during the session. Framing is about 6% of the stream (it was
+    /// 26% at 128-byte chunks). FILE_META tells the receiver the size.
+    static let axdpFileChunkSize = 768 - axdpFileChunkFraming
+
+    /// AXDP bytes around a FILE_CHUNK's data: the header (6), then the type
+    /// (4), session, message, chunk index and total (7 each), payload
+    /// header (3) and CRC (7) TLVs.
+    static let axdpFileChunkFraming = 48
+
     /// Send AXDP payload via connected session if available, otherwise as UI.
     /// Returns true if frames were actually sent, false if window was full or packetEngine not set.
-    func sendAXDPPayload(_ payload: Data, to destination: AX25Address, path: DigiPath, displayInfo: String?) -> Bool {
+    ///
+    /// - Parameter transferStream: the payload is part of a file transfer.
+    ///   It goes only over a connected session, never as a UI frame.
+    func sendAXDPPayload(_ payload: Data, to destination: AX25Address, path: DigiPath, displayInfo: String?,
+                         transferStream: Bool = false) -> Bool {
         // Guard: don't send if packetEngine is not set (e.g., in tests)
         // CRITICAL: This prevents any frame creation or memory allocation when packetEngine is nil
         guard packetEngine != nil else {
@@ -3629,6 +3646,18 @@ final class SessionCoordinator: ObservableObject {
                 sendFrame(frame)
             }
             return true
+        }
+
+        // A UI frame stands alone: a transfer's stream has no business in
+        // one, and nothing goes out over the AX.25 default N1 of 256 bytes
+        // (AX.25 2.2 §6.7.2.1).
+        guard !transferStream, payload.count <= AX25Constants.maxUIInfoLength else {
+            TxLog.warning(.axdp, "AXDP payload not sent as UI: no connected session", [
+                "destination": destination.display,
+                "payloadSize": payload.count,
+                "transferStream": transferStream
+            ])
+            return false
         }
 
         let origin = uiOrigin(to: destination, radio: nil)
@@ -5047,6 +5076,7 @@ final class SessionCoordinator: ObservableObject {
             fileName: fileName,
             fileSize: originalFileData.count,
             destination: destination,
+            chunkSize: Self.axdpFileChunkSize,
             direction: .outbound,
             transferProtocol: transferProtocol,
             compressionSettings: compressionSettings
@@ -5261,7 +5291,8 @@ final class SessionCoordinator: ObservableObject {
             chunkPayload,
             to: destination,
             path: path,
-            displayInfo: "AXDP CHUNK \(nextChunk + 1)/\(transfers[transferIndex].totalChunks)"
+            displayInfo: "AXDP CHUNK \(nextChunk + 1)/\(transfers[transferIndex].totalChunks)",
+            transferStream: true
         )
 
         // Queued behind a full window still counts as handed over: the

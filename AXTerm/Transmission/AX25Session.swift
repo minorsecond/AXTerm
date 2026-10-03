@@ -14,6 +14,10 @@ import Foundation
 nonisolated enum AX25Constants {
     /// Default packet length (paclen) in bytes
     static let defaultPacketLength: Int = 128
+
+    /// The AX.25 default N1: the most information bytes in one frame
+    /// (AX.25 2.2 §6.7.2.1). A UI frame has no XID to raise it.
+    static let maxUIInfoLength: Int = 256
     
     /// Default window size (max outstanding I-frames in modulo-8)
     static let defaultWindowSize: Int = 4

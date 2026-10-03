@@ -533,7 +533,9 @@ final class TwoStationTransferTests: XCTestCase {
     }
 
     func testTheSecondOfferQuotesAirtimeFromTheFirst() async throws {
-        _ = try await send(pattern(3_000), named: "first.bin")
+        // Big enough that the data phase lasts the second a rate needs:
+        // 28 of the 720-byte chunks.
+        _ = try await send(pattern(20_000), named: "first.bin")
         XCTAssertNil(a.coordinator.startTransfer(to: b.callsign, fileName: "second.bin", data: pattern(3_000),
                                                  compressionSettings: .disabled))
         try await waitUntil("second offer") { !self.b.coordinator.pendingIncomingTransfers.isEmpty }

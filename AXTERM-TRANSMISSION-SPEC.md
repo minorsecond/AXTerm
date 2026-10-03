@@ -363,6 +363,15 @@ Each TLV:
 - `len: UInt16 (big endian)`
 - `value: [UInt8]`
 
+The receiver reads a message by its length and nothing else. It is whole when its last byte has arrived, however the bytes were cut into frames on the way: one message per frame, several in a frame, or a node (NET/ROM, BPQ) that re-cut the stream into frames of its own. Rules:
+- Bytes before a magic are not AXDP; the reassembler drops them (the terminal shows them on its own path).
+- A length under 10 (the header and a MessageType TLV), or TLVs that do not fill the length exactly, mean the header cannot be trusted: drop the 4 magic bytes and look for the next magic.
+- A well-formed message without a MessageType, or with a type this build does not know, is skipped whole by its length.
+- Unknown TLV types inside a message are kept and ignored (forward compatibility).
+- A message is at most 65,535 bytes, the most the length can say.
+
+Decision (2026-10-03): the length was added before any release, so there is no older envelope to accept. Without it, a receiver took a message as ended at the next magic or where the frame ended, and a frame that ended on a TLV boundary inside a message looked whole; the data after it was lost until a frame happened to start with a magic. Smoke run 2026-10-03-1 found it when packing file chunks across frames.
+
 Core TLVs:
 - `0x01` MessageType (UInt8): CHAT=1, FILE_META=2, FILE_CHUNK=3, ACK=4, NACK=5, PING=6, PONG=7
 - `0x02` SessionId (UInt32)
@@ -550,11 +559,14 @@ Rules
 
 Chunk sizing interaction
 	•	Chunk boundaries are chosen on the original payload stream
-	•	Sender MUST ensure compressed output fits under the paclen shaping target
+	•	Over UI frames, each frame stands alone: the sender MUST keep each AXDP message under the paclen shaping target
 	•	If compressed output exceeds paclen:
 	•	Shrink the chunk or
 	•	Fall back to uncompressed for that chunk
 	•	Compression that increases size MUST NOT be used for that chunk
+	•	Over a connected session the rule above does not apply: AX.25 cuts a message into as many I-frames as it needs (AX.25 2.2 §6.7.2.1 bounds each I-field at N1, nothing more). Each message is handed to the session on its own, so a short final frame of one chunk never carries the start of the next.
+	•	FILE_CHUNK data is 720 bytes, so with its 48 bytes of framing a chunk message is 768 bytes. Every rung of the paclen ladder (64, 128, 192, 256) divides 768, so every frame of a chunk is full whatever paclen does during the session (§7.8.1), and no cut lands on a TLV boundary inside the message. Framing is about 6% of the stream. A transfer's chunks never fall back to UI frames, and no AXDP UI frame exceeds 256 bytes.
+	•	Decision (2026-10-03, smoke run issue 9): chunks were 128 bytes, a 174-byte message, which paclen 128 cut into a 128-byte and a 46-byte frame, so half a transfer's frames and window slots carried 46 bytes. Shrinking chunks to fit one frame would have carried less payload per byte of airtime. Packing chunks across frame boundaries was tried first and lost data: before the length header (§6.2), a frame that ended on a TLV boundary inside a message looked like a whole message to the receiver. With the length packing would be safe, but at 768-byte messages every frame is already full, so it is not done.
 
 What gets compressed
 	•	FILE_CHUNK: yes (default on if negotiated)
