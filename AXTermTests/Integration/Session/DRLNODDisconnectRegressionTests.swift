@@ -63,7 +63,18 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
         XCTAssertTrue(timerDrivenFrames.isEmpty, "DM must leave no live T1 task behind")
     }
 
-    func testDRLNODNoAckPollRetransmitsHelpBeforeOriginalT1Fires() {
+    /// DRLNOD's poll that acknowledges nothing is answered with RR F=1, and
+    /// "Help" goes out again when our own T1 runs out (AX.25 6.2 and the 2.2
+    /// SDL: a poll asks for a response, not a resend).
+    ///
+    /// Live trace, 2026-05-28 05:43:47: DRLNOD answered our I(0) with
+    /// RR(P=1, N(R)=0). Until 2026-10-02 AXTerm resent "Help" on that poll,
+    /// on the reading that waiting for T1 had let DRLNOD drop the link. The
+    /// write-up of that disconnect (Docs/KB5YZB7_Flaky_Connections.md, bug
+    /// #6) traced DRLNOD's DM to the poll bit AXTerm then set on idle
+    /// I-frames, fixed since; resending on a poll made duplicates whenever a
+    /// poll crossed new frames. To be confirmed on the air against DRLNOD.
+    func testDRLNODNoAckPollIsAnsweredAndHelpIsResentAtT1() {
         let clock = AX25VirtualClock()
         let manager = AX25SessionManager(localCallsign: local, clock: clock)
         manager.defaultConfig = AX25SessionConfig(initialRto: 4.0, adaptiveTimeout: false)
@@ -82,10 +93,6 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
         XCTAssertEqual(helpFrame?.controlByte.map { Int($0 & 0x10) }, 0x10, "First DRLNOD command I-frame should solicit a response with P=1")
         XCTAssertEqual(session.outstandingCount, 1)
 
-        // Live trace, 2026-05-28 05:43:47: DRLNOD answered our I(0) with
-        // RR(P=1,N(R)=0), which polls us but does not ACK Help. Respond with
-        // RR(F=1) and retransmit once immediately instead of waiting for the
-        // original T1 to expire and letting DRLNOD time us out.
         clock.advance(by: 3.0)
         let responses = manager.handleInboundRRFrames(
             from: drlnod,
@@ -95,15 +102,19 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
             pf: true,
             isCommand: true
         )
+        XCTAssertEqual(responses.count, 1, "the poll gets RR F=1 and nothing else")
+        XCTAssertEqual(responses.first?.frameType, "s")
+        XCTAssertEqual(responses.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
 
-        XCTAssertEqual(responses.filter { $0.frameType == "s" }.count, 1)
-        let retransmits = responses.filter { $0.frameType == "i" }
-        XCTAssertEqual(retransmits.count, 1)
-        XCTAssertEqual(retransmits.first?.payload, Data("Help\r".utf8))
-        XCTAssertEqual(retransmits.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
-
-        clock.advance(by: 1.21)
-        XCTAssertTrue(timerDrivenFrames.isEmpty, "The original T1 should be canceled/restarted by the poll recovery")
+        // T1 started with "Help" at 0 s and runs out at 4 s, plus the 200 ms
+        // grace before the resend.
+        clock.advance(by: 0.9)
+        XCTAssertTrue(timerDrivenFrames.isEmpty, "nothing before T1")
+        clock.advance(by: 0.35)
+        let resent = timerDrivenFrames.filter { $0.frameType == "i" }
+        XCTAssertEqual(resent.count, 1)
+        XCTAssertEqual(resent.first?.payload, Data("Help\r".utf8))
+        XCTAssertEqual(resent.first?.controlByte.map { Int($0 & 0x10) }, 0x10, "the T1 resend polls")
         XCTAssertEqual(session.state, .connected)
         XCTAssertEqual(session.outstandingCount, 1)
     }

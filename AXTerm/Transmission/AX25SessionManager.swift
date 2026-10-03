@@ -2928,8 +2928,7 @@ final class AX25SessionManager: ObservableObject {
 
         // Last of all: a claim's ack handler may send at once (YAPP pumps its
         // next blocks here). Run before the actions, the stale stopT1 left
-        // that burst and its poll unprotected (full-stack fuzz, 2026-10-02);
-        // run before the poll retransmit above, its new frames went out twice.
+        // that burst and its poll unprotected (full-stack fuzz, 2026-10-02).
         notifyOutboundAck(session, upTo: session.va)
 
         checkInvariants(session: session)
