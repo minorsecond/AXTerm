@@ -202,6 +202,7 @@ Status is filled in as each is fixed.
 | 50 | Winlink P2P: a caller with nothing to send opens with FF, and the answering station quit on it with its own outbox untouched. | full-stack fuzz, 2026-10-02 | fixed, 3d55843 |
 | 51 | The TNC4's extended modem-type reply was accepted at any length. | property test, 2026-10-02 | fixed, a426ada |
 | 52 | A mailbox caller could not kill private mail they sent to someone else: K looked the message up through the read rule, which hides mail not addressed to the caller, and answered "not found". | full-stack fuzz, 2026-10-02 | fixed, f95e8d4: K finds what the caller can read or kill; other people's mail still answers "not found" |
+| 53 | A YAPP start (SI) with no header after it left a receive holding the session. The next thing the other station sent, a chat line or an AXDP offer, was lost, and a YAPP cancel printed "The other station sent something that is not YAPP" on its terminal. Happens when the sender quits, or after a link reset only the sender was told about. | full-stack fuzz seed 3034, 2026-10-02; reproduced by StaleYAPPReceiveTests | fixed, dd7ba20: a receive still waiting for its header passes bytes that are not YAPP on, without a cancel |
 
 Not bugs, recorded so nobody chases them again:
 
@@ -468,6 +469,10 @@ Bugs found and fixed:
   like every other single-value reply.
 - **52. Mailbox K could not take back mail the caller sent (f95e8d4).** The
   rule allowed it; the lookup went through the read rule first.
+- **53. A stranded YAPP start swallowed the next packet (dd7ba20).** After a lone SI
+  (sender gone, or a reset only the sender heard about), the next chat line
+  or AXDP offer was lost and a YAPP cancel printed on the other terminal.
+  Bytes that cannot start a YAPP frame now go on to AXDP or the terminal.
 
 Not bugs, but worth knowing:
 
