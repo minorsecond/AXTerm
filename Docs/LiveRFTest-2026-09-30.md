@@ -305,6 +305,11 @@ and a capability check that gave up is not retried until the session ends (a
 
 ## Left to test
 
+From 2026-10-03 on-air testing follows the formal plan,
+[SmokeTestPlan.md](SmokeTestPlan.md), with each run logged in
+[SmokeTestRuns/](SmokeTestRuns/). The list below is kept as it stood; every
+item is covered by a test in the plan.
+
 1. YAPP A to B (choose YAPP in A's Protocol picker)
 2. AXDP B to A with a small file (done with 20 KB; repeat small for timing)
 3. Cancel a transfer partway, from the sender and from the receiver
