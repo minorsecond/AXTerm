@@ -59,7 +59,10 @@ never replaces the live run.
 
 ## Test files
 
-Kept with their SHA-256 sums; a received file passes only if its sum matches.
+The same files every run, kept in [SmokeTestRuns/files/](SmokeTestRuns/files/)
+with their SHA-256 sums (`SHA256SUMS`). Setup copies them to
+`~/Downloads/AXTerm Smoke Files/`, where the sandboxed app can read them. A
+received file passes only if its sum matches.
 
 | Name | Contents |
 |---|---|
@@ -131,7 +134,7 @@ turn off Warbler transmit. Write all of that in the resume point, with
 | S1 | Re-enable transmit for A (705) in Warbler | Y |
 | S2 | Set B (ID-50) to 145.070 FM, low power, no tone, volume at the level that does not clip | Y |
 | S3 | Quit the main AXTerm (or disconnect A (705) in it); close the Mobilinkd configuration app | Y |
-| S4 | Build the commit under test; launch both test instances; answer Warbler's password and macOS prompts (microphone, keychain) | C, Y for prompts |
+| S4 | Build the commit under test; copy the test files to `~/Downloads/AXTerm Smoke Files/`; launch both test instances: A (705) from the Debug build, B (ID-50) from a copy with its own bundle ID (`com.rosswardrup.AXTerm.stationb`) so the two never share settings, each with `--test-mode --instance-name "Station A"` or `"Station B"`; answer Warbler's password and macOS prompts (microphone, keychain) | C, Y for prompts |
 | S5 | Configure A (705): K0EPI-2, Warbler at `localhost:50100`. Configure B (ID-50): K0EPI-3, TNC4 on USB with the Mobilinkd switch on, TX delay 800 ms | C |
 | S6 | Record the starting state: A (705)'s frequency, mode and power, then set it to 145.070 FM at about 0.2 W; the TNC4's settings as B (ID-50) finds them | C |
 
