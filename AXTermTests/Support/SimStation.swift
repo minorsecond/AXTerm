@@ -94,7 +94,11 @@ final class StressNet {
     /// Reception outcomes at the intended receiver, by frame kind.
     private(set) var outcomes: [SimFrameKind: [SimReception: Int]] = [:]
 
+    /// The run's seed: everything random in it derives from this.
+    let seed: UInt64
+
     init(seed: UInt64) {
+        self.seed = seed
         clock = AX25VirtualClock()
         channel = HalfDuplexChannel(clock: clock, seed: seed)
         channel.onReception = { [weak self] tag, _, _, outcome in
@@ -181,6 +185,9 @@ final class SimStation {
     private(set) var receiveEpoch: [String: Int] = [:]
     /// Restarts so far; each one is a new manager with no sessions.
     private(set) var restarts = 0
+    /// This station's own T3 jitter draws, so a seed replays the same run
+    /// and the two stations of a run still draw different periods.
+    private var t3Jitter: PropertyRNG
 
     init(net: StressNet, name: String, address: AX25Address, node: Int,
          config: SimConfigSource, useDelayedAckT1: Bool = false) {
@@ -190,6 +197,7 @@ final class SimStation {
         self.node = node
         self.configSource = config
         self.useDelayedAckT1 = useDelayedAckT1
+        self.t3Jitter = PropertyRNG(seed: net.seed &+ 0x9E37_79B9_7F4A_7C15 &* UInt64(node + 1))
         self.manager = AX25SessionManager(localCallsign: address, clock: net.clock)
         wire(manager)
         net.channel.nodes[node].deliver = { [weak self] bytes in self?.receive(bytes) }
@@ -199,6 +207,10 @@ final class SimStation {
 
     private func wire(_ manager: AX25SessionManager) {
         manager.useDelayedAckT1 = useDelayedAckT1
+        manager.t3JitterDraw = { [weak self] in
+            guard let self else { return 0.5 }
+            return Double(self.t3Jitter.next() >> 11) / Double(1 << 53)
+        }
         switch configSource {
         case .fixed(let config):
             manager.defaultConfig = config

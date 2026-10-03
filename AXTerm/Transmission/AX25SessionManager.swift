@@ -536,6 +536,23 @@ final class AX25SessionManager: ObservableObject {
     /// The clock used for all timer scheduling (T1, T3, backoffs). Inject VirtualClock for deterministic tests.
     let clock: AX25TimerScheduler
 
+    /// Where each T3 period's jitter comes from: a draw in 0..<1. The system
+    /// generator, seeded by the OS per process, so two stations running the
+    /// same build do not pick the same periods; tests inject a fixed draw.
+    var t3JitterDraw: () -> Double = { Double.random(in: 0..<1) }
+
+    /// How far below T3 a period may be drawn, as a fraction of T3.
+    static let t3JitterFraction = 0.25
+
+    /// One T3 period: between three quarters of `base` and `base`. Two
+    /// stations restart T3 on the same exchange, and at a fixed period their
+    /// idle polls went out together and collided (smoke run 2026-10-03-1,
+    /// issue 6). AX.25 2.2 §6.7.1.3 leaves the period locally defined. The
+    /// draw never exceeds `base`, which peers already wait out.
+    static func t3Delay(base: Double, draw: Double) -> Double {
+        base * (1 - t3JitterFraction * min(max(draw, 0), 1))
+    }
+
     // MARK: - Debug Logging (Debug Builds Only)
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
 #if DEBUG
@@ -3663,7 +3680,7 @@ final class AX25SessionManager: ObservableObject {
         // Cancel any existing T3 timer
         session.t3TimerTask?.cancel()
 
-        let timeout = session.timers.t3Timeout
+        let timeout = Self.t3Delay(base: session.timers.t3Timeout, draw: t3JitterDraw())
         let sessionId = session.id
 
         session.t3TimerTask = clock.schedule(delay: timeout) { [weak self] in

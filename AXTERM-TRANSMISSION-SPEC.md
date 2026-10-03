@@ -720,6 +720,8 @@ Clamp:
 
 Use `RTO` as your T1 timeout for retransmission.
 
+T3, the idle poll timer, is 30 s. Each time it starts, its period is drawn at random between 22.5 s and 30 s (75% to 100% of T3) from the system's random generator, which the OS seeds per process; tests inject the draw. Decision (2026-10-03, smoke run issue 6): two stations restart T3 on the same exchange, and at a fixed 30 s their idle polls went out together and collided. AX.25 2.2 §6.7.1.3 leaves the period "locally defined", so a drawn period is within the spec. p-persistence (§6.7.1.6) is still the channel-access rule, but it cannot separate two stations that key up within one slot of each other. The draw stays at or under 30 s because peers give up on a silent link not long after that.
+
 ### 7.4 Retries (N2) and link-down detection
 - Default `N2 = 10` (configurable)
 - On consecutive failures:
