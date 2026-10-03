@@ -58,8 +58,8 @@ final class YAPPSessionTransfer: FileTransferProtocolDelegate {
         guard let manager = owner?.sessionManager else { return false }
         claim = manager.claimDelivery(
             for: sessionKey,
-            handler: { [weak self] _, data in
-                self?.yapp.handleIncomingData(data)
+            handler: { [weak self] session, data in
+                self?.received(data, on: session)
             },
             stateHandler: { [weak self] session, _, newState in
                 guard newState == .disconnected || newState == .error else { return }
@@ -69,6 +69,31 @@ final class YAPPSessionTransfer: FileTransferProtocolDelegate {
                 self?.yapp.pumpData()
             })
         return claim != nil
+    }
+
+    // MARK: Receiving bytes
+
+    private func received(_ data: Data, on session: AX25Session) {
+        // A receive still waiting for its header, handed bytes that cannot
+        // start a YAPP frame: the sender is not running YAPP any more (its
+        // program quit, or a link reset that only it was told about ended its
+        // transfer, spec 7.1.1). Answering with CN printed "The other station
+        // sent something that is not YAPP" on a terminal that never asked,
+        // and the bytes, a chat line or an AXDP offer, were lost (full-stack
+        // fuzz seed 3034, StaleYAPPReceiveTests). Stop without a word and
+        // pass them on as if this receive had never claimed the session.
+        if role == .receiving, transferId == nil, yapp.isAwaitingHeader,
+           !YAPPProtocol.canStartFrame(data), !finished {
+            TxLog.inbound(.session, "YAPP start not followed by a header; passing the bytes on", [
+                "from": peer.display, "size": data.count
+            ])
+            finished = true
+            yapp.abandon()
+            end()
+            owner?.sessionManager.deliverUnclaimed(data, on: session)
+            return
+        }
+        yapp.handleIncomingData(data)
     }
 
     // MARK: Driving

@@ -337,6 +337,19 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
     /// over, false if it arrived the wrong size.
     private var fileDelivery: Bool?
 
+    /// A receive that has answered SI and has nothing of a header yet, not
+    /// even part of one.
+    var isAwaitingHeader: Bool {
+        receiverPhase == .awaitingHeader && parser.pendingByteCount == 0
+    }
+
+    /// Whether `data` can begin a YAPP frame: every frame starts with one of
+    /// these control bytes, and text and AXDP never do.
+    static func canStartFrame(_ data: Data) -> Bool {
+        guard let lead = data.first else { return false }
+        return [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x15, 0x18].contains(lead)
+    }
+
     /// Whether this instance is sending (true) or receiving (false). Nil
     /// until one side starts.
     var isSender: Bool? {

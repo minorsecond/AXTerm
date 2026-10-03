@@ -4119,12 +4119,20 @@ final class AX25SessionManager: ObservableObject {
             // A protocol conversation (e.g. Winlink B2F) owns this
             // session's bytes; terminal and AXDP must not see them.
             claim.handler(session, data)
-        } else if onUnclaimedDelivery?(session, data) == true {
+        } else {
+            deliverUnclaimed(data, on: session)
+        }
+    }
+
+    /// Delivers bytes the way they go when no claim holds the session:
+    /// to a recognizer (a YAPP start, say), or to AXDP and the terminal.
+    /// Also for a claim holder that finds bytes it took were not its own.
+    func deliverUnclaimed(_ data: Data, on session: AX25Session) {
+        if onUnclaimedDelivery?(session, data) == true {
             // Taken by whoever recognized it; see onUnclaimedDelivery.
             return
-        } else {
-            onDataDeliveredForReassembly?(session, data)
-            onDataReceived?(session, data)
         }
+        onDataDeliveredForReassembly?(session, data)
+        onDataReceived?(session, data)
     }
 }
