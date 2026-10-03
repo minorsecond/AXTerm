@@ -29,7 +29,7 @@ never stands in for the live run.
 |---|---|---|
 | Callsign | K0EPI-2 | K0EPI-3 |
 | Radio | IC-705, about 0.2 W | ID-50, low power |
-| TNC | AXTerm's sound modem through Warbler (`localhost:50100`) | Mobilinkd TNC4 over USB (Bluetooth in 7.3) |
+| TNC | AXTerm's sound modem through Warbler (`localhost:50100`) | Mobilinkd TNC4 over USB (Bluetooth in 9.3) |
 | TX delay | default | 800 ms |
 | Frequency | 145.070 MHz FM simplex | same |
 
@@ -200,14 +200,14 @@ Nobody nearby broadcasts NODES, so both test stations do it themselves.
 | 12.2 | Bug 53: YAPP start with no header, then chat | chat arrives; no "not YAPP" text on the other terminal | C |
 | 12.3 | Bug 48: no endless gap polling over a long session | none seen; any data-loss event in the log is reported | C |
 | 12.4 | RR-poll change (dc29aaa) against DRLNOD: connect, send `Help`, keep the session a few minutes, then the same with KB5YZB-7 through DRL | no DM after a poll; no duplicate resends; everything delivered | L |
-| 12.6 | Everything in 3 again with AXDP turned off | YAPP everywhere, all pass | C |
+| 12.5 | Everything in 3 again with AXDP turned off | YAPP everywhere, all pass | C |
 
 ## 13. Other checks
 
-| ID | Test | Who |
-|---|---|---|
-| 13.1 | Callsign lookup, elevation downloads, solar conditions | C (needs internet) |
-| 13.2 | Network graph and link metrics (df, dr, ETX, quality) after a long session: values and tooltips make sense | C, with Y to look |
+| ID | Test | Pass | Who |
+|---|---|---|---|
+| 13.1 | Callsign lookup, elevation downloads, solar conditions | data arrives and is shown | C (needs internet) |
+| 13.2 | Network graph and link metrics (df, dr, ETX, quality) after a long session | values and tooltips make sense | C, with Y to look |
 | 13.3 | iOS app on the air: the iPhone as station B with the TNC4 over Bluetooth, repeating 1 to 3 against A | as in 1 to 3 | Y (iPhone), C (checks on A) |
 
 ## At the end (C, then Y)
