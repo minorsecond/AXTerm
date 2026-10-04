@@ -145,9 +145,9 @@ final class APRSMessagingService: ObservableObject {
             onDirectedTraffic?(ctx.sender)
             receiveMessage(addressee: addressee, text: text, number: number, ctx: ctx)
 
-        case let .directedQuery(addressee, query):
+        case let .directedQuery(addressee, query, number):
             guard APRSMessage.isAddressedToUs(addressee, ours: ctx.ourCalls) else { return }
-            receiveQuery(addressee: addressee, query: query, ctx: ctx)
+            receiveQuery(addressee: addressee, query: query, number: number, ctx: ctx)
 
         case let .bulletin(id, text):
             storeBulletin(id: id, text: text, ctx: ctx)
@@ -228,12 +228,22 @@ final class APRSMessagingService: ObservableObject {
         if let number, effectiveAutoReply != .manual { emitAck(to: ctx.sender, number: number, ctx: ctx) }
     }
 
-    private func receiveQuery(addressee: String, query: String, ctx: InboundContext) {
+    private func receiveQuery(addressee: String, query: String, number: String?,
+                              ctx: InboundContext) {
+        // A numbered query is a message and is acked like one (APRS 1.01
+        // ch. 14), under the same rule: any mode but manual. A second copy
+        // means our ack was lost, so it is acked again and not answered
+        // again; the answer already went out.
+        if let number, (try? store.incoming(peer: ctx.sender, number: number)) != nil {
+            if effectiveAutoReply != .manual { emitAck(to: ctx.sender, number: number, ctx: ctx) }
+            return
+        }
         // Log the query for visibility even in manual mode.
         persist(APRSMessageRecord(
             direction: .incoming, kind: .query, localCall: addressee, peer: ctx.sender,
-            text: query, radioID: ctx.radioID, path: ctx.replyPath, viaDirect: ctx.viaDirect,
-            createdAt: ctx.receivedAt, state: .received, isRead: true))
+            text: query, number: number, radioID: ctx.radioID, path: ctx.replyPath,
+            viaDirect: ctx.viaDirect, createdAt: ctx.receivedAt, state: .received, isRead: true))
+        if let number, effectiveAutoReply != .manual { emitAck(to: ctx.sender, number: number, ctx: ctx) }
 
         guard effectiveAutoReply == .full else { return }
         // Uppercase only, as the spec writes them. Xastir logs anything else

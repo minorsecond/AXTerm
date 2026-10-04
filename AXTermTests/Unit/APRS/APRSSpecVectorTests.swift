@@ -119,7 +119,7 @@ final class APRSSpecVectorTests: XCTestCase {
         let info = APRSMessage.directedQueryInfo(to: "XASTIR-1", query: "?APRSP")
         XCTAssertEqual(info, ":XASTIR-1 :?APRSP")
 
-        guard case let .directedQuery(addressee, query) =
+        guard case let .directedQuery(addressee, query, _) =
                 APRSMessage.parse(info: Data(info.utf8)) else {
             return XCTFail("did not parse as a directed query")
         }
@@ -175,7 +175,7 @@ final class APRSSpecVectorTests: XCTestCase {
     func testThirdPartyTrafficUnwrapsToTheOriginalMessage() throws {
         let inner = ":XASTIR-1 :?APRSP"
         let wrapped = "}K0EPI-7>APZAXT,TCPIP,WE0FUN-1*:\(inner)"
-        guard case let .directedQuery(addressee, query) =
+        guard case let .directedQuery(addressee, query, _) =
                 APRSMessage.parse(info: Data(wrapped.utf8)) else {
             return XCTFail("third-party wrapper did not unwrap")
         }

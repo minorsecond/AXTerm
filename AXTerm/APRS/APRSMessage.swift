@@ -27,8 +27,10 @@ nonisolated enum APRSMessage {
         case bulletin(id: String, text: String)
         /// A directed query addressed to `addressee` — a message whose text
         /// is an APRS query token such as `?APRSP` (send position) or
-        /// `?PING?`. `query` keeps the leading `?`.
-        case directedQuery(addressee: String, query: String)
+        /// `?PING?`. `query` keeps the leading `?`. A query typed into a
+        /// message can carry a number like any message, and then the asker
+        /// waits for it to be acked.
+        case directedQuery(addressee: String, query: String, number: String? = nil)
         /// A general, broadcast query (info data type `?`), e.g. `?APRS?`.
         case generalQuery(String)
     }
@@ -112,7 +114,7 @@ nonisolated enum APRSMessage {
 
         // A message whose text begins with `?` is a directed query.
         if messageText.hasPrefix("?") {
-            return .directedQuery(addressee: addressee, query: messageText)
+            return .directedQuery(addressee: addressee, query: messageText, number: number)
         }
         return .message(addressee: addressee, text: messageText, number: number)
     }
@@ -189,44 +191,35 @@ nonisolated enum APRSMessage {
 ///
 /// Query strings are from the APRS specification, chapter 15. They are not
 /// invented and must not be: a station only answers a string it recognizes.
+/// The chapter has exactly three general queries. `?APRSP`, `?APRSS`,
+/// `?APRSO`, `?APRSD` and the rest are directed queries (`APRSDirectedQuery`),
+/// sent in a message to one station; heard unaddressed they go unanswered,
+/// which smoke run 2026-10-03-1 showed when this menu sent `?APRSP` to the
+/// channel (issue 25).
 nonisolated enum APRSGeneralQuery: String, CaseIterable, Identifiable, Sendable {
     /// Everything a station is willing to say: position, status, capabilities.
     case all = "?APRS?"
-    /// Position reports only. The narrowest question, and the one to ask when
-    /// you want the map filled in and nothing else.
-    case position = "?APRSP"
     /// Weather stations report their current conditions.
     case weather = "?WX?"
-    /// Station status text.
-    case status = "?APRSS"
-    /// Objects and items a station is running — the incident markers.
-    case objects = "?APRSO"
-    /// Which stations each responder is hearing *directly*. Answers come back
-    /// as a list, which is how you learn the shape of the network around you
-    /// rather than only who can hear you.
-    case directHeard = "?APRSD"
+    /// Igates answer with a capabilities line: how many messages they have
+    /// passed and how many local stations they hear.
+    case igate = "?IGATE?"
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .all: return "Anything they will say"
-        case .position: return "Positions"
         case .weather: return "Weather conditions"
-        case .status: return "Status text"
-        case .objects: return "Objects & items"
-        case .directHeard: return "Who they hear directly"
+        case .igate: return "Igates"
         }
     }
 
     var systemImage: String {
         switch self {
         case .all: return "dot.radiowaves.left.and.right"
-        case .position: return "mappin.and.ellipse"
         case .weather: return "cloud.sun.fill"
-        case .status: return "text.bubble"
-        case .objects: return "exclamationmark.triangle"
-        case .directHeard: return "point.3.connected.trianglepath.dotted"
+        case .igate: return "network"
         }
     }
 
@@ -235,23 +228,14 @@ nonisolated enum APRSGeneralQuery: String, CaseIterable, Identifiable, Sendable 
         case .all:
             return "Sends \(rawValue). Every APRS station in earshot answers with whatever it "
                 + "is set to give, usually a position and a status line."
-        case .position:
-            return "Sends \(rawValue). Asks every station for a position report, which fills in "
-                + "the map for anyone heard but not yet placed."
         case .weather:
             return "Sends \(rawValue). Asks the weather stations for current conditions. The "
                 + "fastest way to refresh the temperature, wind and pressure the map is "
                 + "drawing from."
-        case .status:
-            return "Sends \(rawValue). Asks each station for its status text, which is where "
-                + "operators put what they are doing and what they can offer."
-        case .objects:
-            return "Sends \(rawValue). Asks stations to re-send the objects and items they are "
-                + "running (hazards, shelters, closures). Worth doing after a restart, "
-                + "when this receiver has heard none of them yet."
-        case .directHeard:
-            return "Sends \(rawValue). Asks each station which stations it is hearing directly, "
-                + "which maps the network around you rather than only around this radio."
+        case .igate:
+            return "Sends \(rawValue). Igates in earshot answer with how many messages they "
+                + "have passed and how many local stations they hear. To ask one station for "
+                + "its position, status or objects, select it on the map and use Ping."
         }
     }
 }

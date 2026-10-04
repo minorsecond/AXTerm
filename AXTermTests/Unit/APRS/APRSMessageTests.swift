@@ -27,6 +27,17 @@ final class APRSMessageTests: XCTestCase {
                        .message(addressee: "WU2Z", text: "Testing", number: "003"))
     }
 
+    /// A query typed into a message carries a number like any message, and
+    /// the number is what the asker waits to see acked. Smoke run
+    /// 2026-10-03-1 (issue 26): the parser dropped it, so the answering
+    /// station could not ack and the asker retried five times.
+    func testANumberedQueryKeepsItsNumber() {
+        XCTAssertEqual(parse(":K0EPI-3  :?APRSP{1"),
+                       .directedQuery(addressee: "K0EPI-3", query: "?APRSP", number: "1"))
+        XCTAssertEqual(parse(":K0EPI-3  :?APRSP"),
+                       .directedQuery(addressee: "K0EPI-3", query: "?APRSP", number: nil))
+    }
+
     func testParsesAMessageWithoutNumber() {
         XCTAssertEqual(parse(":K0EPI-7  :hi there"),
                        .message(addressee: "K0EPI-7", text: "hi there", number: nil))

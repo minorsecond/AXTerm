@@ -53,7 +53,7 @@ nonisolated enum TrafficAddressing {
         case let .message(addressee, _, _),
              let .ack(addressee, _),
              let .reject(addressee, _),
-             let .directedQuery(addressee, _):
+             let .directedQuery(addressee, _, _):
             return APRSMessage.isAddressedToUs(addressee, ours: ours)
         case .bulletin, .generalQuery, .none:
             return false

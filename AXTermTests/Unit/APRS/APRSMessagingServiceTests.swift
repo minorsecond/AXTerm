@@ -91,6 +91,42 @@ final class APRSMessagingServiceTests: XCTestCase {
         XCTAssertEqual(sent.first?.info, APRSMessage.messageInfo(to: "W0ARP", text: "AXTerm 1.0", number: nil))
     }
 
+    /// APRS 1.01 ch. 14: a numbered message is acked, and a query typed into
+    /// a message is still a message. Smoke run 2026-10-03-1 (issue 26): the
+    /// station answered `?APRSP{1` but never acked it, so the asker sent it
+    /// five times and got five answers.
+    func testNumberedQueryIsAckedAndAnswered() async throws {
+        let svc = try makeService()
+        svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSP", number: "12"), context: ctx())
+        XCTAssertEqual(sent.map(\.info), [APRSMessage.ackInfo(to: "W0ARP", number: "12"),
+                                          "!3934.15N/10455.05W-AXTerm"])
+    }
+
+    /// A retry means our ack was lost, not that the asker wants a second
+    /// answer: ack it again and leave the answer that already went out.
+    func testRetriedNumberedQueryIsReAckedNotAnsweredAgain() async throws {
+        let svc = try makeService()
+        svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSP", number: "12"), context: ctx())
+        svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSP", number: "12"), context: ctx())
+        XCTAssertEqual(sent.map(\.info), [APRSMessage.ackInfo(to: "W0ARP", number: "12"),
+                                          "!3934.15N/10455.05W-AXTerm",
+                                          APRSMessage.ackInfo(to: "W0ARP", number: "12")])
+    }
+
+    /// Ack-only acks messages and ignores queries; a numbered query is a
+    /// message, so it is acked and not answered.
+    func testAckOnlyModeAcksAQueryWithoutAnsweringIt() async throws {
+        let svc = try makeService(auto: .ackOnly)
+        svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSP", number: "12"), context: ctx())
+        XCTAssertEqual(sent.map(\.info), [APRSMessage.ackInfo(to: "W0ARP", number: "12")])
+    }
+
+    func testManualModeNeitherAcksNorAnswersAQuery() async throws {
+        let svc = try makeService(auto: .manual)
+        svc.receive(.directedQuery(addressee: "K0EPI-7", query: "?APRSP", number: "12"), context: ctx())
+        XCTAssertTrue(sent.isEmpty)
+    }
+
     // MARK: - Bulletins
 
     func testSendingABulletinBroadcastsItAndRecordsItAsOurs() async throws {

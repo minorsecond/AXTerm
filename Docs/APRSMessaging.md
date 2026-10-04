@@ -18,8 +18,11 @@ type identifier selects the form:
 - **Ack / Reject** — `:AAAAAAAAA:ack{NNN` / `:…:rej{NNN`.
 - **Bulletin / announcement** — addressee `BLN…`, stored read-only.
 - **Directed query** — a message whose text is a query token, e.g. `?APRSP`.
-- **General query** — data type `?` (broadcast); parsed, never auto-answered
-  (answering every `?APRS?` on a busy channel is a storm).
+  Like any message it may carry a number, and then it is acked.
+- **General query** — data type `?` (broadcast). APRS 1.01 ch. 15 defines
+  three: `?APRS?`, `?WX?` and `?IGATE?`. Only `?APRS?` is answered, with our
+  position after a random 0–120 s delay so the answers in earshot do not
+  collide; this station is neither a weather station nor an igate.
 - **Third-party** — a `}`-wrapped frame (relayed by an i-gate) is unwrapped
   once and its payload re-parsed, so a relayed message still reads.
 
@@ -40,6 +43,10 @@ reply.
 - An incoming **ACK** resolves the matching outgoing message → `acked`, and is
   the connectionless channel's proof of a round trip — the basis of
   reachability. A **reject** fails it.
+- A **numbered directed query** is acked under the same rule as a message
+  (any mode but Manual), and a re-send is re-acked without a second answer.
+  Before smoke run 2026-10-03-1 the number was dropped, so the asker never saw
+  an ack and retried five times, each retry answered again.
 - A **directed query** is answered in Full mode: `?APRSP` → our position;
   `?APRST`/`?PING?` → `PATH= <sender>><the digipeaters it came through>`;
   `?APRSV`/`?VER` → version; `?APRSD` → the stations we've heard direct;
@@ -73,6 +80,12 @@ channel instead of a directed query per station, and because `?APRS?` is
 meaningful only to APRS stations, the plain AX.25 nodes, BBSes and digipeaters
 on the channel are never addressed and never bothered. Normal message ACKs feed
 the same reachability picture.
+
+The map's **Ask the Channel** menu offers the three general queries only:
+`?APRS?`, `?WX?` and `?IGATE?`. It used to offer `?APRSP`, `?APRSS`, `?APRSO`
+and `?APRSD` too, sent unaddressed; those are directed queries, and stations
+that hear one unaddressed do not answer it. Asking one station for its
+position, status or objects is the map card's Ping and Ask.
 
 **Which radios carry it.** A `?APRS?` flood only belongs on an APRS channel —
 never on a node/BBS frequency. So the flood (and an APRS message with no route

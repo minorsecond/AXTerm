@@ -112,7 +112,7 @@ nonisolated enum APRSDigestLine {
             return "Reject #\(number) to \(addressee)"
         case .bulletin(let id, let text):
             return "Bulletin \(id): \(quoted(text))"
-        case .directedQuery(let addressee, let query):
+        case .directedQuery(let addressee, let query, _):
             return "Query \(query) to \(addressee)"
         case .generalQuery(let query):
             return "Query \(query) to everyone"

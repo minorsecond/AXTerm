@@ -165,23 +165,29 @@ final class APRSReachabilityProbeTests: XCTestCase {
     /// rather than being refused: the control is not disabled while listening.
     func testAskingAgainWhileListeningStartsTheNewQuery() async throws {
         let p = makeProbe()
-        p.start(query: .position)
+        p.start(query: .weather)
         XCTAssertEqual(p.status, .listening)
-        p.start(query: .objects)
+        p.start(query: .igate)
         XCTAssertEqual(floods, 2)
-        XCTAssertEqual(p.query, .objects)
+        XCTAssertEqual(p.query, .igate)
         XCTAssertEqual(p.status, .listening)
     }
 
     /// Every query string is from the specification. Typos here are silent:
     /// stations simply never answer.
-    func testQueryStringsAreTheSpecifiedOnes() {
-        XCTAssertEqual(APRSGeneralQuery.all.rawValue, "?APRS?")
-        XCTAssertEqual(APRSGeneralQuery.position.rawValue, "?APRSP")
-        XCTAssertEqual(APRSGeneralQuery.weather.rawValue, "?WX?")
-        XCTAssertEqual(APRSGeneralQuery.status.rawValue, "?APRSS")
-        XCTAssertEqual(APRSGeneralQuery.objects.rawValue, "?APRSO")
-        XCTAssertEqual(APRSGeneralQuery.directHeard.rawValue, "?APRSD")
+    ///
+    /// And only the general ones. APRS 1.01 ch. 15 has three queries sent
+    /// to nobody in particular; `?APRSP`, `?APRSS`, `?APRSO` and `?APRSD`
+    /// are directed queries, sent in a message to one station, and a
+    /// station that hears one unaddressed does not answer. Smoke run
+    /// 2026-10-03-1 (issue 25): Ask the Channel's "Positions" sent `?APRSP`
+    /// to everyone and the other AXTerm, rightly, stayed silent.
+    func testQueryStringsAreTheSpecifiedGeneralOnes() {
+        XCTAssertEqual(APRSGeneralQuery.allCases.map(\.rawValue), ["?APRS?", "?WX?", "?IGATE?"])
+        let directed = Set(APRSDirectedQuery.allCases.map(\.rawValue))
+        for query in APRSGeneralQuery.allCases {
+            XCTAssertFalse(directed.contains(query.rawValue), "\(query.rawValue) is a directed query")
+        }
     }
 
     // MARK: - A send that was accepted and then failed to key
