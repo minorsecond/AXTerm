@@ -92,6 +92,30 @@ final class WinlinkFormEngineTests: XCTestCase {
         XCTAssertEqual(rendered.attachments[0].name, "RMS_Express_Form_ICS213_Initial_Viewer.xml")
     }
 
+    /// Every form must be able to say where it goes. The sheet has no
+    /// envelope of its own, so a template whose `To:` line is empty could
+    /// never be queued: "The form needs a To address" with nowhere to type
+    /// one. Smoke run 2026-10-03-1, issue 36 (ICS-213 and Severe Weather).
+    func testEveryFormRendersAToAddress() {
+        for template in WinlinkFormTemplates.all {
+            var values = WinlinkFormEngine.autoFilledValues(for: template, context: context)
+            if template.fields.contains(where: { $0.id == "MsgTo" }) {
+                values["MsgTo"] = "K0EPI-3"
+            }
+            let rendered = WinlinkFormEngine.render(template: template, values: values, context: context)
+            XCTAssertFalse(rendered.to.trimmingCharacters(in: .whitespaces).isEmpty,
+                           "\(template.title) renders no To address")
+        }
+    }
+
+    func testICS213AndSevereWeatherAskWhereTheyGo() throws {
+        for template in [WinlinkFormTemplates.ics213, WinlinkFormTemplates.severeWeather] {
+            let to = try XCTUnwrap(template.fields.first { $0.id == "MsgTo" }, template.title)
+            XCTAssertTrue(to.required, template.title)
+            XCTAssertFalse(to.hidden, template.title)
+        }
+    }
+
     // MARK: - FSR
 
     func testFSRSubjectCarriesPrecedenceAndDTG() {

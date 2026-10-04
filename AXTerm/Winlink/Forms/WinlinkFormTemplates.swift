@@ -109,6 +109,13 @@ nonisolated enum WinlinkFormTemplates {
                              autoFill: .fixed("** THIS IS AN EXERCISE MESSAGE **"),
                              help: "ICS practice: every drill message is clearly marked as an exercise.",
                              section: "Header"),
+            // Where the message goes. The sheet has no envelope of its own, so
+            // without this the form could never be queued (smoke run
+            // 2026-10-03-1, issue 36).
+            WinlinkFormField(id: "MsgTo", label: "Send to", autoFill: nil,
+                             placeholder: "Callsign or address",
+                             help: "The Winlink address this message is sent to: a callsign, a tactical address or an email address.",
+                             required: true, section: "Header"),
             WinlinkFormField(id: "inc_name", label: "1. Incident name", section: "Header"),
             WinlinkFormField(id: "To_Name", label: "2. To (name and position)",
                              required: true, section: "Header"),
@@ -240,6 +247,10 @@ nonisolated enum WinlinkFormTemplates {
         templateText: WinlinkFormTemplateTexts.severewx,
         displayFormFile: "Severe WX Report viewer.html",
         fields: [
+            WinlinkFormField(id: "MsgTo", label: "Send to", autoFill: nil,
+                             placeholder: "Callsign or address",
+                             help: "Where the report goes: the net control, SKYWARN or EOC address you were given.",
+                             required: true, section: "Header"),
             WinlinkFormField(id: "Type", label: "Report status",
                              kind: .choice(["EXERCISE", "REAL EVENT"]),
                              autoFill: .fixed("REAL EVENT"), section: "Header"),

@@ -105,7 +105,7 @@ Map file name: <var Mapfilename>
 Form:ICS213_Initial.html,ICS213_Initial_Viewer.html
 ReplyTemplate:ICS213_SendReply.0
 
-To: 
+To: <var MsgTo>
 Subject:ICS-213: <var Subjectline> - <var Mdate> <var mtime>
 
 SeqInc:
@@ -199,7 +199,7 @@ Map File Name: <var mapfilename>
     static let severewx = """
 Form:Severe WX Report.html,Severe WX Report viewer.html
 
-To:
+To: <var MsgTo>
 Subject: Severe WX Report <var Region> <var County> [<var Type>]
 
 Msg:
