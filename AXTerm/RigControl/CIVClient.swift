@@ -41,6 +41,11 @@ nonisolated final class CIVClient: @unchecked Sendable {
     /// one of that hook.
     var onTransportFailure: (@Sendable (String) -> Void)?
 
+    #if DEBUG
+    /// Test-only: told about each request as it is made.
+    var onRequestCreated: ((AnyObject) -> Void)?
+    #endif
+
     private let queue = DispatchQueue(label: "com.axterm.civ.client")
     private var parser = CIVFrameParser()
     private var pending: [Request] = []
@@ -667,9 +672,13 @@ nonisolated final class CIVClient: @unchecked Sendable {
                     continuation.resume(throwing: CIVError.notOpen)
                     return
                 }
-                self.pending.append(Request(frame: frame, expectation: expecting,
-                                            acceptsAnyRadio: acceptingAnyRadio,
-                                            continuation: continuation))
+                let request = Request(frame: frame, expectation: expecting,
+                                      acceptsAnyRadio: acceptingAnyRadio,
+                                      continuation: continuation)
+                #if DEBUG
+                self.onRequestCreated?(request)
+                #endif
+                self.pending.append(request)
                 self.advance()
             }
         }
@@ -680,8 +689,13 @@ nonisolated final class CIVClient: @unchecked Sendable {
         guard inFlight == nil, !pending.isEmpty else { return }
         let request = pending.removeFirst()
         inFlight = request
-        let timeout = DispatchWorkItem { [weak self] in
-            guard let self, self.inFlight === request else { return }
+        // Weak: the request holds this work item, and a strong capture made
+        // a cycle that kept every finished request, its continuation and
+        // its work item alive for the life of the app (smoke run
+        // 2026-10-03-1, issue 13). While the request is in flight,
+        // `inFlight` keeps it alive.
+        let timeout = DispatchWorkItem { [weak self, weak request] in
+            guard let self, let request, self.inFlight === request else { return }
             self.inFlight = nil
             // The moment that matters. "PTT failed: timeout" says nothing
             // about whether the radio is mute or merely unheard; these

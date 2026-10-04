@@ -291,6 +291,32 @@ final class CIVClientTests: XCTestCase {
         XCTAssertEqual(transport.written.count, 2)
     }
 
+    /// Smoke run 2026-10-03-1, issue 13: every request's timeout captured
+    /// the request and the request held the timeout, so neither was ever
+    /// freed. Station A held 22,911 finished requests (and their
+    /// continuations, work items and dispatch groups) after an evening.
+    func testFinishedRequestsAreFreed() async throws {
+        let (client, transport) = makeClient(timeout: 0.1)
+        final class Weak { weak var object: AnyObject?; init(_ o: AnyObject) { object = o } }
+        var requests: [Weak] = []
+        let lock = NSLock()
+        client.onRequestCreated = { request in lock.withLock { requests.append(Weak(request)) } }
+        transport.responder = { [self] frame in
+            frame.command == 0x03 ? nil : ic705(frame)    // frequency reads time out
+        }
+
+        for _ in 0..<20 { _ = try await client.readMode() }
+        for _ in 0..<3 { _ = try? await client.readFrequency() }
+        try await client.setPTT(false)
+
+        // Answered requests' timeouts stay scheduled until their deadline.
+        try await Task.sleep(nanoseconds: 400_000_000)
+        let made = lock.withLock { requests.count }
+        let alive = lock.withLock { requests.filter { $0.object != nil }.count }
+        XCTAssertEqual(made, 24)
+        XCTAssertEqual(alive, 0, "\(alive) of \(made) finished requests are still in memory")
+    }
+
     func testUnsolicitedFramesNeverSatisfyARequest() async throws {
         let (client, transport) = makeClient(timeout: 0.3)
         var unsolicited: [CIVFrame] = []
