@@ -16,7 +16,11 @@ import XCTest
 ///
 /// Run against a pty, which is a real tty and accepts the termios calls a
 /// character device gets. Mind the timing: `finishOpen` sleeps a full
-/// second to let a TNC settle, so nothing is open before then.
+/// second to let a TNC settle, so nothing is open before then, and the open
+/// runs on the link's own queue, which a loaded machine may not get to for
+/// a while. The tests wait for the link to report itself connected rather
+/// than for a fixed time: in a parallel run of the whole suite, 2.5 s once
+/// found the link still connecting.
 ///
 /// Honest about what these are: a regression guard, not a proof of the
 /// fix. They pass against the unfixed code too. Reproducing the original
@@ -27,10 +31,22 @@ import XCTest
 /// riskier change than the fix. What these do cover is that an ordinary
 /// open, close, close and reopen against a real tty closes nothing it does
 /// not own, which nothing else in the suite exercises.
+@MainActor
 final class SerialDescriptorOwnershipTests: XCTestCase {
 
-    /// Comfortably past finishOpen's one-second stabilization sleep.
-    private static let openSettle = Duration.milliseconds(2500)
+    /// How long a link may take to open before the test gives up. Opening
+    /// takes a second; the rest is room for a busy machine.
+    private static let openDeadline = Duration.seconds(30)
+
+    /// Waits until the link reports itself connected, or the deadline
+    /// passes. Returns whether it connected.
+    private func waitUntilConnected(_ link: KISSLinkSerial) async throws -> Bool {
+        let deadline = ContinuousClock.now + Self.openDeadline
+        while link.state != .connected, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return link.state == .connected
+    }
 
     private var master: Int32 = -1
     private var slavePath = ""
@@ -76,9 +92,8 @@ final class SerialDescriptorOwnershipTests: XCTestCase {
     func testASecondCloseDoesNotReachADescriptorSomeoneElseNowHolds() async throws {
         let link = makeLink()
         link.open()
-        try await Task.sleep(for: Self.openSettle)
-        XCTAssertEqual(link.state, .connected,
-                       "the link never opened the pty, so this test guards nothing")
+        let connected = try await waitUntilConnected(link)
+        XCTAssertTrue(connected, "the link never opened the pty, so this test guards nothing")
 
         link.close()
         try await Task.sleep(for: .milliseconds(150))
@@ -97,8 +112,8 @@ final class SerialDescriptorOwnershipTests: XCTestCase {
     func testReopeningAtOnceLeavesTheNewPortAlone() async throws {
         let first = makeLink()
         first.open()
-        try await Task.sleep(for: Self.openSettle)
-        XCTAssertEqual(first.state, .connected, "nothing was open to race over")
+        let connected = try await waitUntilConnected(first)
+        XCTAssertTrue(connected, "nothing was open to race over")
 
         first.close()
         let sentinels = claimFreedDescriptors()
