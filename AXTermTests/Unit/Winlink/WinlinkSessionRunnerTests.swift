@@ -132,13 +132,13 @@ final class WinlinkSessionRunnerTests: XCTestCase {
                 return
             }
             if upper.hasPrefix("FS") {
-                // Client answered our proposals: stream the bodies, then FF.
+                // Client answered our proposals: stream the bodies. The turn
+                // is then the client's (FBB), so nothing more from us.
                 guard sentOurMail else { return }
                 for message in rmsOutbox {
                     let compressed = LZHUF.encodeB2F(try! message.encode())
                     emit(FBBBlockCodec.encode(title: message.subject, offset: 0, payload: compressed))
                 }
-                emit("FF\r")
                 return
             }
             if upper == "FQ" {
@@ -146,6 +146,16 @@ final class WinlinkSessionRunnerTests: XCTestCase {
                 return
             }
             // ;FW / SID / ;PR — handshake lines, ignored by the fake.
+        }
+
+        /// FBB: the station that received the messages speaks next, with
+        /// its own proposals or FF, as a CMS does.
+        private func takeTurn() {
+            if !sentOurMail && !rmsOutbox.isEmpty {
+                sendOurProposals()
+            } else {
+                emit("FF\r")
+            }
         }
 
         private func sendOurProposals() {
@@ -175,6 +185,7 @@ final class WinlinkSessionRunnerTests: XCTestCase {
                         bodyParser = FBBBlockCodec.Parser()
                     } else {
                         bodyParser = nil
+                        takeTurn()
                     }
                 case .checksumFailure, .protocolError:
                     expectedBodies = 0

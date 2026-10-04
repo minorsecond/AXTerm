@@ -694,28 +694,19 @@ nonisolated final class B2FSessionEngine {
                     summary.deferredMIDs.append(mid)
                 }
             }
-            let batchTransferredNothing = !answers.contains {
-                if case .accept = $0 { return true }
-                if case .acceptFromOffset = $0 { return true }
-                return false
-            }
             proposedBatch = []
 
-            // FBB implicit turnover: when an FS answer accepts nothing,
-            // a CMS with pending mail takes the turn immediately — its FC
-            // proposals follow the FS in the same burst, without waiting
-            // for our FF. Sending FF then collides with the proposal and
-            // the CMS aborts with "Unexpected response to proposal"
-            // (observed on the air). So: nothing accepted + nothing more
-            // to offer + remote advertised mail → just start listening.
-            if batchTransferredNothing, pendingOutbound.isEmpty, remoteHasPendingMail {
-                sentFF = true
-                state = .awaitingRemoteProposals
-                actions.append(.startTimer(.response, seconds: 120))
-                return actions
-            }
-
-            actions.append(contentsOf: sendNextProposalBatchOrFF())
+            // FBB: once our proposals are answered and the accepted bodies
+            // sent, the turn passes to the station that received them. It
+            // proposes its own mail or sends FF; anything of ours still
+            // unproposed goes on our next turn, after its FF or after its
+            // bodies. Sending FF or the next batch here put it where the
+            // other side expected to speak. A CMS with mail aborts on that
+            // with "Unexpected response to proposal": observed on the air
+            // when nothing was accepted, and between two AXTerms when
+            // something was (smoke run 2026-10-03-1, issue 32).
+            state = .awaitingRemoteProposals
+            actions.append(.startTimer(.response, seconds: 120))
             return actions
         }
         // Stray text (e.g. late MOTD) — ignore.

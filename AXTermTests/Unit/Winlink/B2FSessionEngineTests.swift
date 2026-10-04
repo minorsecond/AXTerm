@@ -232,12 +232,33 @@ final class B2FSessionEngineTests: XCTestCase {
         // The framed body must decode back to the original payload.
         let framed = FBBBlockCodec.encode(title: outbound.message.subject, offset: 0, payload: outbound.compressed)
         XCTAssertTrue(harness.contains(.send(framed)))
-        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"), "outbox drained → FF")
+        // FBB: the station that received the messages speaks next. Our FF
+        // here used to land where the gateway expected its own turn.
+        XCTAssertFalse(harness.sentText.hasSuffix("FF\r"), "the turn is theirs after our bodies")
 
-        harness.receive("FQ\r\n")
+        harness.receive("FF\r\n")
+        XCTAssertTrue(harness.sentText.hasSuffix("FQ\r"))
         let summary = try XCTUnwrap(harness.completion)
         XCTAssertEqual(summary.sentMIDs, ["OUTMSG000001"])
         XCTAssertTrue(summary.succeeded)
+    }
+
+    /// Both sides have mail. After our bodies the gateway proposes its own,
+    /// and its FC block must be answered with FS, not met by an FF from us
+    /// ("Unexpected response to proposal" on a CMS; seen between two
+    /// AXTerms in smoke run 2026-10-03-1, issue 32).
+    func testAfterOurBodiesTheirProposalsAreAnswered() throws {
+        let outbound = try prepare(makeMessage(mid: "OUTMSG000001"))
+        let harness = makeHarness(outbound: [outbound])
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.receive("FS Y\r\n")
+        XCTAssertFalse(harness.sentText.contains("FF\r"), harness.sentText)
+
+        let incoming = makeMessage(mid: "INCOMING0001")
+        harness.receive(try remoteProposalBlock(for: [incoming]))
+        XCTAssertTrue(harness.sentText.hasSuffix("FS Y\r"), harness.sentText)
+        XCTAssertNil(harness.failureReason)
     }
 
     func testResumeOffsetFramesFromOffset() throws {
@@ -263,9 +284,10 @@ final class B2FSessionEngineTests: XCTestCase {
 
         XCTAssertTrue(harness.contains(.outboundRejected(mid: "REJECTED0001")))
         XCTAssertTrue(harness.contains(.outboundDeferred(mid: "DEFERRED0001")))
-        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"))
+        XCTAssertFalse(harness.sentText.hasSuffix("FF\r"), "the turn is theirs after an FS")
 
-        harness.receive("FQ\r\n")
+        harness.receive("FF\r\n")
+        XCTAssertTrue(harness.sentText.hasSuffix("FQ\r"))
         let summary = try XCTUnwrap(harness.completion)
         XCTAssertEqual(summary.rejectedMIDs, ["REJECTED0001"])
         XCTAssertEqual(summary.deferredMIDs, ["DEFERRED0001"])
@@ -282,11 +304,19 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertEqual(firstBatchFCs, 5, "first batch capped at 5 proposals")
 
         harness.receive("FS YYYYY\r\n")
+        XCTAssertEqual(harness.sentText.components(separatedBy: "FC EM ").count - 1, 5,
+                       "the sixth waits for our next turn")
+
+        // Their turn: nothing for us, so the turn comes back.
+        harness.receive("FF\r\n")
         let allFCs = harness.sentText.components(separatedBy: "FC EM ").count - 1
         XCTAssertEqual(allFCs, 6, "sixth message proposed in a second batch")
 
         harness.receive("FS Y\r\n")
-        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"))
+        XCTAssertFalse(harness.sentText.hasSuffix("FF\r"))
+        harness.receive("FF\r\n")
+        XCTAssertTrue(harness.sentText.hasSuffix("FQ\r"))
+        XCTAssertEqual(harness.completion?.sentMIDs.count, 6)
     }
 
     func testFSAnswerCountMismatchFailsSession() throws {
@@ -376,10 +406,11 @@ final class B2FSessionEngineTests: XCTestCase {
         harness.fire(.connected)
         harness.receive(standardBanner)
         harness.receive("FS Y\r\n")
-        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"))
+        XCTAssertFalse(harness.sentText.hasSuffix("FF\r"), "the turn is theirs after our bodies")
 
         harness.receive(try remoteProposalBlock(for: [incoming]))
         harness.receive(try framedIncomingBody(for: incoming))
+        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"), "our turn again, nothing left: FF")
         harness.receive("FF\r\n")
 
         let summary = try XCTUnwrap(harness.completion)
@@ -510,15 +541,20 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertEqual(harness.completion?.rejectedMIDs, ["OUTMSG000001"])
     }
 
-    /// Without a ;PM advisory the classic explicit turnover still applies:
-    /// all-declined FS → we send FF as before.
-    func testExplicitTurnoverStillUsedWithoutPendingMailAdvisory() throws {
+    /// With no ;PM advisory the turn still passes on an all-declined FS:
+    /// FBB hands it over after every answered batch, so a gateway with no
+    /// mail sends FF and we close with FQ. This used to send FF here, on
+    /// the guess that the gateway waited for it.
+    func testAllDeclinedStillPassesTheTurnWithoutPendingMailAdvisory() throws {
         let outbound = try prepare(makeMessage(mid: "OUTMSG000001"))
         let harness = makeHarness(outbound: [outbound])
         harness.fire(.connected)
         harness.receive(standardBanner)
         harness.receive("FS N\r\n")
-        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"))
+        XCTAssertFalse(harness.sentText.hasSuffix("FF\r"))
+        harness.receive("FF\r\n")
+        XCTAssertTrue(harness.sentText.hasSuffix("FQ\r"))
+        XCTAssertEqual(harness.completion?.rejectedMIDs, ["OUTMSG000001"])
     }
 
     /// Gateway error text arriving while the engine expects binary blocks
@@ -714,8 +750,9 @@ final class B2FSessionEngineTests: XCTestCase {
 
         harness.receive("FS Y\r\n")
         XCTAssertTrue(harness.contains(.outboundBodySent(mid: "OUTMSG000001")))
-        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"), "outbox drained → FF")
-        harness.receive("FQ\r\n")
+        XCTAssertFalse(harness.sentText.hasSuffix("FF\r"), "the turn is the caller's after our bodies")
+        harness.receive("FF\r\n")
+        XCTAssertTrue(harness.sentText.hasSuffix("FQ\r"))
         let summary = try XCTUnwrap(harness.completion)
         XCTAssertEqual(summary.sentMIDs, ["OUTMSG000001"])
         XCTAssertTrue(summary.succeeded)
