@@ -5370,6 +5370,15 @@ final class SessionCoordinator: ObservableObject {
             let destCall = String(destParts.first ?? "")
             let destSSID = destParts.count > 1 ? Int(destParts[1]) ?? 0 : 0
             let destAddress = AX25Address(call: destCall, ssid: destSSID)
+            // One request at a time: only when the link has nothing waiting
+            // or unacknowledged. On a slow link the 2 s timer outran the
+            // round trip, requests queued behind each other, and after the
+            // receiver confirmed the file the queued ones kept going out
+            // (smoke run 2026-10-03-1, issue 18: 45 for one 1 KB file).
+            if let session = sessionManager.connectedSession(withPeer: destAddress),
+               !session.pendingDataQueue.isEmpty || session.outstandingCount > 0 {
+                continue
+            }
             let path = sessionManager.sessions.values
                 .first { $0.remoteAddress == destAddress && $0.state == .connected }?.path ?? DigiPath()
             let completionRequest = AXDP.Message(
