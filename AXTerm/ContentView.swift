@@ -1938,6 +1938,7 @@ struct ContentView: View {
                     // this key, so interaction is untouched.
                     EquatableBox(key: mapRenderKey) { stationsMapDetail }
                         .equatable()
+                        .keptAliveFrame()
                         .opacity(selectedNav == .map ? 1 : 0)
                         .allowsHitTesting(selectedNav == .map)
                         .accessibilityHidden(selectedNav != .map)

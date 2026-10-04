@@ -24,3 +24,19 @@ struct EquatableBox<Content: View>: View, Equatable {
 
     var body: some View { content() }
 }
+
+extension View {
+    /// For a page kept mounted behind the others: it fills what it is given
+    /// and never sets the window's minimum size.
+    ///
+    /// Opacity hides a view without taking it out of layout, so a hidden page
+    /// that grows (a banner per heard station, captions that refuse to wrap
+    /// short) raises the window's minimum on every page. The main window grew
+    /// past the screen that way and AppKit threw while SwiftUI resized it
+    /// (smoke run 2026-10-03-1, issue 22). Anything taller than the space is
+    /// clipped at the bottom instead.
+    func keptAliveFrame() -> some View {
+        frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
+            .clipped()
+    }
+}
