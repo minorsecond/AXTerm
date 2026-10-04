@@ -110,4 +110,43 @@ final class MapStartRegionTests: XCTestCase {
         XCTAssertEqual(back.latitudeDelta, region.latitudeDelta, accuracy: 0.000001)
         XCTAssertEqual(back.longitudeDelta, region.longitudeDelta, accuracy: 0.000001)
     }
+
+    // MARK: - Smoke run 2026-10-03-1, issue 23
+
+    /// What Station A had saved: the whole world, longitude span clamped at
+    /// 180 and the center shifted half a turn from the station. It passed
+    /// `isSane`, won over the station's own position, and the map opened
+    /// over Asia with the station off screen.
+    func testAWorldWideSavedRegionIsIgnored() {
+        XCTAssertNil(MapStartRegion.decode("39.445896,75.239157,74.728462,180.000000"))
+        let world = MapStartRegion(latitude: 39.45, longitude: 75.24,
+                                   latitudeDelta: 74.7, longitudeDelta: 180)
+        let opened = MapStartRegion.opening(saved: world, observerLatitude: home.lat,
+                                            observerLongitude: home.lon, fitEverything: nil)
+        XCTAssertEqual(opened?.latitude, home.lat)
+        XCTAssertEqual(opened?.longitude, home.lon)
+    }
+
+    /// A view across a few states is still a place an operator looks.
+    func testAStateSizedViewIsStillHonored() {
+        XCTAssertTrue(MapStartRegion(latitude: 39, longitude: -104,
+                                     latitudeDelta: 12, longitudeDelta: 20).isSane)
+    }
+
+    /// Kept in the app's own suite. In `UserDefaults.standard` the test-mode
+    /// wipe never cleared it, so every test instance opened where the last
+    /// one had looked, and the main app opened there too.
+    func testTheDefaultStoreIsTheAppSuite() throws {
+        let key = MapStartRegion.storageKey
+        let before = UserDefaults.standard.string(forKey: key)
+        let previous = AppEnvironment.defaults.string(forKey: key)
+        defer { AppEnvironment.defaults.set(previous, forKey: key) }
+        let region = MapStartRegion.around(latitude: home.lat, longitude: home.lon)
+        MapStartRegion.save(region)
+        XCTAssertEqual(AppEnvironment.defaults.string(forKey: key), region.encoded)
+        XCTAssertEqual(try XCTUnwrap(MapStartRegion.load()).latitude, region.latitude, accuracy: 0.000001)
+        if AppEnvironment.defaults !== UserDefaults.standard {
+            XCTAssertEqual(UserDefaults.standard.string(forKey: key), before, "written to the shared domain")
+        }
+    }
 }

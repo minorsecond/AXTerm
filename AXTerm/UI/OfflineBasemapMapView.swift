@@ -494,6 +494,9 @@ struct OfflineBasemapMapView {
         var passCount = 0
         var passWindowStart = Date.distantPast
         var lastLoggedRegion: MKCoordinateRegion?
+        /// Whether the camera has been put on a region of ours. Until then it
+        /// is MapKit's default, and that is not a place to remember.
+        var hasOpened = false
         #endif
         var installedTerrainIDs: [String] = []
         var installedWeatherFieldIDs: [String] = []
@@ -893,19 +896,23 @@ struct OfflineBasemapMapView {
                 }
             }
             lastLoggedRegion = region
+            #endif
 
             // Remember where the operator is looking. Throttled because a
             // single pan fires this dozens of times, and unthrottled it would
-            // be a write per frame.
+            // be a write per frame. This sat inside the DEBUG block above, so
+            // a Release build never remembered anything; and before the
+            // camera is ours it is MapKit's default, which a hidden map once
+            // saved as "the last place looked" (open water off Sumatra).
             let now = CFAbsoluteTimeGetCurrent()
-            if now - lastRegionReportAt > 0.6 {
+            if hasOpened, now - lastRegionReportAt > 0.6 {
                 lastRegionReportAt = now
+                let current = mapView.region
                 parent.onRegionChanged?(MapStartRegion(
-                    latitude: region.center.latitude, longitude: region.center.longitude,
-                    latitudeDelta: region.span.latitudeDelta,
-                    longitudeDelta: region.span.longitudeDelta))
+                    latitude: current.center.latitude, longitude: current.center.longitude,
+                    latitudeDelta: current.span.latitudeDelta,
+                    longitudeDelta: current.span.longitudeDelta))
             }
-            #endif
             let shows = MapLabelPolicy.showsLabels(
                 latitudeDelta: mapView.region.span.latitudeDelta)
             guard shows != labelsVisible else { return }
@@ -1166,6 +1173,7 @@ struct OfflineBasemapMapView {
 
         if let region {
             mapView.setRegion(region, animated: false)
+            context.coordinator.hasOpened = true
         }
         mapView.addAnnotations(annotations())
         mapView.addAnnotations(featureLabels())
@@ -1583,6 +1591,15 @@ struct OfflineBasemapMapView {
 
     fileprivate func updateMapView(_ mapView: MKMapView, context: Context) {
         context.coordinator.parent = self
+        // Built before the station had a position (the map is mounted
+        // hidden at launch), it is still on MapKit's default camera: open it
+        // now, once, where it would have opened. Never again after that, or
+        // every update would yank the camera from wherever the operator put
+        // it.
+        if !context.coordinator.hasOpened, let region {
+            mapView.setRegion(region, animated: false)
+            context.coordinator.hasOpened = true
+        }
         Self.tuneDragPress(on: mapView, wanted: !draggableSiteIDs.isEmpty)
         // The throttle exists to absorb packet-rate churn, not to make the
         // operator wait. Flipping a layer switch changed nothing on screen for

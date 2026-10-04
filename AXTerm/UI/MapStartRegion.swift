@@ -28,13 +28,23 @@ nonisolated struct MapStartRegion: Equatable, Sendable {
 
     static let storageKey = "map.lastRegion"
 
+    /// The widest view worth reopening: a few states across. Past this the
+    /// station's own network is a dot, and MapKit reports a fully zoomed-out
+    /// view with its longitude span clamped at 180 and the center shifted half
+    /// a turn, which reopened Station A over Asia (smoke run 2026-10-03-1,
+    /// issue 23).
+    static let widestLatitudeDelta: Double = 30
+    static let widestLongitudeDelta: Double = 120
+
     /// Rejects a stored region that would open the map somewhere useless: off
-    /// the globe, inside-out, or zoomed so far that nothing renders.
+    /// the globe, inside-out, zoomed so far in that nothing renders, or so far
+    /// out that the station is lost in it.
     var isSane: Bool {
         latitude >= -90 && latitude <= 90
             && longitude >= -180 && longitude <= 180
             && latitudeDelta > 0.0004 && longitudeDelta > 0.0004
-            && latitudeDelta <= 180 && longitudeDelta <= 360
+            && latitudeDelta <= Self.widestLatitudeDelta
+            && longitudeDelta <= Self.widestLongitudeDelta
     }
 
     var encoded: String {
@@ -74,12 +84,15 @@ nonisolated struct MapStartRegion: Equatable, Sendable {
 
     // MARK: - Persistence
 
-    static func load(_ defaults: UserDefaults = .standard) -> MapStartRegion? {
+    /// In the app's own suite, which a test-mode instance clears at launch.
+    /// In `.standard` it outlived every test launch and was shared by every
+    /// instance, so each opened where the last one had looked.
+    static func load(_ defaults: UserDefaults = AppEnvironment.defaults) -> MapStartRegion? {
         decode(defaults.string(forKey: storageKey))
     }
 
     /// Throttled by the caller; this just writes.
-    static func save(_ region: MapStartRegion, to defaults: UserDefaults = .standard) {
+    static func save(_ region: MapStartRegion, to defaults: UserDefaults = AppEnvironment.defaults) {
         guard region.isSane else { return }
         defaults.set(region.encoded, forKey: storageKey)
     }
