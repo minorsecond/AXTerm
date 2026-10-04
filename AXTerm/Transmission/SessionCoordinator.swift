@@ -3860,9 +3860,11 @@ final class SessionCoordinator: ObservableObject {
             chunkSize: Int(fileMeta.chunkSize),
             direction: .inbound
         )
-        // For inbound transfers with compression, set transmission size based on expected chunks
-        // This is the compressed data size we'll actually receive
-        let estimatedTransmissionSize = expectedChunks * Int(fileMeta.chunkSize)
+        // What will arrive: the file's own size, or with compression the
+        // most its chunks can hold.
+        let estimatedTransmissionSize = BulkTransfer.expectedInboundBytes(
+            fileSize: Int(fileMeta.fileSize), chunks: expectedChunks,
+            chunkSize: Int(fileMeta.chunkSize), compressed: compressionAlgorithm != .none)
         transfer.setTransmissionSize(estimatedTransmissionSize)
 
         // Store compression metrics if compression was used

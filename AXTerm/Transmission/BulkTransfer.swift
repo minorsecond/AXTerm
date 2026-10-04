@@ -550,6 +550,12 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
         transmissionSize = size
     }
 
+    /// The bytes an inbound transfer will carry, from its FILE_META. Exact
+    /// when nothing is compressed; otherwise the most the chunks can hold.
+    static func expectedInboundBytes(fileSize: Int, chunks: Int, chunkSize: Int, compressed: Bool) -> Int {
+        compressed ? chunks * chunkSize : fileSize
+    }
+
     // MARK: - State Checks
 
     /// Whether transfer can be paused. Only the sender can stop sending; a
