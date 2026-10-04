@@ -1088,6 +1088,36 @@ final class SessionCoordinatorTests: XCTestCase {
             "Fallback timer should send text probe after configured delay")
     }
 
+    /// A session a service has claimed (Winlink, the BBS client) carries that
+    /// service's protocol, and an AXDP probe on it is half-duplex airtime in
+    /// the middle of someone else's exchange. Smoke run 2026-10-03-1, issue
+    /// 32: the probe fired 15 s into each Winlink exchange, and once one
+    /// second in, alongside a B2F banner that never reached the engine.
+    func testNoTextProbeOnAClaimedSession() async throws {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = true
+        coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = true
+        #if DEBUG
+        coordinator.testTextProbeFallbackDelay = 0.2
+        #endif
+
+        coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
+        let peer = AX25Address(call: "PEER", ssid: 1)
+        let session = coordinator.sessionManager.session(for: peer)
+        let claim = coordinator.sessionManager.claimDelivery(for: session.key, handler: { _, _ in })
+        XCTAssertNotNil(claim)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
+        coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+
+        XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown,
+            "no probe on a session another service owns")
+    }
+
     /// Disconnect cancels pending text probe.
     func testTextProbeCancelledOnDisconnect() {
         let coordinator = SessionCoordinator()

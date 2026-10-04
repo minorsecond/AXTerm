@@ -2769,6 +2769,13 @@ final class SessionCoordinator: ObservableObject {
             debugAXDP("Text probe withheld: APRS channel", ["peer": peerCallsign])
             return
         }
+        // A session another service owns (Winlink, the BBS client) carries
+        // that service's protocol; a probe is airtime in the middle of its
+        // exchange (smoke run 2026-10-03-1, issue 32).
+        if sessionManager.hasDeliveryClaim(for: session.key) {
+            debugAXDP("Text probe withheld: session claimed by a service", ["peer": peerCallsign])
+            return
+        }
         if isAXDPNotSupported(for: peerCallsign) { return }
         if hasConfirmedAXDPCapability(for: peerCallsign) { return }
         if isCapabilityDiscoveryPending(for: peerCallsign) { return }
