@@ -322,6 +322,10 @@ nonisolated final class B2FSessionEngine {
 
         case .abortRequested:
             switch state {
+            case .closing where summary.aborted:
+                // Asked again while the link is still coming down: the
+                // operator wants it over now.
+                return finishAbort()
             case .closed, .failed, .closing:
                 return []
             case .receivingBodies:
@@ -330,11 +334,11 @@ nonisolated final class B2FSessionEngine {
                 let capture = partialCaptureActions()
                 summary.aborted = true
                 state = .closing
-                return capture + [.requestDisconnect]
+                return capture + [.requestDisconnect] + abortDeadline()
             default:
                 summary.aborted = true
                 state = .closing
-                return [sendText("FQ\r"), .requestDisconnect]
+                return [sendText("FQ\r"), .requestDisconnect] + abortDeadline()
             }
         }
     }
@@ -1098,8 +1102,26 @@ nonisolated final class B2FSessionEngine {
         return actions
     }
 
+    /// How long an aborted session waits for the link to report it is down
+    /// before ending anyway. The disconnect normally lands within T1 or two;
+    /// without this an abort whose disconnect never arrived left the
+    /// exchange running for good (smoke run 2026-10-03-1, issue 35).
+    static let abortDeadlineSeconds: Int = 30
+
+    private func abortDeadline() -> [Action] {
+        [.cancelTimer(.banner), .cancelTimer(.binary), .cancelTimer(.selection),
+         .startTimer(.response, seconds: Self.abortDeadlineSeconds)]
+    }
+
+    private func finishAbort() -> [Action] {
+        state = .closed
+        return [.cancelTimer(.response), .complete(summary)]
+    }
+
     private func handleTimeout(_ kind: TimerKind) -> [Action] {
         switch (state, kind) {
+        case (.closing, .response) where summary.aborted:
+            return finishAbort()
         case (.awaitingBanner, .banner):
             return failSession("timed out waiting for the gateway banner")
         case (.awaitingCallerHandshake, .banner):

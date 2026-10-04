@@ -618,6 +618,30 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertEqual(harness.completion, nil, "aborted sessions do not complete")
     }
 
+    /// An abort must end the exchange even if the link's disconnect never
+    /// reaches the engine. Smoke run 2026-10-03-1, issue 35: the session
+    /// had lost its delivery claim, the disconnect went elsewhere, and the
+    /// exchange stayed "Signing in" for good, with Abort doing nothing.
+    func testAnAbortEndsWhenTheDisconnectNeverArrives() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.fire(.abortRequested)
+        XCTAssertNil(harness.completion)
+
+        harness.fire(.timerFired(.response))
+        XCTAssertEqual(harness.completion?.aborted, true)
+    }
+
+    func testASecondAbortEndsAtOnce() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.fire(.abortRequested)
+        harness.fire(.abortRequested)
+        XCTAssertEqual(harness.completion?.aborted, true)
+    }
+
     /// Found 2026-10-02 while testing bug 40: after an abort the engine went
     /// to closing, and when the disconnect landed it moved to closed and
     /// returned nothing, so the runner waited for the session to end forever
