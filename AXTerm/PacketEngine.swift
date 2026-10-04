@@ -182,8 +182,10 @@ final class PacketEngine: ObservableObject {
     // MARK: - NET/ROM Integration
 
     /// NET/ROM routing integration for passive route inference and link quality estimation.
-    /// Observes all incoming packets to build routing tables.
-    private(set) var netRomIntegration: NetRomIntegration?
+    /// Observes all incoming packets to build routing tables. Nil until the
+    /// station has a callsign (`configureNetRomIntegration`). Published so a
+    /// view built before then picks it up.
+    @Published private(set) var netRomIntegration: NetRomIntegration?
     /// Appends a sample of every measured link on each snapshot save, so the
     /// station profile can show how a path has behaved rather than only how
     /// it behaves now.
@@ -642,31 +644,9 @@ final class PacketEngine: ObservableObject {
             #endif
         }
 
-        // Initialize NET/ROM integration for passive route inference.
-        // Inference compares full addresses, SSID included, so "local" is the
-        // address our frames carry: the primary radio's.
-        let myCallsign = settings.primaryCallsign
-        if !myCallsign.isEmpty {
-            self.netRomIntegration = NetRomIntegration(
-                localCallsign: myCallsign,
-                mode: .hybrid,  // Use hybrid mode for best passive inference
-                persistence: netRomPersistence  // Pass persistence for adaptive stale threshold tracking
-            )
-            #if DEBUG
-            print("[NETROM:ENGINE] ✅ NetRomIntegration initialized with persistence: \(netRomPersistence != nil ? "YES" : "NO")")
-            #endif
-
-            // Load persisted NET/ROM state if available
-            loadNetRomSnapshot()
-
-            // NOTE: Pruning is deferred to avoid database lock during init.
-            // It will run via the scheduled timer below (first run after 60s).
-            // See: database_lock_analysis.md for details.
-            // pruneOldNetRomEntries()
-
-            // Start periodic snapshot timer (will also handle deferred pruning)
-            startNetRomSnapshotTimer()
-        }
+        // NET/ROM integration for passive route inference, now if the station
+        // already has a callsign, otherwise as soon as it gets one.
+        configureNetRomIntegration()
 
         configureStationSubscription()
         observeRadios()
@@ -2525,7 +2505,43 @@ final class PacketEngine: ObservableObject {
         }
     }
 
+    /// Builds the NET/ROM engine for the station's callsign, or rebuilds it
+    /// when that callsign has changed.
+    ///
+    /// Inference compares full addresses, SSID included, so "local" is the
+    /// address our frames carry: the primary radio's. It was built once, in
+    /// init, and only when a callsign was already set, so a station set up by
+    /// the first-run wizard never had one and dropped every NODES broadcast
+    /// (smoke run 2026-10-03-1, issue 37).
+    ///
+    /// Pruning stays deferred to the snapshot timer, which avoids a database
+    /// lock during init (see database_lock_analysis.md).
+    private func configureNetRomIntegration() {
+        let callsign = settings.primaryCallsign
+        guard !callsign.isEmpty else { return }
+        if let existing = netRomIntegration,
+           existing.localCallsign == CallsignValidator.normalize(callsign) {
+            return
+        }
+        let isFirst = netRomIntegration == nil
+        netRomIntegration = NetRomIntegration(
+            localCallsign: callsign,
+            mode: .hybrid,  // Use hybrid mode for best passive inference
+            persistence: netRomPersistence  // Pass persistence for adaptive stale threshold tracking
+        )
+        loadNetRomSnapshot()
+        if isFirst { startNetRomSnapshotTimer() }
+    }
+
     private func observeSettings() {
+        // The callsign can arrive after launch (the first-run wizard) or
+        // change; the NET/ROM engine follows it. objectWillChange fires before
+        // the change lands, so the work runs on the next turn of the loop.
+        settings.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.configureNetRomIntegration() }
+            .store(in: &cancellables)
+
         // The radios. Every transport scalar mirrors into the primary radio's
         // profile, so one sink over the list sees them all. A tweak to a link
         // that is up is applied in place; only a link that did not exist

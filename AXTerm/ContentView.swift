@@ -2249,6 +2249,10 @@ struct ContentView: View {
                     settings: settings,
                     connectCoordinator: connectCoordinator
                 )
+                // Its view model keeps the engine it was built with. The engine
+                // can arrive after launch (first-run setup) or be rebuilt for a
+                // new callsign, so a new engine gets a new view.
+                .id(client.netRomIntegration.map(ObjectIdentifier.init))
             case .nodes:
                 NodeDirectoryView(
                     aliases: nodeAliases,
