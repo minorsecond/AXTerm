@@ -396,6 +396,15 @@ struct ContentView: View {
             // The primary radio's address, SSID included; see
             // `SessionCoordinator.localCallsign`.
             coordinator.localCallsign = settings.primaryCallsign
+            // Test mode: a command folder the smoke test drives transfers
+            // and session text through (see TestCommandChannel).
+            if TestModeConfiguration.shared.isTestMode,
+               let folder = try? TestCommandChannel.folder(instanceID: TestModeConfiguration.shared.instanceID),
+               let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+                let channel = TestCommandChannel(folder: folder, coordinator: coordinator, filesFolder: downloads)
+                channel.start()
+                TestCommandChannel.running = channel
+            }
         }
         // Also restores the NET/ROM node policy; see `appSettings`.
         coordinator.appSettings = settings
