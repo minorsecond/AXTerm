@@ -163,4 +163,38 @@ final class SessionDeliveryClaimTests: XCTestCase {
 
         XCTAssertFalse(manager.hasDeliveryClaim(for: session.key))
     }
+    /// A second call to the same peer in one launch: the claim is taken,
+    /// then connect() clears the ended session left by the first call. That
+    /// cleared the fresh claim with it, so the peer's B2F banner went to the
+    /// terminal and AXDP instead of Winlink and the exchange sat at "Signing
+    /// in" (smoke run 2026-10-03-1, issue 35).
+    func testAClaimTakenBeforeReconnectingSurvivesTheOldSessionsCleanup() {
+        let manager = makeManager()
+        var terminalData = Data()
+        var claimedData = Data()
+        var claimSawDisconnect = false
+        manager.onDataReceived = { _, data in terminalData.append(data) }
+
+        let first = establishSession(manager)
+        let peer = first.remoteAddress
+        _ = manager.handleInboundDISC(from: peer, path: DigiPath(), radio: .primary)
+        XCTAssertEqual(manager.existingSession(for: peer)?.state, .disconnected)
+
+        let claim = manager.claimDelivery(
+            for: first.key,
+            handler: { _, data in claimedData.append(data) },
+            stateHandler: { _, _, new in if new == .disconnected { claimSawDisconnect = true } })
+        XCTAssertNotNil(claim)
+        XCTAssertNotNil(manager.connect(to: peer, path: DigiPath(), radio: .primary))
+        XCTAssertTrue(manager.hasDeliveryClaim(for: first.key), "the reconnect dropped the claim")
+
+        _ = manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let second = manager.existingSession(for: peer)!
+        deliverIFrame(manager, session: second, payload: Data("[AXTerm-1.0-B2FHM$]\r".utf8), ns: 0)
+        XCTAssertEqual(claimedData, Data("[AXTerm-1.0-B2FHM$]\r".utf8))
+        XCTAssertTrue(terminalData.isEmpty, "the banner went to the terminal")
+
+        _ = manager.handleInboundDISC(from: peer, path: DigiPath(), radio: .primary)
+        XCTAssertTrue(claimSawDisconnect, "the claim holder never heard the link end")
+    }
 }

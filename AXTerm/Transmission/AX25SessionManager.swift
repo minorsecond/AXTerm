@@ -1326,7 +1326,13 @@ final class AX25SessionManager: ObservableObject {
         stopT1Timer(for: stale)
         stopT2Timer(for: stale)
         stopT3Timer(for: stale)
+        // A claim on this key belongs to the connect being made now (Winlink
+        // claims before it sends SABM), not to the ended session. Removing
+        // the session cleared it, so the new link's first bytes went to the
+        // terminal (smoke run 2026-10-03-1, issue 35).
+        let claim = deliveryClaims[key]
         removeSession(stale)
+        deliveryClaims[key] = claim
         TxLog.debug(.session, "Discarded ended session for reconnect", [
             "peer": destination.display,
             "state": stale.state.rawValue,
