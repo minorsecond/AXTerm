@@ -391,14 +391,25 @@ nonisolated struct TransferPace: Sendable, Equatable {
         max(Self.minimumQuietSeconds, Self.quietIntervalMultiple * (typicalInterval ?? 0))
     }
 
+    /// A first gap longer than this is a pause, not the pace of the data.
+    static let longestFirstGap: TimeInterval = 120
+
     mutating func noteProgress(at time: Date) {
         if let last = lastProgressAt {
             let gap = max(0, time.timeIntervalSince(last))
-            if gap > quietThreshold {
-                stalledSeconds += gap - (typicalInterval ?? 0)
-            } else if let typical = typicalInterval {
-                typicalInterval = typical + Self.smoothing * (gap - typical)
+            if let typical = typicalInterval {
+                if gap > quietThreshold {
+                    stalledSeconds += gap - typical
+                } else {
+                    typicalInterval = typical + Self.smoothing * (gap - typical)
+                }
+            } else if gap > Self.longestFirstGap {
+                stalledSeconds += gap
             } else {
+                // A gap is only a stall against a usual gap. With 720-byte
+                // chunks at 250 bps every gap is over the 15 s floor, and
+                // setting them all aside left the rate dividing by nearly
+                // nothing (smoke run 2026-10-03-1, issue 14).
                 typicalInterval = gap
             }
         }

@@ -79,6 +79,25 @@ final class TransferPaceTests: XCTestCase {
         let p = pace(stride(from: 0, through: 20, by: 2).map { $0 })
         XCTAssertEqual(p.stalledSeconds, 0)
     }
+
+    /// Smoke run 2026-10-03-1, issue 14: a 720-byte chunk takes about 27 s at
+    /// 250 bps. Every gap was over the 15 s floor before any usual gap was
+    /// known, so every gap was set aside as a stall, the data time came out
+    /// near zero, and the row showed 212 Mbps and "0s remaining".
+    func testSlowChunksAreTheirPaceNotStalls() {
+        let p = pace(stride(from: 0, through: 270, by: 27).map { $0 })
+        XCTAssertEqual(p.stalledSeconds, 0)
+        XCTAssertNil(p.quietSeconds(now: t0.addingTimeInterval(270 + 30)),
+                     "the next chunk is not late yet")
+        XCTAssertNotNil(p.quietSeconds(now: t0.addingTimeInterval(270 + 120)))
+    }
+
+    /// A first gap far longer than any chunk takes is a pause, not a pace.
+    func testAVeryLongFirstGapIsAStall() {
+        let p = pace([0, 300, 302, 304, 306])
+        XCTAssertEqual(p.stalledSeconds, 300, accuracy: 0.5)
+        XCTAssertEqual(p.typicalInterval ?? 0, 2, accuracy: 0.01)
+    }
 }
 
 final class BulkTransferStallTests: XCTestCase {
