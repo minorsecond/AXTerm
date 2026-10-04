@@ -32,6 +32,15 @@ final class WinlinkSettings: ObservableObject {
     static let clientProductKey = "winlinkClientProduct"
     static let gatewayLadderKey = "winlinkGatewayLadder"
     static let mailboxSyncEnabledKey = "winlinkMailboxSyncEnabled"
+
+    /// Whether a station with no decision yet syncs its mailbox: yes, except
+    /// a `--test-mode` instance. Its settings are wiped at every launch, so
+    /// every launch looks like a fresh install, and syncing sent test traffic
+    /// toward the operator's real mailbox on their other devices (smoke run
+    /// 2026-10-03-1, issue 30).
+    static func freshInstallSyncDefault(isolatedInstance: Bool) -> Bool {
+        !isolatedInstance
+    }
     static let passwordVerifiedAtKey = "winlinkPasswordVerifiedAt"
     static let askBeforeDownloadingKey = "winlinkAskBeforeDownloading"
     static let downloadAnywayUnderKBKey = "winlinkDownloadAnywayUnderKB"
@@ -477,7 +486,8 @@ final class WinlinkSettings: ObservableObject {
         // already turned it off keeps it off — the default applies only where
         // no decision exists yet — and Settings › Winlink turns it off again.
         mailboxSyncEnabled = defaults.object(forKey: Self.mailboxSyncEnabledKey) == nil
-            ? true
+            ? Self.freshInstallSyncDefault(
+                isolatedInstance: AppEnvironment.isTestMode && !AppEnvironment.isUnitTestHost)
             : defaults.bool(forKey: Self.mailboxSyncEnabledKey)
         // Asking is the default: a station that downloads whatever it is
         // offered can spend twenty minutes of a shared channel on a

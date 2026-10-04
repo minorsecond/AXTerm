@@ -24,6 +24,15 @@ final class WinlinkSyncDefaultTests: XCTestCase {
                       "Mail is what an operator expects on whichever device they pick up")
     }
 
+    /// A `--test-mode` instance starts with sync off. Its settings are wiped
+    /// at every launch, so "fresh install" is every launch, and on it was
+    /// test traffic headed for the operator's real mailbox on their other
+    /// devices. Smoke run 2026-10-03-1, issue 30.
+    func testAnIsolatedTestInstanceStartsWithSyncOff() {
+        XCTAssertFalse(WinlinkSettings.freshInstallSyncDefault(isolatedInstance: true))
+        XCTAssertTrue(WinlinkSettings.freshInstallSyncDefault(isolatedInstance: false))
+    }
+
     func testAnOperatorWhoTurnedItOffKeepsItOff() async throws {
         let defaults = freshDefaults()
         defaults.set(false, forKey: WinlinkSettings.mailboxSyncEnabledKey)
