@@ -81,6 +81,29 @@ final class RigPrepSnapshotTests: XCTestCase {
 
     // MARK: - Persistence
 
+    /// Smoke run 2026-10-03-1, issue 12: test mode clears an instance's
+    /// settings at launch, and the snapshot lived there, so what a test
+    /// instance still owed a radio (its CI-V had gone silent before the
+    /// restore) was erased by the next launch. The snapshot now has a suite
+    /// of its own that a launch leaves alone.
+    func testTheAppStoreKeepsSnapshotsWhereALaunchDoesNotClear() {
+        XCTAssertTrue(RigPrepStore().defaults === AppEnvironment.owedToRadioDefaults)
+
+        let base = "com.rosswardrup.AXTerm.test.RigPrepLaunch-\(UUID().uuidString)"
+        let owedSuite = AppEnvironment.owedToRadioSuiteName(base: base)
+        XCTAssertNotEqual(owedSuite, base)
+        let owed = try! XCTUnwrap(UserDefaults(suiteName: owedSuite))
+        defer { owed.removePersistentDomain(forName: owedSuite) }
+        let radio = RadioID(rawValue: "radio-primary")
+        let snapshot = RigPrepSnapshot(entries: [usbToFM])
+        RigPrepStore(defaults: owed).save(snapshot, for: radio)
+
+        UserDefaults(suiteName: base)?.removePersistentDomain(forName: base)  // what a launch does
+
+        XCTAssertEqual(RigPrepStore(defaults: owed).load(radio), snapshot)
+    }
+
+
     func testRoundTrip() {
         let store = RigPrepStore(defaults: defaults)
         let radio = RadioID(rawValue: "radio-a")

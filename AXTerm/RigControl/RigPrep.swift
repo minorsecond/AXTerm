@@ -474,7 +474,7 @@ nonisolated struct RigPrepStore: @unchecked Sendable {
     let defaults: UserDefaults
     static let keyPrefix = "rigPrep.v1."
 
-    init(defaults: UserDefaults = AppEnvironment.defaults) {
+    init(defaults: UserDefaults = AppEnvironment.owedToRadioDefaults) {
         self.defaults = defaults
     }
 

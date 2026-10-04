@@ -105,6 +105,20 @@ nonisolated enum AppEnvironment {
         return defaults
     }()
 
+    /// Where AXTerm keeps what it still owes a radio: the settings it
+    /// changed for packet and must put back (`RigPrepStore`). `.standard` in
+    /// production. A test-mode instance clears its own suite at launch, and
+    /// a snapshot kept there was erased before it could be restored (smoke
+    /// run 2026-10-03-1, issue 12), so test mode gives it a suite of its own
+    /// that is never cleared.
+    static let owedToRadioDefaults: UserDefaults = {
+        guard isTestMode, !isUnitTestHost else { return defaults }
+        let suite = owedToRadioSuiteName(base: "com.rosswardrup.AXTerm.test.\(TestModeConfiguration.shared.instanceID)")
+        return UserDefaults(suiteName: suite) ?? defaults
+    }()
+
+    static func owedToRadioSuiteName(base: String) -> String { base + ".owed-to-radio" }
+
     /// Where an XCTest host keeps its suite: `<tmp>/AXTermTestHost/<base>.pid<N>`.
     private static func unitTestHostSuite(base: String) -> String {
         let fileManager = FileManager.default
