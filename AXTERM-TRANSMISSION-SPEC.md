@@ -714,26 +714,77 @@ Window `K` (like maxframe):
 
 **Modern add-on:** dynamic `K` via AIMD (Section 4.4).
 
-### 7.3 Timers: compute RTO from measured RTT
-Classic AX.25 uses static `FRACK`. Modern approach: **adaptive RTO**.
+### 7.3 Timers: T1 exactly as AX.25 2.2 defines it
 
-Maintain:
-- `SRTT` (smoothed RTT)
-- `RTTVAR` (RTT variance)
+T1 follows the AX.25 2.2 SDL, Appendix C, Figure C4.7b "Select T1" (2017
+revision), with nothing added. Decision (2026-10-05, smoke run issue 34,
+operator: "do it exactly to spec").
 
-Update on each acked frame (Jacobson/Karels-style):
+Maintain two values per link:
+- `SRT`, the smoothed round trip time, starting at an initial default.
+- `T1V`, the time T1 runs for at its next start. Its default initial value
+  is the initial value of SRT.
+
+Every start of T1 runs it for T1V. Select T1 is called where the SDL calls
+it: on the UA answering our SABM (Figure C4.2), on each SABM or DISC retry
+(Figures C4.2 and C4.3), when an acknowledgment leaves nothing outstanding
+with the peer not busy ("Check I Frame Acknowledged", Figure C4.7a, on RR
+and I frames), and on Timer Recovery's F=1 exit (Figure C4.5b). It does:
+
 ```
-RTTVAR = (1 - β) * RTTVAR + β * |SRTT - RTT_sample|
-SRTT   = (1 - α) * SRTT   + α * RTT_sample
-RTO    = SRTT + 4 * RTTVAR
+if RC == 0:
+    SRT ← 7·SRT/8 + T1/8 − (remaining time on T1 when last stopped)/8
+        (the same as 7/8·SRT + 1/8·(time T1 had run))
+    T1V ← 2·SRT
+else if T1 expired:
+    T1V ← RC·0.25 s + 2·SRT
 ```
-Typical: `α=1/8`, `β=1/4`
 
-Clamp:
-- `RTO_min = 1.0s`
-- `RTO_max = 30.0s` (or user-configurable)
+**When T1 starts.** The SDL starts T1 as layer 2 transmits a frame. Through a
+KISS TNC or a sound modem a frame leaves later: after the radio keys up and
+after the frames handed over before it. So each link keeps an estimate of
+when its frames will have left the radio (`AX25Session.onAirUntil`: our
+key-up, then each frame's airtime at 1200 bit/s), and T1 starts then, the
+way a TNC-2 times FRACK from the end of its transmission. A new I-frame
+added to a transmission still going out, inside the window and before any
+retry, moves T1's start to the new end. Without this, a burst of four
+256-byte frames (about 7.4 s at 1200 bit/s) outlasted every T1 the spec's
+rules produce: each T1 expired with frames still going out, RC never got
+back to 0 with everything acknowledged, SRT never learned, and the link
+failed (stress matrix, 2026-10-05). The time T1 ran, for Select T1, is
+counted from that start. The estimate assumes 1200 bit/s; hearing any frame
+from the peer proves our transmission has ended, so it is brought back to
+that moment, and a T1 still waiting for our frames starts then. Without
+that it ran ahead without bound on a faster link and T1 never started.
 
-Use `RTO` as your T1 timeout for retransmission.
+So a retry on a connected link keeps the same T1 (Timer Recovery's T1 expiry,
+Figure C4.5c, does not call Select T1), a connect or disconnect retry adds a
+quarter second per retry to twice SRT, and an acknowledgment after retries
+changes nothing. There is no minimum, no maximum and no doubling. A time that
+cannot be one (not positive, or not finite) is dropped. A UA completing a
+re-establishment with frames outstanding sets SRT to the initial default and
+T1V to 2·SRT, as Figure C4.2 does. With adaptive timing off SRT never learns;
+the retry rule still applies.
+
+The initial default (`AX25SessionTimers.initialSRT`) is the operator's T1
+setting, 3 s by default (the spec's XID default for T1), multiplied by
+(2·digipeaters + 1) as a TNC-2 does, since §6.7.1.1 says T1 "should be
+adjusted according to the number of repeaters" and gives no formula. It is
+never less than §6.7.1.1's own rule: T1 "should take at least twice the
+amount of time it would take to send maximum length frame to the distant TNC
+and get the proper response frame back". That round trip is our key-up time
+and a full frame's airtime (paclen plus address, control, PID and FCS, at
+1200 bit/s), plus the peer's key-up and a supervisory frame's airtime, with a
+key-up and an airtime more per digipeater. Our key-up is measured by a sound
+modem (the radio's smoothed PTT confirmation, its audio buffer and the TX
+delay; Warbler has taken 3.6 s to key an IC-705) and is the TX delay setting
+for a TNC; the peer's is assumed to be our TX delay setting. A per-route SRT
+learned in the last 30 minutes replaces the initial default as it is.
+
+Until 2026-10-05 T1 was a TCP-style RTO (SRTT + 4·RTTVAR, RFC 6298), clamped
+to RTO_min and RTO_max, doubled on each retry, started at 4 s, and never
+below FRACK × (2·digipeaters + 1). On the first SABM of issue 34 it fired at
+4 s, under a 705 round trip, and the second SABM crossed the peer's UA.
 
 T3, the idle poll timer, is 30 s. Each time it starts, its period is drawn at random between 22.5 s and 30 s (75% to 100% of T3) from the system's random generator, which the OS seeds per process; tests inject the draw. Decision (2026-10-03, smoke run issue 6): two stations restart T3 on the same exchange, and at a fixed 30 s their idle polls went out together and collided. AX.25 2.2 §6.7.1.3 leaves the period "locally defined", so a drawn period is within the spec. p-persistence (§6.7.1.6) is still the channel-access rule, but it cannot separate two stations that key up within one slot of each other. The draw stays at or under 30 s because peers give up on a silent link not long after that.
 
@@ -807,8 +858,8 @@ inbound loss and a go-back-N resend. Rules:
   nothing owed stays silent.
 - **T2 must sit inside every plausible peer T1.** Production default 2.0 s:
   longer than one max-size frame's airtime at 1200 baud (~1.9 s, so
-  back-to-back frames batch), comfortably under the 3.0 s RTO floor. Timers
-  clamp T2 to ⅔ of `rtoMin` to keep the invariant when either is configured.
+  back-to-back frames batch), under the 3.0 s T1 default a peer starts
+  from. Timers clamp T2 to ⅔ of the link's initial SRT (§7.3).
 - In practice T2 rarely fires: RMS gateways end every burst with a P=1 frame
   (field capture 2026-08-24: 208 inbound I-frames, every burst
   poll-terminated), and the mandatory F=1 response carries the ack.
@@ -915,20 +966,11 @@ Maintain send buffer for unacked frames:
   against receivers that batch acks on T2. Only on window-full, not on every
   burst end: some node stacks (DRLNOD, live capture) DM a session that polls
   on every idle line.
-- Start T1 if not running. **T1 = max(adaptive RTO, FRACK x (2 x digipeaters
-  + 1))**, as a TNC-2 sets it; FRACK is the operator's AX.25 T1 setting (4 s
-  by default) and the adaptive RTO can only lengthen it (2026-10-01). On a
-  path with a slow turnaround (the IC-705 through Warbler measured about
-  5.3 s for an unpolled frame's ack) the operator raises FRACK, as on any
-  TNC. The delayed-ack formula below is kept behind
-  `AX25SessionManager.useDelayedAckT1`, off by default: for a first send of
-  I-frames none of which polls,
-  T1 = max(RTO, SRTT + airtime of our outstanding frames + 3 s): the peer may
-  hold its ack for its own T2 (AXTerm 2 s, Linux AX.25 3 s), and the RTO is
-  learned from exchanges answered at once. Sending a P=1 frame re-arms T1
-  with the plain RTO, and so does every retry, since a retry polls. Field
-  evidence 2026-10-01: a lone P=0 line was resent after 4.3 s while the RR
-  needed about 5.3 s, and the resend keyed over it.
+- Start T1 if not running, for T1V (§7.3). Until 2026-10-05 T1 was
+  max(adaptive RTO, FRACK × (2 × digipeaters + 1)), with a delayed-ack
+  formula kept behind a switch; both are gone. The spec's SRT is timed from
+  T1's start to the acknowledgment that leaves nothing outstanding, so it
+  already includes a peer holding its ack for its T2.
 - On RR with `nr`:
   - ack frames up to `nr-1`
   - advance `VA`

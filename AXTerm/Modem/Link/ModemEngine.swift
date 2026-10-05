@@ -95,6 +95,9 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     /// when the transmitter carries frames.
     private var toneBitsRemaining = 0
     private let toneRequest = Mutex<Int>(0)
+    /// Smoothed time for the radio to confirm PTT; see
+    /// `ModemTelemetry.pttConfirmSeconds`.
+    private let pttConfirmSeconds = Mutex<Double?>(nil)
     private var rxClock: Int64 = 0
     private var txWrittenTotal: Int64 = 0
     private var framesInTransmission = 0
@@ -449,8 +452,15 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
                                   amplitude: active.txAmplitude, spaceGainDB: active.txSpaceGainDB)
         pttConfirmation.store(0, ordering: .releasing)
         txState = .keying(since: rxClock)
+        let askedAt = Date()
         ptt.setTransmit(true) { [weak self] error in
             guard let self else { return }
+            if error == nil {
+                let took = Date().timeIntervalSince(askedAt)
+                self.pttConfirmSeconds.withLock { held in
+                    held = held.map { 7.0 * $0 / 8.0 + took / 8.0 } ?? took
+                }
+            }
             if let error {
                 self.lastError = "PTT: \(error)"
                 self.pttConfirmation.store(2, ordering: .releasing)
@@ -587,6 +597,8 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
         t.rxOverruns = UInt64(rxOverruns.load(ordering: .relaxed))
         t.audioFormat = audio.format
         t.latency = audio.latency
+        t.pttConfirmSeconds = pttConfirmSeconds.withLock { $0 }
+        t.txDelaySeconds = Double(active.txDelayMs) / 1000.0
         t.lastError = lastError
         t.uptime = Date().timeIntervalSince(startedAt)
         latestTelemetry.withLock { $0 = t }

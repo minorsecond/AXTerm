@@ -138,6 +138,15 @@ nonisolated struct AX25SessionConfig: Sendable {
     /// Where `windowSize` and `paclen` came from.
     let startSource: LinkStartSource
 
+    /// How long this station's radio takes to put a frame on the air after
+    /// it is asked to key, seconds. Sets the floor under SRT's initial
+    /// default with `peerKeyUpSeconds` (§6.7.1.1;
+    /// `AX25SessionTimers.initialSRT`). Nil when unknown.
+    let keyUpSeconds: Double?
+    /// The same for the peer, which can only be assumed: our configured TX
+    /// delay, a typical TNC's.
+    let peerKeyUpSeconds: Double?
+
     /// The protocol window: the most frames this session may ever have
     /// outstanding. Sequence invariants and our XID k are checked against
     /// this, never against the live K, which moves below it.
@@ -189,7 +198,9 @@ nonisolated struct AX25SessionConfig: Sendable {
         maxPaclen: Int? = nil,
         minWindowSize: Int? = nil,
         minPaclen: Int? = nil,
-        startSource: LinkStartSource = .configured
+        startSource: LinkStartSource = .configured,
+        keyUpSeconds: Double? = nil,
+        peerKeyUpSeconds: Double? = nil
     ) {
         // Clamp window size to valid range
         let maxWindow = extended ? 127 : 7
@@ -219,6 +230,22 @@ nonisolated struct AX25SessionConfig: Sendable {
         self.t2AckDelay = t2AckDelay
         self.adaptiveTimeout = adaptiveTimeout
         self.learnedPathRto = learnedPathRto
+        self.keyUpSeconds = keyUpSeconds
+        self.peerKeyUpSeconds = peerKeyUpSeconds
+    }
+
+    /// This config with the radio's key-up time filled in, unless it already
+    /// has one.
+    func keyingUp(in seconds: (ours: Double, peer: Double)?) -> AX25SessionConfig {
+        guard keyUpSeconds == nil, let seconds else { return self }
+        return AX25SessionConfig(
+            windowSize: windowSize, paclen: paclen, maxReceiveBufferSize: maxReceiveBufferSize,
+            maxRetries: maxRetries, extended: extended, srejEnabled: srejEnabled,
+            rtoMin: rtoMin, rtoMax: rtoMax, initialRto: initialRto, t2AckDelay: t2AckDelay,
+            adaptiveTimeout: adaptiveTimeout, learnedPathRto: learnedPathRto,
+            maxWindowSize: maxWindowSize, maxPaclen: maxPaclen,
+            minWindowSize: minWindowSize, minPaclen: minPaclen,
+            startSource: startSource, keyUpSeconds: seconds.ours, peerKeyUpSeconds: seconds.peer)
     }
 
     /// This config with the outcome of an XID exchange applied (§6.3.2):
@@ -246,7 +273,9 @@ nonisolated struct AX25SessionConfig: Sendable {
             maxPaclen: maxPaclen.map { min($0, peer.iFieldLengthRx ?? $0) },
             minWindowSize: minWindowSize,
             minPaclen: minPaclen,
-            startSource: startSource
+            startSource: startSource,
+            keyUpSeconds: keyUpSeconds,
+            peerKeyUpSeconds: peerKeyUpSeconds
         )
     }
 }
@@ -355,18 +384,35 @@ nonisolated struct AX25SequenceState: Sendable {
 
 // MARK: - Session Timers
 
-/// Timer management for AX.25 session
+/// T1 as AX.25 2.2 defines it (Appendix C, Figure C4.7b "Select T1", 2017
+/// revision), and the other session timers.
+///
+/// - SRT, the smoothed round trip, starts at an initial default.
+/// - T1V, the value T1 runs for, starts at the initial SRT. Every start of
+///   T1 runs it for T1V.
+/// - Select T1 with RC = 0 (everything acknowledged, nothing retried):
+///   SRT ← 7/8·SRT + 1/8·(time T1 had run), then T1V ← 2·SRT.
+/// - Select T1 with RC ≠ 0 after T1 expired (a SABM or DISC retry):
+///   T1V ← RC·0.25 s + 2·SRT.
+/// - Anything else leaves T1V alone, so retries on a connected link keep
+///   the same T1 (Timer Recovery, Figure C4.5c, does not call Select T1).
+///
+/// There is no minimum, maximum or doubling backoff; the spec has none.
+/// Until 2026-10-05 T1 was a TCP-style RTO (SRTT + 4·RTTVAR, doubled on
+/// each retry, floored at FRACK × (2·digis + 1)). Smoke run 2026-10-03-1,
+/// issue 34; AXTERM-TRANSMISSION-SPEC.md §7.3.
 nonisolated struct AX25SessionTimers: Sendable {
-    /// Smoothed RTT estimate
-    var srtt: Double? = nil
+    /// Smoothed round trip time (SRT), seconds.
+    private(set) var srt: Double
 
-    /// RTT variance
-    var rttvar: Double = 0.0
+    /// T1V: what T1 runs for the next time it starts, seconds.
+    private(set) var t1v: Double
 
-    /// Current RTO (retransmission timeout)
-    private(set) var rto: Double
+    /// Whether SRT holds a measurement rather than the initial default.
+    private(set) var hasSample = false
 
-    /// Whether adaptive timeout estimation is enabled
+    /// Whether SRT learns from measurements. Off keeps SRT at the initial
+    /// default; the retry rule still applies.
     let adaptiveTimeout: Bool
 
     /// T3 idle timeout (seconds)
@@ -374,89 +420,98 @@ nonisolated struct AX25SessionTimers: Sendable {
 
     /// T2 response-delay (delayed-ack) timeout, seconds. Long enough to
     /// span the gap between a burst's frames at 1200 baud (a 256-byte
-    /// frame is ~1.9 s of airtime), short enough to stay inside any sane
-    /// peer's T1 — enforced locally by clamping to 2/3 of rtoMin, since a
-    /// peer on the same link will run a comparable RTO floor. In practice
-    /// it rarely fires: bursts end with a P=1 poll whose mandatory F=1
-    /// response carries the cumulative ack.
+    /// frame is ~1.9 s of airtime), short enough to stay inside the
+    /// peer's T1, which is never below its own initial default; held under
+    /// 2/3 of ours, since a peer on the same link runs a comparable one.
+    /// In practice it rarely fires: bursts end with a P=1 poll whose
+    /// mandatory F=1 response carries the cumulative ack.
     let t2AckDelay: Double
 
-    /// Smoothing factor for SRTT (1/8 per RFC 6298)
-    private let alpha: Double = 1.0 / 8.0
+    /// SRT's initial default, kept so `reset()` can restore it.
+    let initialSRT: Double
 
-    /// Smoothing factor for RTTVAR (1/4 per RFC 6298)
-    private let beta: Double = 1.0 / 4.0
+    /// T1 for the next start. The name predates the spec's T1V.
+    var rto: Double { t1v }
 
-    /// Minimum RTO (seconds)
-    private let rtoMin: Double
+    /// SRT once measured; nil while it is still the initial default.
+    var srtt: Double? { hasSample ? srt : nil }
 
-    /// Maximum RTO (seconds)
-    private let rtoMax: Double
-
-    /// Default initial RTO (seconds)
-    private static let defaultInitialRto: Double = 4.0
-
-    /// The clamped initial RTO this session was configured with, so `reset()` can
-    /// restore it. Without it, reset() fell back to the hardcoded 4 s default and
-    /// silently discarded the operator's configured T1.
-    private let initialRto: Double
-
-    init(rtoMin: Double = 3.0, rtoMax: Double = 30.0, initialRto: Double = AX25SessionTimers.defaultInitialRto, adaptiveTimeout: Bool = true, t2AckDelay: Double = 2.0) {
-        self.rtoMin = max(0.5, rtoMin)
-        self.rtoMax = max(self.rtoMin, min(60.0, rtoMax))
-        self.initialRto = max(self.rtoMin, min(self.rtoMax, initialRto))
-        self.rto = self.initialRto
+    init(initialSRT: Double = 3.0, adaptiveTimeout: Bool = true, t2AckDelay: Double = 2.0) {
+        let initial = initialSRT.isFinite && initialSRT > 0 ? initialSRT : 3.0
+        self.initialSRT = initial
+        self.srt = initial
+        self.t1v = initial
         self.adaptiveTimeout = adaptiveTimeout
-        self.t2AckDelay = max(0.1, min(t2AckDelay, self.rtoMin * 2.0 / 3.0))
+        self.t2AckDelay = max(0.1, min(t2AckDelay, initial * 2.0 / 3.0))
     }
 
-    /// Update RTT estimates with a new sample (Jacobson/Karels, RFC 6298).
+    /// The SDL's Select T1 subroutine.
+    /// - Parameters:
+    ///   - retryCount: RC when it is called.
+    ///   - t1Expired: whether T1 expired, rather than being stopped.
+    ///   - t1Elapsed: how long T1 had run when it was last stopped.
+    mutating func selectT1(retryCount: Int, t1Expired: Bool, t1Elapsed: Double?) {
+        if retryCount == 0 {
+            guard adaptiveTimeout else { return }
+            // A sample that cannot be a time is dropped rather than let it
+            // poison SRT (NaN, infinite, or not positive).
+            guard let elapsed = t1Elapsed, elapsed.isFinite, elapsed > 0 else {
+                TxLog.debug(.session, "T1 sample discarded (invalid)", [
+                    "elapsed": String(describing: t1Elapsed)
+                ])
+                return
+            }
+            srt = 7.0 * srt / 8.0 + elapsed / 8.0
+            hasSample = true
+            t1v = 2.0 * srt
+        } else if t1Expired {
+            t1v = Double(retryCount) * 0.25 + 2.0 * srt
+        }
+    }
+
+    /// SRT's initial default for a link, seconds.
     ///
-    /// Bug H guard: malformed RTT samples (NaN, Inf, ≤0) are silently discarded
-    /// rather than poisoning the estimator. A single bad sample could set SRTT to
-    /// NaN which then contaminates every subsequent estimate.
-    mutating func updateRTT(sample: Double) {
-        guard adaptiveTimeout else {
-            TxLog.debug(.session, "RTT sample discarded (adaptive disabled)")
-            return
-        }
-
-        // Discard physically impossible samples before they corrupt state.
-        guard sample > 0, sample.isFinite else {
-            TxLog.debug(.session, "RTT sample discarded (invalid)", [
-                "sample": String(describing: sample)
-            ])
-            return
-        }
-        if let s = srtt {
-            // Update existing estimates (Jacobson/Karels algorithm)
-            rttvar = (1 - beta) * rttvar + beta * abs(s - sample)
-            srtt = (1 - alpha) * s + alpha * sample
-        } else {
-            // First sample
-            srtt = sample
-            rttvar = sample / 2
-        }
-
-        // Calculate RTO with clamping
-        let newRTO = (srtt ?? 3.0) + 4 * rttvar
-        rto = max(rtoMin, min(rtoMax, newRTO))
+    /// The configured T1 (the operator's setting; the spec's XID default is
+    /// 3000 ms), scaled for digipeaters as a TNC-2 does, FRACK × (2m + 1),
+    /// since §6.7.1.1 says T1 "should be adjusted according to the number
+    /// of repeaters" and gives no formula. Never less than §6.7.1.1's own
+    /// rule, when the radio's key-up time is known: T1 "should take at
+    /// least twice the amount of time it would take to send maximum length
+    /// frame to the distant TNC and get the proper response frame back".
+    /// Each leg pays a key-up and its airtime at every hop: ours on the way
+    /// out, the peer's (`peerKeyUpSeconds`, or ours) on the way back, and
+    /// any digipeater is taken to key up as fast as the peer.
+    static func initialSRT(t1Setting: Double, digipeaters: Int, maxFrameBytes: Int,
+                           keyUpSeconds: Double?, peerKeyUpSeconds: Double? = nil,
+                           bitsPerSecond: Double = TxAdaptiveSettings.airtimeBitsPerSecond) -> Double {
+        let digis = max(0, digipeaters)
+        let configured = max(0.1, t1Setting) * Double(2 * digis + 1)
+        guard let keyUp = keyUpSeconds, keyUp.isFinite, keyUp >= 0 else { return configured }
+        let peerKeyUp = peerKeyUpSeconds.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? keyUp
+        let address = 14 + 7 * digis
+        // Address, control, PID, information and FCS; a reply has no PID or
+        // information.
+        let frameAirtime = Double(address + 2 + max(0, maxFrameBytes) + 2) * 8.0 / bitsPerSecond
+        let replyAirtime = Double(address + 1 + 2) * 8.0 / bitsPerSecond
+        let out = (keyUp + frameAirtime) + Double(digis) * (peerKeyUp + frameAirtime)
+        let back = Double(digis + 1) * (peerKeyUp + replyAirtime)
+        let roundTrip = out + back
+        return max(configured, 2.0 * roundTrip)
     }
 
-    /// Apply exponential backoff (double RTO)
-    mutating func backoff() {
-        guard adaptiveTimeout else {
-            TxLog.debug(.session, "T1 backoff skipped (adaptive disabled)")
-            return
-        }
-        rto = min(rto * 2, rtoMax)
-    }
-
-    /// Reset timers to initial RTO (same bounds)
+    /// Back to the initial default, as a new link starts.
     mutating func reset() {
-        srtt = nil
-        rttvar = 0.0
-        rto = initialRto
+        srt = initialSRT
+        t1v = initialSRT
+        hasSample = false
+    }
+
+    /// The SDL's re-establishment with frames outstanding (Figure C4.2, UA
+    /// with V(S) ≠ V(A)): SRT ← initial default, T1V ← 2·SRT.
+    mutating func resetForReestablishment() {
+        srt = initialSRT
+        t1v = 2.0 * initialSRT
+        hasSample = false
     }
 }
 

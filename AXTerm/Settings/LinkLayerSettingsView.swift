@@ -56,7 +56,7 @@ struct LinkLayerSettingsView: View {
             }
         }
 
-        Text("Guardrails: \(Int(AppSettingsStore.minAX25T1TimeoutSeconds))-\(Int(AppSettingsStore.maxAX25T1TimeoutSeconds)) seconds. Larger values reduce premature retransmits on slow links; smaller values retry faster.")
+        Text("The first T1 of a new link, \(Int(AppSettingsStore.minAX25T1TimeoutSeconds))-\(Int(AppSettingsStore.maxAX25T1TimeoutSeconds)) seconds (3 by default, the AX.25 2.2 default), multiplied by 2 × digipeaters + 1 and never shorter than twice a full frame's round trip for this radio. From there T1 follows the link as AX.25 2.2 defines it: twice the smoothed round trip, plus a quarter second per retry while connecting.")
             .font(.caption)
             .foregroundStyle(.secondary)
 

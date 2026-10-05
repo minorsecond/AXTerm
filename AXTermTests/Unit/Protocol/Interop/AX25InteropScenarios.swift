@@ -130,12 +130,12 @@ extension AX25InteropTestCase {
             }
             let start = clock.currentTime
             let before = axterm.sent.count
+            let t1 = axtermT1
             axtermSends(Data("needs an ack\r".utf8), limit: 200, file: file, line: line)
             // The first frame AXTerm sends after the line is the recovery.
             if let recovery = axterm.sent.dropFirst(before + 1).first?.time {
-                let floor = AX25SessionManager.frackFloor(frack: 4, digipeaters: path.count)
-                XCTAssertGreaterThanOrEqual(recovery - start, floor - 0.01,
-                                            "\(profile.name) path \(path): T1 fired before FRACK x (2 x digis + 1) \(trace())",
+                XCTAssertGreaterThanOrEqual(recovery - start, t1 - 0.01,
+                                            "\(profile.name) path \(path): T1 fired before T1V \(t1) \(trace())",
                                             file: file, line: line)
             } else {
                 XCTFail("\(profile.name) path \(path): AXTerm never recovered \(trace())", file: file, line: line)
@@ -163,6 +163,7 @@ extension AX25InteropTestCase {
             }
             let start = clock.currentTime
             let before = axterm.sent.count
+            let t1 = axtermT1
             axtermSends(Data("only frame\r".utf8), file: file, line: line)
             XCTAssertTrue(dropped, file: file, line: line)
             let resend = axterm.sent.dropFirst(before + 1).first
@@ -170,8 +171,8 @@ extension AX25InteropTestCase {
                            file: file, line: line)
             XCTAssertEqual((resend?.frame.controlByte ?? 0) & 0x10, 0x10, "the resend polls", file: file, line: line)
             if let time = resend?.time {
-                XCTAssertGreaterThanOrEqual(time - start, AX25SessionManager.frackFloor(frack: 4, digipeaters: path.count) - 0.01,
-                                            "\(profile.name) path \(path)", file: file, line: line)
+                XCTAssertGreaterThanOrEqual(time - start, t1 - 0.01,
+                                            "\(profile.name) path \(path): T1 fired before T1V \(t1)", file: file, line: line)
             }
             XCTAssertEqual(axtermRetransmissions, 1, "\(profile.name) path \(path) \(trace())", file: file, line: line)
             assertNoViolations(file: file, line: line)

@@ -126,7 +126,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         // T1 fires: retransmits via timer (separate from REJ suppression)
         var timerRetransmits: [OutboundFrame] = []
         manager.onSendFrame = { timerRetransmits.append($0) }
-        clock.advance(by: 2.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
 
         let timerI = timerRetransmits.filter { $0.frameType == "i" }.count
         XCTAssertEqual(timerI, 2, "T1 must still retransmit both frames after REJ suppression")
@@ -585,8 +585,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         // Fire T1 three times (each causes 1 retransmit)
         for attempt in 1...3 {
-            let rto = session.timers.rto
-            clock.advance(by: rto + 0.21)
+            clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
             let iCount = allRetransmits.filter { $0.frameType == "i" }.count
             XCTAssertEqual(iCount, attempt,
                 "After \(attempt) T1 timeouts, exactly \(attempt) I-frame retransmit(s) — no accumulation")
@@ -706,7 +705,9 @@ final class AX25Phase3CollisionTests: XCTestCase {
     /// T3 must not fire while T1 is active (outstanding frames).
     /// If both expire simultaneously, T1 governs and T3 is irrelevant.
     func testT3_DoesNotFireWhileT1Active() {
-        let (manager, clock) = makeManager(rto: 2.0)
+        // Enough retries that T1 is still going at 31 s: each waits the same
+        // T1V (no backoff, spec 7.3), about 2.4 s here with the grace.
+        let (manager, clock) = makeManager(rto: 2.0, maxRetries: 20)
         let session = connect(manager)
 
         // T3 is running after connect
@@ -718,7 +719,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         XCTAssertNotNil(session.t1TimerTask, "T1 must be running")
 
         // Advance just past the T3 default fire time (30s) but before T1 exhausts
-        // retries (rto=2, maxRetries=4, backoff: ~63s total until error).
+        // its 20 retries (about 48 s).
         // If T3 incorrectly rescheduled itself, t3TimerTask would be non-nil here.
         clock.advance(by: 31.0)
 
@@ -728,9 +729,9 @@ final class AX25Phase3CollisionTests: XCTestCase {
             "T3 must not reschedule while T1 has outstanding frames")
         // Sanity: T1 must still be running (not yet exhausted at 31s with rto=2)
         XCTAssertNotNil(session.t1TimerTask,
-            "T1 must still be running at 31s (exhausts ~63s with rto=2, maxRetries=4)")
+            "T1 must still be running at 31s (20 retries take about 48 s)")
         XCTAssertEqual(session.state, .connected,
-            "Session must still be connected (T1 exhausts at ~63s)")
+            "Session must still be connected (20 retries take about 48 s)")
     }
 
     /// Reconnect after N2 timeout: new session must start with clean slate.
@@ -742,8 +743,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         // Exhaust N2 retries → session enters .error
         for _ in 0..<(2 + 1) {
-            let rto = session.timers.rto
-            clock.advance(by: rto + 0.21)
+            clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         }
         XCTAssertEqual(session.state, .error,
             "Session must enter .error after N2 retries exhausted")

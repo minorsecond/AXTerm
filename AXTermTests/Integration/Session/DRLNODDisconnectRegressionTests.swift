@@ -47,7 +47,7 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
 
         // First T1 expiry should immediately retransmit the outstanding frame with P=1
         // to solicit an ACK and comply with standard AX.25, avoiding unsolicited S-frame polls.
-        clock.advance(by: 4.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         XCTAssertEqual(timerDrivenFrames.filter { $0.frameType == "s" }.count, 0)
         XCTAssertEqual(timerDrivenFrames.filter { $0.frameType == "i" }.count, 1)
         XCTAssertEqual(timerDrivenFrames.filter { $0.frameType == "i" }.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
@@ -106,9 +106,10 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
         XCTAssertEqual(responses.first?.frameType, "s")
         XCTAssertEqual(responses.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
 
-        // T1 started with "Help" at 0 s and runs out at 4 s, plus the 200 ms
-        // grace before the resend.
-        clock.advance(by: 0.9)
+        // T1 started once "Help" was out and runs out 4 s later, plus the
+        // 200 ms grace before the resend. The poll does not move it.
+        let resendIn = session.secondsToT1Resend(now: clock.currentTime)
+        clock.advance(by: resendIn - 0.3)
         XCTAssertTrue(timerDrivenFrames.isEmpty, "nothing before T1")
         clock.advance(by: 0.35)
         let resent = timerDrivenFrames.filter { $0.frameType == "i" }

@@ -2,25 +2,25 @@
 //  AX25T1TimerPropertyTests.swift
 //  AXTermTests
 //
-//  Seeded properties for the T1 rule and the RTT estimator (spec 7.3, 7.6;
-//  spec 13: "timeouts clamp to [min,max]").
+//  Seeded properties for T1 as AX.25 2.2 defines it (spec 7.3; Appendix C,
+//  Figure C4.7b "Select T1").
 //
-//    T1  frackFloor is FRACK x (2 x digipeaters + 1), never below FRACK.
-//    T2  t1Delay: without a delayed ack owed it is the RTO; with one it is
-//        never shorter than the RTO and never longer than 60 s.
-//    T3  The T1 a session actually schedules, over random configs, paths,
-//        RTT histories, retries, polls and bytes in flight: never below
-//        the FRACK floor, never below the adaptive RTO, bounded; with
-//        useDelayedAckT1 off exactly max(RTO, floor); with it on, a retry,
-//        a retransmission or a poll outstanding gets exactly the same.
-//    T4  AX25SessionTimers: any sequence of samples (NaN, infinities,
-//        negatives, zero, huge) and backoffs keeps the RTO inside
-//        [rtoMin, rtoMax], SRTT finite and positive; invalid samples change
-//        nothing; with adaptive off the RTO never moves.
-//    T5  An RTT sample comes only from a frame the acknowledgment newly
-//        covers: an RR that acknowledges nothing new leaves SRTT alone.
+//    T1  initialSRT is the configured T1 × (2·digis + 1) when the key-up
+//        time is unknown, never less than that, never less than twice a
+//        full frame's round trip, finite, and never shorter for another
+//        digipeater or a slower key-up.
+//    T2  Select T1 over any sequence: with RC = 0 and a real time,
+//        SRT ← 7/8·SRT + 1/8·time and T1V ← 2·SRT exactly; after an
+//        expired T1 with RC ≠ 0, T1V ← RC·0.25 + 2·SRT and SRT stays; an
+//        acknowledgment after retries, an impossible time, or (with
+//        adaptive off) any time changes nothing it should not. SRT and T1V
+//        stay finite and positive.
+//    T3  The T1 a session schedules, over random configs, paths, histories,
+//        retries and sends: exactly T1V from when our frames have left the
+//        radio; no floor and no allowance.
+//    T5  A sample comes only from an acknowledgment that newly covers
+//        frames: an RR that acknowledges nothing new leaves SRT alone.
 //
-
 import XCTest
 @testable import AXTerm
 
@@ -47,48 +47,83 @@ final class AX25T1TimerPropertyTests: XCTestCase {
     private let peer = AX25Address(call: "PEER", ssid: 2)
 
     // T1
-    func testFrackFloorScalesWithDigipeaters() {
-        checkProperty("T1.frackFloor", cases: 500) { rng, v in
-            let frack = rng.double(in: 0...30)
-            let digis = rng.int(in: -3...8)
-            let floor = AX25SessionManager.frackFloor(frack: frack, digipeaters: digis)
-            v.check(floor == frack * Double(2 * max(0, digis) + 1), "floor \(floor) for FRACK \(frack), \(digis) digis")
-            v.check(floor >= frack, "floor below FRACK")
-            v.check(AX25SessionManager.frackFloor(frack: frack, digipeaters: digis + 1) >= floor,
-                    "another digipeater lowered the floor")
+    func testTheInitialDefaultFollowsSection6711() {
+        checkProperty("T1.initialSRT", cases: 1000) { rng, v in
+            let t1 = rng.double(in: 0.1...30)
+            let digis = rng.int(in: -2...7)
+            let bytes = rng.int(in: 0...256)
+            let keyUp: Double? = rng.chance(0.3) ? nil : rng.double(in: 0...5)
+            let peer: Double? = rng.chance(0.3) ? nil : rng.double(in: 0...2)
+            let srt = AX25SessionTimers.initialSRT(t1Setting: t1, digipeaters: digis, maxFrameBytes: bytes,
+                                                   keyUpSeconds: keyUp, peerKeyUpSeconds: peer)
+            let configured = t1 * Double(2 * max(0, digis) + 1)
+            v.check(srt.isFinite && srt > 0, "initial SRT \(srt)")
+            v.check(srt >= configured - 1e-9, "below the scaled T1 \(configured): \(srt)")
+            if keyUp == nil { v.check(abs(srt - configured) < 1e-9, "no key-up, yet \(srt) != \(configured)") }
+            if let keyUp {
+                let frame = Double(14 + 7 * max(0, digis) + 4 + bytes) * 8 / 1200
+                v.check(srt >= 2 * (keyUp + frame) - 1e-9, "under twice our leg alone: \(srt)")
+                let slower = AX25SessionTimers.initialSRT(t1Setting: t1, digipeaters: digis, maxFrameBytes: bytes,
+                                                          keyUpSeconds: keyUp + 1, peerKeyUpSeconds: peer)
+                v.check(slower >= srt, "a slower key-up shortened it: \(slower) < \(srt)")
+            }
+            let more = AX25SessionTimers.initialSRT(t1Setting: t1, digipeaters: digis + 1, maxFrameBytes: bytes,
+                                                    keyUpSeconds: keyUp, peerKeyUpSeconds: peer)
+            v.check(more >= srt, "another digipeater shortened it: \(more) < \(srt)")
         }
     }
 
     // T2
-    func testDelayedAckFormulaNeverShortensTheRTO() {
-        checkProperty("T2.t1Delay", cases: 1000) { rng, v in
-            let rto = rng.double(in: 0.5...60)
-            let srtt: Double? = rng.chance(0.3) ? nil : rng.double(in: 0.01...120)
-            let bytes = rng.int(in: 0...(7 * 300))
-            let plain = AX25SessionManager.t1Delay(rto: rto, srtt: srtt, bytesInFlight: bytes, awaitingDelayedAck: false)
-            let delayed = AX25SessionManager.t1Delay(rto: rto, srtt: srtt, bytesInFlight: bytes, awaitingDelayedAck: true)
-            v.check(plain == rto, "with no delayed ack owed T1 \(plain) != RTO \(rto)")
-            v.check(delayed >= rto, "the formula shortened T1 below the RTO: \(delayed) < \(rto)")
-            v.check(delayed <= 60, "the formula gave \(delayed) s, past 60 s")
-            v.check(delayed.isFinite, "non-finite T1")
+    func testSelectT1IsTheSDLWhateverTheSequence() {
+        checkProperty("T2.selectT1", cases: 1000) { rng, v in
+            let initial = rng.pick([0.5, 1, 3, 6, 30])
+            let adaptive = rng.chance(0.8)
+            var timers = AX25SessionTimers(initialSRT: initial, adaptiveTimeout: adaptive)
+            v.check(timers.rto == initial && timers.srt == initial, "T1V must start at the initial SRT")
+            for _ in 0..<rng.int(in: 1...60) {
+                let before = (srt: timers.srt, t1v: timers.rto)
+                let rc = rng.pick([0, 0, 0, 1, 2, 5, 10])
+                let expired = rng.chance(0.4)
+                let elapsed: Double? = rng.pick([nil, rng.double(in: 0.001...20), rng.double(in: 20...5000),
+                                                 .nan, .infinity, -1, 0])
+                timers.selectT1(retryCount: rc, t1Expired: expired, t1Elapsed: elapsed)
+                if rc == 0 {
+                    if adaptive, let e = elapsed, e.isFinite, e > 0 {
+                        let expected = 7 * before.srt / 8 + e / 8
+                        v.check(abs(timers.srt - expected) < 1e-9 * max(1, expected), "SRT \(timers.srt) != \(expected)")
+                        v.check(abs(timers.rto - 2 * timers.srt) < 1e-9 * max(1, timers.rto), "T1V != 2·SRT")
+                    } else {
+                        v.check(timers.srt == before.srt && timers.rto == before.t1v,
+                                "RC 0, time \(String(describing: elapsed)), adaptive \(adaptive): changed")
+                    }
+                } else if expired {
+                    v.check(timers.srt == before.srt, "a retry changed SRT")
+                    v.check(abs(timers.rto - (Double(rc) * 0.25 + 2 * before.srt)) < 1e-9 * max(1, timers.rto),
+                            "retry \(rc): T1V \(timers.rto)")
+                } else {
+                    v.check(timers.srt == before.srt && timers.rto == before.t1v, "an ack after retries changed T1")
+                }
+                v.check(timers.srt.isFinite && timers.srt > 0 && timers.rto.isFinite && timers.rto > 0,
+                        "SRT \(timers.srt), T1V \(timers.rto)")
+                if !adaptive { v.check(timers.srt == initial, "SRT learned with adaptive off") }
+            }
+            timers.reset()
+            v.check(timers.rto == initial && timers.srt == initial && timers.srtt == nil, "reset")
         }
     }
 
     // T3
-    func testScheduledT1RespectsFloorRTOAndSwitch() {
+    func testScheduledT1IsExactlyT1V() {
         checkProperty("T3.scheduledT1", cases: 400) { rng, v in
             let scheduler = RecordingTimerScheduler()
             let manager = AX25SessionManager(localCallsign: local, clock: scheduler)
-            let frack: Double? = rng.chance(0.15) ? nil : rng.pick([0.5, 1, 2, 3, 4, 6, 10])
-            let config = AX25SessionConfig(
-                windowSize: rng.int(in: 1...7),
-                maxRetries: 10,
-                rtoMin: rng.pick([nil, 0.5, 1, 3]),
-                rtoMax: rng.pick([nil, 8, 30, 60]),
-                initialRto: frack,
-                adaptiveTimeout: rng.chance(0.8))
-            manager.defaultConfig = config
-            manager.useDelayedAckT1 = rng.chance(0.5)
+            let t1: Double? = rng.chance(0.15) ? nil : rng.pick([0.5, 1, 2, 3, 4, 6, 10])
+            manager.defaultConfig = AX25SessionConfig(windowSize: rng.int(in: 1...7), maxRetries: 10,
+                                                      initialRto: t1, adaptiveTimeout: rng.chance(0.8))
+            if rng.chance(0.5) {
+                let ours = rng.double(in: 0...4), peer = rng.double(in: 0...1)
+                manager.keyUpSeconds = { _ in (ours, peer) }
+            }
             let digis = rng.int(in: 0...8)
             let path = DigiPath((0..<digis).map { AX25Address(call: "DIGI\($0)", ssid: 0) })
 
@@ -103,8 +138,8 @@ final class AX25T1TimerPropertyTests: XCTestCase {
                 return
             }
             for _ in 0..<rng.int(in: 0...12) {
-                session.timers.updateRTT(sample: rng.pick([rng.double(in: 0.05...5), rng.double(in: 5...90),
-                                                          .nan, .infinity, -1, 0]))
+                session.timers.selectT1(retryCount: rng.pick([0, 0, 1, 3]), t1Expired: rng.chance(0.5),
+                                        t1Elapsed: rng.pick([rng.double(in: 0.05...5), rng.double(in: 5...90), .nan, -1]))
             }
             for _ in 0..<rng.int(in: 0...7) {
                 _ = manager.sendData(rng.bytes(rng.int(in: 1...256)), to: peer, path: path)
@@ -114,72 +149,16 @@ final class AX25T1TimerPropertyTests: XCTestCase {
             guard session.state == .connected else { return }
 
             scheduler.clearDelays()
+            let untilOnAir = max(0, session.onAirUntil - scheduler.currentTime)
             manager.startT1Timer(for: session)
-            guard let t1 = scheduler.delays.first else {
+            guard let scheduled = scheduler.delays.first else {
                 v.record("startT1Timer scheduled nothing")
                 return
             }
-            let rto = session.timers.rto
-            let floor = AX25SessionManager.frackFloor(frack: frack ?? 4.0, digipeaters: digis)
-            let polled = session.sendBuffer.values.contains { ($0.controlByte ?? 0) & 0x10 != 0 }
-            let plainCase = session.sendBuffer.isEmpty || session.stateMachine.retryCount > 0
-                || session.hasRetransmittedOutstanding || polled
-
-            v.check(t1 >= floor, "T1 \(t1) below the FRACK floor \(floor) (digis \(digis))")
-            v.check(t1 >= rto, "T1 \(t1) below the adaptive RTO \(rto)")
-            v.check(t1.isFinite && t1 <= max(60, floor), "T1 \(t1) unbounded (floor \(floor))")
-            if !manager.useDelayedAckT1 {
-                v.check(t1 == max(rto, floor), "switch off: T1 \(t1) != max(RTO \(rto), floor \(floor))")
-            } else if plainCase {
-                v.check(t1 == max(rto, floor), "retry, retransmission or poll outstanding: T1 \(t1) != "
-                        + "max(RTO \(rto), floor \(floor)) (retries \(session.stateMachine.retryCount), polled \(polled))")
-            }
-        }
-    }
-
-    // T4
-    func testRTOStaysClampedWhateverTheSamples() {
-        checkProperty("T4.timers", cases: 1000) { rng, v in
-            let rtoMin = rng.pick([-1, 0, 0.1, 0.5, 1, 3, 10, .nan])
-            let rtoMax = rng.pick([-5, 0.2, 2, 8, 30, 60, 500, .nan, .infinity])
-            let initial = rng.pick([-1, 0.1, 1, 4, 30, 1000, .nan])
-            let adaptive = rng.chance(0.8)
-            var timers = AX25SessionTimers(rtoMin: rtoMin, rtoMax: rtoMax, initialRto: initial,
-                                           adaptiveTimeout: adaptive, t2AckDelay: rng.pick([0, 0.05, 2, 10, .nan]))
-            // The documented clamps (AX25SessionTimers.init).
-            let lo = max(0.5, rtoMin.isNaN ? 0.5 : rtoMin)
-            let hi = max(lo, min(60.0, rtoMax.isNaN ? 60.0 : rtoMax))
-            let initialRTO = timers.rto
-            v.check(timers.rto.isFinite && timers.rto >= lo && timers.rto <= hi,
-                    "initial RTO \(timers.rto) outside [\(lo), \(hi)] (min \(rtoMin), max \(rtoMax), initial \(initial))")
-            v.check(timers.t2AckDelay.isFinite && timers.t2AckDelay >= 0.1 && timers.t2AckDelay <= max(0.1, lo * 2 / 3),
-                    "T2 \(timers.t2AckDelay) outside [0.1, 2/3 rtoMin]")
-
-            for _ in 0..<rng.int(in: 1...60) {
-                let before = (srtt: timers.srtt, rttvar: timers.rttvar, rto: timers.rto)
-                if rng.chance(0.2) {
-                    timers.backoff()
-                    if adaptive {
-                        v.check(timers.rto == min(before.rto * 2, hi), "backoff \(before.rto) -> \(timers.rto)")
-                    }
-                } else {
-                    let sample = rng.pick([rng.double(in: 0.001...10), rng.double(in: 10...10_000),
-                                           .nan, .infinity, -.infinity, -rng.double(in: 0...10), 0,
-                                           .leastNonzeroMagnitude, .greatestFiniteMagnitude])
-                    timers.updateRTT(sample: sample)
-                    if !(sample > 0 && sample.isFinite) || !adaptive {
-                        v.check(timers.srtt == before.srtt && timers.rttvar == before.rttvar && timers.rto == before.rto,
-                                "sample \(sample) (adaptive \(adaptive)) changed the estimator")
-                    }
-                }
-                v.check(timers.rto.isFinite && timers.rto >= lo && timers.rto <= hi,
-                        "RTO \(timers.rto) outside [\(lo), \(hi)]")
-                if let srtt = timers.srtt { v.check(srtt.isFinite && srtt > 0, "SRTT \(srtt)") }
-                v.check(timers.rttvar.isFinite && timers.rttvar >= 0, "RTTVAR \(timers.rttvar)")
-                if !adaptive { v.check(timers.rto == initialRTO, "RTO moved with adaptive off") }
-            }
-            timers.reset()
-            v.check(timers.rto == initialRTO && timers.srtt == nil, "reset did not restore the initial RTO")
+            // T1V, from when our frames have left the radio.
+            v.check(abs(scheduled - (untilOnAir + session.timers.rto)) < 1e-9,
+                    "T1 \(scheduled) != \(untilOnAir) until on air + T1V \(session.timers.rto)")
+            v.check(scheduled.isFinite && scheduled > 0, "T1 \(scheduled)")
         }
     }
 
@@ -188,7 +167,7 @@ final class AX25T1TimerPropertyTests: XCTestCase {
         checkProperty("T5.rttSampleSource", cases: 400) { rng, v in
             let clock = AX25VirtualClock()
             let manager = AX25SessionManager(localCallsign: local, clock: clock)
-            manager.defaultConfig = AX25SessionConfig(windowSize: rng.int(in: 1...7), rtoMin: 0.5, rtoMax: 60, initialRto: 4)
+            manager.defaultConfig = AX25SessionConfig(windowSize: rng.int(in: 1...7), initialRto: 4)
             _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
             guard let session = manager.existingSession(for: peer) else { return }
             var peerVS = 0
@@ -220,7 +199,7 @@ final class AX25T1TimerPropertyTests: XCTestCase {
                     if session.state == .connected {
                         v.check(session.timers.srtt == before.srtt,
                                 "RR(\(stale)) acknowledging nothing new (V(A)=\(before.va), V(S)=\(session.vs)) "
-                                + "changed SRTT \(String(describing: before.srtt)) -> \(String(describing: session.timers.srtt))")
+                                + "changed SRT \(String(describing: before.srtt)) -> \(String(describing: session.timers.srtt))")
                     }
                 default:
                     // A REJ that acknowledges what is outstanding.

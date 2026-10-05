@@ -92,7 +92,7 @@ private struct AdaptivePopoverContent: View {
                 metricCard(label: "K", info: adaptive?.live?.explanation ?? "Window size: outstanding frames allowed. Earned +1 per confirmed 10-clean-frame streak, halved on retransmission.", value: adaptive.map { "\($0.displayK)" } ?? "—")
                 metricCard(label: "P", info: adaptive?.live?.explanation ?? "Packet size in bytes. Steps 64 → 128 → 192 → 256 on sustained stability; drops immediately on loss.", value: adaptive.map { "\($0.displayP)" } ?? "—")
                 metricCard(label: "N2", info: "Maximum retries before fail.", value: adaptive.map { "\($0.n2)" } ?? "—")
-                metricCard(label: "RTO", info: "Current retransmission timeout (2 × smoothed RTT, clamped). Also seeds the connect timer for this route.", value: adaptive.map { formatSeconds($0.currentRto) } ?? "—")
+                metricCard(label: "RTO", info: "Current retransmission timeout (2 × smoothed RTT). Also seeds the connect timer for this route.", value: adaptive.map { formatSeconds($0.currentRto) } ?? "—")
             }
 
             if let adaptive {

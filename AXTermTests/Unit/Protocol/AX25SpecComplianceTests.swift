@@ -1141,14 +1141,12 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertEqual(sm.retryCount, 0, "the F=1 answer proves the link; the counter must clear")
     }
 
-    /// §6.7: Timer backoff doubles RTO
-    func testTimerBackoffDoublesRTO() {
-        var timers = AX25SessionTimers()
-        let initial = timers.rto
-
-        timers.backoff()
-
-        XCTAssertEqual(timers.rto, min(initial * 2, 30.0), accuracy: 0.01)
+    /// Appendix C, Figure C4.7b: after an expired T1 with RC ≠ 0,
+    /// T1V ← RC·0.25 s + 2·SRT. There is no doubling backoff.
+    func testSelectT1AfterRetriesIsLinear() {
+        var timers = AX25SessionTimers(initialSRT: 3.0)
+        timers.selectT1(retryCount: 3, t1Expired: true, t1Elapsed: nil)
+        XCTAssertEqual(timers.rto, 0.75 + 6.0, accuracy: 1e-9)
     }
 
     // MARK: - Section 11: Window Management (AX.25 §4.3.2.1)

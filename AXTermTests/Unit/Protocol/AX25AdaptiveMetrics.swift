@@ -70,7 +70,7 @@ struct AdaptiveSnapshot: Sendable {
         AdaptiveSnapshot(
             time: time,
             srtt: session.timers.srtt,
-            rttvar: session.timers.rttvar,
+            rttvar: 0,   // the spec's SRT carries no variance
             rto: session.timers.rto,
             vs: session.vs,
             vr: session.vr,
@@ -536,9 +536,9 @@ struct AdaptiveInvariantChecker {
             }
         }
 
-        if session.timers.rttvar < 0 || session.timers.rttvar.isNaN {
-            violations.append(.init(parameter: "rttvar", value: session.timers.rttvar,
-                bound: ">= 0, not NaN", context: context))
+        if !(session.timers.rto.isFinite && session.timers.rto > 0) {
+            violations.append(.init(parameter: "T1V", value: session.timers.rto,
+                bound: "> 0, finite", context: context))
         }
 
         let paclen = session.stateMachine.config.paclen

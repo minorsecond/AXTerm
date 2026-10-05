@@ -391,9 +391,13 @@ final class AdaptiveTestHarness {
         case "s":
             let info = frame.displayInfo ?? ""
             if info.hasPrefix("RR") || info.hasPrefix("rr") {
+                // The frame's own P/F bit and command flag: an idle poll must
+                // reach the peer as a poll, or it is never answered.
                 if let r = bob.handleInboundRR(
                     from: from, path: path, radio: radio,
-                    nr: frame.nr ?? 0, isPoll: false
+                    nr: frame.nr ?? 0,
+                    pf: (frame.controlByte ?? 0) & 0x10 != 0,
+                    isCommand: frame.isCommand ?? false
                 ) {
                     responses.append(r)
                 }
@@ -450,9 +454,13 @@ final class AdaptiveTestHarness {
         case "s":
             let info = frame.displayInfo ?? ""
             if info.hasPrefix("RR") || info.hasPrefix("rr") {
+                // The frame's own P/F bit and command flag: an idle poll must
+                // reach the peer as a poll, or it is never answered.
                 if let r = alice.handleInboundRR(
                     from: from, path: path, radio: radio,
-                    nr: frame.nr ?? 0, isPoll: false
+                    nr: frame.nr ?? 0,
+                    pf: (frame.controlByte ?? 0) & 0x10 != 0,
+                    isCommand: frame.isCommand ?? false
                 ) {
                     responses.append(r)
                 }

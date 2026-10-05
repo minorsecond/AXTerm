@@ -108,6 +108,8 @@ final class TransferStation {
                                      t2AckDelay: 0.1, adaptiveTimeout: false)
         coordinator.sessionManager.getConfigForDestination = { _, _, _ in fast }
         coordinator.sessionManager.defaultConfig = fast
+        // No radio key-up to floor T1 with (spec 7.3): the link here is in memory.
+        coordinator.sessionManager.keyUpSeconds = nil
         coordinator.adaptiveTransmissionEnabled = false
         coordinator.transferWatchdogInterval = 0.2
         coordinator.yappResponseTimeout = 10

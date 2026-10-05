@@ -191,28 +191,20 @@ final class AX25SessionTests: XCTestCase {
     func testSessionTimerConfiguration() {
         var timers = AX25SessionTimers()
 
-        // Initial RTO should be default (4.0 per AX25SessionTimers)
-        XCTAssertEqual(timers.rto, 4.0, accuracy: 0.1)
+        // T1V starts at the initial SRT, 3 s by default (the XID default).
+        XCTAssertEqual(timers.rto, 3.0, accuracy: 1e-9)
 
-        // Update with RTT sample
-        timers.updateRTT(sample: 1.5)
-        // First sample: srtt=1.5, rttvar=0.75, rto=1.5+4*0.75=4.5
-        XCTAssertEqual(timers.srtt!, 1.5, accuracy: 0.01)
-        XCTAssertEqual(timers.rttvar, 0.75, accuracy: 0.01)
-
-        // RTO should be clamped between min and max
-        XCTAssertGreaterThanOrEqual(timers.rto, 1.0)  // min
-        XCTAssertLessThanOrEqual(timers.rto, 30.0)    // max
+        // Select T1 with RC = 0: SRT ← 7/8·SRT + 1/8·1.5, T1V ← 2·SRT.
+        timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 1.5)
+        XCTAssertEqual(timers.srtt!, 3.0 * 7 / 8 + 1.5 / 8, accuracy: 1e-9)
+        XCTAssertEqual(timers.rto, 2 * timers.srtt!, accuracy: 1e-9)
     }
 
-    func testSessionTimerBackoff() {
+    func testSessionTimerRetry() {
         var timers = AX25SessionTimers()
-
-        let initialRTO = timers.rto  // 4.0 default
-        timers.backoff()
-
-        // Backoff should double the RTO (clamped to max 30)
-        XCTAssertEqual(timers.rto, min(initialRTO * 2, 30.0), accuracy: 0.1)
+        // A connect retry: T1V ← RC·0.25 + 2·SRT. Nothing doubles.
+        timers.selectT1(retryCount: 1, t1Expired: true, t1Elapsed: nil)
+        XCTAssertEqual(timers.rto, 0.25 + 2 * 3.0, accuracy: 1e-9)
     }
 
     func testSendDataUsesConnectedSessionWhenPathDiffers() {
@@ -358,16 +350,17 @@ final class AX25SessionTests: XCTestCase {
 
     /// The hop-scaled seed must respect rtoMax, and must only be a seed: the first
     /// RTT sample in adaptive mode replaces it with the measured estimate.
-    func testHopScaledInitialRTOClampsAndYieldsToMeasuredRTT() {
+    func testHopScaledInitialRTOAndSelectT1() {
         let local = AX25Address(call: "K0EPI", ssid: 7)
         let remote = AX25Address(call: "KB5YZB", ssid: 7)
 
-        let clamped = AX25Session(
+        // §6.7.1.1's repeater adjustment, FRACK × (2m + 1): nothing clamps it.
+        let threeHops = AX25Session(
             localAddress: local, remoteAddress: remote,
             path: DigiPath.from(["DRLNOD", "W0ARP-7", "WIDE2-1"]),
-            config: AX25SessionConfig(rtoMax: 30.0, initialRto: 8.0, adaptiveTimeout: false)
+            config: AX25SessionConfig(initialRto: 8.0, adaptiveTimeout: false)
         )
-        XCTAssertEqual(clamped.timers.rto, 30.0, accuracy: 0.01, "8 s × 7 hops multiplier clamps to rtoMax")
+        XCTAssertEqual(threeHops.timers.rto, 56.0, accuracy: 0.01, "8 s × 7 for three digipeaters")
 
         var adaptive = AX25Session(
             localAddress: local, remoteAddress: remote,
@@ -375,9 +368,9 @@ final class AX25SessionTests: XCTestCase {
             config: AX25SessionConfig(initialRto: 4.0, adaptiveTimeout: true)
         ).timers
         XCTAssertEqual(adaptive.rto, 12.0, accuracy: 0.01)
-        adaptive.updateRTT(sample: 2.0)
-        // First sample: srtt=2, rttvar=1, rto=2+4·1=6 — the seed is fully replaced.
-        XCTAssertEqual(adaptive.rto, 6.0, accuracy: 0.01, "measured RTT replaces the hop-scaled seed")
+        adaptive.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 2.0)
+        // Select T1 (spec 7.3): SRT ← 7/8·12 + 1/8·2 = 10.75, T1V ← 2·SRT.
+        XCTAssertEqual(adaptive.rto, 21.5, accuracy: 0.01, "a sample folds into the seed at 1/8")
     }
 
     func testSendDataQueuesWhileReceiveSequenceGapIsUnresolved() {
@@ -1691,9 +1684,9 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(responses.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
         XCTAssertEqual(session.stateMachine.retryCount, 0, "a peer's poll is not a retransmission of ours")
 
-        // T1 was started at 0 s and still runs out at 4 s (then the 200 ms
-        // grace before the T1 action).
-        clock.advance(by: 1.25)
+        // T1 started once the I-frame was out and still runs out on that
+        // deadline (then the 200 ms grace before the T1 action).
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         XCTAssertTrue(timerDrivenFrames.contains { $0.frameType == "i" || $0.isCommand == true },
                       "the poll must not push T1 out; recovery runs on the original deadline")
         XCTAssertEqual(session.outstandingCount, 1)

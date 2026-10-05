@@ -39,6 +39,20 @@ nonisolated struct ModemTelemetry: Equatable, Sendable {
     var rxOverruns: UInt64 = 0
     var channelBusy = false
     var waitingForChannel = false
+    /// How long the radio takes to confirm PTT after it is asked to key,
+    /// smoothed over transmissions (1/8 per sample, as the AX.25 2.2 SDL
+    /// smooths SRT); nil before the first one. Through Warbler to an IC-705
+    /// it has taken as long as 3.6 s.
+    var pttConfirmSeconds: Double?
+    /// The TX delay this modem sends before each frame, seconds.
+    var txDelaySeconds: Double = 0
+
+    /// How long from asking to key until a frame starts on the air: PTT
+    /// confirmation, the radio's audio buffer, and the TX delay. Floors a
+    /// new link's initial SRT (AX.25 2.2 §6.7.1.1, spec §7.3).
+    var keyUpSeconds: Double {
+        (pttConfirmSeconds ?? 0) + latency.outputSeconds + txDelaySeconds
+    }
 
     // Audio.
     var audioFormat: ModemAudioFormat?

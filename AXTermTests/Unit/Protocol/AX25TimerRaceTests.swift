@@ -76,7 +76,7 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertEqual(retransmitFrames.count, 0, "No retransmits before T1 fires")
 
         // Advance past RTO (2s) + grace period (0.2s)
-        clock.advance(by: 2.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         print("[TEST] After advance: retransmitCount=\(retransmitFrames.count) retryCount=\(session.stateMachine.retryCount) outstanding=\(session.outstandingCount) clockTime=\(clock.currentTime)")
 
         // First T1 fires: immediately retransmit the outstanding I-frame with P=1
@@ -87,7 +87,7 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertEqual(session.outstandingCount, 1, "Frame should still be outstanding until RR received")
 
         retransmitFrames.removeAll()
-        clock.advance(by: session.timers.rto + 0.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         let secondIFramesRetransmitted = retransmitFrames.filter { $0.frameType == "i" }.count
         XCTAssertEqual(secondIFramesRetransmitted, 1, "Second consecutive T1 should also retransmit 1 I-frame")
     }
@@ -150,7 +150,7 @@ final class AX25TimerRaceTests: XCTestCase {
         manager.onSendFrame = { txFrames.append($0) }
 
         _ = manager.sendData(Data("HELP\r".utf8), to: peer, path: path, radio: .primary)
-        clock.advance(by: 1.05)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime) - 0.16)   // T1 fired, resend pending
         XCTAssertNotNil(session.t1PendingRetransmitTask)
 
         manager.handleInboundDM(from: peer, path: path, radio: .primary)
@@ -161,54 +161,40 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertNil(session.t1PendingRetransmitTask)
     }
 
-    // MARK: - T1: Exponential Backoff
+    // MARK: - T1: No backoff on a connected link
 
-    /// Each T1 timeout doubles the RTO (exponential backoff).
-    func testT1ExponentialBackoff() {
+    /// AX.25 2.2 Figure C4.5c: Timer Recovery's T1 expiry does not call
+    /// Select T1, so each retry on a connected link waits the same T1V.
+    /// (Until 2026-10-05 each timeout doubled the RTO.)
+    func testConnectedRetriesKeepT1V() {
         let (manager, clock) = makeManager(rto: 1.0)
         let session = connect(manager)
-
         _ = manager.sendData(Data("BackoffTest".utf8), to: peer, path: path, radio: .primary)
+        let t1v = session.timers.rto
 
-        let rto1 = session.timers.rto
-        XCTAssertEqual(rto1, 1.0, accuracy: 0.01, "Initial RTO should be 1.0s")
-
-        // Trigger first timeout
-        clock.advance(by: rto1 + 0.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         XCTAssertEqual(session.stateMachine.retryCount, 1)
+        XCTAssertEqual(session.timers.rto, t1v)
 
-        let rto2 = session.timers.rto
-        XCTAssertGreaterThan(rto2, rto1, "RTO must increase after first timeout (backoff)")
-
-        // Trigger second timeout
-        clock.advance(by: rto2 + 0.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         XCTAssertEqual(session.stateMachine.retryCount, 2)
-
-        let rto3 = session.timers.rto
-        XCTAssertGreaterThan(rto3, rto2, "RTO must keep increasing (exponential backoff)")
+        XCTAssertEqual(session.timers.rto, t1v)
     }
 
-    /// RTO is bounded by rtoMax: never grows unboundedly.
-    func testT1BackoffBoundedByMax() {
-        let rtoMax: TimeInterval = 4.0
+    /// Nothing grows over many retries either: there is nothing to bound.
+    func testT1VStaysPutOverManyRetries() {
         let clock   = AX25VirtualClock()
-        let config  = AX25SessionConfig(maxRetries: 10, rtoMin: 1.0, rtoMax: rtoMax, initialRto: 1.0)
         let manager = AX25SessionManager(localCallsign: local, clock: clock)
-        manager.defaultConfig = config
-
+        manager.defaultConfig = AX25SessionConfig(maxRetries: 10, initialRto: 1.0)
         _ = manager.connect(to: peer, path: path, radio: .primary)
         manager.handleInboundUA(from: peer, path: path, radio: .primary)
         let session = manager.session(for: peer, path: path, radio: .primary)
         _ = manager.sendData(Data("BoundedBackoff".utf8), to: peer, path: path, radio: .primary)
+        let t1v = session.timers.rto
 
-        // Fire many timeouts; RTO must never exceed rtoMax
         for _ in 0..<8 {
-            let rto = session.timers.rto
-            clock.advance(by: rto + 0.21)
-            XCTAssertLessThanOrEqual(
-                session.timers.rto, rtoMax + 0.001,
-                "RTO must never exceed rtoMax=\(rtoMax)"
-            )
+            clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
+            XCTAssertEqual(session.timers.rto, t1v)
         }
     }
 
@@ -224,7 +210,7 @@ final class AX25TimerRaceTests: XCTestCase {
 
         for attempt in 1...n2 {
             let rto = session.timers.rto
-            clock.advance(by: rto + 0.21)
+            clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
             if attempt < n2 {
                 XCTAssertEqual(session.state, .connected,
                     "Session must stay connected after retry \(attempt) (< N2=\(n2))")
@@ -233,7 +219,7 @@ final class AX25TimerRaceTests: XCTestCase {
 
         // One more advance — this is the N2+1-th timeout
         let rto = session.timers.rto
-        clock.advance(by: rto + 0.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
 
         XCTAssertEqual(session.state, .error,
             "Session must enter error state after exceeding N2=\(n2) retries")
@@ -316,7 +302,7 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertEqual(session.outstandingCount, 2)
 
         // Advance past RTO + grace — first T1 fires and immediately retransmits both outstanding frames.
-        clock.advance(by: 2.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         XCTAssertEqual(session.stateMachine.retryCount, 1)
         let iFramesAfterFirst = retransmitFrames.filter { $0.frameType == "i" }
         XCTAssertEqual(iFramesAfterFirst.count, 2, "First T1 should immediately retransmit both unacked I-frames")
@@ -328,7 +314,7 @@ final class AX25TimerRaceTests: XCTestCase {
 
         // Advance past another T1 cycle for FrameB: immediately retransmits FrameB.
         let iCountBeforeSecondTimeout = retransmitFrames.filter { $0.frameType == "i" }.count
-        clock.advance(by: session.timers.rto + 0.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         let newIFrames = retransmitFrames.filter { $0.frameType == "i" }.dropFirst(iCountBeforeSecondTimeout)
         XCTAssertEqual(newIFrames.count, 1, "Only one I-frame (FrameB) should be retransmitted")
 
@@ -376,7 +362,7 @@ final class AX25TimerRaceTests: XCTestCase {
         // Fire N2+1 T1 timeouts — should eventually give up
         for _ in 0..<(n2 + 1) {
             let rto = session.timers.rto
-            clock.advance(by: rto + 0.21)
+            clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         }
 
         XCTAssertEqual(session.state, .error, "Session must enter error state after SABM retry exhaustion")
@@ -464,7 +450,7 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertEqual(session.state, .connected)
 
         // The connect-phase T1 closure now delivers anyway — it must be swallowed.
-        clock.fireInFlight(matchingDelay: 2.0)
+        clock.fireInFlight(within: 2.0..<3.0)
         XCTAssertEqual(session.stateMachine.retryCount, 0,
                        "stale connect-phase T1 must not count as a retry")
         XCTAssertTrue(timerDrivenFrames.isEmpty,
@@ -475,7 +461,7 @@ final class AX25TimerRaceTests: XCTestCase {
         _ = manager.handleInboundRRFrames(from: peer, path: path, radio: .primary,
                                           nr: 1, pf: false, isCommand: false)
         XCTAssertEqual(session.outstandingCount, 0)
-        clock.fireInFlight(matchingDelay: 2.0)
+        clock.fireInFlight(within: 2.0..<3.0)
         XCTAssertEqual(session.stateMachine.retryCount, 0,
                        "stale data-phase T1 must not count as a retry")
         XCTAssertTrue(timerDrivenFrames.isEmpty,
@@ -485,7 +471,7 @@ final class AX25TimerRaceTests: XCTestCase {
 
         // Positive control: a T1 that was NOT stopped must still work end to end.
         _ = manager.sendData(Data("World".utf8), to: peer, path: path, radio: .primary)
-        clock.fireInFlight(matchingDelay: 2.0)   // live T1 fires, schedules grace
+        clock.fireInFlight(within: 2.0..<3.0)   // live T1 fires, schedules grace
         clock.fireInFlight(matchingDelay: 0.2)   // grace period elapses → retransmit
         XCTAssertEqual(session.stateMachine.retryCount, 1,
                        "a legitimate T1 fire must still be processed")
@@ -514,6 +500,15 @@ private final class RacyScheduler: AX25TimerScheduler {
     func fireInFlight(matchingDelay: TimeInterval) {
         let inFlight = pending.filter { abs($0.delay - matchingDelay) < 0.001 }
         pending.removeAll { abs($0.delay - matchingDelay) < 0.001 }
+        for entry in inFlight { entry.action() }
+    }
+
+    /// Deliver every held closure whose delay falls in `range`. T1 runs for
+    /// T1V from when our frame has left the radio, so its delay is T1V plus
+    /// that frame's airtime (spec 7.3).
+    func fireInFlight(within range: Range<TimeInterval>) {
+        let inFlight = pending.filter { range.contains($0.delay) }
+        pending.removeAll { range.contains($0.delay) }
         for entry in inFlight { entry.action() }
     }
 

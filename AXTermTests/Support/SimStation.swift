@@ -133,7 +133,6 @@ final class SimStation {
     let node: Int
     unowned let net: StressNet
     private let configSource: SimConfigSource
-    let useDelayedAckT1: Bool
 
     private(set) var manager: AX25SessionManager
     /// Every session any of this station's managers created, for totals.
@@ -190,13 +189,12 @@ final class SimStation {
     private var t3Jitter: PropertyRNG
 
     init(net: StressNet, name: String, address: AX25Address, node: Int,
-         config: SimConfigSource, useDelayedAckT1: Bool = false) {
+         config: SimConfigSource) {
         self.net = net
         self.name = name
         self.address = address
         self.node = node
         self.configSource = config
-        self.useDelayedAckT1 = useDelayedAckT1
         self.t3Jitter = PropertyRNG(seed: net.seed &+ 0x9E37_79B9_7F4A_7C15 &* UInt64(node + 1))
         self.manager = AX25SessionManager(localCallsign: address, clock: net.clock)
         wire(manager)
@@ -206,7 +204,6 @@ final class SimStation {
     // MARK: Manager wiring
 
     private func wire(_ manager: AX25SessionManager) {
-        manager.useDelayedAckT1 = useDelayedAckT1
         manager.t3JitterDraw = { [weak self] in
             guard let self else { return 0.5 }
             return Double(self.t3Jitter.next() >> 11) / Double(1 << 53)

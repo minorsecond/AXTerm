@@ -214,7 +214,6 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
             if dead.state == .error { break }
         }
         XCTAssertEqual(dead.state, .error, "precondition: N2 exhausted the link")
-        XCTAssertGreaterThan(dead.timers.rto, 4.0, "precondition: the dead session's RTO backed off")
 
         let sabm = manager.connect(to: remote, path: path, radio: .primary)
         XCTAssertNotNil(sabm, "reconnect after failure must be possible")
@@ -222,8 +221,8 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         let fresh = manager.session(for: remote, path: path, radio: .primary)
         XCTAssertNotIdentical(fresh, dead, "the reconnect gets a fresh session, not the carcass")
         XCTAssertEqual(fresh.state, .connecting)
-        XCTAssertEqual(fresh.timers.rto, 4.0, accuracy: 0.01,
-                       "fresh timers seed from config, not the dead session's backed-off RTO")
+        XCTAssertEqual(fresh.timers.rto, 3.0, accuracy: 0.01,
+                       "fresh timers seed from config (3 s, spec 7.3), not the dead session's")
         XCTAssertEqual(fresh.statistics.framesSent, 0, "fresh evidence counters")
     }
 

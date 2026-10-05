@@ -230,12 +230,12 @@ final class AdaptiveInvariantTests: XCTestCase {
 
     // I-7: NaN RTT sample guard — feeding NaN directly to updateRTT preserves prior SRTT.
     func testNaNRTTSampleRejected() {
-        var timers = AX25SessionTimers(rtoMin: 1.0, rtoMax: 30.0, initialRto: 2.0)
-        timers.updateRTT(sample: 1.5)
+        var timers = AX25SessionTimers(initialSRT: 2.0)
+        timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 1.5)
         let srttBefore = timers.srtt
 
         // Now try to inject NaN
-        timers.updateRTT(sample: Double.nan)
+        timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: Double.nan)
 
         XCTAssertEqual(timers.srtt, srttBefore,
             "NaN RTT sample must be silently discarded; SRTT must be unchanged")
@@ -244,19 +244,19 @@ final class AdaptiveInvariantTests: XCTestCase {
 
     // I-8: Negative RTT sample is rejected.
     func testNegativeRTTSampleRejected() {
-        var timers = AX25SessionTimers(rtoMin: 1.0, rtoMax: 30.0, initialRto: 2.0)
-        timers.updateRTT(sample: 1.5)
+        var timers = AX25SessionTimers(initialSRT: 2.0)
+        timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 1.5)
         let srttBefore = timers.srtt
 
-        timers.updateRTT(sample: -0.5)
+        timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: -0.5)
         XCTAssertEqual(timers.srtt, srttBefore,
             "Negative RTT sample must not update SRTT")
     }
 
     // I-9: Infinity RTT sample is rejected.
     func testInfiniteRTTSampleRejected() {
-        var timers = AX25SessionTimers(rtoMin: 1.0, rtoMax: 30.0, initialRto: 2.0)
-        timers.updateRTT(sample: Double.infinity)
+        var timers = AX25SessionTimers(initialSRT: 2.0)
+        timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: Double.infinity)
 
         XCTAssertNil(timers.srtt, "SRTT must remain nil after Inf sample as first input")
         XCTAssertFalse(timers.rto.isInfinite, "RTO must not become Infinite")
@@ -264,8 +264,8 @@ final class AdaptiveInvariantTests: XCTestCase {
 
     // I-10: Zero RTT sample is rejected (physically impossible).
     func testZeroRTTSampleRejected() {
-        var timers = AX25SessionTimers(rtoMin: 1.0, rtoMax: 30.0, initialRto: 2.0)
-        timers.updateRTT(sample: 0.0)
+        var timers = AX25SessionTimers(initialSRT: 2.0)
+        timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 0.0)
 
         XCTAssertNil(timers.srtt, "Zero RTT sample must not initialize SRTT")
     }
@@ -663,7 +663,7 @@ final class FairnessTests: XCTestCase {
         let badSession  = alice.session(for: peerBad,  path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
         // Inject good RTT for good session, no RTT for bad session
-        goodSession.timers.updateRTT(sample: 0.2)
+        goodSession.timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 0.2)
 
         XCTAssertNotNil(goodSession.timers.srtt,  "Good session should have SRTT after RTT injection")
         XCTAssertNil(badSession.timers.srtt,       "Bad session should have independent, untouched SRTT")
@@ -724,9 +724,9 @@ final class FairnessTests: XCTestCase {
         let noisySession = alice.session(for: noisy, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
         // Feed clean session with good RTT samples
-        cleanSession.timers.updateRTT(sample: 0.15)
-        cleanSession.timers.updateRTT(sample: 0.16)
-        cleanSession.timers.updateRTT(sample: 0.14)
+        cleanSession.timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 0.15)
+        cleanSession.timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 0.16)
+        cleanSession.timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 0.14)
 
         let cleanRTOBefore = cleanSession.timers.rto
 
@@ -766,8 +766,10 @@ final class AdaptiveRTOTests: XCTestCase {
         clock.advance(by: 0.001)   // t = 0.001
         _ = manager.sendData(Data("karn-test".utf8), to: peer, path: DigiPath(), radio: .primary)
 
-        // Simulate time passing and RR arriving (no T1 yet = no retransmit = non-Karn)
-        clock.advance(by: 0.2)     // t = 0.201: simulated RTT = ~0.2s
+        // Simulate time passing and RR arriving (no T1 yet = no retransmit = non-Karn).
+        // T1 starts once the frame is out (spec 7.3), after the SABM's and the
+        // frame's airtime, about 0.3 s here.
+        clock.advance(by: 0.5)
 
         XCTAssertNil(session.timers.srtt, "SRTT before RR: should be nil until first RTT sample")
 
@@ -797,7 +799,7 @@ final class AdaptiveRTOTests: XCTestCase {
         let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // Force T1 timeout + grace period → retransmit happens → marks NS as Karn-excluded
-        clock.advance(by: 0.5 + 0.21)   // 0.5s RTO + 0.21s grace
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         XCTAssertEqual(session.stateMachine.retryCount, 1,
             "Session should have retried once after T1 + grace")
 
@@ -830,14 +832,14 @@ final class AdaptiveRTOTests: XCTestCase {
 
         // Send and force retransmit
         _ = manager.sendData(Data("retx".utf8), to: peer, path: DigiPath(), radio: .primary)
-        clock.advance(by: 0.5 + 0.21)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         // Ack the retransmitted frame (Karn-excluded)
         _ = manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 1, isPoll: false)
         XCTAssertNil(session.timers.srtt, "SRTT should be nil after Karn-excluded ack")
 
         // Now send a fresh frame — this one has not been retransmitted
         _ = manager.sendData(Data("fresh".utf8), to: peer, path: DigiPath(), radio: .primary)
-        clock.advance(by: 0.1)   // Normal ACK delay
+        clock.advance(by: 0.4)   // the frame's 0.15 s airtime, then a normal ack delay
         _ = manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 2, isPoll: false)
 
         XCTAssertNotNil(session.timers.srtt,
@@ -1172,8 +1174,8 @@ final class PersistentLearningTests: XCTestCase {
         _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
         let s1 = manager.session(for: peer, path: DigiPath(), radio: .primary)
-        s1.timers.updateRTT(sample: 0.5)
-        s1.timers.updateRTT(sample: 0.6)
+        s1.timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 0.5)
+        s1.timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 0.6)
         XCTAssertNotNil(s1.timers.srtt)
 
         // Force disconnect
@@ -1225,16 +1227,16 @@ final class PersistentLearningTests: XCTestCase {
 
     // L-4: Stale RTT samples do not permanently poison the estimator.
     func testStaleRTTSamplesPurgeable() {
-        var timers = AX25SessionTimers(rtoMin: 1.0, rtoMax: 30.0, initialRto: 2.0)
+        var timers = AX25SessionTimers(initialSRT: 2.0)
 
         // Inject a very long RTT (simulates a stale, poisoned sample)
-        timers.updateRTT(sample: 25.0)
+        timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 25.0)
         let highRTO = timers.rto
         XCTAssertGreaterThan(highRTO, 5.0, "RTO should be high after large RTT sample")
 
         // After many good (low) samples, RTO should trend downward
         for _ in 0..<30 {
-            timers.updateRTT(sample: 0.3)
+            timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 0.3)
         }
 
         XCTAssertLessThan(timers.rto, highRTO,
@@ -1384,7 +1386,7 @@ final class AdaptiveFuzzingTests: XCTestCase {
     // F-5: updateRTT with random inputs never produces NaN/Inf.
     func testRTTUpdateRobustToArbitraryInputs() {
         var rng = RFRng(seed: 42)
-        var timers = AX25SessionTimers(rtoMin: 0.5, rtoMax: 60.0, initialRto: 2.0)
+        var timers = AX25SessionTimers(initialSRT: 2.0)
 
         // Random samples including extreme values
         let extremes: [Double] = [0, -1, -0.001, Double.infinity, -Double.infinity, Double.nan, 1e300, -1e300]
@@ -1396,7 +1398,7 @@ final class AdaptiveFuzzingTests: XCTestCase {
             } else {
                 sample = rng.uniform(0.001, 10.0)
             }
-            timers.updateRTT(sample: sample)
+            timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: sample)
             XCTAssertFalse(timers.rto.isNaN,      "RTO became NaN after sample=\(sample)")
             XCTAssertFalse(timers.rto.isInfinite, "RTO became Inf after sample=\(sample)")
         }
@@ -1568,11 +1570,11 @@ final class ThroughputBenchmarkTests: XCTestCase {
 
     // B-3: Jacobson/Karels convergence test — RTO after N samples is tighter than initial.
     func testJacobsonConvergence() {
-        var timers = AX25SessionTimers(rtoMin: 1.0, rtoMax: 30.0, initialRto: 10.0)
+        var timers = AX25SessionTimers(initialSRT: 10.0)
         let initialRTO = timers.rto
 
         // Feed 30 samples of ~0.5s RTT
-        for _ in 0..<30 { timers.updateRTT(sample: 0.5) }
+        for _ in 0..<30 { timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 0.5) }
 
         XCTAssertLessThan(timers.rto, initialRTO,
             "RTO should converge downward from initial=\(initialRTO) after 30 good RTT samples; got \(timers.rto)")
@@ -1742,8 +1744,8 @@ final class ArchitecturalDeterminismTests: XCTestCase {
         XCTAssertEqual(session.stateMachine.retryCount, 0,
             "No retries should occur before virtual clock advances")
 
-        // Advance past RTO + grace → T1 fires
-        clock.advance(by: 1.0 + 0.21)
+        // Advance past T1 + grace → T1 fires (T1 runs from when the frame is out)
+        clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
 
         XCTAssertEqual(session.stateMachine.retryCount, 1,
             "One retry should occur after clock advances past RTO+grace")
@@ -1768,9 +1770,11 @@ final class ArchitecturalDeterminismTests: XCTestCase {
         // SRTT should equal the virtual-clock RTT, not wall-clock time
         XCTAssertNotNil(session.timers.srtt,
             "SRTT must be set after SABM→UA round-trip")
+        // Select T1 folds the virtual 0.3 s (less the SABM's airtime) into
+        // the 2 s initial SRT at 1/8 (spec 7.3), with no wall-clock time in it.
         if let srtt = session.timers.srtt {
-            XCTAssertEqual(srtt, 0.3, accuracy: 0.01,
-                "SRTT must equal the virtual RTT (0.3s), not a wall-clock measurement")
+            XCTAssertEqual(srtt, 2.0 * 7 / 8 + (0.3 - 18.0 * 8 / 1200) / 8, accuracy: 0.001,
+                "SRTT must come from the virtual RTT (0.3 s), not a wall-clock measurement")
         }
     }
 
@@ -1793,7 +1797,7 @@ final class ArchitecturalDeterminismTests: XCTestCase {
         let sessionB = manager.session(for: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
         // Mutate session A's RTT
-        sessionA.timers.updateRTT(sample: 5.0)
+        sessionA.timers.selectT1(retryCount: 0, t1Expired: false, t1Elapsed: 5.0)
         let srttA = sessionA.timers.srtt
 
         // Session B must be unaffected

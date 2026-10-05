@@ -205,6 +205,9 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// is in flight (field capture 2026-08-22: "T1 timeout fired" 60 ms after
     /// "Stopping T1 timer", spending airtime on a needless RR poll).
     var t1Generation: UInt64 = 0
+    /// When T1 was last started (manager clock), nil while it is stopped.
+    /// Select T1 times the round trip from it (AX.25 2.2 Figure C4.7b).
+    var t1StartedAt: Double?
 
     /// T3 idle timer task
     var t3TimerTask: AnyCancellableTask?
@@ -293,24 +296,18 @@ nonisolated final class AX25Session: @unchecked Sendable {
         self.path = path
         self.radio = radio
         self.stateMachine = AX25StateMachine(config: config)
-        // §6.7.1.1: T1 "should be adjusted according to the number of repeaters" —
-        // each digi store-and-forwards the frame in both directions, so a T1 sized
-        // for a direct link fires mid-flight on a digipeated one. The spec gives no
-        // formula; this uses the TNC-2 FRACK convention, retry interval = FRACK ×
-        // (2m+1) for m digis. Only the pre-sample seed is scaled: in adaptive mode
-        // the first RTT sample (SABM→UA) replaces it entirely, and the timers'
-        // rtoMax clamp still bounds it.
-        //
-        // A learned full-path RTO for this exact route supersedes the scaled
-        // guess VERBATIM — it already includes the digipeater delay, so the
-        // hop multiplier must never apply on top (that would double-count the
-        // path). Strict either/or; no mixing of the two seed semantics.
-        let hopMultiplier = Double(2 * path.digis.count + 1)
-        let seed = config.learnedPathRto ?? (config.initialRto ?? 4.0) * hopMultiplier
+        // SRT's initial default (AX.25 2.2 §6.7.1.1, spec §7.3): the
+        // configured T1 scaled for digipeaters, never under twice a
+        // full-size frame's round trip. A learned SRT for this exact route
+        // supersedes it verbatim; it already includes the digipeater delay.
+        let initialSRT = config.learnedPathRto ?? AX25SessionTimers.initialSRT(
+            t1Setting: config.initialRto ?? AppSettingsStore.defaultAX25T1TimeoutSeconds,
+            digipeaters: path.digis.count,
+            maxFrameBytes: config.paclenCeiling,
+            keyUpSeconds: config.keyUpSeconds,
+            peerKeyUpSeconds: config.peerKeyUpSeconds)
         self.timers = AX25SessionTimers(
-            rtoMin: config.rtoMin ?? 1.0,
-            rtoMax: config.rtoMax ?? 30.0,
-            initialRto: seed,
+            initialSRT: initialSRT,
             adaptiveTimeout: config.adaptiveTimeout,
             t2AckDelay: config.t2AckDelay ?? 2.0
         )
@@ -395,6 +392,45 @@ nonisolated final class AX25Session: @unchecked Sendable {
         // Sending a frame fresh: it is no longer tainted by retransmit
         retransmittedNS.remove(ns)
         noteTurnaroundSent(ns: ns, at: time)
+        noteOnAir(ns: ns, at: time)
+    }
+
+    /// When the frames this link has handed to the radio are estimated to
+    /// have left it, manager clock. T1 starts then: the SDL starts T1 as
+    /// layer 2 transmits a frame, and through a KISS TNC or a sound modem the
+    /// frame leaves later, after the radio keys up and the frames ahead of
+    /// it, as a TNC-2 times FRACK from the end of its transmission (spec 7.3).
+    private(set) var onAirUntil: TimeInterval = 0
+
+    /// Account for a frame handed to the radio at `now`: it starts after the
+    /// radio keys up, or after what is already going out, and takes its
+    /// airtime at 1200 bit/s.
+    func noteHandedToRadio(bytes: Int, at now: TimeInterval) {
+        let keyUp = stateMachine.config.keyUpSeconds ?? 0
+        let begins = now >= onAirUntil ? now + keyUp : onAirUntil
+        onAirUntil = begins + Double(max(0, bytes)) * 8.0 / TxAdaptiveSettings.airtimeBitsPerSecond
+    }
+
+    /// The bytes an outbound frame puts on the air: address, control, PID,
+    /// information and FCS.
+    static func airBytes(_ frame: OutboundFrame) -> Int {
+        frame.payload.count + 18 + 7 * frame.path.digis.count
+    }
+
+    /// Hearing the peer proves our transmission has ended (the channel is
+    /// half duplex), so the estimate comes back to `now`. It is made at
+    /// 1200 bit/s and would otherwise run ahead without bound on a faster
+    /// link. Returns whether it moved.
+    @discardableResult
+    func capOnAir(at now: TimeInterval) -> Bool {
+        guard onAirUntil > now else { return false }
+        onAirUntil = now
+        return true
+    }
+
+    private func noteOnAir(ns: Int, at time: TimeInterval) {
+        guard let frame = sendBuffer[ns] else { return }
+        noteHandedToRadio(bytes: Self.airBytes(frame), at: time)
     }
 
     /// Mark a frame N(S) as retransmitted (Karn's algorithm).
@@ -403,6 +439,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
     func markRetransmitted(ns: Int, at time: TimeInterval) {
         retransmittedNS.insert(ns)
         noteTurnaroundSent(ns: ns, at: time)
+        noteOnAir(ns: ns, at: time)
     }
 
     /// Clear send times for sequence numbers acked by RR(nr) (nr = next expected)
@@ -532,6 +569,12 @@ final class AX25SessionManager: ObservableObject {
 
     /// Configuration used when initiating sessions to unknown destinations
     var defaultConfig: AX25SessionConfig = AX25SessionConfig()
+
+    /// How long a radio takes to put a frame on the air after it is asked
+    /// to key, and what the peer is assumed to take, seconds; sets the floor
+    /// under a new session's initial SRT (`AX25SessionTimers.initialSRT`).
+    /// Nil, or nil for a radio, leaves the configured T1 alone.
+    var keyUpSeconds: ((RadioID) -> (ours: Double, peer: Double)?)?
 
     /// The clock used for all timer scheduling (T1, T3, backoffs). Inject VirtualClock for deterministic tests.
     let clock: AX25TimerScheduler
@@ -1150,7 +1193,7 @@ final class AX25SessionManager: ObservableObject {
                 sendBufferSeq: session.sendBuffer.keys.sorted(),
                 rto: session.timers.rto,
                 srtt: session.timers.srtt,
-                rttvar: session.timers.rttvar,
+                rttvar: 0,   // the spec's SRT carries no variance
                 date: Date(),
                 framesSent: session.statistics.framesSent,
                 framesReceived: session.statistics.framesReceived,
@@ -1185,7 +1228,7 @@ final class AX25SessionManager: ObservableObject {
             "rto": String(format: "%.2f", timers.rto),
             "t3Timeout": String(format: "%.1f", timers.t3Timeout),
             "srtt": timers.srtt != nil ? String(format: "%.2f", timers.srtt!) : "nil",
-            "rttvar": String(format: "%.2f", timers.rttvar)
+            "srt": String(format: "%.2f", timers.srt)
         ]
 
         // Summarize send buffer contents for retransmit analysis
@@ -1236,6 +1279,7 @@ final class AX25SessionManager: ObservableObject {
         if negotiateV22, case .supported(let params) = peerXIDStatus[destination.display] {
             config = config.negotiating(with: params)
         }
+        config = config.keyingUp(in: keyUpSeconds?(radio))
 
         axDebugPrint("====== DEBUG TRACE: session(for:) ======")
         axDebugPrint("adaptiveTimeout: \(config.adaptiveTimeout)")
@@ -1984,10 +2028,8 @@ final class AX25SessionManager: ObservableObject {
                     // there are outstanding unacked frames.
                     stopT3Timer(for: session)
                     startT1Timer(for: session)
-                } else if polls && useDelayedAckT1 {
-                    // The poll is answered at once: T1 was armed for an
-                    // unpolled frame's delayed ack and is too long for it now.
-                    startT1Timer(for: session)
+                } else {
+                    extendT1AcrossBurst(session)
                 }
             }
             // Append, never prepend: the queue was empty when this call started
@@ -2149,6 +2191,7 @@ final class AX25SessionManager: ObservableObject {
             if negotiateV22, case .supported(let params) = peerXIDStatus[source.display] {
                 config = config.negotiating(with: params)
             }
+            config = config.keyingUp(in: keyUpSeconds?(radio))
             session = AX25Session(
                 localAddress: destination,  // We're the destination of the SABM
                 remoteAddress: source,
@@ -2308,22 +2351,18 @@ final class AX25SessionManager: ObservableObject {
 
         let oldState = session.state
 
-        // Calculate RTT if we were connecting (Bug F fix: use clock.currentTime not Date())
-        //
-        // Karn's algorithm, which the I-frame path already honors via
-        // `rttSendTime(ackedBy:)`: a UA answering a retransmitted SABM is
-        // ambiguous, so it yields no sample at all. The timers keep whatever
-        // they had, which is a better estimate than one built from backoff.
-        if session.state == .connecting, let sabmSent = session.sabmSentAt,
-           !session.sabmRetransmitted {
-            let rtt = clock.currentTime - sabmSent
-            session.timers.updateRTT(sample: rtt)
-            TxLog.rttUpdate(
-                peer: source.display,
-                srtt: session.timers.srtt ?? rtt,
-                rttvar: session.timers.rttvar,
-                rto: session.timers.rto
-            )
+        // Select T1 on the UA (AX.25 2.2 Figure C4.2). With the SABM sent
+        // once (RC = 0) the time T1 ran is a round trip and folds into SRT;
+        // after a retry RC ≠ 0 and T1 did not expire, so T1V stays.
+        if session.state == .connecting {
+            peerHeard(session)
+            let started = session.t1StartedAt ?? session.sabmSentAt
+            session.timers.selectT1(
+                retryCount: session.sabmRetransmitted ? max(1, session.stateMachine.retryCount) : 0,
+                t1Expired: false,
+                t1Elapsed: started.map { clock.currentTime - $0 })
+            TxLog.rttUpdate(peer: source.display, srtt: session.timers.srtt ?? 0,
+                            rttvar: 0, rto: session.timers.rto)
         }
 
         // Measured before the UA zeroes them: whether the link being
@@ -2343,6 +2382,9 @@ final class AX25SessionManager: ObservableObject {
             ])
         } else if completingReestablish && session.state == .connected {
             session.isReestablishing = false
+            // Figure C4.2, UA with V(S) ≠ V(A): SRT ← initial default,
+            // T1V ← 2·SRT, as the queue is discarded.
+            if lostFrames { session.timers.resetForReestablishment() }
             reportReestablished(session, lostFrames: lostFrames)
         } else if oldState != session.state {
             debugTrace("state change (UA)", [
@@ -2695,10 +2737,13 @@ final class AX25SessionManager: ObservableObject {
         }
 
         // Capture V(A) before state machine updates it - piggybacked N(R) acks [V(A), N(R))
+        peerHeard(session)
         let vaBefore = session.va
+        let retryCountBefore = session.stateMachine.retryCount
 
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
+        selectT1OnFullAcknowledgment(session, vaBefore: vaBefore, retryCountBefore: retryCountBefore)
 
         if oldState != session.state {
             debugTrace("state change (I-frame)", [
@@ -2837,24 +2882,17 @@ final class AX25SessionManager: ObservableObject {
         // was the time since that old frame went out, minutes on an idle
         // link, and it pinned the RTO at rtoMax.
         if session.newlyAcknowledges(nr: nr) {
-            if let sentAt = session.rttSendTime(ackedBy: nr) {
-                let rtt = clock.currentTime - sentAt
-                session.timers.updateRTT(sample: rtt)
-                TxLog.rttUpdate(
-                    peer: source.display,
-                    srtt: session.timers.srtt ?? rtt,
-                    rttvar: session.timers.rttvar,
-                    rto: session.timers.rto
-                )
-            }
             session.clearSendTimesAcked(by: nr)
         }
 
         // Capture V(A) BEFORE state machine update - RR only acks [V(A), N(R))
+        peerHeard(session)
         let vaBefore = session.va
+        let retryCountBefore = session.stateMachine.retryCount
 
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedRR(nr: nr, pf: pf, isCommand: isCommand))
+        selectT1OnFullAcknowledgment(session, vaBefore: vaBefore, retryCountBefore: retryCountBefore)
 
         if oldState != session.state {
             debugTrace("state change (RR)", [
@@ -3145,14 +3183,10 @@ final class AX25SessionManager: ObservableObject {
             return []
         }
 
-        // The N(R) in an RNR is a real acknowledgment, so it yields a valid RTT
-        // sample under the same Karn's-algorithm rules used for RR, and only
-        // when it newly acknowledges something (see the RR handler).
+        // An RNR's N(R) acknowledges frames, but the SDL does not select T1
+        // on it: with the peer busy, "Check I Frame Acknowledged" only moves
+        // V(A) and keeps T1 going (Figure C4.7a).
         if session.newlyAcknowledges(nr: nr) {
-            if let sentAt = session.rttSendTime(ackedBy: nr) {
-                let rtt = clock.currentTime - sentAt
-                session.timers.updateRTT(sample: rtt)
-            }
             session.clearSendTimesAcked(by: nr)
         }
 
@@ -3457,7 +3491,16 @@ final class AX25SessionManager: ObservableObject {
             notifyStateChanged(session, from: oldState, to: session.state)
         }
 
-        session.timers.backoff()  // Exponential backoff
+        session.t1StartedAt = nil   // expired, not stopped
+        // Select T1 after a SABM or DISC retry (AX.25 2.2 Figures C4.2 and
+        // C4.3): RC was just incremented and T1 expired, so
+        // T1V ← RC·0.25 s + 2·SRT. Timer Recovery's retries do not call
+        // Select T1 (Figure C4.5c); they keep T1V.
+        if (oldState == .connecting && session.state == .connecting)
+            || (oldState == .disconnecting && session.state == .disconnecting) {
+            session.timers.selectT1(retryCount: session.stateMachine.retryCount,
+                                    t1Expired: true, t1Elapsed: nil)
+        }
         // T1 firing resets the REJ deduplication window: the next REJ after a T1
         // retransmit should trigger a fresh immediate retransmit, not be suppressed.
         session.lastREJRetransmitNR = nil
@@ -3485,6 +3528,9 @@ final class AX25SessionManager: ObservableObject {
 
             axDebugPrint("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) vr=\(session.vr) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted())")
             frames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "T1-timeout", preservePollFinal: false, forcePollOnFirst: true))
+            // T1 started for the poll the resend replaced; time it from the
+            // resend instead.
+            restartT1IfOutLater(session)
         }
 
         // Loss evidence must be TIMELY: a T1 retransmission reaches the
@@ -3510,42 +3556,59 @@ final class AX25SessionManager: ObservableObject {
 
     // MARK: - Timer Management
 
-    /// Start T1 (retransmit) timer for a session
-    /// Whether T1 uses the delayed-ack formula (`t1Delay`) instead of the
-    /// standard rule. Off by default since 2026-10-01: T1 is the larger of
-    /// the adaptive RTO and the FRACK floor, as on a classic TNC. The
-    /// formula is kept for later evaluation.
-    var useDelayedAckT1 = false
-
-    /// The standard floor under T1: FRACK times (2 x digipeaters + 1), as
-    /// a TNC-2 computes it. FRACK is the operator's AX.25 T1 setting (the
-    /// session's initial RTO), 4 s by default.
-    nonisolated static func frackFloor(frack: Double, digipeaters: Int) -> Double {
-        frack * Double(2 * max(0, digipeaters) + 1)
+    /// A frame from the peer arrived: our transmission is over, so the
+    /// on-air estimate is capped at now, and a T1 still waiting for our
+    /// frames to leave starts now instead.
+    func peerHeard(_ session: AX25Session) {
+        let now = clock.currentTime
+        guard session.capOnAir(at: now) else { return }
+        if let started = session.t1StartedAt, started > now {
+            startT1Timer(for: session)
+        }
     }
 
-    /// How long a peer may hold its acknowledgment of an I-frame sent
-    /// without P=1, waiting for its own T2. AXTerm's T2 is 2 s; Linux AX.25
-    /// defaults to 3 s, and that is the longer one assumed here.
-    nonisolated static let peerAckDelayAllowance: Double = 3.0
-
-    /// How long T1 waits for the frames now outstanding.
-    ///
-    /// The RTO is learned from exchanges the peer answers at once (polls,
-    /// SABM), so for frames the peer is entitled to sit on it is too short:
-    /// on 2026-10-01 a lone chat line was resent after 4.3 s while the RR,
-    /// held for the peer's 2 s T2 and then sent through a slow transmitter,
-    /// needed about 5.3 s, and the resend keyed over it. So when nothing
-    /// outstanding asks for an immediate answer, T1 also covers our own
-    /// airtime and the peer's ack delay (spec 7.6). Polls keep the RTO.
-    nonisolated static func t1Delay(rto: Double, srtt: Double?, bytesInFlight: Int,
-                                    awaitingDelayedAck: Bool) -> Double {
-        guard awaitingDelayedAck else { return rto }
-        let roundTrip = srtt ?? rto
-        let ourAirtime = Double(bytesInFlight) * 8.0 / TxAdaptiveSettings.airtimeBitsPerSecond
-        return min(60.0, max(rto, roundTrip + ourAirtime + peerAckDelayAllowance))
+    /// Restart T1 when frames handed to the radio after it started will be
+    /// out later than it assumed, so it runs from when they have left.
+    private func restartT1IfOutLater(_ session: AX25Session) {
+        guard let started = session.t1StartedAt, session.onAirUntil > started else { return }
+        startT1Timer(for: session)
     }
 
+    /// A frame added to a transmission still going out moves T1's start to
+    /// the transmission's new end, as a TNC-2 times FRACK from the end of
+    /// what it sends (spec 7.3). Only new frames inside the window, before
+    /// any retry, so it is bounded by K and never postpones a recovery.
+    private func extendT1AcrossBurst(_ session: AX25Session) {
+        guard let started = session.t1StartedAt,
+              session.stateMachine.retryCount == 0,
+              session.onAirUntil > started else { return }
+        startT1Timer(for: session)
+    }
+
+    /// Select T1 when an acknowledgment leaves nothing outstanding: the SDL's
+    /// "Check I Frame Acknowledged" with N(R) = V(S) and the peer not busy
+    /// (Figure C4.7a), and Timer Recovery's F=1 exit (Figure C4.5b), each
+    /// with the RC it held. With RC = 0 the time T1 ran folds into SRT; with
+    /// RC ≠ 0 T1 was stopped, not expired, and T1V stays.
+    private func selectT1OnFullAcknowledgment(_ session: AX25Session, vaBefore: Int,
+                                              retryCountBefore: Int) {
+        // N(R) = V(S) by the state machine's sequence state: the send buffer
+        // is trimmed after this, when the actions run.
+        let sequence = session.stateMachine.sequenceState
+        guard session.state == .connected,
+              session.va != vaBefore,
+              sequence.va == sequence.vs,
+              !session.stateMachine.peerBusy,
+              let started = session.t1StartedAt else { return }
+        session.timers.selectT1(retryCount: retryCountBefore, t1Expired: false,
+                                t1Elapsed: clock.currentTime - started)
+        TxLog.rttUpdate(peer: session.remoteAddress.display, srtt: session.timers.srtt ?? 0,
+                        rttvar: 0, rto: session.timers.rto)
+    }
+
+    /// Start T1 (retransmit) timer for a session. T1 runs for T1V, exactly
+    /// (AX.25 2.2 Appendix C; spec §7.3): no floor, no backoff, no allowance
+    /// on top. Until 2026-10-05 it was max(RTO, FRACK × (2·digis + 1)).
     func startT1Timer(for session: AX25Session) {
         // Cancel any existing T1 timer and pending grace-period retransmit
         session.t1TimerTask?.cancel()
@@ -3553,28 +3616,18 @@ final class AX25SessionManager: ObservableObject {
         session.t1PendingRetransmitTask = nil
         session.t1Generation &+= 1
         let generation = session.t1Generation
+        let now = clock.currentTime
+        let startsAt = max(now, session.onAirUntil)
+        session.t1StartedAt = startsAt
 
-        // A first send of I-frames none of which polls will be acked when
-        // the peer's T2 runs out. A retry polls, and is answered at once.
-        let awaitingDelayedAck = !session.sendBuffer.isEmpty
-            && session.stateMachine.retryCount == 0
-            && !session.hasRetransmittedOutstanding
-            && !session.sendBuffer.values.contains { ($0.controlByte ?? 0) & 0x10 != 0 }
-        let adaptive = useDelayedAckT1
-            ? Self.t1Delay(rto: session.timers.rto, srtt: session.timers.srtt,
-                           bytesInFlight: session.bytesInFlight,
-                           awaitingDelayedAck: awaitingDelayedAck)
-            : session.timers.rto
-        let floor = Self.frackFloor(frack: session.stateMachine.config.initialRto ?? 4.0,
-                                    digipeaters: session.path.digis.count)
-        let rto = max(adaptive, floor)
+        let rto = (startsAt - now) + session.timers.rto
         let sessionId = session.id
 
         TxLog.debug(.session, "Starting T1 timer", [
             "session": String(sessionId.uuidString.prefix(8)),
-            "rto": String(format: "%.1fs", session.timers.rto),
-            "t1": String(format: "%.1fs", rto),
-            "awaitingDelayedAck": awaitingDelayedAck,
+            "t1": String(format: "%.2fs", session.timers.rto),
+            "untilOnAir": String(format: "%.2fs", startsAt - now),
+            "srt": String(format: "%.2fs", session.timers.srt),
             "state": session.state.rawValue
         ])
 
@@ -3617,6 +3670,7 @@ final class AX25SessionManager: ObservableObject {
     /// Stop T1 timer for a session
     private func stopT1Timer(for session: AX25Session) {
         session.t1Generation &+= 1
+        session.t1StartedAt = nil
         if session.t1TimerTask != nil {
             TxLog.debug(.session, "Stopping T1 timer", [
                 "session": String(session.id.uuidString.prefix(8))
@@ -3810,9 +3864,8 @@ final class AX25SessionManager: ObservableObject {
             if wasIdle {
                 startT1Timer(for: session)
                 wasIdle = false
-            } else if polls && useDelayedAckT1 {
-                // As in sendData: a poll gets the plain RTO.
-                startT1Timer(for: session)
+            } else {
+                extendT1AcrossBurst(session)
             }
             onSendFrame?(iFrame)
 
@@ -3941,6 +3994,11 @@ final class AX25SessionManager: ObservableObject {
     private func processActions(_ actions: [AX25SessionAction], for session: AX25Session,
                                 answerFinal: Bool = true) -> [OutboundFrame] {
         var frames: [OutboundFrame] = []
+        // Frames built here go to the radio as soon as this returns. I
+        // frames are accounted where they are numbered or resent; the rest
+        // are counted before T1 starts, so T1 runs from when they are out.
+        var framesOnAir = 0
+        var startedT1 = false
         var deliveries: [(data: Data, pid: UInt8?)] = []
 
         for action in actions {
@@ -4079,7 +4137,12 @@ final class AX25SessionManager: ObservableObject {
                 ])
 
             case .startT1:
+                for frame in frames[framesOnAir...] where frame.frameType != "i" {
+                    session.noteHandedToRadio(bytes: AX25Session.airBytes(frame), at: clock.currentTime)
+                }
+                framesOnAir = frames.count
                 startT1Timer(for: session)
+                startedT1 = true
 
             case .stopT1:
                 stopT1Timer(for: session)
@@ -4109,6 +4172,14 @@ final class AX25SessionManager: ObservableObject {
             deliver(delivery.data, pid: delivery.pid, to: session)
         }
 
+        // Frames built after T1 started in this call go out too; T1 runs
+        // from when the last of them has left the radio.
+        if startedT1, framesOnAir < frames.count {
+            for frame in frames[framesOnAir...] where frame.frameType != "i" {
+                session.noteHandedToRadio(bytes: AX25Session.airBytes(frame), at: clock.currentTime)
+            }
+            restartT1IfOutLater(session)
+        }
         // Every frame a session produces leaves on the session's channel; the
         // builders above know nothing about ports.
         return frames.map { $0.onRadio(session.radio) }

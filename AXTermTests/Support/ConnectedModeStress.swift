@@ -26,12 +26,10 @@ import XCTest
 /// Which link behavior a run uses.
 enum StressMode: String, CaseIterable {
     /// Production defaults toward a station not known to hold its acks
-    /// (no AXDP): FRACK floor under T1, in-session growth off.
+    /// (no AXDP): T1 per AX.25 2.2 (spec 7.3), in-session growth off.
     case defaults
     /// SessionCoordinator.inSessionLinkGrowth on.
     case growth
-    /// AX25SessionManager.useDelayedAckT1 on.
-    case delayedAckT1
 }
 
 enum StressTraffic {
@@ -243,15 +241,12 @@ final class StressRunner {
             }
             return .coordinator(brain, frack: scenario.frack)
         }
-        let delayedAck = scenario.mode == .delayedAckT1
         let srcA = source(Self.addressA)
         let srcB = source(Self.addressB)
         if case .coordinator(let brain, _) = srcA { brains.append(brain) }
         if case .coordinator(let brain, _) = srcB { brains.append(brain) }
-        a = SimStation(net: net, name: "A", address: Self.addressA, node: nodeA.index,
-                       config: srcA, useDelayedAckT1: delayedAck)
-        b = SimStation(net: net, name: "B", address: Self.addressB, node: nodeB.index,
-                       config: srcB, useDelayedAckT1: delayedAck)
+        a = SimStation(net: net, name: "A", address: Self.addressA, node: nodeA.index, config: srcA)
+        b = SimStation(net: net, name: "B", address: Self.addressB, node: nodeB.index, config: srcB)
         net.add(a)
         net.add(b)
 

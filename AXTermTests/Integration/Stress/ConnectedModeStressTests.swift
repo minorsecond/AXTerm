@@ -402,9 +402,9 @@ final class ConnectedModeStressTests: XCTestCase {
 
     // MARK: Defaults against the switched-off alternatives
 
-    /// The same scenarios under the production defaults (FRACK floor under
-    /// T1, in-session growth off), with SessionCoordinator.inSessionLinkGrowth
-    /// on, and with AX25SessionManager.useDelayedAckT1 on. Data for the
+    /// The same scenarios under the production defaults (T1 per AX.25 2.2,
+    /// in-session growth off) and with SessionCoordinator.inSessionLinkGrowth
+    /// on. Data for the
     /// owner: the invariants must hold in every mode, and the figures go to
     /// AXTermStress/mode-comparison.txt. No default is changed.
     func testModeComparison() {

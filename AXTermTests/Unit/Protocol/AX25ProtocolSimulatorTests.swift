@@ -102,7 +102,7 @@ final class AX25ProtocolSimulatorTests: XCTestCase {
         sim.addNode(nodeB)
         
         let sessionA = nodeA.manager.session(for: nodeB.callsign, path: DigiPath(), radio: .primary)
-        sessionA.timers = AX25SessionTimers(rtoMin: 0.05, rtoMax: 0.1, initialRto: 0.05)
+        sessionA.timers = AX25SessionTimers(initialSRT: 0.05)
         
         if let sabm = nodeA.manager.connect(to: nodeB.callsign, path: DigiPath(), radio: .primary) {
             nodeA.manager.onSendFrame?(sabm)

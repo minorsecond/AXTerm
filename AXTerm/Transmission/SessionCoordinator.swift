@@ -2438,6 +2438,21 @@ final class SessionCoordinator: ObservableObject {
             self?.refreshLiveLinkDisplay(for: session)
         }
 
+        // The radio's TX delay is how long it takes to get a frame on the
+        // air; it floors a new session's initial SRT (AX.25 2.2 §6.7.1.1).
+        // A sound modem measures its own: PTT confirmation, the radio's
+        // audio buffer and the TX delay. Warbler has taken 3.6 s to key the
+        // IC-705, which no setting shows (smoke run 2026-10-03-1, issue 34).
+        // The peer is assumed to key up in our configured TX delay.
+        sessionManager.keyUpSeconds = { [weak self] radio in
+            guard let txDelay = self?.appSettings?.radio(radio).map({ Double($0.txDelayMs) / 1000.0 })
+            else { return nil }
+            if let modem = self?.packetEngine?.radioManager.session(for: radio)?.link as? SoftModemLink {
+                let telemetry = modem.telemetry
+                return (telemetry.keyUpSeconds, telemetry.txDelaySeconds)
+            }
+            return (txDelay, txDelay)
+        }
         sessionManager.getConfigForDestination = { [weak self] destination, pathSignature, radio in
             TxLog.debug(.session, "getConfigForDestination invoked", [
                 "dest": destination,

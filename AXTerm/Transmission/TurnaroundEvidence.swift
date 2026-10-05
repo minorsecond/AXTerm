@@ -410,5 +410,7 @@ extension AX25SessionManager {
         let session = existingSession(for: source, path: path, radio: radio)
             ?? connectedSession(withPeer: source, radio: radio)
         session?.noteTurnaroundHeard(at: clock.currentTime)
+        // Our transmission is over: bring the on-air estimate back (spec 7.3).
+        if let session { peerHeard(session) }
     }
 }

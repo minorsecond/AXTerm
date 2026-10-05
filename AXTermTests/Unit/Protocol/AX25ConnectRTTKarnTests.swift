@@ -44,9 +44,11 @@ final class AX25ConnectRTTKarnTests: XCTestCase {
 
         XCTAssertEqual(session.state, .connected)
         // A UA that answers the only SABM in flight is unambiguous, so the
-        // measurement is real and must be kept.
+        // measurement is real and must be kept: AX.25 2.2's Select T1 folds
+        // it into SRT at 1/8 (spec 7.3), timed from when the SABM was out.
         let srtt = try! XCTUnwrap(session.timers.srtt)
-        XCTAssertEqual(srtt, 1.8, accuracy: 0.01)
+        let ran = 1.8 - 18.0 * 8 / 1200
+        XCTAssertEqual(srtt, 3.0 * 7 / 8 + ran / 8, accuracy: 0.001)
     }
 
     // MARK: - The ambiguous case must not

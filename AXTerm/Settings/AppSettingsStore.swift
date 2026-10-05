@@ -275,7 +275,7 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAXDPMaxDecompressedPayload = 4096
     static let defaultAXDPShowDecodeDetails = false
     static let defaultAdaptiveTransmissionEnabled = true
-    static let defaultAX25T1TimeoutSeconds = 4.0
+    static let defaultAX25T1TimeoutSeconds = 3.0
     static let minAX25T1TimeoutSeconds = 1.0
     static let maxAX25T1TimeoutSeconds = 30.0
 

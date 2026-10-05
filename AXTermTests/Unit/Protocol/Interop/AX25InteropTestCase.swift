@@ -39,6 +39,11 @@ class AX25InteropTestCase: XCTestCase {
     /// The path as the peer writes it to reach AXTerm.
     var peerPath: [String] { digis.reversed() }
 
+    /// The T1 AXTerm's link to the peer will run next: T1V (spec 7.3).
+    var axtermT1: Double {
+        axterm.manager.sessions.values.first?.timers.rto ?? 0
+    }
+
     override func tearDown() {
         clock = nil
         channel = nil

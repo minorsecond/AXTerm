@@ -53,14 +53,14 @@ final class LearnedRtoSeedingTests: XCTestCase {
                        "no learned value → existing scaled-default behavior, unchanged")
     }
 
-    func testLearnedSeedRespectsTimerBounds() {
-        // The timers clamp the seed into [rtoMin, rtoMax] like any other seed.
-        let config = AX25SessionConfig(rtoMin: 3.0, rtoMax: 12.0, initialRto: 8.0,
-                                       adaptiveTimeout: true, learnedPathRto: 50.0)
+    func testALearnedSeedIsTheInitialSRTAsItIs() {
+        // The spec's timers have no clamps (spec 7.3): a learned per-route
+        // value is the initial SRT verbatim. The coordinator bounds what it
+        // learns before it gets here (configFromAdaptive).
+        let config = AX25SessionConfig(initialRto: 8.0, adaptiveTimeout: true, learnedPathRto: 50.0)
         let session = AX25Session(localAddress: local, remoteAddress: remote,
                                   path: DigiPath(), config: config)
-        XCTAssertEqual(session.timers.rto, 12.0, accuracy: 0.01,
-                       "learned seed clamps to rtoMax like any seed")
+        XCTAssertEqual(session.timers.rto, 50.0, accuracy: 0.01)
     }
 
     // MARK: - Coordinator: the single writer
