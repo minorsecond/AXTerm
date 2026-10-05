@@ -115,4 +115,17 @@ final class APRSComposeModelTests: XCTestCase {
     func testAHeardStationIsNotFlagged() {
         XCTAssertTrue(APRSComposeModel(to: "ad1ct", text: "hi").isHeard(in: heard))
     }
+
+    /// Smoke run 2026-10-03-1, issue 24: the new-message sheet opened from
+    /// APRS Messages was given no heard stations, so it said "Not heard here"
+    /// of K0EPI-3 minutes after decoding its beacon. Every sheet now gets the
+    /// stations heard, built the same way.
+    func testAHeardStationIsHeard() {
+        var station = Station(call: "K0EPI-3")
+        station.lastHeard = Date()
+        let heard = APRSComposeModel.suggestions(from: [station])
+        XCTAssertEqual(heard.map(\.callsign), ["K0EPI-3"])
+        XCTAssertTrue(APRSComposeModel(to: "k0epi-3", text: "hi").isHeard(in: heard))
+        XCTAssertFalse(APRSComposeModel(to: "K0EPI-4", text: "hi").isHeard(in: heard))
+    }
 }

@@ -19,6 +19,10 @@ struct APRSMessagesView: View {
     /// Outgoing messages are stamped with the address of the radio each one
     /// actually leaves on (`outgoingCallsign`).
     var myCallsign: String
+    /// Stations heard here, for the new-message sheet's suggestions and its
+    /// "Not heard here" note. Without them every addressee read as not heard
+    /// (smoke run 2026-10-03-1, issue 24).
+    var heardStations: [APRSComposeModel.Suggestion] = []
     /// How this view is embedded. Defaults to the split-view shell.
     var presentation: Presentation = .standalone
 
@@ -59,7 +63,7 @@ struct APRSMessagesView: View {
             }
         }
         .sheet(isPresented: $showNewMessage) {
-            APRSComposeSheet(myCallsign: myCallsign) { to, text in
+            APRSComposeSheet(myCallsign: myCallsign, heardStations: heardStations) { to, text in
                 messaging.sendMessage(to: to, text: text, from: outgoingCallsign(to: to),
                                       path: outgoingPath(), radioID: nil)
                 selectedPeer = to.uppercased()

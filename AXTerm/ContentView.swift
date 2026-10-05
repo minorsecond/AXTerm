@@ -1377,12 +1377,7 @@ struct ContentView: View {
     /// station worth messaging on APRS is almost always one that just said
     /// something.
     private var aprsAddresseeSuggestions: [APRSComposeModel.Suggestion] {
-        client.stations.map { station in
-            APRSComposeModel.Suggestion(
-                callsign: station.call.uppercased(),
-                lastHeard: station.lastHeard,
-                via: station.lastVia.isEmpty ? nil : station.lastViaDisplay)
-        }
+        APRSComposeModel.suggestions(from: client.stations)
     }
 
     private var radioFamilies: [RadioID: Set<RadioTrafficFamily>] {
@@ -2298,7 +2293,8 @@ struct ContentView: View {
             case .messages:
                 if let messaging = client.aprsMessaging {
                     APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
-                                     myCallsign: settings.primaryCallsign)
+                                     myCallsign: settings.primaryCallsign,
+                                     heardStations: aprsAddresseeSuggestions)
                 } else {
                     Text("APRS messaging is unavailable without a database.")
                         .foregroundStyle(.secondary)

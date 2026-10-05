@@ -20,6 +20,17 @@ nonisolated struct APRSComposeModel: Equatable, Sendable {
         var id: String { callsign }
     }
 
+    /// Addressees to offer: the stations actually heard, so the commonest
+    /// case is picking rather than typing a callsign, and so the sheet can
+    /// say whether the one typed has been heard here.
+    static func suggestions(from stations: [Station]) -> [Suggestion] {
+        stations.map { station in
+            Suggestion(callsign: station.call.uppercased(),
+                       lastHeard: station.lastHeard,
+                       via: station.lastVia.isEmpty ? nil : station.lastViaDisplay)
+        }
+    }
+
     var to: String = ""
     var text: String = ""
 

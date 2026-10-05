@@ -994,7 +994,8 @@ struct AXTermiOSRootView: View {
     private var messages: some View {
         if let messaging = client.aprsMessaging {
             APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
-                             myCallsign: settings.primaryCallsign)
+                             myCallsign: settings.primaryCallsign,
+                             heardStations: APRSComposeModel.suggestions(from: client.stations))
         } else {
             Text("APRS messaging is unavailable without a database.")
                 .foregroundStyle(.secondary)
@@ -1381,7 +1382,9 @@ struct AXTermiOSRootView: View {
     private var pushedMessagesScreen: some View {
         if let messaging = client.aprsMessaging {
             APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
-                             myCallsign: settings.primaryCallsign, presentation: .pushed)
+                             myCallsign: settings.primaryCallsign,
+                             heardStations: APRSComposeModel.suggestions(from: client.stations),
+                             presentation: .pushed)
         } else {
             Text("APRS messaging is unavailable without a database.")
                 .foregroundStyle(.secondary)
