@@ -1028,27 +1028,37 @@ final class PacketEngine: ObservableObject {
     /// keeping.
     private func persistTransmittedFrame(_ ax25Data: Data, frame: OutboundFrame,
                                          link: LinkSession, port: UInt8) {
+        persistPacket(Self.transmittedPacket(
+            ax25Data, id: frame.id, radio: frame.radio, port: port,
+            linkDescription: link.endpointDescription, sessionId: frame.sessionId, fallback: frame))
+    }
+
+    /// The packet-log row for bytes we put on the air. Decoded from the
+    /// bytes themselves; `fallback` fills in what a frame we can't decode
+    /// would otherwise lose.
+    static func transmittedPacket(_ ax25Data: Data, id: UUID = UUID(), radio: RadioID?,
+                                  port: UInt8, linkDescription: String?, sessionId: UUID? = nil,
+                                  fallback: OutboundFrame? = nil) -> Packet {
         let decoded = AX25.decodeFrame(ax25: ax25Data)
-        let packet = Packet(
-            id: frame.id,
+        return Packet(
+            id: id,
             timestamp: Date(),
-            from: decoded?.from ?? frame.source,
-            to: decoded?.to ?? frame.destination,
-            via: decoded?.via ?? frame.path.digis,
+            from: decoded?.from ?? fallback?.source,
+            to: decoded?.to ?? fallback?.destination,
+            via: decoded?.via ?? fallback?.path.digis ?? [],
             frameType: decoded?.frameType ?? .unknown,
             control: decoded?.control ?? 0,
             controlByte1: decoded?.controlByte1,
             pid: decoded?.pid,
-            info: decoded?.info ?? frame.payload,
+            info: decoded?.info ?? fallback?.payload ?? Data(),
             rawAx25: ax25Data,
-            radioID: frame.radio,
+            radioID: radio,
             kissPort: port,
-            linkDescription: link.endpointDescription,
+            linkDescription: linkDescription,
             direction: .tx,
             // Already on the frame; it had simply never been written down.
-            sessionId: frame.sessionId
+            sessionId: sessionId
         )
-        persistPacket(packet)
     }
 
     // MARK: - Mobilinkd Commands
@@ -1465,6 +1475,11 @@ final class PacketEngine: ObservableObject {
         // Back out the radio that heard it: a repeat belongs to the channel
         // the original was on.
         guard radioManager.send(ax25: repeated, radio: radio) else { return }
+        // Logged like any frame we send, with our entry's H bit set, so the
+        // Packets view shows the repeat (smoke run 2026-10-03-1, issue 42).
+        persistPacket(Self.transmittedPacket(
+            repeated, radio: radio, port: radioManager.kissPort(for: radio),
+            linkDescription: radioManager.session(for: radio)?.endpointDescription))
         let who = AX25.decodeFrame(ax25: raw).map {
             "\($0.from?.display ?? "?") \u{2192} \($0.to?.display ?? "?")"
         } ?? "frame"
