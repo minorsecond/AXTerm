@@ -206,8 +206,10 @@ struct BBSFilesPane: View {
                     // Said plainly: an operator who assumes uploads are
                     // immediately downloadable has assumed their station will
                     // redistribute whatever anyone sends it.
-                    Text("Uploads land here and are **not** shared. Move one into an "
-                         + "area above to offer it to callers.")
+                    // One literal: Text renders Markdown only from a string
+                    // literal, and a concatenation showed the asterisks
+                    // (smoke run issue 68).
+                    Text("Uploads land here and are **not** shared. Move one into an area above to offer it to callers.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {

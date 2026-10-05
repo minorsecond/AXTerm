@@ -242,8 +242,8 @@ struct BBSAreaListScreen: View {
                 // Said plainly: an operator who assumes uploads are immediately
                 // downloadable has assumed their station will redistribute
                 // whatever anyone sends it.
-                Text("Uploads land in that folder and are **not** shared. Move one into "
-                     + "an area above to offer it to callers.")
+                // One literal, so Text renders the Markdown (smoke run issue 68).
+                Text("Uploads land in that folder and are **not** shared. Move one into an area above to offer it to callers.")
             } else {
                 Text("Accepting files is a separate decision from sharing them: this one "
                      + "writes to your disk on the say-so of whoever is holding a "
