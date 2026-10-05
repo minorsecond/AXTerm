@@ -49,47 +49,47 @@ final class AX25PathologicalStateTests: XCTestCase {
     }
     
     /// Tests a disconnection collision (both send DISC simultaneously).
-    /// SDL C4.3: Received DISC while awaiting release -> send DM -> Disconnected.
-    /// §6.3.4: the peer accepts UA or DM as the answer to its DISC.
+    /// AX.25 2.2 SDL, Figure C4.3 (awaiting release): a DISC received while our
+    /// own DISC is outstanding is answered with UA (F = P) and the state stays
+    /// awaiting release until the peer's UA answers our DISC. Direwolf reads
+    /// the figure the same way (ax25_link.c, disc_frame). Smoke run
+    /// 2026-10-03-1, issue 32; operator 2026-10-05: "make it follow the spec".
     func testSimultaneousDISCCollision() {
         var smA = AX25StateMachine(config: AX25SessionConfig())
         _ = smA.handle(event: .connectRequest)
         _ = smA.handle(event: .receivedUA)
-        
+
         var smB = AX25StateMachine(config: AX25SessionConfig())
         _ = smB.handle(event: .connectRequest)
         _ = smB.handle(event: .receivedUA)
-        
+
         // Both request disconnect
         let discA = smA.handle(event: .disconnectRequest)
         let discB = smB.handle(event: .disconnectRequest)
-        
+
         XCTAssertEqual(smA.state, .disconnecting)
         XCTAssertEqual(smB.state, .disconnecting)
         XCTAssertTrue(discA.contains(.sendDISC))
         XCTAssertTrue(discB.contains(.sendDISC))
-        
-        // Cross-receive DISCs
+
+        // Cross-receive DISCs: each answers UA and keeps waiting for its own UA.
         let collA = smA.handle(event: .receivedDISC)
         let collB = smB.handle(event: .receivedDISC)
-        
-        XCTAssertEqual(smA.state, .disconnected)
-        XCTAssertEqual(smB.state, .disconnected)
-        // SDL C4.3 (awaiting release): a DISC arriving while our own DISC is
-        // outstanding is answered with DM. §6.3.4 confirms the peer accepts either
-        // UA or DM in reply to its DISC.
-        XCTAssertTrue(collA.contains(.sendDM), "SDL C4.3: DISC collision is answered with DM")
-        XCTAssertTrue(collB.contains(.sendDM), "SDL C4.3: DISC collision is answered with DM")
-        XCTAssertFalse(collA.contains(.sendUA), "UA is the reply for a DISC on an established link, not during teardown")
 
-        // They receive each other's DM (harmless in disconnected state)
-        _ = smA.handle(event: .receivedDM)
-        _ = smB.handle(event: .receivedDM)
-        
+        XCTAssertEqual(collA, [.sendUA], "Figure C4.3: UA, and nothing else")
+        XCTAssertEqual(collB, [.sendUA])
+        XCTAssertEqual(smA.state, .disconnecting, "still awaiting the UA to our own DISC")
+        XCTAssertEqual(smB.state, .disconnecting)
+
+        // Each one's UA answers the other's DISC.
+        let endA = smA.handle(event: .receivedUA)
+        let endB = smB.handle(event: .receivedUA)
         XCTAssertEqual(smA.state, .disconnected)
         XCTAssertEqual(smB.state, .disconnected)
+        XCTAssertTrue(endA.contains(.stopT1))
+        XCTAssertTrue(endB.contains(.notifyDisconnected))
     }
-    
+
     // MARK: - Sequence Pathology Tests
     
     /// Forces a 7 -> 0 sequence wraparound and ensures V(R) and V(S) track correctly without stalling.

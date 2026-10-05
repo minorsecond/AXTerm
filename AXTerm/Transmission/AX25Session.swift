@@ -1375,14 +1375,14 @@ nonisolated struct AX25StateMachine: Sendable {
             return [.stopT1, .notifyDisconnected]
 
         case (.disconnecting, .receivedDISC):
-            // DISC collision — both sides sent DISC. SDL C4.3 (awaiting release)
-            // answers a DISC with DM, and §6.3.4 confirms the peer accepts it:
-            // "After receiving a UA or DM response to a sent DISC command, the TNC
-            // cancels timer T1 and enters the disconnected state." UA is the reply
-            // for a DISC received on an established link (§6.3.4); with our own DISC
-            // outstanding the link is already half-down, so DM is the accurate answer.
-            state = .disconnected
-            return [.stopT1, .sendDM, .notifyDisconnected]
+            // DISC collision: both sides sent DISC. AX.25 2.2 SDL, Figure C4.3
+            // (awaiting release): answer UA with F = P and stay here; the
+            // peer's UA to our own DISC, or T1 running out, ends the link.
+            // Direwolf reads the figure the same way (ax25_link.c,
+            // disc_frame). Until 2026-10-05 this answered DM and dropped the
+            // link at once (smoke run 2026-10-03-1, issue 32; operator: "make
+            // it follow the spec").
+            return [.sendUA]
 
         case (.disconnecting, .receivedDM):
             state = .disconnected

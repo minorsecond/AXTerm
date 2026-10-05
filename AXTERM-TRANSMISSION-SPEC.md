@@ -668,9 +668,16 @@ Events:
 
 **UA and DM carry the P bit of the frame they answer** (AX.25 2.2 §6.2):
 a SABM or DISC sent with P=0 is answered F=0, with P=1 F=1. That covers UA
-to SABM (fresh link, link reset, SABM collision) and to DISC, and DM to
-SABME, to DISC with no link or while our SABM or DISC is out, and to SABM
-while our DISC is out. A DM to an I or S command is sent only when it polled
+to SABM (fresh link, link reset, SABM collision) and to DISC (on a link,
+or crossing our own DISC), and DM to SABME, to DISC with no link or while
+our SABM is out, and to SABM while our DISC is out.
+
+**A DISC crossing ours** (both stations disconnect at once) is answered UA
+and the link stays awaiting release until the peer's UA to our DISC, or T1
+running out, ends it: AX.25 2.2 SDL, Figure C4.3, as Direwolf reads it
+(`ax25_link.c`, `disc_frame`). Decision 2026-10-05 (smoke run issue 32,
+operator: "make it follow the spec"). Until then AXTerm answered DM and
+dropped the link at once, which also ended both sides cleanly. A DM to an I or S command is sent only when it polled
 (§6.3.5), so it always carries F=1; P=0 commands with no link are ignored.
 Until 2026-10-01 every UA and DM went out F=1
 (`AX25SessionManager.processActions(answerFinal:)`, `handleInboundSABM`,

@@ -54,7 +54,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
     private func connect(_ manager: AX25SessionManager) -> AX25Session {
         _ = manager.connect(to: peer, path: path, radio: .primary)
-        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        _ = manager.handleInboundUA(from: peer, path: path, radio: .primary)
         let s = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(s.state, .connected, "Pre-condition: session must be connected")
         return s
@@ -309,41 +309,28 @@ final class AX25Phase3CollisionTests: XCTestCase {
         XCTAssertNil(session.t3TimerTask, "T3 must stop on DISC")
     }
 
-    /// Bug C: Simultaneous DISC collision (AX.25 §6.4.2).
+    /// Bug C: Simultaneous DISC collision.
     ///
-    /// When we send DISC (state = .disconnecting) and peer also sends DISC,
-    /// we must respond with UA (not DM) and transition to .disconnected.
-    ///
-    /// Before fix: handleInboundDISC used findConnectedSession which only
-    /// searches .connected sessions — .disconnecting sessions were missed and the
-    /// DISC fell into the no-session path. The fix ensures .disconnecting sessions
-    /// are found and the collision is completed with a proper state transition.
-    func testSimultaneousDISC_Collision_RespondWithDM() {
+    /// The .disconnecting session must be FOUND (before the Bug C fix the DISC
+    /// fell into the no-session path). AX.25 2.2 Figure C4.3: the DISC is
+    /// answered with UA and the session stays awaiting release until the
+    /// peer's UA to our DISC arrives.
+    func testSimultaneousDISC_Collision_RespondWithUA() {
         let (manager, _) = makeManager()
         let session = connect(manager)
 
-        // We initiate disconnect: state = .disconnecting
         _ = manager.disconnect(session: session)
         XCTAssertEqual(session.state, .disconnecting,
             "Pre-condition: we must be in disconnecting state")
 
-        // Peer also sends DISC (collision)
         let response = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
+        XCTAssertEqual(response?.displayInfo, "UA", "Figure C4.3: a crossed DISC is answered with UA")
+        XCTAssertEqual(session.state, .disconnecting, "awaiting the UA to our own DISC")
+        XCTAssertNotNil(session.t1TimerTask, "T1 still times our DISC")
 
-        // SDL C4.3: DISC in awaiting release is answered with DM; §6.3.4 confirms
-        // the peer accepts UA or DM in reply to its DISC. (The Bug C guarantee that
-        // the .disconnecting session is FOUND and answered still holds — the answer
-        // is simply the SDL's DM rather than UA.)
-        XCTAssertNotNil(response, "DISC collision must produce a response frame")
-        XCTAssertEqual(response?.displayInfo, "DM",
-            "SDL C4.3: DISC collision is answered with DM (§6.3.4 permits either)")
-
-        // Both sides disconnect cleanly
-        XCTAssertEqual(session.state, .disconnected,
-            "Session must reach .disconnected after DISC collision")
-
-        // T1 must be stopped (not running into limbo)
-        XCTAssertNil(session.t1TimerTask, "T1 must stop after DISC collision")
+        _ = manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertNil(session.t1TimerTask, "T1 stops when our DISC is answered")
     }
 
     /// DISC arriving in .disconnecting state cleans up all timers.
@@ -356,8 +343,9 @@ final class AX25Phase3CollisionTests: XCTestCase {
         _ = manager.disconnect(session: session)
         XCTAssertEqual(session.state, .disconnecting)
 
-        // Peer sends DISC back
+        // Peer sends DISC back, then answers ours
         _ = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
+        _ = manager.handleInboundUA(from: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .disconnected)
 
         // No activity after disconnect
@@ -465,7 +453,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         XCTAssertNotNil(session.t1TimerTask, "T1 keeps timing our SABM")
 
         // The peer's UA answers our SABM.
-        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        _ = manager.handleInboundUA(from: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
         XCTAssertNil(session.t1TimerTask, "T1 must stop once the link is up")
         XCTAssertNotNil(session.t3TimerTask, "T3 must start once the link is up")
@@ -753,7 +741,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         XCTAssertEqual(reconnected.state, .connecting)
 
         // Accept the reconnect
-        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        _ = manager.handleInboundUA(from: peer, path: path, radio: .primary)
         XCTAssertEqual(reconnected.state, .connected)
         XCTAssertEqual(reconnected.vs, 0, "V(S) must be reset after reconnect")
         XCTAssertEqual(reconnected.vr, 0, "V(R) must be reset after reconnect")

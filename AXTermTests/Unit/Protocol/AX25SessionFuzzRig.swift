@@ -372,6 +372,9 @@ final class AX25SessionFuzzRig {
             switch priorState {
             case .connected?:
                 v.check(has("UA"), "DISC on a connected link drew no UA \(ctx)")
+            case .disconnecting?:
+                // A DISC crossing ours: UA, Figure C4.3 (awaiting release).
+                v.check(has("UA"), "DISC crossing our DISC drew no UA \(ctx)")
             default:
                 v.check(has("DM"), "DISC with the link \(priorState?.rawValue ?? "absent") drew no DM \(ctx)")
             }

@@ -122,7 +122,7 @@ final class UADMFinalBitTests: XCTestCase {
         }
     }
 
-    func testDMToDISCAndSABMWhileDisconnectingCarriesThePollBit() throws {
+    func testAnswersToDISCAndSABMWhileDisconnectingCarryThePollBit() throws {
         for p in [false, true] {
             let manager = makeManager()
             let session = connectedAsResponder(manager)
@@ -134,8 +134,9 @@ final class UADMFinalBitTests: XCTestCase {
             XCTAssertEqual(sabm.final, p, "DM to a P=\(p ? 1 : 0) SABM while our DISC is out")
             let disc = try onTheWire(manager.handleInboundDISC(from: peer, to: local, path: DigiPath(),
                                                                radio: .primary, pf: p))
-            XCTAssertEqual(disc.type, "DM")
-            XCTAssertEqual(disc.final, p, "DM to a P=\(p ? 1 : 0) DISC crossing ours")
+            // Figure C4.3: a DISC crossing ours is answered UA, F = P.
+            XCTAssertEqual(disc.type, "UA")
+            XCTAssertEqual(disc.final, p, "UA to a P=\(p ? 1 : 0) DISC crossing ours")
         }
     }
 
