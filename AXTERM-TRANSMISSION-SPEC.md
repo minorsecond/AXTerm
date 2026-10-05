@@ -778,8 +778,12 @@ and a full frame's airtime (paclen plus address, control, PID and FCS, at
 key-up and an airtime more per digipeater. Our key-up is measured by a sound
 modem (the radio's smoothed PTT confirmation, its audio buffer and the TX
 delay; Warbler has taken 3.6 s to key an IC-705) and is the TX delay setting
-for a TNC; the peer's is assumed to be our TX delay setting. A per-route SRT
-learned in the last 30 minutes replaces the initial default as it is.
+for a TNC; the peer's is assumed to be our TX delay setting. A route's T1V
+learned in the last 30 minutes replaces the initial default: the session starts
+with T1V at the learned value and SRT at half of it, where the last session's
+Select T1 left off. Until 2026-10-05 the learned value was taken as SRT, so the
+first T1V came out near double it and each reconnect started higher than the
+last (smoke run issue 50: 7.0 s, then 12.0 s, then 19.4 s to the same station).
 
 Until 2026-10-05 T1 was a TCP-style RTO (SRTT + 4·RTTVAR, RFC 6298), clamped
 to RTO_min and RTO_max, doubled on each retry, started at 4 s, and never

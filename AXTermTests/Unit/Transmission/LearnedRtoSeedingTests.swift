@@ -14,8 +14,10 @@
 //    over different routes must not cross-pollinate learned values).
 //  - It is clamped into [max(rtoMin, 4.0), rtoMax] so a freak low sample can
 //    never produce a hair-trigger SABM timer.
-//  - The seed is a timer value, not an RTT sample: session SRTT starts nil and
-//    the first real sample fully replaces the seed (fresh-start invariant).
+//  - The seed is a timer value, not an RTT sample: it is the starting T1V,
+//    SRT starts at half of it (T1V = 2·SRT), and srtt reports nil until the
+//    first real sample, which Select T1 blends in (spec 7.3; smoke run
+//    2026-10-03-1, issue 50).
 //
 
 import XCTest
@@ -53,9 +55,9 @@ final class LearnedRtoSeedingTests: XCTestCase {
                        "no learned value → existing scaled-default behavior, unchanged")
     }
 
-    func testALearnedSeedIsTheInitialSRTAsItIs() {
+    func testALearnedSeedIsTheInitialT1VAsItIs() {
         // The spec's timers have no clamps (spec 7.3): a learned per-route
-        // value is the initial SRT verbatim. The coordinator bounds what it
+        // value is the initial T1V verbatim. The coordinator bounds what it
         // learns before it gets here (configFromAdaptive).
         let config = AX25SessionConfig(initialRto: 8.0, adaptiveTimeout: true, learnedPathRto: 50.0)
         let session = AX25Session(localAddress: local, remoteAddress: remote,

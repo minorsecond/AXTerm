@@ -295,9 +295,9 @@ nonisolated final class AX25Session: @unchecked Sendable {
         self.stateMachine = AX25StateMachine(config: config)
         // SRT's initial default (AX.25 2.2 §6.7.1.1, spec §7.3): the
         // configured T1 scaled for digipeaters, never under twice a
-        // full-size frame's round trip. A learned SRT for this exact route
-        // supersedes it verbatim; it already includes the digipeater delay.
-        let initialSRT = config.learnedPathRto ?? AX25SessionTimers.initialSRT(
+        // full-size frame's round trip. A T1V learned for this exact route
+        // supersedes it; it already includes the digipeater delay.
+        let initialSRT = AX25SessionTimers.initialSRT(
             t1Setting: config.initialRto ?? AppSettingsStore.defaultAX25T1TimeoutSeconds,
             digipeaters: path.digis.count,
             maxFrameBytes: config.paclenCeiling,
@@ -305,6 +305,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
             peerKeyUpSeconds: config.peerKeyUpSeconds)
         self.timers = AX25SessionTimers(
             initialSRT: initialSRT,
+            resumingT1V: config.learnedPathRto,
             adaptiveTimeout: config.adaptiveTimeout,
             t2AckDelay: config.t2AckDelay ?? 2.0
         )

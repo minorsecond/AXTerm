@@ -233,4 +233,67 @@ final class SpecT1Tests: XCTestCase {
         XCTAssertEqual(session.timers.srt, before * 7 / 8 + ran / 8, accuracy: 1e-6)
         XCTAssertEqual(session.timers.rto, 2 * session.timers.srt, accuracy: 1e-9)
     }
+
+    /// The time T1 ran is timed from the start of the T1 that the
+    /// acknowledged frame started, not from earlier in the session. The
+    /// sequence is smoke run 2026-10-05's (issue 50): connect, the peer's T3
+    /// poll, one I-frame, its RR F 2.6 s later.
+    func testAnAcknowledgmentAfterAnIdleSpellTimesOnlyItsOwnFrame() throws {
+        let (manager, clock) = manager()
+        let sabm = try XCTUnwrap(manager.connect(to: peer))
+        let session = try XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), radio: .primary))
+        clock.advance(by: airtime(sabm) + 1.0)
+        _ = manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        XCTAssertEqual(session.state, .connected)
+        let afterUA = session.timers.srt
+
+        // Idle, then the peer's T3 poll, answered with F.
+        clock.advance(by: 27)
+        _ = manager.handleInboundRRFrames(from: peer, path: DigiPath(), radio: .primary,
+                                          nr: 0, pf: true, isCommand: true)
+        XCTAssertEqual(session.timers.srt, afterUA, "a poll acknowledging nothing is not a sample")
+        clock.advance(by: 18)
+
+        let frame = try XCTUnwrap(manager.sendData(Data("smoke 11.1 first line\r".utf8), to: peer).first)
+        clock.advance(by: 2.6)
+        _ = manager.handleInboundRRFrames(from: peer, path: DigiPath(), radio: .primary,
+                                          nr: 1, pf: true, isCommand: false)
+
+        XCTAssertEqual(session.outstandingCount, 0)
+        let ran = 2.6 - airtime(frame)
+        XCTAssertEqual(session.timers.srt, afterUA * 7 / 8 + ran / 8, accuracy: 1e-6)
+    }
+
+    /// A route's learned T1 is a T1V, 2·SRT, so a new session to it starts
+    /// where the last one's Select T1 left off: SRT half of it and T1V all
+    /// of it. Smoke run 2026-10-05 (issue 50): the learned value was taken
+    /// as SRT, so T1V came out near double it, and each reconnect to B
+    /// started higher than the last (7.0 s, 12.0 s, 19.4 s).
+    func testALearnedT1IsWhereTheNextSessionStarts() throws {
+        let (manager, _) = manager(AX25SessionConfig(initialRto: 3.0, learnedPathRto: 12.0))
+        _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
+        let session = try XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), radio: .primary))
+        XCTAssertEqual(session.timers.rto, 12.0, accuracy: 1e-9)
+        XCTAssertEqual(session.timers.srt, 6.0, accuracy: 1e-9)
+    }
+
+    /// Reconnecting on what each session learned settles on the link's
+    /// round trip instead of climbing.
+    func testReconnectsOnALearnedT1DoNotClimb() throws {
+        var learned: Double? = nil
+        var t1s: [Double] = []
+        for _ in 0..<4 {
+            let (manager, clock) = manager(AX25SessionConfig(initialRto: 3.0, learnedPathRto: learned))
+            _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
+            let session = try XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), radio: .primary))
+            let frame = try XCTUnwrap(manager.sendData(Data("hello".utf8), to: peer).first)
+            clock.currentTime += airtime(frame) + 1.4
+            _ = manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 1)
+            t1s.append(session.timers.rto)
+            learned = session.timers.rto
+        }
+        for (before, after) in zip(t1s, t1s.dropFirst()) {
+            XCTAssertLessThan(after, before, "T1 climbed across reconnects: \(t1s)")
+        }
+    }
 }

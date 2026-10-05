@@ -430,19 +430,35 @@ nonisolated struct AX25SessionTimers: Sendable {
     /// SRT's initial default, kept so `reset()` can restore it.
     let initialSRT: Double
 
+    /// T1V's starting value: the initial SRT, or a route's learned T1V.
+    let initialT1V: Double
+
+
     /// T1 for the next start. The name predates the spec's T1V.
     var rto: Double { t1v }
 
     /// SRT once measured; nil while it is still the initial default.
     var srtt: Double? { hasSample ? srt : nil }
 
-    init(initialSRT: Double = 3.0, adaptiveTimeout: Bool = true, t2AckDelay: Double = 2.0) {
-        let initial = initialSRT.isFinite && initialSRT > 0 ? initialSRT : 3.0
-        self.initialSRT = initial
-        self.srt = initial
-        self.t1v = initial
+    /// - Parameter resumingT1V: a route's learned T1V. It is 2·SRT, so the
+    ///   session starts with SRT at half of it and T1V at all of it, where
+    ///   the last session's Select T1 left off. Until 2026-10-05 it was
+    ///   taken as SRT, so T1V came out near double it and climbed with each
+    ///   reconnect (smoke run issue 50).
+    init(initialSRT: Double = 3.0, resumingT1V: Double? = nil,
+         adaptiveTimeout: Bool = true, t2AckDelay: Double = 2.0) {
+        let defaultSRT = initialSRT.isFinite && initialSRT > 0 ? initialSRT : 3.0
+        if let learned = resumingT1V, learned.isFinite, learned > 0 {
+            self.initialSRT = learned / 2.0
+            self.initialT1V = learned
+        } else {
+            self.initialSRT = defaultSRT
+            self.initialT1V = defaultSRT
+        }
+        self.srt = self.initialSRT
+        self.t1v = self.initialT1V
         self.adaptiveTimeout = adaptiveTimeout
-        self.t2AckDelay = max(0.1, min(t2AckDelay, initial * 2.0 / 3.0))
+        self.t2AckDelay = max(0.1, min(t2AckDelay, self.initialSRT * 2.0 / 3.0))
     }
 
     /// The SDL's Select T1 subroutine.
@@ -499,10 +515,10 @@ nonisolated struct AX25SessionTimers: Sendable {
         return max(configured, 2.0 * roundTrip)
     }
 
-    /// Back to the initial default, as a new link starts.
+    /// Back to where the session started, as a new link starts.
     mutating func reset() {
         srt = initialSRT
-        t1v = initialSRT
+        t1v = initialT1V
         hasSample = false
     }
 
