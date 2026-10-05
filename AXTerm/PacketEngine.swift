@@ -202,6 +202,11 @@ final class PacketEngine: ObservableObject {
     private(set) var stationStats: SQLiteStationStatsStore?
     /// Connected-mode sessions that survive a relaunch.
     private(set) var terminalSessions: SQLiteTerminalSessionStore?
+    /// Turns live sessions into stored ones. Made with the store, before any
+    /// view exists: the window used to make it in a task that ran after the
+    /// terminal had wired its receive hook, and that hook kept the nil it saw,
+    /// so no received line reached the history (smoke run issue 49).
+    private(set) var sessionRecorder: TerminalSessionRecorder?
     /// The personal mailbox: messages left by callers, and who called.
     private(set) var bbsMessages: SQLiteBBSMessageStore?
 
@@ -614,6 +619,7 @@ final class PacketEngine: ObservableObject {
                 self.stationStats = SQLiteStationStatsStore(dbQueue: queue)
                 let sessions = SQLiteTerminalSessionStore(dbQueue: queue)
                 self.terminalSessions = sessions
+                self.sessionRecorder = TerminalSessionRecorder(store: sessions)
                 // Nothing is connected at this point, so any session still
                 // marked live belongs to a process that did not come back:
                 // force quit, power cut, debugger stopped. Capped here, once,

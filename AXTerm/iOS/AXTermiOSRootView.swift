@@ -49,11 +49,6 @@ struct AXTermiOSRootView: View {
     @State private var routesScraper = BpqRoutesScraper()
     /// One door to the identity view, wherever a callsign is named.
     @StateObject private var profiles = NodeProfileCoordinator()
-    /// Writes each connected-mode session to the history store as it opens
-    /// and closes. The Mac has had one since the store existed; without it
-    /// here, History on a handheld was empty by construction — nothing was
-    /// ever wrong with the screen, nothing was ever written for it to show.
-    @State private var sessionRecorder: TerminalSessionRecorder?
     @State private var profileMenuTarget: String?
     /// "Show on Map" hands the map a station to select.
     @State private var mapFocusCallsign: String?
@@ -888,16 +883,11 @@ struct AXTermiOSRootView: View {
                 },
                 searchModel: searchModel,
                 locationService: context.locationService,
-                sessionRecorder: sessionRecorder,
+                sessionRecorder: client.sessionRecorder,
                 remoteSessionStore: context.terminalSessionReplication,
                 onIdentity: { profiles.peek($0) },
                 onIdentityMenu: { profileMenuTarget = $0.uppercased() }
             )
-            .task {
-                if sessionRecorder == nil {
-                    sessionRecorder = TerminalSessionRecorder(store: client.terminalSessions)
-                }
-            }
         }
     }
 
