@@ -47,6 +47,10 @@ nonisolated enum PacketToneSignature {
         /// A tone report touched an end of the ADC's range, so `toneVpp`
         /// understates the real level.
         let clipped: Bool
+        /// The packet's first report touched an end of the range. It is the
+        /// onset and is left out of `toneVpp` and `clipped` (see
+        /// `onsetReports`); kept so the evidence can say so.
+        var onsetClipped: Bool = false
 
         var toneFraction: Double { Double(toneVpp) / Double(TNC4LevelSample.fullScale) }
         var duration: Double { end - start }
@@ -72,6 +76,14 @@ nonisolated enum PacketToneSignature {
     /// The key-up of a carrier can smear into the first 100 ms report, so the
     /// quiet report may sit one report further back.
     static let carrierLookback = 2
+    /// The start of the tones is a transient as well. On 2026-10-04 every
+    /// packet from an IC-705 reached an ID-50's TNC4 with its first 100 ms
+    /// report swinging about twice as wide as the tones after it, off
+    /// center; at +24 dB that report touched the top rail while the tones sat
+    /// at 54% with room on both sides. So a packet longer than the minimum
+    /// takes its level, and whether it clipped, from the reports after the
+    /// first. Tones that are really too loud clip in every report.
+    static let onsetReports = 1
     /// Tones at least 15% (about 1.4 dB) away from the level between packets.
     /// This is what rejects the noise that comes back after a carrier
     /// with no data on it: a run of that noise has the same median as the
@@ -135,9 +147,13 @@ nonisolated enum PacketToneSignature {
                 .filter { !$0.clipped && Double($0.vpp) <= carrierRatio * Double(level) }
                 .min { $0.vpp < $1.vpp }
             if run.count >= minimumReports, duration <= maximumDuration, let carrier {
+                // Past the onset, when enough is left to stand on its own.
+                let body = run.count > minimumReports ? (i + onsetReports)..<j : i..<j
                 found.append(Segment(start: samples[i].t, end: samples[j - 1].t, reports: run.count,
-                                     toneVpp: level, carrierVpp: carrier.vpp,
-                                     clipped: samples[i..<j].contains(where: \.clipped)))
+                                     toneVpp: median(samples[body].map(\.vpp)) ?? level,
+                                     carrierVpp: carrier.vpp,
+                                     clipped: samples[body].contains(where: \.clipped),
+                                     onsetClipped: body.lowerBound > i && samples[i].clipped))
                 i = j
             } else {
                 i += 1

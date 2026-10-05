@@ -282,9 +282,10 @@ final class ReceiveLevelMonitor: ObservableObject {
         var evidence: [String] = []
         if let reading {
             for seg in reading.segments {
-                evidence.append(String(format: "Packet at +%.1f s: %@ for %.1f s, after a carrier at %@%@.",
+                evidence.append(String(format: "Packet at +%.1f s: %@ for %.1f s, after a carrier at %@%@%@.",
                                        seg.start, ReceiveLevelFinding.percent(seg.toneVpp), seg.duration + 0.1,
-                                       ReceiveLevelFinding.percent(seg.carrierVpp), seg.clipped ? ", clipped" : ""))
+                                       ReceiveLevelFinding.percent(seg.carrierVpp), seg.clipped ? ", clipped" : "",
+                                       seg.onsetClipped ? "; its first 0.1 s clipped and was left out, as the start of the transmission" : ""))
             }
             evidence += noiseEvidence(reading)
             if source == .beacon {

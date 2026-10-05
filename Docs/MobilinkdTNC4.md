@@ -170,6 +170,21 @@ be part of a run (the packet is then marked clipped) but never count as the
 quiet report, because an input pinned at one end, as after the IC-V8 unkeys,
 reads as a small peak-to-peak.
 
+The first report of the tones is the transmission's onset, and a packet
+longer than 3 reports takes its level, and whether it clipped, from the
+reports after it. On 2026-10-04 every packet from an IC-705 reached an
+ID-50's TNC4 with its first report swinging about twice as wide as the tones
+that followed (+6 dB), off center by up to 14,000. At +18 dB that report read
+54% beside 27% tones and stayed out of the run. At +24 dB it touched the top
+rail; clipping cut its peak-to-peak to within 30% of the 54% tones, so it
+joined the run and marked the whole packet clipped, and calibration stepped
+down a gain it then stepped back up to ten minutes later. Tones that really
+are too loud clip in every report and are still marked. The onset comes about
+300 ms after the carrier, in the preamble flags, so it costs no decoding.
+Whether it starts in the 705's transmit audio or the ID-50's receiver isn't
+known yet; AXTerm's modulator fades in over 2 ms and holds its level. A
+clipped onset is named in the calibration's evidence.
+
 ### Choosing the gain
 
 Input gain steps are 0 to 4: follower mode, then PGA gains of 2, 4, 8 and
