@@ -585,6 +585,11 @@ final class SessionCoordinator: ObservableObject {
     
     /// Test-only callback for monitoring reassembly events
     var onReassemblyEvent: ((String, Int, Bool) -> Void)?  // key, bufferSize, extracted
+
+    /// Test-only: what a radio's channel has learned.
+    func channelSettingsForTesting(_ radio: RadioID) -> TxAdaptiveSettings? {
+        adaptiveByScope[.radio(radio)]?.settings
+    }
     #endif
 
     init() {
@@ -864,6 +869,20 @@ final class SessionCoordinator: ObservableObject {
                                               evidence: evidence)
                 adaptiveByScope[taught] = CachedAdaptiveEntry(settings: channel, lastUpdated: Date())
                 noteLearned(taught, channel)
+                // The toolbar's channel figure follows the channel. Without
+                // this only the network sample, which pauses while a session
+                // is up, ever refreshed it: a route collapsed to K 1 / P 64
+                // under a toolbar still saying K 4 / P 256 (smoke run issue 51).
+                adaptiveStatusStore.updateSession(
+                    id: adaptiveSessionID(radio: taught.radio, destination: "", path: ""),
+                    destination: "",
+                    pathSignature: "",
+                    radio: taught.radio,
+                    settings: channel,
+                    lossRate: lossRate,
+                    etx: etx,
+                    srtt: srtt)
+                refreshDefaultChannel()
             }
             let normalizedKey = scope
             var entry = learningEntry(for: normalizedKey)
@@ -950,11 +969,7 @@ final class SessionCoordinator: ObservableObject {
             // figure. That is correct, and it must not silence the radio that
             // did (2026-09-17).
             if normalizedKey.route == nil {
-                let channels = adaptiveByScope.keys.filter { $0.route == nil }.map(\.radio)
-                if let chosen = Self.defaultChannelRadio(among: channels, primary: primaryRadioID) {
-                    adaptiveStatusStore.setDefaultChannel(
-                        id: adaptiveSessionID(radio: chosen, destination: "", path: ""))
-                }
+                refreshDefaultChannel()
             }
             adaptiveStatusStore.updateSession(
                 id: adaptiveSessionID(radio: normalizedKey.radio,
@@ -1023,6 +1038,16 @@ final class SessionCoordinator: ObservableObject {
             syncSessionManagerConfigFromAdaptive()
         }
         objectWillChange.send()
+    }
+
+    /// Points the toolbar's no-selection figure at a fixed channel: the
+    /// primary radio's when it has one, else the first that does.
+    private func refreshDefaultChannel() {
+        let channels = adaptiveByScope.keys.filter { $0.route == nil }.map(\.radio)
+        if let chosen = Self.defaultChannelRadio(among: channels, primary: primaryRadioID) {
+            adaptiveStatusStore.setDefaultChannel(
+                id: adaptiveSessionID(radio: chosen, destination: "", path: ""))
+        }
     }
 
     /// Hands the route's latest K and paclen to the session that produced the
@@ -1104,11 +1129,7 @@ final class SessionCoordinator: ObservableObject {
                     updatedAt: at)
                 restoredEntries += 1
             }
-            let channels = adaptiveByScope.keys.filter { $0.route == nil }.map(\.radio)
-            if let chosen = Self.defaultChannelRadio(among: channels, primary: primaryRadioID) {
-                adaptiveStatusStore.setDefaultChannel(
-                    id: adaptiveSessionID(radio: chosen, destination: "", path: ""))
-            }
+            refreshDefaultChannel()
             for (scope, rto) in restored.rto where (rememberedRto[scope]?.at ?? .distantPast) < rto.at {
                 rememberedRto[scope] = rto
             }
