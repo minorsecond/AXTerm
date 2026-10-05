@@ -70,13 +70,8 @@ nonisolated enum APRSMessage {
         case "?":
             return .generalQuery(text)
         case "}":
-            // Third-party: `}src>dst,path:<payload>`. Re-parse the payload
-            // after the header-terminating colon.
-            if let colon = text.dropFirst().firstIndex(of: ":") {
-                let payload = String(text[text.index(after: colon)...])
-                return parse(info: Data(payload.utf8))
-            }
-            return nil
+            // Third-party: `}src>dst,path:<payload>`. Re-parse the payload.
+            return APRSThirdParty.unwrap(info: info).flatMap { parse(info: $0.payload) }
         default:
             return nil
         }

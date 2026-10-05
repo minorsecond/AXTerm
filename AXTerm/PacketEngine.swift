@@ -2056,11 +2056,21 @@ final class PacketEngine: ObservableObject {
     /// message-class frame (`:` message/ack/rej or `?` query). Direct-vs-
     /// digipeated is read from the H-bit so the service can tell a direct copy
     /// from a relayed one, and the reply path is the reverse of the used digis.
+    /// Who wrote an APRS message: the source of a third-party frame, else the
+    /// station heard.
+    nonisolated static func aprsMessageSender(info: Data, heardFrom: String) -> String {
+        APRSThirdParty.unwrap(info: info)?.source ?? heardFrom
+    }
+
     private func detectAPRSMessage(from packet: Packet) {
         guard let svc = aprsMessaging,
               packet.frameType == .ui, !packet.isOwnEcho,
-              let sender = packet.from?.display,
+              let heardFrom = packet.from?.display,
               let parsed = APRSMessage.parse(info: packet.info) else { return }
+        // A message an igate relayed is its source's: the thread, the ack and
+        // the reply go to the station that wrote it, not to the igate (smoke
+        // run 2026-10-03-1, issue 27). The igate gates our ack back to it.
+        let sender = Self.aprsMessageSender(info: packet.info, heardFrom: heardFrom)
         let usedDigis = packet.via.filter { $0.repeated }
         let context = APRSMessagingService.InboundContext(
             sender: sender,

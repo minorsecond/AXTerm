@@ -36,6 +36,11 @@ nonisolated struct PacketTypeTag: Equatable, Sendable {
     /// same parsers the terminal and the map use.
     static func aprs(_ digest: APRSDigest) -> PacketTypeTag {
         switch digest {
+        case .relayed(let relay, let inner):
+            let tag = aprs(inner)
+            let route = relay.viaInternet ? "from the internet" : "from another channel"
+            return PacketTypeTag(label: tag.label,
+                                 tooltip: "\(tag.tooltip) Sent by \(relay.source) and relayed onto RF \(route).")
         case .position(let report):
             if report.weather != nil {
                 return PacketTypeTag(label: "WX", tooltip: "APRS weather report with the station's position.")

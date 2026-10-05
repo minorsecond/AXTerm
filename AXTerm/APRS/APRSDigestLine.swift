@@ -42,7 +42,19 @@ nonisolated enum APRSDigestLine {
         case .status(let text):
             let readable = readable(text)
             return readable.isEmpty ? "Status" : "Status: \(readable)"
+        case .relayed(let relay, let inner):
+            return relayed(relay, inner: text(for: inner, observer: observer, inMiles: inMiles,
+                                              definition: definition))
         }
+    }
+
+    /// A relayed frame: whose it is first, then what it says, then who put it
+    /// on the air and from where. The row above shows the gateway as the
+    /// sender, because that is the transmitter that was heard.
+    static func relayed(_ relay: APRSThirdParty, inner: String) -> String {
+        let route = relay.viaInternet ? "from the internet" : "from another channel"
+        let by = relay.gateway.map { "relayed by \($0) \(route)" } ?? "relayed \(route)"
+        return "\(relay.source): \(inner) · \(by)"
     }
 
     // MARK: - Position

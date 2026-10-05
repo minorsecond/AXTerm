@@ -24,7 +24,9 @@ type identifier selects the form:
   position after a random 0–120 s delay so the answers in earshot do not
   collide; this station is neither a weather station nor an igate.
 - **Third-party** — a `}`-wrapped frame (relayed by an i-gate) is unwrapped
-  once and its payload re-parsed, so a relayed message still reads.
+  once (`APRSThirdParty`) and its payload re-parsed, so a relayed message
+  still reads. It is the source's message: the thread, the ack and any reply
+  go to the station that wrote it, not to the i-gate that put it on RF.
 
 Positions remain the job of `APRSParser`; this layer is everything it returns
 `nil` for.

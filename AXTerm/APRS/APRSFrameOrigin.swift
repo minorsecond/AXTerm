@@ -50,16 +50,13 @@ nonisolated enum APRSFrameOrigin: Hashable, Sendable {
     ///   - info: the information field, verbatim.
     ///   - via: the AX.25 digipeater path as heard, `*` included or not.
     static func classify(info: Data, via: [String]) -> APRSFrameOrigin {
-        if let text = String(data: info, encoding: .utf8) ?? String(data: info, encoding: .ascii),
-           text.first == "}",
-           let inner = thirdPartyHeader(text) {
+        if let inner = APRSThirdParty.unwrap(info: info) {
             // Only claim the internet when the inner path says so. A third
             // party frame can also be an RF-to-RF relay, and calling that
             // "from the internet" would be a lie in the safer direction's
             // favor — the operator would discount a station they can reach.
-            if inner.path.contains(where: marksInternet) {
-                return .gatedOntoRF(originator: inner.originator,
-                                    gateway: inner.gateway ?? "unknown")
+            if inner.viaInternet {
+                return .gatedOntoRF(originator: inner.source, gateway: inner.gateway ?? "unknown")
             }
             return .radio
         }
@@ -67,27 +64,5 @@ nonisolated enum APRSFrameOrigin: Hashable, Sendable {
             return .internetPath
         }
         return .radio
-    }
-
-    /// Splits `}SRC>DEST,path:payload` into the parts that say where it came
-    /// from. The gateway is the last path element flagged used (`*`), which
-    /// is the station whose transmitter we actually heard.
-    private static func thirdPartyHeader(
-        _ text: String
-    ) -> (originator: String, path: [String], gateway: String?)? {
-        let body = text.dropFirst()                      // past `}`
-        guard let colon = body.firstIndex(of: ":") else { return nil }
-        let header = body[body.startIndex..<colon]
-        guard let arrow = header.firstIndex(of: ">") else { return nil }
-        let originator = String(header[header.startIndex..<arrow])
-        guard !originator.isEmpty else { return nil }
-        let afterArrow = header[header.index(after: arrow)...]
-        // `DEST,via,via…` — the destination is not part of the path.
-        let elements = afterArrow.split(separator: ",", omittingEmptySubsequences: false)
-            .map(String.init)
-        let path = Array(elements.dropFirst())
-        let gateway = path.last(where: { $0.hasSuffix("*") })?
-            .replacingOccurrences(of: "*", with: "")
-        return (originator, path, gateway)
     }
 }

@@ -44,6 +44,10 @@ nonisolated enum APRSDigest: Equatable, Sendable {
     case telemetry(APRSTelemetry.Frame)
     /// A status report (data type `>`).
     case status(String)
+    /// A third-party frame (`}`): another station's packet, put on RF by the
+    /// one we heard. The inner digest belongs to `thirdParty.source`, never
+    /// to the gateway (smoke run 2026-10-03-1, issue 27).
+    indirect case relayed(APRSThirdParty, APRSDigest)
 
     /// Decode one frame, or nil if it is not APRS.
     ///
@@ -59,6 +63,12 @@ nonisolated enum APRSDigest: Equatable, Sendable {
     /// position first.
     static func parse(destination: String, info: Data) -> APRSDigest? {
         guard let dti = info.first else { return nil }
+
+        // A third-party frame is the inner packet, decoded against its own
+        // destination (Mic-E's latitude), and credited to its own source.
+        if let relay = APRSThirdParty.unwrap(info: info) {
+            return parse(destination: relay.destination, info: relay.payload).map { .relayed(relay, $0) }
+        }
 
         if let object = APRSObjectReport.parse(info: info) { return .object(object) }
         if let message = APRSMessage.parse(info: info) { return .message(message) }
@@ -84,8 +94,16 @@ nonisolated enum APRSDigest: Equatable, Sendable {
         switch self {
         case .position(let r): return GreatCircle.Point(latitude: r.latitude, longitude: r.longitude)
         case .object(let o): return GreatCircle.Point(latitude: o.latitude, longitude: o.longitude)
+        case .relayed(_, let inner): return inner.coordinate
         case .weather, .message, .telemetry, .status: return nil
         }
+    }
+
+    /// The station the content belongs to: the source of a relayed frame,
+    /// else whoever sent it.
+    func originator(heardFrom sender: String) -> String {
+        if case .relayed(let relay, _) = self { return relay.source }
+        return sender
     }
 
     /// The symbol to draw beside the line, when the frame carries one.
@@ -93,6 +111,7 @@ nonisolated enum APRSDigest: Equatable, Sendable {
         switch self {
         case .position(let r): return (r.symbolTable, r.symbolCode)
         case .object(let o): return (o.symbolTable, o.symbolCode)
+        case .relayed(_, let inner): return inner.symbol
         case .weather, .message, .telemetry, .status: return nil
         }
     }
@@ -107,6 +126,8 @@ nonisolated enum APRSDigest: Equatable, Sendable {
     /// DATA, so there was no way to see the conversation for the beacons.
     var messageClass: ConsoleLine.MessageType {
         switch self {
+        case .relayed(_, let inner):
+            return inner.messageClass
         case .position, .weather, .object, .telemetry, .status:
             return .beacon
         case .message(let inbound):

@@ -171,6 +171,26 @@ comment and leaves the altitude column empty for a station at twelve thousand
 feet. The digits are taken as they come, up to six; `/A=` with nothing
 countable after it is still not an altitude.
 
+## Relayed frames
+
+A third-party frame (`}`, APRS 1.01 chapter 17) is how an igate puts a packet
+from APRS-IS, or a relay one from another channel, onto RF:
+
+    }KJ5PEC-13>APRS,TCPIP,W0NED*:@161843z3936.25N/10442.50W_...
+
+`APRSThirdParty` reads the header and `APRSDigest` decodes the inner packet as
+`.relayed(header, inner)`, against the inner destination (which is where a
+Mic-E latitude lives). The row still shows the igate as the sender, because
+that is the transmitter heard; the line says whose it is and how it came:
+
+    KJ5PEC-13: 39.60°N 104.71°W · 12.3 mi NE · … · relayed by W0NED from the internet
+
+"From another channel" replaces "from the internet" when the inner path has no
+TCPIP, TCPXX or qA marker. The content belongs to the source, never to the
+igate: a telemetry line is read with the source's own definition. Before smoke
+run 2026-10-03-1 (issue 27) every relayed position, weather report and object
+was printed raw, because only the message parser looked past the `}`.
+
 ## Telemetry
 
 `T#217,137,140,41,0,0,00010011` is thirteen channels: five analog counts and

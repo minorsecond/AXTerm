@@ -1312,7 +1312,9 @@ struct ConsoleLineView: View {
     /// The sending station's telemetry definition, if it has sent one.
     private var telemetryDefinition: APRSTelemetry.Definition? {
         guard let from = line.from else { return nil }
-        return telemetryDefinitions[CallsignValidator.normalize(from)]
+        // A relayed frame's telemetry is its source's, not the gateway's.
+        let owner = line.aprs?.originator(heardFrom: from) ?? from
+        return telemetryDefinitions[CallsignValidator.normalize(owner)]
     }
 
     /// The runs `attributed(_:)` turned into links, in the same order.
