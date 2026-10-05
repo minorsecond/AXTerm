@@ -255,4 +255,24 @@ final class NetRomRelayPlanTests: XCTestCase {
         XCTAssertEqual(plan.chain.count, 2,
                        "the ladder respects the budget even when knowledge runs deeper")
     }
+
+    // MARK: - With nobody to ask (smoke run 2026-10-03-1, issue 39)
+
+    func testTheFirstHopIsTheOperatorsPickThenTheHint() {
+        XCTAssertEqual(NetRomRelayPlan.relayFirstHop(override: "DRLNOD", routeHint: "KB5YZB-7"), "DRLNOD")
+        XCTAssertEqual(NetRomRelayPlan.relayFirstHop(override: nil, routeHint: "KB5YZB-7"), "KB5YZB-7")
+        XCTAssertNil(NetRomRelayPlan.relayFirstHop(override: nil, routeHint: nil))
+        XCTAssertNil(NetRomRelayPlan.relayFirstHop(override: "", routeHint: nil))
+    }
+
+    /// The terminal said it was "Asking a node to connect on our behalf
+    /// instead" with no node known, then sent nothing and said nothing more.
+    func testWithNoNodeToAskTheNoticeSaysNothingWasSent() {
+        let none = NetRomRelayPlan.nativeFallbackNotice(reason: "No route to K0EPI-3.", relayAvailable: false)
+        XCTAssertFalse(none.contains("Asking a node"), none)
+        XCTAssertTrue(none.hasSuffix("so nothing was sent."), none)
+
+        let some = NetRomRelayPlan.nativeFallbackNotice(reason: "No route to K0EPI-3.", relayAvailable: true)
+        XCTAssertTrue(some.contains("Asking a node to connect on our behalf instead"), some)
+    }
 }

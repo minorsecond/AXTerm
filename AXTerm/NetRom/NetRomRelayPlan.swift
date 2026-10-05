@@ -29,6 +29,25 @@ import Foundation
 
 nonisolated enum NetRomRelayPlan {
 
+    /// The first node a prompt relay would dial: the operator's pick, else
+    /// the route hint's next hop. Nil when there is nobody to ask.
+    static func relayFirstHop(override: String?, routeHint: String?) -> String? {
+        let hop = override ?? routeHint
+        return (hop?.isEmpty ?? true) ? nil : hop
+    }
+
+    /// What the terminal says when a native NET/ROM circuit can't be opened
+    /// and the old prompt relay would come next. With no node to ask, it
+    /// says so and the attempt ends there; it used to promise a node and
+    /// then send nothing (smoke run 2026-10-03-1, issue 39).
+    static func nativeFallbackNotice(reason: String, relayAvailable: Bool) -> String {
+        relayAvailable
+            ? reason + " Asking a node to connect on our behalf instead. Its menus will "
+                + "appear below, because that method talks to node command prompts."
+            : reason + " No node is known that could connect on our behalf either, so "
+                + "nothing was sent."
+    }
+
     /// A chain of node hops to walk, in order, before commanding the
     /// final destination.
     struct Plan: Equatable {

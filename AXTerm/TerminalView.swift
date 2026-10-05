@@ -3792,7 +3792,8 @@ struct TerminalView: View {
     ///   as one rung, because what runs next is the planner's decision.
     private func attemptNativeNetRomCircuit(
         intent: ConnectIntent,
-        announceFallback: Bool = true
+        announceFallback: Bool = true,
+        relayAvailable: Bool = true
     ) async -> ConnectAttemptStepResult? {
         let driver = sessionCoordinator.netRomDriver
         let target = CallsignNormalizer.toAddress(intent.normalizedTo)
@@ -3834,10 +3835,8 @@ struct TerminalView: View {
                 "destination": intent.normalizedTo, "reason": reason.operatorText
             ])
             if announceFallback {
-                client.appendSystemNotification(
-                    reason.operatorText
-                    + " Asking a node to connect on our behalf instead. Its menus will "
-                    + "appear below, because that method talks to node command prompts.")
+                client.appendSystemNotification(NetRomRelayPlan.nativeFallbackNotice(
+                    reason: reason.operatorText, relayAvailable: relayAvailable))
             } else {
                 client.appendSystemNotification(reason.operatorText)
             }
@@ -3921,9 +3920,10 @@ struct TerminalView: View {
                     + "have nowhere to go. Turn on \"Announce this station to the "
                     + "network\" under Settings › Packet Node if you want circuits to "
                     + "work here."
-            let fallbackText = announceFallback
-                ? " Asking a node to connect on our behalf instead. Its menus will appear below."
-                : ""
+            let fallbackText = !announceFallback ? ""
+                : relayAvailable
+                    ? " Asking a node to connect on our behalf instead. Its menus will appear below."
+                    : " No node is known that could connect on our behalf either, so nothing more was sent."
             client.appendSystemNotification(
                 "\(intent.normalizedTo.uppercased()) did not answer as a NET/ROM node "
                 + "(\(detail))." + advice + fallbackText)
@@ -4003,7 +4003,12 @@ struct TerminalView: View {
     private func executeNETROMAutoAttempt(intent: ConnectIntent, override: String?) async -> ConnectAttemptStepResult {
         // Real NET/ROM first. Only when the network cannot carry a circuit
         // do we fall back to driving node command prompts.
-        if let native = await attemptNativeNetRomCircuit(intent: intent) { return native }
+        let relay = NetRomRelayPlan.relayFirstHop(override: override, routeHint: intent.routeHint?.nextHop)
+        if let native = await attemptNativeNetRomCircuit(intent: intent, relayAvailable: relay != nil) {
+            return native
+        }
+        // The notice above already said there is no node to ask.
+        if relay == nil { return failForNoRelay(intent: intent, announce: false) }
         return await runNodePromptRelayWithRetry(intent: intent, override: override)
     }
 
@@ -4033,6 +4038,19 @@ struct TerminalView: View {
         return await runNodePromptRelay(intent: intent, override: override)
     }
 
+    /// No route and no node to ask: the attempt ends here, recorded as
+    /// failed. `announce` is false when the terminal has already said so.
+    private func failForNoRelay(intent: ConnectIntent, announce: Bool) -> ConnectAttemptStepResult {
+        let message = "No NET/ROM route to \(intent.normalizedTo)"
+        upsertSessionRecord(intent: intent, statusText: "Failed")
+        connectBarViewModel.markConnecting()
+        connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+        connectBarViewModel.markFailed(reason: .noRoute, detail: message)
+        updateActiveSessionRecordState("Failed")
+        if announce { client.appendSystemNotification(message) }
+        return .unavailable(message: message)
+    }
+
     /// One run of the node-prompt chain: plan it, reach the first node, drive
     /// its prompts. Separate from the caller so it can be run twice.
     private func runNodePromptRelay(
@@ -4041,14 +4059,7 @@ struct TerminalView: View {
         txViewModel.clearRelayFrameLoss()
 
         guard let nextHop = override ?? intent.routeHint?.nextHop, !nextHop.isEmpty else {
-            let message = "No NET/ROM route to \(intent.normalizedTo)"
-            upsertSessionRecord(intent: intent, statusText: "Failed")
-            connectBarViewModel.markConnecting()
-            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
-            connectBarViewModel.markFailed(reason: .noRoute, detail: message)
-            updateActiveSessionRecordState("Failed")
-            client.appendSystemNotification(message)
-            return .unavailable(message: message)
+            return failForNoRelay(intent: intent, announce: true)
         }
 
         // The station that lists the destination may not be one this
@@ -4522,7 +4533,9 @@ struct TerminalView: View {
     /// would be strange for them to use different transports.
     private func connectNETROM(intent: ConnectIntent, override: CallsignSSID?) {
         Task { @MainActor in
-            if await attemptNativeNetRomCircuit(intent: intent) != nil { return }
+            let relay = NetRomRelayPlan.relayFirstHop(
+                override: override?.stringValue, routeHint: intent.routeHint?.nextHop)
+            if await attemptNativeNetRomCircuit(intent: intent, relayAvailable: relay != nil) != nil { return }
             connectNETROMViaNodePrompts(intent: intent, override: override)
         }
     }
