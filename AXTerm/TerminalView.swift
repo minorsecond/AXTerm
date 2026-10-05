@@ -4895,9 +4895,18 @@ struct TerminalView: View {
         guard let url = selectedFileURL else { return }
         let digiPath = path.isEmpty ? DigiPath() : DigiPath.from(path.split(separator: ",").map { String($0.trimmingCharacters(in: .whitespaces)) })
 
-        if let error = sessionCoordinator.startTransfer(to: destination, fileURL: url, path: digiPath, transferProtocol: transferProtocol, compressionSettings: compressionSettings) {
-            transferError = error
-            showingTransferError = true
+        // The staged copy is the transfer's now: the sheet closing would
+        // discard it before the read below has opened it.
+        selectedFileURL = nil
+        Task { @MainActor in
+            let error = await sessionCoordinator.startTransfer(
+                to: destination, fileURL: url, path: digiPath,
+                transferProtocol: transferProtocol, compressionSettings: compressionSettings)
+            OutgoingFileStaging.discard(url)
+            if let error {
+                transferError = error
+                showingTransferError = true
+            }
         }
     }
 }

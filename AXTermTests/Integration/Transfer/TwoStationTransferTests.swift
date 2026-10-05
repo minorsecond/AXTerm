@@ -621,10 +621,20 @@ final class TwoStationTransferTests: XCTestCase {
         let data = pattern(400)
         try data.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        XCTAssertNil(a.coordinator.startTransfer(to: b.callsign, fileURL: url, compressionSettings: .disabled))
+        let started = await a.coordinator.startTransfer(to: b.callsign, fileURL: url, compressionSettings: .disabled)
+        XCTAssertNil(started)
         try await waitUntil("offered") { !self.b.coordinator.pendingIncomingTransfers.isEmpty }
         b.coordinator.acceptIncomingTransfer(b.coordinator.pendingIncomingTransfers[0].id)
         try await waitUntil("done") { self.b.coordinator.transfers.first?.status == .completed }
         XCTAssertEqual(b.savedData(b.coordinator.transfers.first), data)
+    }
+
+    /// Smoke run 2026-10-03-1, issue 17: the read now happens off the main
+    /// actor; a file that can't be read still says so and starts nothing.
+    func testAnUnreadableFileSaysSoAndStartsNothing() async {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("missing-\(UUID().uuidString).bin")
+        let error = await a.coordinator.startTransfer(to: b.callsign, fileURL: missing, compressionSettings: .disabled)
+        XCTAssertEqual(error, "Failed to read file")
+        XCTAssertTrue(a.coordinator.transfers.isEmpty)
     }
 }

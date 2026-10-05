@@ -73,6 +73,9 @@ final class TestCommandChannelTests: XCTestCase {
         drop(#"{"action":"sendFile","to":"K0BBB-2","file":"t3k.bin","protocol":"axdp","compression":"off"}"#,
              named: "02-send", in: commandsA)
         channelA.poll()
+        // The file is read off the main actor, and the result comes after.
+        let answered = await FullStackFuzz.wait(10) { self.result("02-send", in: commandsA) != nil }
+        XCTAssertTrue(answered)
         XCTAssertEqual(result("02-send", in: commandsA)?["ok"] as? Bool, true, "\(String(describing: result("02-send", in: commandsA)))")
         let offered = await FullStackFuzz.wait(10) { !b.coordinator.pendingIncomingTransfers.isEmpty }
         XCTAssertTrue(offered)

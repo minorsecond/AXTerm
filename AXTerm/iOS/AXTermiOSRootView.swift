@@ -595,13 +595,15 @@ struct AXTermiOSRootView: View {
             return
         }
         let transferProtocol = sessionCoordinator.availableProtocols(for: callsign).first ?? .axdp
-        if let error = sessionCoordinator.startTransfer(
-            to: session.remoteAddress.display, fileURL: file.url,
-            path: session.path, transferProtocol: transferProtocol) {
-            fileProblem = error
-            IncomingDocumentRouter.discard(file)
-        } else {
-            selection = .terminal
+        Task { @MainActor in
+            if let error = await sessionCoordinator.startTransfer(
+                to: session.remoteAddress.display, fileURL: file.url,
+                path: session.path, transferProtocol: transferProtocol) {
+                fileProblem = error
+                IncomingDocumentRouter.discard(file)
+            } else {
+                selection = .terminal
+            }
         }
     }
 

@@ -9,7 +9,8 @@
 //  its temporary directory. A JSON file dropped there runs once, in name
 //  order, through the same SessionCoordinator calls the buttons use, and a
 //  <name>.result.json is written beside it: {"ok": true} or {"ok": false,
-//  "error": "..."}. Only started with --test-mode.
+//  "error": "..."}. sendFile's result comes once its file has been read.
+//  Only started with --test-mode.
 //
 //  {"action":"connect","to":"K0EPI-3"}
 //  {"action":"disconnect","to":"K0EPI-3"}
@@ -44,6 +45,9 @@ final class TestCommandChannel {
     private let filesFolder: URL
     private weak var coordinator: SessionCoordinator?
     private var timer: Timer?
+    /// Work a command leaves to finish asynchronously; its result file is
+    /// written when it returns. Set by `run`, taken by `poll`.
+    private var pending: (() async -> String?)?
 
     init(folder: URL, coordinator: SessionCoordinator, filesFolder: URL) {
         self.folder = folder
@@ -84,6 +88,7 @@ final class TestCommandChannel {
             let url = folder.appendingPathComponent(name)
             let base = String(name.dropLast(".json".count))
             let error: String?
+            pending = nil
             if let data = try? Data(contentsOf: url),
                let command = try? JSONDecoder().decode(Command.self, from: data) {
                 error = run(command)
@@ -91,18 +96,29 @@ final class TestCommandChannel {
                 error = "Not a command: expected JSON with an \"action\""
             }
             try? FileManager.default.removeItem(at: url)
-            var result: [String: Any] = ["ok": error == nil]
-            if let error { result["error"] = error }
-            if let out = try? JSONSerialization.data(withJSONObject: result) {
-                try? out.write(to: folder.appendingPathComponent(base + ".result.json"))
+            if error == nil, let work = pending {
+                pending = nil
+                Task { @MainActor [weak self] in self?.writeResult(base, error: await work()) }
+            } else {
+                writeResult(base, error: error)
             }
-            TxLog.debug(.session, "Test command", ["name": base, "ok": error == nil, "error": error ?? ""])
             ran.append(base)
         }
         return ran
     }
 
-    /// Runs one command. Returns why it failed, or nil.
+    private func writeResult(_ base: String, error: String?) {
+        var result: [String: Any] = ["ok": error == nil]
+        if let error { result["error"] = error }
+        if let out = try? JSONSerialization.data(withJSONObject: result) {
+            try? out.write(to: folder.appendingPathComponent(base + ".result.json"))
+        }
+        TxLog.debug(.session, "Test command", ["name": base, "ok": error == nil, "error": error ?? ""])
+    }
+
+    /// Runs one command. Returns why it failed, or nil. A command that
+    /// finishes later (sendFile reads its file off the main actor) leaves
+    /// that work in `pending`.
     private func run(_ command: Command) -> String? {
         guard let coordinator else { return "No coordinator" }
         let manager = coordinator.sessionManager
@@ -150,8 +166,13 @@ final class TestCommandChannel {
             case "deflate": compression = .withAlgorithm(.deflate)
             default: return "Unknown compression \(command.compression ?? "")"
             }
-            return coordinator.startTransfer(to: to, fileURL: url, transferProtocol: transferProtocol,
-                                             compressionSettings: compression)
+            // The read runs off the main actor and the result is written
+            // when it is done (see `pending`).
+            pending = { [coordinator] in
+                await coordinator.startTransfer(to: to, fileURL: url, transferProtocol: transferProtocol,
+                                                compressionSettings: compression)
+            }
+            return nil
 
         case "acceptOffer", "declineOffer":
             guard let file = command.file else { return "\(command.action) needs \"file\"" }

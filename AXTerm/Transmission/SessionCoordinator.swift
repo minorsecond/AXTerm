@@ -5033,7 +5033,7 @@ final class SessionCoordinator: ObservableObject {
         path: DigiPath = DigiPath(),
         transferProtocol: TransferProtocolType = .axdp,
         compressionSettings: TransferCompressionSettings = .useGlobal
-    ) -> String? {
+    ) async -> String? {
         // Validate before reading, so a refusal costs no disk read.
         if let error = validateProtocolRequirements(for: destination, protocol: transferProtocol) {
             return error
@@ -5042,7 +5042,16 @@ final class SessionCoordinator: ObservableObject {
         // Read the whole file now. The caller may hold a security scope only
         // for the length of this call (a file picked on iOS), and a transfer
         // that read lazily would fail partway through the send.
-        guard let originalFileData = try? Data(contentsOf: fileURL) else {
+        //
+        // Off the main actor: opening a file can wait on a macOS privacy
+        // prompt, and Station B froze for 23 minutes behind one for the
+        // Downloads folder while its link went unanswered (smoke run
+        // 2026-10-03-1, issue 17). A plain nonisolated async function would
+        // still run on the main actor under this target's default isolation.
+        let read = await Task.detached(priority: .userInitiated) {
+            Result { try Data(contentsOf: fileURL) }
+        }.value
+        guard case .success(let originalFileData) = read else {
             TxLog.error(.session, "Failed to read file for transfer", error: nil, [
                 "file": fileURL.lastPathComponent
             ])
