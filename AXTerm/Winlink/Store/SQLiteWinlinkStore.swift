@@ -397,6 +397,12 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
         }
     }
 
+    func heldMessageIDs() throws -> Set<String> {
+        try dbQueue.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT id FROM \(WinlinkMessageRecord.databaseTableName)"))
+        }
+    }
+
     func messageTombstones() throws -> [WinlinkMessageTombstoneRecord] {
         try dbQueue.read { db in
             try WinlinkMessageTombstoneRecord.fetchAll(db)

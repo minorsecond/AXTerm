@@ -117,6 +117,19 @@ final class SQLiteWinlinkStoreTests: XCTestCase {
         XCTAssertNotNil(summary.trashedAt)
     }
 
+    // MARK: - Held messages
+
+    /// The MIDs an exchange refuses when offered again (issue 63): every
+    /// message the store holds, whichever folder it is in. A message deleted
+    /// for good is not held, so it may come down again.
+    func testHeldMessageIDsAreTheMessagesInTheStore() throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "INBOUND00001"))
+        try store.saveInbound(makeMessage(mid: "GONE00000001"))
+        _ = try store.deleteMessages(mids: ["GONE00000001"])
+        XCTAssertEqual(try store.heldMessageIDs(), ["INBOUND00001"])
+    }
+
     // MARK: - Permanent deletion
 
     /// Everything goes: the message, its attachments, its state row. The

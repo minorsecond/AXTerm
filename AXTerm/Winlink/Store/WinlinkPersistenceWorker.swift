@@ -72,6 +72,10 @@ actor WinlinkPersistenceWorker {
         try store.partialBodies()
     }
 
+    func heldMessageIDs() throws -> Set<String> {
+        try store.heldMessageIDs()
+    }
+
     func replaceCatalogCache(_ items: [WinlinkCatalogItemRecord]) throws {
         try store.replaceCatalogCache(items)
     }

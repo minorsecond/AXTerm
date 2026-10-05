@@ -210,7 +210,9 @@ final class WinlinkSessionRunner: ObservableObject {
             role: role,
             outbound: prepared,
             partialInbound: partialInbound,
-            inboundSelection: inboundSelection))
+            inboundSelection: inboundSelection,
+            // Offered again, a message already here is refused (issue 63).
+            alreadyHeld: (try? await worker.heldMessageIDs()) ?? []))
         self.engine = engine
         self.transport = transport
 

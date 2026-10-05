@@ -26,6 +26,7 @@ nonisolated final class FallbackWinlinkStore: WinlinkStore, @unchecked Sendable 
     func markDeferred(mid: String) throws {}
     func savePartialBody(mid: String, compressedSize: Int, data: Data) throws {}
     func partialBodies() throws -> [WinlinkPartialBodyRecord] { [] }
+    func heldMessageIDs() throws -> Set<String> { [] }
     func deletePartialBody(mid: String) throws {}
     func revertSendingToQueued() throws {}
     func recordSentOffset(mid: String, offset: Int) throws {}

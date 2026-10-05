@@ -261,6 +261,21 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertNil(harness.failureReason)
     }
 
+    /// A message this station already holds is refused (`N`), not
+    /// downloaded again. Smoke run 2026-10-03-1, issue 63: B (ID-50)
+    /// answered `FS Y` to a MID already in its inbox and the whole body
+    /// crossed the air a second time.
+    func testAMessageAlreadyHeldIsRefused() throws {
+        let held = makeMessage(mid: "HELD00000001")
+        let fresh = makeMessage(mid: "FRESH0000001")
+        let harness = Harness(config: .init(myCallsign: "K0EPI", password: "SECRET",
+                                            alreadyHeld: ["HELD00000001"]))
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.receive(try remoteProposalBlock(for: [held, fresh]))
+        XCTAssertTrue(harness.sentText.hasSuffix("FS NY\r"), harness.sentText)
+    }
+
     func testResumeOffsetFramesFromOffset() throws {
         let message = makeMessage(mid: "RESUME000001", body: String(repeating: "payload line\r\n", count: 100))
         let outbound = try prepare(message)

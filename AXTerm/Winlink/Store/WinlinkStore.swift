@@ -80,6 +80,9 @@ nonisolated protocol WinlinkStore: Sendable {
     // B2F resume: partially received compressed bodies
     func savePartialBody(mid: String, compressedSize: Int, data: Data) throws
     func partialBodies() throws -> [WinlinkPartialBodyRecord]
+    /// Every MID the store holds, in any folder: offered again in an
+    /// exchange, they are refused rather than downloaded twice.
+    func heldMessageIDs() throws -> Set<String>
     func deletePartialBody(mid: String) throws
 
     // Mailbox reading

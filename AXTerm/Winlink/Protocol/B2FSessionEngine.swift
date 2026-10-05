@@ -49,14 +49,20 @@ nonisolated final class B2FSessionEngine {
         var partialInbound: [String: PartialInboundBody]
         /// Who decides which offered messages come down this session.
         var inboundSelection: InboundSelectionPolicy
+        /// MIDs this station already holds, or deleted for good. Offered
+        /// again, they are refused (`N`) rather than downloaded a second
+        /// time (smoke run 2026-10-03-1, issue 63).
+        var alreadyHeld: Set<String>
 
         init(myCallsign: String, password: String? = nil,
              sid: WinlinkSID = .axterm(version: "1.0"),
              role: Role = .initiator,
              outbound: [PreparedOutbound] = [],
              partialInbound: [String: PartialInboundBody] = [:],
-             inboundSelection: InboundSelectionPolicy = .acceptAll) {
+             inboundSelection: InboundSelectionPolicy = .acceptAll,
+             alreadyHeld: Set<String> = []) {
             self.inboundSelection = inboundSelection
+            self.alreadyHeld = alreadyHeld
             self.myCallsign = myCallsign
             self.password = password
             self.sid = sid
@@ -799,7 +805,7 @@ nonisolated final class B2FSessionEngine {
             let acceptable = proposal.kind == .encapsulatedMessage
                 && proposal.compressedSize >= 6
                 && proposal.compressedSize <= 4 * 1024 * 1024
-            guard acceptable else {
+            guard acceptable, !config.alreadyHeld.contains(proposal.mid) else {
                 proposalPlan.append(.refuse)
                 continue
             }
