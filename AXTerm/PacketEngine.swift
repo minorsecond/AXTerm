@@ -244,10 +244,15 @@ final class PacketEngine: ObservableObject {
     ///   the same alerts again and must not reprint hours of them.
     private func recordWeatherAlert(from packet: Packet, sentBy station: String,
                                     announce: Bool = true) {
+        // NWS bulletins reach RF relayed: `}WXSVR-x>…` from a local igate.
+        // The NWS gateway is the inner source; checking the igate's callsign
+        // dropped every alert that came this way (issue 27).
+        let relay = APRSThirdParty.unwrap(info: packet.info)
         guard Self.carriesAPRS(packet),
               case .bulletin(let id, let text)? = APRSMessage.parse(info: packet.info),
               let alert = APRSWeatherAlert.classify(
-                bulletinID: id, text: text, from: station, heard: packet.timestamp)
+                bulletinID: id, text: text, from: relay?.source ?? station,
+                relayedBy: relay == nil ? nil : station, heard: packet.timestamp)
         else { return }
         if aprsAlerts.record(alert), announce {
             TxLog.inbound(.frame, "NWS alert relayed onto APRS", [
@@ -275,12 +280,17 @@ final class PacketEngine: ObservableObject {
     /// - Parameter announce: false when replaying stored history.
     private func recordAPRSObject(from packet: Packet, sentBy station: String,
                                   announce: Bool = true) {
+        // A relayed object is placed by the station inside the third-party
+        // frame; the station heard is only the gateway (issue 27).
+        let relay = APRSThirdParty.unwrap(info: packet.info)
         guard Self.carriesAPRS(packet),
-              let report = APRSObjectReport.parse(info: packet.info) else { return }
-        if aprsObjects.record(report, from: station, at: packet.timestamp), announce {
+              let report = APRSObjectReport.parse(info: relay?.payload ?? packet.info) else { return }
+        let owner = relay?.source ?? station
+        if aprsObjects.record(report, from: owner, relayedBy: relay == nil ? nil : station,
+                              at: packet.timestamp), announce {
             TxLog.inbound(.frame, "APRS object heard", [
                 "name": report.name,
-                "from": station,
+                "from": owner,
                 "live": String(report.isLive),
                 "symbol": report.symbolLabel,
             ])

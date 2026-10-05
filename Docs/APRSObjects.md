@@ -100,6 +100,18 @@ Classification needs two independent signals — the sender looks like a gateway
 station called `NWSMITH` is a person, and a club bulletin joking about a flood
 watch is not a warning.
 
+Most bulletins reach RF relayed: a local igate transmits `}WXSVR-CO>…`, a
+third-party frame. The sender checked is the NWS gateway inside the frame, and
+the igate is shown beside it: `From WXSVR-CO, relayed onto RF by W0XYZ …`.
+Until smoke run 2026-10-03-1 (issue 27) the igate's own callsign was checked,
+failed the gateway test, and every alert that arrived this way was dropped.
+Alerts are keyed by the station that put them on RF, so two igates relaying the
+same product still count as two pieces of evidence.
+
+Objects and items in third-party frames are filed the same way: placed by the
+station inside the frame, which alone may kill them, with the igate recorded
+as `relayedBy` and shown on the object's card.
+
 ## On the map
 
 Cartography rules that came out of using it:

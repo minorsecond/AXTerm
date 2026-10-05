@@ -1161,7 +1161,8 @@ struct StationsMapView: View {
                                 bearing, GreatCircle.compassPoint(bearing)))
         }
         lines.append("")
-        lines.append("Reported by \(placed.reportedBy)")
+        lines.append("Reported by \(placed.reportedBy)"
+                     + (placed.relayedBy.map { ", relayed onto RF by \($0)" } ?? ""))
         lines.append("Heard \(placed.heard.formatted(.relative(presentation: .named)))"
                      + (placed.timesHeard > 1 ? " \u{b7} repeated \(placed.timesHeard) times" : ""))
         if placed.timesHeard == 1 {
@@ -1996,7 +1997,8 @@ struct StationsMapView: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text("\(hazard.report.name) \u{b7} \(hazard.report.symbolLabel)")
                                 .font(.caption.weight(.semibold))
-                            Text("Reported by \(hazard.reportedBy), heard "
+                            Text("Reported by \(hazard.reportedBy)"
+                                 + (hazard.relayedBy.map { " via \($0)" } ?? "") + ", heard "
                                  + hazard.heard.formatted(.relative(presentation: .named))
                                  + (hazard.timesHeard == 1 ? " (unconfirmed)" : ""))
                                 .font(.caption2)

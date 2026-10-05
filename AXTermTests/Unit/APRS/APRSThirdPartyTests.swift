@@ -90,4 +90,32 @@ final class APRSThirdPartyTests: XCTestCase {
         XCTAssertEqual(PacketEngine.aprsMessageSender(
             info: Data(":AK0U-4   :Hello{12".utf8), heardFrom: "K5RHD-10"), "K5RHD-10")
     }
+
+    /// An NWS bulletin a local igate relays reads `}WXSVR-x>…`. The alert
+    /// gate checked the igate's callsign against the NWS gateway prefixes and
+    /// dropped every alert that arrived this way.
+    func testARelayedNWSAlertIsKeptAndCredited() throws {
+        let alert = try XCTUnwrap(APRSWeatherAlert.classify(
+            bulletinID: "1", text: "SEVERE THUNDERSTORM WARNING UNTIL 7PM",
+            from: "WXSVR-CO", relayedBy: "w0xyz", heard: Date()))
+        XCTAssertEqual(alert.source, "WXSVR-CO")
+        XCTAssertEqual(alert.relayedBy, "W0XYZ")
+        XCTAssertTrue(alert.provenance().hasPrefix("From WXSVR-CO, relayed onto RF by W0XYZ"), alert.provenance())
+        XCTAssertNil(APRSWeatherAlert.classify(bulletinID: "1", text: "SEVERE THUNDERSTORM WARNING",
+                                               from: "W0XYZ", heard: Date()),
+                     "the igate's own callsign is not an NWS gateway")
+    }
+
+    /// A relayed object is placed by its source, so only its source may kill
+    /// it; the gateway is recorded beside it.
+    func testARelayedObjectBelongsToItsSource() throws {
+        let live = try XCTUnwrap(APRSObjectReport.parse(info: Data(";SPOTTER  *161843z3923.61N/10440.49W/note".utf8)))
+        let kill = try XCTUnwrap(APRSObjectReport.parse(info: Data(";SPOTTER  _161843z3923.61N/10440.49W/note".utf8)))
+        var store = APRSObjectStore()
+        store.record(live, from: "KC0ABC", relayedBy: "W3OO-1", at: Date())
+        XCTAssertEqual(store.live().first?.reportedBy, "KC0ABC")
+        XCTAssertEqual(store.live().first?.relayedBy, "W3OO-1")
+        XCTAssertFalse(store.record(kill, from: "W3OO-1", at: Date()), "the gateway does not own it")
+        XCTAssertTrue(store.record(kill, from: "KC0ABC", relayedBy: "W3OO-1", at: Date()))
+    }
 }

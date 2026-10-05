@@ -36,7 +36,7 @@ nonisolated struct APRSWeatherAlert: Equatable, Sendable {
         }
     }
 
-    /// The station that transmitted it — the gateway, not the NWS.
+    /// The NWS relay gateway that sent the bulletin (WXSVR and the like).
     var source: String
     /// Bulletin identifier, so repeats of the same bulletin collapse.
     var identifier: String
@@ -44,6 +44,8 @@ nonisolated struct APRSWeatherAlert: Equatable, Sendable {
     var severity: Severity
     /// When this receiver heard it. Never the sender's clock.
     var heard: Date
+    /// The igate that put it on RF, when it came in a third-party frame.
+    var relayedBy: String? = nil
 
     /// Alerts older than this are almost certainly a gateway that has gone
     /// off the air rather than weather that is still happening.
@@ -56,7 +58,8 @@ nonisolated struct APRSWeatherAlert: Equatable, Sendable {
     /// The line that must appear wherever the alert does.
     func provenance(now: Date = Date()) -> String {
         let age = heard.formatted(.relative(presentation: .named))
-        let base = "Relayed by \(source) \(age), originally from an internet feed"
+        let base = relayedBy.map { "From \(source), relayed onto RF by \($0) \(age), originally from an internet feed" }
+            ?? "Relayed by \(source) \(age), originally from an internet feed"
         return isStale(now: now)
             ? base + ". No update since; treat as possibly out of date."
             : base + "."
@@ -83,12 +86,13 @@ extension APRSWeatherAlert {
     /// positives — a station called `NWSMITH` is a person, and a club bulletin
     /// mentioning a "flood watch" fundraiser is not a warning.
     static func classify(bulletinID: String, text: String, from source: String,
-                         heard: Date) -> APRSWeatherAlert? {
+                         relayedBy gateway: String? = nil, heard: Date) -> APRSWeatherAlert? {
         guard isGateway(source) else { return nil }
         guard let severity = severity(of: text) else { return nil }
         return APRSWeatherAlert(source: source.uppercased(), identifier: bulletinID,
                                 text: text.trimmingCharacters(in: .whitespaces),
-                                severity: severity, heard: heard)
+                                severity: severity, heard: heard,
+                                relayedBy: gateway?.uppercased())
     }
 
     /// Severity from the wording. Ordered so "warning" wins over "watch" when
@@ -113,7 +117,7 @@ nonisolated struct APRSWeatherAlertStore: Equatable, Sendable {
     /// collapsing them would hide that.
     @discardableResult
     mutating func record(_ alert: APRSWeatherAlert) -> Bool {
-        let key = "\(alert.source)|\(alert.identifier)"
+        let key = "\(alert.relayedBy ?? alert.source)|\(alert.identifier)"
         let existed = alerts[key]
         alerts[key] = alert
         return existed?.text != alert.text

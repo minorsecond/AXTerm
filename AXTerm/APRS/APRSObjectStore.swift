@@ -15,6 +15,9 @@ nonisolated struct APRSObjectStore: Equatable, Sendable {
         /// The station that transmitted it. An object is a claim by a person,
         /// and a claim with no name attached is not one an operator can weigh.
         var reportedBy: String
+        /// The gateway that put it on RF, when it arrived in a third-party
+        /// frame; `reportedBy` is then the station that placed it.
+        var relayedBy: String?
         /// When this receiver heard it — not the sender's clock, which may be
         /// anything at all.
         var heard: Date
@@ -54,7 +57,7 @@ nonisolated struct APRSObjectStore: Equatable, Sendable {
     /// - Returns: true when this changed anything worth redrawing for.
     @discardableResult
     mutating func record(_ report: APRSObjectReport, from station: String,
-                         at when: Date) -> Bool {
+                         relayedBy gateway: String? = nil, at when: Date) -> Bool {
         let key = report.key
         guard !key.isEmpty else { return false }
 
@@ -78,12 +81,13 @@ nonisolated struct APRSObjectStore: Equatable, Sendable {
             let changed = existing.report != report || existing.reportedBy != station
             existing.report = report
             existing.reportedBy = station
+            existing.relayedBy = gateway
             existing.heard = when
             existing.timesHeard += 1
             placed[key] = existing
             return changed
         }
-        placed[key] = Placed(report: report, reportedBy: station,
+        placed[key] = Placed(report: report, reportedBy: station, relayedBy: gateway,
                              heard: when, firstHeard: when, timesHeard: 1)
         return true
     }
