@@ -155,6 +155,13 @@ final class LearnedRouteMemoryTests: XCTestCase {
                      "a round trip belongs to one route; the channel has none")
     }
 
+    func testARowAMomentAheadCountsAsJustWritten() {
+        // SQLite keeps milliseconds, so a row read back at once can be
+        // rounded a fraction ahead of the clock.
+        let snap = LearnedRouteSnapshot(scope: route, settings: learned(), at: now.addingTimeInterval(0.0005))
+        XCTAssertNotNil(LearnedRouteMemory.restore([snap], now: now).recent[route])
+    }
+
     func testARowFromTheFutureIsIgnored() {
         // A clock set back after the row was written.
         let snap = LearnedRouteSnapshot(scope: route, settings: learned(), at: now.addingTimeInterval(3600))

@@ -98,6 +98,9 @@ nonisolated enum LearnedRouteMemory {
     /// wrong start is corrected by the session's first sample (Select T1).
     static let rtoLifetime: TimeInterval = 7 * 86_400
 
+    /// How far ahead of now a row may be and still count as just written.
+    static let futureTolerance: TimeInterval = 60
+
     struct Restored {
         /// Entries still inside `recentLifetime`, as settings.
         var recent: [AdaptiveScope: TxAdaptiveSettings] = [:]
@@ -115,10 +118,12 @@ nonisolated enum LearnedRouteMemory {
     static func restore(_ rows: [LearnedRouteSnapshot], now: Date) -> Restored {
         var out = Restored()
         for row in rows {
-            let age = now.timeIntervalSince(row.updatedAt)
-            // A row from the future means the clock moved back: its age is
-            // unknown, so it is trusted for nothing.
-            guard age >= 0 else { continue }
+            // A row well in the future means the clock moved back: its age
+            // is unknown, so it is trusted for nothing. A row a moment
+            // ahead is the database's millisecond rounding.
+            let rawAge = now.timeIntervalSince(row.updatedAt)
+            guard rawAge >= -futureTolerance else { continue }
+            let age = max(0, rawAge)
             if age <= recentLifetime {
                 out.recent[row.scope] = row.applied(to: TxAdaptiveSettings())
                 out.recentAt[row.scope] = row.updatedAt
