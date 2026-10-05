@@ -72,9 +72,9 @@ extension SessionCoordinator {
             return
         }
         if let runner = yappTransfers[id] {
-            // Too late once the receiver has acknowledged the file; it
-            // finishes on its own.
-            guard !runner.yapp.fileAcknowledged else {
+            // Too late once the whole file is out (EF sent); it finishes
+            // on its own.
+            guard !runner.yapp.tooLateToCancel else {
                 transfersEndedLocally.remove(id)
                 return
             }

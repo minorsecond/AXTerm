@@ -328,7 +328,7 @@ final class YAPPProtocolTests: XCTestCase {
         yapp.handleIncomingData(YAPPEncoder.receiveReady())
         yapp.handleIncomingData(YAPPEncoder.receiveFile())
         yapp.handleIncomingData(YAPPEncoder.ackEndFile())
-        XCTAssertTrue(yapp.fileAcknowledged)
+        XCTAssertTrue(yapp.tooLateToCancel)
 
         yapp.cancel()
         XCTAssertEqual(spy.sent.last, YAPPEncoder.endTransmission(), "no CN after AF")
@@ -339,14 +339,41 @@ final class YAPPProtocolTests: XCTestCase {
         XCTAssertEqual(spy.completion?.ok, true)
     }
 
-    func testACancelBeforeAFStillCancels() throws {
+    /// Once EF is out the whole file is on its way: AX.25 delivers the EF
+    /// whatever a later CN says, and the receiver saves the file on it. A
+    /// cancel then only made the stations disagree, A (705) Canceled and
+    /// B (ID-50) Completed with the file (smoke run 2026-10-03-1, issue 60).
+    /// It is too late, as after AF, and the transfer finishes.
+    func testACancelAfterEFIsTooLateAndTheTransferFinishes() throws {
         let yapp = YAPPProtocol()
         let spy = YAPPSpy()
         yapp.delegate = spy
         try yapp.startSending(fileName: "F", fileData: Data([1, 2]))
         yapp.handleIncomingData(YAPPEncoder.receiveReady())
         yapp.handleIncomingData(YAPPEncoder.receiveFile())
-        XCTAssertFalse(yapp.fileAcknowledged, "EF sent, AF not yet back")
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.endFile(), "EF sent, AF not yet back")
+        XCTAssertTrue(yapp.tooLateToCancel)
+
+        yapp.cancel()
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.endFile(), "no CN after EF")
+        XCTAssertNotEqual(yapp.state, .cancelled)
+        XCTAssertNil(spy.completion)
+
+        yapp.handleIncomingData(YAPPEncoder.ackEndFile())
+        XCTAssertEqual(spy.sent.last, YAPPEncoder.endTransmission())
+        yapp.handleIncomingData(YAPPEncoder.ackEndTransmission())
+        XCTAssertEqual(spy.completion?.ok, true)
+    }
+
+    func testACancelWhileBlocksAreStillGoingOutCancels() throws {
+        let yapp = YAPPProtocol()
+        let spy = YAPPSpy()
+        yapp.delegate = spy
+        yapp.readyForData = { false }   // the link is full: nothing more goes yet
+        try yapp.startSending(fileName: "F", fileData: Data([1, 2, 3]))
+        yapp.handleIncomingData(YAPPEncoder.receiveReady())
+        yapp.handleIncomingData(YAPPEncoder.receiveFile())
+        XCTAssertFalse(yapp.tooLateToCancel)
         yapp.cancel()
         XCTAssertEqual(spy.sent.last, YAPPEncoder.cancel(reason: "Canceled"))
         XCTAssertEqual(yapp.state, .cancelled)

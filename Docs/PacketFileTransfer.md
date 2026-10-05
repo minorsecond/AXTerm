@@ -217,6 +217,11 @@ since that text arrives on an AX.25 session.
   AXTerm reads that as "declined" and stops; a newer one marks the transfer
   canceled. YAPP sends CN and waits briefly for CA. Either way both ends
   finish canceled and the per-transfer maps are emptied.
+- A YAPP sender's cancel is too late once its EF is out, whether or not the
+  receiver's AF is back: AX.25 delivers the EF regardless and the receiver
+  saves the file on it, so the transfer finishes as Completed on both
+  stations. A CN sent then left the sender showing Canceled while the
+  receiver had the file (smoke run 2026-10-03-1, issue 60).
 
 ## When a transfer goes quiet or the link drops
 

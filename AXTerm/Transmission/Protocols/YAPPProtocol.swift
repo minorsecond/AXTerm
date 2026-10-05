@@ -438,18 +438,24 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
         pumpData()
     }
 
-    /// The receiver answered EF with AF: it holds the whole file and has
-    /// handed it over, and only the closing ET/AT exchange is left.
-    var fileAcknowledged: Bool { senderPhase == .awaitingEndTransmissionAck }
+    /// The whole file is out: EF has been sent, whether or not the
+    /// receiver's AF is back. AX.25 delivers the EF whatever a later CN
+    /// says, and the receiver saves the file on it, so a cancel has nothing
+    /// left to stop.
+    var tooLateToCancel: Bool {
+        senderPhase == .awaitingEndFileAck || senderPhase == .awaitingEndTransmissionAck
+    }
 
     /// Stops the transfer and tells the other side with CN.
     ///
-    /// Does nothing once the file is acknowledged: there is nothing left to
-    /// stop, and a receiver that ends on ET never answers the CN, which kept
-    /// the stream claimed for the whole CA wait and could put the CN in the
-    /// other station's terminal (full-stack fuzz, 2026-10-02).
+    /// Does nothing once EF is out (`tooLateToCancel`). After AF, a
+    /// receiver that ends on ET never answered the CN, which kept the
+    /// stream claimed for the whole CA wait and could put the CN in the
+    /// other station's terminal (full-stack fuzz, 2026-10-02). Between EF
+    /// and AF, the CN left the sender showing Canceled while the receiver
+    /// had the file and showed Completed (smoke run 2026-10-03-1, issue 60).
     func cancel() {
-        guard !state.isTerminal, !fileAcknowledged else { return }
+        guard !state.isTerminal, !tooLateToCancel else { return }
         let wasActive = senderPhase != .idle || receiverPhase != .idle
         if senderPhase != .idle { senderPhase = .awaitingCancelAck }
         if receiverPhase != .idle { receiverPhase = .awaitingCancelAck }
