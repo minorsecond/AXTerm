@@ -102,6 +102,18 @@ final class StationServicesTests: XCTestCase {
                       "the mailbox's address is registered at launch")
     }
 
+    /// Smoke run 2026-10-03-1, issue 61: B (ID-50) said "Armed" for
+    /// inbound Winlink calls, accepted A (705)'s link and never greeted it,
+    /// because the listener was attached by the Mail page, which had not
+    /// been opened since launch. The station attaches it.
+    func testWithNoWindowTheWinlinkListenerIsAttached() {
+        let p = parts("StationNoWindowWinlink")
+        let station = services(p)
+        defer { station.stop() }
+        XCTAssertNotNil(station.coordinator.onInboundSessionConnected,
+                        "inbound calls reach the Winlink listener with no Mail page open")
+    }
+
     func testWithNoWindowSettingsChangesReachTheStation() {
         let p = parts("StationNoWindowFollow")
         let station = services(p)

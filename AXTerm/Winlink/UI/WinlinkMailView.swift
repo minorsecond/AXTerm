@@ -175,7 +175,12 @@ struct WinlinkMailView: View {
         // attached whenever the mail area is present and re-evaluated
         // when the setting changes. The listener itself re-checks
         // `isArmed` on every call, so a stale hook can never answer.
-        .onAppear { attachP2PListener() }
+        // An exchange this page did not start, such as an inbound peer
+        // call answered by the station (issue 61), still changes the lists.
+        .onReceive(context.$finishedExchanges.dropFirst()) { _ in
+            mailboxVM.refresh()
+            stationsVM.reloadLinkQuality()
+        }
         // Same reason as the iOS shell: reading a message updates the view
         // model's count, and the sidebar badge reads the context's.
         .onAppear { mailboxVM.onUnreadCountChanged = { context.refreshUnread() } }
@@ -604,77 +609,6 @@ struct WinlinkMailView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Reading-pane placement, opening a message in its own window, and the ICS-309 communications log.")
-    }
-
-    // MARK: - Winlink P2P
-
-    /// Answers inbound calls as a P2P mail peer when the operator has
-    /// armed it. Every decision is logged to the exchange console —
-    /// a station that silently ignores callers is indistinguishable
-    /// from a broken one.
-    private func attachP2PListener() {
-        sessionCoordinator.onInboundSessionConnected = { session in
-            Task { @MainActor in
-                let listener = WinlinkP2PListener(
-                    isArmed: winlinkSettings.p2pListenEnabled,
-                    myCallsign: winlinkSettings.effectiveP2PCallsign(
-                        stationCallsign: appSettings.primaryCallsign),
-                    isExchangeRunning: context.runner?.isRunning ?? true,
-                    // Refuses to answer when another of the operator's devices
-                    // already holds this callsign on this TNC — otherwise both
-                    // reply to the same caller with nobody watching.
-                    contestedBy: context.contestedIdentityHolder,
-                    runningExchangePeer: context.runner?.currentPeer)
-                let called = session.localAddress.display
-                let decision = listener.decide(
-                    called: called, isInitiator: session.isInitiator,
-                    caller: session.remoteAddress.display)
-                if decision == .answerWhenFree {
-                    context.runner?.note(
-                        "Inbound call from \(session.remoteAddress.display): \(decision.explanation)")
-                    guard await context.runner?.waitUntilIdle(timeout: 15) == true,
-                          session.state == .connected else {
-                        context.runner?.note(
-                            "Did not answer \(session.remoteAddress.display) again: the old exchange did not close in time or the link went down")
-                        return
-                    }
-                    await answerP2PCall(session)
-                    return
-                }
-                guard decision == .answer else {
-                    if case .weInitiated = decision { return }
-                    context.runner?.note(
-                        "Inbound call from \(session.remoteAddress.display) \(decision.explanation)")
-                    return
-                }
-                await answerP2PCall(session)
-            }
-        }
-    }
-
-    private func answerP2PCall(_ session: AX25Session) async {
-        guard let runner = context.runner else { return }
-        let peer = session.remoteAddress.display.uppercased()
-        // The transport reuses the already-connected session rather than
-        // placing a call: `open()` finds it and returns immediately.
-        let transport = WinlinkAX25Transport(
-            sessionManager: sessionCoordinator.sessionManager,
-            sendFrames: { [weak client] frames in
-                for frame in frames { client?.send(frame: frame) }
-            },
-            destination: session.remoteAddress,
-            radio: session.radio)
-        _ = await runner.runExchange(
-            transport: transport,
-            myCallsign: appSettings.myCallsign,
-            password: nil,          // P2P carries no CMS account
-            gatewayName: peer,
-            transportName: "P2P",
-            role: .answering,
-            peer: peer)
-        mailboxVM.refresh()
-        context.exchangeFinished()
-        stationsVM.reloadLinkQuality()
     }
 
     // MARK: - Field status

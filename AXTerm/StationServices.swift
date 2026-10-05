@@ -35,6 +35,9 @@ final class StationServices {
     private let bbsSettings: BBSSettings
     private let keepAwake: KeepAwakeController
     private var subscriptions = Set<AnyCancellable>()
+    /// Answers inbound peer-to-peer Winlink calls when armed, with or
+    /// without the Mail page open (smoke run issue 61).
+    private var winlinkAnswerer: WinlinkP2PAnswerer?
     /// The inputs `syncServiceAddresses` last ran with.
     private var addressSignature = ""
 
@@ -61,6 +64,10 @@ final class StationServices {
     /// that keep the station in step with settings and with what it is doing.
     private func start() {
         bbsService.attach()
+        let answerer = WinlinkP2PAnswerer(coordinator: coordinator, context: winlinkContext,
+                                          settings: settings, client: client)
+        answerer.attach()
+        winlinkAnswerer = answerer
         syncServiceAddresses()
         bbsLibrary.rescan()
         client.radioManager.startWatchingOutages()

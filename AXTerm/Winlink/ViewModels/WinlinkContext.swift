@@ -189,7 +189,13 @@ final class WinlinkContext: ObservableObject {
     func exchangeFinished() {
         refreshUnread()
         sync?.onSessionFinished()
+        finishedExchanges += 1
     }
+
+    /// Counts finished exchanges, so a view showing mail can refresh after
+    /// one it did not start: an inbound peer call is answered by the
+    /// station's services, not by the Mail page (smoke run issue 61).
+    @Published private(set) var finishedExchanges = 0
 
     /// App launch and every return to the foreground: pull whatever the
     /// other device did while this one was closed.
