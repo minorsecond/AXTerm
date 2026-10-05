@@ -16,6 +16,8 @@ struct MobilinkdSettingsSections: View {
     @ObservedObject var viewModel: ConnectionTransportViewModel
     /// The radio is on an APRS channel, where calibration may send a beacon.
     var onAPRS = false
+    /// Why this radio's beacon can't go out now, which calibration needs.
+    var beaconObstacle: String?
     /// Opens the TNC4 tuning wizard.
     var openTuning: (() -> Void)?
 
@@ -23,6 +25,7 @@ struct MobilinkdSettingsSections: View {
     @State private var confirmingTone = false
     @State private var toneEndsAt: Date?
     @State private var measuring = false
+    @State private var measuringSince: Date?
     @State private var confirmingSave = false
     @State private var confirmingAssistant = false
     @StateObject private var assistant = MobilinkdLevelAssistantRunner()
@@ -113,6 +116,7 @@ struct MobilinkdSettingsSections: View {
             levelMeter
             ReceiveLevelTuningRows(radioID: radioID, onAPRS: onAPRS, connected: connected,
                                    blocked: measuring || toneEndsAt != nil || assistant.running,
+                                   beaconObstacle: beaconObstacle,
                                    monitor: client.receiveLevel)
             if connected { levelAssistant }
             ManagedTNC4Setting(title: "Input gain for this radio", value: $viewModel.tnc4.inputGain,
@@ -158,8 +162,22 @@ struct MobilinkdSettingsSections: View {
                     Button(measuring ? "Stop" : "Measure") {
                         if measuring { control?.stopMeasuringInput() } else { control?.startMeasuringInput() }
                         measuring.toggle()
+                        measuringSince = measuring ? Date() : nil
                     }
                     .disabled(toneEndsAt != nil)
+                }
+            }
+            // The TNC4's link ends a measurement on its own after two
+            // minutes; follow it, or the page keeps saying it is measuring
+            // and keeps calibration disabled.
+            .task(id: measuring) {
+                while measuring, !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if Self.measurementEnded(activity: control?.mobilinkdActivity,
+                                             startedAt: measuringSince, now: Date()) {
+                        measuring = false
+                        measuringSince = nil
+                    }
                 }
             }
             if measuring {
@@ -168,6 +186,15 @@ struct MobilinkdSettingsSections: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Whether a measurement this page started has ended without it: the
+    /// link is no longer measuring. The link starts on its own queue, so
+    /// the first two seconds are given the benefit of the doubt.
+    static func measurementEnded(activity: MobilinkdActivity?, startedAt: Date?, now: Date) -> Bool {
+        guard activity != .measuring else { return false }
+        guard let startedAt else { return true }
+        return now.timeIntervalSince(startedAt) >= 2
     }
 
     @ViewBuilder
