@@ -23,7 +23,14 @@ nonisolated enum GPSError: Error, Equatable {
 @MainActor
 final class StationLocationService: ObservableObject {
 
-    @Published private(set) var lastLocation: StationLocation?
+    /// The last position resolved. Not handed out as a GPS fix once the
+    /// device location switch is off: the grid square stands in for it.
+    var lastLocation: StationLocation? {
+        guard let held else { return nil }
+        if held.source == .gps, !deviceLocationEnabled() { return manualLocation() }
+        return held
+    }
+    @Published private var held: StationLocation?
     @Published private(set) var isResolving = false
     @Published private(set) var lastGPSError: GPSError?
 
@@ -35,6 +42,11 @@ final class StationLocationService: ObservableObject {
 
     private let gps: GPSProviding?
     private let manualGridProvider: () -> String
+    /// General › Station position › "This device's location". Off, nothing
+    /// here asks CoreLocation or hands out a fix it took earlier (smoke run
+    /// 2026-10-03-1, issue 31: a Winlink session log and a form used GPS
+    /// with the switch off).
+    private let deviceLocationEnabled: () -> Bool
     private let now: () -> Date
     /// When CoreLocation was last actually asked, success or not, so a
     /// station with no GPS is not re-interrogated once per caller.
@@ -43,10 +55,14 @@ final class StationLocationService: ObservableObject {
     init(
         gps: GPSProviding? = CoreLocationGPSProvider(),
         manualGridProvider: @escaping () -> String,
+        deviceLocationEnabled: @escaping () -> Bool = {
+            AppEnvironment.defaults.bool(forKey: StationPositionKeys.useDeviceLocation)
+        },
         now: @escaping () -> Date = { Date() }
     ) {
         self.gps = gps
         self.manualGridProvider = manualGridProvider
+        self.deviceLocationEnabled = deviceLocationEnabled
         self.now = now
     }
 
@@ -65,7 +81,12 @@ final class StationLocationService: ObservableObject {
     /// retried any faster than a working one is re-read.
     func currentLocation(gpsTimeout: TimeInterval = 15,
                          maxFixAge: TimeInterval = StationLocationService.gpsFixLifetime) async -> StationLocation? {
-        if let held = lastLocation, held.source == .gps,
+        guard deviceLocationEnabled() else {
+            let manual = manualLocation()
+            held = manual
+            return manual
+        }
+        if let held, held.source == .gps,
            now().timeIntervalSince(held.timestamp) < maxFixAge {
             return held
         }
@@ -100,7 +121,7 @@ final class StationLocationService: ObservableObject {
                     source: .gps,
                     timestamp: now())
                 lastGPSError = nil
-                lastLocation = location
+                held = location
                 return location
             } catch let error as GPSError {
                 lastGPSError = error
@@ -110,10 +131,18 @@ final class StationLocationService: ObservableObject {
         }
 
         if let manual = manualLocation() {
-            lastLocation = manual
+            held = manual
             return manual
         }
         return nil
+    }
+
+    /// A position from the last `window` when there is one, else a fresh
+    /// one; for callers that stamp many records in a row and should not
+    /// wake CoreLocation for each.
+    func recentLocation(within window: TimeInterval) async -> StationLocation? {
+        if let last = lastLocation, now().timeIntervalSince(last.timestamp) < window { return last }
+        return await currentLocation()
     }
 
     /// The configured grid square's center, without touching GPS.

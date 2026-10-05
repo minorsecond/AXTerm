@@ -165,12 +165,7 @@ final class WinlinkContext: ObservableObject {
         // waking CoreLocation once per gateway in a ladder run.
         self.runner = store.map { store in
             WinlinkSessionRunner(store: store) { [weak locationService] in
-                guard let locationService else { return nil }
-                if let last = locationService.lastLocation,
-                   Date().timeIntervalSince(last.timestamp) < Self.positionReuseWindow {
-                    return last
-                }
-                return await locationService.currentLocation()
+                await locationService?.recentLocation(within: Self.positionReuseWindow)
             }
         }
         locationChanges = locationService.objectWillChange.sink { [weak self] _ in

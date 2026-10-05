@@ -68,6 +68,7 @@ final class StationLocationTests: XCTestCase {
         let service = StationLocationService(
             gps: MockGPS(result: .success((39.7392, -104.9903))),
             manualGridProvider: { "FN31pr" },
+            deviceLocationEnabled: { true },
             now: { Date(timeIntervalSince1970: 42) })
         let location = await service.currentLocation()
 
@@ -77,10 +78,58 @@ final class StationLocationTests: XCTestCase {
         XCTAssertNil(service.lastGPSError)
     }
 
+    // MARK: - The device location switch (smoke run 2026-10-03-1, issue 31)
+
+    /// Counts CoreLocation requests, so a test can say none were made.
+    private final class RequestCountingGPS: GPSProviding, @unchecked Sendable {
+        var requests = 0
+        func requestOneShotFix(timeout: TimeInterval) async throws -> (latitude: Double, longitude: Double) {
+            requests += 1
+            return (39.7392, -104.9903)
+        }
+    }
+
+    /// A Winlink session log stored a GPS fix, and a form sent one over the
+    /// air, while "This device's location" was off. Every caller goes
+    /// through this service, so the switch is honored here.
+    func testWithDeviceLocationOffTheGridIsUsedAndGPSIsNotAsked() async {
+        let gps = RequestCountingGPS()
+        let service = StationLocationService(
+            gps: gps, manualGridProvider: { "DM79po" },
+            deviceLocationEnabled: { false },
+            now: { Date(timeIntervalSince1970: 42) })
+
+        let location = await service.currentLocation()
+        XCTAssertEqual(location?.source, .manualGrid)
+        XCTAssertEqual(gps.requests, 0)
+        let recent = await service.recentLocation(within: 600)
+        XCTAssertEqual(recent?.source, .manualGrid)
+        XCTAssertEqual(gps.requests, 0)
+    }
+
+    /// A fix taken while the switch was on is not handed out once it is off.
+    func testAFixHeldFromBeforeTheSwitchWentOffIsNotUsed() async {
+        var enabled = true
+        let service = StationLocationService(
+            gps: RequestCountingGPS(), manualGridProvider: { "DM79po" },
+            deviceLocationEnabled: { enabled },
+            now: { Date(timeIntervalSince1970: 42) })
+        let first = await service.currentLocation()
+        XCTAssertEqual(first?.source, .gps)
+
+        enabled = false
+        XCTAssertEqual(service.lastLocation?.source, .manualGrid)
+        let held = await service.currentLocation()
+        XCTAssertEqual(held?.source, .manualGrid)
+        let recent = await service.recentLocation(within: 600)
+        XCTAssertEqual(recent?.source, .manualGrid)
+    }
+
     func testServiceFallsBackToManualGrid() async {
         let service = StationLocationService(
             gps: MockGPS(result: .failure(.denied)),
             manualGridProvider: { "DM79po" },
+            deviceLocationEnabled: { true },
             now: { Date(timeIntervalSince1970: 42) })
         let location = await service.currentLocation()
 
@@ -93,7 +142,7 @@ final class StationLocationTests: XCTestCase {
     func testServiceNilWhenNothingAvailable() async {
         let service = StationLocationService(
             gps: MockGPS(result: .failure(.timeout)),
-            manualGridProvider: { "" })
+            manualGridProvider: { "" }, deviceLocationEnabled: { true })
         let location = await service.currentLocation()
         XCTAssertNil(location)
     }
@@ -133,7 +182,7 @@ final class StationLocationTests: XCTestCase {
         let gps = CountingGPS()
         let clock = Clock()
         let service = StationLocationService(
-            gps: gps, manualGridProvider: { "" }, now: { clock.now })
+            gps: gps, manualGridProvider: { "" }, deviceLocationEnabled: { true }, now: { clock.now })
 
         _ = await service.currentLocation()
         clock.now += 60
@@ -150,7 +199,7 @@ final class StationLocationTests: XCTestCase {
         let gps = CountingGPS()
         let clock = Clock()
         let service = StationLocationService(
-            gps: gps, manualGridProvider: { "" }, now: { clock.now })
+            gps: gps, manualGridProvider: { "" }, deviceLocationEnabled: { true }, now: { clock.now })
 
         _ = await service.currentLocation()
         clock.now += StationLocationService.gpsFixLifetime + 1
@@ -165,7 +214,7 @@ final class StationLocationTests: XCTestCase {
         let gps = CountingGPS()
         let clock = Clock()
         let service = StationLocationService(
-            gps: gps, manualGridProvider: { "" }, now: { clock.now })
+            gps: gps, manualGridProvider: { "" }, deviceLocationEnabled: { true }, now: { clock.now })
 
         _ = await service.currentLocation()
         clock.now += 5
@@ -180,7 +229,7 @@ final class StationLocationTests: XCTestCase {
         gps.result = .failure(.timeout)
         let clock = Clock()
         let service = StationLocationService(
-            gps: gps, manualGridProvider: { "DM79po" }, now: { clock.now })
+            gps: gps, manualGridProvider: { "DM79po" }, deviceLocationEnabled: { true }, now: { clock.now })
 
         let first = await service.currentLocation()
         clock.now += 60

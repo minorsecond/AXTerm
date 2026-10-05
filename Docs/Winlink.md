@@ -875,8 +875,11 @@ local RMS (`K0NTS-10` per its ID beacon) is a natural first target.
   entitlement + usage strings) with fallback to the configured grid
   square's center. Portable: Winlink compose, the packet-terminal
   compose bar, forms, position reports, and SailDocs spot forecasts all
-  pull from it. `StationLocationFormat` renders the Winlink
-  insertion-tag position formats.
+  pull from it. It asks CoreLocation only while General › Station
+  position › "This device's location" is on; off, every caller gets the
+  grid square, and a fix taken while it was on is not handed out.
+  `StationLocationFormat` renders the Winlink insertion-tag position
+  formats.
 
 ## Forms (`AXTerm/Winlink/Forms/`)
 

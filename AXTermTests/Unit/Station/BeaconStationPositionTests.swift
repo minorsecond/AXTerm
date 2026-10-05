@@ -34,7 +34,8 @@ final class BeaconStationPositionTests: XCTestCase {
 
     private func gpsService(_ lat: Double, _ lon: Double) async -> StationLocationService {
         let service = StationLocationService(gps: FixedGPS(result: .success((lat, lon))),
-                                             manualGridProvider: { "" })
+                                             manualGridProvider: { "" },
+                                             deviceLocationEnabled: { true })
         _ = await service.currentLocation()
         return service
     }
