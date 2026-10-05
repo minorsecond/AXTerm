@@ -417,7 +417,10 @@ private struct RadioMismatchedBeaconRows: View {
 /// it.
 private struct RadioBeaconNowRow: View {
     let radioID: RadioID
-    let settings: AppSettingsStore
+    /// Observed: the obstacle shown here comes from the settings, and a
+    /// plain `let` never redrew the row when they changed (smoke run
+    /// 2026-10-03-1, issue 43).
+    @ObservedObject var settings: AppSettingsStore
     let linkUp: Bool
 
     /// What the last "Send one now" did, shown under the button for a while.
