@@ -78,4 +78,32 @@ final class WinlinkAX25TransportCloseTests: XCTestCase {
         _ = manager.handleInboundDISC(from: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(closedWith, .some(nil), "the peer's DISC is a clean end")
     }
+
+    /// An abort drops what is still queued for the link, so its FQ is next
+    /// and the DISC follows it, not the rest of the message (issue 64).
+    /// Frames already in the window are numbered and still go.
+    func testDiscardUnsentDropsTheQueueButNotTheWindow() async throws {
+        let (manager, session, transport) = try await makeConnected()
+        transport.send(Data(repeating: 0x41, count: 128 * 8))   // more than the window holds
+        XCTAssertFalse(session.pendingDataQueue.isEmpty, "some of it is waiting behind the window")
+        let inFlight = session.sendBuffer.count
+        XCTAssertGreaterThan(inFlight, 0)
+
+        transport.discardUnsent()
+        XCTAssertTrue(session.pendingDataQueue.isEmpty)
+        XCTAssertEqual(session.sendBuffer.count, inFlight, "numbered frames are not taken back")
+
+        transport.send(Data("FQ\r".utf8))
+        sent.removeAll()
+        transport.close()
+        XCTAssertFalse(sentDISC, "the window and the FQ are still to be acknowledged")
+        // The peer acknowledges everything it holds, each time it is asked.
+        for _ in 0..<4 where !sentDISC {
+            sent.append(contentsOf: manager.handleInboundRRFrames(
+                from: peer, path: DigiPath(), radio: .primary, nr: session.vs % 8))
+        }
+        XCTAssertTrue(sentDISC, "the DISC follows as soon as the FQ is acknowledged")
+        let dataFrames = sent.filter { $0.frameType.lowercased() == "i" }
+        XCTAssertLessThanOrEqual(dataFrames.count, 1, "after the drop only the FQ was left to send")
+    }
 }

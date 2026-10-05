@@ -170,6 +170,9 @@ nonisolated final class B2FSessionEngine {
         /// meanwhile, so the driver must answer with
         /// `inboundSelectionResolved` or let the timer expire.
         case requestInboundSelection(offers: [InboundOffer], timeoutSeconds: Int, autoAcceptUnderBytes: Int)
+        /// Drop whatever is queued for the link and not yet sent, so what
+        /// follows goes next (an abort's FQ).
+        case discardUnsent
         case requestDisconnect
         case complete(WinlinkExchangeSummary)
         case fail(reason: String)
@@ -338,7 +341,10 @@ nonisolated final class B2FSessionEngine {
             default:
                 summary.aborted = true
                 state = .closing
-                return [sendText("FQ\r"), .requestDisconnect] + abortDeadline()
+                // The rest of a body still queued would go out ahead of the
+                // FQ, and the link would carry the whole message before it
+                // closed (smoke run 2026-10-03-1, issue 64).
+                return [.discardUnsent, sendText("FQ\r"), .requestDisconnect] + abortDeadline()
             }
         }
     }

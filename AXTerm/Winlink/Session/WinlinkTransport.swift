@@ -31,6 +31,16 @@ protocol WinlinkTransport: AnyObject {
 
     /// Politely tears the link down (AX.25 DISC / TCP close).
     func close()
+
+    /// Drops bytes queued for the link that have not gone out yet. Bytes
+    /// already on the way (AX.25: numbered and in the window) still go.
+    func discardUnsent()
+}
+
+extension WinlinkTransport {
+    /// A transport that hands bytes straight to the network has nothing
+    /// queued to drop.
+    func discardUnsent() {}
 }
 
 nonisolated enum WinlinkTransportError: Error, Equatable {

@@ -479,6 +479,9 @@ final class WinlinkSessionRunner: ObservableObject {
                     + "your Downloads folder.")
             }
 
+        case .discardUnsent:
+            transport?.discardUnsent()
+
         case .requestDisconnect:
             transport?.close()
 

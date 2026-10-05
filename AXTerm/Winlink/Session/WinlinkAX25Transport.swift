@@ -124,6 +124,13 @@ final class WinlinkAX25Transport: WinlinkTransport {
         onDeliveryProgress?(delivered, submittedBytes)
     }
 
+    /// Drops data queued behind the window. Frames already numbered must
+    /// still be delivered, so they stay.
+    func discardUnsent() {
+        guard let session = sessionManager.existingSession(for: destination, path: path, radio: radio) else { return }
+        _ = sessionManager.discardQueuedData(for: session.key)
+    }
+
     /// Ends the link once everything sent has been acknowledged.
     ///
     /// A disconnect discards whatever is queued or unacknowledged (AX.25 2.2,

@@ -61,7 +61,10 @@ mail takes the turn without an `FF` handshake.
   disconnect discards the I-frame queue (AX.25 2.2, Figure C4.4) and the
   closing `FQ` used to go with it (smoke run 2026-10-03-1, issue 32(e)).
   The link bounds the wait: a peer that never acknowledges runs T1 out to
-  N2. A second `close()` disconnects at once.
+  N2. A second `close()` disconnects at once. An abort first drops what is
+  still queued behind the window (`discardUnsent`), so its `FQ` is next
+  and the link does not carry the rest of the message before it closes
+  (issue 64).
 - `WinlinkTelnetTransport` — TCP to `cms.winlink.org:8772`; the login
   preamble answers the `Callsign:`/`Password:` prompts (password is the
   fixed transport string `CMSTELNET` — real authentication is the B2F

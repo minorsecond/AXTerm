@@ -618,6 +618,25 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertEqual(harness.completion, nil, "aborted sessions do not complete")
     }
 
+    /// The FQ must not wait behind a body still queued for the link: since
+    /// the transport holds its DISC until everything sent is acknowledged
+    /// (issue 32(e)), an abort mid-body kept transmitting the whole message
+    /// first (smoke run 2026-10-03-1, issue 64). What has not been sent is
+    /// dropped, then the FQ goes.
+    func testAbortDropsUnsentDataBeforeTheFQ() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        let before = harness.actions.count
+        harness.fire(.abortRequested)
+        let abort = Array(harness.actions[before...])
+        let drop = abort.firstIndex(of: .discardUnsent)
+        let fq = abort.firstIndex { if case .send(let d) = $0 { return d == Data("FQ\r".utf8) }; return false }
+        XCTAssertNotNil(drop)
+        XCTAssertNotNil(fq)
+        XCTAssertLessThan(drop ?? .max, fq ?? .min)
+    }
+
     /// An abort must end the exchange even if the link's disconnect never
     /// reaches the engine. Smoke run 2026-10-03-1, issue 35: the session
     /// had lost its delivery claim, the disconnect went elsewhere, and the
