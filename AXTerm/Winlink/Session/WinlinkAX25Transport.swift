@@ -19,6 +19,9 @@ final class WinlinkAX25Transport: WinlinkTransport {
 
     private var claim: SessionDeliveryClaim?
     private var closed = false
+    /// `close()` was asked for while frames were still unacknowledged; the
+    /// DISC goes once they are.
+    private var closeWhenDrained = false
 
     var onReceive: ((Data) -> Void)?
     var onClose: ((String?) -> Void)?
@@ -65,6 +68,7 @@ final class WinlinkAX25Transport: WinlinkTransport {
             },
             ackHandler: { [weak self] session, _ in
                 self?.reportDeliveryProgress(session: session)
+                self?.disconnectIfDrained(session)
             }
         ) else {
             throw WinlinkTransportError.sessionBusy(
@@ -120,20 +124,46 @@ final class WinlinkAX25Transport: WinlinkTransport {
         onDeliveryProgress?(delivered, submittedBytes)
     }
 
+    /// Ends the link once everything sent has been acknowledged.
+    ///
+    /// A disconnect discards whatever is queued or unacknowledged (AX.25 2.2,
+    /// Figure C4.4, DL-DISCONNECT request), so asking for one straight after
+    /// the last send dropped the exchange's closing FQ (smoke run
+    /// 2026-10-03-1, issue 32(e)). The wait is bounded by the link itself:
+    /// a peer that never acknowledges runs T1 out to N2 and the link fails.
+    /// A second call disconnects at once.
     func close() {
         guard !closed else { return }
         if let session = sessionManager.existingSession(for: destination, path: path, radio: radio),
            session.state == .connected || session.state == .connecting {
-            if let disc = sessionManager.disconnect(session: session) {
-                sendFrames([disc])
+            if session.state == .connected, !closeWhenDrained, !Self.isDrained(session) {
+                closeWhenDrained = true
+                return
             }
-            // The DISC/UA exchange completes asynchronously; the state
-            // handler fires onClose and releases the claim when it lands.
+            sendDisconnect(session)
         } else {
             closed = true
             releaseClaim()
             onClose?(nil)
         }
+    }
+
+    private static func isDrained(_ session: AX25Session) -> Bool {
+        session.pendingDataQueue.isEmpty && session.sendBuffer.isEmpty
+    }
+
+    private func disconnectIfDrained(_ session: AX25Session) {
+        guard closeWhenDrained, !closed, session.state == .connected, Self.isDrained(session) else { return }
+        sendDisconnect(session)
+    }
+
+    private func sendDisconnect(_ session: AX25Session) {
+        closeWhenDrained = false
+        if let disc = sessionManager.disconnect(session: session) {
+            sendFrames([disc])
+        }
+        // The DISC/UA exchange completes asynchronously; the state
+        // handler fires onClose and releases the claim when it lands.
     }
 
     private func releaseClaim() {

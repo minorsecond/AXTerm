@@ -56,7 +56,12 @@ mail takes the turn without an `FF` handshake.
   exclusively via `AX25SessionManager.claimDelivery` (added for this
   feature): while claimed, `onDataReceived` (terminal line-splitter) and
   `onDataDeliveredForReassembly` (AXDP) are bypassed. PID `0xF0`, no AXDP
-  envelope — B2F is wire-exact (spec §16).
+  envelope — B2F is wire-exact (spec §16). `close()` waits until
+  everything sent has been acknowledged before it sends DISC, because a
+  disconnect discards the I-frame queue (AX.25 2.2, Figure C4.4) and the
+  closing `FQ` used to go with it (smoke run 2026-10-03-1, issue 32(e)).
+  The link bounds the wait: a peer that never acknowledges runs T1 out to
+  N2. A second `close()` disconnects at once.
 - `WinlinkTelnetTransport` — TCP to `cms.winlink.org:8772`; the login
   preamble answers the `Callsign:`/`Password:` prompts (password is the
   fixed transport string `CMSTELNET` — real authentication is the B2F
