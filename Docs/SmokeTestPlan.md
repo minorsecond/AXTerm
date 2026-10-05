@@ -1,6 +1,6 @@
 # AXTerm smoke test plan
 
-**Plan version 1, 2026-10-03.**
+**Plan version 2, 2026-10-04.** Version 2: 6.5 expects mailbox uploads by YAPP only.
 
 This is the formal smoke test for AXTerm. It is run live on the air, the same
 way every time, before a release and after any change to AX.25 or a service
@@ -213,7 +213,7 @@ turn off Warbler transmit. Write all of that in the resume point, with
 | 6.2 | A (705) sends a message, lists, reads | stored once, listed, body whole | C |
 | 6.3 | A (705) kills a private message it sent to the sysop (bug 52) | killed; still not readable by A (705) | C |
 | 6.4 | Files: list areas, text download, binary download by YAPP | text typed out; binary sum matches | C |
-| 6.5 | A (705) uploads by YAPP and by AXDP | stored and listed on B (ID-50) | C |
+| 6.5 | A (705) uploads a file to the mailbox by YAPP; an AXDP offer during `U` is declined with a message saying YAPP | the YAPP upload is stored and listed on B (ID-50); the AXDP offer is declined and says why | C |
 | 6.6 | Directory (white pages) | entries learned and shown | C |
 | 6.7 | Refusals: a call to the wrong callsign; a second caller while busy | refused with the right reason | C |
 
