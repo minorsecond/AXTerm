@@ -18,7 +18,7 @@ struct AXTermApp: App {
     /// Settings scene and the BBS view observe the same object — two instances
     /// would each read the same defaults and neither would see the other's
     /// changes until relaunch.
-    @StateObject private var bbsSettings = BBSSettings()
+    @StateObject private var bbsSettings: BBSSettings
     // The menu bar item's visibility is read straight from UserDefaults
     // by StatusItemController; no scene state is involved any more.
     private let packetStore: PacketStore?
@@ -29,6 +29,10 @@ struct AXTermApp: App {
     private let notificationManager: NotificationAuthorizationManager
     private let winlinkContext: WinlinkContext
     private let client: PacketEngine
+    /// The station: built here, at launch, so it answers callers whether or
+    /// not a window is open (smoke run issue 46). Nil in the unit-test host,
+    /// which mounts no UI and builds its own stations.
+    private let station: StationServices?
 
     init() {
         let isUnitTests = AppEnvironment.isUnitTestHost
@@ -121,6 +125,8 @@ struct AXTermApp: App {
             notificationScheduler: notificationScheduler,
             databaseWriter: queue
         )
+        let bbs = BBSSettings()
+        _bbsSettings = StateObject(wrappedValue: bbs)
 
         // Determine connection settings (test mode overrides take precedence)
         let primary = settingsStore.primaryRadio
@@ -156,6 +162,10 @@ struct AXTermApp: App {
                 self.client.connectUsingSettings()
             }
         }
+        // After the test-mode callsign and radios are in, so the station
+        // starts with the addresses it will answer on.
+        self.station = isUnitTests ? nil : StationServices(
+            client: client, settings: settingsStore, winlinkContext: winlinkContext, bbsSettings: bbs)
         appDelegate.settings = settingsStore
 
         // The menu bar item lives in AppKit — see StatusItemController's
@@ -187,8 +197,8 @@ struct AXTermApp: App {
                 // Hosts the real ConsoleView and self-terminates; see
                 // ConsoleHangReproHarness.
                 ConsoleHangReproHarness()
-            } else {
-                ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings)
+            } else if let station {
+                ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings, station: station)
                     // @AppStorage follows the isolated suite under test
                     // mode; in production this is .standard, so it is a
                     // no-op. Belt-and-suspenders with AppEnvironment.defaults.

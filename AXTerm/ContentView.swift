@@ -267,7 +267,6 @@ struct ContentView: View {
     /// Holds off App Nap while radios are up, and holds off idle system sleep
     /// when the operator has asked for it. Shared, so closing the window in
     /// menu-bar mode does not release it.
-    @ObservedObject private var keepAwake = KeepAwakeController.shared
     @ObservedObject private var bbsSettings: BBSSettings
     @StateObject private var bbsService: BBSService
     @StateObject private var bbsLibrary: BBSFileLibrary
@@ -294,7 +293,7 @@ struct ContentView: View {
     @State private var lastTapTimes: [String: Date] = [:]
 
 
-    init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter, winlinkContext: WinlinkContext, bbsSettings: BBSSettings) {
+    init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter, winlinkContext: WinlinkContext, bbsSettings: BBSSettings, station: StationServices) {
         _client = StateObject(wrappedValue: client)
         _settings = ObservedObject(wrappedValue: settings)
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
@@ -327,193 +326,12 @@ struct ContentView: View {
             }
         ))
         _bbsSettings = ObservedObject(wrappedValue: bbsSettings)
-        // The coordinator's wiring and the mailbox services are built once,
-        // when SwiftUI first installs this view; see MainWindowServicesBox.
-        // Every later pass through this initializer leaves its box unopened.
-        let setup = MainWindowServicesBox {
-            Self.makeServices(client: client, settings: settings,
-                              winlinkContext: winlinkContext, bbsSettings: bbsSettings)
-        }
-        _sessionCoordinator = StateObject(wrappedValue: setup.services.coordinator)
-        _bbsLibrary = StateObject(wrappedValue: setup.services.bbsLibrary)
-        _callsignLookup = StateObject(wrappedValue: setup.services.callsignLookup)
-        _bbsService = StateObject(wrappedValue: setup.services.bbsService)
-    }
-
-    /// The shared session coordinator, wired to the engine, and the mailbox
-    /// built around it. Called once per window, from `MainWindowServicesBox`.
-    private static func makeServices(client: PacketEngine, settings: AppSettingsStore,
-                                     winlinkContext: WinlinkContext,
-                                     bbsSettings: BBSSettings) -> MainWindowServices {
-        // Get or create the shared session coordinator so Settings can update the same instance.
-        // Only seed @Published properties on a new coordinator — re-seeding an existing shared
-        // instance during view init triggers "Publishing changes from within view updates".
-        let coordinator: SessionCoordinator
-        if let existing = SessionCoordinator.shared {
-            coordinator = existing
-            // This runs while SwiftUI installs the window, inside a view
-            // update. It used to run on every settings edit as well, from
-            // the initializer, and assigning the callsign unconditionally
-            // there published `localCallsign` from inside the update: 36 of
-            // the 61 warnings logged with the Settings window open on
-            // 2026-09-29. With a window up, the onChange in
-            // presentationLayer keeps the callsign in step; a change made
-            // while no window was open catches up on the next turn of the
-            // run loop, outside the update.
-            if existing.localCallsign != settings.primaryCallsign {
-                DispatchQueue.main.async { [weak existing, weak settings] in
-                    guard let existing, let settings else { return }
-                    existing.applyLocalCallsign(settings.primaryCallsign)
-                }
-            }
-        } else {
-            coordinator = SessionCoordinator()
-            // Seed AXDP / transmission adaptive settings from persisted settings
-            var adaptive = TxAdaptiveSettings()
-            adaptive.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
-            adaptive.autoNegotiateCapabilities = settings.axdpAutoNegotiateCapabilities
-            adaptive.compressionEnabled = settings.axdpCompressionEnabled
-            if let algo = AXDPCompression.Algorithm(rawValue: settings.axdpCompressionAlgorithmRaw) {
-                adaptive.compressionAlgorithm = algo
-            }
-            adaptive.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
-            adaptive.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
-            // The operator's manual PACLEN, K and N2, which were never kept
-            // past a relaunch.
-            adaptive = settings.ax25LinkTuning.applied(to: adaptive)
-            coordinator.globalAdaptiveSettings = adaptive
-            coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
-            coordinator.syncSessionManagerConfigFromAdaptive()
-            if settings.adaptiveTransmissionEnabled {
-                TxLog.adaptiveEnabled()
-            } else {
-                TxLog.adaptiveDisabled()
-            }
-            // The primary radio's address, SSID included; see
-            // `SessionCoordinator.localCallsign`.
-            coordinator.localCallsign = settings.primaryCallsign
-            // Test mode: a command folder the smoke test drives transfers
-            // and session text through (see TestCommandChannel).
-            if TestModeConfiguration.shared.isTestMode,
-               let folder = try? TestCommandChannel.folder(instanceID: TestModeConfiguration.shared.instanceID),
-               let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
-                let channel = TestCommandChannel(folder: folder, coordinator: coordinator, filesFolder: downloads)
-                channel.start()
-                TestCommandChannel.running = channel
-            }
-        }
-        // Also restores the NET/ROM node policy; see `appSettings`.
-        coordinator.appSettings = settings
-        // An APRS position beacon that follows the station reads the station
-        // position at send time, from the same resolver the map uses.
-        coordinator.aprsLocationProvider = StationPositionResolver.beaconProvider(
-            defaults: settings.defaults, locationService: winlinkContext.locationService)
-        coordinator.subscribeToPackets(from: client)
-        // APRS messaging: wire the transmit funnel, the query-answer
-        // providers, and start the ACK-retry sweep. Auto-reply defaults to
-        // full (auto-ACK incoming messages and answer directed queries).
-        if let aprs = client.aprsMessaging {
-            aprs.autoReplyProvider = { APRSMessagingService.AutoReply(rawValue: settings.aprsAutoReplyRaw) ?? .full }
-            aprs.send = { [weak coordinator] out in _ = coordinator?.sendAPRS(out) }
-            aprs.positionInfo = { [weak coordinator] in coordinator?.currentAPRSPositionInfo() }
-            aprs.heardDirect = { [weak client] in
-                Array((client?.stations ?? []).filter { $0.lastVia.isEmpty }.map { $0.call }
-                    .prefix(APRSMessagingService.directsStationLimit))
-            }
-            // Objects we own, most urgent first — `live()` already sorts
-            // that way, and the cap in `objectAnswers` depends on it. Each is
-            // rebuilt with the current time rather than replayed: see
-            // `reannounced(at:)`.
-            aprs.ownObjects = { [weak client, weak coordinator] in
-                guard let client else { return [] }
-                // The same set `mayRemove` uses: every address this station
-                // answers to, not just the configured callsign. An object
-                // placed from a second radio's SSID is still ours.
-                let answered = Set((coordinator?.sessionManager.answeredAddresses ?? [])
-                    .map { $0.display.uppercased() })
-                let ours = answered.isEmpty ? Array(settings.onAirCallsigns) : Array(answered)
-                let oursSet = Set(ours)
-                let asOf = Date()
-                return client.aprsObjects.live()
-                    .filter { oursSet.contains($0.reportedBy.uppercased()) }
-                    .compactMap { $0.report.reannounced(at: asOf) }
-            }
-            aprs.versionInfo = {
-                let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-                return v.isEmpty ? "AXTerm" : "AXTerm \(v)"
-            }
-            aprs.startRetryTimer()
-        }
-        // "Who can hear me": flood one unaddressed ?APRS? general query and
-        // fold in whoever answers (real APRS stations only, never packet
-        // nodes). Xastir-style — one transmission, not a directed poll.
-        let probe = client.aprsProbe
-        probe.aprsStations = { [weak client] in client?.aprsHeardStations() ?? [] }
-        // Sampled when a query goes out, so the results can tell an answer
-        // from a station that beacons often enough to land in any window.
-        probe.beaconIntervals = { [weak client] in client?.aprsBeaconIntervals() ?? [:] }
-        probe.floodQuery = { [weak coordinator] query, reach in
-            (coordinator?.floodAPRS(query.rawValue, reach: reach) ?? 0) > 0
-        }
-        // A queued send has already reported success by the time a radio fails
-        // to key, so the probe hears about that the only way it can: a link
-        // fault arriving while it is listening.
-        client.onLinkError = { [weak probe] message in probe?.transmitDidFail(message) }
-        // The personal mailbox. Built here because this is the one place that
-        // holds both the coordinator (which owns inbound calls) and the engine
-        // (which owns the database and the frame sink).
-        // Hoisted rather than inlined: as one expression the closures push the
-        // type checker past its budget.
-        let sendFrames: ([OutboundFrame]) -> Void = { [weak client] frames in
-            for frame in frames { client?.send(frame: frame) }
-        }
-        // What an empty mailbox or P2P callsign falls back to: the address
-        // the primary radio answers as, which is what the station callsign
-        // was before SSIDs moved to the radios. The bare base call would be
-        // a new address that no radio operates under.
-        let stationCallsign: () -> String = { settings.primaryCallsign }
-        let winlinkArmed: () -> Bool = { winlinkContext.settings.p2pListenEnabled }
-        let winlinkCallsign: () -> String = {
-            winlinkContext.settings.effectiveP2PCallsign(stationCallsign: settings.primaryCallsign)
-        }
-        let contested: () -> String? = { winlinkContext.contestedIdentityHolder }
-        let library = BBSFileLibrary(store: client.bbsMessages)
-        let supportsAXDP: (String) -> Bool = { [weak client] callsign in
-            client?.capabilityStore.hasCapabilities(for: callsign) ?? false
-        }
-        // Built before the mailbox so the mailbox can read its cache.
-        let lookup = CallsignLookupService(
-            store: winlinkContext.store,
-            isNetworkEnabled: winlinkContext.settings.callsignLookupEnabled)
-        // Cached only: the mailbox answers calls unattended, and looking a
-        // caller up over the internet the moment they connect would tell a
-        // third party who is talking to this station.
-        let licence: (String) -> CallsignRecord? = { [weak lookup] callsign in
-            lookup?.cached(callsign)
-        }
-        let heard: () -> [BBSShell.HeardStation] = { [weak client] in
-            (client?.stations ?? []).compactMap { station in
-                guard let lastHeard = station.lastHeard else { return nil }
-                return BBSShell.HeardStation(callsign: station.call, lastHeard: lastHeard)
-            }
-        }
-        let bbsService = BBSService(
-            store: client.bbsMessages,
-            settings: bbsSettings,
-            coordinator: coordinator,
-            sendFrames: sendFrames,
-            stationCallsign: stationCallsign,
-            isWinlinkP2PArmed: winlinkArmed,
-            winlinkP2PCallsign: winlinkCallsign,
-            heardStations: heard,
-            library: library,
-            peerSupportsAXDP: supportsAXDP,
-            licenceRecord: licence,
-            announce: { [weak client] line in client?.appendSystemNotification(line) },
-            resolveLicences: { [weak lookup] callsigns in await lookup?.resolveAll(callsigns) },
-            contestedIdentityHolder: contested)
-        return MainWindowServices(coordinator: coordinator, bbsLibrary: library,
-                                  callsignLookup: lookup, bbsService: bbsService)
+        // The station is built at launch and runs with or without a window
+        // (StationServices); the window shows it.
+        _sessionCoordinator = StateObject(wrappedValue: station.coordinator)
+        _bbsLibrary = StateObject(wrappedValue: station.bbsLibrary)
+        _callsignLookup = StateObject(wrappedValue: station.callsignLookup)
+        _bbsService = StateObject(wrappedValue: station.bbsService)
     }
 
     /// The window, assembled in layers.
@@ -542,60 +360,11 @@ struct ContentView: View {
         .accessibilityIdentifier("mainWindowRoot")
     }
 
-    /// Attaching and detaching the station: which addresses it answers on, and
-    /// saying goodbye before the machine sleeps or quits.
+    /// The station's own lifecycle (the mailbox attach, its addresses,
+    /// keep-awake, the goodbyes on sleep and quit) belongs to
+    /// StationServices, so it runs with no window open (smoke run issue 46).
     private var serviceLifecycleLayer: some View {
         windowShell
-        .task {
-            bbsService.attach()
-            syncServiceAddresses()
-            bbsLibrary.rescan()
-            client.radioManager.startWatchingOutages()
-            applyKeepAwake()
-        }
-        // Which addresses this station accepts calls on. Watched as one value
-        // rather than five separate modifiers, which the type checker cannot
-        // afford on a body this size.
-        .onChange(of: serviceAddressSignature) { syncServiceAddresses() }
-        // Saying goodbye costs one frame. Vanishing mid-session leaves the
-        // caller's software retrying into an address that stopped existing,
-        // with no way to tell that from a bad path.
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSApplication.willTerminateNotification)) { _ in
-            bbsService.shutdown(reason: "AXTerm is closing")
-        }
-        // Sleep gets the same teardown quitting does. The sessions and the
-        // radios are released by AXTermAppDelegate, which outlives this view —
-        // with the menu bar icon on, closing the window leaves the station
-        // running and there would be nobody here to do it. What is left here
-        // is what belongs to the window: the mailbox goodbye and the service
-        // address table.
-        .onReceive(SystemPowerMonitor.shared.willSleep) { _ in
-            bbsService.shutdown(reason: "this station is going to sleep")
-        }
-        .onReceive(SystemPowerMonitor.shared.didWake) { _ in
-            bbsService.attach()
-            syncServiceAddresses()
-            applyKeepAwake()
-        }
-        // What the app asks the OS for depends on both the operator's policy
-        // and what the station is doing, so it is re-evaluated when either
-        // moves. See KeepAwake.swift for why one half of it is not a choice.
-        .onChange(of: settings.keepAwakePolicy) { _, _ in applyKeepAwake() }
-        .onChange(of: client.radioManager.radioStates) { _, _ in applyKeepAwake() }
-        .onChange(of: sessionCoordinator.connectedSessions.count) { _, _ in applyKeepAwake() }
-    }
-
-    /// Re-evaluates the sleep and scheduling holds.
-    private func applyKeepAwake() {
-        let connected = client.radioManager.radioStates.values.contains(.connected)
-        keepAwake.update(
-            policy: settings.keepAwakePolicy,
-            isConnected: connected,
-            isTransferring: !sessionCoordinator.connectedSessions.isEmpty,
-            // A node or mailbox that answers calls is armed even with nothing
-            // in progress, and a station that sleeps stops answering.
-            isListening: connected && (settings.netRomAcceptInbound || bbsSettings.onAir))
     }
 
     /// The toolbar search field and the panel it opens.
@@ -939,9 +708,6 @@ struct ContentView: View {
             case .profile(let presentation):
                 profileSheet(presentation)
             }
-        }
-        .onChange(of: settings.primaryCallsign) { _, newValue in
-            sessionCoordinator.applyLocalCallsign(newValue)
         }
         // Warm the in-memory directory from the on-disk cache the moment a
         // profile is requested. Without this, a station looked up weeks ago
@@ -1765,33 +1531,6 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .frame(minWidth: 200)
-    }
-
-    /// Every input deciding which addresses this station answers on, as one
-    /// value, so the view can watch a single thing.
-    private var serviceAddressSignature: String {
-        let winlink = winlinkContext.settings
-        return [settings.primaryCallsign,
-                bbsSettings.onAir ? "1" : "0",
-                bbsSettings.callsign,
-                winlink.p2pListenEnabled ? "1" : "0",
-                winlink.p2pListenCallsign].joined(separator: "|")
-    }
-
-    /// Registers every address a service answers on with the session layer.
-    ///
-    /// Frames not addressed to a registered address never reach the session
-    /// layer, so this is what makes a service SSID mean anything at all.
-    private func syncServiceAddresses() {
-        bbsService.syncServiceAddress()
-
-        let winlink = winlinkContext.settings
-        let address = winlink.p2pListenEnabled
-            ? winlink.effectiveP2PCallsign(stationCallsign: settings.primaryCallsign)
-            : ""
-        sessionCoordinator.sessionManager.setServiceAddress(
-            address.isEmpty ? nil : CallsignNormalizer.toAddress(address),
-            for: "winlink.p2p")
     }
 
     /// What each section is waiting on.
@@ -3293,11 +3032,16 @@ struct ContentView: View {
 
 #Preview {
     let settings = AppSettingsStore()
+    let client = PacketEngine(settings: settings)
+    let winlink = WinlinkContext(store: nil, settings: WinlinkSettings())
+    let bbs = BBSSettings()
     ContentView(
-        client: PacketEngine(settings: settings),
+        client: client,
         settings: settings,
         inspectionRouter: .shared,
-        winlinkContext: WinlinkContext(store: nil, settings: WinlinkSettings()),
-        bbsSettings: BBSSettings()
+        winlinkContext: winlink,
+        bbsSettings: bbs,
+        station: StationServices(client: client, settings: settings,
+                                 winlinkContext: winlink, bbsSettings: bbs)
     )
 }

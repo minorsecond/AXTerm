@@ -93,9 +93,14 @@ to burn T1 × N2 finding out why.
 In the delegate rather than in `ContentView`, for the same reason the
 keep-awake controller is shared: with the menu bar icon on, closing the window
 tears the view down while the station keeps running, and the machine could
-then sleep with live sessions on the air and nobody left to release them. The
-view keeps what is genuinely its own — the mailbox goodbye, the service address
-table, and the keep-awake indicator.
+then sleep with live sessions on the air and nobody left to release them.
+
+The mailbox goodbye on sleep and quit, the reattach on wake, the service
+address table and the keep-awake evaluation live in `StationServices`, which
+`AXTermApp` builds at launch along with the session coordinator and the
+mailbox. Until 2026-10-05 the main window built all of those and ran them, so a
+launch that restored no window heard callers and answered none (smoke run
+2026-10-03-1, issue 46). The window now only shows the station.
 
 The DISCs are transmitted and not waited on. A UA needs a round trip over a
 radio link and there is no waiting for one on a machine that is about to stop

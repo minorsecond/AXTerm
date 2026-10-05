@@ -23,7 +23,7 @@ struct AXTermiOSRootView: View {
     @StateObject private var sessionCoordinator: SessionCoordinator
     /// The personal mailbox: settings, the service that answers calls, and
     /// the folders it shares. Built here for the same reason the Mac builds
-    /// them in `ContentView.makeServices` — this is the one place holding
+    /// them in `StationServices.build` — this is the one place holding
     /// both the coordinator (which owns inbound calls) and the engine (which
     /// owns the database and the frame sink).
     @ObservedObject var bbsSettings: BBSSettings
@@ -243,7 +243,7 @@ struct AXTermiOSRootView: View {
                                      client: PacketEngine,
                                      bbsSettings: BBSSettings) -> MainWindowServices {
         // The Mac wires the coordinator to the station's identity and to the
-        // radio in `ContentView.makeServices`; this shell has to do the same
+        // radio in `StationServices.build`; this shell has to do the same
         // or the transmit path runs with neither. Field capture 2026-08-25: a connect
         // to W0ARP-10 went out as `src=NOCALL` and every T1 retry logged
         // "Skipping sendFrame - packetEngine not set". The gateway answered

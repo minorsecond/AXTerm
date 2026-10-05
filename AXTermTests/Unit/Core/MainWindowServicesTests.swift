@@ -2,12 +2,15 @@
 //  MainWindowServicesTests.swift
 //  AXTermTests
 //
-//  The main window's services are built once per window. ContentView's
-//  initializer runs every time AXTermApp's body does, which is every time a
-//  setting publishes, and it used to build a new BBS file library, callsign
-//  lookup service and mailbox each time and re-wire the session coordinator:
-//  new packet subscription, restarted APRS retry timer, re-armed NET/ROM
-//  broadcast timer. These count the builds.
+//  The station's services are built once. ContentView's initializer runs
+//  every time AXTermApp's body does, which is every time a setting
+//  publishes, and it used to build a new BBS file library, callsign lookup
+//  service and mailbox each time and re-wire the session coordinator: new
+//  packet subscription, restarted APRS retry timer, re-armed NET/ROM
+//  broadcast timer. On the Mac they are now built at launch by
+//  StationServices and the window is handed them (smoke run issue 46); the
+//  iPhone still builds them once per install through MainWindowServicesBox.
+//  These count the builds.
 //
 
 #if os(macOS)
@@ -27,6 +30,7 @@ final class MainWindowServicesTests: XCTestCase {
         let winlink: WinlinkContext
         let bbsSettings: BBSSettings
         let router: PacketInspectionRouter
+        let station: StationServices
     }
 
     private var savedCoordinator: SessionCoordinator?
@@ -68,22 +72,27 @@ final class MainWindowServicesTests: XCTestCase {
             settings: WinlinkSettings(defaults: defaults,
                                       keychain: KeychainStore(service: "test-\(UUID().uuidString)")),
             profile: StationProfile(defaults: defaults))
+        let client = PacketEngine(settings: settings)
+        let bbs = BBSSettings(defaults: defaults)
         return Station(defaults: defaults, settings: settings,
-                       client: PacketEngine(settings: settings), winlink: winlink,
-                       bbsSettings: BBSSettings(defaults: defaults),
-                       router: PacketInspectionRouter())
+                       client: client, winlink: winlink,
+                       bbsSettings: bbs,
+                       router: PacketInspectionRouter(),
+                       station: StationServices(client: client, settings: settings,
+                                                winlinkContext: winlink, bbsSettings: bbs))
     }
 
     private func contentView(_ station: Station) -> ContentView {
         ContentView(client: station.client, settings: station.settings,
                     inspectionRouter: station.router, winlinkContext: station.winlink,
-                    bbsSettings: station.bbsSettings)
+                    bbsSettings: station.bbsSettings, station: station.station)
     }
 
     // MARK: - The box
 
     func testTheBoxBuildsOnceHoweverOftenItIsRead() {
         let station = station("MainWindowServicesBox")
+        defer { station.station.stop() }
         var builds = 0
         let box = MainWindowServicesBox {
             builds += 1
@@ -112,19 +121,20 @@ final class MainWindowServicesTests: XCTestCase {
     }
 
     /// What AXTermApp's body does on every settings change: make a new
-    /// ContentView value. Making one must not build anything.
+    /// ContentView value. Making one must not build anything: the station
+    /// is built once, at launch (StationServices, smoke run issue 46).
     func testMakingContentViewValuesBuildsNothing() {
         let station = station("MainWindowServicesValues")
-        let before = MainWindowServicesBox.buildCount
+        defer { station.station.stop() }
+        let before = StationServices.buildCount
 
         _ = contentView(station)
         _ = contentView(station)
         _ = contentView(station)
 
-        XCTAssertEqual(MainWindowServicesBox.buildCount, before,
-                       "the services belong to the installed window, not to each view value")
-        XCTAssertNil(SessionCoordinator.shared,
-                     "no coordinator is made until a window is installed")
+        XCTAssertEqual(StationServices.buildCount, before,
+                       "the station belongs to the app, not to each view value")
+        XCTAssertTrue(SessionCoordinator.shared === station.station.coordinator)
     }
 
     // MARK: - A hosted window
@@ -144,15 +154,17 @@ final class MainWindowServicesTests: XCTestCase {
             return ContentView(client: station.client, settings: settings,
                                inspectionRouter: station.router,
                                winlinkContext: station.winlink,
-                               bbsSettings: station.bbsSettings)
+                               bbsSettings: station.bbsSettings,
+                               station: station.station)
                 .defaultAppStorage(station.defaults)
         }
     }
 
     func testAHostedWindowBuildsItsServicesOnceAcrossSettingsChanges() throws {
         let station = station("MainWindowServicesHosted")
+        defer { station.station.stop() }
         let counter = InitCounter()
-        let before = MainWindowServicesBox.buildCount
+        let before = StationServices.buildCount
 
         let start = Date()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
@@ -163,8 +175,9 @@ final class MainWindowServicesTests: XCTestCase {
         defer { window.close() }
         spin(1.0)
 
-        XCTAssertEqual(MainWindowServicesBox.buildCount - before, 1, "installing the window builds once")
-        let coordinator = try XCTUnwrap(SessionCoordinator.shared, "the window made a coordinator")
+        XCTAssertEqual(StationServices.buildCount - before, 0, "installing the window builds nothing")
+        let coordinator = try XCTUnwrap(SessionCoordinator.shared)
+        XCTAssertTrue(coordinator === station.station.coordinator, "the window shows the station's coordinator")
         XCTAssertEqual(coordinator.localCallsign, station.settings.primaryCallsign,
                        "a new coordinator is seeded with the primary radio's address")
         let initsAtInstall = counter.count
@@ -181,7 +194,7 @@ final class MainWindowServicesTests: XCTestCase {
 
         XCTAssertGreaterThan(counter.count, initsAtInstall,
                              "the stand-in re-ran its body, so ContentView.init ran again")
-        XCTAssertEqual(MainWindowServicesBox.buildCount - before, 1,
+        XCTAssertEqual(StationServices.buildCount - before, 0,
                        "later initializers must not build the services again")
         XCTAssertTrue(SessionCoordinator.shared === coordinator, "still the same coordinator")
         XCTAssertEqual(coordinator.localCallsign, station.settings.primaryCallsign,

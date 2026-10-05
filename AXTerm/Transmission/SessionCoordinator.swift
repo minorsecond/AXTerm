@@ -3131,9 +3131,9 @@ final class SessionCoordinator: ObservableObject {
         // Note: onDataDeliveredForReassembly is wired up in setupCallbacks() already
 
         // Cancel previous subscription to prevent duplicate packet processing.
-        // Each main window wires the shared coordinator once when it is
-        // installed (see MainWindowServicesBox), so a second window, or the
-        // window reopened from the menu bar, calls this again.
+        // The Mac wires the coordinator once at launch (StationServices); the
+        // iPhone once per install (MainWindowServicesBox). A second call
+        // replaces the first rather than adding to it.
         packetSubscription?.cancel()
         packetSubscription = client.packetPublisher
             .receive(on: DispatchQueue.main)
