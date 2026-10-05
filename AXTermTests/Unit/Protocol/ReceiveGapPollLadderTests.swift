@@ -32,6 +32,9 @@ final class ReceiveGapPollLadderTests: XCTestCase {
     private func connected(clock: AX25VirtualClock)
         -> (AX25SessionManager, AX25Session, () -> [OutboundFrame], () -> [Data]) {
         let manager = AX25SessionManager(localCallsign: local, clock: clock)
+        // T3 at its full 30 s: the system's draw put a third idle poll in
+        // the 60 s window now and then, and the test failed at random.
+        manager.t3JitterDraw = { 0 }
         manager.defaultConfig = AX25SessionConfig(windowSize: 4, paclen: 128, maxRetries: maxRetries,
                                                   rtoMin: 0.3, rtoMax: 1.2, initialRto: 0.5,
                                                   t2AckDelay: 0.1, adaptiveTimeout: false)
