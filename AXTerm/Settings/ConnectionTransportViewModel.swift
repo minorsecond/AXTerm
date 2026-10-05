@@ -727,17 +727,38 @@ final class ConnectionTransportViewModel: ObservableObject {
     @Published var pttMethod: ModemPTTMethod = .civ {
         didSet { update { $0.pttMethod = pttMethod } }
     }
+    // Each value is held inside its range here, not only in the profile, so
+    // the field shows what is stored and sent rather than what was typed
+    // (smoke run 2026-10-03-1, issue 53). Through @Published an assignment
+    // inside didSet runs didSet again, so it happens only when out of range,
+    // and that second pass does the saving.
     @Published var txDelayMs: Int = 300 {
-        didSet { update { $0.txDelayMs = max(0, min(2000, txDelayMs)) } }
+        didSet {
+            let held = max(0, min(2000, txDelayMs))
+            guard held == txDelayMs else { txDelayMs = held; return }
+            update { $0.txDelayMs = txDelayMs }
+        }
     }
     @Published var txTailMs: Int = 100 {
-        didSet { update { $0.txTailMs = max(0, min(1000, txTailMs)) } }
+        didSet {
+            let held = max(0, min(1000, txTailMs))
+            guard held == txTailMs else { txTailMs = held; return }
+            update { $0.txTailMs = txTailMs }
+        }
     }
     @Published var persistence: Int = 63 {
-        didSet { update { $0.persistence = max(0, min(255, persistence)) } }
+        didSet {
+            let held = max(0, min(255, persistence))
+            guard held == persistence else { persistence = held; return }
+            update { $0.persistence = persistence }
+        }
     }
     @Published var slotTimeMs: Int = 100 {
-        didSet { update { $0.slotTimeMs = max(10, min(1000, slotTimeMs)) } }
+        didSet {
+            let held = max(10, min(1000, slotTimeMs))
+            guard held == slotTimeMs else { slotTimeMs = held; return }
+            update { $0.slotTimeMs = slotTimeMs }
+        }
     }
     /// Whether a network or plain serial TNC is sent the timing above.
     @Published var sendsKISSTiming: Bool = false {

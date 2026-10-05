@@ -97,6 +97,27 @@ final class RadioTimingTests: XCTestCase {
         }
     }
 
+    /// A value past a field's range is held at the range's end, and the
+    /// field shows that, not what was typed. Smoke run 2026-10-05 (issue 53):
+    /// typing into TX delay left `100800` on screen while 2000 ms was stored
+    /// and sent to the TNC.
+    func testATimingValuePastItsRangeShowsWhatIsStored() throws {
+        let settings = AppSettingsStore(defaults: TestDefaults.make("Timing-clamp"))
+        let id = try XCTUnwrap(settings.activeRadios.first?.id)
+        let model = ConnectionTransportViewModel(radioID: id, settings: settings,
+                                                 packetEngine: PacketEngine(settings: settings))
+        model.txDelayMs = 100_800
+        model.persistence = 300
+        model.slotTimeMs = 0
+        model.txTailMs = -5
+        let stored = try XCTUnwrap(settings.radio(id))
+        XCTAssertEqual(model.txDelayMs, 2000)
+        XCTAssertEqual(stored.txDelayMs, 2000)
+        XCTAssertEqual(model.persistence, 255)
+        XCTAssertEqual(model.slotTimeMs, 10)
+        XCTAssertEqual(model.txTailMs, 0)
+    }
+
     // MARK: - RadioManager sends it to a network TNC
 
     private var links: [String: KISSLinkLoopback] = [:]
