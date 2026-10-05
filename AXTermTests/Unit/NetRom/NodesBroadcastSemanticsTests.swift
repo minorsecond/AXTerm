@@ -89,4 +89,30 @@ final class NodesBroadcastSemanticsTests: XCTestCase {
         XCTAssertEqual(store.directory.callsign(for: "DRLNOD"), "KE0NCQ")
         XCTAssertEqual(store.directory.callsign(for: "COSCO"), "KE0GB-7")
     }
+
+    /// A node heard announcing itself is reachable directly. With no self
+    /// entry in NODES (issue 38) nothing lists it, and the Nodes page filed
+    /// EPINDB under "No route known" while Routes had the route (smoke run
+    /// 2026-10-03-1, issue 65).
+    func testANodeHeardAnnouncingItselfIsReachableDirectly() throws {
+        let suite = "NodesBroadcastSemanticsTests-\(UUID().uuidString)"
+        let store = NodeAliasStore(defaults: UserDefaults(suiteName: suite)!)
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+
+        store.ingest(packets: [headerOnlyFromB])
+        let entry = try XCTUnwrap(store.directory.entry(for: "EPINDB"))
+        XCTAssertTrue(entry.tellers.isEmpty, "a node listing itself is still no teller")
+        XCTAssertNotNil(entry.heardDirectlyAt)
+        XCTAssertTrue(entry.isReachable)
+    }
+
+    func testHeardDirectlySurvivesSavingAndLoading() throws {
+        var directory = NodeAliasDirectory()
+        directory.record(NodeAliasParser.Announcement(alias: "EPINDB", callsign: "K0EPI-3", service: "N"),
+                         at: Date(timeIntervalSince1970: 1000))
+        directory.noteHeardDirectly(alias: "EPINDB", at: Date(timeIntervalSince1970: 1000))
+        let data = try JSONEncoder().encode(directory.entry(for: "EPINDB"))
+        let back = try JSONDecoder().decode(NodeAliasDirectory.Entry.self, from: data)
+        XCTAssertEqual(back.heardDirectlyAt, Date(timeIntervalSince1970: 1000))
+    }
 }

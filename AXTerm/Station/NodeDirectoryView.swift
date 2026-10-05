@@ -86,9 +86,14 @@ struct NodeDirectoryView: View {
     struct RouteGroup: Identifiable {
         let teller: String?
         let entries: [NodeAliasDirectory.Entry]
-        var id: String { teller ?? "" }
+        /// Nodes nothing lists but this station heard announcing themselves.
+        var direct = false
+        var id: String { direct ? "\u{0}direct" : (teller ?? "") }
 
-        var title: String { teller.map { "Via \($0)" } ?? "No route known" }
+        var title: String {
+            if direct { return "Heard directly" }
+            return teller.map { "Via \($0)" } ?? "No route known"
+        }
     }
 
     /// Groups in the order the operator would work down them: the routes that
@@ -103,6 +108,7 @@ struct NodeDirectoryView: View {
         }
         var byTeller: [String: [NodeAliasDirectory.Entry]] = [:]
         var orphans: [NodeAliasDirectory.Entry] = []
+        var direct: [NodeAliasDirectory.Entry] = []
         for entry in rows {
             // Filed under the freshest node that listed it. An entry reachable
             // several ways appears once, under its best route — the sheet lists
@@ -110,6 +116,8 @@ struct NodeDirectoryView: View {
             // counts that make the sections worth reading.
             if let teller = entry.reachableVia.first {
                 byTeller[teller, default: []].append(entry)
+            } else if entry.heardDirectlyAt != nil {
+                direct.append(entry)
             } else {
                 orphans.append(entry)
             }
@@ -122,6 +130,9 @@ struct NodeDirectoryView: View {
                 }
                 return $0.id < $1.id
             }
+        if !direct.isEmpty {
+            result.append(RouteGroup(teller: nil, entries: direct, direct: true))
+        }
         if !orphans.isEmpty {
             result.append(RouteGroup(teller: nil, entries: orphans))
         }
@@ -141,7 +152,7 @@ struct NodeDirectoryView: View {
                 || $0.callsign.contains(needle)
                 || $0.reachableVia.contains { $0.contains(needle) }
         }
-        let filtered = reachableOnly ? matching.filter { !$0.tellers.isEmpty } : matching
+        let filtered = reachableOnly ? matching.filter(\.isReachable) : matching
         switch order {
         case .alias: return filtered.sorted { $0.alias < $1.alias }
         case .station: return filtered.sorted { $0.callsign < $1.callsign }
@@ -308,7 +319,7 @@ struct NodeDirectoryView: View {
     /// network has published, including the ones with no way in.
     private var countLabel: String {
         let all = aliases.directory.allEntries
-        let reachable = all.count { !$0.tellers.isEmpty }
+        let reachable = all.count(where: \.isReachable)
         if rows.count != all.count {
             return "\(rows.count) of \(all.count)"
         }

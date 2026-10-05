@@ -225,6 +225,17 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
         /// is a better bet than one that listed it in June.
         var tellers: [String: Date] = [:]
 
+        /// When this station was last heard announcing itself directly, with
+        /// no digipeater between: its own NODES header. A node listing itself
+        /// is no teller, but hearing it means it is reachable directly. Nil
+        /// when it has only ever been heard of (smoke run 2026-10-03-1,
+        /// issue 65).
+        var heardDirectlyAt: Date?
+
+        /// Whether there is a way in: a node that listed it, or it heard
+        /// directly.
+        var isReachable: Bool { !tellers.isEmpty || heardDirectlyAt != nil }
+
         /// The most recent node to list this station, for callers wanting one
         /// name. Nil when nothing has ever claimed to reach it.
         var learnedFrom: String? {
@@ -254,7 +265,7 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
         }
 
         private enum CodingKeys: String, CodingKey {
-            case alias, callsign, service, heardAt, announcements, tellers
+            case alias, callsign, service, heardAt, announcements, tellers, heardDirectlyAt
             /// Pre-multi-teller storage held a single optional name.
             case learnedFrom
         }
@@ -276,6 +287,7 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
             service = try container.decode(String.self, forKey: .service)
             heardAt = try container.decode(Date.self, forKey: .heardAt)
             announcements = try container.decode(Int.self, forKey: .announcements)
+            heardDirectlyAt = try container.decodeIfPresent(Date.self, forKey: .heardDirectlyAt)
 
             if let stored = try container.decodeIfPresent(
                 [String: Date].self, forKey: .tellers) {
@@ -306,6 +318,7 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
             try container.encode(heardAt, forKey: .heardAt)
             try container.encode(announcements, forKey: .announcements)
             try container.encode(tellers, forKey: .tellers)
+            try container.encodeIfPresent(heardDirectlyAt, forKey: .heardDirectlyAt)
         }
     }
 
@@ -357,6 +370,16 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
             updated.noteTeller(told, at: time)
         }
         entries[key] = updated
+    }
+
+    /// Records that the station behind `alias` was heard announcing itself
+    /// with no digipeater between.
+    mutating func noteHeardDirectly(alias: String, at time: Date) {
+        let key = alias.trimmingCharacters(in: .whitespaces).uppercased()
+        guard var entry = entries[key] else { return }
+        if let known = entry.heardDirectlyAt, known >= time { return }
+        entry.heardDirectlyAt = time
+        entries[key] = entry
     }
 
     func callsign(for alias: String) -> String? {
@@ -834,7 +857,7 @@ final class NodeAliasStore: ObservableObject {
         for packet in packets {
             if packet.isNetRomBroadcast {
                 if let result = NetRomBroadcastParser.parse(packet: packet) {
-                    ingest(nodes: result, at: packet.timestamp)
+                    ingest(nodes: result, at: packet.timestamp, heardDirectly: packet.via.isEmpty)
                 }
                 continue
             }
@@ -852,12 +875,15 @@ final class NodeAliasStore: ObservableObject {
     /// by the sender. Only text frames were read before, so a node heard
     /// only through NODES never reached the Nodes page (smoke run
     /// 2026-10-03-1, issue 38).
-    func ingest(nodes result: NetRomBroadcastResult, at time: Date) {
+    func ingest(nodes result: NetRomBroadcastResult, at time: Date, heardDirectly: Bool = false) {
         let origin = CallsignValidator.normalize(result.originCallsign)
         var updated = directory
         if let alias = result.originAlias, !alias.isEmpty {
             updated.record(NodeAliasParser.Announcement(alias: alias, callsign: origin, service: "N"),
                            at: time, from: origin)
+            if heardDirectly {
+                updated.noteHeardDirectly(alias: alias, at: time)
+            }
         }
         for entry in result.entries where !entry.destinationAlias.isEmpty {
             updated.record(NodeAliasParser.Announcement(
