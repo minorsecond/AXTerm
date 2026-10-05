@@ -352,7 +352,16 @@ nonisolated final class B2FSessionEngine {
                 state = .closing
                 // The rest of a body still queued would go out ahead of the
                 // FQ, and the link would carry the whole message before it
-                // closed (smoke run 2026-10-03-1, issue 64).
+                // closed (smoke run 2026-10-03-1, issue 64), so it is dropped.
+                // While our bodies may still be in flight the peer is reading
+                // binary blocks, and an FQ would land inside one as three
+                // more body bytes: B (ID-50) saved `FQ\r` into a resume
+                // prefix and the resume failed its checksum (5.4 retest).
+                // FBB has no quit for the middle of a body, so then the link
+                // just ends, as the receiving side's abort does.
+                if !bodiesAwaitingConfirmation.isEmpty {
+                    return [.discardUnsent, .requestDisconnect] + abortDeadline()
+                }
                 return [.discardUnsent, sendText("FQ\r"), .requestDisconnect] + abortDeadline()
             }
         }

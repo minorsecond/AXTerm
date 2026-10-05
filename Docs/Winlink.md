@@ -64,7 +64,10 @@ mail takes the turn without an `FF` handshake.
   N2. A second `close()` disconnects at once. An abort first drops what is
   still queued behind the window (`discardUnsent`), so its `FQ` is next
   and the link does not carry the rest of the message before it closes
-  (issue 64).
+  (issue 64). While our bodies may still be in flight there is no `FQ` at
+  all: the peer is reading binary blocks and would take `FQ\r` as three
+  more body bytes, poisoning its resume prefix (issue 67). The link just
+  ends, the peer saves a clean prefix, and the next exchange resumes.
 - `WinlinkTelnetTransport` — TCP to `cms.winlink.org:8772`; the login
   preamble answers the `Callsign:`/`Password:` prompts (password is the
   fixed transport string `CMSTELNET` — real authentication is the B2F

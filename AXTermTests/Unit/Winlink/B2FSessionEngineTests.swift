@@ -652,6 +652,28 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertLessThan(drop ?? .max, fq ?? .min)
     }
 
+    /// While our bodies may still be in flight the peer is reading binary
+    /// blocks, and an FQ sent then lands inside a block as three more body
+    /// bytes. On air (smoke run 2026-10-03-1, 5.4 retest) B (ID-50) saved
+    /// a 738-byte prefix from 735 real bytes plus `FQ\r`, and the resume
+    /// failed its checksum. FBB has no quit for the middle of a body, so the
+    /// abort drops what is unsent and ends the link, as the receiving side's
+    /// abort already does.
+    func testAbortWhileOurBodiesMayBeInFlightSendsNoFQ() throws {
+        let outbound = try prepare(makeMessage(mid: "OUTMSG000001"))
+        let harness = makeHarness(outbound: [outbound])
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.receive("FS Y\r\n")
+        let before = harness.actions.count
+        harness.fire(.abortRequested)
+        let abort = Array(harness.actions[before...])
+        XCTAssertTrue(abort.contains(.discardUnsent))
+        XCTAssertTrue(abort.contains(.requestDisconnect))
+        XCTAssertFalse(abort.contains { if case .send(let d) = $0 { return d == Data("FQ\r".utf8) }; return false },
+                       "no FQ into a binary stream")
+    }
+
     /// The peer's next turn after our bodies (FF, FC or FQ) says it has
     /// them. An abort that crosses it still has to count them as delivered:
     /// smoke run 2026-10-03-1, issue 62, B (ID-50) held the message while
