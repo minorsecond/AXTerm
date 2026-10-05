@@ -8,8 +8,10 @@
 //  - AX25SessionConfig.learnedPathRto is a FULL-PATH RTO learned for one
 //    specific route. When present it IS the session's initial RTO seed and is
 //    never hop-scaled (the learned value already includes digipeater delay).
-//  - It has exactly one writer: the per-route adaptive cache-hit branch, which
-//    only runs with adaptive ON and a fresh (TTL-valid) entry.
+//  - It comes from this route only: its fresh (TTL-valid) adaptive entry,
+//    or failing that its last T1V from the past 7 days, which is kept
+//    across restarts (spec 7.3; LearnedRouteRestartTests). Adaptive OFF
+//    never seeds it.
 //  - It never survives config merging (multiple sessions to one destination
 //    over different routes must not cross-pollinate learned values).
 //  - It is clamped into [max(rtoMin, 4.0), rtoMax] so a freak low sample can

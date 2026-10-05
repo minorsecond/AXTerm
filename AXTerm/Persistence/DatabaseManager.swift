@@ -826,8 +826,42 @@ nonisolated enum DatabaseManager {
                                   name: "allowSessionlessOutboundMessages") { db in
             try allowSessionlessOutboundMessages(db)
         }
+        registerReportedMigration(&migrator, version: 37, name: "createLearnedRoutes") { db in
+            try createLearnedRoutes(db)
+        }
         return migrator
     }()
+
+    /// What each route learned, so a restart does not start every route over
+    /// (`SQLiteLearnedRouteStore`). One row per radio, station and path, and
+    /// one per radio for the channel (`isChannel`, with an empty destination
+    /// and path). Only the newest snapshot of each is kept.
+    static func createLearnedRoutes(_ db: Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS learned_routes (
+                radioID TEXT NOT NULL,
+                isChannel INTEGER NOT NULL DEFAULT 0,
+                destination TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                windowSize INTEGER NOT NULL,
+                paclen INTEGER NOT NULL,
+                windowCeiling INTEGER NOT NULL,
+                paclenCeiling INTEGER NOT NULL,
+                lossRate REAL,
+                forwardLoss REAL,
+                etx REAL,
+                rto REAL,
+                successStreak INTEGER NOT NULL DEFAULT 0,
+                upgradeStreakRequirement INTEGER NOT NULL DEFAULT 10,
+                updatedAt DATETIME NOT NULL,
+                PRIMARY KEY (radioID, isChannel, destination, path)
+            )
+            """)
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_learned_routes_updated
+                ON learned_routes(updatedAt)
+            """)
+    }
 
     /// The radio on the link-quality time series: a link's history is per
     /// radio, like its present. Added with the primary radio as the default

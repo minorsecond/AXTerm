@@ -801,9 +801,14 @@ key-up and an airtime more per digipeater. Our key-up is measured by a sound
 modem (the radio's smoothed PTT confirmation, its audio buffer and the TX
 delay; Warbler has taken 3.6 s to key an IC-705) and is the TX delay setting
 for a TNC; the peer's is assumed to be our TX delay setting. A route's T1V
-learned in the last 30 minutes replaces the initial default: the session starts
+learned in the last 7 days replaces the initial default: the session starts
 with T1V at the learned value and SRT at half of it, where the last session's
-Select T1 left off. Until 2026-10-05 the learned value was taken as SRT, so the
+Select T1 left off. The value is kept in the database (`learned_routes`, see
+§7.8.1), so it outlives a restart. Decision (2026-10-05, smoke run issue 54):
+7 days, because the round trip is mostly structure (our key-up, the peer's
+turnaround, the digipeaters) and barely moves from day to day, and a start
+that is off is corrected by the session's first Select T1. K, paclen and the
+loss figures are kept for 30 minutes only. Until 2026-10-05 the learned value was taken as SRT, so the
 first T1V came out near double it and each reconnect started higher than the
 last (smoke run issue 50: 7.0 s, then 12.0 s, then 19.4 s to the same station).
 
@@ -1133,11 +1138,13 @@ in any scenario, or behind it overall.
 
 **Start** (`AX25SessionConfig.windowSize`, `paclen`, `startSource`), in order:
 1. Another session to the same station is open: the merged config of §7.8.
-2. This route's own evidence from the last 30 minutes (the per-route adaptive cache).
+2. This route's own evidence from the last 30 minutes (the per-route adaptive cache), including evidence from before a restart.
 3. The values this route last confirmed, if confirmed within 24 hours (`ConfirmedLinkMemory`).
 4. The radio's channel figure, then the configured defaults (K=2, paclen 128).
 
 Only confirmed values seed a session. An upgrade still on probation counts as the values it would roll back to (`TxAdaptiveSettings.confirmedWindow`, `confirmedPaclen`). The memory is keyed by radio, station and path, so a digipeated path's figures never seed the direct path. It is written when a probation trial passes, lowered when the link backs off, and never raised by anything but another passed trial; a backoff with no record writes nothing. Clear All Learned and a per-station reset clear it.
+
+**Across restarts** (`SQLiteLearnedRouteStore`, `LearnedRouteMemory`). Each route's and each channel's learning is written to the `learned_routes` table, one row per radio, station and path, at most once every 5 s while samples arrive and again at quit. A row holds the confirmed K and paclen, the ceilings, the loss and ETX averages, the last T1V and the clean streak, and the time of its last sample by the wall clock. At launch a row under 30 minutes old comes back as the route's adaptive entry, keeping its own time so it still expires 30 minutes after it was learned; a trial in progress at quit does not come back, only the values it would roll back to. The T1V comes back for 7 days (§7.3). Rows older than 7 days are deleted at launch. A row with a time in the future, from a clock set back, is used for nothing. Clear All Learned empties the table; a per-station reset deletes that station's rows, because the reset itself is not kept across a restart. Test mode starts each launch with a fresh database (Docs/TestIsolation.md), so nothing carries across a relaunch there. Decision: 2026-10-05, smoke run issue 54 (test 11.2 found nothing survived a restart).
 
 Decision: 24 hours. It covers the sessions an operator runs to one station in a sitting (a test, a break, more tests; an evening of BBS visits) and stops short of the changes that make an old figure wrong: another radio or power level, a different antenna, band conditions, the other station's TX delay changed overnight. A start that is too high costs little, since the first retransmission halves K and steps paclen down, but there is no reason to pay it with a stale figure.
 

@@ -556,7 +556,22 @@ final class SessionCoordinator: ObservableObject {
     private var adaptiveByScope: [AdaptiveScope: CachedAdaptiveEntry] = [:]
 
     /// TTL for per-route cache: after this many seconds without a sample for that route, we fall back to global.
-    private static let adaptiveByScopeTTLSeconds: TimeInterval = 30 * 60  // 30 minutes
+    private static let adaptiveByScopeTTLSeconds: TimeInterval = LearnedRouteMemory.recentLifetime
+
+    /// Where what routes learned is kept across restarts (spec §7.8.1,
+    /// smoke run issue 54). Nil until the app's database is open, and in
+    /// unit tests unless a test attaches one.
+    private(set) var learnedRouteStore: LearnedRouteStore?
+    /// Each route's last T1V, which seeds its next session's T1 for up to
+    /// `LearnedRouteMemory.rtoLifetime` (spec §7.3), outliving the 30-minute
+    /// entry it came from.
+    private var rememberedRto: [AdaptiveScope: LearnedRouteMemory.RememberedRto] = [:]
+    /// Scopes learned since the last write to the store.
+    private var unsavedScopes: Set<AdaptiveScope> = []
+    private var learnedFlushTask: Task<Void, Never>?
+    /// Samples arrive a few per second during a transfer; the store is
+    /// written once per this many seconds of learning, and at quit.
+    static let learnedFlushDelay: TimeInterval = 5
 
     /// AXDP reassembly per peer over connected-mode I-frames.
     /// Key: "callsign-path".
@@ -848,6 +863,7 @@ final class SessionCoordinator: ObservableObject {
                                               newFrames: newFrames, retransmits: retransmits,
                                               evidence: evidence)
                 adaptiveByScope[taught] = CachedAdaptiveEntry(settings: channel, lastUpdated: Date())
+                noteLearned(taught, channel)
             }
             let normalizedKey = scope
             var entry = learningEntry(for: normalizedKey)
@@ -918,6 +934,7 @@ final class SessionCoordinator: ObservableObject {
                 ])
             }
             adaptiveByScope[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
+            noteLearned(normalizedKey, entry)
             // With nothing selected the toolbar shows a channel, and which
             // one has to be a fixed choice: picking whichever learned most
             // recently makes the figure flip between radios every poll.
@@ -1055,6 +1072,99 @@ final class SessionCoordinator: ObservableObject {
             reason: session.liveLinkReason))
     }
 
+    // MARK: Learned routes across restarts (spec §7.3, §7.8.1)
+
+    /// Picks up what routes learned before the app last quit, and keeps
+    /// what they learn from now on. Calling it again with the same store
+    /// does nothing.
+    func attachLearnedRouteStore(_ store: LearnedRouteStore, now: Date = Date()) {
+        guard learnedRouteStore !== store else { return }
+        learnedRouteStore = store
+        let oldest = now.addingTimeInterval(-LearnedRouteMemory.rtoLifetime)
+        do {
+            try store.prune(before: oldest)
+            let restored = LearnedRouteMemory.restore(try store.load(since: oldest), now: now)
+            var restoredEntries = 0
+            for (scope, settings) in restored.recent {
+                let at = restored.recentAt[scope] ?? now
+                // Something learned in this process is newer than any row.
+                if let live = adaptiveByScope[scope], live.lastUpdated >= at { continue }
+                adaptiveByScope[scope] = CachedAdaptiveEntry(settings: settings, lastUpdated: at)
+                adaptiveStatusStore.updateSession(
+                    id: adaptiveSessionID(radio: scope.radio,
+                                          destination: scope.route?.destination ?? "",
+                                          path: scope.route?.path ?? ""),
+                    destination: scope.route?.destination ?? "",
+                    pathSignature: scope.route?.path ?? "",
+                    radio: scope.radio,
+                    settings: settings,
+                    lossRate: settings.lossRateEWMA,
+                    etx: settings.etxEWMA,
+                    srtt: nil,
+                    updatedAt: at)
+                restoredEntries += 1
+            }
+            let channels = adaptiveByScope.keys.filter { $0.route == nil }.map(\.radio)
+            if let chosen = Self.defaultChannelRadio(among: channels, primary: primaryRadioID) {
+                adaptiveStatusStore.setDefaultChannel(
+                    id: adaptiveSessionID(radio: chosen, destination: "", path: ""))
+            }
+            for (scope, rto) in restored.rto where (rememberedRto[scope]?.at ?? .distantPast) < rto.at {
+                rememberedRto[scope] = rto
+            }
+            TxLog.debug(.adaptive, "Restored what routes learned before the last quit", [
+                "recentEntries": restoredEntries,
+                "roundTrips": restored.rto.count
+            ])
+        } catch {
+            TxLog.warning(.adaptive, "Could not read learned routes",
+                          ["error": String(describing: error)])
+        }
+        objectWillChange.send()
+    }
+
+    /// Writes every scope learned since the last write. Runs on a timer
+    /// while learning, and at quit.
+    func flushLearnedRoutes() {
+        learnedFlushTask?.cancel()
+        learnedFlushTask = nil
+        guard let store = learnedRouteStore, !unsavedScopes.isEmpty else { return }
+        let rows = unsavedScopes.compactMap { scope in
+            adaptiveByScope[scope].map {
+                LearnedRouteSnapshot(scope: scope, settings: $0.settings, at: $0.lastUpdated)
+            }
+        }
+        unsavedScopes.removeAll()
+        do {
+            try store.save(rows)
+        } catch {
+            TxLog.warning(.adaptive, "Could not save learned routes",
+                          ["rows": rows.count, "error": String(describing: error)])
+        }
+    }
+
+    private func noteLearned(_ scope: AdaptiveScope, _ settings: TxAdaptiveSettings) {
+        if scope.route != nil, let rto = settings.currentRto, rto.isFinite, rto > 0 {
+            rememberedRto[scope] = LearnedRouteMemory.RememberedRto(value: rto, at: Date())
+        }
+        guard learnedRouteStore != nil else { return }
+        unsavedScopes.insert(scope)
+        guard learnedFlushTask == nil else { return }
+        learnedFlushTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.learnedFlushDelay))
+            guard !Task.isCancelled else { return }
+            self?.flushLearnedRoutes()
+        }
+    }
+
+    /// The route's last T1V, if it is under a week old.
+    private func rememberedRtoValue(for scope: AdaptiveScope) -> Double? {
+        guard let remembered = rememberedRto[scope] else { return nil }
+        let age = Date().timeIntervalSince(remembered.at)
+        guard age >= 0, age <= LearnedRouteMemory.rtoLifetime else { return nil }
+        return remembered.value
+    }
+
     /// True if cached entry is older than TTL (route-level cache invalidation).
     private func isAdaptiveCacheEntryExpired(_ entry: CachedAdaptiveEntry) -> Bool {
         Date().timeIntervalSince(entry.lastUpdated) > Self.adaptiveByScopeTTLSeconds
@@ -1096,8 +1206,9 @@ final class SessionCoordinator: ObservableObject {
 
     /// Build session config from adaptive settings (shared by per-route and merged paths).
     ///
-    /// `learnedPathRto` is passed ONLY by the per-route cache-hit branch — the
-    /// field's single writer. Merged configs and the global path leave it nil.
+    /// `learnedPathRto` is passed only for one exact route: its fresh entry's
+    /// T1V, or its remembered T1V from the past week. Merged configs and the
+    /// global path leave it nil.
     ///
     /// K and paclen (spec §7.8.1): a parameter on Auto gets a ceiling, the
     /// most the link allows, and starts at the values `a` has *confirmed*
@@ -1270,6 +1381,15 @@ final class SessionCoordinator: ObservableObject {
         useDefaultConfigForDestinations.removeAll()
         adaptiveByScope.removeAll()
         confirmedLinkMemory.removeAll()
+        rememberedRto.removeAll()
+        unsavedScopes.removeAll()
+        learnedFlushTask?.cancel()
+        learnedFlushTask = nil
+        do {
+            try learnedRouteStore?.removeAll()
+        } catch {
+            TxLog.warning(.adaptive, "Could not clear learned routes", ["error": String(describing: error)])
+        }
         syncSessionManagerConfigFromAdaptive()
         TxLog.adaptiveCleared(reason: "clear all – reset to defaults (routes + global)")
         objectWillChange.send()
@@ -1281,6 +1401,16 @@ final class SessionCoordinator: ObservableObject {
         guard !normalized.isEmpty else { return }
         useDefaultConfigForDestinations.insert(normalized)
         confirmedLinkMemory.remove(destination: normalized)
+        // The reset is not kept across a restart, so what it reset must not
+        // be either.
+        rememberedRto = rememberedRto.filter { $0.key.route?.destination != normalized }
+        unsavedScopes = unsavedScopes.filter { $0.route?.destination != normalized }
+        do {
+            try learnedRouteStore?.remove(destination: normalized)
+        } catch {
+            TxLog.warning(.adaptive, "Could not forget learned routes",
+                          ["destination": normalized, "error": String(describing: error)])
+        }
         TxLog.adaptiveStationReset(callsign: normalized)
         objectWillChange.send()
     }
@@ -2506,28 +2636,33 @@ final class SessionCoordinator: ObservableObject {
             let hops = hopCount(inPathSignature: pathSignature)
             let growth = self.growsInSession(toward: destination)
             if let cached = self.adaptiveByScope[key], !self.isAdaptiveCacheEntryExpired(cached) {
-                // Single writer of learnedPathRto: a fresh entry for THIS
-                // exact route seeds the connect timer with its measured
-                // full-path RTO (clamped; never hop-scaled downstream).
+                // A fresh entry for THIS exact route seeds the connect
+                // timer with its measured full-path T1V (clamped; never
+                // hop-scaled downstream).
                 return self.configFromAdaptive(cached.settings, hops: hops, growth: growth,
                                                startSource: .recentEvidence,
                                                learnedPathRto: cached.settings.currentRto)
             }
             // Nothing in the last 30 minutes: the values this route last
             // confirmed, if within a day (§7.8.1).
+            // The route's round trip outlives its K and paclen: up to a week,
+            // across restarts (§7.3).
+            let rememberedRto = self.rememberedRtoValue(for: key)
             if growth, let seed = self.confirmedLinkMemory.values(for: key) {
                 var seeded = TxAdaptiveSettings()
                 seeded.windowSize.currentAdaptive = seed.window
                 seeded.paclen.currentAdaptive = seed.paclen
                 return self.configFromAdaptive(seeded, hops: hops, growth: growth,
-                                               startSource: .confirmed(seed.recordedAt))
+                                               startSource: .confirmed(seed.recordedAt),
+                                               learnedPathRto: rememberedRto)
             }
             // Nothing for this exact route: inherit the channel before the
             // baseline, so a new route on a known radio does not start over.
             let channelKnown = self.adaptiveByScope[.radio(radio)]
                 .map { !self.isAdaptiveCacheEntryExpired($0) } ?? false
             return self.configFromAdaptive(self.resolvedSettings(for: key), hops: hops, growth: growth,
-                                           startSource: channelKnown ? .channel : .configured)
+                                           startSource: channelKnown ? .channel : .configured,
+                                           learnedPathRto: rememberedRto)
         }
 
         // Wire up session state changes for capability discovery
@@ -2670,8 +2805,9 @@ final class SessionCoordinator: ObservableObject {
                         || (cachedSnap.rto != nil && cachedSnap.rto != defaultSnap.rto)
                     {
                         let ttlMinutes = Int(Self.adaptiveByScopeTTLSeconds / 60)
+                        let rtoDays = Int(LearnedRouteMemory.rtoLifetime / 86_400)
                         self.packetEngine?.appendSystemNotification(
-                            "Adaptive: Session ended, learned parameters kept \(ttlMinutes) min for reconnect (\(dest) \(pathDesc))"
+                            "Adaptive: Session ended, learned parameters kept \(ttlMinutes) min and T1 \(rtoDays) days for reconnect (\(dest) \(pathDesc))"
                         )
                     } else {
                         self.packetEngine?.appendSystemNotification(
@@ -3133,6 +3269,9 @@ final class SessionCoordinator: ObservableObject {
     /// Safe to call multiple times — replaces any existing subscription.
     func subscribeToPackets(from client: PacketEngine) {
         self.packetEngine = client
+        if let store = client.learnedRoutes {
+            attachLearnedRouteStore(store)
+        }
         // Note: onDataDeliveredForReassembly is wired up in setupCallbacks() already
 
         // Cancel previous subscription to prevent duplicate packet processing.
@@ -3159,6 +3298,7 @@ final class SessionCoordinator: ObservableObject {
     /// - Returns: the number of DISC frames put on the air.
     @discardableResult
     func prepareForTermination() -> Int {
+        flushLearnedRoutes()
         let live = sessionManager.sessions.values.filter {
             $0.state == .connected || $0.state == .connecting
         }

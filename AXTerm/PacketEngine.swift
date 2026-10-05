@@ -190,6 +190,9 @@ final class PacketEngine: ObservableObject {
     /// station profile can show how a path has behaved rather than only how
     /// it behaves now.
     private(set) var linkQualityHistory: SQLiteLinkQualityHistoryStore?
+    /// What each route learned, for the session coordinator to keep across
+    /// restarts (spec §7.8.1). Nil without a database.
+    private(set) var learnedRoutes: LearnedRouteStore?
     /// The operator's own notes and photos about stations.
     private(set) var stationNotes: SQLiteStationNoteStore?
     /// What the network has said and shown about what each station runs.
@@ -613,6 +616,7 @@ final class PacketEngine: ObservableObject {
             // only, which is what it always showed.
             if let queue = writer as? DatabaseQueue {
                 self.linkQualityHistory = SQLiteLinkQualityHistoryStore(dbQueue: queue)
+                self.learnedRoutes = SQLiteLearnedRouteStore(dbQueue: queue)
                 self.stationNotes = SQLiteStationNoteStore(dbQueue: queue)
                 self.stationServices = SQLiteStationServiceStore(dbQueue: queue)
                 self.networkPaths = SQLiteNetworkPathStore(dbQueue: queue)
