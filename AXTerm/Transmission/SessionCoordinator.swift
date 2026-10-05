@@ -2460,6 +2460,11 @@ final class SessionCoordinator: ObservableObject {
         // audio buffer and the TX delay. Warbler has taken 3.6 s to key the
         // IC-705, which no setting shows (smoke run 2026-10-03-1, issue 34).
         // The peer is assumed to key up in our configured TX delay.
+        // T3, the idle poll: the operator's setting (spec 7.3).
+        sessionManager.idleT3Seconds = { [weak self] in
+            AppSettingsStore.sanitizeAX25T3IdleSeconds(
+                self?.appSettings?.ax25T3IdleSeconds ?? AppSettingsStore.defaultAX25T3IdleSeconds)
+        }
         sessionManager.keyUpSeconds = { [weak self] radio in
             guard let txDelay = self?.appSettings?.radio(radio).map({ Double($0.txDelayMs) / 1000.0 })
             else { return nil }

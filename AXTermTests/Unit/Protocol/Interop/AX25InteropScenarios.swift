@@ -219,8 +219,9 @@ extension AX25InteropTestCase {
         assertNoViolations(file: file, line: line)
     }
 
-    /// AXTerm's T3 enquiry (RR P=1 after 30 s idle) is answered and the link
-    /// stays up; the peer's own idle enquiry is answered too.
+    /// AXTerm's T3 enquiry (RR P=1 after T3 idle, 300 s by default) is
+    /// answered and the link stays up; the peer's own idle enquiry is
+    /// answered too.
     func scenarioKeepalive(_ profile: PeerProfile, file: StaticString = #filePath, line: UInt = #line) {
         build(profile)
         axtermConnects(file: file, line: line)
@@ -228,9 +229,12 @@ extension AX25InteropTestCase {
             $0.frame.frameType == "s" && $0.frame.isCommand == true
         }
         let before = axterm.sent.filter(isPoll).count
-        run(max(330, profile.t3 + 30))
+        let t3 = AppSettingsStore.defaultAX25T3IdleSeconds
+        run(max(3 * t3 + 30, profile.t3 + 30))
         let polls = axterm.sent.filter(isPoll).count - before
-        XCTAssertGreaterThanOrEqual(polls, 9, "\(profile.name): about one enquiry per 30 s idle", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(polls, 3, "\(profile.name): about one enquiry per T3 idle", file: file, line: line)
+        XCTAssertLessThanOrEqual(polls, 5, "\(profile.name): no more than one per three quarters of T3",
+                                 file: file, line: line)
         XCTAssertEqual(axSession?.state, .connected, "\(profile.name) \(trace())", file: file, line: line)
         XCTAssertTrue(peer.isConnected, "\(profile.name) \(trace())", file: file, line: line)
         XCTAssertEqual(peer.linkFailures, 0, file: file, line: line)

@@ -60,6 +60,38 @@ struct LinkLayerSettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
+        LabeledContent("Idle Poll (T3)") {
+            HStack(spacing: 8) {
+                TextField(
+                    "",
+                    value: $settings.ax25T3IdleSeconds,
+                    format: .number.precision(.fractionLength(0))
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+
+                Text("s")
+                    .foregroundStyle(.secondary)
+
+                Stepper(
+                    "",
+                    value: $settings.ax25T3IdleSeconds,
+                    in: AppSettingsStore.minAX25T3IdleSeconds...AppSettingsStore.maxAX25T3IdleSeconds,
+                    step: 30
+                )
+                .labelsHidden()
+            }
+        }
+        .help("How long a connected link may sit idle before AXTerm checks that the other station is "
+              + "still there, by sending it a poll it must answer. AX.25 2.2 leaves this to each station. "
+              + "Linux, Direwolf and most TNCs use 300 seconds. Each wait is drawn a little shorter at "
+              + "random, so two AXTerm stations do not poll each other at the same moment, and it is "
+              + "never shorter than the link's T1.")
+
+        Text("How often an idle link is checked, \(Int(AppSettingsStore.minAX25T3IdleSeconds))-\(Int(AppSettingsStore.maxAX25T3IdleSeconds)) seconds (300 by default, as Linux and Direwolf use). Shorter finds a dead link sooner and puts more polls on a shared channel.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
         Toggle("Negotiate AX.25 2.2 (XID / selective reject)", isOn: $settings.ax25NegotiateV22)
             .help("Before the first connect to an unknown station, offer AX.25 2.2 "
                   + "parameters via XID. A 2.2 peer agrees to selective reject "

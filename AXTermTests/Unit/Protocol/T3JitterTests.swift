@@ -26,6 +26,9 @@ final class T3JitterTests: XCTestCase {
         -> (AX25SessionManager, () -> [OutboundFrame]) {
         let manager = AX25SessionManager(localCallsign: local, clock: clock)
         manager.t3JitterDraw = draw
+        // The draw's arithmetic, at the 30 s these tests were written for;
+        // the setting's default is 300 s (IdlePollSettingTests).
+        manager.idleT3Seconds = { 30 }
         var sent: [OutboundFrame] = []
         manager.onSendFrame = { sent.append($0) }
         _ = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)

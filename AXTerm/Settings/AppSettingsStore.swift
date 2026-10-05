@@ -145,6 +145,7 @@ final class AppSettingsStore: ObservableObject {
     static let axdpShowDecodeDetailsKey = "axdpShowAXDPDecodeDetails"
     static let adaptiveTransmissionEnabledKey = "adaptiveTransmissionEnabled"
     static let ax25T1TimeoutSecondsKey = "ax25T1TimeoutSeconds"
+    static let ax25T3IdleSecondsKey = "ax25T3IdleSeconds"
     static let tncCapabilitiesKey = "tncCapabilities"
 
     // NET/ROM route settings keys
@@ -278,6 +279,13 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAX25T1TimeoutSeconds = 3.0
     static let minAX25T1TimeoutSeconds = 1.0
     static let maxAX25T1TimeoutSeconds = 30.0
+    /// T3, the idle poll. AX.25 2.2 §6.7.1.3 leaves it locally defined;
+    /// Linux, Direwolf and the Kenwood D710A use 300 s. AXTerm used 30 s
+    /// until 2026-10-05 and polled real nodes about every 27 s (smoke run
+    /// 2026-10-03-1, 12.4).
+    static let defaultAX25T3IdleSeconds = 300.0
+    static let minAX25T3IdleSeconds = 30.0
+    static let maxAX25T3IdleSeconds = 3600.0
 
     // NET/ROM route defaults
     static let defaultHideExpiredRoutes = true  // Hide expired routes by default for clean UI
@@ -803,6 +811,19 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAdaptiveTransmissionEnabled() }
     }
 
+    /// AX.25 T3 idle poll period (seconds), clamped to its bounds. The
+    /// session layer never polls sooner than the link's T1.
+    @Published var ax25T3IdleSeconds: Double {
+        didSet {
+            let sanitized = Self.sanitizeAX25T3IdleSeconds(ax25T3IdleSeconds)
+            guard sanitized == ax25T3IdleSeconds else {
+                ax25T3IdleSeconds = sanitized
+                return
+            }
+            defaults.set(ax25T3IdleSeconds, forKey: Self.ax25T3IdleSecondsKey)
+        }
+    }
+
     /// AX.25 T1 retransmit timeout (seconds), clamped to safe bounds.
     @Published var ax25T1TimeoutSeconds: Double {
         didSet {
@@ -1190,6 +1211,7 @@ final class AppSettingsStore: ObservableObject {
         let storedAXDPShowDecodeDetails = defaults.object(forKey: Self.axdpShowDecodeDetailsKey) as? Bool ?? Self.defaultAXDPShowDecodeDetails
         let storedAdaptiveTransmissionEnabled = defaults.object(forKey: Self.adaptiveTransmissionEnabledKey) as? Bool ?? Self.defaultAdaptiveTransmissionEnabled
         let storedAX25T1TimeoutSeconds = defaults.object(forKey: Self.ax25T1TimeoutSecondsKey) as? Double ?? Self.defaultAX25T1TimeoutSeconds
+        let storedAX25T3IdleSeconds = defaults.object(forKey: Self.ax25T3IdleSecondsKey) as? Double ?? Self.defaultAX25T3IdleSeconds
 
         // TNC capabilities (JSON-encoded)
         let storedTNCCapabilities: TNCCapabilities
@@ -1377,6 +1399,7 @@ final class AppSettingsStore: ObservableObject {
         self.axdpShowDecodeDetails = storedAXDPShowDecodeDetails
         self.adaptiveTransmissionEnabled = storedAdaptiveTransmissionEnabled
         self.ax25T1TimeoutSeconds = Self.sanitizeAX25T1TimeoutSeconds(storedAX25T1TimeoutSeconds)
+        self.ax25T3IdleSeconds = Self.sanitizeAX25T3IdleSeconds(storedAX25T3IdleSeconds)
 
         // Clear timestamps
         self.terminalClearedAt = storedTerminalClearedAt
@@ -1575,6 +1598,13 @@ final class AppSettingsStore: ObservableObject {
     static func sanitizeLogRetention(_ value: Int) -> Int {
         if value == Int.max { return value }
         return min(max(value, minLogRetention), maxLogRetention)
+    }
+
+    /// Whole seconds inside the bounds; a non-finite value falls back to the
+    /// default (see `sanitizeAX25T1TimeoutSeconds` for why).
+    static func sanitizeAX25T3IdleSeconds(_ value: Double) -> Double {
+        guard value.isFinite else { return defaultAX25T3IdleSeconds }
+        return min(max(value, minAX25T3IdleSeconds), maxAX25T3IdleSeconds).rounded()
     }
 
     static func sanitizeAX25T1TimeoutSeconds(_ value: Double) -> Double {

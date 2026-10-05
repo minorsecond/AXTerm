@@ -415,9 +415,6 @@ nonisolated struct AX25SessionTimers: Sendable {
     /// default; the retry rule still applies.
     let adaptiveTimeout: Bool
 
-    /// T3 idle timeout (seconds)
-    let t3Timeout: Double = 30.0
-
     /// T2 response-delay (delayed-ack) timeout, seconds. Long enough to
     /// span the gap between a burst's frames at 1200 baud (a 256-byte
     /// frame is ~1.9 s of airtime), short enough to stay inside the

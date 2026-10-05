@@ -1980,14 +1980,6 @@ final class AX25SessionTests: XCTestCase {
             "T3 restarts when the response arrives — not passively at expiry")
     }
 
-    /// T3 timeout should be reasonable for VHF packet (not 180s which is longer
-    /// than peers typically wait before disconnecting).
-    func testT3TimeoutValueIsReasonable() {
-        let timers = AX25SessionTimers()
-        XCTAssertLessThanOrEqual(timers.t3Timeout, 30.0,
-            "T3 timeout of \(timers.t3Timeout)s is too long — peers disconnect after ~20s of no response")
-    }
-
     // MARK: - Line Buffer Flush on Disconnect Regression Test
 
     /// When a session disconnects, any partially buffered text (no trailing CR/LF)

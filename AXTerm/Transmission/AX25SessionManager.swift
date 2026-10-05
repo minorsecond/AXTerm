@@ -587,6 +587,11 @@ final class AX25SessionManager: ObservableObject {
     /// same build do not pick the same periods; tests inject a fixed draw.
     var t3JitterDraw: () -> Double = { Double.random(in: 0..<1) }
 
+    /// T3, the idle poll period in seconds: the operator's setting, read
+    /// each time T3 starts, so a change applies from the next idle spell.
+    /// The coordinator points this at `AppSettingsStore.ax25T3IdleSeconds`.
+    var idleT3Seconds: () -> Double = { AppSettingsStore.defaultAX25T3IdleSeconds }
+
     /// How far below T3 a period may be drawn, as a fraction of T3.
     static let t3JitterFraction = 0.25
 
@@ -1233,7 +1238,7 @@ final class AX25SessionManager: ObservableObject {
             "retryCount": sm.retryCount,
             "maxRetries": sm.config.maxRetries,
             "rto": String(format: "%.2f", timers.rto),
-            "t3Timeout": String(format: "%.1f", timers.t3Timeout),
+            "t3Timeout": String(format: "%.1f", idleT3Seconds()),
             "srtt": timers.srtt != nil ? String(format: "%.2f", timers.srtt!) : "nil",
             "srt": String(format: "%.2f", timers.srt)
         ]
@@ -3771,7 +3776,10 @@ final class AX25SessionManager: ObservableObject {
         // Cancel any existing T3 timer
         session.t3TimerTask?.cancel()
 
-        let timeout = Self.t3Delay(base: session.timers.t3Timeout, draw: t3JitterDraw())
+        // §6.7.1.3: "T3 should be greater than T1." A long T1 (a slow or
+        // digipeated path) lifts the period rather than polling inside it.
+        let timeout = max(Self.t3Delay(base: idleT3Seconds(), draw: t3JitterDraw()),
+                          session.timers.rto)
         let sessionId = session.id
 
         session.t3TimerTask = clock.schedule(delay: timeout) { [weak self] in
