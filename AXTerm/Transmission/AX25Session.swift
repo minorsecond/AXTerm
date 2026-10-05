@@ -248,6 +248,20 @@ nonisolated struct AX25SessionConfig: Sendable {
             startSource: startSource, keyUpSeconds: seconds.ours, peerKeyUpSeconds: seconds.peer)
     }
 
+    /// This config with the radio's key-up time replaced by a newer
+    /// figure: a sound modem measures its key-up when it transmits, and the
+    /// first transmission can come after the session was made.
+    func replacingKeyUp(with seconds: (ours: Double, peer: Double)) -> AX25SessionConfig {
+        AX25SessionConfig(
+            windowSize: windowSize, paclen: paclen, maxReceiveBufferSize: maxReceiveBufferSize,
+            maxRetries: maxRetries, extended: extended, srejEnabled: srejEnabled,
+            rtoMin: rtoMin, rtoMax: rtoMax, initialRto: initialRto, t2AckDelay: t2AckDelay,
+            adaptiveTimeout: adaptiveTimeout, learnedPathRto: learnedPathRto,
+            maxWindowSize: maxWindowSize, maxPaclen: maxPaclen,
+            minWindowSize: minWindowSize, minPaclen: minPaclen,
+            startSource: startSource, keyUpSeconds: seconds.ours, peerKeyUpSeconds: seconds.peer)
+    }
+
     /// This config with the outcome of an XID exchange applied (§6.3.2):
     /// SREJ if the response selected it, and the peer's advertised receive
     /// limits taken as ceilings — N1 and k are notifications of what the

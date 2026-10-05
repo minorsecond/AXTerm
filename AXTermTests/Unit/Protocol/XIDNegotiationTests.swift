@@ -65,6 +65,48 @@ final class XIDNegotiationTests: XCTestCase {
                        "SABM waits for the XID answer")
     }
 
+    /// The first T1 of a link covers our own key-up (AX.25 2.2 §6.7.1.1),
+    /// and a sound modem only knows its key-up once it has transmitted. The
+    /// session is made before the XID goes out, so the SABM's T1 must be
+    /// worked out again with what the XID measured. Smoke run 2026-10-03-1,
+    /// issue 59: the first connect after a launch ran T1 at the configured
+    /// 3 s against a 4.6 s round trip, and the SABM went out twice.
+    func testTheSABMsFirstT1UsesTheKeyUpTheXIDMeasured() {
+        manager.defaultConfig = AX25SessionConfig(windowSize: 4, paclen: 128, initialRto: 3.0)
+        var keyUp: (ours: Double, peer: Double)? = nil      // nothing measured yet
+        manager.keyUpSeconds = { _ in keyUp }
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        let session = manager.existingSession(for: peer, path: DigiPath(), radio: .primary)
+        XCTAssertEqual(session?.timers.rto ?? -1, 3.0, accuracy: 0.01, "the configured T1, as before")
+
+        keyUp = (ours: 3.0, peer: 0.8)                      // the XID keyed the radio
+        _ = manager.handleInboundXID(from: peer, path: DigiPath(), radio: .primary,
+                                     info: xidResponse(srej: true), isCommand: false, pf: true)
+        XCTAssertTrue(sent.contains { $0.displayInfo == "SABM" })
+        let frameCeiling = session?.stateMachine.config.paclenCeiling ?? 0
+        let expected = AX25SessionTimers.initialSRT(t1Setting: 3.0, digipeaters: 0, maxFrameBytes: frameCeiling,
+                                                    keyUpSeconds: 3.0, peerKeyUpSeconds: 0.8)
+        XCTAssertGreaterThan(expected, 3.0)
+        XCTAssertEqual(session?.timers.rto ?? -1, expected, accuracy: 0.01,
+                       "the SABM's T1 covers the round trip the radio actually has")
+        XCTAssertEqual(session?.stateMachine.config.keyUpSeconds ?? -1, 3.0, accuracy: 0.01,
+                       "and T1 starts when the SABM has actually left the radio")
+    }
+
+    func testALearnedT1IsNotReplacedByTheEstimate() {
+        manager.defaultConfig = AX25SessionConfig(windowSize: 4, paclen: 128, initialRto: 3.0,
+                                                  learnedPathRto: 9.0)
+        var keyUp: (ours: Double, peer: Double)? = nil
+        manager.keyUpSeconds = { _ in keyUp }
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        keyUp = (ours: 3.0, peer: 0.8)
+        _ = manager.handleInboundXID(from: peer, path: DigiPath(), radio: .primary,
+                                     info: xidResponse(srej: true), isCommand: false, pf: true)
+        let session = manager.existingSession(for: peer, path: DigiPath(), radio: .primary)
+        XCTAssertEqual(session?.timers.rto ?? -1, 9.0, accuracy: 0.01,
+                       "this route's own measured T1 beats any estimate")
+    }
+
     /// A peer that answered DM or FRMR in a previous launch already told
     /// us its firmware generation — the probe is skipped and the connect
     /// goes straight to SABM instead of re-spending a frame and an RTO.

@@ -807,7 +807,17 @@ and a full frame's airtime (paclen plus address, control, PID and FCS, at
 key-up and an airtime more per digipeater. Our key-up is measured by a sound
 modem (the radio's smoothed PTT confirmation, its audio buffer and the TX
 delay; Warbler has taken 3.6 s to key an IC-705) and is the TX delay setting
-for a TNC; the peer's is assumed to be our TX delay setting. A route's T1V
+for a TNC; the peer's is assumed to be our TX delay setting. A sound modem
+learns its key-up only when it transmits, and a session is made before its
+XID goes out, so on the first connect after a launch the starting T1 left the
+key-up out. Just before the first SABM after an XID, the starting SRT and T1V
+are worked out again with the key-up as it then stands, for a link with no
+learned T1V and no sample yet (`AX25SessionManager.refreshStartingT1`). The
+XID's round trip is not a sample: Select T1 is not called for it. Nothing in
+this is particular to one radio; a TNC's key-up is its TX delay setting, which
+does not change. Decision 2026-10-05 (smoke run issue 59: T1 at the configured
+3 s against a 4.6 s round trip through Warbler, and the SABM went out twice).
+A route's T1V
 learned in the last 7 days replaces the initial default: the session starts
 with T1V at the learned value and SRT at half of it, where the last session's
 Select T1 left off. The value is kept in the database (`learned_routes`, see

@@ -1756,6 +1756,7 @@ final class AX25SessionManager: ObservableObject {
         if case .supported(let params) = status {
             applyNegotiatedConfig(params, to: session)
         }
+        refreshStartingT1(for: session)
 
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .connectRequest)
@@ -1792,6 +1793,42 @@ final class AX25SessionManager: ObservableObject {
 
     /// Rebuilds a virgin session's state machine with the negotiated
     /// parameters. Safe only before SABM: no sequence state exists yet.
+    /// Works out the link's starting T1 again just before its first SABM,
+    /// with the radio's key-up as it stands now (AX.25 2.2 §6.7.1.1: T1 at
+    /// least twice the round trip, key-up included).
+    ///
+    /// The session was made before the XID went out, and a sound modem only
+    /// knows its key-up once it has transmitted, so on the first connect
+    /// after a launch the starting T1 left the radio's key-up out: the
+    /// configured 3 s against a 4.6 s round trip, and the SABM went out
+    /// twice (smoke run 2026-10-03-1, issue 59). Only for a link with no
+    /// learned T1 and no round trip measured yet; the XID's own round trip
+    /// is not a sample, since Select T1 is not called for it.
+    private func refreshStartingT1(for session: AX25Session) {
+        let config = session.stateMachine.config
+        guard config.learnedPathRto == nil, !session.timers.hasSample,
+              let keyUp = keyUpSeconds?(session.radio),
+              keyUp.ours != config.keyUpSeconds || keyUp.peer != config.peerKeyUpSeconds
+        else { return }
+        let updated = config.replacingKeyUp(with: keyUp)
+        session.stateMachine = AX25StateMachine(config: updated)
+        session.timers = AX25SessionTimers(
+            initialSRT: AX25SessionTimers.initialSRT(
+                t1Setting: updated.initialRto ?? AppSettingsStore.defaultAX25T1TimeoutSeconds,
+                digipeaters: session.path.digis.count,
+                maxFrameBytes: updated.paclenCeiling,
+                keyUpSeconds: updated.keyUpSeconds,
+                peerKeyUpSeconds: updated.peerKeyUpSeconds),
+            resumingT1V: nil,
+            adaptiveTimeout: updated.adaptiveTimeout,
+            t2AckDelay: updated.t2AckDelay ?? 2.0)
+        debugTrace("Starting T1 worked out again with the measured key-up", [
+            "peer": session.remoteAddress.display,
+            "keyUp": String(format: "%.2fs", keyUp.ours),
+            "t1v": String(format: "%.2fs", session.timers.rto)
+        ])
+    }
+
     private func applyNegotiatedConfig(_ params: AX25XIDParameters, to session: AX25Session) {
         guard session.state == .disconnected || session.state == .error,
               session.stateMachine.sequenceState.vs == 0,
