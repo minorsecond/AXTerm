@@ -340,10 +340,20 @@ final class BBSShellTests: XCTestCase {
         ], nextID: 12)
         let lines = sut.handle(line: "L", mailbox: box, now: t(60)).lines
 
-        XCTAssertEqual(lines.first, "  #  DATE   FROM     TO     SUBJECT")
+        XCTAssertEqual(lines.first, "  #  DATE   FROM      TO        SUBJECT")
         XCTAssertTrue(lines[1].hasPrefix("  7 "))   // bulletin, unflagged
         XCTAssertTrue(lines[2].hasPrefix(" 11*"))   // unread, addressed to caller
         XCTAssertTrue(lines[1].contains("11/14"))
+    }
+
+    /// Smoke run 2026-10-03-1, issue 20: the TO column was six wide and
+    /// listed K0EPI-3 as "K0EPI-". A call with its SSID runs to nine.
+    func testCallsignsWithSSIDsAreListedWhole() {
+        var sut = shell(caller: "K0EPI-3")
+        let box = BBSShell.Mailbox(
+            messages: [message(1, from: "KB5YZB-15", to: "K0EPI-3", subject: "Test")], nextID: 2)
+        let row = sut.handle(line: "L", mailbox: box, now: t(60)).lines[1]
+        XCTAssertTrue(row.contains("KB5YZB-15 K0EPI-3   Test"), row)
     }
 
     func testLongSubjectsAreTruncatedRatherThanWrapped() {

@@ -552,15 +552,16 @@ nonisolated struct BBSShell {
         }
 
         let shown = visible.suffix(maxListRows)
-        var lines = ["  #  DATE   FROM     TO     SUBJECT"]
+        var lines = ["  #  DATE   FROM      TO        SUBJECT"]
         for message in shown {
             let flag = message.readAt == nil && message.isAddressed(to: caller) ? "*" : " "
             lines.append(
                 Self.rightPad(String(message.id), to: 3)
                 + flag + " "
                 + shortDate(message.receivedAt) + "  "
-                + Self.pad(message.from.uppercased(), to: 8) + " "
-                + Self.pad(message.to.uppercased(), to: 6) + " "
+                // Nine: the longest call with an SSID (KB5YZB-15).
+                + Self.pad(message.from.uppercased(), to: 9) + " "
+                + Self.pad(message.to.uppercased(), to: 9) + " "
                 + Self.truncate(message.subject, to: 30)
             )
         }
