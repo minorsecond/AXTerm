@@ -61,7 +61,7 @@ struct ReceiveLevelTuningRows: View {
             caption(note)
         }
         if onAPRS, let next, !isRunning(state) {
-            caption("To keep the channel clear, the next calibration beacon can go at \(ReceiveLevelMonitor.time(next)).")
+            caption("To keep the channel clear, the next calibration beacon can go at \(ReceiveLevelMonitor.notBefore(next)).")
                 .task(id: next) {
                     let wait = next.timeIntervalSinceNow
                     if wait > 0 { try? await Task.sleep(nanoseconds: UInt64((wait + 0.5) * 1_000_000_000)) }

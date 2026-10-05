@@ -464,4 +464,18 @@ final class ReceiveLevelMonitorTests: XCTestCase {
         connected = false
         XCTAssertFalse(makeMonitor().suggestsTuning(radio), "nothing to tune while it is down")
     }
+
+    /// The time shown for the next calibration is never earlier than when
+    /// Calibrate enables: shown truncated, "5:15 PM" meant 5:15:52, and the
+    /// operator pressed a grey button at 5:15 (smoke run 2026-10-03-1,
+    /// issue 69). It rounds up to the minute.
+    func testTheNextCalibrationTimeRoundsUpToTheMinute() {
+        let wholeMinute = Date(timeIntervalSinceReferenceDate: 60 * 1_000_000)
+        XCTAssertEqual(ReceiveLevelMonitor.notBefore(wholeMinute.addingTimeInterval(52)),
+                       ReceiveLevelMonitor.time(wholeMinute.addingTimeInterval(60)))
+        XCTAssertEqual(ReceiveLevelMonitor.notBefore(wholeMinute), ReceiveLevelMonitor.time(wholeMinute),
+                       "a whole minute stays as it is")
+        XCTAssertNotEqual(ReceiveLevelMonitor.time(wholeMinute),
+                          ReceiveLevelMonitor.time(wholeMinute.addingTimeInterval(60)))
+    }
 }

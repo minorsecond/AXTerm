@@ -531,4 +531,13 @@ final class ReceiveLevelMonitor: ObservableObject {
     static func time(_ date: Date) -> String {
         date.formatted(date: .omitted, time: .shortened)
     }
+
+    /// A time something may happen, to the minute and rounded up, so it is
+    /// never earlier than the moment it is allowed: shown truncated,
+    /// "5:15 PM" meant 5:15:52 and Calibrate was still grey at 5:15 (smoke
+    /// run 2026-10-03-1, issue 69).
+    static func notBefore(_ date: Date) -> String {
+        let seconds = date.timeIntervalSinceReferenceDate
+        return time(Date(timeIntervalSinceReferenceDate: (seconds / 60).rounded(.up) * 60))
+    }
 }

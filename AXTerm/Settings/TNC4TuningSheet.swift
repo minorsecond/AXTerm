@@ -202,7 +202,7 @@ struct TNC4TuningSheet: View {
             Button("Send Beacon and Measure") { monitor.calibrate(radioID) }
                 .disabled(!connected || next != nil || monitor.isBusy(radioID))
             if let next {
-                Text("To keep the channel clear, the next calibration beacon can go at \(ReceiveLevelMonitor.time(next)).")
+                Text("To keep the channel clear, the next calibration beacon can go at \(ReceiveLevelMonitor.notBefore(next)).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
