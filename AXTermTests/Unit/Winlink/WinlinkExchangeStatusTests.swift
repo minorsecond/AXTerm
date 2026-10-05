@@ -52,6 +52,34 @@ final class WinlinkExchangeStatusTests: XCTestCase {
         XCTAssertEqual(status.detail, "Sent 2 messages · Received 1 message")
     }
 
+    /// An aborted exchange says so, and counts only what the peer confirmed.
+    /// Smoke run 2026-10-03-1, 5.4: after an abort mid-body the status read
+    /// "Exchange complete: sent 1" while the message was still queued.
+    func testAnAbortedExchangeSaysAbortedAndCountsOnlyWhatArrived() {
+        var summary = WinlinkExchangeSummary()
+        summary.sentMIDs = ["A"]
+        summary.aborted = true
+        let status = WinlinkExchangeStatus.make(
+            phase: .done, statusText: "", progress: nil, summary: summary)
+        XCTAssertEqual(status.title, "Exchange aborted")
+        XCTAssertEqual(status.kind, .failed)
+        XCTAssertEqual(status.detail, "Nothing was delivered. Unsent mail stays in the outbox.")
+
+        summary.confirmedMIDs = ["A"]
+        let delivered = WinlinkExchangeStatus.make(
+            phase: .done, statusText: "", progress: nil, summary: summary)
+        XCTAssertEqual(delivered.detail, "Delivered 1 message before the abort")
+    }
+
+    func testTheRunnersStatusLineForAnAbort() {
+        var summary = WinlinkExchangeSummary()
+        summary.sentMIDs = ["A"]
+        summary.aborted = true
+        XCTAssertEqual(WinlinkSessionRunner.summaryStatusText(summary), "Exchange aborted.")
+        summary.confirmedMIDs = ["A"]
+        XCTAssertEqual(WinlinkSessionRunner.summaryStatusText(summary), "Exchange aborted: delivered 1.")
+    }
+
     func testIdleIsNotDressedUpAsWorking() {
         let status = WinlinkExchangeStatus.make(
             phase: .idle, statusText: "", progress: nil, summary: nil)

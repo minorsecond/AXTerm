@@ -58,6 +58,14 @@ nonisolated struct WinlinkExchangeStatus: Equatable {
             return WinlinkExchangeStatus(
                 kind: .failed, title: "Exchange failed", detail: reason)
 
+        case .done where summary?.aborted == true:
+            // Counted from what the peer confirmed: a body handed to the
+            // link before the abort may never have arrived.
+            return WinlinkExchangeStatus(
+                kind: .failed,
+                title: "Exchange aborted",
+                detail: summary.map(abortDetail) ?? nil)
+
         case .done:
             // A finished session reports what moved. "Complete" alone invites
             // the operator to go hunting in the transcript for the counts.
@@ -107,6 +115,12 @@ nonisolated struct WinlinkExchangeStatus: Equatable {
         case .sending: return "Sending"
         case .receiving: return "Receiving"
         }
+    }
+
+    private static func abortDetail(_ summary: WinlinkExchangeSummary) -> String {
+        let delivered = summary.confirmedMIDs.count
+        guard delivered > 0 else { return "Nothing was delivered. Unsent mail stays in the outbox." }
+        return "Delivered \(delivered) message\(delivered == 1 ? "" : "s") before the abort"
     }
 
     private static func completionDetail(_ summary: WinlinkExchangeSummary) -> String? {

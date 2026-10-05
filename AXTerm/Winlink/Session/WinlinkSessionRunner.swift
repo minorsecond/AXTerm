@@ -668,12 +668,16 @@ final class WinlinkSessionRunner: ObservableObject {
             statusText = reason
         } else {
             phase = .done
-            statusText = summaryStatusText(summary)
+            statusText = Self.summaryStatusText(summary)
         }
         return summary
     }
 
-    private func summaryStatusText(_ summary: WinlinkExchangeSummary) -> String {
+    nonisolated static func summaryStatusText(_ summary: WinlinkExchangeSummary) -> String {
+        if summary.aborted {
+            let delivered = summary.confirmedMIDs.count
+            return delivered > 0 ? "Exchange aborted: delivered \(delivered)." : "Exchange aborted."
+        }
         let sent = summary.sentMIDs.count
         let received = summary.receivedMIDs.count
         if sent == 0 && received == 0 { return "No new mail." }
