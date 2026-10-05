@@ -36,6 +36,8 @@ final class TestCommandChannel {
         var `protocol`: String?
         var compression: String?
         var text: String?
+        /// For sendHex: bytes as hex, spaces allowed (`"05 01"`).
+        var hex: String?
     }
 
     /// The channel test mode started at launch.
@@ -134,11 +136,32 @@ final class TestCommandChannel {
 
         case "disconnect":
             guard let to = command.to else { return "disconnect needs \"to\"" }
-            guard let session = manager.connectedSession(withPeer: CallsignNormalizer.toAddress(to)),
-                  let frame = manager.disconnect(session: session) else {
-                return "No connected session with \(to)"
+            // A connect still retrying is stopped too (smoke run issue 47).
+            let peer = CallsignNormalizer.toAddress(to).display.uppercased()
+            guard let session = manager.connectedSession(withPeer: CallsignNormalizer.toAddress(to))
+                    ?? manager.sessions.values.first(where: {
+                        $0.state == .connecting && $0.remoteAddress.display.uppercased() == peer
+                    }) else {
+                return "No session with \(to)"
             }
-            coordinator.sendFrame(frame)
+            if let frame = manager.disconnect(session: session) { coordinator.sendFrame(frame) }
+            return nil
+
+        case "sendHex":
+            guard let to = command.to, let hex = command.hex else { return "sendHex needs \"to\" and \"hex\"" }
+            let digits = hex.filter { !$0.isWhitespace }
+            guard !digits.isEmpty, digits.count.isMultiple(of: 2),
+                  digits.allSatisfy(\.isHexDigit) else { return "Not hex: \(hex)" }
+            var bytes = Data()
+            var index = digits.startIndex
+            while index < digits.endIndex {
+                let next = digits.index(index, offsetBy: 2)
+                bytes.append(UInt8(digits[index..<next], radix: 16)!)
+                index = next
+            }
+            let frames = manager.sendData(bytes, to: CallsignNormalizer.toAddress(to),
+                                          radio: coordinator.primaryRadioID)
+            for frame in frames { coordinator.sendFrame(frame) }
             return nil
 
         case "sendText":

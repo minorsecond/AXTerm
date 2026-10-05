@@ -145,4 +145,59 @@ final class TestCommandChannelTests: XCTestCase {
 
         XCTAssertEqual(channel.poll(), ["01", "02"])
     }
+
+    /// Smoke run 2026-10-03-1, issue 47: disconnect answered "No connected
+    /// session" while a connect was still retrying, so a connect to a silent
+    /// station could not be stopped from the folder.
+    func testDisconnectStopsAConnectStillRetrying() async {
+        // B's engine never starts, so A's SABMs go unanswered.
+        let a = FuzzStation(callsign: "K0AAA-1", seed: 1)
+        let b = FuzzStation(callsign: "K0BBB-2", seed: 2)
+        a.connectLink(to: b)
+        defer { a.tearDown(); b.tearDown() }
+        let commands = makeFolder("A"), files = makeFolder("files")
+        let channel = TestCommandChannel(folder: commands, coordinator: a.coordinator, filesFolder: files)
+
+        drop(#"{"action":"connect","to":"K0BBB-2"}"#, named: "01-connect", in: commands)
+        channel.poll()
+        // XID first, then SABMs that nobody answers.
+        let retrying = await FullStackFuzz.wait(15) {
+            a.coordinator.sessionManager.sessions.values.contains { $0.state == .connecting }
+        }
+        XCTAssertTrue(retrying)
+        drop(#"{"action":"disconnect","to":"K0BBB-2"}"#, named: "02-disconnect", in: commands)
+        channel.poll()
+
+        XCTAssertEqual(result("02-disconnect", in: commands)?["ok"] as? Bool, true,
+                       "\(String(describing: result("02-disconnect", in: commands)))")
+        XCTAssertFalse(a.coordinator.sessionManager.sessions.values.contains { $0.state == .connecting })
+    }
+
+    /// Raw bytes, for tests that need a packet no text line makes: smoke test
+    /// 12.2 sends a YAPP start (SI, `05 01`) with no header, then chat.
+    func testSendHexPutsExactlyThoseBytesInAFrame() async {
+        let (a, b) = await connectedPair()
+        defer { a.tearDown(); b.tearDown() }
+        let commands = makeFolder("A"), files = makeFolder("files")
+        let channel = TestCommandChannel(folder: commands, coordinator: a.coordinator, filesFolder: files)
+        drop(#"{"action":"connect","to":"K0BBB-2"}"#, named: "01-connect", in: commands)
+        channel.poll()
+        let up = await FullStackFuzz.wait(10) { a.session != nil && b.session != nil }
+        XCTAssertTrue(up)
+
+        drop(#"{"action":"sendHex","to":"K0BBB-2","hex":"zz"}"#, named: "02-bad", in: commands)
+        channel.poll()
+        XCTAssertEqual(result("02-bad", in: commands)?["ok"] as? Bool, false)
+
+        drop(#"{"action":"sendHex","to":"K0BBB-2","hex":"05 01"}"#, named: "03-si", in: commands)
+        channel.poll()
+        XCTAssertEqual(result("03-si", in: commands)?["ok"] as? Bool, true)
+        drop(#"{"action":"sendText","to":"K0BBB-2","text":"smoke 12.2 chat after SI"}"#, named: "04-chat", in: commands)
+        channel.poll()
+
+        let chat = await FullStackFuzz.wait(10) {
+            String(decoding: b.terminalText, as: UTF8.self).contains("smoke 12.2 chat after SI")
+        }
+        XCTAssertTrue(chat, "the chat after a YAPP start with no header reaches the terminal")
+    }
 }
