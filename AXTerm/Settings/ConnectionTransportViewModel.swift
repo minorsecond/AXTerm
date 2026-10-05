@@ -424,11 +424,8 @@ final class ConnectionTransportViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .assign(to: &$audioDevices)
 
-        // The modem's telemetry and the rig's status, this radio's only.
-        packetEngine.radioManager.$modemTelemetry
-            .receive(on: RunLoop.main)
-            .map { [radioID] in $0[radioID] }
-            .assign(to: &$modemTelemetry)
+        // The rig's status, this radio's only. Its modem telemetry has a
+        // feed of its own (`telemetryFeed`).
         packetEngine.radioManager.$rigStatus
             .receive(on: RunLoop.main)
             .map { [radioID] in $0[radioID] }
@@ -830,7 +827,17 @@ final class ConnectionTransportViewModel: ObservableObject {
     /// The Mac's sound devices, live.
     @Published private(set) var audioDevices: [ModemAudioDevice] = []
     /// The modem's levels, carrier and PTT, while it runs.
-    @Published private(set) var modemTelemetry: ModemTelemetry?
+    /// This radio's live modem telemetry, for the meter and status rows
+    /// only: published here, ten reports a second redrew the whole form
+    /// (smoke run issue 13). See `ModemTelemetryFeed`.
+    private(set) lazy var telemetryFeed = ModemTelemetryFeed(
+        source: packetEngine.radioManager.$modemTelemetry
+            .receive(on: RunLoop.main)
+            .map { [radioID] in $0[radioID] }
+            .eraseToAnyPublisher())
+
+    /// The latest telemetry the feed has, nil while nothing watches it.
+    var modemTelemetry: ModemTelemetry? { telemetryFeed.telemetry }
     /// What the last receive audit found, worst first.
     @Published private(set) var receiveFindings: [RigReceiveAudit.Finding] = []
     /// The audit's own answer, shown beside the audit's own buttons. Sharing

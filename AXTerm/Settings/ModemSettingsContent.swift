@@ -37,7 +37,9 @@ struct ModemSettingsContent: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            ModemLevelMeter(telemetry: viewModel.modemTelemetry)
+            ModemTelemetryReader(feed: viewModel.telemetryFeed) { telemetry in
+                ModemLevelMeter(telemetry: telemetry)
+            }
         }
         .padding(.vertical, 4)
         #else
@@ -570,34 +572,9 @@ struct ModemStatusRows: View {
 
     var body: some View {
         ModemReceiveDriftRows(viewModel: viewModel)
-        if let telemetry = viewModel.modemTelemetry {
-            LabeledContent("Channel") {
-                HStack(spacing: 12) {
-                    dot(telemetry.dcd, on: .green, "Carrier")
-                    dot(telemetry.ptt, on: .red, "PTT")
-                    if telemetry.waitingForChannel {
-                        Text("waiting for a clear channel")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .help("Carrier: the modem hears packet activity (from its decoder, not the radio's squelch). PTT: this radio is transmitting.")
-
-            LabeledContent("Frames") {
-                Text("\(telemetry.framesDecoded) decoded \u{b7} \(telemetry.fcsErrors) failed checksum \u{b7} \(telemetry.framesSent) sent")
-                    .font(.callout.monospacedDigit())
-            }
-            .help("Failed checksums are frames heard but not decoded; a few are normal, many with a healthy level means the audio is too hot or too quiet.")
-
-            if let format = telemetry.audioFormat {
-                LabeledContent("Audio") {
-                    Text(String(format: "%.0f kHz \u{b7} %d in \u{b7} %d out%@",
-                                format.sampleRate / 1000, format.inputChannels, format.outputChannels,
-                                telemetry.rxOverruns + telemetry.txUnderruns > 0
-                                    ? " \u{b7} \(telemetry.rxOverruns + telemetry.txUnderruns) dropouts" : ""))
-                        .font(.callout.monospacedDigit())
-                }
+        ModemTelemetryReader(feed: viewModel.telemetryFeed) { telemetry in
+            if let telemetry {
+                ModemTelemetryRows(telemetry: telemetry)
             }
         }
         if let rig = viewModel.rigStatus, let frequency = rig.frequencyLabel {
@@ -607,6 +584,43 @@ struct ModemStatusRows: View {
                     .font(.callout.monospacedDigit())
             }
             .help("As the radio reports it over CI-V. Refreshed every five seconds while the modem is idle.")
+        }
+    }
+}
+
+/// The modem's live rows: carrier and PTT, frame counts, audio format. The
+/// only part of the status section that changes ten times a second.
+struct ModemTelemetryRows: View {
+    let telemetry: ModemTelemetry
+
+    var body: some View {
+        LabeledContent("Channel") {
+            HStack(spacing: 12) {
+                dot(telemetry.dcd, on: .green, "Carrier")
+                dot(telemetry.ptt, on: .red, "PTT")
+                if telemetry.waitingForChannel {
+                    Text("waiting for a clear channel")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .help("Carrier: the modem hears packet activity (from its decoder, not the radio's squelch). PTT: this radio is transmitting.")
+
+        LabeledContent("Frames") {
+            Text("\(telemetry.framesDecoded) decoded \u{b7} \(telemetry.fcsErrors) failed checksum \u{b7} \(telemetry.framesSent) sent")
+                .font(.callout.monospacedDigit())
+        }
+        .help("Failed checksums are frames heard but not decoded; a few are normal, many with a healthy level means the audio is too hot or too quiet.")
+
+        if let format = telemetry.audioFormat {
+            LabeledContent("Audio") {
+                Text(String(format: "%.0f kHz \u{b7} %d in \u{b7} %d out%@",
+                            format.sampleRate / 1000, format.inputChannels, format.outputChannels,
+                            telemetry.rxOverruns + telemetry.txUnderruns > 0
+                                ? " \u{b7} \(telemetry.rxOverruns + telemetry.txUnderruns) dropouts" : ""))
+                    .font(.callout.monospacedDigit())
+            }
         }
     }
 
