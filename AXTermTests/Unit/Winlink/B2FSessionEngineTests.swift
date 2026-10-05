@@ -652,6 +652,37 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertLessThan(drop ?? .max, fq ?? .min)
     }
 
+    /// The peer's next turn after our bodies (FF, FC or FQ) says it has
+    /// them. An abort that crosses it still has to count them as delivered:
+    /// smoke run 2026-10-03-1, issue 62, B (ID-50) held the message while
+    /// A (705) put it back in the outbox.
+    func testBodiesThePeerConfirmedCountEvenAfterAnAbort() throws {
+        let outbound = try prepare(makeMessage(mid: "OUTMSG000001"))
+        let harness = makeHarness(outbound: [outbound])
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.receive("FS Y\r\n")
+        harness.fire(.abortRequested)
+        harness.receive("FF\r\n")
+        harness.fire(.linkDisconnected)
+        let summary = try XCTUnwrap(harness.completion)
+        XCTAssertTrue(summary.aborted)
+        XCTAssertEqual(summary.confirmedMIDs, ["OUTMSG000001"])
+    }
+
+    func testBodiesWithNoAnswerAreNotConfirmed() throws {
+        let outbound = try prepare(makeMessage(mid: "OUTMSG000001"))
+        let harness = makeHarness(outbound: [outbound])
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.receive("FS Y\r\n")
+        harness.fire(.abortRequested)
+        harness.fire(.linkDisconnected)
+        let summary = try XCTUnwrap(harness.completion)
+        XCTAssertEqual(summary.sentMIDs, ["OUTMSG000001"], "handed to the link")
+        XCTAssertEqual(summary.confirmedMIDs, [], "nothing said the peer has it")
+    }
+
     /// An abort must end the exchange even if the link's disconnect never
     /// reaches the engine. Smoke run 2026-10-03-1, issue 35: the session
     /// had lost its delivery claim, the disconnect went elsewhere, and the

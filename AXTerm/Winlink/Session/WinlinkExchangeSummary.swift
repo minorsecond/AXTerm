@@ -2,7 +2,12 @@ import Foundation
 
 /// The outcome of one Winlink mail exchange session.
 nonisolated struct WinlinkExchangeSummary: Equatable, Sendable {
+    /// Bodies handed to the link.
     var sentMIDs: [String] = []
+    /// Bodies the peer has said it holds: its next turn (FF, FC or FQ)
+    /// came after them. These count as delivered even when the session
+    /// was aborted or failed (smoke run 2026-10-03-1, issue 62).
+    var confirmedMIDs: [String] = []
     var receivedMIDs: [String] = []
     var rejectedMIDs: [String] = []
     var deferredMIDs: [String] = []

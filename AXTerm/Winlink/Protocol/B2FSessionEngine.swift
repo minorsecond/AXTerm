@@ -263,6 +263,9 @@ nonisolated final class B2FSessionEngine {
     private var binaryStreamCorrupt = false
 
     private var summary = WinlinkExchangeSummary()
+    /// Bodies sent whose receipt the peer has not yet shown by taking its
+    /// turn.
+    private var bodiesAwaitingConfirmation: [String] = []
 
     /// What this session has moved so far. A session that dies mid-body
     /// still transferred everything up to that point, and the session log
@@ -578,6 +581,15 @@ nonisolated final class B2FSessionEngine {
             return []
         }
 
+        // The station that received our bodies speaks next, so its FF, FC
+        // or FQ says it has them, whatever state we are in, an abort
+        // included.
+        if !bodiesAwaitingConfirmation.isEmpty,
+           upper == "FF" || upper == "FQ" || upper.hasPrefix("FC ") {
+            summary.confirmedMIDs.append(contentsOf: bodiesAwaitingConfirmation)
+            bodiesAwaitingConfirmation.removeAll()
+        }
+
         switch state {
         case .awaitingBanner:
             return processBannerLine(line)
@@ -694,6 +706,7 @@ nonisolated final class B2FSessionEngine {
                     summary.bytesSent += outbound.compressed.count
                     actions.append(.outboundBodySent(mid: mid))
                     summary.sentMIDs.append(mid)
+                    bodiesAwaitingConfirmation.append(mid)
                 case .acceptFromOffset(let offset):
                     let bounded = min(offset, outbound.compressed.count)
                     actions.append(.outboundAccepted(mid: mid, offset: bounded))
@@ -702,6 +715,7 @@ nonisolated final class B2FSessionEngine {
                     summary.bytesSent += outbound.compressed.count - bounded
                     actions.append(.outboundBodySent(mid: mid))
                     summary.sentMIDs.append(mid)
+                    bodiesAwaitingConfirmation.append(mid)
                 case .reject:
                     actions.append(.outboundRejected(mid: mid))
                     summary.rejectedMIDs.append(mid)

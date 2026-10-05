@@ -488,7 +488,11 @@ final class WinlinkSessionRunner: ObservableObject {
             transport?.close()
 
         case .complete(let summary):
-            log(.event, "Exchange complete: sent \(summary.sentMIDs.count), received \(summary.receivedMIDs.count)")
+            if summary.aborted {
+                log(.event, "Exchange aborted: delivered \(summary.confirmedMIDs.count), received \(summary.receivedMIDs.count)")
+            } else {
+                log(.event, "Exchange complete: sent \(summary.sentMIDs.count), received \(summary.receivedMIDs.count)")
+            }
             resolve(with: summary)
 
         case .fail(let reason):
@@ -614,10 +618,11 @@ final class WinlinkSessionRunner: ObservableObject {
         // duplicate by MID, which is the cheap direction to be wrong in.
         // (The byte counts on a failed summary are still real and are
         // kept — they are what the Stations list measures.)
-        if summary.succeeded {
-            for mid in summary.sentMIDs {
-                try? await worker.markSent(mid: mid)
-            }
+        // What the peer confirmed is delivered whatever became of the
+        // session (issue 62).
+        let delivered = summary.succeeded ? summary.sentMIDs : summary.confirmedMIDs
+        for mid in delivered {
+            try? await worker.markSent(mid: mid)
         }
         try? await worker.revertSendingToQueued()
 
@@ -628,7 +633,7 @@ final class WinlinkSessionRunner: ObservableObject {
             gatewayCallsign: gatewayName,
             transport: transportName,
             result: summary.failureReason ?? (summary.aborted ? "aborted" : "success"),
-            messagesSent: summary.sentMIDs.count,
+            messagesSent: delivered.count,
             messagesReceived: summary.receivedMIDs.count,
             bytesSent: summary.bytesSent,
             bytesReceived: summary.bytesReceived,
