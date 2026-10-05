@@ -19,6 +19,12 @@ struct RawTerminalField: View {
 
     @State private var isFocused = false
 
+    #if os(macOS)
+    static let fieldHeight: CGFloat = 22
+    #else
+    static let fieldHeight: CGFloat = 34
+    #endif
+
     var body: some View {
         ZStack(alignment: .leading) {
             RawKeyCaptureRepresentable(
@@ -46,7 +52,11 @@ struct RawTerminalField: View {
             .padding(.horizontal, 6)
             .allowsHitTesting(false)
         }
-        .frame(minHeight: 22)
+        // The key view has no height of its own, so without a fixed one
+        // SwiftUI let it take every point the compose area offered (smoke
+        // run 10.1: half the window). The height a rounded-border text
+        // field has on each platform.
+        .frame(height: Self.fieldHeight)
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(Color(platform: .platformTextBackground))
