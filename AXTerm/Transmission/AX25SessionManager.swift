@@ -3556,6 +3556,19 @@ final class AX25SessionManager: ObservableObject {
 
     // MARK: - Timer Management
 
+    /// Drop data queued for a session that has no sequence number yet. It
+    /// has never been on the air, so the peer is not waiting for it. Frames
+    /// in the send buffer, numbered and perhaps sent, are never touched:
+    /// V(S), V(A) and T1 stay as they are. Returns how many were dropped.
+    @discardableResult
+    func discardQueuedData(for key: SessionKey) -> Int {
+        guard let session = sessions[key], !session.pendingDataQueue.isEmpty else { return 0 }
+        let count = session.pendingDataQueue.count
+        session.pendingDataQueue.removeAll()
+        TxLog.debug(.session, "Queued data discarded", ["peer": session.remoteAddress.display, "count": count])
+        return count
+    }
+
     /// A frame from the peer arrived: our transmission is over, so the
     /// on-air estimate is capped at now, and a T1 still waiting for our
     /// frames to leave starts now instead.

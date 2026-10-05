@@ -380,9 +380,14 @@ extension SessionCoordinator {
         // session opens a new link, and a transfer that ended must not
         // reconnect to anybody.
         guard let session = sessionManager.sessions[runner.sessionKey], session.state == .connected else { return }
+        let queuedBefore = session.pendingDataQueue.count
         let frames = sessionManager.sendData(
             data, to: runner.peer, path: runner.path, radio: runner.radio, pid: 0xF0,
             displayInfo: "YAPP (\(data.count) bytes)")
+        // Whether this block sits in the queue whole, with nothing of it on
+        // the air and nothing else queued: then a cancel may drop it.
+        runner.lastBlockQueuedWhole = frames.isEmpty && queuedBefore == 0
+            && !session.pendingDataQueue.isEmpty
         for frame in frames { sendFrame(frame) }
     }
 

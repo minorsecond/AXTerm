@@ -117,10 +117,24 @@ final class YAPPSessionTransfer: FileTransferProtocolDelegate {
     func pause() { yapp.pause() }
     func resume() { yapp.resume() }
 
+    /// The last block handed to the session is still queued, whole: none of
+    /// it numbered or on the air, nothing else queued with it.
+    var lastBlockQueuedWhole = false
+
     func cancel() {
         guard !yapp.state.isTerminal else {
             end()
             return
+        }
+        // The cancel goes out behind whatever is queued, and on a slow link
+        // the other station heard it 38 s late (smoke run 2026-10-03-1,
+        // issue 19). A block still queued whole has never been on the air,
+        // so it is dropped and the CN is next. Frames already in the window
+        // are numbered and must still be delivered.
+        stopPumping()
+        if lastBlockQueuedWhole {
+            owner?.sessionManager.discardQueuedData(for: sessionKey)
+            lastBlockQueuedWhole = false
         }
         // Keep the claim until the other side's CA arrives (or the wait for
         // it runs out), so those two bytes are not typed into the terminal.
