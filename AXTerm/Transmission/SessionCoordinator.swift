@@ -420,6 +420,18 @@ final class SessionCoordinator: ObservableObject {
     /// AXDP transfers with a chunk-loop turn already scheduled.
     var chunkLoopScheduled: Set<UUID> = []
 
+    /// History records of sessions someone opened to this station, by
+    /// session. A session we opened is recorded by the connect bar.
+    var inboundRecordIDs: [UUID: String] = [:]
+
+    /// The history record of a caller's live session, if one is open.
+    func inboundRecordID(for peer: AX25Address) -> String? {
+        let key = peer.display.uppercased()
+        return sessionManager.sessions.values
+            .first { !$0.isInitiator && $0.remoteAddress.display.uppercased() == key && inboundRecordIDs[$0.id] != nil }
+            .flatMap { inboundRecordIDs[$0.id] }
+    }
+
     /// AXDP transfers whose last chunk the session holds queued whole, none
     /// of it numbered or on the air. A cancel drops it so the NACK is next.
     var axdpChunkQueuedWhole: Set<UUID> = []
@@ -2545,6 +2557,16 @@ final class SessionCoordinator: ObservableObject {
                 let peer = session.remoteAddress.display.uppercased()
 
                 if !isInitiator {
+                    // History records the call whether or not a window is
+                    // open; until 2026-10-05 only the connect bar recorded
+                    // a session, so callers left nothing (smoke run issue 48).
+                    if let recorder = self.packetEngine?.sessionRecorder {
+                        let id = "inbound|\(session.id.uuidString)"
+                        self.inboundRecordIDs[session.id] = id
+                        recorder.began(id: id, remote: session.remoteAddress.display,
+                                       via: session.path.digis.map(\.display), transport: "AX.25",
+                                       radio: session.radio)
+                    }
                     // Someone called us. Whoever wants to answer decides
                     // what that means — the Winlink P2P listener is one
                     // subscriber, and it only acts when the operator has
@@ -2593,6 +2615,10 @@ final class SessionCoordinator: ObservableObject {
             // When a session disconnects, invalidate cached capabilities and clear reassembly buffer.
             // This ensures we re-discover on next connection (station might switch software)
             // and prevents stale partial AXDP messages from corrupting future communications.
+            if newState == .disconnected || newState == .error,
+               let id = self.inboundRecordIDs.removeValue(forKey: session.id) {
+                self.packetEngine?.sessionRecorder?.ended(id: id, outcome: newState == .error ? .lost : .closed)
+            }
             if (oldState == .connected || oldState == .disconnecting) && (newState == .disconnected || newState == .error) {
                 // A transfer riding this session cannot finish now. Say so
                 // straight away rather than leaving it "Sending" until a

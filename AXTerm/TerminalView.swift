@@ -2272,7 +2272,8 @@ struct TerminalView: View {
             // The transcript. Same hook the console renders from, so what is
             // kept is what the operator saw rather than a second pass at
             // deciding what counts.
-            if let id = activeSessionRecordID {
+            // A caller's session has its own record (SessionCoordinator).
+            if let id = sessionCoordinator.inboundRecordID(for: from) ?? activeSessionRecordID {
                 sessionRecorder?.recorded(line: "\(speaker): \(text)", for: id,
                                           sent: false, bytes: text.utf8.count)
             }
@@ -3284,7 +3285,10 @@ struct TerminalView: View {
 
         // Build payload
         let text = txViewModel.viewModel.composeText
-        if let id = activeSessionRecordID, !text.isEmpty {
+        let inboundRecord = txViewModel.currentSession.flatMap {
+            sessionCoordinator.inboundRecordID(for: $0.remoteAddress)
+        }
+        if let id = inboundRecord ?? activeSessionRecordID, !text.isEmpty {
             sessionRecorder?.recorded(line: "> \(text)", for: id,
                                       sent: true, bytes: text.utf8.count)
         }
