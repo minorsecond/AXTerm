@@ -681,6 +681,19 @@ AXTerm folds the SDL's Timer Recovery state into `CONNECTED` (retry count
 above zero) and calls Awaiting Connection `CONNECTING`. These transitions
 follow the SDL:
 
+- **Disconnect request while `CONNECTING`** (the operator cancels a connect
+  nobody has answered): send one DISC with P = 1, stop T1, go to
+  `DISCONNECTED`; no retries. Deliberate departure from Figure C4.2, which
+  says "requeue request": read literally, the SABMs go on until UA or N2 and
+  the radio keeps transmitting after the cancel. Direwolf (ax25_link.c,
+  `dl_disconnect_request`) treats that as an erratum and does the same. If the
+  peer did open its side (it heard a SABM but we missed its UA), the DISC
+  goes over the path the SABM already crossed and releases it; if that DISC
+  is lost, the peer's first frame to us draws a DM (Figure C4.1) and releases
+  it then. Requeueing instead leaves such a peer half-open every time: the
+  SABMs run out without a DISC. Operator decision 2026-10-05 (smoke run
+  2026-10-03-1, 12.4: a canceled connect to KB5YZB-7 sent a DISC every 20 s,
+  N2 times).
 - **SABM while `CONNECTING`** (both stations called at once): answer UA with
   F = P and stay in `CONNECTING`. The link is up when our own SABM is
   answered. §6.3.1: after a SABM, frames other than UA and DM go out only

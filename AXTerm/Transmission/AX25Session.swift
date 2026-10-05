@@ -1056,8 +1056,16 @@ nonisolated struct AX25StateMachine: Sendable {
             return [.sendSABM, .startT1]
 
         case (.connecting, .disconnectRequest):
-            state = .disconnecting
-            return [.stopT1, .sendDISC, .startT1]
+            // Canceling a connect nobody has answered: one DISC (P=1), then
+            // disconnected. Figure C4.2 says "requeue" the request, which keeps
+            // the SABMs going until UA or N2 and transmits after the operator
+            // canceled; Direwolf reads it as an erratum and so does AXTerm
+            // (spec 7.1.1, operator decision 2026-10-05). The DISC releases a
+            // peer that opened its side; one that missed it gets a DM for its
+            // first frame to us, and that releases it.
+            state = .disconnected
+            retryCount = 0
+            return [.stopT1, .sendDISC, .notifyDisconnected]
 
         case (.connecting, .forceDisconnect):
             state = .disconnected

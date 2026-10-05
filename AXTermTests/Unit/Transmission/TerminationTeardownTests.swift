@@ -48,7 +48,9 @@ final class TerminationTeardownTests: XCTestCase {
         XCTAssertEqual(sent, 2, "both live sessions get a DISC; the closed one does not")
         XCTAssertEqual(connected.state, .disconnecting,
                        "the peer is told the link is going down, not just abandoned")
-        XCTAssertEqual(connecting.state, .disconnecting)
+        // A connect nobody has answered gets one DISC and is closed at once
+        // (spec 7.1.1, smoke run 2026-10-03-1, 12.4).
+        XCTAssertEqual(connecting.state, .disconnected)
     }
 
     func testPrepareForTerminationIsQuietWithNoLiveSessions() {

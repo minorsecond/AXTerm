@@ -248,6 +248,9 @@ final class AX25PropertyFindingsTests: XCTestCase {
         let (manager, clock) = makeManager(maxRetries: 3)
         _ = manager.connect(to: peer)
         let session = try XCTUnwrap(manager.existingSession(for: peer))
+        // A connected link, so the DISC has retries to run out (a connect
+        // nobody answered is closed with one DISC instead).
+        _ = manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
         _ = manager.disconnect(session: session)
         XCTAssertEqual(session.state, .disconnecting)
         clock.advance(by: 120)

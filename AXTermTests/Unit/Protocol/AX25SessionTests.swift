@@ -41,20 +41,6 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(AX25SessionState.disconnecting.rawValue, "disconnecting")
     }
 
-    func testDisconnectRequestWhileConnectingSendsDISC() {
-        var sm = AX25StateMachine(config: AX25SessionConfig())
-
-        let connectActions = sm.handle(event: .connectRequest)
-        XCTAssertEqual(sm.state, .connecting)
-        XCTAssertTrue(connectActions.contains(.sendSABM))
-
-        let disconnectActions = sm.handle(event: .disconnectRequest)
-        XCTAssertEqual(sm.state, .disconnecting)
-        XCTAssertTrue(disconnectActions.contains(.sendDISC))
-        XCTAssertTrue(disconnectActions.contains(.stopT1))
-        XCTAssertTrue(disconnectActions.contains(.startT1))
-    }
-
     func testForceDisconnectFromConnectingStopsTimersAndNotifies() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
@@ -1049,6 +1035,47 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertTrue(actions.contains(.sendDISC))
         XCTAssertTrue(actions.contains(.stopT3))
         XCTAssertTrue(actions.contains(.startT1))
+    }
+
+    /// Canceling a connect nobody has answered: one DISC, then disconnected.
+    /// AX.25 2.2 Figure C4.2 says "requeue" the request, which keeps the
+    /// SABMs going until UA or N2; this follows Direwolf's reading instead
+    /// (operator decision 2026-10-05, smoke run 12.4: a canceled connect to
+    /// KB5YZB-7 sent DISC every 20 s). A peer that did open its side is
+    /// released by the DISC, or by the DM its first frame to us draws.
+    func testStateMachineDisconnectRequestWhileConnectingSendsOneDISCAndStops() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        XCTAssertEqual(sm.state, .connecting)
+
+        let actions = sm.handle(event: .disconnectRequest)
+
+        XCTAssertEqual(sm.state, .disconnected)
+        XCTAssertTrue(actions.contains(.sendDISC))
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.notifyDisconnected))
+        XCTAssertFalse(actions.contains(.startT1), "no DISC retries")
+    }
+
+    func testCancelingAnUnansweredConnectPutsNothingMoreOnTheAir() throws {
+        let clock = AX25VirtualClock()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 2), clock: clock)
+        manager.defaultConfig = AX25SessionConfig(initialRto: 3.0)
+        let peer = AX25Address(call: "KB5YZB", ssid: 7)
+        var sent: [OutboundFrame] = []
+        manager.onSendFrame = { sent.append($0) }
+        _ = manager.connect(to: peer, path: DigiPath.from(["DRLNOD"]))
+        clock.advance(by: 20)   // a few unanswered SABMs
+        let session = try XCTUnwrap(manager.existingSession(for: peer, path: DigiPath.from(["DRLNOD"])))
+
+        let disc = try XCTUnwrap(manager.disconnect(session: session))
+        XCTAssertEqual(disc.displayInfo, "DISC")
+        XCTAssertEqual(disc.controlByte.map { $0 & 0x10 }, 0x10, "DISC with P=1")
+        XCTAssertEqual(session.state, .disconnected)
+
+        sent.removeAll()
+        clock.advance(by: 300)
+        XCTAssertTrue(sent.isEmpty, "nothing more after the one DISC: \(sent.map { $0.displayInfo ?? "?" })")
     }
 
     func testStateMachineUAWhileDisconnecting() {
