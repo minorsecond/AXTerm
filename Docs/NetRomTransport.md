@@ -241,10 +241,20 @@ that reads real BPQ and TheNET broadcasts off the air.
 Two rules are enforced in `advertisement(...)` rather than left to
 callers:
 
-1. **Never advertise what we will not carry.** With forwarding off, the
-   only entry is this station itself, at quality 255. Advertising a
-   learned route we would not forward makes this station a black hole:
-   neighbors route traffic at it and the traffic dies.
+1. **Never advertise what we will not carry.** With forwarding off, no
+   entries are listed and the frame is the header alone (signature and
+   alias), which tells neighbors the node exists. Advertising a learned
+   route we would not forward makes this station a black hole: neighbors
+   route traffic at it and the traffic dies.
+
+This station never lists itself. As in classic NET/ROM, a station hearing
+a NODES broadcast takes the sender (the frame's source, with the header's
+alias) as a destination, reached directly at the link's quality, and each
+entry as a destination through the sender at entry quality × link quality
+/ 256. AXTerm does the same on receive (`NetRomRouter.recordBroadcastOrigin`).
+Until smoke run 2026-10-03-1 (issue 38) it listed itself as its only entry
+and did not take the sender as a destination, so the node shell's `NODES`
+said "No nodes known yet" with a neighbor's broadcast just heard.
 2. **Split horizon** — never advertise a destination back toward the
    neighbor we reach it through.
 

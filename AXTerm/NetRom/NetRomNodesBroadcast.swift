@@ -14,10 +14,16 @@
 //   1. **Never advertise what we will not carry.** A node that
 //      advertises a destination it cannot forward to is a black hole:
 //      neighbors route traffic at it and the traffic dies. So with
-//      forwarding off, the only thing advertised is this station
-//      itself — "I exist, you can reach me", which is true and
-//      harmless. Learned routes are advertised only when forwarding is
-//      on, and only for hops we would actually use.
+//      forwarding off, nothing is listed and the broadcast is the header
+//      alone: "I exist, you can reach me", which is true and harmless.
+//      Learned routes are advertised only when forwarding is on, and
+//      only for hops we would actually use.
+//
+//  This station never lists itself. A receiver learns the sender from
+//  the frame's source and the header's alias, and adds it as a
+//  destination at its link quality; an entry for the sender says nothing
+//  more. AXTerm used to list itself as its only entry (smoke run
+//  2026-10-03-1, issue 38).
 //   2. **Never advertise a route back to its own source.** Split
 //      horizon: telling N "I can reach D" when our route to D *is* N
 //      invites a loop.
@@ -50,10 +56,6 @@ nonisolated enum NetRomNodesBroadcast {
     /// 256-byte NET/ROM packet size every implementation accepts.
     static let maxEntriesPerFrame = 11
 
-    /// Quality a node advertises for itself. It *is* itself, so the path
-    /// is perfect; each neighbor scales this by its own link quality.
-    static let selfQuality: UInt8 = 255
-
     struct Entry: Equatable {
         let destination: AX25Address
         let alias: String
@@ -78,10 +80,10 @@ nonisolated enum NetRomNodesBroadcast {
     // MARK: - Encoding
 
     /// Encode entries into one or more broadcast payloads, each within
-    /// `maxEntriesPerFrame`. Returns an empty array for no entries — a
-    /// broadcast with nothing in it says nothing and wastes airtime.
+    /// `maxEntriesPerFrame`. No entries is one header-only payload, the
+    /// signature and alias: the broadcast that says this node exists.
     static func encode(originAlias: String, entries: [Entry]) -> [Data] {
-        guard !entries.isEmpty else { return [] }
+        guard !entries.isEmpty else { return [Data([signature] + encodeAlias(originAlias))] }
         return stride(from: 0, to: entries.count, by: maxEntriesPerFrame).map { start in
             let slice = entries[start..<min(start + maxEntriesPerFrame, entries.count)]
             var bytes: [UInt8] = [signature]
@@ -125,13 +127,8 @@ nonisolated enum NetRomNodesBroadcast {
         limit: Int = maxEntriesPerFrame * 4,
         callsignForAlias: (String) -> String? = { _ in nil }
     ) -> [Entry] {
-        // Always first, always true: this station exists and is itself.
-        var entries: [Entry] = [
-            Entry(destination: localNode,
-                  alias: localAlias,
-                  bestNeighbor: localNode,
-                  quality: selfQuality)
-        ]
+        // Never ourselves: the frame's source and header say that already.
+        var entries: [Entry] = []
         guard forwarding else { return entries }
 
         var seen: Set<String> = [localNode.display.uppercased()]

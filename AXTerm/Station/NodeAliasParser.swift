@@ -832,6 +832,12 @@ final class NodeAliasStore: ObservableObject {
 
     func ingest(packets: [Packet]) {
         for packet in packets {
+            if packet.isNetRomBroadcast {
+                if let result = NetRomBroadcastParser.parse(packet: packet) {
+                    ingest(nodes: result, at: packet.timestamp)
+                }
+                continue
+            }
             guard let text = packet.infoText, !text.isEmpty else { continue }
             guard let destination = packet.to?.call.uppercased(),
                   Self.announcementDestinations.contains(destination) else { continue }
@@ -839,6 +845,29 @@ final class NodeAliasStore: ObservableObject {
             ingest(text: text, source: source, at: packet.timestamp)
             ingestServices(text: text, source: source, at: packet.timestamp)
         }
+    }
+
+    /// Learns from a binary NET/ROM NODES broadcast: the sender's own alias
+    /// from the header, and each entry's alias for its destination, as told
+    /// by the sender. Only text frames were read before, so a node heard
+    /// only through NODES never reached the Nodes page (smoke run
+    /// 2026-10-03-1, issue 38).
+    func ingest(nodes result: NetRomBroadcastResult, at time: Date) {
+        let origin = CallsignValidator.normalize(result.originCallsign)
+        var updated = directory
+        if let alias = result.originAlias, !alias.isEmpty {
+            updated.record(NodeAliasParser.Announcement(alias: alias, callsign: origin, service: "N"),
+                           at: time, from: origin)
+        }
+        for entry in result.entries where !entry.destinationAlias.isEmpty {
+            updated.record(NodeAliasParser.Announcement(
+                alias: entry.destinationAlias,
+                callsign: CallsignValidator.normalize(entry.destinationCallsign),
+                service: "N"), at: time, from: origin)
+        }
+        guard updated != directory else { return }
+        directory = updated
+        save()
     }
 
     /// What each station said it runs.

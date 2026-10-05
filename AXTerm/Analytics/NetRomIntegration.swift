@@ -256,6 +256,8 @@ final class NetRomIntegration {
             router.observePacket(syntheticPacket, observedQuality: max(observedQuality, 200), direction: .incoming, timestamp: result.timestamp)
             router.markAsOfficial(call: normalizedOrigin, radio: radio)
         }
+        // The sender is a destination too, which its own broadcast never says.
+        router.recordBroadcastOrigin(normalizedOrigin, radio: radio, timestamp: result.timestamp)
 
         // Convert broadcast entries to RouteInfo and feed to router
         let routeInfos = result.entries.map { entry in

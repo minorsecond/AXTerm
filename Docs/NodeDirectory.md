@@ -15,6 +15,7 @@ where they already arrive:
 | Node tables | `ALIAS:CALL` | `AGNODE:K1AJD-4  ARAPEY:CX2SA-7` |
 | ID / beacon frames | `CALL/R ALIAS/N` | `KE0NCQ/R DRL/D DRLBBS/B DRLNOD/N` |
 | BPQ node identification | `NODE: ALIAS:CALL, …` | `NODE: YZBBPQ:KB5YZB-7, Aurora, CO` |
+| NET/ROM `NODES` broadcasts (binary, PID 0xCF) | header alias, then an alias per entry | `EPINDB` for K0EPI-3; `COSCO` for KE0GB-7, told by KE0NCQ |
 
 Node tables are the highest-yield source by a wide margin: one `N` or `NODES`
 to one node names its whole view of the network, where a beacon names one

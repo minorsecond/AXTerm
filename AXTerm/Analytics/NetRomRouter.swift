@@ -318,6 +318,25 @@ nonisolated final class NetRomRouter {
         }
     }
 
+    /// Classic NET/ROM: the node that sent a NODES broadcast is itself a
+    /// destination, reached directly at the quality of the link to it. Its
+    /// broadcast never lists itself, so without this the node shell's NODES
+    /// said "No nodes known yet" with the neighbor just heard (smoke run
+    /// 2026-10-03-1, issue 38). Needs the sender to be a neighbor already.
+    func recordBroadcastOrigin(_ origin: String, radio: RadioID = .primary, timestamp: Date) {
+        guard let normalizedOrigin = normalize(origin), normalizedOrigin != localCallsign,
+              let neighbor = neighbors[NeighborKey(radio: radio, call: normalizedOrigin)] else { return }
+        storeRoute(
+            destination: normalizedOrigin,
+            origin: normalizedOrigin,
+            radio: radio,
+            quality: max(1, clampQuality(neighbor.pathQuality)),
+            path: [normalizedOrigin],
+            timestamp: timestamp,
+            sourceType: "broadcast"
+        )
+    }
+
     func currentNeighbors() -> [NeighborInfo] {
         neighbors
             .values

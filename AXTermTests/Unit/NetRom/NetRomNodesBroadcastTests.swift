@@ -56,22 +56,25 @@ final class NetRomNodesBroadcastTests: XCTestCase {
 
     // MARK: - Round trip through the real parser
 
-    func testSelfOnlyBroadcastRoundTripsThroughTheParser() {
+    /// Smoke run 2026-10-03-1, issue 38: this station listed itself as its
+    /// only entry. A receiver learns the sender from the frame's source and
+    /// the header's alias, so with nothing to list the frame is the header
+    /// alone, as classic NET/ROM nodes send it.
+    func testWithoutForwardingTheBroadcastIsTheHeaderAlone() {
         let entries = NetRomNodesBroadcast.advertisement(
             localNode: localNode, localAlias: "EPINOD",
             forwarding: false, routes: [])
+        XCTAssertTrue(entries.isEmpty)
         let payloads = NetRomNodesBroadcast.encode(originAlias: "EPINOD", entries: entries)
-        XCTAssertEqual(payloads.count, 1)
+        XCTAssertEqual(payloads, [Data([0xFF] + Array("EPINOD".utf8))])
 
         guard let parsed = NetRomBroadcastParser.parse(
             packet: packet(from: localNode, payload: payloads[0])) else {
             return XCTFail("our own broadcast must parse with our own parser")
         }
-        XCTAssertEqual(parsed.entries.count, 1)
-        XCTAssertEqual(parsed.entries[0].destinationCallsign, "K0EPI-7")
-        XCTAssertEqual(parsed.entries[0].destinationAlias, "EPINOD")
-        XCTAssertEqual(parsed.entries[0].bestNeighborCallsign, "K0EPI-7")
-        XCTAssertEqual(parsed.entries[0].quality, 255)
+        XCTAssertTrue(parsed.entries.isEmpty)
+        XCTAssertEqual(parsed.originAlias, "EPINOD")
+        XCTAssertEqual(parsed.originCallsign, "K0EPI-7")
     }
 
     func testMultipleEntriesRoundTripWithCallsignsAndQualitiesIntact() {
@@ -93,10 +96,11 @@ final class NetRomNodesBroadcastTests: XCTestCase {
             return XCTFail("broadcast should parse")
         }
         XCTAssertEqual(parsed.entries.map(\.destinationCallsign),
-                       ["K0EPI-7", "KE0GB-7", "KB5YZB-7"])
+                       ["KE0GB-7", "KB5YZB-7"])
         XCTAssertEqual(parsed.entries.map(\.destinationAlias),
-                       ["EPINOD", "COSCO", "YZBBPQ"])
-        XCTAssertEqual(parsed.entries.map(\.quality), [255, 120, 16])
+                       ["COSCO", "YZBBPQ"])
+        XCTAssertEqual(parsed.entries.map(\.quality), [120, 16])
+        XCTAssertEqual(parsed.originAlias, "EPINOD")
         // Every advertised destination names *us* as the way there — that
         // is what advertising means.
         XCTAssertEqual(Set(parsed.entries.map(\.bestNeighborCallsign)), ["K0EPI-7"])
@@ -106,10 +110,12 @@ final class NetRomNodesBroadcastTests: XCTestCase {
         for ssid in 0...15 {
             let node = AX25Address(call: "W0ARP", ssid: ssid)
             let entries = NetRomNodesBroadcast.advertisement(
-                localNode: node, localAlias: "TESTND", forwarding: false, routes: [])
+                localNode: localNode, localAlias: "TESTND", forwarding: true,
+                routes: [NetRomNodesBroadcast.KnownRoute(destination: node, alias: "ARP",
+                                                         nextHop: drlnod, quality: 100)])
             let payloads = NetRomNodesBroadcast.encode(originAlias: "TESTND", entries: entries)
             guard let parsed = NetRomBroadcastParser.parse(
-                packet: packet(from: node, payload: payloads[0])) else {
+                packet: packet(from: localNode, payload: payloads[0])) else {
                 return XCTFail("ssid \(ssid) should parse")
             }
             XCTAssertEqual(parsed.entries[0].destinationCallsign, node.display)
@@ -145,14 +151,14 @@ final class NetRomNodesBroadcastTests: XCTestCase {
         }
     }
 
-    func testNoEntriesMeansNoFrames() {
-        XCTAssertTrue(NetRomNodesBroadcast.encode(originAlias: "EPINOD", entries: []).isEmpty,
-                      "an empty broadcast says nothing and would only waste airtime")
+    func testNoEntriesIsOneHeaderOnlyFrame() {
+        XCTAssertEqual(NetRomNodesBroadcast.encode(originAlias: "EPINOD", entries: []).map(\.count), [7],
+                       "the header alone says this node exists")
     }
 
     // MARK: - What we are willing to claim
 
-    func testWithoutForwardingWeAdvertiseOnlyOurselves() {
+    func testWithoutForwardingNothingIsListed() {
         // The rule that keeps this station from becoming a black hole:
         // never advertise a destination we will not carry traffic to.
         let routes = [
@@ -162,8 +168,7 @@ final class NetRomNodesBroadcastTests: XCTestCase {
         let entries = NetRomNodesBroadcast.advertisement(
             localNode: localNode, localAlias: "EPINOD",
             forwarding: false, routes: routes)
-        XCTAssertEqual(entries.count, 1)
-        XCTAssertEqual(entries[0].destination, localNode)
+        XCTAssertTrue(entries.isEmpty)
     }
 
     func testForwardingAdvertisesLearnedRoutes() {
@@ -174,7 +179,7 @@ final class NetRomNodesBroadcastTests: XCTestCase {
         let entries = NetRomNodesBroadcast.advertisement(
             localNode: localNode, localAlias: "EPINOD",
             forwarding: true, routes: routes)
-        XCTAssertEqual(entries.map(\.destination.display), ["K0EPI-7", "KE0GB-7"])
+        XCTAssertEqual(entries.map(\.destination.display), ["KE0GB-7"])
     }
 
     func testSplitHorizonSuppressesARouteBackToItsOwnHop() {
@@ -186,7 +191,7 @@ final class NetRomNodesBroadcastTests: XCTestCase {
         let entries = NetRomNodesBroadcast.advertisement(
             localNode: localNode, localAlias: "EPINOD",
             forwarding: true, routes: routes)
-        XCTAssertEqual(entries.count, 1, "only ourselves survives: \(entries)")
+        XCTAssertTrue(entries.isEmpty, "nothing survives: \(entries)")
     }
 
     func testZeroQualityRoutesAreNotAdvertised() {
@@ -197,7 +202,7 @@ final class NetRomNodesBroadcastTests: XCTestCase {
         let entries = NetRomNodesBroadcast.advertisement(
             localNode: localNode, localAlias: "EPINOD",
             forwarding: true, routes: routes)
-        XCTAssertEqual(entries.count, 1, "an unusable route must not be offered to others")
+        XCTAssertTrue(entries.isEmpty, "an unusable route must not be offered to others")
     }
 
     func testDuplicateDestinationsAreAdvertisedOnce() {
@@ -210,7 +215,7 @@ final class NetRomNodesBroadcastTests: XCTestCase {
         let entries = NetRomNodesBroadcast.advertisement(
             localNode: localNode, localAlias: "EPINOD",
             forwarding: true, routes: routes)
-        XCTAssertEqual(entries.map(\.destination.display), ["K0EPI-7", "KE0GB-7"])
+        XCTAssertEqual(entries.map(\.destination.display), ["KE0GB-7"])
     }
 
     func testAliasShapedDestinationsAreResolvedBeforeAdvertising() {
@@ -227,15 +232,15 @@ final class NetRomNodesBroadcastTests: XCTestCase {
             forwarding: true, routes: routes,
             callsignForAlias: { $0 == "EVANS" ? "W0ARP-10" : nil })
 
-        XCTAssertEqual(entries.map(\.destination.display), ["K0EPI-7", "W0ARP-10"])
-        XCTAssertEqual(entries[1].alias, "EVANS", "the tactical name survives, in its own field")
+        XCTAssertEqual(entries.map(\.destination.display), ["W0ARP-10"])
+        XCTAssertEqual(entries[0].alias, "EVANS", "the tactical name survives, in its own field")
 
         guard let parsed = NetRomBroadcastParser.parse(packet: packet(
             from: localNode,
             payload: NetRomNodesBroadcast.encode(originAlias: "EPINOD", entries: entries)[0]))
         else { return XCTFail("resolved broadcast should parse") }
-        XCTAssertEqual(parsed.entries.map(\.destinationCallsign), ["K0EPI-7", "W0ARP-10"])
-        XCTAssertEqual(parsed.entries[1].destinationAlias, "EVANS")
+        XCTAssertEqual(parsed.entries.map(\.destinationCallsign), ["W0ARP-10"])
+        XCTAssertEqual(parsed.entries[0].destinationAlias, "EVANS")
     }
 
     func testSplitHorizonSurvivesResolution() {
@@ -250,8 +255,8 @@ final class NetRomNodesBroadcastTests: XCTestCase {
             localNode: localNode, localAlias: "EPINOD",
             forwarding: true, routes: routes,
             callsignForAlias: { $0 == "DRLNOD" ? "KE0NCQ" : nil })
-        XCTAssertEqual(entries.count, 1,
-                       "alias and callsign are the same station: \(entries)")
+        XCTAssertTrue(entries.isEmpty,
+                      "alias and callsign are the same station: \(entries)")
     }
 
     func testUnresolvableAliasDestinationsAreStillSkipped() {
@@ -269,11 +274,11 @@ final class NetRomNodesBroadcastTests: XCTestCase {
         let entries = NetRomNodesBroadcast.advertisement(
             localNode: localNode, localAlias: "EPINOD",
             forwarding: true, routes: routes)
-        XCTAssertEqual(entries.map(\.destination.display), ["K0EPI-7", "KE0GB-7"],
+        XCTAssertEqual(entries.map(\.destination.display), ["KE0GB-7"],
                        "EVANS is an alias, not a callsign — it cannot ride that field")
     }
 
-    func testWeNeverAdvertiseOurselvesTwice() {
+    func testWeNeverAdvertiseOurselves() {
         let routes = [
             NetRomNodesBroadcast.KnownRoute(
                 destination: localNode, alias: "EPINOD", nextHop: drlnod, quality: 200)
@@ -281,8 +286,6 @@ final class NetRomNodesBroadcastTests: XCTestCase {
         let entries = NetRomNodesBroadcast.advertisement(
             localNode: localNode, localAlias: "EPINOD",
             forwarding: true, routes: routes)
-        XCTAssertEqual(entries.count, 1)
-        XCTAssertEqual(entries[0].quality, NetRomNodesBroadcast.selfQuality,
-                       "our own entry keeps the perfect quality, not a learned one")
+        XCTAssertTrue(entries.isEmpty, "a learned route to ourselves is not advertised either")
     }
 }

@@ -36,6 +36,10 @@ nonisolated struct NetRomBroadcastResult: Equatable {
     let originCallsign: String
     let entries: [NetRomBroadcastEntry]
     let timestamp: Date
+    /// The sending node's own alias, from the header, when the frame has
+    /// one (the standard form does). Empty entries with an alias is a node
+    /// that knows no routes yet but says it is there.
+    var originAlias: String? = nil
 }
 
 /// Parser for NET/ROM L3 routing broadcast packets.
@@ -56,6 +60,11 @@ nonisolated struct NetRomBroadcastParser {
     /// Minimum valid broadcast size (signature + at least one entry of smaller format).
     static let minimumSize = 1 + aliasFirstEntrySize
 
+    /// Signature and origin alias with no entries: a node announcing itself
+    /// with no routes to share. Classic NET/ROM nodes send it, and AXTerm
+    /// sends it when forwarding is off (smoke run 2026-10-03-1, issue 38).
+    static let headerOnlySize = 7
+
     /// Parse a packet and extract NET/ROM broadcast routing entries if applicable.
     /// Returns nil if the packet is not a valid NET/ROM broadcast.
     static func parse(packet: Packet) -> NetRomBroadcastResult? {
@@ -71,6 +80,16 @@ nonisolated struct NetRomBroadcastParser {
 
         // Get the info field data
         let data = packet.info
+
+        if data.count == headerOnlySize, data[data.startIndex] == signatureByte,
+           let origin = packet.from?.display {
+            let aliasBytes = [UInt8](data[(data.startIndex + 1)..<(data.startIndex + 7)])
+            guard aliasBytes.allSatisfy({ $0 >= 0x20 && $0 <= 0x7E }) else { return nil }
+            let alias = decodeAlias(aliasBytes)
+            return NetRomBroadcastResult(originCallsign: origin, entries: [], timestamp: packet.timestamp,
+                                         originAlias: alias.isEmpty ? nil : alias)
+        }
+
         guard data.count >= minimumSize else {
             #if DEBUG
             print("[NETROM:PARSER] Packet too small: \(data.count) bytes, need at least \(minimumSize)")
@@ -133,10 +152,16 @@ nonisolated struct NetRomBroadcastParser {
         }
         #endif
 
+        var originAlias: String?
+        if hasOriginAlias, !isAliasFirst {
+            let alias = decodeAlias([UInt8](data[(data.startIndex + 1)..<(data.startIndex + 7)]))
+            originAlias = alias.isEmpty ? nil : alias
+        }
         return NetRomBroadcastResult(
             originCallsign: origin,
             entries: entries,
-            timestamp: packet.timestamp
+            timestamp: packet.timestamp,
+            originAlias: originAlias
         )
     }
 

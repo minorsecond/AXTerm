@@ -352,10 +352,9 @@ final class NetRomLinkDriverTests: XCTestCase {
 
         XCTAssertEqual(driver.broadcastNodes(), 1)
         guard let payload = transport.broadcasts.first else { return XCTFail("no broadcast") }
-        // One entry: ourselves. We will not carry COSCO, so we do not
-        // claim it.
-        let entryBytes = payload.count - 1 - NetRomNodesBroadcast.aliasLength
-        XCTAssertEqual(entryBytes / NetRomNodesBroadcast.entryLength, 1)
+        // The header alone: this node exists. We will not carry COSCO, so
+        // we do not claim it, and we never list ourselves.
+        XCTAssertEqual(payload, Data([0xFF] + Array("EPINOD".utf8)))
     }
 
     func testForwardingStationAdvertisesWhatItWillCarry() {
@@ -374,8 +373,8 @@ final class NetRomLinkDriverTests: XCTestCase {
         XCTAssertEqual(driver.broadcastNodes(), 1)
         guard let payload = transport.broadcasts.first else { return XCTFail("no broadcast") }
         let entryBytes = payload.count - 1 - NetRomNodesBroadcast.aliasLength
-        XCTAssertEqual(entryBytes / NetRomNodesBroadcast.entryLength, 2,
-                       "ourselves plus the route we will actually forward")
+        XCTAssertEqual(entryBytes / NetRomNodesBroadcast.entryLength, 1,
+                       "the route we will actually forward, and not ourselves")
     }
 
     // MARK: - Transit routing
@@ -588,18 +587,12 @@ final class NetRomLinkDriverTests: XCTestCase {
     /// eleven, and the operator had no way to tell which had just left the
     /// antenna (2026-08-27).
     func testSummaryNamesTheStationWhenThereAreNoRoutes() {
-        let entries = [NetRomNodesBroadcast.Entry(
-            destination: AX25Address(call: "K0EPI", ssid: 7), alias: "EPINOD",
-            bestNeighbor: AX25Address(call: "K0EPI", ssid: 7), quality: 255)]
-        XCTAssertEqual(NetRomLinkDriver.summarize(alias: "EPINOD", entries: entries),
+        XCTAssertEqual(NetRomLinkDriver.summarize(alias: "EPINOD", entries: []),
                        "this station as EPINOD")
     }
 
     func testSummaryNamesTheRoutesBeingPromised() {
         let entries = [
-            NetRomNodesBroadcast.Entry(
-                destination: AX25Address(call: "K0EPI", ssid: 7), alias: "EPINOD",
-                bestNeighbor: AX25Address(call: "K0EPI", ssid: 7), quality: 255),
             NetRomNodesBroadcast.Entry(
                 destination: AX25Address(call: "KB5YZB", ssid: 1), alias: "YZBBBS",
                 bestNeighbor: AX25Address(call: "DRLNOD", ssid: 0), quality: 23)
@@ -611,17 +604,12 @@ final class NetRomLinkDriverTests: XCTestCase {
     /// A blank alias is what a station announces before the operator has
     /// set one, and it is worth saying out loud rather than printing a gap.
     func testSummarySaysWhenNoAliasIsSet() {
-        let entries = [NetRomNodesBroadcast.Entry(
-            destination: AX25Address(call: "K0EPI", ssid: 7), alias: "",
-            bestNeighbor: AX25Address(call: "K0EPI", ssid: 7), quality: 255)]
-        XCTAssertEqual(NetRomLinkDriver.summarize(alias: "   ", entries: entries),
+        XCTAssertEqual(NetRomLinkDriver.summarize(alias: "   ", entries: []),
                        "this station (no alias set)")
     }
 
     func testSummaryTruncatesALongTable() {
-        var entries = [NetRomNodesBroadcast.Entry(
-            destination: AX25Address(call: "K0EPI", ssid: 7), alias: "EPINOD",
-            bestNeighbor: AX25Address(call: "K0EPI", ssid: 7), quality: 255)]
+        var entries: [NetRomNodesBroadcast.Entry] = []
         for index in 1...10 {
             entries.append(NetRomNodesBroadcast.Entry(
                 destination: AX25Address(call: "DEST\(index)", ssid: 0), alias: "",

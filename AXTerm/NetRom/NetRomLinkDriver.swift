@@ -390,9 +390,10 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
     /// put on the air — zero when announcing is off, which is the
     /// default.
     ///
-    /// With forwarding off this advertises exactly one destination:
-    /// ourselves. That is the whole truth about what we will carry, and
-    /// advertising more would invite traffic into a black hole.
+    /// With forwarding off this lists no destinations: the frame is the
+    /// header alone, which tells neighbors this node exists. That is the
+    /// whole truth about what we will carry, and advertising more would
+    /// invite traffic into a black hole.
     @discardableResult
     func broadcastNodes() -> Int {
         guard advertisesItself else { return 0 }
@@ -432,7 +433,7 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
             total += sent
             TxLog.debug(.session, "NET/ROM NODES broadcast sent", [
                 "frames": sent,
-                "entries": entries.count,
+                "entries": entries.count,   // 0: the header alone
                 "forwarding": forwardingEnabled,
                 "radio": announcement.radio.rawValue,
                 "contents": summary
@@ -466,8 +467,8 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
         let name = alias.trimmingCharacters(in: .whitespaces).isEmpty
             ? "this station (no alias set)"
             : "this station as \(alias.trimmingCharacters(in: .whitespaces))"
-        // The first entry is always ourselves; the rest are promises.
-        let routes = entries.dropFirst()
+        // Every entry is a promise; this station itself is never listed.
+        let routes = entries
         guard !routes.isEmpty else { return name }
         let named = routes.prefix(6).map { entry -> String in
             let alias = entry.alias.trimmingCharacters(in: .whitespaces)
