@@ -57,6 +57,8 @@ nonisolated enum HeardStationMap {
         /// Defaulted so entries built from a lookup — which have no frame
         /// behind them — make no claim either way.
         var frameOrigin: APRSFrameOrigin = .radio
+        /// The station relays other stations' packets onto RF.
+        var relaysForOthers: APRSGatewayActivity?
         /// What the position actually describes — which is a different
         /// question from how precise it is.
         var confidence: PositionConfidence = .gridSquare
@@ -192,6 +194,7 @@ nonisolated enum HeardStationMap {
                     // decided by StationPlausibility.positionSourceLine.
                     positionSource: StationPlausibility.aprsSource,
                     frameOrigin: station.frameOrigin,
+                    relaysForOthers: station.relaysForOthers,
                     confidence: .exact,
                     gridSquare: record?.gridSquare?.uppercased(),
                     name: record?.name, locality: record?.locality,
@@ -684,11 +687,13 @@ nonisolated enum HeardStationMap {
         if !entry.lastVia.isEmpty {
             lines.append("Via \(entry.lastVia.joined(separator: " \u{2192} "))")
         }
-        if case .gatedOntoRF(_, let gateway) = entry.frameOrigin {
+        if let relay = entry.relaysForOthers {
             lines.append("")
-            lines.append("Relayed onto RF by \(gateway). Its traffic reaches "
-                       + "this channel from the internet, not from its own transmitter.")
-        } else if entry.frameOrigin == .internetPath {
+            lines.append("Gateway: relays other stations' packets onto RF "
+                       + (relay.viaInternet ? "from the internet" : "from another channel")
+                       + ", lately \(relay.lastSource)'s. Its own transmitter is heard here.")
+        }
+        if entry.frameOrigin == .internetPath {
             lines.append("")
             lines.append("Its path is marked as having come from the internet, "
                        + "not from a transmitter this station can be heard on.")

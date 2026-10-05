@@ -98,6 +98,13 @@ nonisolated struct Station: Identifiable, Hashable {
     /// gateway. `.radio` is the absence of a claim, not proof of one.
     var frameOrigin: APRSFrameOrigin = .radio
 
+    /// Set when this station sends third-party frames: it is a gateway,
+    /// relaying other stations' packets onto RF. Kept apart from
+    /// `frameOrigin`, because its own transmitter is the one heard (smoke
+    /// run 2026-10-03-1, issue 27: the gateway's card said its traffic came
+    /// from the internet "not from its own transmitter").
+    var relaysForOthers: APRSGatewayActivity?
+
     /// The station's latest telemetry frame and whatever it has said the
     /// channels mean. Held separately from weather because it is arbitrary:
     /// a creek gauge, a battery bank and a repeater's power all arrive here.

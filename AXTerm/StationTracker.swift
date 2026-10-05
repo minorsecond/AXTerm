@@ -71,6 +71,13 @@ nonisolated struct StationTracker {
     /// frame does not clear it — absence of a marker is not evidence of RF.
     static func applyOrigin(_ station: inout Station, packet: Packet) {
         guard !packet.info.isEmpty else { return }
+        // A third-party frame is another station's packet: the sender heard
+        // here is the gateway that put it on RF, transmitting for real.
+        if let relay = APRSThirdParty.unwrap(info: packet.info) {
+            station.relaysForOthers = APRSGatewayActivity(lastSource: relay.source,
+                                                          viaInternet: relay.viaInternet)
+            return
+        }
         let origin = APRSFrameOrigin.classify(info: packet.info,
                                               via: packet.via.map(\.display))
         if origin.isFromInternet { station.frameOrigin = origin }

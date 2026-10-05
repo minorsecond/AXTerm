@@ -58,3 +58,14 @@ nonisolated struct APRSThirdParty: Equatable, Sendable {
                               payload: Data(info[info.index(after: colon)...]))
     }
 }
+
+/// What a station that sends third-party frames is doing: putting other
+/// stations' packets onto RF. Its own transmitter is the one heard, so this
+/// says nothing against its own position or reach.
+nonisolated struct APRSGatewayActivity: Hashable, Sendable {
+    /// The source of the latest packet it relayed.
+    let lastSource: String
+    /// Whether that packet came from the internet rather than another
+    /// channel.
+    let viaInternet: Bool
+}

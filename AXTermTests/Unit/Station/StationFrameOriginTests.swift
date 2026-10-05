@@ -6,8 +6,9 @@
 import XCTest
 @testable import AXTerm
 
-/// A station whose traffic is piped in from the internet must say so, and must
-/// still say so after a relaunch.
+/// A station whose own traffic is piped in from the internet must say so, a
+/// gateway that relays other stations' traffic must say that instead, and both
+/// must survive a relaunch.
 ///
 /// `update(with:)` and `rebuild(from:)` are two implementations of the same
 /// derivation; anything recorded in one and not the other vanishes on the next
@@ -30,13 +31,17 @@ final class StationFrameOriginTests: XCTestCase {
     /// onto the channel.
     private let gated = "}K0VJ-10>APFII0,TCPIP,W3OO-1*::OTA      :ack5421"
 
-    func testAGatingStationIsRecorded() {
+    /// W3OO-1 is a gateway: it relays K0VJ-10's internet traffic, and its
+    /// own transmitter is the one heard. Until smoke run 2026-10-03-1 (issue
+    /// 27) it was filed as gated traffic itself, and its card said its
+    /// traffic came "from the internet, not from its own transmitter".
+    func testAGatewayIsRecordedAsRelayingNotAsGated() {
         var tracker = StationTracker()
         tracker.update(with: packet(gated, from: "W3OO", ssid: 1, at: 10))
 
         let station = tracker.stations.first { $0.call == "W3OO-1" }!
-        XCTAssertEqual(station.frameOrigin, .gatedOntoRF(originator: "K0VJ-10", gateway: "W3OO-1"))
-        XCTAssertTrue(station.frameOrigin.isFromInternet)
+        XCTAssertEqual(station.relaysForOthers, APRSGatewayActivity(lastSource: "K0VJ-10", viaInternet: true))
+        XCTAssertEqual(station.frameOrigin, .radio, "its own transmitter was heard")
     }
 
     func testARebuildKeepsIt() {
@@ -47,20 +52,40 @@ final class StationFrameOriginTests: XCTestCase {
         var rebuilt = StationTracker()
         rebuilt.rebuild(from: packets)
 
-        XCTAssertEqual(rebuilt.stations.first { $0.call == "W3OO-1" }?.frameOrigin,
-                       live.stations.first { $0.call == "W3OO-1" }?.frameOrigin,
-                       "a relaunch must not lose the fact that this is gated traffic")
-        XCTAssertTrue(rebuilt.stations.first { $0.call == "W3OO-1" }!.frameOrigin.isFromInternet)
+        XCTAssertEqual(rebuilt.stations.first { $0.call == "W3OO-1" }?.relaysForOthers,
+                       live.stations.first { $0.call == "W3OO-1" }?.relaysForOthers,
+                       "a relaunch must not lose the fact that this station is a gateway")
+        XCTAssertNotNil(rebuilt.stations.first { $0.call == "W3OO-1" }!.relaysForOthers)
     }
 
-    /// A station that gates some traffic and beacons its own the rest of the
-    /// time is still a gateway; a later plain frame must not clear the fact.
-    func testAPlainFrameDoesNotClearAnEarlierClaim() {
+    /// A gateway that also beacons its own position is still a gateway; a
+    /// later plain frame must not clear the fact.
+    func testAPlainFrameDoesNotClearIt() {
         var tracker = StationTracker()
         tracker.update(with: packet(gated, from: "W3OO", ssid: 1, at: 10))
         tracker.update(with: packet("!3937.00N/10443.00W-", from: "W3OO", ssid: 1, at: 20))
 
-        XCTAssertTrue(tracker.stations.first { $0.call == "W3OO-1" }!.frameOrigin.isFromInternet)
+        XCTAssertNotNil(tracker.stations.first { $0.call == "W3OO-1" }!.relaysForOthers)
+    }
+
+    func testTheGatewaysCardSaysWhatItDoes() {
+        var tracker = StationTracker()
+        tracker.update(with: packet(gated, from: "W3OO", ssid: 1, at: 10))
+        tracker.update(with: packet("!3937.00N/10443.00W-", from: "W3OO", ssid: 1, at: 20))
+        let entries = HeardStationMap.entries(stations: tracker.stations, directory: [:], gatewayGrids: [:])
+        let entry = entries.first { $0.callsign == "W3OO-1" }!
+        let card = HeardStationMap.detail(for: entry, observer: nil, now: Date(timeIntervalSince1970: 30))
+        XCTAssertTrue(card.contains("Gateway: relays other stations' packets onto RF from the internet"), card)
+        XCTAssertTrue(card.contains("Its own transmitter is heard here."), card)
+        XCTAssertFalse(card.contains("not from its own transmitter"), card)
+    }
+
+    /// A packet whose own path says it came over the internet is still badged.
+    func testAnInternetPathIsStillRecorded() {
+        var tracker = StationTracker()
+        tracker.update(with: packet("!3937.00N/10443.00W-", from: "K0ABC",
+                                    via: [AX25Address(call: "TCPIP", ssid: 0, repeated: true)], at: 10))
+        XCTAssertEqual(tracker.stations.first { $0.call == "K0ABC" }?.frameOrigin, .internetPath)
     }
 
     /// KC0AUH-2: far away, but its frame makes no claim. Distance is
