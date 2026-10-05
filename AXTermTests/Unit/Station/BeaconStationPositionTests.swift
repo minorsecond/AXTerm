@@ -119,6 +119,21 @@ final class BeaconStationPositionTests: XCTestCase {
         XCTAssertNil(coordinator.beaconObstacle(for: id, settings: settings))
     }
 
+    /// Smoke run 2026-10-03-1, issue 41: Calibrate receive level was offered
+    /// with the radio's beacon off, and only said afterwards that no beacon
+    /// went. The radio page now asks this first and says it beside Calibrate.
+    func testCalibrationIsToldTheBeaconIsOff() {
+        let settings = AppSettingsStore(defaults: TestDefaults.make("BeaconOffForCalibration"))
+        let id = aprsRadio(in: settings, APRSPositionConfig(useGPS: false, latitude: 38.0, longitude: -104.0))
+        settings.updateRadio(id) { $0.beacon.enabled = false }
+        let coordinator = SessionCoordinator()
+        let why = coordinator.beaconObstacle(for: id, settings: settings)
+        XCTAssertEqual(why, "The beacon is switched off for this radio.")
+        XCTAssertEqual(ReceiveLevelTuningRows.beaconNote(why),
+                       "Calibrating sends this radio's beacon, which can't go out yet: The beacon is switched off for this radio.")
+        XCTAssertNil(ReceiveLevelTuningRows.beaconNote(nil))
+    }
+
     /// A position beacon nobody has edited has no position settings stored.
     /// It follows the station like a new one, rather than never going out.
     func testABeaconWithNoPositionSettingsFollowsTheStation() {

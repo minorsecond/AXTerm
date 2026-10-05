@@ -16,13 +16,21 @@ struct ReceiveLevelTuningRows: View {
     let connected: Bool
     /// A measurement or test tone is running from this page.
     let blocked: Bool
+    /// Why the radio's beacon can't go out now. Calibration sends it, so
+    /// it waits until this is nil (smoke run 2026-10-03-1, issue 41).
+    var beaconObstacle: String?
     @ObservedObject var monitor: ReceiveLevelMonitor
     @State private var confirming = false
+    /// Moves on when the calibration spacing runs out. Nothing else redraws
+    /// the rows then, and Calibrate stayed disabled until the page was
+    /// reopened (smoke run 2026-10-03-1, issue 43).
+    @State private var spacingEnded = 0
 
     var body: some View {
         let record = monitor.record(radioID)
         let state = monitor.calibrations[radioID]
         let next = monitor.nextCalibrationAllowed(radioID)
+        let _ = spacingEnded
 
         LabeledContent("Receive level") {
             if case .running(let status) = state {
@@ -32,7 +40,8 @@ struct ReceiveLevelTuningRows: View {
                 }
             } else if onAPRS {
                 Button("Calibrate receive level\u{2026}") { confirming = true }
-                    .disabled(!connected || blocked || next != nil || monitor.isBusy(radioID))
+                    .disabled(!connected || blocked || next != nil || beaconObstacle != nil
+                              || monitor.isBusy(radioID))
                     .help("Sends this radio's beacon once, measures how loud the digipeats arrive, and sets the input gain for this radio.")
             } else if let passive = monitor.passiveAdvice(for: radioID) {
                 if case .keep = passive.recommendation.action {
@@ -48,8 +57,16 @@ struct ReceiveLevelTuningRows: View {
             }
         }
 
+        if onAPRS, !isRunning(state), let note = Self.beaconNote(beaconObstacle) {
+            caption(note)
+        }
         if onAPRS, let next, !isRunning(state) {
             caption("To keep the channel clear, the next calibration beacon can go at \(ReceiveLevelMonitor.time(next)).")
+                .task(id: next) {
+                    let wait = next.timeIntervalSinceNow
+                    if wait > 0 { try? await Task.sleep(nanoseconds: UInt64((wait + 0.5) * 1_000_000_000)) }
+                    if !Task.isCancelled { spacingEnded += 1 }
+                }
         }
         if !onAPRS { passiveCaption }
 
@@ -96,6 +113,12 @@ struct ReceiveLevelTuningRows: View {
                     + "\(ReceiveLevelAnalysis.passiveMinimumPackets) packets in its level checks (\(min(have, ReceiveLevelAnalysis.passiveMinimumPackets)) so far). "
                     + "Until then, use the level meter above.")
         }
+    }
+
+    /// What to say beside Calibrate when the beacon it sends can't go.
+    static func beaconNote(_ obstacle: String?) -> String? {
+        guard let obstacle else { return nil }
+        return "Calibrating sends this radio's beacon, which can't go out yet: \(obstacle)"
     }
 
     private func isRunning(_ state: ReceiveLevelMonitor.CalibrationState?) -> Bool {

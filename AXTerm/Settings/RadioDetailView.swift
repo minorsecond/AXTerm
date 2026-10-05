@@ -292,7 +292,11 @@ struct RadioDetailView: View {
     @ViewBuilder
     private var tncSections: some View {
         MobilinkdSettingsSections(radioID: radioID, client: client, viewModel: viewModel,
-                                  onAPRS: channel == .aprs, openTuning: openTuning)
+                                  onAPRS: channel == .aprs,
+                                  beaconObstacle: channel == .aprs
+                                      ? SessionCoordinator.shared?.beaconObstacle(for: radioID, settings: settings)
+                                      : nil,
+                                  openTuning: openTuning)
 
         #if os(macOS)
         if viewModel.selectedTransport == .modem {
