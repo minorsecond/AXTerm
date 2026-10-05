@@ -64,4 +64,38 @@ final class InboundDigipeaterPathTests: XCTestCase {
         XCTAssertEqual(session.state, .connected)
         XCTAssertEqual(coordinator.sessionManager.sessions.count, 1, "no second session for the reversed path")
     }
+
+    /// Smoke run 2026-10-03-1, issue 56: W0ARP-7 is heard directly as well as
+    /// through DRLNOD, so each of its frames arrives twice, first with DRLNOD
+    /// not yet repeated. A frame is ours only once every digipeater has
+    /// repeated it; the first copy belongs to DRLNOD and must change nothing.
+    func testTheUnrepeatedCopyOfACallIsIgnored() {
+        let coordinator = SessionCoordinator()
+        coordinator.localCallsign = "N0AXT-1"
+        let inTransit = Packet(from: peer, to: local, via: [AX25Address(call: "DRLNOD", repeated: false)],
+                               frameType: .u, control: 0x3F)
+        coordinator.handleIncomingPacket(inTransit)
+        XCTAssertTrue(coordinator.sessionManager.sessions.isEmpty, "the digipeater has not repeated it yet")
+
+        coordinator.handleIncomingPacket(Packet(from: peer, to: local, via: repeated(["DRLNOD"]),
+                                                frameType: .u, control: 0x3F))
+        XCTAssertNotNil(coordinator.sessionManager.connectedSession(withPeer: peer, radio: .primary))
+    }
+
+    func testTheUnrepeatedCopyOfAnAnswerIsIgnored() throws {
+        let coordinator = SessionCoordinator()
+        coordinator.localCallsign = "N0AXT-1"
+        let path = DigiPath.from(["DRLNOD"])
+        _ = coordinator.sessionManager.connect(to: peer, path: path)
+        let session = try XCTUnwrap(coordinator.sessionManager.existingSession(for: peer, path: path))
+
+        coordinator.handleIncomingPacket(Packet(from: peer, to: local,
+                                                via: [AX25Address(call: "DRLNOD", repeated: false)],
+                                                frameType: .u, control: 0x73))
+        XCTAssertEqual(session.state, .connecting, "the UA is still with DRLNOD")
+
+        coordinator.handleIncomingPacket(Packet(from: peer, to: local, via: repeated(["DRLNOD"]),
+                                                frameType: .u, control: 0x73))
+        XCTAssertEqual(session.state, .connected)
+    }
 }
