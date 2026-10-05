@@ -511,3 +511,45 @@ final class AdaptiveSettingsTests: XCTestCase {
         XCTAssertEqual(settings.maxDecompressedPayload, 8192)
     }
 }
+
+/// Smoke run 2026-10-03-1, issue 51: B (ID-50) said "Our frames losing 24%:
+/// stop-and-wait" and sent at K 1 and 64-byte frames while A (705) heard 129
+/// of its 131 I-frames. At K 1 each sample is one frame, and each sample
+/// moved the averages by 0.3, so one resend read as 30% loss. The averages
+/// now move per transmission, so they read as a loss rate per frame.
+final class AdaptiveLossPerFrameTests: XCTestCase {
+
+    private func clean(_ s: inout TxAdaptiveSettings) {
+        s.updateFromLinkQuality(lossRate: 0, forwardLoss: 0, etx: 1, srtt: 2,
+                                newFrames: 1, retransmits: 0)
+    }
+
+    /// A T1 resend's sample: no new frame, one resend.
+    private func resend(_ s: inout TxAdaptiveSettings) {
+        s.updateFromLinkQuality(lossRate: 1, forwardLoss: 1, etx: 20, srtt: 2,
+                                newFrames: 0, retransmits: 1)
+    }
+
+    /// From a link that has earned K 4 and 256-byte frames, a resend backs
+    /// off one step (spec 4.2 and 4.4) and nothing more.
+    func testTwoLossesInAHundredAndThirtyOneFramesDoNotStopAndWait() {
+        var s = TxAdaptiveSettings()
+        s.windowSize.currentAdaptive = 4
+        s.paclen.currentAdaptive = 256
+        for i in 0..<131 {
+            if i == 40 || i == 120 { resend(&s) } else { clean(&s) }
+            XCTAssertLessThan(s.forwardLossEWMA ?? 0, 0.2, "frame \(i)")
+            XCTAssertGreaterThan(s.windowSize.currentAdaptive, 1, "frame \(i)")
+            XCTAssertGreaterThan(s.paclen.currentAdaptive, 64, "frame \(i)")
+        }
+    }
+
+    func testSteadyLossStillStopsAndWaits() {
+        var s = TxAdaptiveSettings()
+        for i in 0..<30 {
+            if i % 3 == 2 { resend(&s) } else { clean(&s) }
+        }
+        XCTAssertEqual(s.windowSize.currentAdaptive, 1)
+        XCTAssertEqual(s.paclen.currentAdaptive, 64)
+    }
+}

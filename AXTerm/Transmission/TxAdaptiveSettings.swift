@@ -438,7 +438,14 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         // otherwise inherit, and it resizes nothing (smoke run 2026-10-03-1,
         // issue 5).
         guard evidence == .ownFrames else { return }
-        forwardLossEWMA = Self.blend(forwardLossEWMA, sample: forward)
+        // Forward loss moves once per transmission the sample covers, so it
+        // reads as a rate per frame: at K 1 a sample is one frame, and
+        // blending each sample at 0.3 made one resend read as 30% loss and
+        // stop-and-wait (smoke run 2026-10-03-1, issue 51). The composite
+        // and ETX averages, which also judge the reverse direction and gate
+        // upgrades, keep the per-sample blend.
+        forwardLossEWMA = Self.blend(forwardLossEWMA, sample: forward,
+                                     frames: retransmits.map { max(1, newFrames + $0) })
         let smoothedEtx = etxEWMA ?? sampleEtx
         // What paclen and K are *backed off* from. Upgrades still consult
         // `smoothedLoss`, and so do route ranking and the operator's
@@ -599,6 +606,21 @@ nonisolated struct TxAdaptiveSettings: Sendable {
     private static func blend(_ previous: Double?, sample: Double) -> Double {
         guard let previous else { return sample }
         return previous * (1 - ewmaLambda) + sample * ewmaLambda
+    }
+
+    /// Weight of one transmission in the per-frame averages. Four frames
+    /// move them about as far as one sample at `ewmaLambda` did.
+    static let perFrameLambda = 0.1
+
+    /// Blend a sample that covers `frames` transmissions as that many
+    /// one-frame blends at the sample's rate. With no frame count it is the
+    /// per-sample blend. A link with no history starts from no loss, so its
+    /// first resend is one frame's worth, not all of it.
+    private static func blend(_ previous: Double?, sample: Double, frames: Int?) -> Double {
+        guard let frames else { return blend(previous, sample: sample) }
+        let weight = 1 - pow(1 - perFrameLambda, Double(frames))
+        let from = previous ?? 0
+        return from * (1 - weight) + sample * weight
     }
 
     /// Next lower ladder value (or the floor if already at/below it).

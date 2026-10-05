@@ -167,6 +167,15 @@ Keep an EWMA of:
 
 The “stable for N=10 frames” check uses this link controller’s rolling window/EWMA.
 
+Decision (2026-10-05, smoke run issue 51): the forward-loss average, which is
+what backs K and paclen off, moves once per transmission a sample covers, at
+0.1 per frame (a four-frame sample moves it about as far as one sample at the
+old 0.3), and a link with no history starts it at no loss. Blending every
+sample at 0.3 made a single resend at K 1, where a sample is one frame, read as
+30% loss: B (ID-50) ran stop-and-wait at 64-byte frames while A (705) heard 129
+of its 131 I-frames. The composite loss and ETX averages, which also judge the
+reverse direction and gate upgrades, keep the per-sample blend.
+
 2) Connected mode can temporarily clamp paclen
 
 When a connected session starts, you can do:
