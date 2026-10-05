@@ -80,6 +80,30 @@ nonisolated struct KeychainStore: Sendable {
         return status == errSecSuccess
     }
 
+    /// Whether an item is stored, without reading its secret. Asking for
+    /// attributes only doesn't decrypt anything, so macOS has no access
+    /// check to run and shows no prompt; `UIFail` turns any prompt it would
+    /// still want into a status instead. An item this build may not open
+    /// still counts as stored: it is there, and saying otherwise sends the
+    /// operator looking for something they never lost.
+    ///
+    /// Smoke run 2026-10-03-1, issue 29: opening the Winlink settings page
+    /// read both secrets to fill its fields, and macOS asked for the
+    /// Keychain before the operator had done anything.
+    func exists(account: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        return status == errSecSuccess || status == errSecInteractionNotAllowed
+    }
+
     /// The full answer, including why a value could not be produced.
     func read(account: String) -> ReadOutcome {
         let query: [String: Any] = [

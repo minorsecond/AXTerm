@@ -705,7 +705,7 @@ struct WinlinkMailView: View {
         // the inferred form blows the type-checker's budget.
         let inputs = WinlinkReadiness.Inputs(
             callsign: appSettings.myCallsign,
-            hasPassword: !winlinkSettings.password.isEmpty,
+            hasPassword: winlinkSettings.hasPassword,
             passwordVerifiedAt: winlinkSettings.passwordVerifiedAt,
             gatewayCount: winlinkSettings.gatewayLadder.count,
             gridSquare: winlinkSettings.gridSquare,

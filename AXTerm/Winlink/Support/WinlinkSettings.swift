@@ -384,6 +384,12 @@ final class WinlinkSettings: ObservableObject {
         keychain.read(account: Self.passwordAccount)
     }
 
+    /// A password is stored. Never reads it, so it never prompts.
+    var hasPassword: Bool { keychain.exists(account: Self.passwordAccount) }
+
+    /// A CMS access key is stored. Never reads it.
+    var hasAPIKeyOverride: Bool { keychain.exists(account: Self.apiKeyAccount) }
+
     var password: String {
         get { keychain.string(account: Self.passwordAccount) ?? "" }
         set {

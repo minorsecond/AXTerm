@@ -36,6 +36,16 @@ final class KeychainStoreTests: XCTestCase {
         super.tearDown()
     }
 
+    // MARK: - Is one stored (smoke run 2026-10-03-1, issue 29)
+
+    func testExistsWithoutReadingTheSecret() {
+        XCTAssertFalse(store.exists(account: "probe"))
+        XCTAssertTrue(store.setString("hunter2", account: "probe"))
+        XCTAssertTrue(store.exists(account: "probe"))
+        store.remove(account: "probe")
+        XCTAssertFalse(store.exists(account: "probe"))
+    }
+
     // MARK: - What the status means
 
     /// The distinction the old code threw away, and the whole point of this

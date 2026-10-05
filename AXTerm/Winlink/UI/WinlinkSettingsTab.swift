@@ -15,6 +15,14 @@ struct WinlinkSettingsTab: View {
     @State private var passwordDraft = ""
     @State private var apiKeyDraft = ""
     @State private var didLoadSecrets = false
+    /// What the Keychain held when the fields were loaded, so the dirty
+    /// check and commit don't read it again on every redraw.
+    @State private var storedPassword = ""
+    @State private var storedAPIKey = ""
+    /// Whether each secret is stored, found without reading it.
+    @State private var passwordIsStored = false
+    @State private var apiKeyIsStored = false
+    @FocusState private var apiKeyFieldFocused: Bool
     @State private var isVerifyingKey = false
     @State private var keyVerification: (ok: Bool, message: String)?
     @State private var newLadderCallsign = ""
@@ -222,11 +230,12 @@ struct WinlinkSettingsTab: View {
                     // never per keystroke: the Keychain must hold the
                     // account password, not whatever half of it has been
                     // typed so far.
-                    SecureField("Winlink password", text: $passwordDraft)
+                    SecureField("Winlink password", text: $passwordDraft,
+                                prompt: Text(!didLoadSecrets && passwordIsStored ? "Saved" : ""))
                         .focused($passwordFieldFocused)
                         .onSubmit { commitPassword() }
                         .onChange(of: passwordFieldFocused) { _, focused in
-                            if !focused { commitPassword() }
+                            if focused { loadSecretsIfNeeded() } else { commitPassword() }
                         }
                         .help(WinlinkCopy.passwordTooltip)
 
@@ -246,7 +255,9 @@ struct WinlinkSettingsTab: View {
                         }
                     }
                     .disabled(isVerifyingPassword
-                              || passwordDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                              || (didLoadSecrets
+                                  ? passwordDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  : !passwordIsStored))
                     .help("Asks the CMS whether this is the password on the account. It is the same question the ;PR: handshake asks on the air, answered here in a sentence instead of a disconnect.")
                 }
 
@@ -257,10 +268,16 @@ struct WinlinkSettingsTab: View {
                 }
 
                 HStack {
-                    SecureField("CMS access key (optional)", text: $apiKeyDraft)
+                    SecureField("CMS access key (optional)", text: $apiKeyDraft,
+                                prompt: Text(!didLoadSecrets && apiKeyIsStored ? "Saved" : ""))
+                        .focused($apiKeyFieldFocused)
+                        .onChange(of: apiKeyFieldFocused) { _, focused in
+                            if focused { loadSecretsIfNeeded() }
+                        }
                         .onChange(of: apiKeyDraft) { _, newValue in
-                            guard didLoadSecrets else { return }
+                            guard didLoadSecrets, newValue != storedAPIKey else { return }
                             settings.apiKeyOverride = newValue
+                            storedAPIKey = newValue
                             keyVerification = nil
                         }
                         .help(WinlinkCopy.apiKeyTooltip)
@@ -274,7 +291,10 @@ struct WinlinkSettingsTab: View {
                             Text("Verify")
                         }
                     }
-                    .disabled(isVerifyingKey || apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(isVerifyingKey
+                              || (didLoadSecrets
+                                  ? apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty
+                                  : !apiKeyIsStored))
                     .help("Checks the key against the Winlink catalog service, the operation that needs a personal key.")
                 }
 
@@ -399,9 +419,12 @@ struct WinlinkSettingsTab: View {
         .formStyle(.grouped)
         .settingsPagePadding()
         .onAppear {
-            passwordDraft = settings.password
-            apiKeyDraft = settings.apiKeyOverride
-            didLoadSecrets = true
+            // Whether each secret is stored, without reading either: a read
+            // can raise a Keychain prompt, and opening a settings page is
+            // not a reason for one (smoke run 2026-10-03-1, issue 29). The
+            // secrets load when the operator works with a field.
+            passwordIsStored = settings.hasPassword
+            apiKeyIsStored = settings.hasAPIKeyOverride
             passwordStatus = initialPasswordStatus()
         }
     }
@@ -423,9 +446,20 @@ struct WinlinkSettingsTab: View {
     /// The state to show when the pane opens: whatever the CMS last said
     /// about the password that is actually stored.
     private func initialPasswordStatus() -> PasswordStatus {
-        guard !settings.password.isEmpty else { return .idle }
+        guard passwordIsStored else { return .idle }
         if let verifiedAt = settings.passwordVerifiedAt { return .verified(verifiedAt) }
         return .stored
+    }
+
+    /// Fill the fields from the Keychain, once, when the operator first
+    /// works with them.
+    private func loadSecretsIfNeeded() {
+        guard !didLoadSecrets else { return }
+        storedPassword = settings.password
+        storedAPIKey = settings.apiKeyOverride
+        passwordDraft = storedPassword
+        apiKeyDraft = storedAPIKey
+        didLoadSecrets = true
     }
 
     /// Writes the field to the Keychain. Called on Return and on focus
@@ -442,20 +476,28 @@ struct WinlinkSettingsTab: View {
         // Rewriting it under the cursor is startling, and the dirty check
         // trims both sides anyway, so stray spaces do not read as an edit.
         guard !trimmed.isEmpty else {
-            if !settings.password.isEmpty { settings.password = "" }
+            if !storedPassword.isEmpty { settings.password = "" }
+            storedPassword = ""
+            passwordIsStored = false
             passwordStatus = .idle
             return
         }
 
         // Same password as before: an abandoned edit, or a retype of the
         // one already stored. Either way the standing verdict still applies.
-        guard trimmed != settings.password else { return }
+        guard trimmed != storedPassword else { return }
 
-        passwordStatus = settings.storePassword(trimmed) ? .stored : .storeFailed
+        let stored = settings.storePassword(trimmed)
+        if stored {
+            storedPassword = trimmed
+            passwordIsStored = true
+        }
+        passwordStatus = stored ? .stored : .storeFailed
     }
 
     /// Asks the CMS the question the air link will ask later.
     private func verifyPassword() {
+        loadSecretsIfNeeded()
         commitPassword()
         let password = settings.password
         guard !password.isEmpty else { return }
@@ -510,7 +552,7 @@ struct WinlinkSettingsTab: View {
     /// that loads the field, and would open the pane claiming an edit.
     private var passwordIsDirty: Bool {
         guard didLoadSecrets else { return false }
-        return passwordDraft.trimmingCharacters(in: .whitespacesAndNewlines) != settings.password
+        return passwordDraft.trimmingCharacters(in: .whitespacesAndNewlines) != storedPassword
     }
 
     private var passwordStatusIcon: (symbol: String, tint: Color, help: String)? {
@@ -559,6 +601,7 @@ struct WinlinkSettingsTab: View {
     /// Tests the entered key against the catalog operation (the one that
     /// requires a personal key) and reports the outcome inline.
     private func verifyAPIKey() {
+        loadSecretsIfNeeded()
         let key = apiKeyDraft.trimmingCharacters(in: .whitespaces)
         guard !key.isEmpty else { return }
         isVerifyingKey = true

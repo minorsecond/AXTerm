@@ -664,7 +664,7 @@ struct WinlinkMailboxScreen: View {
             ?? context.locationService.manualLocation()
         return WinlinkReadiness.evaluate(.init(
             callsign: appSettings.myCallsign,
-            hasPassword: !context.settings.password.isEmpty,
+            hasPassword: context.settings.hasPassword,
             passwordVerifiedAt: context.settings.passwordVerifiedAt,
             gatewayCount: context.settings.gatewayLadder.count,
             gridSquare: context.settings.gridSquare,
