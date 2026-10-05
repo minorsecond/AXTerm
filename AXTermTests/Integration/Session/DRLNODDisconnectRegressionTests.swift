@@ -56,7 +56,6 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertEqual(session.outstandingCount, 0)
         XCTAssertNil(session.t1TimerTask)
-        XCTAssertNil(session.t1PendingRetransmitTask)
 
         timerDrivenFrames.removeAll()
         clock.advance(by: 20.0)

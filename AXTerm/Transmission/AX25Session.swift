@@ -1232,9 +1232,9 @@ nonisolated struct AX25StateMachine: Sendable {
         case (.connected, .receivedDM):
             state = .disconnected
             TxLog.warning(.ax25, "Remote disconnected (DM received)")
-            // Stop T1 too: a DM can arrive while outbound I-frames are outstanding
-            // or while the T1 grace retransmit task is pending. Leaving T1 alive
-            // causes a spurious timeout/retransmit after the session is already dead.
+            // Stop T1 too: a DM can arrive while outbound I-frames are outstanding.
+            // Leaving T1 alive causes a spurious timeout/retransmit after the
+            // session is already dead.
             return [.stopT1, .stopT3, .notifyError("Remote disconnected (DM received)")]
 
         case (.connected, .t1Timeout):

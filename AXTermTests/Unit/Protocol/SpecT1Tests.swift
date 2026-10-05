@@ -140,7 +140,7 @@ final class SpecT1Tests: XCTestCase {
     /// The first SABM waits the initial SRT; each retry waits RC·0.25 s +
     /// 2·SRT (Figure C4.2's T1 expiry calls Select T1). T1 runs from when
     /// the SABM has left the radio (no key-up time here, so its airtime),
-    /// and AXTerm resends 0.2 s after T1 fires.
+    /// and the retry goes out when T1 expires.
     func testSABMRetriesFollowTheSpec() throws {
         let (manager, clock) = manager()
         var sabms: [(at: Double, frame: OutboundFrame)] = []
@@ -153,9 +153,9 @@ final class SpecT1Tests: XCTestCase {
         XCTAssertGreaterThanOrEqual(sabms.count, 4, "\(sabms.map(\.at))")
         guard sabms.count >= 4 else { return }
         let air = airtime(first)
-        XCTAssertEqual(sabms[1].at - sabms[0].at, air + 3.0 + 0.2, accuracy: 0.02)
-        XCTAssertEqual(sabms[2].at - sabms[1].at, air + 6.25 + 0.2, accuracy: 0.02)
-        XCTAssertEqual(sabms[3].at - sabms[2].at, air + 6.5 + 0.2, accuracy: 0.02)
+        XCTAssertEqual(sabms[1].at - sabms[0].at, air + 3.0, accuracy: 0.02)
+        XCTAssertEqual(sabms[2].at - sabms[1].at, air + 6.25, accuracy: 0.02)
+        XCTAssertEqual(sabms[3].at - sabms[2].at, air + 6.5, accuracy: 0.02)
     }
 
     /// A UA to the only SABM is a round trip: SRT learns it, T1V = 2·SRT.
@@ -187,10 +187,10 @@ final class SpecT1Tests: XCTestCase {
 
         XCTAssertGreaterThanOrEqual(sent.count, 4, "\(sent.map(\.at))")
         guard sent.count >= 4 else { return }
-        // Each gap is the previous frame's airtime, T1V and the 0.2 s grace;
+        // Each gap is the previous frame's airtime and T1V;
         // a poll the resend replaced may still be counted, an RR's 0.12 s.
         for i in 1...3 {
-            let gap = sent[i].at - sent[i - 1].at - airtime(sent[i - 1].frame) - 0.2
+            let gap = sent[i].at - sent[i - 1].at - airtime(sent[i - 1].frame)
             XCTAssertTrue(gap >= t1 - 0.01 && gap <= t1 + 0.13, "retry \(i): \(gap) for T1V \(t1)")
         }
         XCTAssertEqual(session.timers.rto, t1)

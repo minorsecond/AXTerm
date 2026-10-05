@@ -798,10 +798,10 @@ final class AdaptiveRTOTests: XCTestCase {
         _ = manager.sendData(Data("karn".utf8), to: peer, path: DigiPath(), radio: .primary)
         let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
-        // Force T1 timeout + grace period → retransmit happens → marks NS as Karn-excluded
+        // Force a T1 timeout → retransmit happens → marks NS as Karn-excluded
         clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         XCTAssertEqual(session.stateMachine.retryCount, 1,
-            "Session should have retried once after T1 + grace")
+            "Session should have retried once after T1")
 
         // Now SRTT should be nil (no RTT measured before retransmit)
         let srttAfterRetransmit = session.timers.srtt
@@ -1744,11 +1744,11 @@ final class ArchitecturalDeterminismTests: XCTestCase {
         XCTAssertEqual(session.stateMachine.retryCount, 0,
             "No retries should occur before virtual clock advances")
 
-        // Advance past T1 + grace → T1 fires (T1 runs from when the frame is out)
+        // Advance past T1 → T1 fires (T1 runs from when the frame is out)
         clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
 
         XCTAssertEqual(session.stateMachine.retryCount, 1,
-            "One retry should occur after clock advances past RTO+grace")
+            "One retry should occur after clock advances past T1")
     }
 
     // A-5: SRTT uses virtual clock time, not wall clock.

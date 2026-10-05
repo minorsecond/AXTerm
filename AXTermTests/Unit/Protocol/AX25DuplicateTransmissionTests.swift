@@ -3,7 +3,7 @@
 //  AXTermTests
 //
 //  Regression tests for duplicate transmission bugs:
-//  - T1 grace-period retransmit not canceled on T1 restart
+//  - REJ after a T1 timeout
 //  - T1 not restarted on partial ack (AX.25 §6.4.6)
 //  - onRetransmitFrame removal (merged into onSendFrame)
 //
@@ -36,35 +36,9 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
         return session
     }
 
-    // MARK: - Bug 1: startT1Timer cancels pending retransmit task
+    // MARK: - Bug 1 (state machine): REJ after a T1 timeout restarts T1
 
-    func testStartT1CancelsPendingRetransmitTask() async throws {
-        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
-        manager.localCallsign = AX25Address(call: "K0TST", ssid: 0)
-        let dest = AX25Address(call: "N0TST", ssid: 0)
-        let session = connectSession(manager: manager, destination: dest, path: DigiPath())
-
-        // Simulate a pending retransmit task (as if T1 fired and grace period started)
-        var taskRan = false
-        session.t1PendingRetransmitTask = manager.clock.schedule(delay: 5.0) {
-            taskRan = true
-        }
-
-        // Now restart T1 — this should cancel the pending retransmit
-        manager.startT1Timer(for: session)
-
-        XCTAssertNil(session.t1PendingRetransmitTask,
-                     "startT1Timer must nil out t1PendingRetransmitTask")
-
-        // Give a moment for any uncanceled task to run
-        try await Task.sleep(nanoseconds: 50_000_000) // 50ms
-        XCTAssertFalse(taskRan,
-                       "Pending retransmit task should have been canceled by startT1Timer")
-    }
-
-    // MARK: - Bug 1 (state machine): REJ during grace period doesn't duplicate
-
-    func testREJDuringT1GracePeriodDoesNotDuplicateFrames() {
+    func testREJAfterT1TimeoutRestartsT1() {
         var sm = makeConnectedStateMachine()
 
         // Send an I-frame to have something outstanding
@@ -76,8 +50,7 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
         XCTAssertTrue(t1Actions.contains(.startT1),
                       "T1 timeout should restart T1")
 
-        // During grace period, REJ arrives from peer requesting retransmit from nr=0
-        // This should also produce .startT1 (which in manager cancels the pending task)
+        // Then a REJ arrives from the peer requesting retransmit from nr=0
         let rejActions = sm.handle(event: .receivedREJ(nr: 0))
         XCTAssertTrue(rejActions.contains(.startT1),
                       "REJ should produce .startT1 action to restart timer")

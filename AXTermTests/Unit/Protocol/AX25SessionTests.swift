@@ -537,7 +537,6 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertEqual(session.outstandingCount, 0)
         XCTAssertNil(session.t1TimerTask, "DM must stop T1 immediately")
-        XCTAssertNil(session.t1PendingRetransmitTask, "DM must cancel any pending grace retransmit")
     }
 
     func testDigiPathFromStripsRepeatedMarkerAndParsesSSID() {
@@ -1685,7 +1684,7 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(session.stateMachine.retryCount, 0, "a peer's poll is not a retransmission of ours")
 
         // T1 started once the I-frame was out and still runs out on that
-        // deadline (then the 200 ms grace before the T1 action).
+        // deadline.
         clock.advance(by: session.secondsToT1Resend(now: clock.currentTime))
         XCTAssertTrue(timerDrivenFrames.contains { $0.frameType == "i" || $0.isCommand == true },
                       "the poll must not push T1 out; recovery runs on the original deadline")

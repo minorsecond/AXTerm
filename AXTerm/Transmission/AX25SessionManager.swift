@@ -186,9 +186,6 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// T1 retransmit timer task
     var t1TimerTask: AnyCancellableTask?
 
-    /// Pending retransmit task (grace period after T1 fires); canceled if RR arrives
-    var t1PendingRetransmitTask: AnyCancellableTask?
-
     /// Statistics watermarks from the previous link-quality sample, so each
     /// sample reports fresh evidence (deltas) rather than a session-lifetime
     /// average. Spec 4.2 requires time-local, EWMA-able samples; a cumulative
@@ -331,7 +328,6 @@ nonisolated final class AX25Session: @unchecked Sendable {
     deinit {
         // Ensure timers are canceled to avoid background tasks outliving the session.
         t1TimerTask?.cancel()
-        t1PendingRetransmitTask?.cancel()
         t3TimerTask?.cancel()
     }
 
@@ -1409,7 +1405,6 @@ final class AX25SessionManager: ObservableObject {
         for key in keys {
             guard let session = sessions[key] else { continue }
             session.t1TimerTask?.cancel()
-            session.t1PendingRetransmitTask?.cancel()
             session.t3TimerTask?.cancel()
             switch session.state {
             case .connecting, .connected, .disconnecting:
@@ -1431,7 +1426,6 @@ final class AX25SessionManager: ObservableObject {
         for session in sessions.values {
             // Cancel timers to prevent background tasks from firing after removal
             session.t1TimerTask?.cancel()
-            session.t1PendingRetransmitTask?.cancel()
             session.t3TimerTask?.cancel()
 
             switch session.state {
@@ -3623,10 +3617,7 @@ final class AX25SessionManager: ObservableObject {
     /// (AX.25 2.2 Appendix C; spec §7.3): no floor, no backoff, no allowance
     /// on top. Until 2026-10-05 it was max(RTO, FRACK × (2·digis + 1)).
     func startT1Timer(for session: AX25Session) {
-        // Cancel any existing T1 timer and pending grace-period retransmit
         session.t1TimerTask?.cancel()
-        session.t1PendingRetransmitTask?.cancel()
-        session.t1PendingRetransmitTask = nil
         session.t1Generation &+= 1
         let generation = session.t1Generation
         let now = clock.currentTime
@@ -3664,18 +3655,13 @@ final class AX25SessionManager: ObservableObject {
                 "retryCount": session.stateMachine.retryCount
             ])
 
-            // Grace period: delay retransmit so if RR is in flight we can cancel and avoid duplicate frames
-            let gracePeriod: TimeInterval = 0.2 // 200ms
-            session.t1PendingRetransmitTask?.cancel()
-            session.t1PendingRetransmitTask = self.clock.schedule(delay: gracePeriod) { [weak self] in
-                guard let self = self else { return }
-                guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else { return }
-                guard session.t1Generation == generation else { return }
-                session.t1PendingRetransmitTask = nil
-                let frames = self.handleT1Timeout(session: session)
-                for frame in frames {
-                    self.onSendFrame?(frame)
-                }
+            // The retry goes out as T1 expires (Figures C4.2, C4.4, C4.5c).
+            // Until 2026-10-05 it waited 200 ms more in case an ack was on
+            // its way; T1 now starts when our frames have left the radio,
+            // so the wait only added delay.
+            let frames = self.handleT1Timeout(session: session)
+            for frame in frames {
+                self.onSendFrame?(frame)
             }
         }
     }
@@ -3691,8 +3677,6 @@ final class AX25SessionManager: ObservableObject {
             session.t1TimerTask?.cancel()
             session.t1TimerTask = nil
         }
-        session.t1PendingRetransmitTask?.cancel()
-        session.t1PendingRetransmitTask = nil
     }
 
     /// How many T2 periods, counted from the first frame owed an ack, a

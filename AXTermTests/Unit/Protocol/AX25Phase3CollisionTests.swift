@@ -276,8 +276,6 @@ final class AX25Phase3CollisionTests: XCTestCase {
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertNil(session.t1TimerTask,
             "T1 must be canceled after DISC received (Bug B — ghost timer)")
-        XCTAssertNil(session.t1PendingRetransmitTask,
-            "T1 grace-period task must also be canceled on DISC")
         XCTAssertNil(session.t3TimerTask,
             "T3 must also be stopped on DISC")
 
@@ -674,8 +672,10 @@ final class AX25Phase3CollisionTests: XCTestCase {
     // MARK: Timer Race Tests (Virtual Clock)
     // MARK: ──────────────────────────────────────────────────────────────
 
-    /// RR arriving exactly as T1 fires (grace period overlap) must cancel retransmit.
-    func testRR_ArrivingDuringT1GracePeriod_CancelsRetransmit() {
+    /// An RR arriving just before T1 expires stops T1, so nothing is resent.
+    /// T1 runs from when the frame has left the radio, so at 2.0 s with
+    /// T1V = 2.0 s it has a frame's airtime still to run.
+    func testRR_ArrivingJustBeforeT1Expires_StopsRetransmit() {
         let (manager, clock) = makeManager(rto: 2.0)
         let session = connect(manager)
 
@@ -684,20 +684,17 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         _ = manager.sendData(Data("RaceTest".utf8), to: peer, path: path, radio: .primary)
 
-        // Advance to T1 fire point (grace period starts)
         clock.advance(by: 2.0)
         XCTAssertEqual(retransmits.filter { $0.frameType == "i" }.count, 0,
-            "Grace period active — no retransmit yet")
+            "T1 has not expired yet")
 
-        // RR arrives during grace period (t=2.0 + 0.1s, before grace expires at t=2.2s)
         _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 1, isPoll: false)
         XCTAssertEqual(session.outstandingCount, 0, "RR must ack the frame")
 
-        // Advance through rest of grace period and beyond
         clock.advance(by: 1.0)
 
         XCTAssertEqual(retransmits.filter { $0.frameType == "i" }.count, 0,
-            "RR during grace period must suppress retransmit")
+            "an RR before T1 expires must stop the retransmit")
         XCTAssertEqual(session.stateMachine.retryCount, 0,
             "retryCount must be 0 (RR acked before retransmit fired)")
     }
@@ -706,7 +703,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
     /// If both expire simultaneously, T1 governs and T3 is irrelevant.
     func testT3_DoesNotFireWhileT1Active() {
         // Enough retries that T1 is still going at 31 s: each waits the same
-        // T1V (no backoff, spec 7.3), about 2.4 s here with the grace.
+        // T1V (no backoff, spec 7.3), plus the resent frame's airtime.
         let (manager, clock) = makeManager(rto: 2.0, maxRetries: 20)
         let session = connect(manager)
 
