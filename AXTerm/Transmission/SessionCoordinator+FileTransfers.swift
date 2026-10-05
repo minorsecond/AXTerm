@@ -82,6 +82,16 @@ extension SessionCoordinator {
             setStatus(.cancelled, for: id)
             return
         }
+        // The NACK goes out behind whatever is queued. A chunk still queued
+        // whole has never been on the air, so it is dropped and the NACK is
+        // next; on 2026-10-05 it waited behind twelve 64-byte frames, 37 s
+        // (smoke run issue 52). Part of a chunk already started is still
+        // sent, or the receiver would read the NACK as the rest of it.
+        if axdpChunkQueuedWhole.remove(id) != nil,
+           let route = transferRoutes[id],
+           let session = sessionManager.connectedSession(withPeer: route.destination) {
+            _ = sessionManager.discardQueuedData(for: session.key)
+        }
         sendAXDPCancel(for: id)
         setStatus(.cancelled, for: id)
     }

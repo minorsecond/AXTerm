@@ -420,6 +420,10 @@ final class SessionCoordinator: ObservableObject {
     /// AXDP transfers with a chunk-loop turn already scheduled.
     var chunkLoopScheduled: Set<UUID> = []
 
+    /// AXDP transfers whose last chunk the session holds queued whole, none
+    /// of it numbered or on the air. A cancel drops it so the NACK is next.
+    var axdpChunkQueuedWhole: Set<UUID> = []
+
     /// What a capability check put on the air, so it can be sent again.
     private enum CapabilityProbeKind {
         /// The plain-text `AXDP?` probe, a UI frame to a connected peer.
@@ -5343,6 +5347,12 @@ final class SessionCoordinator: ObservableObject {
             scheduleNextChunk(after: 200_000_000, for: transferId, to: destination, path: path,
                               axdpSessionId: axdpSessionId)
             return
+        }
+
+        if frameSent {
+            axdpChunkQueuedWhole.remove(transferId)
+        } else {
+            axdpChunkQueuedWhole.insert(transferId)
         }
 
         // Mark chunk as sent and update progress - use explicit reassignment for SwiftUI
