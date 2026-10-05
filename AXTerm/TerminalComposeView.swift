@@ -1448,8 +1448,20 @@ struct TerminalComposeView: View {
     var isCapturing: Bool = false
     /// Turns Capture on or off for the session on screen. Nil hides the button.
     var onToggleCapture: (() -> Void)?
+    /// Line or Raw (Docs/TerminalInputModes.md).
+    var inputMode: Binding<TerminalInputMode> = .constant(.line)
+    /// The far end's line so far, shown in the raw field.
+    var rawPrompt: String = ""
+    /// The keys typed on the current raw line.
+    var rawEcho: String = ""
+    /// Takes keys typed in Raw mode. Nil hides the Line/Raw switch.
+    var onRawKey: ((RawKeyCoalescer.Key) -> Void)?
+    /// Sends one control byte now. Nil hides the control-character menu.
+    var onSendControl: ((UInt8) -> Void)?
 
     @FocusState private var isTextFieldFocused: Bool
+    /// Off for a far end that echoes what it receives.
+    @AppStorage("terminalRawLocalEcho") private var rawLocalEcho = true
     @State private var showRoutingChangeConfirmation = false
     @StateObject private var destinationPickerViewModel = DestinationPickerViewModel()
 
@@ -1518,19 +1530,45 @@ struct TerminalComposeView: View {
 
                 // Row 1 — compose. The message/broadcast field + Send.
                 HStack(spacing: 8) {
-                    TextField(connectionMode == .connected ? "Message" : "Broadcast message", text: $composeText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-                        .accessibilityIdentifier("terminalComposeField")
-                        .focused($isTextFieldFocused)
-                        .onSubmit {
-                            if canSendMessage {
-                                onSend()
+                    if showsInputModeSwitch {
+                        Picker("Input", selection: inputMode) {
+                            ForEach(TerminalInputMode.allCases) { mode in
+                                Text(mode.label).tag(mode)
                             }
                         }
-                        .disabled(!isConnected || !canTypeMessage)
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize()
+                        .help("Line: edit a line and send it with Return. "
+                              + "Raw: each key goes to the station as you type, for prompts, menus and control keys.")
+                        .accessibilityIdentifier("terminalInputModePicker")
+                    }
 
-                    if let onInsertPosition {
+                    if isRawMode {
+                        RawTerminalField(
+                            prompt: rawPrompt,
+                            echo: rawLocalEcho ? rawEcho : "",
+                            isEnabled: isConnected && sessionIsUp,
+                            onKey: { onRawKey?($0) })
+                    } else {
+                        TextField(connectionMode == .connected ? "Message" : "Broadcast message", text: $composeText)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .accessibilityIdentifier("terminalComposeField")
+                            .focused($isTextFieldFocused)
+                            .onSubmit {
+                                if canSendMessage {
+                                    onSend()
+                                }
+                            }
+                            .disabled(!isConnected || !canTypeMessage)
+                    }
+
+                    if let onSendControl, connectionMode == .connected {
+                        controlCharacterMenu(onSendControl)
+                    }
+
+                    if let onInsertPosition, !isRawMode {
                         Button {
                             onInsertPosition()
                         } label: {
@@ -1561,7 +1599,7 @@ struct TerminalComposeView: View {
                         .accessibilityIdentifier("terminalCaptureToggle")
                     }
 
-                    if !composeText.isEmpty {
+                    if !composeText.isEmpty && !isRawMode {
                         Text("\(characterCount)")
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.quaternary)
@@ -1574,13 +1612,17 @@ struct TerminalComposeView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Button("Send") {
-                        onSend()
+                    // Raw mode sends as keys are pressed, and Return is a
+                    // key there: a Send button would take it.
+                    if !isRawMode {
+                        Button("Send") {
+                            onSend()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.regular)
+                        .disabled(!canSendMessage || !isConnected)
+                        .keyboardShortcut(.return, modifiers: [])
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .disabled(!canSendMessage || !isConnected)
-                    .keyboardShortcut(.return, modifiers: [])
                 }
             }
             .padding(.horizontal, 14)
@@ -1910,6 +1952,50 @@ struct TerminalComposeView: View {
             return
         }
         handleSessionAction()
+    }
+
+    private var showsInputModeSwitch: Bool {
+        connectionMode == .connected && onRawKey != nil
+    }
+
+    /// Raw keys and control bytes need a link to go out on, and nothing
+    /// else: unlike Send, they do not depend on what is in the message box.
+    private var sessionIsUp: Bool {
+        connectionMode == .connected && sessionState == .connected
+    }
+
+    private var isRawMode: Bool {
+        showsInputModeSwitch && inputMode.wrappedValue == .raw
+    }
+
+    /// One control byte, sent at once, in either mode. In Raw mode it goes
+    /// through the raw buffer so it follows what was typed before it.
+    private func controlCharacterMenu(_ send: @escaping (UInt8) -> Void) -> some View {
+        Menu {
+            Section("Send Now") {
+                Button("Ctrl-C (interrupt)") { send(0x03) }
+                Button("Ctrl-D (end of input)") { send(0x04) }
+                Button("Ctrl-Z (end of message)") { send(0x1A) }
+                Button("Esc") { send(0x1B) }
+            }
+            if isRawMode {
+                Divider()
+                Toggle("Local Echo", isOn: $rawLocalEcho)
+            }
+        } label: {
+            Image(systemName: "control")
+        }
+        #if os(macOS)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        #endif
+        .fixedSize()
+        .disabled(!isConnected || !sessionIsUp)
+        .help(isRawMode
+              ? "Send a control character now, or turn Local Echo off for a station that echoes what you type."
+              : "Send a control character now, on its own. The message box is left as it is.")
+        .accessibilityLabel("Control Characters")
+        .accessibilityIdentifier("terminalControlMenu")
     }
 
     /// Whether the user can type a message

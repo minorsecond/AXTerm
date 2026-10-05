@@ -250,7 +250,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Per-peer buffer for assembling the current line between CR/LF terminators.
     /// Each peer has its own buffer to prevent data from one peer contaminating another.
     /// Key is the peer's callsign (uppercased).
-    private var currentLineBuffers: [String: Data] = [:]
+    private var currentLineBuffers: [String: Data] = [:] {
+        didSet {
+            let prompts = currentLineBuffers.mapValues(RawTerminalInput.promptText(for:))
+            if prompts != partialLineText { partialLineText = prompts }
+        }
+    }
+
+    /// Each peer's line so far: what has arrived since its last CR or LF.
+    /// Raw mode shows it, so a prompt with no line ending is on screen.
+    @Published private(set) var partialLineText: [String: String] = [:]
+
+    /// Raw mode's buffer and echo (Docs/TerminalInputModes.md).
+    let rawInput = RawTerminalInput()
+    /// The peer raw keys last went to, whose session ending clears the echo.
+    private var rawInputPeer: String?
 
     /// Current session (if any) for the active destination
     @Published private(set) var currentSession: AX25Session?
@@ -760,6 +774,11 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         
         setupSearchDebounce()
         setupConsoleSubscription(client: client)
+        // The compose row and the idle-send task read raw mode through this
+        // object, so its changes are this object's changes.
+        rawInput.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
         textRecorder.onCaptureChange = { [weak self] in
             guard let self else { return }
             self.capturingPeerKeys = self.textRecorder.capturingKeys
@@ -858,6 +877,10 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                         self?.onPlainTextChatReceived?(self?.conversationPeer(for: session) ?? session.remoteAddress, line, session.lastReceivedVia)
                     }
                     self?.currentLineBuffers.removeValue(forKey: peerKey)
+                    if self?.rawInputPeer == peerKey {
+                        self?.rawInput.sessionEnded()
+                        self?.rawInputPeer = nil
+                    }
 
                     // Clear any in-progress send indicator for this peer.
                     // If the session drops while an I-frame is in-flight (DM received, T1
@@ -1722,6 +1745,35 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         )
     }
     
+    /// Sends raw-mode bytes as they are, never as AXDP.
+    ///
+    /// `displayInfo` is the chunk as the console shows it. Relay detection
+    /// reads whole lines, so it gets the lines a CR ended, not the chunks.
+    func sendRaw(_ payload: Data, displayInfo: String, committedLines: [String]) -> [OutboundFrame] {
+        guard !viewModel.destinationCall.isEmpty, !payload.isEmpty else { return [] }
+        for line in committedLines {
+            manualRelayDetector.processOutgoing(line)
+        }
+        manualRelayDestination = manualRelayDetector.activeRelayDestination
+        let wire = wireDestination
+        let dest = parseCallsign(wire.call)
+        let path = parsePath(wire.path)
+        rawInputPeer = dest.display.uppercased()
+        return sessionManager.sendData(
+            payload,
+            to: dest,
+            path: path,
+            radio: currentSession?.radio ?? radio(for: dest, path: path),
+            displayInfo: displayInfo
+        )
+    }
+
+    /// The far end's line so far, for the raw field.
+    func partialLine(for peer: AX25Address?) -> String {
+        guard let peer else { return "" }
+        return partialLineText[peer.display.uppercased()] ?? ""
+    }
+
     /// Get session info (vs, paclen) for the current destination.
     /// Used to properly initialize outbound progress tracking with modulo-8 ack handling.
     func sessionInfo(for destination: String) -> (vs: Int, paclen: Int)? {
@@ -2894,8 +2946,29 @@ struct TerminalView: View {
                 isCapturing: txViewModel.isCapturingCurrentSession,
                 onToggleCapture: {
                     toggleCapture()
+                },
+                inputMode: Binding(
+                    get: { txViewModel.rawInput.mode },
+                    set: { setInputMode($0) }),
+                rawPrompt: txViewModel.partialLine(for: txViewModel.currentSession?.remoteAddress),
+                rawEcho: txViewModel.rawInput.echoLine,
+                onRawKey: { key in
+                    handleRawKey(key)
+                },
+                onSendControl: { byte in
+                    sendControlByte(byte)
                 }
             )
+            }
+            // Raw mode's idle send (TNC-2 PACTIME): restarted by every key,
+            // since every key moves the deadline.
+            .task(id: txViewModel.rawInput.flushDeadline) {
+                guard let deadline = txViewModel.rawInput.flushDeadline else { return }
+                let wait = deadline.timeIntervalSinceNow
+                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                guard !Task.isCancelled,
+                      let chunk = txViewModel.rawInput.flushIfIdle() else { return }
+                sendRawChunk(chunk, committedLines: [])
             }
 
             // Session notification toast overlay
@@ -3248,6 +3321,88 @@ struct TerminalView: View {
                     case .failure:
                         txViewModel?.updateFrameStatus(entry.frame.id, status: .failed)
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: Raw mode (Docs/TerminalInputModes.md)
+
+    private func setInputMode(_ mode: TerminalInputMode) {
+        guard mode != txViewModel.rawInput.mode else { return }
+        switch mode {
+        case .line:
+            // Whatever was typed in Raw goes out before anything typed next.
+            if let rest = txViewModel.rawInput.leaveRawMode() {
+                sendRawChunk(rest, committedLines: [])
+            }
+        case .raw:
+            txViewModel.rawInput.mode = .raw
+        }
+    }
+
+    private func handleRawKey(_ key: RawKeyCoalescer.Key) {
+        if let paclen = txViewModel.currentSession?.livePaclen {
+            txViewModel.rawInput.paclen = paclen
+        }
+        let output = txViewModel.rawInput.input(key)
+        for (index, chunk) in output.chunks.enumerated() {
+            // A CR always ends a chunk, so the lines it ended ride with the
+            // last chunk of this key.
+            let isLast = index == output.chunks.count - 1
+            sendRawChunk(chunk, committedLines: isLast ? output.committedLines : [])
+        }
+        let recordID = txViewModel.currentSession.flatMap {
+            sessionCoordinator.inboundRecordID(for: $0.remoteAddress)
+        } ?? activeSessionRecordID
+        if let recordID {
+            for line in output.committedLines {
+                sessionRecorder?.recorded(line: "> \(line)", for: recordID,
+                                          sent: true, bytes: line.utf8.count + 1)
+            }
+        }
+    }
+
+    /// A control byte from the menu. Raw mode puts it through the raw buffer
+    /// so it follows what was typed; Line mode sends it alone.
+    private func sendControlByte(_ byte: UInt8) {
+        if txViewModel.rawInput.mode == .raw {
+            handleRawKey(.control(byte))
+        } else {
+            sendRawChunk(Data([byte]), committedLines: [])
+        }
+    }
+
+    /// Sends raw bytes on whatever carries the session on screen.
+    private func sendRawChunk(_ chunk: Data, committedLines: [String]) {
+        let shown = RawKeyCoalescer.consoleText(for: chunk)
+        switch NetRomCircuitSession.sendTarget(
+            activeRecordID: activeSessionRecordID,
+            circuits: sessionCoordinator.netRomDriver.circuits
+        ) {
+        case .circuit(let circuitID):
+            sessionCoordinator.netRomDriver.send(chunk, on: circuitID)
+            let circuitRadio = (sessionCoordinator.netRomDriver.circuit(for: circuitID)?.destination)
+                .flatMap { sessionCoordinator.radioOwning($0) }
+            client.appendSessionChatLine(from: sessionCoordinator.netRomDriver.localUser.display,
+                                         text: shown, radioID: circuitRadio)
+            return
+        case .circuitNotReady(let reason):
+            client.appendSystemNotification(reason)
+            return
+        case .ax25:
+            break
+        }
+        if txViewModel.relayIsHandshaking {
+            let hop = (txViewModel.netRomRelayNextHop ?? "the node").uppercased()
+            client.appendSystemNotification("Not sent: still waiting for \(hop) to make the circuit.")
+            return
+        }
+        let frames = txViewModel.sendRaw(chunk, displayInfo: shown, committedLines: committedLines)
+        for frame in frames {
+            client.send(frame: frame) { result in
+                if case .failure(let error) = result {
+                    Task { @MainActor in TxLog.error(.ax25, "Raw frame send failed", error: error) }
                 }
             }
         }
