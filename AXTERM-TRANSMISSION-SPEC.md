@@ -954,7 +954,16 @@ Outcomes, all cached per callsign so the cost is paid at most once:
   raised. Then SABM.
 - **FRMR** → the spec's documented pre-2.2 answer (§6.3.2): "use
   defaults". Proceed with plain SABM. Never an error.
-- **Silence** → one RTO, then plain SABM.
+- **DM** → what BPQ answers: it holds no link to us. Treated as FRMR.
+- **Silence** → one RTO, then plain SABM. An answer can still arrive after
+  that: a DM or FRMR heard before the SABM that followed has left the radio
+  (the SABM's off-air time as estimated when it was handed over, §7.3) cannot
+  answer the SABM, since the peer has not heard it yet. It answers the XID:
+  the peer is remembered as not doing XID and the SABM keeps waiting for its
+  own answer. Decision 2026-10-05 (smoke run 2026-10-03-1, test 12.4):
+  DRLNOD's DM to an XID landed 0.45 s after the SABM was handed over, was
+  taken as refusing it, and DRLNOD's UA then found no session; its poll drew
+  a DM. A DM or FRMR after the SABM is out is still the SABM's answer.
 - A malformed XID response resolves as unsupported — a peer's encoding bug
   must not strand the connect.
 

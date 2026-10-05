@@ -3350,7 +3350,12 @@ final class SessionCoordinator: ObservableObject {
             // §6.3.2: during XID negotiation, FRMR is a pre-2.2 peer's
             // documented "use defaults" — resolve the negotiation first so
             // the deferred SABM proceeds; then normal FRMR handling.
-            sessionManager.handleInboundFRMRDuringNegotiation(from: from, radio: radio)
+            // A late FRMR to an XID we gave up on is consumed there too
+            // and must not reach the SABM's session.
+            if sessionManager.handleInboundFRMRDuringNegotiation(from: from, radio: radio),
+               sessionManager.existingSession(for: from, path: path, radio: radio)?.state == .connecting {
+                break
+            }
             sessionManager.handleInboundFRMR(from: from, path: path, radio: radio)
         case .XID:
             let responses = sessionManager.handleInboundXID(

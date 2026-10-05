@@ -150,6 +150,56 @@ final class XIDNegotiationTests: XCTestCase {
                        "negotiation is over; a later DM is a real refusal")
     }
 
+    /// Smoke run 2026-10-03-1, 12.4: A (705) sent XID to DRLNOD, heard
+    /// nothing within T1, and sent SABM; DRLNOD's DM to the XID landed
+    /// 0.45 s later, before the SABM had left the radio, and was taken as
+    /// a refusal of it. DRLNOD's UA then found no session, and A answered
+    /// DRLNOD's poll with DM. A frame that arrives before our SABM is out
+    /// cannot answer it: it is the XID's late answer.
+    func testALateDMToATimedOutXIDIsNotARefusalOfTheSABM() {
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        clock.advance(by: 2.01)  // just past the 2.0 s RTO: XID given up, SABM sent
+        XCTAssertTrue(sent.contains { $0.displayInfo == "SABM" })
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
+        XCTAssertEqual(session.state, .connecting)
+        XCTAssertGreaterThan(session.onAirUntil, clock.currentTime, "the SABM is still going out")
+
+        // As the coordinator does: a frame heard is noted before it is handled.
+        manager.noteFrameHeard(from: peer, path: DigiPath(), radio: .primary)
+        XCTAssertTrue(manager.handleInboundDMDuringNegotiation(from: peer, radio: .primary),
+                      "the DM answers the XID, not the SABM")
+        XCTAssertEqual(session.state, .connecting, "still waiting for the SABM's answer")
+        XCTAssertTrue(manager.xidMemory.isKnownUnsupported(peer.display),
+                      "the peer answered XID with DM: the next connect skips XID")
+
+        _ = manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        XCTAssertEqual(session.state, .connected)
+    }
+
+    /// Once the SABM is on the air, a DM is its answer: a refusal.
+    func testADMAfterTheSABMIsOutIsStillARefusal() {
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        clock.advance(by: 3.0)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
+        clock.currentTime = session.onAirUntil + 0.5
+
+        manager.noteFrameHeard(from: peer, path: DigiPath(), radio: .primary)
+        XCTAssertFalse(manager.handleInboundDMDuringNegotiation(from: peer, radio: .primary))
+        manager.handleInboundDM(from: peer, path: DigiPath(), radio: .primary)
+        XCTAssertNotEqual(session.state, .connecting, "the connect was refused")
+    }
+
+    /// The same for FRMR, the spec's own "no XID here" answer (§6.3.2).
+    func testALateFRMRToATimedOutXIDIsNotARefusalOfTheSABM() {
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        clock.advance(by: 2.01)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
+
+        manager.noteFrameHeard(from: peer, path: DigiPath(), radio: .primary)
+        XCTAssertTrue(manager.handleInboundFRMRDuringNegotiation(from: peer, radio: .primary))
+        XCTAssertEqual(session.state, .connecting)
+    }
+
     func testSilentPeerTimesOutOnceAndIsCached() {
         _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         XCTAssertFalse(sent.contains { $0.displayInfo == "SABM" })

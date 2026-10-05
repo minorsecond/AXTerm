@@ -235,6 +235,12 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Using TimeInterval keeps this compatible with the virtual clock in tests.
     var sabmSentAt: TimeInterval?
 
+    /// When the SABM sent after an XID gave up will have left the radio. A
+    /// DM or FRMR heard before then cannot answer it: it is the XID's late
+    /// answer (smoke run 2026-10-03-1, 12.4). Kept apart from `onAirUntil`,
+    /// which hearing the peer brings back to the present.
+    var sabmOffAirAt: TimeInterval?
+
     /// True once SABM has been retransmitted, so the connect RTT sample is
     /// discarded (Karn's algorithm).
     ///
@@ -940,6 +946,10 @@ final class AX25SessionManager: ObservableObject {
     func rememberXIDAnswer(peer: String, unsupported: Bool) {
         xidMemory.remember(peer, unsupported: unsupported)
     }
+
+    /// Peers whose XID went unanswered within T1, with the session whose
+    /// SABM followed. Their answer may still be on its way.
+    private var xidGaveUp: [String: SessionKey] = [:]
 
     /// XID commands in flight: peer callsign → the half-open session key
     /// and the timeout that resolves a silent peer as pre-2.2.
@@ -1716,6 +1726,7 @@ final class AX25SessionManager: ObservableObject {
             guard let self else { return }
             guard self.pendingXID[peerKey] != nil else { return }
             TxLog.debug(.session, "XID timeout — peer treated as pre-2.2", ["peer": peerKey])
+            self.xidGaveUp[peerKey] = sessionKey
             self.resolveXID(peer: peerKey, status: .unsupported)
         }
         // Belt and braces now that `connect` refuses a duplicate: an
@@ -1752,6 +1763,26 @@ final class AX25SessionManager: ObservableObject {
         for frame in processActions(actions, for: session) {
             onSendFrame?(frame)
         }
+        session.sabmOffAirAt = session.onAirUntil
+    }
+
+    /// A DM or FRMR from a peer whose XID we gave up on, heard before the
+    /// SABM that followed has left the radio, answers the XID: nothing the
+    /// peer sends can answer a frame it has not heard yet. The peer does not
+    /// do XID, which is remembered, and the SABM is still waiting for its
+    /// own answer. On 2026-10-05 DRLNOD's DM to an XID landed 0.45 s after
+    /// the SABM was handed over and was taken as refusing it; DRLNOD's UA
+    /// then found no session, and its poll drew a DM.
+    private func consumeLateXIDAnswer(from source: AX25Address) -> Bool {
+        let peer = source.display
+        guard let key = xidGaveUp[peer], let session = sessions[key],
+              session.state == .connecting, !session.sabmRetransmitted,
+              let offAir = session.sabmOffAirAt, clock.currentTime < offAir else { return false }
+        xidGaveUp[peer] = nil
+        peerXIDStatus[peer] = .unsupported
+        xidMemory.remember(peer, unsupported: true)
+        TxLog.debug(.session, "Late answer to XID, heard before our SABM was out", ["peer": peer])
+        return true
     }
 
     /// Rebuilds a virgin session's state machine with the negotiated
@@ -1829,10 +1860,12 @@ final class AX25SessionManager: ObservableObject {
 
     /// §6.3.2: a pre-2.2 peer answers an XID command with FRMR. During
     /// negotiation that is the documented "use defaults" — never an error.
-    func handleInboundFRMRDuringNegotiation(from source: AX25Address, radio: RadioID) {
-        guard pendingXID[source.display] != nil else { return }
+    @discardableResult
+    func handleInboundFRMRDuringNegotiation(from source: AX25Address, radio: RadioID) -> Bool {
+        guard pendingXID[source.display] != nil else { return consumeLateXIDAnswer(from: source) }
         xidMemory.remember(source.display, unsupported: true)
         resolveXID(peer: source.display, status: .unsupported)
+        return true
     }
 
     /// The other pre-2.2 answer, and the common one on this network: DM.
@@ -1853,7 +1886,7 @@ final class AX25SessionManager: ObservableObject {
     ///   cancel the connect it just started.
     @discardableResult
     func handleInboundDMDuringNegotiation(from source: AX25Address, radio: RadioID) -> Bool {
-        guard pendingXID[source.display] != nil else { return false }
+        guard pendingXID[source.display] != nil else { return consumeLateXIDAnswer(from: source) }
         TxLog.debug(.session, "XID answered with DM — peer treated as pre-2.2", ["peer": source.display])
         xidMemory.remember(source.display, unsupported: true)
         resolveXID(peer: source.display, status: .unsupported)
