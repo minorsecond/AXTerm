@@ -251,6 +251,11 @@ struct AXTermApp: App {
                 .defaultAppStorage(AppEnvironment.defaults)
             }
         }
+        // Opened only with a draft (openWindow(id:value:)). SwiftUI adds a
+        // File menu item for every window group, and that item opened this
+        // one empty, titled "New New Winlink Message Window" (smoke run
+        // 2026-10-03-1, issue 33).
+        .commandsRemoved()
 
         WindowGroup("Winlink Message", id: "winlinkMessage", for: String.self) { $mid in
             if let mid, let store = winlinkContext.store {
@@ -262,6 +267,8 @@ struct AXTermApp: App {
                     .defaultAppStorage(AppEnvironment.defaults)
             }
         }
+        // Opened only with a message (openWindow(id:value:)); see above.
+        .commandsRemoved()
 
         // A window rather than a sheet: a map wants to be resized,
         // zoomed and put full-screen, and a sheet can do none of those.

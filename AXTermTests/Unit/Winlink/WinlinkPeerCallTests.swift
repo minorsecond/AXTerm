@@ -39,26 +39,41 @@ final class WinlinkPeerCallTests: XCTestCase {
     /// The station last called is the likeliest next one.
     func testTheLastPeerIsSuggestedFirst() {
         XCTAssertEqual(WinlinkPeerCall.suggestion(recentPeers: ["K0EPI-3", "W1AW"],
-                                                  outboxRecipients: ["N0CALL"]),
+                                                  outboxRecipients: ["N0CALL"], heard: []),
                        "K0EPI-3")
     }
 
-    /// With no history, the queued message's To address: peer-to-peer mail
-    /// is usually addressed to the station it goes to.
-    func testWithoutHistoryTheOutboxRecipientIsSuggested() {
+    /// With no history, the queued message's To address when that station
+    /// has been heard: peer-to-peer mail is usually addressed to the station
+    /// it goes to.
+    func testWithoutHistoryAHeardOutboxRecipientIsSuggested() {
         XCTAssertEqual(WinlinkPeerCall.suggestion(recentPeers: [],
-                                                  outboxRecipients: ["SMTP:a@example.com", "k0epi-3"]),
+                                                  outboxRecipients: ["SMTP:a@example.com", "k0epi-3"],
+                                                  heard: ["K0EPI-3"]),
                        "K0EPI-3")
     }
 
     func testANumberSuffixedWinlinkAddressCountsAsItsCallsign() {
         XCTAssertEqual(WinlinkPeerCall.suggestion(recentPeers: [],
-                                                  outboxRecipients: ["K0EPI-3@winlink.org"]),
+                                                  outboxRecipients: ["K0EPI-3@winlink.org"],
+                                                  heard: ["k0epi-3"]),
                        "K0EPI-3")
     }
 
+    /// Smoke run 2026-10-03-1, issue 33: a queued message for a third party
+    /// put N0CALL in the field.
+    func testARecipientNeverHeardIsNotSuggested() {
+        XCTAssertEqual(WinlinkPeerCall.suggestion(recentPeers: [], outboxRecipients: ["N0CALL", "K0EPI-3"],
+                                                  heard: ["K0EPI-3"]),
+                       "K0EPI-3")
+        XCTAssertEqual(WinlinkPeerCall.suggestion(recentPeers: [], outboxRecipients: ["N0CALL"],
+                                                  heard: ["K0EPI-3"]),
+                       "")
+    }
+
     func testNothingToSuggestLeavesTheFieldEmpty() {
-        XCTAssertEqual(WinlinkPeerCall.suggestion(recentPeers: [], outboxRecipients: ["a@example.com"]), "")
+        XCTAssertEqual(WinlinkPeerCall.suggestion(recentPeers: [], outboxRecipients: ["a@example.com"],
+                                                  heard: []), "")
     }
 
     // MARK: Remembering peers

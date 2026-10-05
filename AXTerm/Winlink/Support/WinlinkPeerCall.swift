@@ -21,11 +21,18 @@ nonisolated enum WinlinkPeerCall {
     }
 
     /// What the sheet fills in: the station last called, or else the first
-    /// queued recipient that is a callsign, since peer-to-peer mail is
-    /// usually addressed to the station it goes to. Empty if neither.
-    static func suggestion(recentPeers: [String], outboxRecipients: [String]) -> String {
+    /// queued recipient that has been heard on the air, since peer-to-peer
+    /// mail is usually addressed to the station it goes to. Empty if
+    /// neither.
+    ///
+    /// Only a heard recipient: a queued message for a third party once put
+    /// N0CALL in the field, a connect request to a station nobody here has
+    /// ever heard (smoke run 2026-10-03-1, issue 33).
+    static func suggestion(recentPeers: [String], outboxRecipients: [String],
+                           heard: Set<String>) -> String {
         if let last = recentPeers.first { return last }
-        return outboxRecipients.lazy.compactMap(addressCallsign).first ?? ""
+        let heard = Set(heard.map(CallsignValidator.normalize))
+        return outboxRecipients.lazy.compactMap(addressCallsign).first { heard.contains($0) } ?? ""
     }
 
     /// Whether `message` belongs in an exchange with `peer`.

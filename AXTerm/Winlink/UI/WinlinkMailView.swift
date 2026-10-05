@@ -193,7 +193,8 @@ struct WinlinkMailView: View {
                 myCallsign: appSettings.myCallsign,
                 suggestion: WinlinkPeerCall.suggestion(
                     recentPeers: winlinkSettings.recentP2PPeers,
-                    outboxRecipients: queuedRecipients()),
+                    outboxRecipients: queuedRecipients(),
+                    heard: Set(client.stations.map(\.call))),
                 recentPeers: winlinkSettings.recentP2PPeers,
                 onCall: { callsign, path in startPeerExchange(callsign: callsign, path: path) })
         }

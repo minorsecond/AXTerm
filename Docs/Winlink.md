@@ -429,7 +429,8 @@ returns.
 
 Connect & Exchange › Peer-to-Peer… calls one station directly
 (`WinlinkPeerCallSheet`). It asks for the callsign, suggests the station
-last called or else the first queued recipient that is a callsign, offers
+last called or else the first queued recipient that has been heard on the
+air (a recipient nobody here has heard is a third party, not a peer), offers
 the last five peers under Recent, and takes an optional digipeater path.
 Before 2026-10-01 the only way to call a peer was to add it to the RMS
 gateway ladder, which also put it in line for every gateway exchange; the
