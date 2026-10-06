@@ -44,7 +44,8 @@ final class ModemRadioLinkTests: XCTestCase {
         return c
     }
 
-    private func makeLink(_ config: ModemLinkConfig, responder: @escaping @Sendable (CIVFrame) -> [UInt8]? = ModemRadioLinkTests.ic705)
+    private func makeLink(_ config: ModemLinkConfig, responder: @escaping @Sendable (CIVFrame) -> [UInt8]? = ModemRadioLinkTests.ic705,
+                          reconnectDelay: TimeInterval? = nil)
     -> (ModemRadioLink, FakeCIVTransport, SyntheticModemIO, Spy) {
         let transport = FakeCIVTransport()
         transport.responder = responder
@@ -59,8 +60,14 @@ final class ModemRadioLinkTests: XCTestCase {
         let audio = SyntheticModemIO()
         // Default delivery: delegate calls hop to the main actor, where these
         // tests run, and land during the awaits.
-        let link = ModemRadioLink(config: config, audio: audio, makeTransport: { _ in transport },
+        let link: ModemRadioLink
+        if let reconnectDelay {
+            link = ModemRadioLink(config: config, audio: audio, makeTransport: { _ in transport },
+                                  scheduling: .inline, reconnectDelay: { _ in reconnectDelay })
+        } else {
+            link = ModemRadioLink(config: config, audio: audio, makeTransport: { _ in transport },
                                   scheduling: .inline)
+        }
         let spy = Spy()
         link.delegate = spy
         return (link, transport, audio, spy)
@@ -395,15 +402,23 @@ final class ModemRadioLinkTests: XCTestCase {
     /// ("Sound modem could not start: the radio's network session is not
     /// up"). Every other failure in `open()` schedules a retry; this one left
     /// the link failed until somebody pressed Connect.
+    ///
+    /// The open identifies and reads the radio first, which under a full
+    /// test run took longer than the old 2 s wait for the failure: the wait
+    /// gave up, the error was cleared, and the first open then simply
+    /// succeeded. The waits are long because they return as soon as the
+    /// state arrives, and the retry runs on a short delay instead of the
+    /// real 3 s backoff.
     func testAModemThatWillNotStartIsRetried() async {
-        let (link, _, audio, spy) = makeLink(config())
+        let (link, _, audio, spy) = makeLink(config(), reconnectDelay: 0.2)
         audio.startError = ModemError.notRunning
         link.open()
-        await waitUntil("the failed audio start to fail the link") { link.state == .failed }
+        guard await waitUntil("the failed audio start to fail the link", timeout: 15,
+                              { link.state == .failed }) else { return }
         XCTAssertTrue(spy.errors.contains { $0.contains("Sound modem could not start") }, "\(spy.errors)")
 
         audio.startError = nil
-        await waitUntil("the link to retry and come back", timeout: 8) { link.state == .connected }
+        await waitUntil("the link to retry and come back", timeout: 15) { link.state == .connected }
         XCTAssertEqual(link.state, .connected, "nothing tried again after the audio failed to start")
         link.close()
     }

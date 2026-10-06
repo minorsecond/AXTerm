@@ -85,6 +85,10 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// a second or two; only a connection that outlasts this counts as real.
     /// Injectable so tests can use a short window instead of real-time waits.
     let stableConnectionSeconds: TimeInterval
+    /// The wait before reconnect attempt `n`: the backoff plus jitter.
+    /// Injectable so a test of the retry does not sleep through a real
+    /// 3 s backoff, which on a loaded machine is when its waits ran out.
+    private let reconnectDelay: (Int) -> TimeInterval
 
     #if DEBUG
     /// Test seam: read or seed the reconnect backoff counter, so the "clear
@@ -110,6 +114,9 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
          makeSession: @escaping (IcomLANSession.Configuration) -> IcomLANSession = { IcomLANSession(configuration: $0) },
          scheduling: ModemEngine.Scheduling = .dedicatedThread,
          stableConnectionSeconds: TimeInterval = 12,
+         reconnectDelay: @escaping (Int) -> TimeInterval = { attempt in
+             ModemRadioLink.reconnectBackoff(attempt: attempt) + Double.random(in: 0...0.5)   // jitter
+         },
          prepStore: RigPrepStore = RigPrepStore(),
          deliver: @escaping SoftModemLink.Deliver = { work in
              DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
@@ -120,6 +127,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         self.makeSession = makeSession
         self.deliver = deliver
         self.stableConnectionSeconds = stableConnectionSeconds
+        self.reconnectDelay = reconnectDelay
         let session: IcomLANSession? = config.rigLink == .lan ? makeSession(config.lanConfiguration) : nil
         self.lanSession = session
         let audioIO: ModemAudioIO
@@ -610,7 +618,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         // count: a radio the operator wants connected should recover on its
         // own once it releases the slot, however long that takes.
         reconnectAttempt = Self.nextReconnectAttempt(reconnectAttempt)
-        let delay = Self.reconnectBackoff(attempt: reconnectAttempt) + Double.random(in: 0...0.5)   // jitter
+        let delay = reconnectDelay(reconnectAttempt)
         reconnectTask?.cancel()
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
