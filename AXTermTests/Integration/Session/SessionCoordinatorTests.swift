@@ -1039,6 +1039,24 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(sent.last?.source.display, "K0EPI-3")
     }
 
+    /// A binary PONG to a peer whose link is at our node alias comes from
+    /// the alias, the link's own address, not the radio's (issue 89, on air
+    /// at 18:11:21Z: a PING to EPINDB was answered from K0EPI-3).
+    func testAUIReplyToAPeerLinkedAtAnAliasComesFromTheAlias() throws {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.sessionManager.localCallsign = AX25Address(call: "K0EPI", ssid: 3)
+        let alias = AX25Address(call: "EPINDB", ssid: 0)
+        coordinator.sessionManager.setServiceAddress(alias, for: "netromNodeL2")
+        let caller = AX25Address(call: "K0EPI", ssid: 2)
+        _ = try XCTUnwrap(coordinator.sessionManager.handleInboundSABM(
+            from: caller, to: alias, path: DigiPath(), radio: .primary))
+
+        XCTAssertEqual(coordinator.uiOrigin(to: caller, radio: .primary).source.display, "EPINDB")
+        XCTAssertEqual(coordinator.uiOrigin(to: AX25Address(call: "W0ARP", ssid: 1), radio: .primary)
+            .source.display, "K0EPI-3", "no link: the radio's address")
+    }
+
     /// After text probe → PONG, the initiator sends a binary PING (with capabilities)
     /// so the peer also learns the initiator's features (bidirectional exchange).
     func testBidirectionalCapabilityExchange() {

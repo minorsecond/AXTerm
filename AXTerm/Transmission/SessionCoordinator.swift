@@ -4080,11 +4080,15 @@ final class SessionCoordinator: ObservableObject {
     /// belongs to the radio the frame goes out on, so the far station can
     /// answer on the channel it heard us.
     func uiOrigin(to peer: AX25Address, radio: RadioID?) -> (radio: RadioID, source: AX25Address) {
+        // A peer with a link to us is answered from the link's own address,
+        // which is the node alias for a link to the node: a PONG to EPINDB
+        // from K0EPI-3 went unmatched (smoke run 2026-10-03-1, issue 89).
+        if let session = sessionManager.connectedSession(withPeer: peer),
+           radio == nil || session.radio == radio {
+            return (session.radio, session.localAddress)
+        }
         if let radio {
             return (radio, sessionManager.localAddress(for: radio))
-        }
-        if let session = sessionManager.connectedSession(withPeer: peer) {
-            return (session.radio, session.localAddress)
         }
         let primary = primaryRadioID
         return (primary, sessionManager.localAddress(for: primary))
