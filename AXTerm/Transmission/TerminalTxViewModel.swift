@@ -156,7 +156,7 @@ nonisolated struct TerminalTxViewModel {
 
         // Build payload based on AXDP setting
         let payload: Data
-        if useAXDP {
+        if payloadUsesAXDP {
             // AXDP-encoded payload (for AXDP-aware peers)
             payload = buildChatPayload(text: composeText)
         } else {
@@ -198,8 +198,8 @@ nonisolated struct TerminalTxViewModel {
     }
 
     /// The frames the current message goes out as. A broadcast longer than
-    /// `paclen` is split into several UI frames, each within it (spec §6.3):
-    /// AXDP chat as numbered parts of one message, plain text cut at paclen.
+    /// `paclen` is split into several UI frames, each within it (spec §6.3),
+    /// as plain text cut at paclen.
     /// A connected-mode message stays whole; the session cuts it into
     /// I-frames itself.
     func buildOutboundFrames(radio: RadioID = .primary, source: AX25Address? = nil,
@@ -208,18 +208,8 @@ nonisolated struct TerminalTxViewModel {
         guard let whole = buildOutboundFrame(radio: radio, source: source, destination: destination) else { return [] }
         guard connectionMode == .datagram, whole.payload.count > paclen else { return [whole] }
 
-        let payloads: [Data]
-        if useAXDP {
-            let pieces = Self.utf8Pieces(of: composeText, maxBytes: max(1, paclen - Self.axdpChunkOverhead))
-            let messageId = UInt32.random(in: 1...UInt32.max)
-            payloads = pieces.enumerated().map { index, piece in
-                AXDP.Message(type: .chat, sessionId: 0, messageId: messageId,
-                             chunkIndex: UInt32(index), totalChunks: UInt32(pieces.count),
-                             payload: piece).encode()
-            }
-        } else {
-            payloads = Self.utf8Pieces(of: composeText, maxBytes: paclen)
-        }
+        // A broadcast is plain text (`payloadUsesAXDP`), cut at paclen.
+        let payloads = Self.utf8Pieces(of: composeText, maxBytes: paclen)
         return payloads.map { payload in
             OutboundFrame(radio: whole.radio, destination: whole.destination, source: whole.source,
                           path: whole.path, payload: payload, priority: whole.priority,
@@ -228,10 +218,15 @@ nonisolated struct TerminalTxViewModel {
         }
     }
 
-    /// AXDP bytes around the text of one part: the header (6), then the type
-    /// (4), session (7), message (7), chunk index (7) and total (7) TLVs and
-    /// the payload TLV header (3).
-    static let axdpChunkOverhead = 41
+    /// Whether this message's payload is AXDP. Never for a broadcast: a UI
+    /// frame reaches every station on the channel, only AXTerm reads AXDP, and
+    /// the rest saw "AXT1" and binary instead of the message (smoke run
+    /// 2026-10-03-1, issue 2; operator 2026-10-06). A connected message uses
+    /// it when the setting is on; the terminal sends AXDP only to a station
+    /// that has proven it speaks AXDP and falls back to plain text otherwise.
+    var payloadUsesAXDP: Bool {
+        useAXDP && connectionMode == .connected
+    }
 
     /// `text` as UTF-8 cut into pieces of at most `maxBytes`, never inside a
     /// character.

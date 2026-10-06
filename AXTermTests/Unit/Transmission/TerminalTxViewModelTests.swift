@@ -81,7 +81,7 @@ final class TerminalTxViewModelTests: XCTestCase {
         vm.destinationCall = "N0CALL"
         vm.composeText = "Hello World"
         vm.connectionMode = .datagram  // UI frame mode
-        vm.useAXDP = true              // AXDP encoding
+        vm.useAXDP = true              // on, but a broadcast is plain text (issue 2)
 
         let frame = vm.buildOutboundFrame()
 
@@ -90,24 +90,8 @@ final class TerminalTxViewModelTests: XCTestCase {
         XCTAssertEqual(frame?.destination.call, "N0CALL")
         XCTAssertEqual(frame?.frameType, "ui")
         XCTAssertEqual(frame?.priority, .interactive)
-
-        // Payload is AXDP-encoded, should start with magic header
-        if let payload = frame?.payload {
-            XCTAssertTrue(AXDP.hasMagic(payload), "Payload should have AXDP magic header")
-            // Decode and verify the message
-            if let (msg, _) = AXDP.Message.decode(from: payload) {
-                XCTAssertEqual(msg.type, .chat)
-                if let textData = msg.payload, let text = String(data: textData, encoding: .utf8) {
-                    XCTAssertEqual(text, "Hello World")
-                } else {
-                    XCTFail("Message payload should contain the text")
-                }
-            } else {
-                XCTFail("Payload should be valid AXDP message")
-            }
-        } else {
-            XCTFail("Frame should have payload")
-        }
+        XCTAssertEqual(frame?.payload, Data("Hello World".utf8),
+                       "a UI frame reaches every station, and only AXTerm reads AXDP")
     }
 
     func testBuildFrameWithDigiPath() {

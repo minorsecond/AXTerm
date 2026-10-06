@@ -404,7 +404,9 @@ Overhead includes: magic+ver, TLVs for type/session/msg/chunk/crc.
 
 **Default**: chunk size 64–192 bytes depending on link quality.
 
-Decision (2026-10-03, smoke run issue 3): a terminal broadcast longer than the UI paclen (128 by default) goes out as several AXDP CHAT messages that share one MessageId and carry ChunkIndex and TotalChunks, each frame within paclen. A plain-text broadcast is cut at paclen. Neither is cut inside a UTF-8 character. A message that fits is sent as before, with no chunk TLVs. The receiver shows each part as it arrives, as "(1/3) text"; it does not hold parts back to join them, so a lost part shows as a gap and nothing waits on a timer.
+Decision (2026-10-06, smoke run issue 2, operator: "plain text broadcasts, AXDP for connected AXDP proven stations"): a terminal broadcast is always plain text, whatever the AXDP setting. A UI frame reaches every station on the channel and only AXTerm reads AXDP; other software showed `AXT1` and binary instead of the message. AXDP chat is used only on a connected session, and only once the station has proven it speaks AXDP (capability confirmed); otherwise the line goes as plain text. `TerminalTxViewModel.payloadUsesAXDP` holds the rule.
+
+A broadcast longer than the UI paclen (128 by default) is cut at paclen into several UI frames, never inside a UTF-8 character (decision 2026-10-03, smoke run issue 3). Receivers still show AXDP CHAT parts from older AXTerm builds as they arrive, as "(1/3) text", without holding parts back to join them.
 
 ### 6.4 App-level ACKs (selective, efficient)
 For bulk transfers over UI:
