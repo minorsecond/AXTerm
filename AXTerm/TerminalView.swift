@@ -1903,6 +1903,10 @@ private struct SessionRecord: Identifiable, Hashable {
     /// The radio carrying the session, named only when the station has
     /// several. Fixed when the session opened; a link cannot move radios.
     var radioName: String?
+    /// The address the transcript is filtered by, when it is not
+    /// `destination`. A circuit is named "EPINDB (K0EPI-3)" and its lines
+    /// carry K0EPI-3.
+    var transcriptPeer: String?
 
     var label: String {
         if let relay = relayDestination {
@@ -3133,7 +3137,9 @@ struct TerminalView: View {
             }
         }
 
-        let destinationByRecordID = Dictionary(uniqueKeysWithValues: sessionRecords.map { ($0.id, $0.destination) })
+        let destinationByRecordID = Dictionary(uniqueKeysWithValues: sessionRecords.map {
+            ($0.id, $0.transcriptPeer ?? $0.destination)
+        })
         let connectedPeers = Set(
             sessionCoordinator.connectedSessions
                 .map { CallsignValidator.normalize($0.remoteAddress.display) }
@@ -3183,6 +3189,14 @@ struct TerminalView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .padding(.top, 8)
+                } else if searchModel.query.isEmpty {
+                    // A session with nothing in it yet. No search is set, so
+                    // "No messages matching \"\"" told the operator nothing.
+                    Text("Nothing in this session yet")
+                        .font(.headline)
+                    Text("Lines sent and received in this session show up here.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 } else {
                     Text("No Results")
                         .font(.headline)
@@ -3222,11 +3236,11 @@ struct TerminalView: View {
         var payload = Data(text.utf8)
         payload.append(0x0D)  // CR, as node command lines expect
         sessionCoordinator.netRomDriver.send(payload, on: circuitID)
-        let circuitRadio = (sessionCoordinator.netRomDriver.circuit(for: circuitID)?.destination)
-            .flatMap { sessionCoordinator.radioOwning($0) }
+        let farEnd = sessionCoordinator.netRomDriver.circuit(for: circuitID)?.destination
+        let circuitRadio = farEnd.flatMap { sessionCoordinator.radioOwning($0) }
         // The circuit carries the node's user address, not the base call.
         client.appendSessionChatLine(from: sessionCoordinator.netRomDriver.localUser.display,
-                                     text: text, radioID: circuitRadio)
+                                     text: text, radioID: circuitRadio, to: farEnd?.display)
         txViewModel.clearCompose()
     }
 
@@ -3252,7 +3266,8 @@ struct TerminalView: View {
                         mode: .netrom,
                         via: hop,
                         statusText: status,
-                        relayDestination: nil
+                        relayDestination: nil,
+                        transcriptPeer: NetRomCircuitSession.transcriptPeer(for: circuit)
                     ),
                     at: 0
                 )

@@ -41,6 +41,13 @@ nonisolated enum NetRomCircuitSession {
         return circuits.first { Self.recordID(for: $0.id) == recordID }
     }
 
+    /// The address a circuit's pane filters its lines by: the callsign on
+    /// the air. The display name ("EPINDB (K0EPI-3)") is no address, and
+    /// filtering by it left the pane empty (smoke run 2026-10-03-1, 7.2).
+    static func transcriptPeer(for summary: NetRomCircuitSummary) -> String {
+        summary.destination.display
+    }
+
     /// Where the compose field's text should go.
     enum SendTarget: Equatable {
         /// A live, established circuit.

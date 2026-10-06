@@ -1651,7 +1651,7 @@ final class PacketEngine: ObservableObject {
     /// Called when AXDP chat is received—the raw I-frame payload is binary so it never
     /// reaches the console via the normal packet path.
     func appendSessionChatLine(from fromDisplay: String, text: String, via: [String] = [],
-                               radioID: RadioID? = nil) {
+                               radioID: RadioID? = nil, to farEnd: String? = nil) {
         TxLog.debug(.session, "appendSessionChatLine called", [
             "from": fromDisplay,
             "textLength": text.count,
@@ -1662,8 +1662,9 @@ final class PacketEngine: ObservableObject {
         // The address the session runs under on its radio, which is what the
         // far station sent to. Attributed to the session's radio, so the
         // per-radio filter reaches connected-mode conversation the way it
-        // reaches monitored frames.
-        let toDisplay = settings.onAirCallsign(for: radioID)
+        // reaches monitored frames. A line this station sent names the far
+        // end instead.
+        let toDisplay = farEnd ?? settings.onAirCallsign(for: radioID)
         let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text, via: via,
                                       radioID: radioID)
         appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)

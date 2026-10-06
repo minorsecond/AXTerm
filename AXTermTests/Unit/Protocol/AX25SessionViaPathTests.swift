@@ -172,6 +172,18 @@ final class AX25SessionViaPathTests: XCTestCase {
         XCTAssertEqual(lastLine.to, "K0EPI-7")
     }
 
+    /// A line the operator sent on a NET/ROM circuit names the far end. It
+    /// was addressed to this station's own call ("K0EPI-2 > K0EPI-2"), so the
+    /// circuit's pane could not find it (smoke run 2026-10-03-1, 7.2).
+    func testASentLineNamesTheFarEnd() {
+        let engine = makeEngine()
+
+        engine.appendSessionChatLine(from: "K0EPI-7", text: "N", to: "K0EPI-3")
+
+        XCTAssertEqual(engine.consoleLines.last?.from, "K0EPI-7")
+        XCTAssertEqual(engine.consoleLines.last?.to, "K0EPI-3")
+    }
+
     func testAppendSessionChatLineWithoutVia() {
         let engine = makeEngine()
 

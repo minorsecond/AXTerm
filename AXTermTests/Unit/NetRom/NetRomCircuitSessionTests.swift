@@ -49,6 +49,30 @@ final class NetRomCircuitSessionTests: XCTestCase {
         XCTAssertEqual(found?.destination.display, "EVANS")
     }
 
+    // MARK: - The circuit's transcript
+
+    /// A circuit's pane shows the lines to and from the station on the
+    /// circuit. It was filtered by the display name, "EPINDB (K0EPI-3)",
+    /// which no line carries, so the pane stayed empty while the node
+    /// answered (smoke run 2026-10-03-1, 7.2).
+    func testACircuitsTranscriptIsFilteredByTheCallsignOnTheAir() {
+        let station = AX25Address(call: "K0EPI", ssid: 3)
+        var circuit = summary(.connected, destination: station, neighbor: station)
+        circuit.requestedAlias = "EPINDB"
+        XCTAssertEqual(circuit.displayName, "EPINDB (K0EPI-3)")
+
+        let peer = NetRomCircuitSession.transcriptPeer(for: circuit)
+        XCTAssertEqual(peer, "K0EPI-3")
+
+        let lines: [ConsoleLine] = [
+            .packet(from: "K0EPI-3", to: "K0EPI-2", text: "AXTerm Node EPINDB:K0EPI-3"),
+            .packet(from: "K0EPI-2", to: "K0EPI-3", text: "N"),
+            .packet(from: "N0FH-10", to: "BEACON", text: "unrelated")
+        ]
+        XCTAssertEqual(TerminalSessionLineFilter.apply(lines, peer: peer).map(\.text),
+                       ["AXTerm Node EPINDB:K0EPI-3", "N"])
+    }
+
     // MARK: - Where typed text goes
 
     func testTextGoesToAnEstablishedCircuit() {
