@@ -745,6 +745,13 @@ The field case for these rules is in Docs/LiveRFTest-2026-09-30.md, bug 39:
 Warbler held a SABM 3.6 s before keying, T1 sent a second one, the peer
 reset for it, and AXTerm used to ignore the second UA.
 
+**An abandoned connect stays abandoned.** A session given up while its XID is
+out (`forceDisconnect`) drops the negotiation, so the answer arriving later
+sends no SABM. Callers waiting on a connect treat a session that reads
+disconnected while its XID is out as still connecting (`isNegotiating`,
+`AX25ConnectProgress`); the Auto ladder used to fail its direct rung 2 s in
+for that, while the link went on to come up behind it (issue 88).
+
 ### 7.2 Sequence numbers + window
 AX.25 uses `N(S)` (send seq) and `N(R)` (recv expected) mod 8 or 128 depending on extended mode.
 Implement both, default to **mod 8** unless you detect/choose extended.

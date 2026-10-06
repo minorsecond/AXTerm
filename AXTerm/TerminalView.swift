@@ -39,6 +39,36 @@ nonisolated enum TerminalSessionLineFilter {
     }
 }
 
+/// How an Auto attempt reads the link it is waiting on.
+nonisolated enum AX25ConnectProgress {
+    enum Verdict: Equatable {
+        case connected
+        case refused
+        case failed(String)
+        case waiting
+    }
+
+    /// A new session reads disconnected until its SABM goes out, and with
+    /// an XID exchange first that is seconds (2.7 s to EPINDB, 8 s to
+    /// DRLNOD); it is progress while the XID is out (issue 88).
+    static func verdict(state: AX25SessionState, refused: Bool,
+                        negotiating: Bool, elapsed: TimeInterval) -> Verdict {
+        if refused { return .refused }
+        switch state {
+        case .connected:
+            return .connected
+        case .error:
+            return .failed("Session entered error state.")
+        case .disconnecting:
+            return .failed("Session disconnected during connect attempt.")
+        case .disconnected where !negotiating && elapsed > 2:
+            return .failed("Peer disconnected before session establishment.")
+        case .connecting, .disconnected:
+            return .waiting
+        }
+    }
+}
+
 nonisolated enum TerminalSessionDisplayScope {
     static func selectedPeer(
         connectionMode: TxConnectionMode,
@@ -4454,19 +4484,17 @@ struct TerminalView: View {
 
             if let session = txViewModel.sessionManager.existingSession(for: destinationAddress, path: path)
                 ?? txViewModel.sessionManager.connectedSession(withPeer: destinationAddress) {
-                if session.peerRefusedConnect {
+                switch AX25ConnectProgress.verdict(
+                    state: session.state, refused: session.peerRefusedConnect,
+                    negotiating: txViewModel.sessionManager.isNegotiating(key: session.key),
+                    elapsed: Date().timeIntervalSince(start)) {
+                case .refused:
                     return .refused(detail: "\(destination) answered the connect request with DM (refused).")
-                }
-                switch session.state {
                 case .connected:
                     return .success
-                case .error:
-                    return .failed(detail: "Session entered error state.")
-                case .disconnected where Date().timeIntervalSince(start) > 2:
-                    return .failed(detail: "Peer disconnected before session establishment.")
-                case .disconnecting:
-                    return .failed(detail: "Session disconnected during connect attempt.")
-                case .connecting, .disconnected:
+                case .failed(let detail):
+                    return .failed(detail: detail)
+                case .waiting:
                     break
                 }
             }

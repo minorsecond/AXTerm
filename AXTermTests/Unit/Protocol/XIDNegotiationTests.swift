@@ -125,6 +125,25 @@ final class XIDNegotiationTests: XCTestCase {
         XCTAssertTrue(manager.xidMemory.isKnownUnsupported(peer.display))
     }
 
+    /// An attempt given up while its XID is out must stay given up: the
+    /// answer arriving later used to send the SABM anyway, and the link came
+    /// up behind the Auto ladder's back while its next rung dialed the same
+    /// station under another address (smoke run 2026-10-03-1, issue 88).
+    func testAnAbandonedConnectSendsNoSABMWhenTheXIDAnswerArrives() {
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
+        XCTAssertTrue(manager.isNegotiating(key: session.key))
+        manager.forceDisconnect(session: session)
+        XCTAssertFalse(manager.isNegotiating(key: session.key))
+
+        sent = []
+        _ = manager.handleInboundXID(
+            from: peer, path: DigiPath(), radio: .primary,
+            info: xidResponse(srej: true), isCommand: false, pf: true)
+        XCTAssertFalse(sent.contains { $0.displayInfo == "SABM" },
+                       "a SABM went out for a connect that was given up")
+    }
+
     func testXIDResponseEnablesSREJAndMinimumsThenSABM() {
         _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         let responses = manager.handleInboundXID(

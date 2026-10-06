@@ -1767,6 +1767,12 @@ final class AX25SessionManager: ObservableObject {
 
         // Clear sabmSentAt to prevent late UA from reopening the session
         session.sabmSentAt = nil
+        // And drop an XID still out, or its answer sends the SABM for a
+        // connect that was given up (smoke run 2026-10-03-1, issue 88).
+        for (peer, pending) in pendingXID where pending.key == session.key {
+            pending.task?.cancel()
+            pendingXID[peer] = nil
+        }
         session.clearPendingTransmission(reason: "Force disconnect")
         session.touch()
         _ = processActions(actions, for: session)
