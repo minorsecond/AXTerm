@@ -798,6 +798,19 @@ from the peer proves our transmission has ended, so it is brought back to
 that moment, and a T1 still waiting for our frames starts then. Without
 that it ran ahead without bound on a faster link and T1 never started.
 
+A sound modem also reports when each transmission really ends
+(`PacketEngine.onTransmissionEnded`, from the modem's sent-frame count). Every
+link that handed that radio frames since its previous transmission ended had
+them in this one, so they left at the report. When that is later than the
+estimate, the estimate moves to it and T1 starts again from there
+(`AX25SessionManager.transmissionEnded(on:)`). The report never moves the
+start earlier, and a transmission that carried none of a link's frames leaves
+its T1 alone. The key-up time is smoothed, and keying the IC-705 through
+Warbler varies by seconds: a SABM handed over at 15:21:34Z reached B (ID-50)
+2.85 s later, T1 ran from the estimate, and a second SABM crossed the UA (smoke
+run 2026-10-03-1, issue 83). A KISS TNC reports nothing, so its links keep the
+estimate.
+
 So a retry on a connected link keeps the same T1 (Timer Recovery's T1 expiry,
 Figure C4.5c, does not call Select T1), a connect or disconnect retry adds a
 quarter second per retry to twice SRT, and an acknowledgment after retries

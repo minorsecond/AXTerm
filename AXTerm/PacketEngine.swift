@@ -147,6 +147,11 @@ final class PacketEngine: ObservableObject {
     /// one this is about.
     var onTransmitOutcome: ((RadioID, _ onAir: Int, _ dropped: Int) -> Void)?
 
+    /// The radio finished a transmission: frames reached the air. Only a
+    /// radio that can tell reports it (a sound modem); layer 2 times T1
+    /// from it.
+    var onTransmissionEnded: ((RadioID) -> Void)?
+
     // MARK: - Debug Logging (Debug Builds Only)
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
         #if DEBUG
@@ -3305,6 +3310,7 @@ extension PacketEngine: RadioManagerDelegate {
             if onAir > 0 || dropped > 0 {
                 for radio in manager.radios(onLink: link.key) {
                     onTransmitOutcome?(radio, onAir, dropped)
+                    if onAir > 0 { onTransmissionEnded?(radio) }
                 }
             }
         }

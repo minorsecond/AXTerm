@@ -3388,6 +3388,9 @@ final class SessionCoordinator: ObservableObject {
     /// Safe to call multiple times — replaces any existing subscription.
     func subscribeToPackets(from client: PacketEngine) {
         self.packetEngine = client
+        client.onTransmissionEnded = { [weak self] radio in
+            self?.sessionManager.transmissionEnded(on: radio)
+        }
         if let store = client.learnedRoutes {
             attachLearnedRouteStore(store)
         }

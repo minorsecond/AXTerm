@@ -418,6 +418,21 @@ nonisolated final class AX25Session: @unchecked Sendable {
         let keyUp = stateMachine.config.keyUpSeconds ?? 0
         let begins = now >= onAirUntil ? now + keyUp : onAirUntil
         onAirUntil = begins + Double(max(0, bytes)) * 8.0 / TxAdaptiveSettings.airtimeBitsPerSecond
+        lastHandedAt = now
+    }
+
+    /// When this link last handed the radio a frame, manager clock.
+    private(set) var lastHandedAt: TimeInterval?
+
+    /// The radio says a transmission carrying this link's frames ended at
+    /// `now`. Later than the estimate means keying took longer than the
+    /// measured key-up time, and the frames left now. Returns whether the
+    /// estimate moved.
+    @discardableResult
+    func noteLeftRadio(at now: TimeInterval) -> Bool {
+        guard onAirUntil < now else { return false }
+        onAirUntil = now
+        return true
     }
 
     /// The bytes an outbound frame puts on the air: address, control, PID,
@@ -3700,6 +3715,28 @@ final class AX25SessionManager: ObservableObject {
         guard session.capOnAir(at: now) else { return }
         if let started = session.t1StartedAt, started > now {
             startT1Timer(for: session)
+        }
+    }
+
+    /// When each radio last reported the end of a transmission.
+    private var transmissionEndedAt: [RadioID: TimeInterval] = [:]
+
+    /// A radio that can tell says a transmission has just ended. Links that
+    /// handed it frames since its previous transmission ended had them in
+    /// this one, so their frames left now. When that is later than the
+    /// estimate, T1 runs from now, as a TNC-2 times FRACK from the end of its
+    /// transmission (spec 7.3). Through Warbler the IC-705 has keyed up to
+    /// 2 s later than the smoothed key-up time, and a T1 started on the
+    /// estimate sent a second SABM across the UA (smoke run 2026-10-03-1,
+    /// issue 83).
+    func transmissionEnded(on radio: RadioID) {
+        let now = clock.currentTime
+        let previous = transmissionEndedAt[radio] ?? -.infinity
+        transmissionEndedAt[radio] = now
+        for session in sessions.values where session.radio == radio {
+            guard let handed = session.lastHandedAt, handed > previous, handed <= now,
+                  session.noteLeftRadio(at: now) else { continue }
+            restartT1IfOutLater(session)
         }
     }
 
