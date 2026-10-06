@@ -1558,7 +1558,7 @@ struct TerminalComposeView: View {
                             .focused($isTextFieldFocused)
                             .onSubmit {
                                 if canSendMessage {
-                                    onSend()
+                                    send()
                                 }
                             }
                             .disabled(!isConnected || !canTypeMessage)
@@ -1616,7 +1616,7 @@ struct TerminalComposeView: View {
                     // key there: a Send button would take it.
                     if !isRawMode {
                         Button("Send") {
-                            onSend()
+                            send()
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.regular)
@@ -1948,10 +1948,27 @@ struct TerminalComposeView: View {
 
     private func handlePrimaryAction() {
         if connectionMode == .datagram {
-            onSend()
+            send()
             return
         }
         handleSessionAction()
+    }
+
+    /// Sends, and if that emptied the box while the field is being edited,
+    /// ends the edit and starts a fresh one.
+    ///
+    /// Return sends with the field still being edited. The send clears the
+    /// draft and the text on screen, but the field keeps the line it held as
+    /// its value until the edit ends. When the link then dropped and the field
+    /// was disabled, the edit was dropped and the field showed the sent line
+    /// again over an empty draft: Return did nothing and Send sent a blank
+    /// line (smoke run 2026-10-03-1, issue 77). Ending the edit commits the
+    /// empty box, and the cursor goes straight back for the next line.
+    private func send() {
+        onSend()
+        guard composeText.isEmpty, isTextFieldFocused else { return }
+        isTextFieldFocused = false
+        DispatchQueue.main.async { isTextFieldFocused = true }
     }
 
     private var showsInputModeSwitch: Bool {

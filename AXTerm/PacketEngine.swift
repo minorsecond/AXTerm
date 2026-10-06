@@ -372,6 +372,10 @@ final class PacketEngine: ObservableObject {
     // MARK: - Published State
 
     @Published private(set) var status: ConnectionStatus = .disconnected
+    #if DEBUG
+    /// Test seam: a hosted terminal acts as if a radio were up.
+    func setStatusForTesting(_ status: ConnectionStatus) { self.status = status }
+    #endif
 
     /// Set when another station on this channel is transmitting under our
     /// callsign — see `StationIdentityMonitor`. Two AXTerms sharing one
