@@ -53,7 +53,7 @@ final class FullStackWinlinkFuzzTests: XCTestCase {
     }
 
     private func transport(_ station: FuzzStation, to destination: AX25Address,
-                           radio: RadioID? = nil) -> WinlinkAX25Transport {
+                           radio: RadioID? = nil, answering: Bool = false) -> WinlinkAX25Transport {
         WinlinkAX25Transport(
             sessionManager: station.coordinator.sessionManager,
             sendFrames: { [weak coordinator = station.coordinator] frames in
@@ -61,7 +61,8 @@ final class FullStackWinlinkFuzzTests: XCTestCase {
             },
             destination: destination,
             radio: radio ?? station.coordinator.primaryRadioID,
-            connectTimeout: 40)
+            connectTimeout: 40,
+            answering: answering)
     }
 
     private func message(mid: String, from: String, to: [String], pick: inout FuzzPicker) -> WinlinkB2Message {
@@ -150,7 +151,7 @@ final class FullStackWinlinkFuzzTests: XCTestCase {
                         caller: session.remoteAddress.display)
             guard decision == .answer || decision == .answerWhenFree else { return }
             let peer = session.remoteAddress.display.uppercased()
-            let t = self.transport(b, to: session.remoteAddress, radio: session.radio)
+            let t = self.transport(b, to: session.remoteAddress, radio: session.radio, answering: true)
             answerTasks.append(Task { @MainActor in
                 if decision == .answerWhenFree {
                     guard await runnerB.waitUntilIdle(timeout: 15), session.state == .connected else { return }

@@ -442,6 +442,15 @@ row, because no Winlink call happened. Until 2026-10-06 the answerer
 waited 90 s for a handshake, then ended the link, and the circuit riding
 it dropped (smoke run 2026-10-03-1, issue 73).
 
+**A call needs a link of its own.** The called station speaks first when
+the link comes up, so a calling exchange never reuses a link already up:
+`WinlinkAX25Transport` (calling) asks `SessionCoordinator.makeWayForFreshLink`
+to release a leftover NET/ROM link, or fails at once with the reason when a
+circuit or someone's session is on it. Until 2026-10-06 it reused the link
+and waited at "Signing in" for a greeting that never came (smoke run
+2026-10-03-1, issue 80). The answering side (`answering: true`) runs on the
+caller's new link.
+
 Wiring: `SessionCoordinator.onInboundSessionConnected` is a plain
 callback so the coordinator needs to know nothing about mail;
 `WinlinkAX25Transport` already reuses an existing connected session, so

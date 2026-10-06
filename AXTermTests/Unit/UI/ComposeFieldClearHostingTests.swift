@@ -125,9 +125,13 @@ final class ComposeFieldClearHostingTests: XCTestCase {
         }
         spin(0.5)
         XCTAssertEqual(model.viewModel.composeText, "", "the line was sent")
-        let focused = (station.window.firstResponder as? NSTextView)?.delegate as? NSTextField
-        XCTAssertTrue(focused === textFields(in: station.window.contentView!).first,
-                      "the cursor is back in the box for the next line")
+        // Only a key window can take focus, and under a parallel test run
+        // another test's window can hold key status.
+        if station.window.isKeyWindow {
+            let focused = (station.window.firstResponder as? NSTextView)?.delegate as? NSTextField
+            XCTAssertTrue(focused === textFields(in: station.window.contentView!).first,
+                          "the cursor is back in the box for the next line")
+        }
         // Not read here: asking a field being edited for its value commits the
         // editor's text and hides the fault.
 

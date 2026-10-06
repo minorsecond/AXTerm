@@ -87,7 +87,8 @@ final class WinlinkP2PAnswerer {
                 for frame in frames { client?.send(frame: frame) }
             },
             destination: session.remoteAddress,
-            radio: session.radio)
+            radio: session.radio,
+            answering: true)
         _ = await runner.runExchange(
             transport: transport,
             myCallsign: settings.myCallsign,

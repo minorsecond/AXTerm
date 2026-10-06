@@ -383,6 +383,18 @@ parallel UI. `NetRomCircuitSession` holds the pure part:
   typed). Until 2026-10-06 All Traffic sent typing as plain AX.25 text on
   the neighbor link and Disconnect dropped that link (smoke run
   2026-10-03-1, issue 76).
+- **A leftover node link is released for a call that needs its own.**
+  AX.25 2.2 allows one link per pair of addresses, and the far station
+  greets (a Winlink SID, a node banner) only when a link comes up. When a
+  circuit closes its link can stay up, so a Winlink call or a terminal
+  connect to that station would reuse a link whose greeting is long gone.
+  `SessionCoordinator.makeWayForFreshLink` releases a link that has carried
+  NET/ROM (`AX25Session.carriesNetRom`) when no circuit rides it (DISC, UA,
+  or a forced close if the peer has gone), then the call opens a new one. A
+  link carrying a circuit stays up and the call is refused with the reason;
+  so does one that never carried NET/ROM, which is someone's session. A
+  native circuit still reuses the neighbor link, as NET/ROM intends.
+  Smoke run 2026-10-03-1, issue 80.
 - **A circuit's pane filters by the callsign on the air**
   (`transcriptPeer(for:)`), not by its display name "EPINDB (K0EPI-3)",
   which no line carries (issue 75).

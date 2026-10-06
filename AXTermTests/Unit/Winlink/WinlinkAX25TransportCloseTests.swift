@@ -26,7 +26,8 @@ final class WinlinkAX25TransportCloseTests: XCTestCase {
         let transport = WinlinkAX25Transport(
             sessionManager: manager,
             sendFrames: { [unowned self] in self.sent.append(contentsOf: $0) },
-            destination: peer)
+            destination: peer,
+            answering: true)   // the peer opened this link
         try await transport.open()
         return (manager, session, transport)
     }

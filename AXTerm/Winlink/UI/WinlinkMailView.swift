@@ -1021,7 +1021,10 @@ struct WinlinkMailView: View {
                 destination: destination,
                 path: path,
                 radio: sessionCoordinator.radio(
-                    preferring: winlinkSettings.preferredRadioID, for: destination, path: path))
+                    preferring: winlinkSettings.preferredRadioID, for: destination, path: path),
+                makeWayForFreshLink: { [sessionCoordinator] in
+                    await sessionCoordinator.makeWayForFreshLink(to: destination).refusal
+                })
 
             // Point the adaptive toolbar at this exchange's route so the
             // popover shows the session scope instead of "Global Network".

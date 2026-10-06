@@ -36,7 +36,8 @@ final class WinlinkNetRomStandAsideTests: XCTestCase {
         let transport = WinlinkAX25Transport(
             sessionManager: manager,
             sendFrames: { [unowned self] in self.sent.append(contentsOf: $0) },
-            destination: peer)
+            destination: peer,
+            answering: true)   // the answerer, on the link A opened
         var steppedAside: String?
         var received = Data()
         transport.onStandAside = { steppedAside = $0 }

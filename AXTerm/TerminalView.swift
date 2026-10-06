@@ -3884,6 +3884,11 @@ struct TerminalView: View {
         upsertSessionRecord(intent: intent, statusText: "Connecting")
         connectBarViewModel.markConnecting()
 
+        if hasLeftoverNetRomLink(to: intent.normalizedTo),
+           await !makeWayForTerminalConnect(to: intent.normalizedTo) {
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            return .failed
+        }
         guard let frame = txViewModel.connect() else {
             connectBarViewModel.recordAttempt(intent: intent, result: .failed)
             connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build SABM frame")
@@ -4514,7 +4519,42 @@ struct TerminalView: View {
         }
     }
 
+    /// Whether the link to `destination` is a leftover node link: up, and
+    /// it has carried NET/ROM. A connect needs a link of its own there, since
+    /// the far station greets only a new one (smoke run issue 80).
+    private func hasLeftoverNetRomLink(to destination: String) -> Bool {
+        sessionCoordinator.sessionManager
+            .connectedSession(withPeer: CallsignNormalizer.toAddress(destination))?.carriesNetRom == true
+    }
+
+    /// Releases a leftover node link to `destination` before a connect, or
+    /// says why it has to stay. True when the connect can go ahead.
+    private func makeWayForTerminalConnect(to destination: String) async -> Bool {
+        let station = destination.uppercased()
+        switch await sessionCoordinator.makeWayForFreshLink(to: CallsignNormalizer.toAddress(destination)) {
+        case .clear, .inUse:
+            return true
+        case .released:
+            client.appendSystemNotification(
+                "Closed the idle NET/ROM link to \(station) so this connect gets a link of its own.")
+            return true
+        case .carriesCircuit(let reason):
+            client.appendSystemNotification(reason)
+            connectBarViewModel.markFailed(reason: .connectRejected, detail: reason)
+            updateActiveSessionRecordState("Failed")
+            return false
+        }
+    }
+
     private func connectAX25AndRecord(intent: ConnectIntent) {
+        if hasLeftoverNetRomLink(to: intent.normalizedTo) {
+            Task { @MainActor in
+                if await makeWayForTerminalConnect(to: intent.normalizedTo) {
+                    connectAX25AndRecord(intent: intent)
+                }
+            }
+            return
+        }
         guard let frame = txViewModel.connect() else {
             connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build SABM frame")
             updateActiveSessionRecordState("Failed")
@@ -4744,6 +4784,15 @@ struct TerminalView: View {
             aliasResolve: { relayKnowledge.aliasCallsign($0) },
             maxChainLength: settings.autoRouteMaxChainLength
         )
+        // The node's banner comes only on a new link (smoke run issue 80).
+        if hasLeftoverNetRomLink(to: plan.linkTarget) {
+            Task { @MainActor in
+                if await makeWayForTerminalConnect(to: plan.linkTarget) {
+                    connectNETROMViaNodePrompts(intent: intent, override: override)
+                }
+            }
+            return
+        }
         client.appendSystemNotification(plan.operatorSummary)
 
         // Set relay phase BEFORE sending SABM so data interception is active when UA arrives

@@ -235,6 +235,12 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Using TimeInterval keeps this compatible with the virtual clock in tests.
     var sabmSentAt: TimeInterval?
 
+    /// The link has carried a NET/ROM datagram (PID 0xCF) either way: it is
+    /// a node's link, not a conversation someone is typing in. A leftover one
+    /// with no circuit riding it can be released for a fresh connect
+    /// (`SessionCoordinator.makeWayForFreshLink`, smoke run issue 80).
+    var carriesNetRom = false
+
     /// When the SABM sent after an XID gave up will have left the radio. A
     /// DM or FRMR heard before then cannot answer it: it is the XID's late
     /// answer (smoke run 2026-10-03-1, 12.4). Kept apart from `onAirUntil`,
@@ -1994,6 +2000,7 @@ final class AX25SessionManager: ObservableObject {
         displayInfo: String? = nil
     ) -> [OutboundFrame] {
         let session = selectSession(for: destination, path: path, radio: radio)
+        if pid == NetRomWire.pid { session.carriesNetRom = true }
         // Cut at the live paclen: data segmented now uses the current value,
         // and anything cut earlier keeps its size (§7.8.1).
         //
@@ -2019,6 +2026,7 @@ final class AX25SessionManager: ObservableObject {
             // with a fresh one, and data queued on the old object never went
             // out (smoke run 2026-10-03-1, 7.2: a lost NET/ROM CONREQ).
             let connecting = self.session(for: destination, path: path, radio: radio)
+            if pid == NetRomWire.pid { connecting.carriesNetRom = true }
             for (i, chunk) in chunks.enumerated() {
                 let info = (i == 0) ? displayInfo : nil
                 connecting.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
@@ -4324,6 +4332,7 @@ final class AX25SessionManager: ObservableObject {
         // are NET/ROM L3 datagrams for the transport engine —
         // never terminal text, never AXDP, never a claim's bytes.
         if pid == NetRomWire.pid {
+            session.carriesNetRom = true
             TxLog.debug(.session, "NET/ROM datagram delivered from L2", [
                 "peer": session.remoteAddress.display,
                 "size": data.count

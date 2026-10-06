@@ -2537,6 +2537,83 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
+    // MARK: - Making way for a fresh link
+
+    /// What stands between a caller and a fresh AX.25 link to a station.
+    enum FreshLinkOutcome: Equatable {
+        /// No link is up; connect as usual.
+        case clear
+        /// A leftover NET/ROM link with nothing riding it was released.
+        case released
+        /// The link carries a NET/ROM circuit and stays up.
+        case carriesCircuit(String)
+        /// The link is someone's session (a terminal conversation, a
+        /// caller's session) and stays up.
+        case inUse(String)
+
+        /// Why the call cannot have its fresh link, or nil when it can.
+        var refusal: String? {
+            switch self {
+            case .clear, .released: return nil
+            case .carriesCircuit(let reason), .inUse(let reason): return reason
+            }
+        }
+    }
+
+    /// Clears the way for a call that needs a link of its own.
+    ///
+    /// AX.25 2.2 allows one link per pair of addresses, and a Winlink exchange
+    /// (peer to peer or with a gateway) begins when the link comes up: the
+    /// called station speaks first, and there is no way to ask it to speak
+    /// again on a link already up. After a NET/ROM circuit closes, its link
+    /// can stay up with nothing on it; a call that reused it waited for a
+    /// greeting that never came, and a terminal connect failed outright
+    /// (smoke run 2026-10-03-1, issue 80).
+    ///
+    /// A leftover NET/ROM link with no circuit riding it is released with DISC
+    /// and the peer's UA (or force-closed if the peer is gone). A link
+    /// carrying a circuit is left up, as is one that never carried NET/ROM,
+    /// which is someone's session; the caller is told why.
+    func makeWayForFreshLink(to destination: AX25Address,
+                             radio: RadioID? = nil,
+                             circuitsRiding: ((AX25Address) -> Bool)? = nil,
+                             timeout: TimeInterval = 30) async -> FreshLinkOutcome {
+        let session = radio.map { sessionManager.connectedSession(withPeer: destination, radio: $0) }
+            ?? sessionManager.connectedSession(withPeer: destination)
+        guard let session else { return .clear }
+        let station = destination.display.uppercased()
+        let ridden = circuitsRiding ?? { [weak self] neighbor in
+            self?.netRomDriver.circuits.contains {
+                CallsignNormalizer.addressesMatch($0.neighbor, neighbor) && $0.state != .disconnected
+            } ?? false
+        }
+        if ridden(destination) {
+            return .carriesCircuit(
+                "The link to \(station) is carrying a NET/ROM circuit. "
+                + "Close the circuit, then call again.")
+        }
+        guard session.carriesNetRom else {
+            return .inUse(
+                "A session with \(station) is already open. "
+                + "Disconnect it, then call again.")
+        }
+
+        TxLog.outbound(.session, "Releasing an idle NET/ROM link for a fresh connect", [
+            "peer": station
+        ])
+        if let disc = sessionManager.disconnect(session: session) {
+            _ = sendFrame(disc)
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while session.state != .disconnected && session.state != .error && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if session.state != .disconnected && session.state != .error {
+            sessionManager.forceDisconnect(session: session)
+        }
+        return .released
+    }
+
     // MARK: - Setup
 
     private func setupCallbacks() {

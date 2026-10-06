@@ -818,7 +818,10 @@ struct WinlinkMailboxScreen: View {
                 destination: destination,
                 path: path,
                 radio: sessionCoordinator.radio(
-                    preferring: context.settings.preferredRadioID, for: destination, path: path))
+                    preferring: context.settings.preferredRadioID, for: destination, path: path),
+                makeWayForFreshLink: { [sessionCoordinator] in
+                    await sessionCoordinator.makeWayForFreshLink(to: destination).refusal
+                })
 
             sessionCoordinator.selectAdaptiveSession(
                 destination: rung.callsign, path: rung.path.isEmpty ? nil : rung.path)
