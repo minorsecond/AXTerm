@@ -1028,6 +1028,12 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private var lastResetToken: UUID?
     private var lastFocusNodeID: String?
     private var lastFitToSelectionRequest: UUID?
+    /// The stations the last fit-all framed, while the operator has not moved
+    /// the camera since. A station that joins the graph then gets the view
+    /// refit around it; it used to be laid out past the right edge, out of
+    /// sight beside the sidebar, until Fit was pressed (smoke run 2026-10-03-1,
+    /// issue 92). Nil once the operator pans or zooms.
+    private var followedFitNodeIDs: Set<String>?
     private var lastResetCameraRequest: UUID?
 
     private var selectionStart: CGPoint?
@@ -1144,6 +1150,13 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 myCallsign: normalizedCallsign,
                 visibleNodeIDs: visibleNodeIDs
             )
+            if let followed = followedFitNodeIDs {
+                let shown = visibleNodeIDs.isEmpty ? Set(nodePositions.map(\.id)) : visibleNodeIDs
+                if GraphFitFollowing.shouldRefit(framed: followed, shown: shown) {
+                    fitCamera(to: shown, positions: nodePositions)
+                    followedFitNodeIDs = shown
+                }
+            }
         }
 
         let newHighlight = GraphHighlightKey(
@@ -1163,6 +1176,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     func handle(resetToken: UUID) {
         guard resetToken != lastResetToken else { return }
         lastResetToken = resetToken
+        followedFitNodeIDs = nil
         camera.reset()
         onCameraUpdate(CameraState(scale: camera.scale, offset: camera.offset))
         requestInteractionRedraw()
@@ -1172,6 +1186,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         guard focusNodeID != lastFocusNodeID else { return }
         lastFocusNodeID = focusNodeID
         guard let focusNodeID, let node = nodeIndex[focusNodeID], let view else { return }
+        followedFitNodeIDs = nil
         let viewSize = view.bounds.size
         camera.focus(on: node.position, size: viewSize)
         onFocusHandled()
@@ -1203,6 +1218,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             targetNodeIDs = Set(nodePositions.map { $0.id })
         }
 
+        // Explicit targets are a selection the view model keeps framed itself.
+        followedFitNodeIDs = fitTargetNodeIDs.isEmpty ? targetNodeIDs : nil
         fitCamera(to: targetNodeIDs, positions: nodePositions)
     }
 
@@ -1399,7 +1416,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             selectionRect = rect
             onSelectionRect(rect)
         } else {
-                camera.pan(by: delta, viewSize: view?.bounds.size)
+            followedFitNodeIDs = nil
+            camera.pan(by: delta, viewSize: view?.bounds.size)
             requestInteractionRedraw()
         }
     }
@@ -1454,7 +1472,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             // Clamp per-event zoom delta for smoother zooming
             let clampedDelta = max(-50, min(50, delta.height))
             let zoomDelta = 1 - (clampedDelta * sensitivity)
-                camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
+            followedFitNodeIDs = nil
+            camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
             requestInteractionRedraw()
             return true  // Consumed - don't scroll the page
         }
@@ -1468,6 +1487,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         // Clamp magnification for smoother pinch-zoom
         let clampedMag = max(-0.5, min(0.5, magnification))
         let zoomDelta = 1 + (clampedMag * 0.6)
+        followedFitNodeIDs = nil
         camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
         requestInteractionRedraw()
     }

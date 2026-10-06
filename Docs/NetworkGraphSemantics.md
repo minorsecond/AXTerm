@@ -225,7 +225,10 @@ Clicking the "?" button shows a popover with full definitions.
 
 ### Explicit Actions
 
-- **Fit Graph**: Zoom to show all visible nodes (default toolbar button)
+- **Fit Graph**: Zoom to show all visible nodes (default toolbar button).
+  Until you pan or zoom, the view keeps following: a station that joins the
+  graph gets the view refit around it instead of landing past the edge
+  (issue 92).
 - **Zoom to Selection**: Explicit action to zoom to selected node's neighborhood
 - **Clear Selection (X)**: Deselect and return to Fit Graph extent
 
