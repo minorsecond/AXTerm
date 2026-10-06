@@ -25,8 +25,8 @@ final class NodesBroadcastSemanticsTests: XCTestCase {
         CallsignValidator.configureIgnoredServiceEndpoints([])
     }
 
-    private func nodes(from call: String, ssid: Int, payload: [UInt8]) -> Packet {
-        Packet(timestamp: heardAt,
+    private func nodes(from call: String, ssid: Int, payload: [UInt8], at time: Date? = nil) -> Packet {
+        Packet(timestamp: time ?? heardAt,
                from: AX25Address(call: call, ssid: ssid),
                to: AX25Address(call: "NODES"),
                frameType: .ui, control: 0x03, pid: NetRomBroadcastParser.netromPID,
@@ -104,6 +104,31 @@ final class NodesBroadcastSemanticsTests: XCTestCase {
         XCTAssertTrue(entry.tellers.isEmpty, "a node listing itself is still no teller")
         XCTAssertNotNil(entry.heardDirectlyAt)
         XCTAssertTrue(entry.isReachable)
+    }
+
+    /// The live harvest both apps run on their packet sweep learns a node
+    /// as it is heard, and each later broadcast moves its heard time. The
+    /// Mac only learned aliases when the operator opened Packets, Map or
+    /// Nodes, so a NODES heard with the Nodes page open never appeared
+    /// (smoke run 2026-10-03-1, 7.2 retest).
+    func testTheLiveHarvestLearnsANodeAsItIsHeard() throws {
+        let suite = "NodesBroadcastSemanticsTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+        let aliases = NodeAliasStore(defaults: defaults)
+        let capabilities = NodeCapabilityStore(defaults: defaults)
+
+        let first = headerOnlyFromB
+        AnnouncementHarvest.run([first], aliases: aliases, capabilities: capabilities)
+        XCTAssertEqual(try XCTUnwrap(aliases.directory.entry(for: "EPINDB")).heardDirectlyAt, heardAt)
+
+        let later = nodes(from: "K0EPI", ssid: 3, payload: [0xFF] + Array("EPINDB".utf8),
+                          at: heardAt.addingTimeInterval(300))
+        // The sweep hands over the whole recent window each time.
+        AnnouncementHarvest.run([first, later], aliases: aliases, capabilities: capabilities)
+        let entry = try XCTUnwrap(aliases.directory.entry(for: "EPINDB"))
+        XCTAssertEqual(entry.heardDirectlyAt, later.timestamp)
+        XCTAssertEqual(entry.announcements, 2, "the first broadcast is not counted again")
     }
 
     func testHeardDirectlySurvivesSavingAndLoading() throws {

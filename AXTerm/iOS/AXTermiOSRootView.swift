@@ -803,9 +803,8 @@ struct AXTermiOSRootView: View {
         // Keep the alias store learning wherever the operator happens to be:
         // aliases are heard in ID beacons, not in the tab that shows them.
         .onReceive(client.$packets.throttle(for: .seconds(5), scheduler: RunLoop.main, latest: true)) { packets in
-            let recent = Array(packets.suffix(200))
-            nodeAliases.ingest(packets: recent)
-            nodeCapabilities.ingest(packets: recent)
+            let recent = Array(packets.suffix(AnnouncementHarvest.window))
+            AnnouncementHarvest.run(recent, aliases: nodeAliases, capabilities: nodeCapabilities)
             // The network's own directory, harvested as it arrives: what
             // stations announced, and which digipeaters actually repeated a
             // frame while we listened.

@@ -143,6 +143,9 @@ struct ContentView: View {
         // Stays here: it publishes into the views, and it persists to a
         // UserDefaults blob rather than to the database.
         announcedGrids.ingest(packets: Array(packets.suffix(Self.serviceWindow)))
+        // Aliases and node capabilities, as they are heard rather than when
+        // the operator next opens a page that sweeps them.
+        AnnouncementHarvest.run(packets, aliases: nodeAliases, capabilities: nodeCapabilities)
         let services = client.stationServices
         let paths = client.networkPaths
         let localCallsign = settings.myCallsign
