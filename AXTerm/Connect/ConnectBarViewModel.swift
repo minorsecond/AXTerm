@@ -663,6 +663,15 @@ final class ConnectBarViewModel: ObservableObject {
         endAutoAttempting()
     }
 
+    /// The session ended without the bar asking: back to a draft from
+    /// connected or disconnecting. `markDisconnected` only completes a
+    /// disconnect that was requested (issue 84).
+    func markSessionEnded() {
+        if case .connectedSession = barState { markDisconnecting() }
+        guard case .disconnecting = barState else { return }
+        markDisconnected()
+    }
+
     func markFailed(reason: ConnectFailure.Reason, detail: String?) {
         let failure = ConnectFailure(reason: reason, detail: detail)
         barState = ConnectBarStateReducer.reduce(state: barState, event: .connectFailed(failure))

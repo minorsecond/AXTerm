@@ -3253,13 +3253,17 @@ struct TerminalView: View {
     /// (issue 84).
     private func endBarSessionIfItsCircuitClosed(before: [NetRomCircuitSummary],
                                                  after: [NetRomCircuitSummary]) {
-        guard case .connectedSession(let session) = connectBarViewModel.barState,
-              case .netrom = session.transport,
+        let session: SessionInfo
+        switch connectBarViewModel.barState {
+        case .connectedSession(let info), .disconnecting(let info): session = info
+        default: return
+        }
+        guard case .netrom = session.transport,
               NetRomCircuitSession.barSessionEnded(
                 barDestination: session.destination, barIsNetRomSession: true,
                 before: before, after: after)
         else { return }
-        connectBarViewModel.markDisconnected()
+        connectBarViewModel.markSessionEnded()
     }
 
     private func syncCircuitSessionRecords() {

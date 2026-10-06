@@ -256,6 +256,36 @@ final class ConnectBarViewModelTests: XCTestCase {
         }
     }
 
+    /// A session that ends with nobody asking (a NET/ROM circuit closing
+    /// while its link stays up) goes straight back to a draft, from
+    /// connected as well as from disconnecting. `markDisconnected` alone
+    /// only completes a disconnect the bar asked for (smoke run
+    /// 2026-10-03-1, issue 84).
+    func testASessionThatEndsGoesBackToADraft() {
+        for asked in [false, true] {
+            let vm = makeViewModel()
+            vm.setMode(.netrom, for: .terminal)
+            vm.toCall = "EPINDB"
+            vm.markConnecting()
+            vm.markConnected(sourceCall: "K0EPI-2", destination: "EPINDB", via: [],
+                             transportMode: .netrom, forcedNextHop: nil)
+            if asked { vm.markDisconnecting() }
+            vm.markSessionEnded()
+            guard case .disconnectedDraft(let draft) = vm.barState else {
+                return XCTFail("asked \(asked): expected a draft, got \(vm.barState)")
+            }
+            XCTAssertEqual(draft.destination, "EPINDB", "the draft keeps the destination for Connect")
+        }
+    }
+
+    func testEndingWithNoSessionChangesNothing() {
+        let vm = makeViewModel()
+        vm.toCall = "EPINDB"
+        let before = vm.barState
+        vm.markSessionEnded()
+        XCTAssertEqual(vm.barState, before)
+    }
+
     func testCallsignWithSSIDPreservedOnSelection() {
         let vm = makeViewModel()
 
