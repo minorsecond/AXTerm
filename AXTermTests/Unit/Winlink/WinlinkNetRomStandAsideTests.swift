@@ -63,6 +63,42 @@ final class WinlinkNetRomStandAsideTests: XCTestCase {
         XCTAssertFalse(sentDISC, "closing a transport that stepped aside sends nothing")
     }
 
+    /// The node's answer to the CONREQ survives the answerer stepping aside.
+    /// On the air B's greeting was still unacknowledged when A's CONREQ came
+    /// (its N(R) was 0), so B's CONACK queued behind it; the stand-aside then
+    /// dropped the link's queue, CONACK and all, and A gave up after 30 s
+    /// (issue 80 retest, 14:19Z).
+    func testTheNodesAnswerIsNotDroppedWithTheGreeting() async throws {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 3))
+        manager.defaultConfig = AX25SessionConfig(windowSize: 1, paclen: 128)
+        manager.onSendFrame = { [unowned self] in self.sent.append($0) }
+        _ = manager.handleInboundSABM(from: peer, to: manager.localCallsign, path: DigiPath(), radio: .primary)
+        let session = try XCTUnwrap(manager.existingSession(for: peer))
+        let transport = WinlinkAX25Transport(
+            sessionManager: manager,
+            sendFrames: { [unowned self] in self.sent.append(contentsOf: $0) },
+            destination: peer, answering: true)
+        transport.onStandAside = { _ in }
+        try await transport.open()
+        transport.send(Data("[AXTerm-1.0-B2FHM$]\r".utf8))   // the greeting, unacknowledged
+        XCTAssertEqual(session.outstandingCount, 1)
+
+        // The node answers the CONREQ at once, as the endpoint does.
+        let conack = Data(repeating: 0xCA, count: 22)
+        manager.onNetRomDatagram = { [weak manager] session, _ in
+            guard let manager else { return }
+            self.sent.append(contentsOf: manager.sendData(conack, to: session.remoteAddress,
+                                                          path: DigiPath(), radio: .primary, pid: NetRomWire.pid))
+        }
+        _ = manager.handleInboundIFrame(from: peer, path: DigiPath(), radio: .primary,
+                                        ns: 0, nr: 0, pf: true, payload: Data(repeating: 0, count: 20),
+                                        pid: NetRomWire.pid)
+
+        let queued = session.pendingDataQueue.map(\.data) + session.sendBuffer.values.map(\.payload)
+            + sent.filter { $0.frameType == "i" }.map(\.payload)
+        XCTAssertTrue(queued.contains(conack), "the CONACK was dropped along with the greeting")
+    }
+
     func testTheRunnerEndsQuietlyWhenTheTransportStepsAside() async throws {
         let queue = try DatabaseQueue(path: ":memory:")
         try DatabaseManager.migrator.migrate(queue)

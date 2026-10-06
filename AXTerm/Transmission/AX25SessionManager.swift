@@ -4337,10 +4337,13 @@ final class AX25SessionManager: ObservableObject {
                 "peer": session.remoteAddress.display,
                 "size": data.count
             ])
-            onNetRomDatagram?(session, data)
             // A claim's owner learns the link carries NET/ROM: whatever it
             // expected, the station at the other end is a node (issue 73).
+            // First, so whatever it drops as it lets go is its own and not
+            // the node's answer: a CONACK queued behind an unacknowledged
+            // Winlink greeting went with it (issue 80 retest).
             deliveryClaims[session.key]?.netRomHandler?(session)
+            onNetRomDatagram?(session, data)
             return
         }
         let prefixHex = data.prefix(8).map { String(format: "%02X", $0) }.joined()
