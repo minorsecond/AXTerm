@@ -413,9 +413,12 @@ final class ModemRadioLinkTests: XCTestCase {
         let (link, _, audio, spy) = makeLink(config(), reconnectDelay: 0.2)
         audio.startError = ModemError.notRunning
         link.open()
-        guard await waitUntil("the failed audio start to fail the link", timeout: 15,
-                              { link.state == .failed }) else { return }
-        XCTAssertTrue(spy.errors.contains { $0.contains("Sound modem could not start") }, "\(spy.errors)")
+        // The error is delivered on the main queue after the state changes,
+        // so wait for both: under a full run the state was seen first and the
+        // error list read empty.
+        guard await waitUntil("the failed audio start to fail the link and say why", timeout: 15, {
+            link.state == .failed && spy.errors.contains { $0.contains("Sound modem could not start") }
+        }) else { return }
 
         audio.startError = nil
         await waitUntil("the link to retry and come back", timeout: 15) { link.state == .connected }
