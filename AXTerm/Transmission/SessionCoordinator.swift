@@ -3662,7 +3662,9 @@ final class SessionCoordinator: ObservableObject {
         // here so the session layer never sees it: a DM means nothing to a
         // layer with no link, but an XID would open a negotiation for a
         // link nobody asked for.
-        let hasSession = sessionManager.connectedSession(withPeer: from) != nil
+        // Any link in progress, not only a connected one: the UA to our SABM
+        // or DISC is the link's (issue 90).
+        let hasSession = sessionManager.hasLinkInProgress(withPeer: from)
         if pingProber.noteAnswer(from: from.display, uType: uType, hasSession: hasSession) {
             return
         }

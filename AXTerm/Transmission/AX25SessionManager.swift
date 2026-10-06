@@ -1428,6 +1428,16 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Find a connected session with a specific peer and channel
+    /// Whether a link with `peer` is coming up, up, or closing. Its UA and
+    /// DM belong to the link; a ping probe waiting on the same station must
+    /// not take them (smoke run 2026-10-03-1, issue 90).
+    func hasLinkInProgress(withPeer peer: AX25Address) -> Bool {
+        sessions.values.contains { session in
+            [.connecting, .connected, .disconnecting].contains(session.state)
+                && CallsignNormalizer.addressesMatch(session.remoteAddress, peer)
+        }
+    }
+
     func connectedSession(withPeer peer: AX25Address, radio: RadioID) -> AX25Session? {
         return sessions.values.first {
             $0.remoteAddress == peer &&
