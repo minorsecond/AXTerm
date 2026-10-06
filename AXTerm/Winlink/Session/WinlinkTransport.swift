@@ -35,12 +35,23 @@ protocol WinlinkTransport: AnyObject {
     /// Drops bytes queued for the link that have not gone out yet. Bytes
     /// already on the way (AX.25: numbered and in the window) still go.
     func discardUnsent()
+
+    /// The link turned out to carry something other than B2F (AX.25: NET/ROM
+    /// from a node), and the transport let go of it without ending it. The
+    /// text says why, for the console.
+    var onStandAside: ((String) -> Void)? { get set }
 }
 
 extension WinlinkTransport {
     /// A transport that hands bytes straight to the network has nothing
     /// queued to drop.
     func discardUnsent() {}
+
+    /// Only a shared link can turn out to be someone else's.
+    var onStandAside: ((String) -> Void)? {
+        get { nil }
+        set {}
+    }
 }
 
 nonisolated enum WinlinkTransportError: Error, Equatable {

@@ -26,6 +26,7 @@ final class WinlinkAX25Transport: WinlinkTransport {
     var onReceive: ((Data) -> Void)?
     var onClose: ((String?) -> Void)?
     var onDeliveryProgress: ((Int, Int) -> Void)?
+    var onStandAside: ((String) -> Void)?
 
     private var submittedBytes = 0
 
@@ -69,6 +70,9 @@ final class WinlinkAX25Transport: WinlinkTransport {
             ackHandler: { [weak self] session, _ in
                 self?.reportDeliveryProgress(session: session)
                 self?.disconnectIfDrained(session)
+            },
+            netRomHandler: { [weak self] session in
+                self?.standAside(for: session)
             }
         ) else {
             throw WinlinkTransportError.sessionBusy(
@@ -153,6 +157,19 @@ final class WinlinkAX25Transport: WinlinkTransport {
             releaseClaim()
             onClose?(nil)
         }
+    }
+
+    /// NET/ROM arrived on the link: the station at the other end is a node
+    /// using it for a circuit, not a Winlink caller (smoke run 2026-10-03-1,
+    /// issue 73). The link is the node's, so it stays up; only B2F lets go.
+    private func standAside(for session: AX25Session) {
+        guard !closed else { return }
+        closed = true
+        closeWhenDrained = false
+        discardUnsent()
+        releaseClaim()
+        onStandAside?("\(session.remoteAddress.display) is using this link for NET/ROM, "
+                      + "so the Winlink answerer stepped aside and left it to the node.")
     }
 
     private static func isDrained(_ session: AX25Session) -> Bool {

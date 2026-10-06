@@ -1009,7 +1009,8 @@ final class AX25SessionManager: ObservableObject {
         id: UUID,
         handler: (AX25Session, Data) -> Void,
         stateHandler: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?,
-        ackHandler: ((AX25Session, Int) -> Void)?
+        ackHandler: ((AX25Session, Int) -> Void)?,
+        netRomHandler: ((AX25Session) -> Void)?
     )] = [:]
 
     /// Claims the delivered byte stream for one session key. Returns nil if
@@ -1019,11 +1020,12 @@ final class AX25SessionManager: ObservableObject {
         for key: SessionKey,
         handler: @escaping (AX25Session, Data) -> Void,
         stateHandler: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)? = nil,
-        ackHandler: ((AX25Session, Int) -> Void)? = nil
+        ackHandler: ((AX25Session, Int) -> Void)? = nil,
+        netRomHandler: ((AX25Session) -> Void)? = nil
     ) -> SessionDeliveryClaim? {
         guard deliveryClaims[key] == nil else { return nil }
         let claim = SessionDeliveryClaim(key: key)
-        deliveryClaims[key] = (claim.id, handler, stateHandler, ackHandler)
+        deliveryClaims[key] = (claim.id, handler, stateHandler, ackHandler, netRomHandler)
         return claim
     }
 
@@ -4327,6 +4329,9 @@ final class AX25SessionManager: ObservableObject {
                 "size": data.count
             ])
             onNetRomDatagram?(session, data)
+            // A claim's owner learns the link carries NET/ROM: whatever it
+            // expected, the station at the other end is a node (issue 73).
+            deliveryClaims[session.key]?.netRomHandler?(session)
             return
         }
         let prefixHex = data.prefix(8).map { String(format: "%02X", $0) }.joined()

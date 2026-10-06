@@ -82,6 +82,8 @@ final class WinlinkSessionRunner: ObservableObject {
     private var transport: WinlinkTransport?
     private var timerTasks: [B2FSessionEngine.TimerKind: Task<Void, Never>] = [:]
     private var completion: CheckedContinuation<WinlinkExchangeSummary, Never>?
+    /// The transport found the link was not a Winlink call and let go of it.
+    private var steppedAside = false
     private var startedAt = Date()
     private var sessionFrequencyHz: Int?
     /// Supplied by the caller, which knows the gateway and frequency the
@@ -225,6 +227,9 @@ final class WinlinkSessionRunner: ObservableObject {
         }
         transport.onDeliveryProgress = { [weak self] delivered, submitted in
             self?.handleDeliveryProgress(delivered: delivered, submitted: submitted)
+        }
+        transport.onStandAside = { [weak self] reason in
+            self?.standAside(reason)
         }
 
         messageSubjects = Dictionary(uniqueKeysWithValues: prepared.map { ($0.message.mid, $0.message.subject) })
@@ -601,12 +606,37 @@ final class WinlinkSessionRunner: ObservableObject {
         return await finish(summary: summary, gatewayName: gatewayName, transportName: transportName)
     }
 
+    /// The link is someone else's (a node's NET/ROM circuit), so this was
+    /// never a Winlink exchange. It ends with a note and nothing else: no
+    /// failure, no session-log row, and the link left up (issue 73).
+    private func standAside(_ reason: String) {
+        guard isRunning, completion != nil else { return }
+        log(.event, reason)
+        steppedAside = true
+        let summary = engine?.currentSummary ?? WinlinkExchangeSummary()
+        completion?.resume(returning: summary)
+        completion = nil
+    }
+
     private func finish(summary: WinlinkExchangeSummary, gatewayName: String, transportName: String) async -> WinlinkExchangeSummary {
         cancelAllTimers()
         transport?.onReceive = nil
         transport?.onClose = nil
         transport?.onDeliveryProgress = nil
+        transport?.onStandAside = nil
         progress = nil
+
+        if steppedAside {
+            steppedAside = false
+            observationTask?.cancel()
+            observationTask = nil
+            engine = nil
+            transport = nil
+            lastSummary = nil
+            phase = .idle
+            statusText = ""
+            return summary
+        }
 
         // Persist final delivery states. Anything still marked `sending`
         // (session died mid-body) reverts to `queued`; only offsets the

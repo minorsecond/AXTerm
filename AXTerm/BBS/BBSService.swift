@@ -357,6 +357,14 @@ final class BBSService: ObservableObject {
             stateHandler: { [weak self] _, _, newState in
                 guard newState == .disconnected || newState == .error else { return }
                 self?.endCall(unexpected: true)
+            },
+            netRomHandler: { [weak self] session in
+                // A neighbor node linked up to carry a NET/ROM circuit: the
+                // link is the node's, so the mailbox lets go of it rather
+                // than time it out later (smoke run 2026-10-03-1, issue 73).
+                self?.append(.note, "\(session.remoteAddress.display) is using this link for NET/ROM; "
+                             + "the mailbox stepped aside and left it to the node")
+                self?.endCall(unexpected: false)
             }
         ) else {
             lastRefusal = "\(session.remoteAddress.display.uppercased()): another feature owns this session"

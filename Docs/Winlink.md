@@ -430,6 +430,18 @@ configured SSID (`K0EPI-7`) answers only that exact address, while a bare
 callsign (`K0EPI`) is a wildcard over its own SSIDs. Otherwise a mail
 station would hijack calls meant for a node on another SSID.
 
+**A link that carries NET/ROM is a node's link.** When the answerer and
+the station's node share a callsign, a neighbor node linking to it for a
+NET/ROM circuit looks like a caller: the answerer greets first, as B2F
+requires. The first PID 0xCF frame on that link settles it (AX.25 §3.3:
+the PID is the protocol demux). `AX25SessionManager` tells the claim's
+owner, and `WinlinkAX25Transport` drops whatever B2F it still had queued,
+releases its claim and leaves the link up for the node. The runner ends
+that exchange with a note in the console and no failure or session-log
+row, because no Winlink call happened. Until 2026-10-06 the answerer
+waited 90 s for a handshake, then ended the link, and the circuit riding
+it dropped (smoke run 2026-10-03-1, issue 73).
+
 Wiring: `SessionCoordinator.onInboundSessionConnected` is a plain
 callback so the coordinator needs to know nothing about mail;
 `WinlinkAX25Transport` already reuses an existing connected session, so
