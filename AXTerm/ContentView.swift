@@ -311,6 +311,7 @@ struct ContentView: View {
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(
             settingsStore: settings,
             netRomIntegration: client.netRomIntegration,
+            netRomIntegrationUpdates: client.$netRomIntegration.eraseToAnyPublisher(),
             databaseAggregationProvider: { interval, bucket, calendar, options in
                 await client.aggregateAnalytics(
                     in: interval,
@@ -329,9 +330,6 @@ struct ContentView: View {
             },
             transmittedPacketsProvider: { interval in
                 await client.loadTransmittedPackets(in: interval)
-            },
-            linkStatsProvider: { [weak client] in
-                client?.netRomIntegration?.exportLinkStats() ?? []
             }
         ))
         _bbsSettings = ObservedObject(wrappedValue: bbsSettings)

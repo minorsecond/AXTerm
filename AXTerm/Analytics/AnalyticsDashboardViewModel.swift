@@ -29,7 +29,19 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private weak var settingsStore: AppSettingsStore?
 
     /// Reference to NET/ROM routing system for real-time routing graphs
-    private let netRomIntegration: NetRomIntegration?
+    /// The station's NET/ROM engine as it is now. The station builds it once
+    /// it has a callsign and replaces it when the callsign changes, so the
+    /// model follows `netRomIntegrationUpdates` rather than keeping the one
+    /// it was handed: it held a missing or stale engine, and the graph's
+    /// NET/ROM view and edge tooltip read nothing (smoke run 2026-10-03-1,
+    /// issue 95).
+    private var netRomIntegration: NetRomIntegration?
+    private let initialNetRomIntegration: NetRomIntegration?
+    private let netRomIntegrationUpdates: AnyPublisher<NetRomIntegration?, Never>?
+    private var netRomUpdatesSubscription: AnyCancellable?
+    private var netRomEngineSubscription: AnyCancellable?
+
+    var currentNetRomIntegration: NetRomIntegration? { netRomIntegration }
 
     @Published var timeframe: AnalyticsTimeframe {
         didSet {
@@ -224,16 +236,11 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     nonisolated private let databaseAggregationProvider: DatabaseAggregationProvider?
     nonisolated private let timeframePacketsProvider: TimeframePacketsProvider?
     nonisolated private let transmittedPacketsProvider: TimeframePacketsProvider?
-    /// The link estimates as they are now. The station builds its NET/ROM
-    /// engine when it has a callsign and rebuilds it when the callsign
-    /// changes, so the one handed to this model at window creation can be
-    /// missing or stale; the edge tooltip read none at all on A (705).
-    private let linkStatsProvider: (() -> [LinkStatRecord])?
     nonisolated private let captureEventsProvider: CaptureEventsProvider?
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
     private var cancellables: Set<AnyCancellable> = []
     private var packets: [Packet] = []
-    private var netRomUpdateCount: Int = 0
+    private(set) var netRomUpdateCount: Int = 0
     private var chartWidth: CGFloat = 640
     private var graphLayoutSeed: Int = 1
     private var selectionState = GraphSelectionState()
@@ -280,23 +287,23 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     init(
         settingsStore: AppSettingsStore? = nil,
         netRomIntegration: NetRomIntegration? = nil,
+        netRomIntegrationUpdates: AnyPublisher<NetRomIntegration?, Never>? = nil,
         databaseAggregationProvider: DatabaseAggregationProvider? = nil,
         captureEventsProvider: CaptureEventsProvider? = nil,
         timeframePacketsProvider: TimeframePacketsProvider? = nil,
         transmittedPacketsProvider: TimeframePacketsProvider? = nil,
-        linkStatsProvider: (() -> [LinkStatRecord])? = nil,
         calendar: Calendar = .current,
         packetDebounce: TimeInterval = 0.25,
         graphDebounce: TimeInterval = 0.4,
         packetScheduler: RunLoop = .main
     ) {
         self.settingsStore = settingsStore
-        self.netRomIntegration = netRomIntegration
+        self.initialNetRomIntegration = netRomIntegration
+        self.netRomIntegrationUpdates = netRomIntegrationUpdates
         self.databaseAggregationProvider = databaseAggregationProvider
         self.captureEventsProvider = captureEventsProvider
         self.timeframePacketsProvider = timeframePacketsProvider
         self.transmittedPacketsProvider = transmittedPacketsProvider
-        self.linkStatsProvider = linkStatsProvider
         self.calendar = calendar
 
         // Load from settings store or use defaults
@@ -558,7 +565,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }) else { return nil }
         let callsign = Dictionary(viewState.graphModel.nodes.map { ($0.id, $0.callsign) },
                                   uniquingKeysWith: { first, _ in first })
-        let records = linkStatsProvider?() ?? netRomIntegration?.exportLinkStats() ?? []
+        let records = netRomIntegration?.exportLinkStats() ?? []
         let now = Date()
         return GraphEdgeTooltip.lines(
             sourceCall: callsign[edge.sourceID] ?? edge.sourceID,
@@ -762,16 +769,29 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func bindNetRomUpdates() {
-        guard let netRomIntegration else { return }
-        
-        netRomIntegration.didUpdate
+        adoptNetRomIntegration(initialNetRomIntegration, rebuild: false)
+        netRomEngineSubscription = netRomIntegrationUpdates?
+            .receive(on: RunLoop.main)
+            .sink { [weak self] integration in
+                self?.adoptNetRomIntegration(integration)
+            }
+    }
+
+    /// Switches to `integration`, moving the update subscription with it,
+    /// and redraws a NET/ROM graph from the new engine's tables.
+    private func adoptNetRomIntegration(_ integration: NetRomIntegration?, rebuild: Bool = true) {
+        guard integration !== netRomIntegration else { return }
+        netRomIntegration = integration
+        netRomUpdatesSubscription = integration?.didUpdate
             .receive(on: RunLoop.main)
             .sink { [weak self] in
                 guard self?.autoUpdateEnabled == true else { return }
                 self?.netRomUpdateCount += 1
                 self?.scheduleGraphBuild(reason: "NET/ROM update")
             }
-            .store(in: &cancellables)
+        if rebuild, graphViewMode.isNetRomMode {
+            scheduleGraphBuild(reason: "NET/ROM engine replaced")
+        }
     }
 
     private func bindSettingsStore() {

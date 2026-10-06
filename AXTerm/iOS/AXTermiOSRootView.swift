@@ -227,6 +227,7 @@ struct AXTermiOSRootView: View {
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(
             settingsStore: settings,
             netRomIntegration: client.netRomIntegration,
+            netRomIntegrationUpdates: client.$netRomIntegration.eraseToAnyPublisher(),
             databaseAggregationProvider: { interval, bucket, calendar, options in
                 await client.aggregateAnalytics(in: interval, bucket: bucket,
                                                 calendar: calendar, options: options)
@@ -238,9 +239,6 @@ struct AXTermiOSRootView: View {
             },
             transmittedPacketsProvider: { interval in
                 await client.loadTransmittedPackets(in: interval)
-            },
-            linkStatsProvider: { [weak client] in
-                client?.netRomIntegration?.exportLinkStats() ?? []
             }))
 
         // The coordinator's wiring and the mailbox services are built once,
