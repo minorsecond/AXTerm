@@ -110,10 +110,15 @@ final class NetRomIntegrationTests: XCTestCase {
         let integration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
         let now = Date(timeIntervalSince1970: 1_700_005_400)
 
-        // Build up link quality with many consistent packets
+        // Build up link quality with distinct packets. Identical ones two
+        // seconds apart are retries and measure the link as bad.
         for offset in 0..<20 {
             let ts = now.addingTimeInterval(Double(offset) * 2)
-            await integration.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts), timestamp: ts)
+            var packet = makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts)
+            packet = Packet(timestamp: ts, from: packet.from, to: packet.to, frameType: .ui,
+                            info: Data("TEST \(offset)".utf8), rawAx25: Data("TEST \(offset)".utf8),
+                            infoText: "TEST \(offset)")
+            await integration.observePacket(packet, timestamp: ts)
         }
 
         let neighbors = await integration.currentNeighbors()
@@ -122,7 +127,10 @@ final class NetRomIntegrationTests: XCTestCase {
             return
         }
 
-        // Neighbor quality should be boosted by good link quality
+        // Neighbor quality is the measured link (from the neighbor, since
+        // nothing was sent to it): beacons alone give a capped presence credit.
+        let link = await integration.linkQuality(from: "W0ABC", to: "N0CALL")
+        XCTAssertEqual(neighbor.quality, link, "Neighbor quality is read from its measured link.")
         XCTAssertGreaterThan(neighbor.quality, 80, "Neighbor quality should benefit from link quality observations.")
     }
 

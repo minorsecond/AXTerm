@@ -79,7 +79,9 @@ final class NetRomIntegration {
         if mode == .inference || mode == .hybrid {
             self.passiveInference = makePassiveInference(localCallsign: localCallsign)
         }
-
+        router.measuredNeighborQuality = { [weak self] call, radio in
+            self?.measuredNeighborQuality(call, radio: radio)
+        }
     }
 
     /// Set or update the persistence reference.
@@ -587,35 +589,29 @@ final class NetRomIntegration {
         )
     }
 
-    /// The neighbor's measured link quality, or nil when the estimator has no
-    /// evidence for either direction.
-    private func measuredLinkQuality(_ call: String) -> Int? {
-        let quality = linkQualityForNeighbor(call)
+    /// A neighbor's measured quality on a radio: 255 / ETX of the link from
+    /// us to it, the direction traffic routed through it goes, whose ETX
+    /// already covers both halves of the exchange (the frame arriving and
+    /// its acknowledgment coming back). With nothing sent to it yet, the link
+    /// from it stands in, on the assumption that the path is symmetric. Nil
+    /// when neither has been measured. This replaced the average of the two
+    /// directions, which mixed in a figure for a path traffic to the
+    /// neighbor never takes.
+    func measuredNeighborQuality(_ call: String, radio: RadioID = .primary) -> Int? {
         let normalized = CallsignValidator.normalize(call)
-        guard !normalized.isEmpty,
-              linkEstimator.linkQuality(from: normalized, to: localCallsign) > 0
-                || linkEstimator.linkQuality(from: localCallsign, to: normalized) > 0 else { return nil }
-        return quality
+        guard !normalized.isEmpty else { return nil }
+        let toNeighbor = linkEstimator.linkQuality(from: localCallsign, to: normalized, radio: radio)
+        if toNeighbor > 0 { return toNeighbor }
+        let fromNeighbor = linkEstimator.linkQuality(from: normalized, to: localCallsign, radio: radio)
+        return fromNeighbor > 0 ? fromNeighbor : nil
+    }
+
+    private func measuredLinkQuality(_ call: String) -> Int? {
+        measuredNeighborQuality(call)
     }
 
     private func linkQualityForNeighbor(_ call: String) -> Int {
-        let normalized = CallsignValidator.normalize(call)
-        guard !normalized.isEmpty else { return routerConfig.neighborBaseQuality }
-
-        // Get bidirectional link quality
-        let forwardQuality = linkEstimator.linkQuality(from: normalized, to: localCallsign)
-        let reverseQuality = linkEstimator.linkQuality(from: localCallsign, to: normalized)
-
-        // Use the average of the observed directions. The old code took the *max*
-        // (discarding the worse direction) and floored the result at
-        // neighborBaseQuality, so a neighbor could never read below ~80 no matter
-        // how bad its link. Cold start is handled by the estimator's warm-up prior.
-        if forwardQuality > 0 && reverseQuality > 0 {
-            return (forwardQuality + reverseQuality) / 2
-        }
-        if forwardQuality > 0 { return forwardQuality }
-        if reverseQuality > 0 { return reverseQuality }
-        return routerConfig.neighborBaseQuality
+        measuredNeighborQuality(call) ?? routerConfig.neighborBaseQuality
     }
 
     /// Returns whether the frame refreshed its sender as a neighbor.

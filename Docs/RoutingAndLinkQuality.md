@@ -302,22 +302,35 @@ restart.
 
 ## 8. Neighbor and Route Quality Semantics
 
-- **Neighbor observed quality** is the average of the observed link-quality
-  directions (forward and reverse when both exist, the observed one otherwise);
-  `neighborBaseQuality` (80) is only the cold-start default, not a floor.
-- **Neighbor path quality** updates by EWMA blend (70% current, 30% observed).
-  There is no per-observation "heard bonus": quality moves only on evidence, in
-  both directions.
-- **One update per frame, from evidence.** In hybrid mode a direct frame from a
-  neighbor updates it once, from the classic path's measured link quality;
-  passive inference does not count the same frame again. Passive inference
-  uses the measured link quality too, for a direct sender or for the digipeater
-  that repeated a frame. `inferredBaseQuality` (60) is used only for a station
-  with no measured link at all, as its starting value. Before this, inference
-  blended every frame toward 60, and K0EPI-3 read 162 beside links of 229 and
-  169 (smoke run 2026-10-03-1, issue 97).
-- The Neighbors tab's Quality tooltip shows the measured quality of each
-  direction and their average, or says that nothing has been measured yet.
+- **Neighbor quality is read from the link estimator**, not stored: 255 / ETX of
+  the link from this station to the neighbor, the direction traffic routed
+  through it takes. That link's ETX = 1 / (df × dr) already covers both halves
+  of an exchange, the frame arriving (df) and its acknowledgment coming back
+  (dr). With nothing sent to the neighbor yet, the link from it stands in, on
+  the assumption that the path is symmetric. This is how ETX routing uses link
+  measurements (De Couto et al., MobiCom 2003), and it follows the four-bit
+  estimator's preference for acknowledgments on real traffic over beacons
+  (Fonseca et al., HotNets 2007), which the link estimator already applies
+  (§1, Evidence Sources).
+- **No second average.** The figure moves when the link estimate moves; the
+  estimator's own EWMA is the smoothing. It used to be a separate running
+  average (70% old, 30% new) sampled only on frames that "refresh a neighbor",
+  so acknowledgments never moved it, it trailed the link, and it described the
+  neighbor's traffic pattern more than its link: 145 beside links of 167 and
+  205 after a transfer (smoke run 2026-10-03-1, issue 97). Before that, passive
+  inference also pulled every update toward a fixed 60.
+- **Little evidence reads as little evidence.** The estimator's warm-up keeps a
+  link with few observations near its prior (one frame gives df 0.75), and the
+  Neighbors tab's tooltip calls a figure from fewer than 10 observations
+  tentative.
+- **With no measurement at all** the neighbor shows its starting value:
+  `neighborBaseQuality` (80) when heard directly, `inferredBaseQuality` (60)
+  when only inferred through a digipeater. These are priors, not floors, and
+  stop mattering at the first measurement.
+- **Recency is separate**: the Freshness column, and the recency multiplier in
+  the composite used for ranking (§2). Neighbors still expire as before.
+- The Neighbors tab's Quality tooltip names the link the figure is read from
+  and gives its df, dr, ETX and observation count.
 - **Route quality** follows classic NET/ROM semantics: each broadcast carries the
   origin's current figure and *replaces* the stored quality (it can decrease).
   Passively inferred evidence may only corroborate (raise) a broadcast-sourced

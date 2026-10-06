@@ -74,11 +74,11 @@ nonisolated struct NeighborDisplayInfo: Identifiable, Hashable {
 
     /// - Parameters:
     ///   - localCallsign: this station, for naming the two directions.
-    ///   - heardQuality: measured quality of the neighbor → us link, if any.
-    ///   - sentQuality: measured quality of the us → neighbor link, if any.
+    ///   - toNeighbor: the measured link from us to the neighbor, if any.
+    ///   - fromNeighbor: the measured link from the neighbor to us, if any.
     init(from info: NeighborInfo, now: Date, ttl: TimeInterval = NeighborDisplayInfo.defaultTTL,
          plateau: TimeInterval = NeighborDisplayInfo.defaultPlateau,
-         localCallsign: String = "", heardQuality: Int? = nil, sentQuality: Int? = nil) {
+         localCallsign: String = "", toNeighbor: LinkStatRecord? = nil, fromNeighbor: LinkStatRecord? = nil) {
         self.id = info.radioID == .primary ? info.call : "\(info.call)@\(info.radioID.rawValue)"
         self.callsign = info.call
         self.radioID = info.radioID
@@ -95,31 +95,48 @@ nonisolated struct NeighborDisplayInfo: Identifiable, Hashable {
         self.freshnessStatus = info.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
         self.qualityTooltip = Self.qualityTooltip(
             call: info.call, quality: info.quality, sourceType: info.sourceType,
-            localCallsign: localCallsign, heardQuality: heardQuality, sentQuality: sentQuality)
+            localCallsign: localCallsign, toNeighbor: toNeighbor, fromNeighbor: fromNeighbor)
     }
 
+    /// Fewer observations than this and the tooltip calls the figure
+    /// tentative: the estimator's warm-up still holds it near its prior.
+    static let tentativeObservations = 10
+
+    /// Why the quality is what it is: which link it is read from, and that
+    /// link's df, dr, ETX and evidence count.
     static func qualityTooltip(call: String, quality: Int, sourceType: String, localCallsign: String,
-                               heardQuality: Int?, sentQuality: Int?) -> String {
+                               toNeighbor: LinkStatRecord?, fromNeighbor: LinkStatRecord?) -> String {
         let me = localCallsign.isEmpty ? "this station" : localCallsign
         var lines = ["Quality: \(quality) (\(Int((Double(quality) / 255 * 100).rounded()))%)"]
-        lines.append("A running average: each frame from \(call) that refreshes it moves it 30% of the way to the link's measured quality at that moment.")
-        let measured = [heardQuality, sentQuality].compactMap { $0 }.filter { $0 > 0 }
-        if measured.isEmpty {
-            lines.append("No link to \(call) measured yet, so it is still near its starting value (80 when heard directly, 60 when only inferred through a digipeater).")
-        } else {
-            let heard = heardQuality.map(String.init) ?? "not measured"
-            let sent = sentQuality.map(String.init) ?? "not measured"
-            lines.append("Measured now: \(call) → \(me) \(heard), \(me) → \(call) \(sent)")
-            if measured.count == 2 {
-                lines.append("Average of the two directions: \(measured.reduce(0, +) / 2)")
+
+        func derivation(_ link: LinkStatRecord) -> String {
+            guard let df = link.dfEstimate else { return "  (restored from the last session)" }
+            let dr = link.drEstimate.map { String(format: "dr %.2f", $0) } ?? "dr unobserved (0.99 assumed)"
+            let etx = LinkQualityEstimator.etx(df: df, dr: link.drEstimate)
+            let count = link.observationCount == 1 ? "1 observation" : "\(link.observationCount) observations"
+            var line = String(format: "  df %.2f × ", df) + dr + String(format: " → ETX %.2f, from ", etx) + count
+            if link.observationCount < tentativeObservations { line += "; still tentative" }
+            return line
+        }
+
+        if let to = toNeighbor, to.quality > 0 {
+            lines.append("= 255 / ETX of the link \(me) → \(call), the way traffic to it goes:")
+            lines.append(derivation(to))
+            if let from = fromNeighbor, from.quality > 0 {
+                lines.append("For reference, \(call) → \(me): \(from.quality)")
             }
-            lines.append("Each link's quality is 255 / ETX; the Link Quality tab shows its df, dr and ETX.")
+        } else if let from = fromNeighbor, from.quality > 0 {
+            lines.append("Nothing has been sent to \(call) yet, so this is 255 / ETX of the link \(call) → \(me), taking the path as symmetric:")
+            lines.append(derivation(from))
+        } else {
+            lines.append("No link to \(call) measured yet, so this is a starting value: 80 when heard directly, 60 when only inferred through a digipeater.")
         }
         switch sourceType {
         case "inferred": lines.append("Inferred from traffic it repeated or sent us.")
         case "broadcast": lines.append("Learned from its NODES broadcasts.")
         default: lines.append("Heard directly.")
         }
+        lines.append("(See Docs/RoutingAndLinkQuality.md §8)")
         return lines.joined(separator: "\n")
     }
 
@@ -895,13 +912,13 @@ final class NetRomRoutesViewModel: ObservableObject {
 
         let local = integration.localCallsign
         let allLinks = integration.exportLinkStats()
-        func linkQuality(_ from: String, _ to: String, _ radio: RadioID) -> Int? {
-            allLinks.first { $0.fromCall == from && $0.toCall == to && $0.radioID == radio }?.quality
+        func link(_ from: String, _ to: String, _ radio: RadioID) -> LinkStatRecord? {
+            allLinks.first { $0.fromCall == from && $0.toCall == to && $0.radioID == radio }
         }
         neighbors = filteredNeighbors.map {
             NeighborDisplayInfo(from: $0, now: now, ttl: neighborTTL, localCallsign: local,
-                                heardQuality: linkQuality($0.call, local, $0.radioID),
-                                sentQuality: linkQuality(local, $0.call, $0.radioID))
+                                toNeighbor: link(local, $0.call, $0.radioID),
+                                fromNeighbor: link($0.call, local, $0.radioID))
         }
 
         // Routes use different TTL strategies based on source type

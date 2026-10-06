@@ -6,6 +6,11 @@
 //  read 162 beside links of 229 and 169 (smoke run 2026-10-03-1, issue 97):
 //  in hybrid mode each direct frame moved it toward the measured link
 //  quality, and passive inference then moved it again toward a fixed 60.
+//  After that was fixed it still trailed the link (145 beside 167 and 205),
+//  because it was a second running average sampled only on some frame
+//  types. The operator asked for it to follow the science: like ETX
+//  routing (De Couto et al., 2003), the neighbor's quality is now read from
+//  the link estimator, 255 / ETX of the link from us to it.
 //
 
 import XCTest
@@ -32,11 +37,6 @@ final class NeighborQualityEvidenceTests: XCTestCase {
         integration.observePacket(packet, timestamp: clock)
     }
 
-    private func measured(_ integration: NetRomIntegration, _ a: String, _ b: String) -> Int {
-        let forward = integration.linkQuality(from: a, to: b)
-        let reverse = integration.linkQuality(from: b, to: a)
-        return forward > 0 && reverse > 0 ? (forward + reverse) / 2 : max(forward, reverse)
-    }
 
     /// What A (705) hears from B (ID-50) during a transfer: B's RRs moving
     /// N(R) on, and the odd I-frame of B's own.
@@ -53,13 +53,12 @@ final class NeighborQualityEvidenceTests: XCTestCase {
                 ns = (ns + 1) % 8
             }
         }
-        let link = measured(integration, "K0EPI-3", "K0EPI-2")
-        XCTAssertGreaterThan(link, 150, "the link itself is healthy")
+        // B's RRs moving N(R) on measure the link from us to B (issue 93).
+        let toNeighbor = integration.linkQuality(from: "K0EPI-2", to: "K0EPI-3")
+        XCTAssertGreaterThan(toNeighbor, 150, "the link itself is healthy")
         let neighbor = try XCTUnwrap(integration.currentNeighbors().first { $0.call == "K0EPI-3" })
-        // A running average refreshed by the frames that refresh a neighbor
-        // (B's 8 I-frames here, not its RRs), so it trails the link a little.
-        XCTAssertEqual(Double(neighbor.quality), Double(link), accuracy: 20,
-                       "the neighbor's quality is its measured link, not a blend with a constant")
+        XCTAssertEqual(neighbor.quality, toNeighbor,
+                       "255 / ETX of the link traffic to the neighbor would use, with no second average")
     }
 
     /// A digipeater A also hears directly: the traffic it repeats must not
@@ -73,10 +72,13 @@ final class NeighborQualityEvidenceTests: XCTestCase {
             hear(frame(from: ("N0CALL", 7), to: ("KE0GB", 7), control: UInt8((step % 8) << 1),
                        type: .i, via: [digi], info: 40), into: integration, after: 1)
         }
-        let link = measured(integration, "W0ARP-1", "K0EPI-2")
-        XCTAssertGreaterThan(link, 150)
+        // Nothing was ever sent to W0ARP-1, so the link from it stands in,
+        // on the assumption that the path is symmetric.
+        XCTAssertEqual(integration.linkQuality(from: "K0EPI-2", to: "W0ARP-1"), 0)
+        let fromNeighbor = integration.linkQuality(from: "W0ARP-1", to: "K0EPI-2")
+        XCTAssertGreaterThan(fromNeighbor, 150)
         let neighbor = try XCTUnwrap(integration.currentNeighbors().first { $0.call == "W0ARP-1" })
-        XCTAssertEqual(Double(neighbor.quality), Double(link), accuracy: 12)
+        XCTAssertEqual(neighbor.quality, fromNeighbor)
     }
 
     /// With no measurement at all, an inferred neighbor still starts from
@@ -92,20 +94,37 @@ final class NeighborQualityEvidenceTests: XCTestCase {
         XCTAssertLessThan(neighbor.quality, 90, "no evidence: near the prior, \(neighbor.quality)")
     }
 
-    /// The Quality tooltip only defined the term; it now says why.
-    func testTheQualityTooltipShowsTheMeasuredLinks() {
+    /// The Quality tooltip only defined the term; it now gives the
+    /// derivation of the number shown.
+    func testTheQualityTooltipGivesTheDerivation() {
+        let toB = LinkStatRecord(fromCall: "K0EPI-2", toCall: "K0EPI-3", quality: 229, lastUpdated: Date(),
+                                 dfEstimate: 0.95, drEstimate: 0.94, observationCount: 132)
+        let fromB = LinkStatRecord(fromCall: "K0EPI-3", toCall: "K0EPI-2", quality: 169, lastUpdated: Date(),
+                                   dfEstimate: 0.67, observationCount: 40)
         let tip = NeighborDisplayInfo.qualityTooltip(
-            call: "K0EPI-3", quality: 199, sourceType: "classic", localCallsign: "K0EPI-2",
-            heardQuality: 169, sentQuality: 229)
-        XCTAssertTrue(tip.hasPrefix("Quality: 199 (78%)"), tip)
-        XCTAssertTrue(tip.contains("Measured now: K0EPI-3 → K0EPI-2 169, K0EPI-2 → K0EPI-3 229"), tip)
-        XCTAssertTrue(tip.contains("Average of the two directions: 199"), tip)
-        XCTAssertTrue(tip.contains("255 / ETX"), tip)
+            call: "K0EPI-3", quality: 229, sourceType: "classic", localCallsign: "K0EPI-2",
+            toNeighbor: toB, fromNeighbor: fromB)
+        XCTAssertTrue(tip.hasPrefix("Quality: 229 (90%)"), tip)
+        XCTAssertTrue(tip.contains("255 / ETX of the link K0EPI-2 → K0EPI-3"), tip)
+        XCTAssertTrue(tip.contains("df 0.95 × dr 0.94 → ETX 1.12, from 132 observations"), tip)
+        XCTAssertTrue(tip.contains("K0EPI-3 → K0EPI-2: 169"), tip)
+
+        let heardOnly = NeighborDisplayInfo.qualityTooltip(
+            call: "K0EPI-3", quality: 169, sourceType: "classic", localCallsign: "K0EPI-2",
+            toNeighbor: nil, fromNeighbor: fromB)
+        XCTAssertTrue(heardOnly.contains("Nothing has been sent to K0EPI-3 yet"), heardOnly)
+        XCTAssertTrue(heardOnly.contains("dr unobserved (0.99 assumed)"), heardOnly)
+
+        let tentative = NeighborDisplayInfo.qualityTooltip(
+            call: "K0EPI-3", quality: 191, sourceType: "classic", localCallsign: "K0EPI-2",
+            toNeighbor: LinkStatRecord(fromCall: "K0EPI-2", toCall: "K0EPI-3", quality: 191, lastUpdated: Date(),
+                                       dfEstimate: 0.75, observationCount: 3),
+            fromNeighbor: nil)
+        XCTAssertTrue(tentative.contains("tentative"), tentative)
 
         let unmeasured = NeighborDisplayInfo.qualityTooltip(
             call: "W0ARP-1", quality: 62, sourceType: "inferred", localCallsign: "K0EPI-2",
-            heardQuality: nil, sentQuality: nil)
+            toNeighbor: nil, fromNeighbor: nil)
         XCTAssertTrue(unmeasured.contains("No link to W0ARP-1 measured yet"), unmeasured)
-        XCTAssertTrue(unmeasured.contains("Inferred"), unmeasured)
     }
 }

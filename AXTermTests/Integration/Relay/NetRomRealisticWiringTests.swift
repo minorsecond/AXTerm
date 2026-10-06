@@ -454,12 +454,15 @@ final class NetRomRealisticWiringTests: XCTestCase {
         let integration = NetRomIntegration(localCallsign: localCallsign, mode: .hybrid)
         let baseTime = Date(timeIntervalSince1970: 1_700_570_000)
 
-        // Create classic neighbor first
+        // Create classic neighbor first. Distinct frames: twenty identical
+        // ones a second apart are retries, which measure the link as bad, and
+        // the neighbor's quality is now read from that measurement.
         for i in 0..<20 {
             let directPacket = makePacket(
                 from: "W0ABC",
                 to: localCallsign,
                 via: [],
+                infoText: "TEST \(i)",
                 timestamp: baseTime.addingTimeInterval(Double(i))
             )
             integration.observePacket(directPacket, timestamp: directPacket.timestamp)

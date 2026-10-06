@@ -386,6 +386,14 @@ nonisolated struct LinkQualityEstimator {
         stats[key] = s
     }
 
+    /// ETX from delivery ratios as the estimator computes it: 1 / (df × dr),
+    /// each floored at `minDeliveryRatio`, dr taken as 0.99 when unobserved,
+    /// clamped to [1, maxETX]. For explaining a figure without repeating
+    /// the rule.
+    static func etx(df: Double, dr: Double?, config: LinkQualityConfig = .default) -> Double {
+        DirectionalLinkStats.etx(df: df, dr: dr, config: config)
+    }
+
     /// Get the current quality estimate for a directional link (0...255).
     func linkQuality(from: String, to: String, radio: RadioID = .primary) -> Int {
         let key = LinkKey(radio: radio, from: CallsignValidator.normalize(from), to: CallsignValidator.normalize(to))

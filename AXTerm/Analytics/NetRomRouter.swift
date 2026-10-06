@@ -177,6 +177,24 @@ nonisolated final class NetRomRouter {
     let config: NetRomConfig
 
     private var neighbors: [NeighborKey: NeighborRecord] = [:]
+
+    /// The measured quality of the link to a neighbor on a radio, nil when
+    /// nothing has been measured. When it answers, it is the neighbor's
+    /// quality, read fresh each time: 255 / ETX from the link estimator, as
+    /// ETX routing uses measured delivery directly (De Couto et al., 2003).
+    /// The stored `pathQuality` is only the starting value for a neighbor
+    /// with no measurement. It used to be a second running average sampled
+    /// on some frame types, which trailed the link and described the
+    /// neighbor's traffic more than its link (smoke run 2026-10-03-1,
+    /// issue 97).
+    var measuredNeighborQuality: ((String, RadioID) -> Int?)?
+
+    private func effectiveQuality(of neighbor: NeighborRecord) -> Int {
+        if let measured = measuredNeighborQuality?(neighbor.call, neighbor.radioID) {
+            return clampQuality(measured)
+        }
+        return neighbor.pathQuality
+    }
     private var routesByDestination: [String: [RouteRecord]] = [:]
 
     /// Tracks the currently preferred route per destination for hysteresis.
@@ -271,7 +289,7 @@ nonisolated final class NetRomRouter {
             if normalizedDestination == normalizedOrigin { continue }
             if advertised.path.contains(where: { normalize($0) == localCallsign }) { continue }
 
-            let combined = combinedQuality(broadcastQuality: advertised.quality, pathQuality: neighbor.pathQuality)
+            let combined = combinedQuality(broadcastQuality: advertised.quality, pathQuality: effectiveQuality(of: neighbor))
             // minimumRouteQuality is the classic NET/ROM acceptance rule for
             // *broadcast* routes. Inferred routes are acceptance-gated by evidence
             // in the inference layer (inferredMinimumQuality) and store the honest
@@ -330,7 +348,7 @@ nonisolated final class NetRomRouter {
             destination: normalizedOrigin,
             origin: normalizedOrigin,
             radio: radio,
-            quality: max(1, clampQuality(neighbor.pathQuality)),
+            quality: max(1, clampQuality(effectiveQuality(of: neighbor))),
             path: [normalizedOrigin],
             timestamp: timestamp,
             sourceType: "broadcast"
@@ -341,7 +359,7 @@ nonisolated final class NetRomRouter {
         neighbors
             .values
             .sorted(by: neighborSort)
-            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType, isOfficial: $0.isOfficial, radioID: $0.radioID) }
+            .map { NeighborInfo(call: $0.call, quality: effectiveQuality(of: $0), lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType, isOfficial: $0.isOfficial, radioID: $0.radioID) }
     }
 
     /// O(1) check — avoids the full route array construction of bestRouteTo().
@@ -817,8 +835,9 @@ nonisolated final class NetRomRouter {
     }
 
     private func neighborSort(lhs: NeighborRecord, rhs: NeighborRecord) -> Bool {
-        if lhs.pathQuality != rhs.pathQuality {
-            return lhs.pathQuality > rhs.pathQuality
+        let lq = effectiveQuality(of: lhs), rq = effectiveQuality(of: rhs)
+        if lq != rq {
+            return lq > rq
         }
         if lhs.call != rhs.call {
             return lhs.call < rhs.call
