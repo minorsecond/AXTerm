@@ -101,6 +101,39 @@ final class FreshLinkTests: XCTestCase {
         XCTAssertFalse(coordinator.sessionManager.hasDeliveryClaim(for: session.key))
     }
 
+    /// The whole call: the leftover link is released, a new one opened, and
+    /// the station's greeting on it reaches the exchange. On the air the
+    /// release dropped the exchange's claim on the link along with the old
+    /// session, so the greeting went to the terminal and the call sat at
+    /// "Signing in" (issue 80 retest, 14:06Z).
+    func testTheGreetingOnTheFreshLinkReachesTheExchange() async throws {
+        let (coordinator, session) = linked(carryingNetRom: true)
+        let manager = coordinator.sessionManager
+        let transport = WinlinkAX25Transport(
+            sessionManager: manager, sendFrames: { _ in }, destination: peer, connectTimeout: 5,
+            makeWayForFreshLink: {
+                await coordinator.makeWayForFreshLink(to: self.peer, circuitsRiding: { _ in false }).refusal
+            })
+        var received = Data()
+        transport.onReceive = { received.append($0) }
+        // The peer answers our DISC, then our SABM.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            _ = manager.handleInboundUA(from: self.peer, path: DigiPath(), radio: .primary)
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            _ = manager.handleInboundUA(from: self.peer, path: DigiPath(), radio: .primary)
+        }
+
+        try await transport.open()
+        let fresh = try XCTUnwrap(manager.connectedSession(withPeer: peer))
+        XCTAssertNotIdentical(fresh, session, "a new link, not the leftover one")
+
+        _ = manager.handleInboundIFrame(from: peer, path: DigiPath(), radio: .primary, ns: 0, nr: 0,
+                                        pf: false, payload: Data("[AXTerm-1.0-B2FHM$]\r".utf8))
+        XCTAssertEqual(String(decoding: received, as: UTF8.self), "[AXTerm-1.0-B2FHM$]\r",
+                       "the greeting went somewhere other than the exchange")
+    }
+
     /// The answering side runs on the link the caller just opened.
     func testAnAnsweringTransportUsesTheCallersLink() async throws {
         let (coordinator, session) = linked(carryingNetRom: false)

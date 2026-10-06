@@ -23,9 +23,6 @@ final class WinlinkAX25Transport: WinlinkTransport {
     /// call cannot have a fresh link, or nil when it can
     /// (`SessionCoordinator.makeWayForFreshLink`).
     private let makeWayForFreshLink: (() async -> String?)?
-    /// True while a leftover link is being released; its closing is not
-    /// this exchange's link closing.
-    private var releasingLeftoverLink = false
 
     private var claim: SessionDeliveryClaim?
     private var closed = false
@@ -67,6 +64,26 @@ final class WinlinkAX25Transport: WinlinkTransport {
     func open() async throws {
         let key = SessionKey(destination: destination, path: path, radio: radio)
 
+        // Calling: the station speaks first when a link comes up, and a link
+        // already up had its greeting long ago (smoke run issue 80). A
+        // leftover one is released before the claim below, because a claim
+        // ends with its link and the new link's greeting went to the terminal.
+        if !answering,
+           let existing = sessionManager.existingSession(for: destination, path: path, radio: radio),
+           existing.state == .connected {
+            guard !sessionManager.hasDeliveryClaim(for: key) else {
+                throw WinlinkTransportError.sessionBusy(
+                    "another session to \(destination.display) is already active")
+            }
+            let refusal: String?
+            if let makeWayForFreshLink {
+                refusal = await makeWayForFreshLink()
+            } else {
+                refusal = "A link to \(destination.display) is already up, and a Winlink call needs a new one."
+            }
+            if let refusal { throw WinlinkTransportError.sessionBusy(refusal) }
+        }
+
         // Claim before any frame goes out so no delivered byte can leak
         // to the terminal path, and so a terminal session to the same
         // station blocks us instead of corrupting both.
@@ -74,7 +91,7 @@ final class WinlinkAX25Transport: WinlinkTransport {
             for: key,
             handler: { [weak self] _, data in self?.onReceive?(data) },
             stateHandler: { [weak self] _, _, newState in
-                guard let self, !self.closed, !self.releasingLeftoverLink else { return }
+                guard let self, !self.closed else { return }
                 if newState == .disconnected || newState == .error {
                     self.closed = true
                     self.releaseClaim()
@@ -94,24 +111,11 @@ final class WinlinkAX25Transport: WinlinkTransport {
         }
         self.claim = claim
 
-        if let existing = sessionManager.existingSession(for: destination, path: path, radio: radio),
+        // Answering: the caller's fresh link, where it greets us.
+        if answering,
+           let existing = sessionManager.existingSession(for: destination, path: path, radio: radio),
            existing.state == .connected {
-            // Answering: the caller's fresh link, where it greets us.
-            if answering { return }
-            // Calling: the station speaks first when a link comes up, and a
-            // link already up had its greeting long ago (smoke run issue 80).
-            releasingLeftoverLink = true
-            let refusal: String?
-            if let makeWayForFreshLink {
-                refusal = await makeWayForFreshLink()
-            } else {
-                refusal = "A link to \(destination.display) is already up, and a Winlink call needs a new one."
-            }
-            releasingLeftoverLink = false
-            if let refusal {
-                releaseClaim()
-                throw WinlinkTransportError.sessionBusy(refusal)
-            }
+            return
         }
 
         if let sabm = sessionManager.connect(to: destination, path: path, radio: radio) {
