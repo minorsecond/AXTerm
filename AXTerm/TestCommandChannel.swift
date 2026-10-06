@@ -19,6 +19,8 @@
 //   "protocol":"axdp|yapp","compression":"global|off|lz4|deflate"}
 //  {"action":"acceptOffer"|"declineOffer","file":"t1k_bin.bin"}
 //  {"action":"cancelTransfer"|"pauseTransfer"|"resumeTransfer","file":"t1k_bin.bin"}
+//  {"action":"cancelTransfer","file":"t1k_bin.bin","when":"endOfFileSent"}
+//    (held until the YAPP sender's EF is out; the result comes then)
 //
 //  "file" for sendFile is relative to the files folder (Downloads in the
 //  app); for the others it is the transfer's file name.
@@ -38,6 +40,9 @@ final class TestCommandChannel {
         var text: String?
         /// For sendHex: bytes as hex, spaces allowed (`"05 01"`).
         var hex: String?
+        /// For cancelTransfer: "endOfFileSent" holds the cancel until the
+        /// YAPP sender's EF is out, so it lands between EF and AF.
+        var when: String?
     }
 
     /// The channel test mode started at launch.
@@ -211,8 +216,20 @@ final class TestCommandChannel {
 
         case "cancelTransfer", "pauseTransfer", "resumeTransfer":
             guard let file = command.file else { return "\(command.action) needs \"file\"" }
+            if let when = command.when {
+                guard command.action == "cancelTransfer", when == "endOfFileSent" else {
+                    return "Unknown \"when\" \(when) for \(command.action); only cancelTransfer takes endOfFileSent"
+                }
+            }
             guard let transfer = coordinator.transfers.last(where: { $0.fileName == file }) else {
                 return "No transfer of \(file)"
+            }
+            if command.when != nil {
+                let id = transfer.id
+                pending = { [weak coordinator] in
+                    await Self.cancelOnceEndOfFileIsOut(id, coordinator: coordinator)
+                }
+                return nil
             }
             switch command.action {
             case "cancelTransfer": coordinator.cancelTransfer(transfer.id)
@@ -223,6 +240,63 @@ final class TestCommandChannel {
 
         default:
             return "Unknown action \(command.action)"
+        }
+    }
+
+    /// Cancels the moment the YAPP sender's EF goes out. EF to AF is one
+    /// round trip, and the folder is read once a second, so a cancel aimed by
+    /// hand mostly missed it (smoke run 2026-10-03-1, issue 60).
+    private static func cancelOnceEndOfFileIsOut(_ id: UUID,
+                                                 coordinator: SessionCoordinator?) async -> String? {
+        await withCheckedContinuation { continuation in
+            EndOfFileCancel(id: id, coordinator: coordinator) { continuation.resume(returning: $0) }.watch()
+        }
+    }
+}
+
+/// Watches one outbound YAPP transfer and cancels it as its EF goes out.
+@MainActor
+private final class EndOfFileCancel {
+    private let id: UUID
+    private weak var coordinator: SessionCoordinator?
+    private let started = Date()
+    private var finished: ((String?) -> Void)?
+
+    init(id: UUID, coordinator: SessionCoordinator?, finished: @escaping (String?) -> Void) {
+        self.id = id
+        self.coordinator = coordinator
+        self.finished = finished
+    }
+
+    private func finish(_ result: String?) {
+        finished?(result)
+        finished = nil
+    }
+
+    func watch() {
+        guard finished != nil else { return }
+        guard let coordinator,
+              let transfer = coordinator.transfers.first(where: { $0.id == id }) else {
+            return finish("The transfer is gone")
+        }
+        if let runner = coordinator.yappTransfers[id] {
+            if runner.yapp.tooLateToCancel {
+                coordinator.cancelTransfer(id)
+                return finish(nil)
+            }
+            let id = self.id
+            runner.yapp.onEndFileSent = { [weak self, weak coordinator] in
+                coordinator?.cancelTransfer(id)
+                self?.finish(nil)
+            }
+        }
+        if !transfer.canCancel {
+            return finish("The transfer ended before its EF went out (\(transfer.status))")
+        }
+        guard Date().timeIntervalSince(started) < 600 else { return finish("No EF in 10 minutes") }
+        // Held by the timer until the transfer ends one way or the other.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [self] in
+            MainActor.assumeIsolated { self.watch() }
         }
     }
 }

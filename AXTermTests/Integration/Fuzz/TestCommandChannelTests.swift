@@ -94,6 +94,64 @@ final class TestCommandChannelTests: XCTestCase {
         XCTAssertTrue(down)
     }
 
+    /// A cancel can be held until the sender's EF is out, so the smoke test
+    /// can land one between EF and AF, a window of one round trip that a
+    /// once-a-second folder poll cannot aim at (smoke run 2026-10-03-1, issue
+    /// 60). Once EF is out the cancel changes nothing: the receiver has the
+    /// file, and both sides finish Completed.
+    func testACancelHeldForEndOfFileLeavesTheTransferComplete() async {
+        let (a, b) = await connectedPair()
+        defer { a.tearDown(); b.tearDown() }
+        let commandsA = makeFolder("A"), commandsB = makeFolder("B"), files = makeFolder("files")
+        let data = Data((0..<600).map { UInt8($0 % 251) })
+        try? data.write(to: files.appendingPathComponent("t600.bin"))
+        let channelA = TestCommandChannel(folder: commandsA, coordinator: a.coordinator, filesFolder: files)
+        let channelB = TestCommandChannel(folder: commandsB, coordinator: b.coordinator, filesFolder: files)
+
+        drop(#"{"action":"connect","to":"K0BBB-2"}"#, named: "00-connect", in: commandsA)
+        channelA.poll()
+        let up = await FullStackFuzz.wait(10) { a.session != nil && b.session != nil }
+        XCTAssertTrue(up)
+        drop(#"{"action":"sendFile","to":"K0BBB-2","file":"t600.bin","protocol":"yapp"}"#,
+             named: "01-send", in: commandsA)
+        channelA.poll()
+        let sent = await FullStackFuzz.wait(10) { self.result("01-send", in: commandsA) != nil }
+        XCTAssertTrue(sent)
+        XCTAssertEqual(result("01-send", in: commandsA)?["ok"] as? Bool, true,
+                       "\(String(describing: result("01-send", in: commandsA))) transfers \(a.coordinator.transfers.map(\.fileName))")
+        drop(#"{"action":"cancelTransfer","file":"t600.bin","when":"endOfFileSent"}"#,
+             named: "02-cancel", in: commandsA)
+        channelA.poll()
+        XCTAssertNil(result("02-cancel", in: commandsA), "held until EF is out")
+
+        let offered = await FullStackFuzz.wait(10) { !b.coordinator.pendingIncomingTransfers.isEmpty }
+        if offered {
+            drop(#"{"action":"acceptOffer","file":"t600.bin"}"#, named: "03-accept", in: commandsB)
+            channelB.poll()
+        }
+        let answered = await FullStackFuzz.wait(60) { self.result("02-cancel", in: commandsA) != nil }
+        XCTAssertTrue(answered, "the cancel ran once EF was out")
+        XCTAssertEqual(result("02-cancel", in: commandsA)?["ok"] as? Bool, true,
+                       "\(String(describing: result("02-cancel", in: commandsA)))")
+        let done = await FullStackFuzz.wait(60) {
+            b.transfer(named: "t600.bin")?.status == .completed
+                && a.transfer(named: "t600.bin")?.status == .completed
+        }
+        XCTAssertTrue(done, "A \(String(describing: a.transfer(named: "t600.bin")?.status)), "
+                      + "B \(String(describing: b.transfer(named: "t600.bin")?.status))")
+        XCTAssertEqual(b.savedData(b.transfer(named: "t600.bin")), data)
+    }
+
+    func testAnUnknownWhenIsRefused() {
+        let a = FuzzStation(callsign: "K0AAA-1", seed: 1)
+        defer { a.tearDown() }
+        let commands = makeFolder("when")
+        let channel = TestCommandChannel(folder: commands, coordinator: a.coordinator, filesFolder: commands)
+        drop(#"{"action":"cancelTransfer","file":"x.bin","when":"later"}"#, named: "01", in: commands)
+        channel.poll()
+        XCTAssertEqual(result("01", in: commands)?["ok"] as? Bool, false)
+    }
+
     func testSendTextGoesOverTheSession() async {
         let (a, b) = await connectedPair()
         defer { a.tearDown(); b.tearDown() }

@@ -280,6 +280,9 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
     let protocolType: TransferProtocolType = .yapp
 
     weak var delegate: FileTransferProtocolDelegate?
+    /// Called the moment the sender's EF is handed to the link. The smoke
+    /// test's command folder uses it to land a cancel between EF and AF.
+    var onEndFileSent: (() -> Void)?
 
     private(set) var state: TransferProtocolState = .idle
     private(set) var bytesTransferred: Int = 0
@@ -409,6 +412,7 @@ nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable 
                 setState(.waitingForAck)
                 send(YAPPEncoder.endFile())
                 armTimer(responseTimeout)
+                onEndFileSent?()
                 return
             }
             let end = min(sendOffset + blockSize, fileData.count)
