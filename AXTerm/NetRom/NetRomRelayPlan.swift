@@ -36,6 +36,22 @@ nonisolated enum NetRomRelayPlan {
         return (hop?.isEmpty ?? true) ? nil : hop
     }
 
+    /// What the terminal says when an Auto connect passes over a native
+    /// circuit because one to the same station failed within the hour.
+    /// That skip used to leave only a debug log, and when nothing else could
+    /// reach the station the Connect button did nothing visible (smoke run
+    /// 2026-10-03-1, issue 82).
+    static func nativeHoldNotice(destination: String, failedAt: Date,
+                                 retryInterval: TimeInterval = 3600,
+                                 timeZone: TimeZone = .current) -> String {
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm"
+        clock.timeZone = timeZone
+        return "A NET/ROM circuit to \(destination) did not come up at \(clock.string(from: failedAt)), "
+            + "so Auto is not trying another until \(clock.string(from: failedAt.addingTimeInterval(retryInterval))) "
+            + "or until \(destination) is heard announcing itself. Choose NET/ROM to try one now."
+    }
+
     /// What the terminal says when a native NET/ROM circuit can't be opened
     /// and the old prompt relay would come next. With no node to ask, it
     /// says so and the attempt ends there; it used to promise a node and

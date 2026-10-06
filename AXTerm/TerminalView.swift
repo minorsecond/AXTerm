@@ -3969,20 +3969,29 @@ struct TerminalView: View {
     ///   operator the prompt relay is coming next. True for the legacy
     ///   native-then-relay path; false when the strategy ladder calls this
     ///   as one rung, because what runs next is the planner's decision.
+    /// - Parameter respectHold: whether a recent failure to this station
+    ///   skips the attempt. False when the operator chose NET/ROM and
+    ///   pressed Connect: they asked for a circuit, so the hold only shapes
+    ///   what Auto tries (smoke run 2026-10-03-1, issue 82).
     private func attemptNativeNetRomCircuit(
         intent: ConnectIntent,
         announceFallback: Bool = true,
-        relayAvailable: Bool = true
+        relayAvailable: Bool = true,
+        respectHold: Bool = true
     ) async -> ConnectAttemptStepResult? {
         let driver = sessionCoordinator.netRomDriver
         let target = CallsignNormalizer.toAddress(intent.normalizedTo)
 
         // A destination that has already proved it cannot carry a circuit
         // is not worth another grace period this hour.
-        guard sessionCoordinator.shouldTryNativeNetRom(to: intent.normalizedTo) else {
+        if respectHold, let failedAt = sessionCoordinator.nativeNetRomHold(to: intent.normalizedTo),
+           !sessionCoordinator.shouldTryNativeNetRom(to: intent.normalizedTo) {
             TxLog.debug(.session, "Skipping native NET/ROM — it did not work here recently", [
                 "destination": intent.normalizedTo
             ])
+            client.appendSystemNotification(NetRomRelayPlan.nativeHoldNotice(
+                destination: intent.normalizedTo, failedAt: failedAt,
+                retryInterval: SessionCoordinator.netRomNativeRetryInterval))
             return nil
         }
 
@@ -4749,7 +4758,8 @@ struct TerminalView: View {
         Task { @MainActor in
             let relay = NetRomRelayPlan.relayFirstHop(
                 override: override?.stringValue, routeHint: intent.routeHint?.nextHop)
-            if await attemptNativeNetRomCircuit(intent: intent, relayAvailable: relay != nil) != nil { return }
+            if await attemptNativeNetRomCircuit(
+                intent: intent, relayAvailable: relay != nil, respectHold: false) != nil { return }
             connectNETROMViaNodePrompts(intent: intent, override: override)
         }
     }

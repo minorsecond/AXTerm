@@ -219,10 +219,21 @@ the default, and deliberately so — the reply has nowhere to go however
 well the outbound half worked. The fallback notice says this when the
 setting is off, because it is a setting rather than a fault.
 
+The hold ends early when the station is heard announcing itself after the
+failure, directly or in another node's table (`NodeAliasStore` entries for
+the alias or callsign, `heardAt` and `heardDirectlyAt`). A node that comes
+back is the case the hold was never meant to cover. It also applies only
+to Auto: choosing NET/ROM and pressing Connect always tries a circuit,
+since the operator asked for one. When Auto does pass a circuit over, the
+transcript says so, with when the hold began and when it ends
+(`NetRomRelayPlan.nativeHoldNotice`). Before, the skip wrote only a debug
+log, and a connect with no relay to fall back on did nothing visible (smoke
+run 2026-10-03-1, issue 82).
+
 Ordering is the same from `connectNETROM` (one explicit next hop) and
 `executeNETROMAutoAttempt` (auto), because those are the operator's two
 buttons for one intent and it would be strange for them to use different
-transports.
+transports. The hold is the one difference.
 
 ## Being a node: announcing, forwarding, auto-try
 

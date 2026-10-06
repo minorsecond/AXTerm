@@ -165,7 +165,9 @@ final class SessionCoordinator: ObservableObject {
     ///
     /// Deliberately time-boxed rather than permanent: routes appear,
     /// advertising gets switched on, nodes come back. Re-testing costs one
-    /// grace period an hour per destination.
+    /// grace period an hour per destination, or less when the station is
+    /// heard announcing itself after the failure: that is a node coming
+    /// back, and the next connect should find out.
     private var netRomNativeFailedAt: [String: Date] = [:]
 
     /// How long a native failure is remembered before it is worth retrying.
@@ -175,11 +177,30 @@ final class SessionCoordinator: ObservableObject {
     func shouldTryNativeNetRom(to destination: String) -> Bool {
         let key = canonicalDestination(destination)
         guard let failedAt = netRomNativeFailedAt[key] else { return true }
-        guard Date().timeIntervalSince(failedAt) >= Self.netRomNativeRetryInterval else {
+        guard Date().timeIntervalSince(failedAt) >= Self.netRomNativeRetryInterval
+                || lastHeardAnnouncing(key).map({ $0 > failedAt }) == true else {
             return false
         }
         netRomNativeFailedAt[key] = nil
         return true
+    }
+
+    /// When this destination, named by alias or callsign, was last heard in
+    /// an announcement, directly or through another node's table.
+    private func lastHeardAnnouncing(_ destination: String) -> Date? {
+        guard let directory = nodeAliases?.directory else { return nil }
+        var entries = directory.aliases(for: destination)
+        if let byAlias = directory.entry(for: destination) { entries.append(byAlias) }
+        return entries
+            .map { max($0.heardAt, $0.heardDirectlyAt ?? .distantPast) }
+            .max()
+    }
+
+    /// When the hold on native circuits to this destination began, or nil
+    /// when there is none. Unlike `shouldTryNativeNetRom` it never ends the
+    /// hold, so the terminal can say why a circuit was passed over.
+    func nativeNetRomHold(to destination: String) -> Date? {
+        netRomNativeFailedAt[canonicalDestination(destination)]
     }
 
     func noteNativeNetRomFailed(to destination: String) {

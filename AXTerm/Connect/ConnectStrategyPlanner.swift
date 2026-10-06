@@ -184,7 +184,7 @@ nonisolated enum ConnectStrategyPlanner {
         guard !evidence.nativeCircuitCoolingDown else {
             skipped.append(.init(
                 familyLabel: "native circuit",
-                reason: "a native circuit failed here recently; retrying after the hold expires"))
+                reason: "a native circuit failed here recently; trying again after an hour, or sooner if the station is heard announcing itself"))
             return
         }
         // A route anchored on a proven non-router is not a route; if every
