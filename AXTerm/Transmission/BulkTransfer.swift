@@ -774,6 +774,22 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
         completedChunks_.count
     }
 
+    /// The Chunks row. A receiver counts the chunks it has. A sender cannot
+    /// know chunk by chunk: AXDP confirms the whole file at the end, so until
+    /// then it counts chunks handed to the link, the same ones its progress
+    /// bar counts. It read "Chunks 0/29" beside "20 KB / 20 KB" (smoke run
+    /// 2026-10-03-1, issue 96).
+    var chunkProgressText: String {
+        let total = totalChunks
+        if direction == .inbound {
+            return "\(completedChunks_.count)/\(total)"
+        }
+        if status == .completed {
+            return "\(completedChunks_.count)/\(total) confirmed"
+        }
+        return "\(sentChunks.union(completedChunks_).count)/\(total) sent"
+    }
+
     /// Mark a chunk as sent (awaiting ack)
     mutating func markChunkSent(_ chunk: Int) {
         sentChunks.insert(chunk)

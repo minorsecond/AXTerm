@@ -284,7 +284,10 @@ struct BulkTransferRow: View {
             detailRow(transfer.direction == .inbound ? "From" : "To", transfer.destination, help: "Remote station for this transfer.")
             detailRow("Protocol", transfer.transferProtocol.displayName, help: "Transfer protocol used for this session.")
             detailRow("Chunk Size", "\(transfer.chunkSize) bytes", help: "Payload bytes per chunk before AXDP framing. Smaller chunks trade efficiency for reliability.")
-            detailRow("Chunks", "\(transfer.completedChunks)/\(transfer.totalChunks)", help: "Progress in chunks received/sent out of total.")
+            detailRow("Chunks", transfer.chunkProgressText,
+                      help: transfer.direction == .inbound
+                        ? "Chunks received out of the total."
+                        : "Chunks sent out of the total. AXDP confirms the whole file at the end rather than each chunk, so they count as confirmed once the receiver reports the file arrived intact.")
 
             // Compression info - show during transfer or after completion
             if transfer.compressionSettings != .disabled || transfer.compressionMetrics != nil {
