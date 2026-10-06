@@ -713,6 +713,57 @@ final class AX25SessionManager: ObservableObject {
         serviceAddresses[service] = address
     }
 
+    /// What a frame is, for answering it in the disconnected state.
+    enum UnheldLinkFrameKind {
+        case sabm
+        case disc
+        /// I, RR, RNR, REJ, SREJ or XID.
+        case supervisoryOrInformation
+        /// UA, DM, FRMR, or any frame sent as a response.
+        case response
+    }
+
+    /// A frame from `source` to one of our addresses that is not the one our
+    /// link with that peer uses. AX.25 identifies a link by both addresses,
+    /// and sessions here are keyed by the peer alone, so such a frame would
+    /// drive the other link: a SABM to K0EPI-3 reset B's link to K0EPI-2 at
+    /// EPINDB and was answered UA from EPINDB (smoke run 2026-10-03-1, issue
+    /// 89). It belongs to a link this station does not hold, so the
+    /// disconnected state answers it: DM, from the address it was sent to,
+    /// for a SABM, a DISC, or a command with P set; nothing otherwise.
+    ///
+    /// - Returns: nil when the frame is for the peer's link, or there is
+    ///   none; otherwise the frame is taken, with the DM to send if any.
+    func answerForUnheldLink(from source: AX25Address, to destination: AX25Address,
+                             path: DigiPath, radio: RadioID, kind: UnheldLinkFrameKind,
+                             isCommand: Bool, pf: Bool) -> UnheldLinkAnswer? {
+        guard let session = existingSession(for: source, path: path, radio: radio),
+              session.state == .connected || session.state == .connecting
+                || session.state == .disconnecting,
+              !CallsignNormalizer.addressesMatch(session.localAddress, destination)
+        else { return nil }
+        let answers: Bool
+        switch kind {
+        case .sabm, .disc: answers = true
+        case .supervisoryOrInformation: answers = isCommand && pf
+        case .response: answers = false
+        }
+        TxLog.debug(.session, "Frame for a link this station does not hold", [
+            "from": source.display, "to": destination.display,
+            "link": session.localAddress.display, "answered": "\(answers)"
+        ])
+        let dm = answers
+            ? AX25FrameBuilder.buildDM(from: destination, to: source, via: path, pf: pf).onRadio(radio)
+            : nil
+        return UnheldLinkAnswer(response: dm)
+    }
+
+    /// A frame taken for a link this station does not hold.
+    struct UnheldLinkAnswer {
+        /// The DM to send, or nil when the frame draws no answer.
+        let response: OutboundFrame?
+    }
+
     /// The address a frame that belongs to no session is answered from:
     /// the one it was sent to, when that is one of ours (a mailbox on its
     /// own SSID), otherwise this radio's address. A station matches the DM

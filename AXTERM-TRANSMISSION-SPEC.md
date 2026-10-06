@@ -745,6 +745,18 @@ The field case for these rules is in Docs/LiveRFTest-2026-09-30.md, bug 39:
 Warbler held a SABM 3.6 s before keying, T1 sent a second one, the peer
 reset for it, and AXTerm used to ignore the second UA.
 
+**A link is a pair of addresses.** A station that answers on more than one
+address (its callsign and its node alias, or a mailbox SSID) can hold one link
+per peer here, because sessions are keyed by the peer. A frame from that peer
+to another of our addresses is for a link we do not hold, so it gets the
+disconnected state's answer: DM, from the address it was sent to, for a SABM,
+a DISC, or a command with P set, and nothing for anything else. It never
+reaches the link on our other address
+(`AX25SessionManager.answerForUnheldLink`). Before 2026-10-06 it did: with a
+link up K0EPI-2 to EPINDB, B (ID-50) answered A's SABM to K0EPI-3 with UA from
+EPINDB, A took that as an unexpected UA and established its EPINDB link again,
+and each retry repeated it (smoke run 2026-10-03-1, issue 89).
+
 **An abandoned connect stays abandoned.** A session given up while its XID is
 out (`forceDisconnect`) drops the negotiation, so the answer arriving later
 sends no SABM. Callers waiting on a connect treat a session that reads

@@ -3607,6 +3607,17 @@ final class SessionCoordinator: ObservableObject {
         sessionManager.noteFrameHeard(from: from, path: DigiPath.replyPath(heardVia: packet.via),
                                       radio: radio)
 
+        // A frame to another of our addresses than the one our link with
+        // this peer uses is for a link we do not hold (issue 89).
+        if let kind = Self.unheldLinkKind(decoded: decoded, isCommand: packet.isCommand),
+           let taken = sessionManager.answerForUnheldLink(
+                from: from, to: to, path: DigiPath.replyPath(heardVia: packet.via), radio: radio,
+                kind: kind, isCommand: packet.isCommand,
+                pf: decoded.pf.map { $0 == 1 } ?? ((packet.control & 0x10) != 0)) {
+            if let dm = taken.response { sendFrame(dm) }
+            return
+        }
+
         switch decoded.frameClass {
         case .U:
             handleUFrame(packet: packet, from: from, to: to, uType: decoded.uType, radio: radio)
@@ -3616,6 +3627,28 @@ final class SessionCoordinator: ObservableObject {
             handleSFrame(packet: packet, from: from, sType: decoded.sType, nr: decoded.nr ?? 0, pf: decoded.pf ?? 0, radio: radio)
         case .unknown:
             break
+        }
+    }
+
+    /// How the disconnected state treats a frame, or nil for one that
+    /// belongs to no link (UI).
+    private static func unheldLinkKind(decoded: AX25ControlFieldDecoded,
+                                       isCommand: Bool) -> AX25SessionManager.UnheldLinkFrameKind? {
+        switch decoded.frameClass {
+        case .I:
+            return .supervisoryOrInformation
+        case .S:
+            return isCommand ? .supervisoryOrInformation : .response
+        case .U:
+            switch decoded.uType {
+            case .SABM, .SABME: return .sabm
+            case .DISC: return .disc
+            case .XID: return isCommand ? .supervisoryOrInformation : .response
+            case .UA, .DM, .FRMR: return .response
+            default: return nil
+            }
+        case .unknown:
+            return nil
         }
     }
 
