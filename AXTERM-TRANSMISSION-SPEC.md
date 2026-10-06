@@ -683,6 +683,16 @@ Until 2026-10-01 every UA and DM went out F=1
 (`AX25SessionManager.processActions(answerFinal:)`, `handleInboundSABM`,
 `handleInboundDISC`).
 
+**A poll is answered before a disconnect the layer above asks for.** When
+an I-frame with P=1 is delivered and the application ends the link at once
+(Winlink hearing FQ, say), the RR F=1 goes out first and the DISC after it.
+In the SDL the enquiry response belongs to handling the I-frame, and layer
+3's DL-DISCONNECT request is a later event. `AX25SessionManager` defers a
+`disconnect(session:)` asked for during a delivery and sends it after the
+frame's answer (`flushDeferredDisconnects`). Decision 2026-10-06 (smoke run
+issue 72, operator: "follow the spec"). Before that, B (ID-50) sent DISC P
+and then RR(7) F.
+
 ### 7.1.1 Link setup, collisions and resets (AX.25 2.2 SDL, figures C4.2 to C4.5)
 AXTerm folds the SDL's Timer Recovery state into `CONNECTED` (retry count
 above zero) and calls Awaiting Connection `CONNECTING`. These transitions

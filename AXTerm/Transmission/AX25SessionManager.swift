@@ -1668,9 +1668,29 @@ final class AX25SessionManager: ObservableObject {
         return processActions(actions, for: session).first
     }
 
+    /// Sessions whose received data is being handed to the layer above.
+    private var deliveringSessions: Set<UUID> = []
+    /// Disconnects the layer above asked for during a delivery, sent once
+    /// the received frame's own answer is out (`flushDeferredDisconnects`).
+    private var deferredDisconnects: [AX25Session] = []
+    /// True while `handleInboundIFrame` is handling a frame on a live link;
+    /// it sends the deferred disconnects after the frame's answer itself.
+    private var handlingInboundIFrame = false
+
     /// Disconnect from a connected session
-    /// Returns the DISC frame to send
+    /// Returns the DISC frame to send, or nil when there is none to send
+    /// yet: asked for while this session's received data is being delivered,
+    /// the DISC waits for that frame's answer. In the AX.25 2.2 SDL the
+    /// enquiry response is part of handling the I-frame, and DL-DISCONNECT
+    /// from layer 3 is a later event; answering the other way round put
+    /// DISC P before RR F on the air (smoke run 2026-10-03-1, issue 72).
     func disconnect(session: AX25Session) -> OutboundFrame? {
+        if deliveringSessions.contains(session.id) {
+            if !deferredDisconnects.contains(where: { $0 === session }) {
+                deferredDisconnects.append(session)
+            }
+            return nil
+        }
         guard session.state == .connected || session.state == .connecting else {
             TxLog.warning(.session, "Cannot disconnect: session not connected/connecting", [
                 "state": session.state.rawValue
@@ -1691,6 +1711,15 @@ final class AX25SessionManager: ObservableObject {
         session.clearPendingTransmission(reason: "Local disconnect requested")
         session.touch()
         return processActions(actions, for: session).first
+    }
+
+    /// Carries out the disconnects deferred during a delivery.
+    private func flushDeferredDisconnects() {
+        let pending = deferredDisconnects
+        deferredDisconnects.removeAll()
+        for session in pending {
+            if let disc = disconnect(session: session) { onSendFrame?(disc) }
+        }
     }
 
     /// Force disconnect immediately without on-air DISC/UA exchange.
@@ -2818,6 +2847,8 @@ final class AX25SessionManager: ObservableObject {
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
         selectT1OnFullAcknowledgment(session, vaBefore: vaBefore, retryCountBefore: retryCountBefore)
+        handlingInboundIFrame = true
+        defer { handlingInboundIFrame = false }
 
         if oldState != session.state {
             debugTrace("state change (I-frame)", [
@@ -2849,8 +2880,16 @@ final class AX25SessionManager: ObservableObject {
         // transmit fresh I-frames and start T1 for them. Running the stale stopT1
         // after the drain cancels the timer protecting the new frames. The ack
         // notification waits for the same reason: its handler may send at once.
-        let responseFrame = processActions(actions, for: session).first
+        var responseFrame = processActions(actions, for: session).first
         notifyOutboundAck(session, upTo: session.va)
+
+        // A disconnect asked for while this frame was delivered goes out
+        // after the frame's answer, so both leave here, in that order.
+        if !deferredDisconnects.isEmpty {
+            if let responseFrame { onSendFrame?(responseFrame) }
+            responseFrame = nil
+            flushDeferredDisconnects()
+        }
 
         if session.state == .connected && !session.hasReceiveSequenceGap && !session.pendingDataQueue.isEmpty {
             let queueBeforeDrain = session.pendingDataQueue.count
@@ -4248,8 +4287,19 @@ final class AX25SessionManager: ObservableObject {
             }
         }
 
-        for delivery in deliveries {
-            deliver(delivery.data, pid: delivery.pid, to: session)
+        if !deliveries.isEmpty {
+            let alreadyDelivering = deliveringSessions.contains(session.id)
+            deliveringSessions.insert(session.id)
+            for delivery in deliveries {
+                deliver(delivery.data, pid: delivery.pid, to: session)
+            }
+            if !alreadyDelivering {
+                deliveringSessions.remove(session.id)
+                // Delivered from anywhere else, nothing waits on an answer.
+                if !handlingInboundIFrame && !deferredDisconnects.isEmpty {
+                    flushDeferredDisconnects()
+                }
+            }
         }
 
         // Frames built after T1 started in this call go out too; T1 runs
