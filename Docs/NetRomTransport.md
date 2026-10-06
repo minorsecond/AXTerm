@@ -376,6 +376,16 @@ parallel UI. `NetRomCircuitSession` holds the pure part:
   nowhere to put them yet. Critically, a *closed* circuit record does
   not fall through to the AX.25 path, which would transmit the
   operator's text somewhere they did not intend.
+- **The picker filters; the compose bar decides.** With All Traffic
+  picked, `composeRecordID(activeRecordID:barIsNetRom:barDestination:circuits:)`
+  hands typing and Disconnect to the live circuit the compose bar points
+  at, when the bar is set to NET/ROM (matched by callsign or by the alias
+  typed). Until 2026-10-06 All Traffic sent typing as plain AX.25 text on
+  the neighbor link and Disconnect dropped that link (smoke run
+  2026-10-03-1, issue 76).
+- **A circuit's pane filters by the callsign on the air**
+  (`transcriptPeer(for:)`), not by its display name "EPINDB (K0EPI-3)",
+  which no line carries (issue 75).
 - **Disconnect on a focused circuit** sends DISCREQ on that circuit, not
   DISC on the neighbor link — that link may be carrying other circuits.
 - **Focusing a circuit record does not repoint the connect bar.** Doing
