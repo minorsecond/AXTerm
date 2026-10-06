@@ -7,14 +7,20 @@
 
 import AppKit
 import Combine
+import OSLog
 import UserNotifications
 
 final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
     var settings: AppSettingsStore?
     let notificationHandler = NotificationActionHandler(router: .shared)
     private var powerSubscriptions: Set<AnyCancellable> = []
+    private let launchLog = Logger(subsystem: "AXTerm", category: "Launch")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // What AppKit made of the launch: a default launch with no window
+        // here was issue 79's signature.
+        let isDefault = (notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool).map(String.init) ?? "absent"
+        launchLog.info("did finish launching: isDefaultLaunch=\(isDefault, privacy: .public) active=\(NSApp.isActive, privacy: .public) windows=\(NSApp.windows.map { $0.identifier?.rawValue ?? "?" }, privacy: .public)")
         UNUserNotificationCenter.current().delegate = notificationHandler
         watchForSleep()
         // The unit-test host must not flash a window or steal focus:
@@ -25,34 +31,20 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             NSApp.setActivationPolicy(.accessory)
             for window in NSApp.windows { window.orderOut(nil) }
-            return
-        }
-        // After SwiftUI has had its chance to open the window itself.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            Self.openMainWindowIfMissing()
         }
     }
 
-    /// Opens the main window if launch left the app without one.
+    /// AXTerm opens no documents, so a command-line argument is never a
+    /// file to open.
     ///
-    /// AppKit skipped its open-untitled step for instances launched with
-    /// `open` or from a shell, and that step is where SwiftUI makes a
-    /// WindowGroup's first window, so they came up with no window at all and
-    /// File > New was the only way in (smoke run 2026-10-03-1, issue 79).
-    /// This asks for it through the same call AppKit would have made.
-    private static func openMainWindowIfMissing() {
-        let identifiers = NSApp.windows.map { $0.identifier?.rawValue ?? "" }
-        guard needsMainWindow(isHidden: NSApp.isHidden, windowIdentifiers: identifiers) else { return }
-        _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
-    }
-
-    /// Whether the main window is missing. Only the main group's windows
-    /// count (SwiftUI names them `main-AppWindow-N`); the menu-bar item and
-    /// the other windows do not. A launch the operator asked to be hidden
-    /// stays hidden.
-    nonisolated static func needsMainWindow(isHidden: Bool, windowIdentifiers: [String]) -> Bool {
-        guard !isHidden else { return false }
-        return !windowIdentifiers.contains { $0.hasPrefix("main-") }
+    /// AppKit treats an argument that does not start with "-" as one, so a
+    /// test instance started with `--instance-name "Station A" --callsign
+    /// K0EPI` launched as if asked to open the files "Station A" and "K0EPI":
+    /// no open-untitled step, nothing it could open, and no window at all
+    /// (smoke run 2026-10-03-1, issue 79). Registered in the app's init,
+    /// before AppKit reads the arguments.
+    static func registerLaunchDefaults(in defaults: UserDefaults = .standard) {
+        defaults.register(defaults: ["NSTreatUnknownArgumentsAsOpen": false])
     }
 
     /// Sleep and wake, handled here rather than in a view.

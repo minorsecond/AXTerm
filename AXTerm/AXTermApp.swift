@@ -35,6 +35,8 @@ struct AXTermApp: App {
     private let station: StationServices?
 
     init() {
+        // Before AppKit reads the launch arguments (smoke run issue 79).
+        AXTermAppDelegate.registerLaunchDefaults()
         let isUnitTests = AppEnvironment.isUnitTestHost
         let testConfig = TestModeConfiguration.shared
         // `AppEnvironment.defaults` is the one place that decides this, and the
