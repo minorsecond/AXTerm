@@ -144,6 +144,18 @@ struct AXTermiOSRootView: View {
     private func withTNCStrip<Content: View>(_ content: Content) -> some View {
         VStack(spacing: 0) {
             content
+            // A file transfer under way, on every tab (issue 91).
+            if let transfers = ActiveTransfersSummary.make(sessionCoordinator.transfers) {
+                HStack {
+                    ActiveTransfersChip(summary: transfers) {
+                        selection = .terminal
+                        TransferUIRouter.shared.requestShowTransfers()
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            }
             // Summaries for one radio too: they know the transport, and the
             // profile's host is only meaningful for a TCP radio. Re-read every
             // 30 seconds: a deaf receiver brings no frames that would redraw it.

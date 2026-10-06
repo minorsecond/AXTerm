@@ -2252,7 +2252,13 @@ struct TerminalView: View {
             .onReceive(transferRouter.$sendFileRequest.dropFirst()) { _ in
                 takeSendFileRequest()
             }
-            .onAppear { takeSendFileRequest() }
+            .onReceive(transferRouter.$showTransfersRequest.dropFirst()) { _ in
+                if transferRouter.consumeShowTransfersRequest() { selectedTab = .transfers }
+            }
+            .onAppear {
+                takeSendFileRequest()
+                if transferRouter.consumeShowTransfersRequest() { selectedTab = .transfers }
+            }
             #if os(iOS)
             .fileImporter(isPresented: $isPickingTransfer,
                           allowedContentTypes: [.item],
@@ -2284,7 +2290,7 @@ struct TerminalView: View {
             HStack(spacing: 12) {
                 Picker("", selection: $selectedTab) {
                     ForEach(TerminalTab.allCases, id: \.self) { tab in
-                        Text(tab.rawValue).tag(tab)
+                        Text(tabTitle(tab)).tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -2314,6 +2320,15 @@ struct TerminalView: View {
                                    onOpenCallsign: onIdentity)
             }
         }
+    }
+
+    /// "Transfers (1)" while a transfer is under way, so the tab says there
+    /// is something to see (issue 91).
+    private func tabTitle(_ tab: TerminalTab) -> String {
+        guard tab == .transfers,
+              let count = ActiveTransfersSummary.make(sessionCoordinator.transfers)?.count
+        else { return tab.rawValue }
+        return "\(tab.rawValue) (\(count))"
     }
 
     private func wireCallbacks() {

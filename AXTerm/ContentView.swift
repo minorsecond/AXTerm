@@ -2407,6 +2407,13 @@ struct ContentView: View {
             if let sync = winlinkContext.sync {
                 SyncStatusIndicator(sync: sync)
             }
+            // A file transfer under way, on every page (issue 91).
+            if let transfers = ActiveTransfersSummary.make(sessionCoordinator.transfers) {
+                ActiveTransfersChip(summary: transfers) {
+                    selectedNav = .terminal
+                    TransferUIRouter.shared.requestShowTransfers()
+                }
+            }
             // Same group, same test: a station with no usable position has a
             // quietly broken map and terrain. Silent unless it has something
             // to say — see PositionStatusChip.

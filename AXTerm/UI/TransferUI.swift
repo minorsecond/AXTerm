@@ -41,6 +41,20 @@ final class TransferUIRouter: ObservableObject {
         defer { hasPendingSendFileRequest = false }
         return hasPendingSendFileRequest
     }
+
+    /// Asks the terminal to show its Transfers tab (the transfer chip).
+    @Published private(set) var showTransfersRequest = 0
+    private(set) var hasPendingShowTransfersRequest = false
+
+    func requestShowTransfers() {
+        hasPendingShowTransfersRequest = true
+        showTransfersRequest += 1
+    }
+
+    func consumeShowTransfersRequest() -> Bool {
+        defer { hasPendingShowTransfersRequest = false }
+        return hasPendingShowTransfersRequest
+    }
 }
 
 // MARK: - Sheet sizing
