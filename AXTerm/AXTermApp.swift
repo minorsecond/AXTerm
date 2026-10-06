@@ -212,6 +212,11 @@ struct AXTermApp: App {
                     }
             }
         }
+        // The main window always opens at launch. Restoration alone left a
+        // relaunched instance with no window at all, three times in a row on
+        // 2026-10-05 (smoke run 2026-10-03-1, issue 79), and a Mac app that
+        // launches to nothing reads as broken.
+        .defaultLaunchBehavior(.presented)
         .commands {
             CommandGroup(after: .windowArrangement) {
                 Button("Close") {
