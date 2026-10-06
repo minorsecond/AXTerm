@@ -77,11 +77,7 @@ final class NetRomIntegration {
         self.linkEstimator = LinkQualityEstimator(config: linkConfig)
 
         if mode == .inference || mode == .hybrid {
-            self.passiveInference = NetRomPassiveInference(
-                router: router,
-                localCallsign: localCallsign,
-                config: inferenceConfig
-            )
+            self.passiveInference = makePassiveInference(localCallsign: localCallsign)
         }
 
     }
@@ -106,11 +102,7 @@ final class NetRomIntegration {
 
         if newMode == .inference || newMode == .hybrid {
             if passiveInference == nil {
-                passiveInference = NetRomPassiveInference(
-                    router: router,
-                    localCallsign: localCallsign,
-                    config: inferenceConfig
-                )
+                passiveInference = makePassiveInference(localCallsign: localCallsign)
             }
         }
     }
@@ -164,6 +156,7 @@ final class NetRomIntegration {
         let rawFrom = packet.from?.display ?? ""
         let normalizedFrom = CallsignValidator.normalize(rawFrom)
         let observedQuality = linkQualityForNeighbor(normalizedFrom)
+        var neighborRefreshed = false
 
         // allowedRouteSources deliberately excludes "harvested" (and "inferred")
         // in both branches below: hearing the anchor node on the air proves the
@@ -173,7 +166,7 @@ final class NetRomIntegration {
         case .classic:
             // Classic mode: only direct observations become neighbors
             if packet.via.isEmpty {
-                applyRoutingFreshness(
+                _ = applyRoutingFreshness(
                     packet: packet,
                     classification: classification,
                     observedQuality: observedQuality,
@@ -189,7 +182,7 @@ final class NetRomIntegration {
         case .hybrid:
             // Hybrid mode: use both classic and inference
             if packet.via.isEmpty {
-                applyRoutingFreshness(
+                neighborRefreshed = applyRoutingFreshness(
                     packet: packet,
                     classification: classification,
                     observedQuality: observedQuality,
@@ -197,7 +190,9 @@ final class NetRomIntegration {
                     timestamp: timestamp
                 )
             }
-            passiveInference?.observePacket(packet, timestamp: timestamp, classification: classification, duplicateStatus: duplicateStatus)
+            passiveInference?.observePacket(packet, timestamp: timestamp, classification: classification,
+                                            duplicateStatus: duplicateStatus,
+                                            neighborAlreadyRefreshed: neighborRefreshed)
         }
     }
 
@@ -572,11 +567,7 @@ final class NetRomIntegration {
 
         // Recreate passive inference if needed
         if mode == .inference || mode == .hybrid {
-            passiveInference = NetRomPassiveInference(
-                router: router,
-                localCallsign: callsign,
-                config: inferenceConfig
-            )
+            passiveInference = makePassiveInference(localCallsign: callsign)
         }
 
         #if DEBUG
@@ -587,6 +578,26 @@ final class NetRomIntegration {
     // MARK: - Private Helpers
 
     /// Calculate observed quality for a neighbor, optionally influenced by link quality.
+    private func makePassiveInference(localCallsign: String) -> NetRomPassiveInference {
+        NetRomPassiveInference(
+            router: router,
+            localCallsign: localCallsign,
+            config: inferenceConfig,
+            measuredQuality: { [weak self] call in self?.measuredLinkQuality(call) }
+        )
+    }
+
+    /// The neighbor's measured link quality, or nil when the estimator has no
+    /// evidence for either direction.
+    private func measuredLinkQuality(_ call: String) -> Int? {
+        let quality = linkQualityForNeighbor(call)
+        let normalized = CallsignValidator.normalize(call)
+        guard !normalized.isEmpty,
+              linkEstimator.linkQuality(from: normalized, to: localCallsign) > 0
+                || linkEstimator.linkQuality(from: localCallsign, to: normalized) > 0 else { return nil }
+        return quality
+    }
+
     private func linkQualityForNeighbor(_ call: String) -> Int {
         let normalized = CallsignValidator.normalize(call)
         guard !normalized.isEmpty else { return routerConfig.neighborBaseQuality }
@@ -607,13 +618,14 @@ final class NetRomIntegration {
         return routerConfig.neighborBaseQuality
     }
 
+    /// Returns whether the frame refreshed its sender as a neighbor.
     private func applyRoutingFreshness(
         packet: Packet,
         classification: PacketClassification,
         observedQuality: Int,
         allowedRouteSources: Set<String>,
         timestamp: Date
-    ) {
+    ) -> Bool {
         let refreshNeighbor = shouldRefreshNeighbor(for: classification)
         let refreshRoutes = shouldRefreshRoute(for: classification)
         // The radio that heard this frame — its neighbors and routes are its
@@ -629,6 +641,7 @@ final class NetRomIntegration {
         if refreshRoutes, let origin = packet.from?.display {
             router.refreshRoutes(from: origin, radio: radio, timestamp: timestamp, allowedSourceTypes: allowedRouteSources)
         }
+        return refreshNeighbor
     }
 
     private func shouldRefreshNeighbor(for classification: PacketClassification) -> Bool {

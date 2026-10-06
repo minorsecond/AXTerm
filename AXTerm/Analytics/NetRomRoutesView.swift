@@ -383,7 +383,8 @@ struct NetRomRoutesView: View {
                     .width(min: 80, ideal: 100)
 
                     TableColumn("Quality") { neighbor in
-                        QualityBadge(quality: neighbor.quality, percent: neighbor.qualityPercent)
+                        QualityBadge(quality: neighbor.quality, percent: neighbor.qualityPercent,
+                                     detailTooltip: neighbor.qualityTooltip)
                     }
                     .width(min: 80, ideal: 100)
 

@@ -63,13 +63,22 @@ nonisolated struct NeighborDisplayInfo: Identifiable, Hashable {
     /// Freshness status label (Fresh, Recent, Stale, Expired).
     let freshnessStatus: String
 
+    /// Why the quality is what it is (CLAUDE.md §11).
+    let qualityTooltip: String
+
     /// Default TTL for neighbor freshness (30 minutes).
     private static let defaultTTL: TimeInterval = FreshnessCalculator.defaultTTL
 
     /// Default plateau duration (5 minutes).
     private static let defaultPlateau: TimeInterval = FreshnessCalculator.defaultPlateau
 
-    init(from info: NeighborInfo, now: Date, ttl: TimeInterval = NeighborDisplayInfo.defaultTTL, plateau: TimeInterval = NeighborDisplayInfo.defaultPlateau) {
+    /// - Parameters:
+    ///   - localCallsign: this station, for naming the two directions.
+    ///   - heardQuality: measured quality of the neighbor → us link, if any.
+    ///   - sentQuality: measured quality of the us → neighbor link, if any.
+    init(from info: NeighborInfo, now: Date, ttl: TimeInterval = NeighborDisplayInfo.defaultTTL,
+         plateau: TimeInterval = NeighborDisplayInfo.defaultPlateau,
+         localCallsign: String = "", heardQuality: Int? = nil, sentQuality: Int? = nil) {
         self.id = info.radioID == .primary ? info.call : "\(info.call)@\(info.radioID.rawValue)"
         self.callsign = info.call
         self.radioID = info.radioID
@@ -84,6 +93,34 @@ nonisolated struct NeighborDisplayInfo: Identifiable, Hashable {
         self.freshnessDisplayString = info.freshnessDisplayString(now: now, ttl: ttl, plateau: plateau)
         self.freshness255 = info.freshness255(now: now, ttl: ttl, plateau: plateau)
         self.freshnessStatus = info.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
+        self.qualityTooltip = Self.qualityTooltip(
+            call: info.call, quality: info.quality, sourceType: info.sourceType,
+            localCallsign: localCallsign, heardQuality: heardQuality, sentQuality: sentQuality)
+    }
+
+    static func qualityTooltip(call: String, quality: Int, sourceType: String, localCallsign: String,
+                               heardQuality: Int?, sentQuality: Int?) -> String {
+        let me = localCallsign.isEmpty ? "this station" : localCallsign
+        var lines = ["Quality: \(quality) (\(Int((Double(quality) / 255 * 100).rounded()))%)"]
+        lines.append("A running average: each frame from \(call) that refreshes it moves it 30% of the way to the link's measured quality at that moment.")
+        let measured = [heardQuality, sentQuality].compactMap { $0 }.filter { $0 > 0 }
+        if measured.isEmpty {
+            lines.append("No link to \(call) measured yet, so it is still near its starting value (80 when heard directly, 60 when only inferred through a digipeater).")
+        } else {
+            let heard = heardQuality.map(String.init) ?? "not measured"
+            let sent = sentQuality.map(String.init) ?? "not measured"
+            lines.append("Measured now: \(call) → \(me) \(heard), \(me) → \(call) \(sent)")
+            if measured.count == 2 {
+                lines.append("Average of the two directions: \(measured.reduce(0, +) / 2)")
+            }
+            lines.append("Each link's quality is 255 / ETX; the Link Quality tab shows its df, dr and ETX.")
+        }
+        switch sourceType {
+        case "inferred": lines.append("Inferred from traffic it repeated or sent us.")
+        case "broadcast": lines.append("Learned from its NODES broadcasts.")
+        default: lines.append("Heard directly.")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func formatRelativeTime(_ date: Date, now: Date) -> String {
@@ -856,7 +893,16 @@ final class NetRomRoutesViewModel: ObservableObject {
         let neighborTTL = neighborStaleTTLSeconds
         let linkStatTTL = linkStatStaleTTLSeconds
 
-        neighbors = filteredNeighbors.map { NeighborDisplayInfo(from: $0, now: now, ttl: neighborTTL) }
+        let local = integration.localCallsign
+        let allLinks = integration.exportLinkStats()
+        func linkQuality(_ from: String, _ to: String, _ radio: RadioID) -> Int? {
+            allLinks.first { $0.fromCall == from && $0.toCall == to && $0.radioID == radio }?.quality
+        }
+        neighbors = filteredNeighbors.map {
+            NeighborDisplayInfo(from: $0, now: now, ttl: neighborTTL, localCallsign: local,
+                                heardQuality: linkQuality($0.call, local, $0.radioID),
+                                sentQuality: linkQuality(local, $0.call, $0.radioID))
+        }
 
         // Routes use different TTL strategies based on source type
         routes = filteredRoutes.map { route in

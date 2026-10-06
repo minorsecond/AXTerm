@@ -16,11 +16,20 @@ final class NetRomPassiveInference {
     private let router: NetRomRouter
     private let localCallsign: String
     private var evidenceByDestination: [String: [NetRomRouteEvidence]] = [:]
+    /// The measured link quality for a neighbor, nil when there is none.
+    /// Inference used a fixed `inferredBaseQuality` for every neighbor it
+    /// touched, which in hybrid mode dragged a measured neighbor toward 60:
+    /// K0EPI-3 read 162 beside links of 229 and 169 (smoke run 2026-10-03-1,
+    /// issue 97). The constant is now only the prior for a station with no
+    /// measurement at all.
+    private let measuredQuality: (String) -> Int?
 
-    init(router: NetRomRouter, localCallsign: String, config: NetRomInferenceConfig = .default) {
+    init(router: NetRomRouter, localCallsign: String, config: NetRomInferenceConfig = .default,
+         measuredQuality: @escaping (String) -> Int? = { _ in nil }) {
         self.router = router
         self.localCallsign = CallsignValidator.normalize(localCallsign)
         self.config = config
+        self.measuredQuality = measuredQuality
     }
 
     #if DEBUG
@@ -28,7 +37,11 @@ final class NetRomPassiveInference {
     private static var inferenceCount = 0
     #endif
 
-    func observePacket(_ packet: Packet, timestamp: Date, classification: PacketClassification, duplicateStatus: PacketDuplicateStatus) {
+    /// - Parameter neighborAlreadyRefreshed: the caller has already applied
+    ///   this frame's evidence to its sender as a neighbor (hybrid mode), so
+    ///   a direct frame must not count a second time.
+    func observePacket(_ packet: Packet, timestamp: Date, classification: PacketClassification,
+                       duplicateStatus: PacketDuplicateStatus, neighborAlreadyRefreshed: Bool = false) {
         guard let rawFrom = packet.from?.display,
               let normalizedFrom = normalize(rawFrom),
               let rawTo = packet.to?.display,
@@ -57,10 +70,10 @@ final class NetRomPassiveInference {
 
         // Case 1: Direct packet addressed to us (no via path)
         if packet.via.isEmpty && normalizedTo == localCallsign {
-            guard classification.refreshesNeighbor else { return }
+            guard classification.refreshesNeighbor, !neighborAlreadyRefreshed else { return }
             router.observePacketInferred(
                 makeSyntheticPacket(call: normalizedFrom, radio: radio, timestamp: timestamp),
-                observedQuality: config.inferredBaseQuality,
+                observedQuality: measuredQuality(normalizedFrom) ?? config.inferredBaseQuality,
                 direction: .incoming,
                 timestamp: timestamp
             )
@@ -278,7 +291,7 @@ final class NetRomPassiveInference {
         )
         router.observePacket(
             synthetic,
-            observedQuality: config.inferredBaseQuality,
+            observedQuality: measuredQuality(nextHop) ?? config.inferredBaseQuality,
             direction: .incoming,
             timestamp: timestamp
         )
@@ -304,7 +317,7 @@ final class NetRomPassiveInference {
         )
         router.observePacketInferred(
             synthetic,
-            observedQuality: config.inferredBaseQuality,
+            observedQuality: measuredQuality(nextHop) ?? config.inferredBaseQuality,
             direction: .incoming,
             timestamp: timestamp
         )

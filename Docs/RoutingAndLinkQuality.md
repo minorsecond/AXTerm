@@ -293,7 +293,7 @@ restart.
 | `inferredRouteHalfLifeSeconds` | 1800 | 300–7200 | Evidence validity period |
 | `tombstoneWindowMultiplier` | 1.0 | 0.5–3.0 | Tombstone window = halfLife × multiplier |
 | `evidenceWindowSeconds` | 5 | 1–60 | Minimum interval between reinforcements |
-| `inferredBaseQuality` | 60 | 0–255 | Initial quality for inferred routes |
+| `inferredBaseQuality` | 60 | 0–255 | Initial quality for inferred routes, and for an inferred neighbor with no measured link |
 | `reinforcementIncrement` | 20 | 0–100 | Quality boost per reinforcement |
 | `retryPenaltyMultiplier` | 0.7 | 0.0–1.0 | Score multiplier on retry detection |
 
@@ -308,6 +308,16 @@ restart.
 - **Neighbor path quality** updates by EWMA blend (70% current, 30% observed).
   There is no per-observation "heard bonus": quality moves only on evidence, in
   both directions.
+- **One update per frame, from evidence.** In hybrid mode a direct frame from a
+  neighbor updates it once, from the classic path's measured link quality;
+  passive inference does not count the same frame again. Passive inference
+  uses the measured link quality too, for a direct sender or for the digipeater
+  that repeated a frame. `inferredBaseQuality` (60) is used only for a station
+  with no measured link at all, as its starting value. Before this, inference
+  blended every frame toward 60, and K0EPI-3 read 162 beside links of 229 and
+  169 (smoke run 2026-10-03-1, issue 97).
+- The Neighbors tab's Quality tooltip shows the measured quality of each
+  direction and their average, or says that nothing has been measured yet.
 - **Route quality** follows classic NET/ROM semantics: each broadcast carries the
   origin's current figure and *replaces* the stored quality (it can decrease).
   Passively inferred evidence may only corroborate (raise) a broadcast-sourced
