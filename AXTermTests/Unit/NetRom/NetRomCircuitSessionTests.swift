@@ -105,6 +105,52 @@ final class NetRomCircuitSessionTests: XCTestCase {
             circuits: [summary(.disconnected, destination: station, neighbor: station)]))
     }
 
+    // MARK: - The connect bar when its circuit closes
+
+    /// Smoke run 2026-10-03-1, issue 84: after "Circuit to K0EPI-3 closed."
+    /// the bar still read connected, NET/ROM, K0EPI-3, with Disconnect,
+    /// because it follows the AX.25 link underneath, and that link stays up
+    /// for the node.
+    func testTheBarsCircuitClosingEndsTheBarsSession() {
+        let station = AX25Address(call: "K0EPI", ssid: 3)
+        var live = summary(.connected, destination: station, neighbor: station)
+        live.requestedAlias = "EPINDB"
+        var closing = NetRomCircuitSummary(id: live.id, destination: station, neighbor: station,
+                                           state: .disconnecting, openedAt: live.openedAt)
+        closing.requestedAlias = "EPINDB"
+
+        for bar in ["EPINDB", "K0EPI-3", "epindb"] {
+            XCTAssertTrue(NetRomCircuitSession.barSessionEnded(
+                barDestination: bar, barIsNetRomSession: true, before: [live], after: []), "bar \(bar)")
+            XCTAssertTrue(NetRomCircuitSession.barSessionEnded(
+                barDestination: bar, barIsNetRomSession: true, before: [live], after: [closing]), "bar \(bar)")
+        }
+    }
+
+    func testOnlyTheBarsOwnCircuitEndsIt() {
+        let station = AX25Address(call: "K0EPI", ssid: 3)
+        let live = summary(.connected, destination: station, neighbor: station)
+        let other = summary(.connected)
+
+        // Another station's circuit closing.
+        XCTAssertFalse(NetRomCircuitSession.barSessionEnded(
+            barDestination: "K0EPI-3", barIsNetRomSession: true, before: [live, other], after: [live]))
+        // Still up.
+        XCTAssertFalse(NetRomCircuitSession.barSessionEnded(
+            barDestination: "K0EPI-3", barIsNetRomSession: true, before: [live], after: [live]))
+        // A second circuit to the same station is still up.
+        let second = summary(.connected, destination: station, neighbor: station)
+        XCTAssertFalse(NetRomCircuitSession.barSessionEnded(
+            barDestination: "K0EPI-3", barIsNetRomSession: true, before: [live, second], after: [second]))
+        // The bar is not showing a NET/ROM session (an AX.25 link, or a
+        // node-prompt relay, which has no circuit at all).
+        XCTAssertFalse(NetRomCircuitSession.barSessionEnded(
+            barDestination: "K0EPI-3", barIsNetRomSession: false, before: [live], after: []))
+        // Nothing was up to begin with: a relay session's bar is left alone.
+        XCTAssertFalse(NetRomCircuitSession.barSessionEnded(
+            barDestination: "K0EPI-3", barIsNetRomSession: true, before: [], after: []))
+    }
+
     // MARK: - Where typed text goes
 
     func testTextGoesToAnEstablishedCircuit() {

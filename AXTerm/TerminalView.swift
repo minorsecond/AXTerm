@@ -2089,8 +2089,9 @@ struct TerminalView: View {
             .onChange(of: connectBarViewModel.toCall) { _, _ in syncAdaptiveSelection() }
             .onChange(of: connectBarViewModel.viaDigipeaters) { _, _ in syncAdaptiveSelection() }
             .onChange(of: sessionCoordinator.adaptiveTransmissionEnabled) { _, _ in syncAdaptiveSelection() }
-            .onChange(of: sessionCoordinator.netRomDriver.circuits) { _, _ in
+            .onChange(of: sessionCoordinator.netRomDriver.circuits) { before, after in
                 syncCircuitSessionRecords()
+                endBarSessionIfItsCircuitClosed(before: before, after: after)
             }
             .onChange(of: txViewModel.sessionState) { oldState, newState in
                 switch newState {
@@ -3247,6 +3248,20 @@ struct TerminalView: View {
     /// Mirror live circuits into the session picker so a circuit is
     /// selectable, filterable, and typeable like any other session
     /// (CLAUDE.md §5 lists NET/ROM circuits as a session type).
+    /// The bar follows the AX.25 link, which outlives the circuit it
+    /// carried; when the bar's own circuit closes, the bar's session is over
+    /// (issue 84).
+    private func endBarSessionIfItsCircuitClosed(before: [NetRomCircuitSummary],
+                                                 after: [NetRomCircuitSummary]) {
+        guard case .connectedSession(let session) = connectBarViewModel.barState,
+              case .netrom = session.transport,
+              NetRomCircuitSession.barSessionEnded(
+                barDestination: session.destination, barIsNetRomSession: true,
+                before: before, after: after)
+        else { return }
+        connectBarViewModel.markDisconnected()
+    }
+
     private func syncCircuitSessionRecords() {
         let circuits = sessionCoordinator.netRomDriver.circuits
         for circuit in circuits {
@@ -3595,8 +3610,10 @@ struct TerminalView: View {
     /// already up to that means talk to it, not dial it again. Dialing would
     /// run the route ladder at a peer that is connected to us. The session
     /// state change that the sync caused marks the bar connected.
+    /// A link left up for NET/ROM is not the operator's session: a connect
+    /// over it releases it first (issue 80), so it does not count here.
     private var isAlreadyConnectedToDestination: Bool {
-        txViewModel.sessionState == .connected
+        txViewModel.sessionState == .connected && txViewModel.currentSession?.carriesNetRom != true
     }
 
     /// Establish connection to current destination

@@ -71,6 +71,28 @@ nonisolated enum NetRomCircuitSession {
         return match.map { recordID(for: $0.id) }
     }
 
+    /// Whether the circuit the connect bar shows has just closed, so the
+    /// bar should go back to a draft. The bar otherwise follows the AX.25
+    /// link underneath, which stays up for the node after the circuit is
+    /// gone (smoke run 2026-10-03-1, issue 84). Only a circuit that was up
+    /// counts: a node-prompt relay also shows as NET/ROM and has none.
+    static func barSessionEnded(barDestination: String,
+                                barIsNetRomSession: Bool,
+                                before: [NetRomCircuitSummary],
+                                after: [NetRomCircuitSummary]) -> Bool {
+        guard barIsNetRomSession else { return false }
+        let wanted = barDestination.trimmingCharacters(in: .whitespaces).uppercased()
+        guard !wanted.isEmpty else { return false }
+        func liveToBar(_ circuits: [NetRomCircuitSummary]) -> Bool {
+            circuits.contains { circuit in
+                (circuit.state == .connecting || circuit.state == .connected)
+                    && (circuit.destination.display.uppercased() == wanted
+                        || circuit.requestedAlias?.uppercased() == wanted)
+            }
+        }
+        return liveToBar(before) && !liveToBar(after)
+    }
+
     /// Where the compose field's text should go.
     enum SendTarget: Equatable {
         /// A live, established circuit.
