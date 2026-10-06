@@ -26,6 +26,22 @@ final class TerminalSessionLineFilterTests: XCTestCase {
         })
     }
 
+    /// A session's notices often name the station by its node alias. The
+    /// circuit to EPINDB filters on K0EPI-3, and its failure notice "EPINDB
+    /// did not answer as a NET/ROM node" was hidden from the session that
+    /// asked for it (smoke run 2026-10-03-1, issue 86).
+    func testANoticeNamingTheStationsAliasStaysInItsSession() {
+        let lines: [ConsoleLine] = [
+            .packet(from: "K0EPI-2", to: "K0EPI-3", text: "SABM P"),
+            .system("EPINDB did not answer as a NET/ROM node (no answer in 30s)."),
+            .system("COSCO did not answer as a NET/ROM node."),
+        ]
+        let filtered = TerminalSessionLineFilter.apply(lines, peer: "K0EPI-3", aliases: ["EPINDB"])
+        XCTAssertEqual(filtered.map(\.text), ["SABM P", "EPINDB did not answer as a NET/ROM node (no answer in 30s)."])
+        XCTAssertEqual(TerminalSessionLineFilter.apply(lines, peer: "K0EPI-3").count, 1,
+                       "without aliases, only the callsign matches")
+    }
+
     private func sampleLines() -> [ConsoleLine] {
         [
             .packet(from: "PEER1", to: "ME", text: "hello"),

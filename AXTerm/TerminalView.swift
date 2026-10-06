@@ -15,10 +15,17 @@ import UniformTypeIdentifiers
 typealias TerminalLine = ConsoleLine
 
 nonisolated enum TerminalSessionLineFilter {
-    static func apply(_ lines: [TerminalLine], peer: String?) -> [TerminalLine] {
+    /// The lines of one session: frames to or from `peer`, and notices that
+    /// name it or one of its node `aliases`. Notices often use the alias the
+    /// operator typed ("EPINDB did not answer…"), and filtering on the
+    /// callsign alone hid them from the session that asked (issue 86).
+    static func apply(_ lines: [TerminalLine], peer: String?, aliases: [String] = []) -> [TerminalLine] {
         guard let peer, !peer.isEmpty else { return lines }
         let normalizedPeer = CallsignValidator.normalize(peer)
         guard !normalizedPeer.isEmpty else { return lines }
+        let names = [normalizedPeer] + aliases
+            .map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
+            .filter { !$0.isEmpty }
 
         return lines.filter { line in
             let from = CallsignValidator.normalize(line.from ?? "")
@@ -26,7 +33,8 @@ nonisolated enum TerminalSessionLineFilter {
             if from == normalizedPeer || to == normalizedPeer {
                 return true
             }
-            return line.text.uppercased().contains(normalizedPeer)
+            let text = line.text.uppercased()
+            return names.contains { text.contains($0) }
         }
     }
 }
@@ -3153,7 +3161,10 @@ struct TerminalView: View {
             destinationByRecordID: destinationByRecordID,
             connectedPeers: connectedPeers
         )
-        return TerminalSessionLineFilter.apply(txViewModel.filteredLines, peer: selectedPeer)
+        let aliases = selectedPeer.map { peer in
+            nodeAliases.directory.aliases(for: CallsignValidator.normalize(peer)).map(\.alias)
+        } ?? []
+        return TerminalSessionLineFilter.apply(txViewModel.filteredLines, peer: selectedPeer, aliases: aliases)
             .filter(radioVisible)
     }
 
