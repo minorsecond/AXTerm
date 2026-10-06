@@ -2890,7 +2890,7 @@ struct TerminalView: View {
                 characterCount: txViewModel.characterCount,
                 queueDepth: txViewModel.queueDepth,
                 isConnected: client.status == .connected,
-                sessionState: txViewModel.sessionState,
+                sessionState: displayedSessionState,
                 destinationCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
                 capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall),
                 connectBarViewModel: connectBarViewModel,
@@ -3821,7 +3821,16 @@ struct TerminalView: View {
     /// happened — reported 2026-08-27 as "it looks like I am just connected to
     /// kb5yzb".
     private var displayedSessionState: AX25SessionState? {
-        txViewModel.relayIsHandshaking ? .connecting : txViewModel.sessionState
+        if txViewModel.relayIsHandshaking { return .connecting }
+        // A link kept up for the node after its circuits closed is not the
+        // operator's session (issue 84).
+        if txViewModel.sessionState == .connected, let link = txViewModel.currentSession,
+           !NetRomCircuitSession.linkIsOperatorSession(
+                carriesNetRom: link.carriesNetRom, peer: link.remoteAddress,
+                circuits: sessionCoordinator.netRomDriver.circuits) {
+            return .disconnected
+        }
+        return txViewModel.sessionState
     }
 
     /// The relay's next hop reads as a via — which is what it is, one node

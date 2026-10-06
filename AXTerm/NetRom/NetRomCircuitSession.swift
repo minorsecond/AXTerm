@@ -71,6 +71,21 @@ nonisolated enum NetRomCircuitSession {
         return match.map { recordID(for: $0.id) }
     }
 
+    /// Whether an AX.25 link counts as the operator's session for the
+    /// compose bar. A link that has carried NET/ROM stays up for the node
+    /// after its circuits close; with none riding it, it is not a session
+    /// the operator has, and showing it as connected left the bar on
+    /// Disconnect after "Circuit to K0EPI-3 closed." (issue 84).
+    static func linkIsOperatorSession(carriesNetRom: Bool,
+                                      peer: AX25Address,
+                                      circuits: [NetRomCircuitSummary]) -> Bool {
+        guard carriesNetRom else { return true }
+        return circuits.contains { circuit in
+            circuit.state != .disconnected
+                && CallsignNormalizer.addressesMatch(circuit.neighbor, peer)
+        }
+    }
+
     /// Whether the circuit the connect bar shows has just closed, so the
     /// bar should go back to a draft. The bar otherwise follows the AX.25
     /// link underneath, which stays up for the node after the circuit is

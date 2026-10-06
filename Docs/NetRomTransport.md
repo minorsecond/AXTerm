@@ -406,14 +406,17 @@ parallel UI. `NetRomCircuitSession` holds the pure part:
   so does one that never carried NET/ROM, which is someone's session. A
   native circuit still reuses the neighbor link, as NET/ROM intends.
   Smoke run 2026-10-03-1, issue 80.
-- **The bar's session ends with its circuit.** The connect bar follows
-  the AX.25 link, which stays up for the node after a circuit closes, so
-  after "Circuit to K0EPI-3 closed." it still read connected, NET/ROM,
-  K0EPI-3, and offered only Disconnect (issue 84). When the circuit the bar
-  shows was up and no longer is (`barSessionEnded(barDestination:
-  barIsNetRomSession:before:after:)`), the bar goes back to a draft. A
-  node-prompt relay also shows as NET/ROM but has no circuit, so it is left
-  alone. A link that carried NET/ROM does not count as already connected
+- **The bar's session ends with its circuit.** The compose bar shows the
+  terminal's AX.25 session state, and the link stays up for the node after
+  a circuit closes, so after "Circuit to K0EPI-3 closed." the bar still read
+  connected, NET/ROM, K0EPI-3, and offered only Disconnect (issue 84). A
+  link that has carried NET/ROM now counts as the operator's session only
+  while a circuit rides it (`linkIsOperatorSession(carriesNetRom:peer:
+  circuits:)`); otherwise the bar shows disconnected and offers Connect. The
+  bar model goes back to a draft too, when the circuit it shows was up and
+  no longer is (`barSessionEnded(barDestination:barIsNetRomSession:before:
+  after:)`); a node-prompt relay also shows as NET/ROM but has no circuit,
+  so it is left alone. Such a link does not count as already connected
   either, so Connect goes ahead and releases it as above.
 - **A circuit's pane filters by the callsign on the air**
   (`transcriptPeer(for:)`), not by its display name "EPINDB (K0EPI-3)",

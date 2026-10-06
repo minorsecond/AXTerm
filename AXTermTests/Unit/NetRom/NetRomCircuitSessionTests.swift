@@ -127,6 +127,30 @@ final class NetRomCircuitSessionTests: XCTestCase {
         }
     }
 
+    /// The compose bar shows the terminal's AX.25 session state. A link
+    /// that only carried circuits is not the operator's session once no
+    /// circuit rides it (issue 84).
+    func testALinkLeftForTheNodeIsNotTheOperatorsSession() {
+        let station = AX25Address(call: "K0EPI", ssid: 3)
+        let riding = summary(.connected, destination: station, neighbor: station)
+        let closing = summary(.disconnecting, destination: station, neighbor: station)
+        let elsewhere = summary(.connected)
+
+        XCTAssertFalse(NetRomCircuitSession.linkIsOperatorSession(
+            carriesNetRom: true, peer: station, circuits: []))
+        XCTAssertFalse(NetRomCircuitSession.linkIsOperatorSession(
+            carriesNetRom: true, peer: station, circuits: [elsewhere]),
+            "a circuit through another neighbor does not ride this link")
+        XCTAssertTrue(NetRomCircuitSession.linkIsOperatorSession(
+            carriesNetRom: true, peer: station, circuits: [riding]))
+        XCTAssertTrue(NetRomCircuitSession.linkIsOperatorSession(
+            carriesNetRom: true, peer: station, circuits: [closing]),
+            "still closing: Disconnect stays until it is done")
+        XCTAssertTrue(NetRomCircuitSession.linkIsOperatorSession(
+            carriesNetRom: false, peer: station, circuits: []),
+            "a plain AX.25 session is the operator's")
+    }
+
     func testOnlyTheBarsOwnCircuitEndsIt() {
         let station = AX25Address(call: "K0EPI", ssid: 3)
         let live = summary(.connected, destination: station, neighbor: station)
