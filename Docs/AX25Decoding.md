@@ -27,6 +27,13 @@ called `V},'-11` (2026-09-29). The decoder now applies AX.25 2.2 §3.12 to each
   encode them, and Direwolf rejects a received address with lower case in it.
 - The SSID byte is not judged. Bits 5 and 6 are reserved and usually 1, but
   some software sends 0. Bit 7 is the C or H bit and can be anything.
+- Bit 7 means "has been repeated" (H) only on a digipeater. On the destination
+  and source it is the command/response (C) bit, so the decoded destination
+  and source never read as repeated; the frame's `isCommand` carries the two C
+  bits instead (true for a command, false for a response, nil when they are
+  equal, which is AX.25 1.x). A packet reads its command/response from its own
+  raw bytes. Until 2026-10-06 the C bit was stored as `repeated`, and a
+  response's source did not compare equal to its station.
 
 Real traffic fits inside these rules: callsigns, APRS tocalls, `WIDEn-N`,
 `RELAY`, `TRACE`, `RFONLY`, `NOGATE`, `TCPIP`, `BEACON`, `ID`, `CQ`, `QST`,

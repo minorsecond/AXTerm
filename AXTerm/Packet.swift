@@ -98,12 +98,12 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
     var isCommand: Bool {
         // Command: Dest bit 7 = 1, Src bit 7 = 0
         // Response: Dest bit 7 = 0, Src bit 7 = 1
-        // (In AX25Address, bit 7 is stored in the `repeated` property for src/dest)
-        if to?.repeated == true && from?.repeated == false {
-            return true
-        }
-        if to?.repeated == false && from?.repeated == true {
-            return false
+        // Read from the frame's own bytes: the decoder does not carry the C
+        // bits in the addresses (`repeated` is for digipeaters only).
+        if rawAx25.count >= 14 {
+            let destC = rawAx25[rawAx25.startIndex + 6] & 0x80 != 0
+            let srcC = rawAx25[rawAx25.startIndex + 13] & 0x80 != 0
+            if destC != srcC { return destC }
         }
         
         // V1.0 (both 0 or both 1), or unknown, guess based on frame type

@@ -458,9 +458,8 @@ final class KISSAX25DecodePropertyTests: XCTestCase {
                 v.record("built \(frame.displayInfo ?? frame.frameType) refused: \(AX25.decodeFailureReason(ax25: bytes))")
                 return
             }
-            let packetLike = (to: decoded.to?.repeated ?? false, from: decoded.from?.repeated ?? false)
-            let decodedCommand = packetLike.to && !packetLike.from
-            let decodedResponse = !packetLike.to && packetLike.from
+            let decodedCommand = decoded.isCommand == true
+            let decodedResponse = decoded.isCommand == false
             v.check(decodedCommand || decodedResponse, "C bits are not a v2 command/response pair")
             v.check(decodedCommand == (frame.isCommand ?? true), "command bit lost: built \(String(describing: frame.isCommand))")
             v.check(decoded.control == frame.controlByte, "control byte changed")

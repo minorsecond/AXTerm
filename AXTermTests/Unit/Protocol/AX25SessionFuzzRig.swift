@@ -128,15 +128,8 @@ final class AX25SessionFuzzRig {
         guard case .success(let frame) = AX25.checkFrame(ax25: bytes),
               let from = frame.from, let to = frame.to, manager.answers(to) else { return nil }
         let decoded = AX25ControlFieldDecoder.decode(control: frame.control, controlByte1: frame.controlByte1)
-        let isCommand: Bool
-        if to.repeated && !from.repeated {
-            isCommand = true
-        } else if !to.repeated && from.repeated {
-            isCommand = false
-        } else {
-            isCommand = decoded.frameClass == .I
-                || [AX25UType.SABM, .SABME, .DISC, .UI].contains(decoded.uType ?? .UNKNOWN)
-        }
+        let isCommand = frame.isCommand ?? (decoded.frameClass == .I
+            || [AX25UType.SABM, .SABME, .DISC, .UI].contains(decoded.uType ?? .UNKNOWN))
         let path = DigiPath.from(frame.via.map(\.display))
         let pf = (decoded.pf ?? 0) == 1
         let radio = RadioID.primary

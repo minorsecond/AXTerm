@@ -291,9 +291,15 @@ nonisolated enum AX25 {
 
     /// Result of decoding an AX.25 address field
     struct AddressDecodeResult {
+        /// `repeated` is bit 7 of the SSID byte as read, which only means
+        /// "repeated" on a digipeater; `checkFrame` clears it for the
+        /// destination and source, where bit 7 is the C bit.
         let address: AX25Address
         let nextOffset: Int
         let isLast: Bool
+        /// Bit 7 of the SSID byte: the C bit on the destination and source,
+        /// the H bit on a digipeater.
+        let highBit: Bool
     }
 
     /// Result of decoding an AX.25 frame
@@ -307,6 +313,10 @@ nonisolated enum AX25 {
         let pid: UInt8?
         let info: Data
         let frameType: FrameType
+        /// AX.25 2.x command/response from the C bits: true for a command
+        /// (destination C = 1, source C = 0), false for a response, nil when
+        /// the bits are equal, which is AX.25 1.x and says neither.
+        var isCommand: Bool? = nil
     }
 
     /// Why one 7-byte address field was refused.
@@ -493,7 +503,8 @@ nonisolated enum AX25 {
         let repeated = (ssidByte & 0x80) != 0
 
         let address = AX25Address(call: callsign, ssid: ssid, repeated: repeated)
-        return .success(AddressDecodeResult(address: address, nextOffset: offset + 7, isLast: isLast))
+        return .success(AddressDecodeResult(address: address, nextOffset: offset + 7, isLast: isLast,
+                                            highBit: repeated))
     }
 
     /// Explain why decodeFrame returned nil for the given bytes, naming the
@@ -538,8 +549,12 @@ nonisolated enum AX25 {
         // Checked after the source so a frame that is noise throughout is
         // reported by its characters, which say more than this bit does.
         if destResult.isLast { return .failure(.endsAfterDestination) }
-        let to = destResult.address
-        let from = srcResult.address
+        // Bit 7 of the destination and source is the C bit, not "repeated",
+        // which only a digipeater can be. Read as repeated, a response's
+        // source did not equal its station.
+        let to = AX25Address(call: destResult.address.call, ssid: destResult.address.ssid)
+        let from = AX25Address(call: srcResult.address.call, ssid: srcResult.address.ssid)
+        let isCommand: Bool? = destResult.highBit == srcResult.highBit ? nil : destResult.highBit
 
         // Decode via addresses (digipeaters)
         var via: [AX25Address] = []
@@ -596,7 +611,7 @@ nonisolated enum AX25 {
         return .success(FrameDecodeResult(
             from: from, to: to, via: via,
             control: control, controlByte1: controlByte1, pid: pid, info: info,
-            frameType: frameType
+            frameType: frameType, isCommand: isCommand
         ))
     }
 

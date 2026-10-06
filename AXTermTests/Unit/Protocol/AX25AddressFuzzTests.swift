@@ -136,14 +136,26 @@ final class AX25AddressFuzzTests: XCTestCase {
             return true
         }
         let all = [decoded.to!, decoded.from!] + decoded.via
+        // Bit 7 is the H bit only on a digipeater; on the destination and
+        // source it is the C bit, which the decoder reports as `isCommand`.
+        let expected = oracle.addresses.enumerated().map { index, address in
+            index < 2 ? OracleAddress(call: address.call, ssid: address.ssid, hBit: false) : address
+        }
         XCTAssertEqual(all.map { OracleAddress(call: $0.call, ssid: $0.ssid, hBit: $0.repeated) },
-                       oracle.addresses, context(), file: file, line: line)
+                       expected, context(), file: file, line: line)
+        let destC = oracle.addresses[0].hBit, srcC = oracle.addresses[1].hBit
+        XCTAssertEqual(decoded.isCommand, destC == srcC ? nil : destC, context(), file: file, line: line)
         XCTAssertEqual(decoded.control, bytes[oracle.controlIndex], context(), file: file, line: line)
         for a in all where !AddressOracle.isValidCallsign(a.call) {
             XCTFail("accepted illegal callsign \(a.call): \(context())", file: file, line: line)
         }
 
-        let legacy = LegacyDecoder.decode(bytes)
+        // The legacy decoder read the C bits into `repeated`; set those aside.
+        let legacy = LegacyDecoder.decode(bytes).map {
+            LegacyDecoder.Frame(to: AX25Address(call: $0.to.call, ssid: $0.to.ssid),
+                                from: AX25Address(call: $0.from.call, ssid: $0.from.ssid),
+                                via: $0.via, control: $0.control, pid: $0.pid, info: $0.info)
+        }
         XCTAssertEqual(legacy, LegacyDecoder.Frame(to: decoded.to!, from: decoded.from!, via: decoded.via,
                                                    control: decoded.control, pid: decoded.pid,
                                                    info: decoded.info),

@@ -552,10 +552,10 @@ final class AX25ModelPeer {
 
     func receive(_ bytes: Data) {
         guard case .success(let frame) = AX25.checkFrame(ax25: bytes),
-              let from = frame.from, let to = frame.to,
+              frame.from != nil, let to = frame.to,
               to.call == rig.peer.call, to.ssid == rig.peer.ssid else { return }
         let decoded = AX25ControlFieldDecoder.decode(control: frame.control, controlByte1: frame.controlByte1)
-        let isCommand = to.repeated && !from.repeated
+        let isCommand = frame.isCommand == true
         let pf = (decoded.pf ?? 0) == 1
 
         switch decoded.frameClass {
@@ -687,7 +687,7 @@ final class AX25FuzzChannel {
     static func describe(_ bytes: Data) -> String {
         guard case .success(let frame) = AX25.checkFrame(ax25: bytes) else { return "undecodable" }
         let d = AX25ControlFieldDecoder.decode(control: frame.control, controlByte1: frame.controlByte1)
-        let cmd = (frame.to?.repeated ?? false) && !(frame.from?.repeated ?? false) ? "cmd" : "rsp"
+        let cmd = frame.isCommand == true ? "cmd" : "rsp"
         let pf = (d.pf ?? 0) == 1 ? " P/F" : ""
         switch d.frameClass {
         case .I:
