@@ -1014,6 +1014,31 @@ final class SessionCoordinatorTests: XCTestCase {
             "Peer that sent text probe should be marked as AXDP-capable")
     }
 
+    /// The PONG comes from the address the probe was sent to. B (ID-50)
+    /// answered probes to its node alias EPINDB from K0EPI-3, A never
+    /// matched them to EPINDB, and probed again every 10 s for as long as
+    /// the link lasted (smoke run 2026-10-03-1, issue 89).
+    func testAProbeToANodeAliasIsAnsweredFromTheAlias() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = true
+        coordinator.sessionManager.localCallsign = AX25Address(call: "K0EPI", ssid: 3)
+        let alias = AX25Address(call: "EPINDB", ssid: 0)
+        coordinator.sessionManager.setServiceAddress(alias, for: "netromNodeL2")
+        var sent: [OutboundFrame] = []
+        coordinator.onFrameHandedToRadio = { sent.append($0) }
+
+        let probe = SessionCoordinator.axdpTextProbe.data(using: .ascii)!
+        coordinator.handleInboundTextProbe(from: AX25Address(call: "K0EPI", ssid: 2), to: alias,
+                                           path: DigiPath(), payload: probe)
+        XCTAssertEqual(sent.last?.source.display, "EPINDB")
+
+        coordinator.handleInboundTextProbe(from: AX25Address(call: "K0EPI", ssid: 2),
+                                           to: AX25Address(call: "K0EPI", ssid: 3),
+                                           path: DigiPath(), payload: probe)
+        XCTAssertEqual(sent.last?.source.display, "K0EPI-3")
+    }
+
     /// After text probe → PONG, the initiator sends a binary PING (with capabilities)
     /// so the peer also learns the initiator's features (bidirectional exchange).
     func testBidirectionalCapabilityExchange() {

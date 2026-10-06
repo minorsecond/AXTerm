@@ -3165,7 +3165,7 @@ final class SessionCoordinator: ObservableObject {
     /// respond with AXDP PONG (also via UI frame).  The peer sent us a text probe,
     /// which proves they understand AXDP — so responding with binary PONG is safe.
     /// Internal access for testability.
-    func handleInboundTextProbe(from: AX25Address, path: DigiPath, payload: Data,
+    func handleInboundTextProbe(from: AX25Address, to: AX25Address? = nil, path: DigiPath, payload: Data,
                                 radio: RadioID = .primary) {
         guard globalAdaptiveSettings.axdpExtensionsEnabled else { return }
         // Answering a probe puts a binary PONG on the air. Not on a beacon
@@ -3191,11 +3191,14 @@ final class SessionCoordinator: ObservableObject {
             messageId: 1,
             capabilities: localCaps
         )
-        // From the address of the radio the probe arrived on, and out on it.
+        // From the address the probe was sent to when it is one of ours (a
+        // node alias), else the radio's, and out on the radio it arrived on.
+        // A PONG to EPINDB from K0EPI-3 went unmatched and the prober asked
+        // again every 10 s (issue 89).
         let pongFrame = OutboundFrame(
             radio: radio,
             destination: from,
-            source: sessionManager.localAddress(for: radio),
+            source: sessionManager.answeringAddress(for: to, radio: radio),
             path: path,
             payload: pongMessage.encode(),
             frameType: "ui",
@@ -3724,7 +3727,7 @@ final class SessionCoordinator: ObservableObject {
         case .UI:
             // Check for text-safe AXDP probe ("AXDP?\r") before binary AXDP check.
             // Text probes don't have AXDP magic, so handleAXDPMessage would skip them.
-            handleInboundTextProbe(from: from, path: heardPath, payload: packet.info, radio: radio)
+            handleInboundTextProbe(from: from, to: to, path: heardPath, payload: packet.info, radio: radio)
             // UI frames can also contain binary AXDP messages (capability discovery, file transfers)
             handleAXDPMessage(from: from, path: heardPath, payload: packet.info, radio: radio)
         default:
