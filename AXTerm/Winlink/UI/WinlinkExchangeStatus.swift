@@ -42,6 +42,36 @@ nonisolated struct WinlinkExchangeStatus: Equatable {
         }
     }
 
+    /// The one-line result the Mail toolbar keeps after an exchange ends.
+    struct ResultBanner: Equatable {
+        var symbol: String
+        var failed: Bool
+        var text: String
+    }
+
+    /// The toolbar's result, or nil while nothing has finished. An aborted
+    /// exchange is a failure here as in the console, whatever words the
+    /// runner's status line used.
+    static func resultBanner(phase: WinlinkSessionRunner.Phase,
+                             statusText: String,
+                             summary: WinlinkExchangeSummary?) -> ResultBanner? {
+        let failed: Bool
+        let text: String
+        switch phase {
+        case .done:
+            failed = summary?.aborted == true
+            text = statusText
+        case .failed(let reason):
+            failed = true
+            text = reason
+        default:
+            return nil
+        }
+        let kind: Kind = failed ? .failed : .succeeded
+        return ResultBanner(symbol: WinlinkExchangeStatus(kind: kind, title: "").symbol,
+                            failed: failed, text: text)
+    }
+
     // MARK: - Derivation
 
     /// Builds the status from the runner's published state.

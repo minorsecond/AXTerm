@@ -80,6 +80,33 @@ final class WinlinkExchangeStatusTests: XCTestCase {
         XCTAssertEqual(WinlinkSessionRunner.summaryStatusText(summary), "Exchange aborted: delivered 1.")
     }
 
+    /// The Mail toolbar's result banner shows an abort as a failure too.
+    /// Smoke run 2026-10-03-1, issue 67 retest: the console said "Exchange
+    /// aborted" in red while the toolbar showed the same words with a green
+    /// check, because the banner treated every finished exchange as a success.
+    func testTheToolbarBannerShowsAnAbortAsAFailure() {
+        var summary = WinlinkExchangeSummary()
+        summary.aborted = true
+        let aborted = WinlinkExchangeStatus.resultBanner(
+            phase: .done, statusText: "Exchange aborted.", summary: summary)
+        XCTAssertEqual(aborted?.failed, true)
+        XCTAssertEqual(aborted?.symbol, "exclamationmark.triangle.fill")
+        XCTAssertEqual(aborted?.text, "Exchange aborted.")
+
+        let complete = WinlinkExchangeStatus.resultBanner(
+            phase: .done, statusText: "Exchange complete: sent 1.", summary: WinlinkExchangeSummary())
+        XCTAssertEqual(complete?.failed, false)
+        XCTAssertEqual(complete?.symbol, "checkmark.circle.fill")
+        XCTAssertEqual(complete?.text, "Exchange complete: sent 1.")
+
+        let failed = WinlinkExchangeStatus.resultBanner(
+            phase: .failed("link lost"), statusText: "", summary: nil)
+        XCTAssertEqual(failed?.failed, true)
+        XCTAssertEqual(failed?.text, "link lost")
+
+        XCTAssertNil(WinlinkExchangeStatus.resultBanner(phase: .idle, statusText: "", summary: nil))
+    }
+
     func testIdleIsNotDressedUpAsWorking() {
         let status = WinlinkExchangeStatus.make(
             phase: .idle, statusText: "", progress: nil, summary: nil)

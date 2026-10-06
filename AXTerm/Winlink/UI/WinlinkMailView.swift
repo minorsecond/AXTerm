@@ -320,17 +320,12 @@ struct WinlinkMailView: View {
         if let runner = context.runner {
             if runner.isRunning {
                 WinlinkExchangeProgressView(runner: runner)
-            } else if case .done = runner.phase {
+            } else if let result = WinlinkExchangeStatus.resultBanner(
+                phase: runner.phase, statusText: runner.statusText, summary: runner.lastSummary) {
                 resultBanner(
-                    icon: "checkmark.circle.fill",
-                    tint: .green,
-                    text: runner.statusText,
-                    runner: runner)
-            } else if case .failed(let reason) = runner.phase {
-                resultBanner(
-                    icon: "exclamationmark.triangle.fill",
-                    tint: .red,
-                    text: reason,
+                    icon: result.symbol,
+                    tint: result.failed ? .red : .green,
+                    text: result.text,
                     runner: runner)
             }
         }
