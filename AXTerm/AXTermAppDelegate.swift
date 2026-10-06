@@ -25,7 +25,34 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             NSApp.setActivationPolicy(.accessory)
             for window in NSApp.windows { window.orderOut(nil) }
+            return
         }
+        // After SwiftUI has had its chance to open the window itself.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            Self.openMainWindowIfMissing()
+        }
+    }
+
+    /// Opens the main window if launch left the app without one.
+    ///
+    /// AppKit skipped its open-untitled step for instances launched with
+    /// `open` or from a shell, and that step is where SwiftUI makes a
+    /// WindowGroup's first window, so they came up with no window at all and
+    /// File > New was the only way in (smoke run 2026-10-03-1, issue 79).
+    /// This asks for it through the same call AppKit would have made.
+    private static func openMainWindowIfMissing() {
+        let identifiers = NSApp.windows.map { $0.identifier?.rawValue ?? "" }
+        guard needsMainWindow(isHidden: NSApp.isHidden, windowIdentifiers: identifiers) else { return }
+        _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
+    }
+
+    /// Whether the main window is missing. Only the main group's windows
+    /// count (SwiftUI names them `main-AppWindow-N`); the menu-bar item and
+    /// the other windows do not. A launch the operator asked to be hidden
+    /// stays hidden.
+    nonisolated static func needsMainWindow(isHidden: Bool, windowIdentifiers: [String]) -> Bool {
+        guard !isHidden else { return false }
+        return !windowIdentifiers.contains { $0.hasPrefix("main-") }
     }
 
     /// Sleep and wake, handled here rather than in a view.
