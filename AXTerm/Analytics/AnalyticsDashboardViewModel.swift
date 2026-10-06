@@ -224,6 +224,11 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     nonisolated private let databaseAggregationProvider: DatabaseAggregationProvider?
     nonisolated private let timeframePacketsProvider: TimeframePacketsProvider?
     nonisolated private let transmittedPacketsProvider: TimeframePacketsProvider?
+    /// The link estimates as they are now. The station builds its NET/ROM
+    /// engine when it has a callsign and rebuilds it when the callsign
+    /// changes, so the one handed to this model at window creation can be
+    /// missing or stale; the edge tooltip read none at all on A (705).
+    private let linkStatsProvider: (() -> [LinkStatRecord])?
     nonisolated private let captureEventsProvider: CaptureEventsProvider?
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
     private var cancellables: Set<AnyCancellable> = []
@@ -279,6 +284,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         captureEventsProvider: CaptureEventsProvider? = nil,
         timeframePacketsProvider: TimeframePacketsProvider? = nil,
         transmittedPacketsProvider: TimeframePacketsProvider? = nil,
+        linkStatsProvider: (() -> [LinkStatRecord])? = nil,
         calendar: Calendar = .current,
         packetDebounce: TimeInterval = 0.25,
         graphDebounce: TimeInterval = 0.4,
@@ -290,6 +296,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.captureEventsProvider = captureEventsProvider
         self.timeframePacketsProvider = timeframePacketsProvider
         self.transmittedPacketsProvider = transmittedPacketsProvider
+        self.linkStatsProvider = linkStatsProvider
         self.calendar = calendar
 
         // Load from settings store or use defaults
@@ -551,7 +558,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }) else { return nil }
         let callsign = Dictionary(viewState.graphModel.nodes.map { ($0.id, $0.callsign) },
                                   uniquingKeysWith: { first, _ in first })
-        let records = netRomIntegration?.exportLinkStats() ?? []
+        let records = linkStatsProvider?() ?? netRomIntegration?.exportLinkStats() ?? []
         let now = Date()
         return GraphEdgeTooltip.lines(
             sourceCall: callsign[edge.sourceID] ?? edge.sourceID,

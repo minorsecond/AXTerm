@@ -238,6 +238,9 @@ struct AXTermiOSRootView: View {
             },
             transmittedPacketsProvider: { interval in
                 await client.loadTransmittedPackets(in: interval)
+            },
+            linkStatsProvider: { [weak client] in
+                client?.netRomIntegration?.exportLinkStats() ?? []
             }))
 
         // The coordinator's wiring and the mailbox services are built once,
