@@ -182,6 +182,15 @@ are built from heard frames only, so this station's own transmissions never
 count as a station heard. The tallies add them because a station we just sent
 176 I-frames to otherwise read "Packets In 0".
 
+## Edge Tooltips
+
+Resting the pointer on an edge shows its link type and the frames heard on
+it, then for each direction the link estimator's quality, df, dr, ETX,
+duplicates or retries, and freshness, with the formula that combines them
+(see RoutingMetrics.md). A direction with no estimate says so. In station
+mode several callsign pairs can map onto one edge; the most observed pair
+speaks for it, and the tooltip says how many there were.
+
 ## Edge Legend
 
 A small legend in the graph header explains line styles:

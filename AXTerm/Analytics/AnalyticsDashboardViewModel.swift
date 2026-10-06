@@ -542,6 +542,30 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.hoveredNodeID = nodeID
     }
 
+    /// The derivation behind an edge on the canvas: traffic, then df, dr,
+    /// ETX, duplicates and freshness for each direction.
+    func edgeTooltipLines(sourceID: String, targetID: String) -> [String]? {
+        guard let edge = viewState.graphModel.edges.first(where: {
+            ($0.sourceID == sourceID && $0.targetID == targetID)
+                || ($0.sourceID == targetID && $0.targetID == sourceID)
+        }) else { return nil }
+        let callsign = Dictionary(viewState.graphModel.nodes.map { ($0.id, $0.callsign) },
+                                  uniquingKeysWith: { first, _ in first })
+        let records = netRomIntegration?.exportLinkStats() ?? []
+        let now = Date()
+        return GraphEdgeTooltip.lines(
+            sourceCall: callsign[edge.sourceID] ?? edge.sourceID,
+            targetCall: callsign[edge.targetID] ?? edge.targetID,
+            linkType: edge.linkType,
+            weight: edge.weight,
+            isNetRomSource: graphViewMode.isNetRomMode,
+            forward: GraphEdgeTooltip.direction(from: edge.sourceID, to: edge.targetID, records: records,
+                                                identityMode: stationIdentityMode, now: now),
+            reverse: GraphEdgeTooltip.direction(from: edge.targetID, to: edge.sourceID, records: records,
+                                                identityMode: stationIdentityMode, now: now)
+        )
+    }
+
     func manualRefresh() {
         guard isActive else { return }
         // An explicit refresh must recompute, not replay a cached window.

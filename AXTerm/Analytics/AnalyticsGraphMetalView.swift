@@ -44,6 +44,8 @@ struct AnalyticsGraphView: View {
     let onApplySimulatedServiceEndpointIgnore: (String) -> Void
     let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
     var onDrawPathTo: (String) -> Void = { _ in }
+    /// The derivation shown when the pointer rests on an edge, nil for none.
+    var edgeTooltipLines: (_ sourceID: String, _ targetID: String) -> [String]? = { _, _ in nil }
     /// Node menu raised by a long press, where the platform cannot raise one
     /// itself. macOS gets an NSMenu from the view and never sets this.
     @State private var touchMenu: TouchGraphMenu?
@@ -51,6 +53,8 @@ struct AnalyticsGraphView: View {
     @State private var selectionRect: CGRect?
     @State private var hoverPoint: CGPoint?
     @State private var hoverNodeID: String?
+    @State private var hoverEdge: GraphEdgeHover?
+    @State private var hoverEdgeLines: [String]?
     @State private var cameraState: CameraState = CameraState(scale: 1, offset: .zero)
 
     var body: some View {
@@ -99,6 +103,16 @@ struct AnalyticsGraphView: View {
                     onDrawPathTo: onDrawPathTo,
                     onContextMenu: { menu, location in
                         touchMenu = TouchGraphMenu(menu: menu, location: location)
+                    },
+                    onEdgeHover: { hover in
+                        DispatchQueue.main.async {
+                            // The text reads every link's estimates, so only
+                            // work it out when the pointer reaches a new edge.
+                            if hover?.sourceID != hoverEdge?.sourceID || hover?.targetID != hoverEdge?.targetID {
+                                hoverEdgeLines = hover.flatMap { edgeTooltipLines($0.sourceID, $0.targetID) }
+                            }
+                            hoverEdge = hover
+                        }
                     }
                 )
                 // A long press is the touch equivalent of a right-click, and
@@ -160,6 +174,12 @@ struct AnalyticsGraphView: View {
                     )
                     GraphTooltipView(node: node, isNetRomSource: isNetRomSource)
                         .position(tooltipPosition)
+                } else if let hoverEdge, let hoverEdgeLines {
+                    GraphEdgeTooltipView(lines: hoverEdgeLines)
+                        .position(Self.edgeTooltipPosition(
+                            near: hoverEdge.point, lineCount: hoverEdgeLines.count,
+                            viewSize: geometry.size))
+                        .allowsHitTesting(false)
                 }
             }
         }
@@ -572,6 +592,7 @@ private struct GraphMetalViewRepresentable: GraphViewRepresentable {
     var onDrawPathTo: (String) -> Void = { _ in }
     /// Presents the node menu where the platform cannot raise one itself.
     var onContextMenu: (GraphContextMenu, CGPoint) -> Void = { _, _ in }
+    var onEdgeHover: (GraphEdgeHover?) -> Void = { _ in }
 
     func makeCoordinator() -> GraphMetalCoordinator {
         GraphMetalCoordinator(
@@ -615,6 +636,7 @@ private struct GraphMetalViewRepresentable: GraphViewRepresentable {
     }
 
     private func updateGraphView(_ nsView: GraphMetalView, context: Context) {
+        context.coordinator.onEdgeHover = onEdgeHover
         context.coordinator.update(
             graphModel: graphModel,
             nodePositions: nodePositions,
@@ -652,6 +674,39 @@ private struct SelectionRectView: View {
             .background(Color(platform: .platformSelectedControl).opacity(0.12))
             .frame(width: rect.width, height: rect.height)
             .position(x: rect.midX, y: rect.midY)
+    }
+}
+
+extension AnalyticsGraphView {
+    /// Below and to the right of the pointer, kept inside the graph.
+    static func edgeTooltipPosition(near point: CGPoint, lineCount: Int, viewSize: CGSize) -> CGPoint {
+        let width: CGFloat = 312
+        let height = CGFloat(lineCount) * 15 + 12
+        let x = min(max(point.x + 16 + width / 2, width / 2 + 4), viewSize.width - width / 2 - 4)
+        var y = point.y + 18 + height / 2
+        if y + height / 2 > viewSize.height - 4 { y = point.y - 18 - height / 2 }
+        return CGPoint(x: x, y: max(height / 2 + 4, y))
+    }
+}
+
+private struct GraphEdgeTooltipView: View {
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                Text(line)
+                    .font(index == 0 ? .caption.weight(.semibold) : .caption2.monospacedDigit())
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(width: 300, alignment: .leading)
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(platform: .platformWindowBackground))
+                .shadow(radius: 2)
+        )
     }
 }
 
@@ -996,6 +1051,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
     private let onCameraUpdate: (CameraState) -> Void
     private let onDrawPathTo: (String) -> Void
+    /// Reports the edge under the pointer when no node is under it.
+    var onEdgeHover: (GraphEdgeHover?) -> Void = { _ in }
     private var contextMenuNodeCallsign: String?
     private var contextMenuNodeID: String?
 
@@ -1131,7 +1188,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     ) {
         guard fitToSelectionRequest != lastFitToSelectionRequest else { return }
         lastFitToSelectionRequest = fitToSelectionRequest
-        guard fitToSelectionRequest != nil, let view else { return }
+        guard fitToSelectionRequest != nil, view != nil else { return }
 
         // Priority:
         // 1) Explicit fit targets (e.g., multi-selection extents).
@@ -1146,6 +1203,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             targetNodeIDs = Set(nodePositions.map { $0.id })
         }
 
+        fitCamera(to: targetNodeIDs, positions: nodePositions)
+    }
+
+    private func fitCamera(to targetNodeIDs: Set<String>, positions nodePositions: [NodePosition]) {
+        guard let view else { return }
         guard let bounds = GraphAlgorithms.boundingBox(
             visibleNodeIDs: targetNodeIDs,
             positions: nodePositions
@@ -1290,6 +1352,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     func handleMouseMoved(location: CGPoint) {
         guard let view else { return }
         let hit = hitTest(at: location, in: view)
+        onEdgeHover(hit == nil ? edgeHitTest(at: location, in: view) : nil)
         if hit?.id != highlightKey?.hoveredNodeID {
             onHover(hit?.id, hit?.screenPoint)
         } else if let hit {
@@ -1301,9 +1364,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
 
     func handleMouseExited() {
         onHover(nil, nil)
+        onEdgeHover(nil)
     }
 
     func handleMouseDown(location: CGPoint, modifiers: GraphInputModifiers) {
+        onEdgeHover(nil)
         selectionStart = location
         lastDragLocation = location
         accumulatedDrag = .zero
@@ -1334,7 +1399,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             selectionRect = rect
             onSelectionRect(rect)
         } else {
-            camera.pan(by: delta, viewSize: view?.bounds.size)
+                camera.pan(by: delta, viewSize: view?.bounds.size)
             requestInteractionRedraw()
         }
     }
@@ -1389,7 +1454,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             // Clamp per-event zoom delta for smoother zooming
             let clampedDelta = max(-50, min(50, delta.height))
             let zoomDelta = 1 - (clampedDelta * sensitivity)
-            camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
+                camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
             requestInteractionRedraw()
             return true  // Consumed - don't scroll the page
         }
@@ -1861,6 +1926,39 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         guard let closest else { return nil }
         let screenPointPoints = CGPoint(x: closest.2.x / backingScale, y: closest.2.y / backingScale)
         return (closest.0, screenPointPoints)
+    }
+
+    /// The edge nearest the pointer, within a few points of its line.
+    private func edgeHitTest(at point: CGPoint, in view: MTKView) -> GraphEdgeHover? {
+        let backingScale = self.backingScale(for: view)
+        let viewSizePixels = view.drawableSize
+        let insetPixels = AnalyticsStyle.Layout.graphInset * backingScale
+        let cameraOffsetPixels = CGSize(width: camera.offset.width * backingScale, height: camera.offset.height * backingScale)
+        let hitPixel = CGPoint(x: point.x * backingScale, y: viewSizePixels.height - point.y * backingScale)
+        func pixel(_ node: GraphNodeInfo) -> CGPoint {
+            GraphCoordinateMapper.normalizedToPixel(
+                normalized: node.position,
+                viewSizePixels: viewSizePixels,
+                insetPixels: insetPixels,
+                cameraScale: camera.scale,
+                cameraOffsetPixels: cameraOffsetPixels
+            )
+        }
+        let tolerance = GraphEdgeHitTest.hitTolerancePoints * backingScale
+        var best: (edge: GraphEdgeInfo, distance: CGFloat)?
+        for edge in edgeCache {
+            let distance = GraphEdgeHitTest.distance(
+                from: hitPixel, toSegmentFrom: pixel(edge.source), to: pixel(edge.target))
+            if distance <= tolerance, distance < (best?.distance ?? .infinity) {
+                best = (edge, distance)
+            }
+        }
+        guard let best else { return nil }
+        return GraphEdgeHover(
+            sourceID: best.edge.source.id,
+            targetID: best.edge.target.id,
+            point: CGPoint(x: hitPixel.x / backingScale, y: hitPixel.y / backingScale)
+        )
     }
 
     private func nodes(in rect: CGRect) -> Set<String> {

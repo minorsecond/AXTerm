@@ -797,6 +797,9 @@ struct AnalyticsDashboardView: View {
                             },
                             onDrawPathTo: { nodeID in
                                 viewModel.beginPathDraft(targeting: nodeID)
+                            },
+                            edgeTooltipLines: { sourceID, targetID in
+                                viewModel.edgeTooltipLines(sourceID: sourceID, targetID: targetID)
                             }
                         )
                         if (!viewModel.hasLoadedGraph || viewModel.isGraphLoading) && viewModel.viewState.graphModel.nodes.isEmpty {
