@@ -22,6 +22,17 @@
 import SwiftUI
 
 struct NodeDirectoryView: View {
+
+    /// When a node was last heard, for its row. Anything under a second
+    /// old is "just now": the heard time can sit a fraction of a second past
+    /// the clock read here, and the relative format called that "in 0
+    /// seconds".
+    nonisolated static func heardLabel(_ date: Date, now: Date = Date()) -> String {
+        now.timeIntervalSince(date) < 1
+            ? "just now"
+            : date.formatted(.relative(presentation: .numeric))
+    }
+
     @ObservedObject var aliases: NodeAliasStore
 
     /// Search text, owned by the shell.
@@ -530,7 +541,7 @@ struct NodeDirectoryView: View {
 
             Spacer(minLength: 8)
 
-            Text(entry.heardAt.formatted(.relative(presentation: .numeric)))
+            Text(Self.heardLabel(entry.heardAt))
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .help(lastHeardTooltip(entry))

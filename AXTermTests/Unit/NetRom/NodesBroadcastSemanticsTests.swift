@@ -131,6 +131,16 @@ final class NodesBroadcastSemanticsTests: XCTestCase {
         XCTAssertEqual(entry.announcements, 2, "the first broadcast is not counted again")
     }
 
+    /// A node heard a moment ago reads "just now". Its heard time can sit a
+    /// fraction of a second past the clock the page reads, and the relative
+    /// format put that in the future: "in 0 seconds" (smoke run 2026-10-03-1).
+    func testANodeHeardAMomentAgoReadsJustNow() {
+        let now = heardAt
+        XCTAssertEqual(NodeDirectoryView.heardLabel(now.addingTimeInterval(0.4), now: now), "just now")
+        XCTAssertEqual(NodeDirectoryView.heardLabel(now, now: now), "just now")
+        XCTAssertNotEqual(NodeDirectoryView.heardLabel(now.addingTimeInterval(-300), now: now), "just now")
+    }
+
     func testHeardDirectlySurvivesSavingAndLoading() throws {
         var directory = NodeAliasDirectory()
         directory.record(NodeAliasParser.Announcement(alias: "EPINDB", callsign: "K0EPI-3", service: "N"),
