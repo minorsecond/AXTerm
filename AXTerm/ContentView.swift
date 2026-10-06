@@ -326,6 +326,9 @@ struct ContentView: View {
             },
             timeframePacketsProvider: { interval in
                 await client.loadPackets(in: interval)
+            },
+            transmittedPacketsProvider: { interval in
+                await client.loadTransmittedPackets(in: interval)
             }
         ))
         _bbsSettings = ObservedObject(wrappedValue: bbsSettings)

@@ -163,6 +163,25 @@ Displays:
 - Last heard time
 - Via digipeaters (e.g., "via DRL, K0NTS-7")
 
+### Heard By Section
+
+**Header**: "Heard By"
+**Tooltip**: "Stations that decoded this one, directly or through digipeaters. One-way evidence: no frame shows this station hearing them back."
+
+Heard Direct and Heard Via are recorded on the station that did the hearing.
+Heard By is the other side of the same relationship, so both ends of every
+drawn edge name each other. Without it a station that was only heard showed
+"No neighbors found" beside an edge on the canvas (smoke run 2026-10-03-1,
+issue 95).
+
+### Traffic Counts
+
+Packets In, Packets Out, Bytes In and Bytes Out count heard frames plus the
+frames this station transmitted. The graph's nodes, edges and relationships
+are built from heard frames only, so this station's own transmissions never
+count as a station heard. The tallies add them because a station we just sent
+176 I-frames to otherwise read "Packets In 0".
+
 ## Edge Legend
 
 A small legend in the graph header explains line styles:

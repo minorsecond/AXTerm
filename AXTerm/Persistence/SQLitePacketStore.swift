@@ -36,6 +36,18 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
     }
 
     func loadPackets(in timeframe: DateInterval) throws -> [Packet] {
+        try loadPackets(in: timeframe, direction: "rx")
+    }
+
+    /// What this station sent in the window. Only the graph inspector's
+    /// traffic tallies read these: a station we sent 176 I-frames to read
+    /// "Packets In 0" when only heard frames counted (smoke run 2026-10-03-1,
+    /// issue 95).
+    func loadTransmittedPackets(in timeframe: DateInterval) throws -> [Packet] {
+        try loadPackets(in: timeframe, direction: "tx")
+    }
+
+    private func loadPackets(in timeframe: DateInterval, direction: String) throws -> [Packet] {
         try dbQueue.read { db in
             // A database opened straight from disk is never migrated — a
             // snapshot kept from an older build is missing whatever columns
@@ -50,13 +62,13 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                        controlHex, pid, infoText, infoLen,
                        \(bytesColumn), \(hexColumn), \(radioColumn)
                 FROM \(PacketRecord.databaseTableName)
-                WHERE receivedAt >= ? AND receivedAt < ? AND direction = 'rx'
-                -- Heard traffic only. Since 2026-09-17 this table also holds what
-                -- this station transmitted, and counting our own frames as
+                WHERE receivedAt >= ? AND receivedAt < ? AND direction = ?
+                -- One direction at a time. Since 2026-09-17 this table also holds
+                -- what this station transmitted, and counting our own frames as
                 -- stations heard would inflate every figure derived from it.
                 ORDER BY receivedAt ASC
             """
-            let rows = try Row.fetchAll(db, sql: sql, arguments: [timeframe.start, timeframe.end])
+            let rows = try Row.fetchAll(db, sql: sql, arguments: [timeframe.start, timeframe.end, direction])
             return rows.map { row in
                 let id: UUID = row["id"]
                 let timestamp: Date = row["receivedAt"]

@@ -2243,6 +2243,16 @@ final class PacketEngine: ObservableObject {
         }
     }
 
+    func loadTransmittedPackets(in timeframe: DateInterval) async -> [Packet]? {
+        guard settings.persistHistory, let persistenceWorker else { return nil }
+        do {
+            return try await persistenceWorker.loadTransmittedPackets(in: timeframe)
+        } catch {
+            SentryManager.shared.capturePersistenceFailure("load transmitted packets in timeframe", error: error)
+            return nil
+        }
+    }
+
     private func loadPersistedPackets(reason: String) {
         guard settings.persistHistory, let persistenceWorker else { return }
         // One read at a time. Startup and the first connect both ask for

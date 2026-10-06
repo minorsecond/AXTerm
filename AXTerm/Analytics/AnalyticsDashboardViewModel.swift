@@ -223,6 +223,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private let calendar: Calendar
     nonisolated private let databaseAggregationProvider: DatabaseAggregationProvider?
     nonisolated private let timeframePacketsProvider: TimeframePacketsProvider?
+    nonisolated private let transmittedPacketsProvider: TimeframePacketsProvider?
     nonisolated private let captureEventsProvider: CaptureEventsProvider?
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
     private var cancellables: Set<AnyCancellable> = []
@@ -248,6 +249,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var loopDetection = RecomputeLoopDetector()
     private var isActive = false
     private var latestTimeframePackets: [Packet] = []
+    /// This station's own frames in the window, for the inspector's traffic
+    /// tallies only. The graph itself stays built from heard frames.
+    private var latestTimeframeTransmissions: [Packet] = []
     private var hasPrewarmed = false
     private var lastPinnedRefitTimestamp: Date = .distantPast
     private var lastPinnedRefitNodeIDs: Set<String> = []
@@ -274,6 +278,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         databaseAggregationProvider: DatabaseAggregationProvider? = nil,
         captureEventsProvider: CaptureEventsProvider? = nil,
         timeframePacketsProvider: TimeframePacketsProvider? = nil,
+        transmittedPacketsProvider: TimeframePacketsProvider? = nil,
         calendar: Calendar = .current,
         packetDebounce: TimeInterval = 0.25,
         graphDebounce: TimeInterval = 0.4,
@@ -284,6 +289,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.databaseAggregationProvider = databaseAggregationProvider
         self.captureEventsProvider = captureEventsProvider
         self.timeframePacketsProvider = timeframePacketsProvider
+        self.transmittedPacketsProvider = transmittedPacketsProvider
         self.calendar = calendar
 
         // Load from settings store or use defaults
@@ -594,15 +600,19 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         // found" in the inspector.
         let relationships = viewState.classifiedGraphModel.relationships(for: selectedNodeID)
         let directPeers = relationships.filter { $0.linkType == .directPeer }
-        let heardDirect = relationships.filter { $0.linkType == .heardDirect || $0.linkType == .heardMutual }
-        let seenVia = relationships.filter { $0.linkType == .heardVia }
+        let heardDirect = relationships.filter {
+            ($0.linkType == .heardDirect || $0.linkType == .heardMutual) && !$0.isHeardBy
+        }
+        let seenVia = relationships.filter { $0.linkType == .heardVia && !$0.isHeardBy }
+        let heardBy = relationships.filter(\.isHeardBy)
 
         return GraphInspectorDetails(
             node: node,
             neighbors: neighbors,
             directPeers: directPeers,
             heardDirect: heardDirect,
-            seenVia: seenVia
+            seenVia: seenVia,
+            heardBy: heardBy
         )
     }
 
@@ -1363,6 +1373,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let timeframeInterval = currentDateRange(now: now)
         let packetSnapshot = await timeframePacketSnapshot(now: now)
         latestTimeframePackets = packetSnapshot
+        latestTimeframeTransmissions = scoped(await transmittedPacketsProvider?(timeframeInterval) ?? [])
         updateTimeframeStationPresence(packets: packetSnapshot, identityMode: stationIdentityMode)
         updateActivityInsights(packets: packetSnapshot, identityMode: stationIdentityMode, windowEnd: timeframeInterval.end)
         updatePathDraftContext(packets: packetSnapshot, identityMode: stationIdentityMode)
@@ -2101,9 +2112,22 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func packetTrafficByNodeID() -> [String: NodeTrafficAggregate] {
+        Self.nodeTraffic(heard: latestTimeframePackets,
+                         transmitted: latestTimeframeTransmissions,
+                         identityMode: stationIdentityMode)
+    }
+
+    /// Frames to and from each station: what was heard plus what this station
+    /// sent. Heard frames alone left a station we had just sent a 20 KB file
+    /// showing "Packets In 0" (smoke run 2026-10-03-1, issue 95).
+    nonisolated static func nodeTraffic(
+        heard: [Packet],
+        transmitted: [Packet],
+        identityMode: StationIdentityMode
+    ) -> [String: NodeTrafficAggregate] {
         var aggregates: [String: NodeTrafficAggregate] = [:]
 
-        for event in latestTimeframePackets.map({ PacketEvent(packet: $0) }) {
+        for event in (heard + transmitted).map({ PacketEvent(packet: $0) }) {
             guard
                 let rawFrom = event.from,
                 let rawTo = event.to,
@@ -2113,8 +2137,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 continue
             }
 
-            let fromKey = CallsignParser.identityKey(for: from, mode: stationIdentityMode)
-            let toKey = CallsignParser.identityKey(for: to, mode: stationIdentityMode)
+            let fromKey = CallsignParser.identityKey(for: from, mode: identityMode)
+            let toKey = CallsignParser.identityKey(for: to, mode: identityMode)
 
             guard fromKey != toKey else { continue }
 
@@ -2179,7 +2203,7 @@ private struct GraphCacheKey: Hashable {
     let ignoredServiceEndpointsHash: Int
 }
 
-private struct NodeTrafficAggregate {
+struct NodeTrafficAggregate: Equatable {
     var inCount: Int = 0
     var outCount: Int = 0
     var inBytes: Int = 0
@@ -2195,6 +2219,8 @@ struct GraphInspectorDetails: Hashable, Sendable {
     let directPeers: [StationRelationship]
     let heardDirect: [StationRelationship]
     let seenVia: [StationRelationship]
+    /// Stations that heard this one, where nothing shows it heard them back.
+    let heardBy: [StationRelationship]
 
     /// Creates inspector details with classified relationships.
     init(
@@ -2202,13 +2228,15 @@ struct GraphInspectorDetails: Hashable, Sendable {
         neighbors: [GraphNeighborStat],
         directPeers: [StationRelationship] = [],
         heardDirect: [StationRelationship] = [],
-        seenVia: [StationRelationship] = []
+        seenVia: [StationRelationship] = [],
+        heardBy: [StationRelationship] = []
     ) {
         self.node = node
         self.neighbors = neighbors
         self.directPeers = directPeers
         self.heardDirect = heardDirect
         self.seenVia = seenVia
+        self.heardBy = heardBy
     }
 }
 

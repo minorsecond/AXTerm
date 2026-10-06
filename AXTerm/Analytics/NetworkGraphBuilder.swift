@@ -982,6 +982,32 @@ nonisolated struct NetworkGraphBuilder {
             relationships[observer] = observerRels
         }
 
+        // Heard By: a one-way relationship is recorded on the station that did
+        // the hearing, so the station that was heard listed nothing while the
+        // canvas drew an edge to it ("No neighbors found", smoke run
+        // 2026-10-03-1, issue 95). Give it the other side, marked as such, so
+        // both ends of every drawn edge name each other.
+        let oneWay = relationships.flatMap { observer, rels in
+            rels.filter { $0.linkType == .heardDirect || $0.linkType == .heardVia }
+                .map { (observer: observer, rel: $0) }
+        }
+        for (observer, rel) in oneWay {
+            var senderRels = relationships[rel.id, default: []]
+            guard !senderRels.contains(where: { $0.id == observer }) else { continue }
+            senderRels.append(
+                StationRelationship(
+                    id: observer,
+                    linkType: rel.linkType,
+                    packetCount: rel.packetCount,
+                    lastHeard: rel.lastHeard,
+                    viaDigipeaters: rel.viaDigipeaters,
+                    score: rel.score,
+                    isHeardBy: true
+                )
+            )
+            relationships[rel.id] = senderRels
+        }
+
         // PHASE 4: Build nodes from ALL stations seen in packets (nodeStats)
         let activeNodeIDs = Set(nodeStats.keys)
         var nodes: [NetworkGraphNode] = []

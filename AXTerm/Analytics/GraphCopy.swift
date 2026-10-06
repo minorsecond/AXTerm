@@ -322,16 +322,16 @@ nonisolated enum GraphCopy {
         static let noSelectionMessage = "Select a node in the graph to see details."
 
         static let packetsInLabel = "Packets In"
-        static let packetsInTooltip = "Number of packets received by this station."
+        static let packetsInTooltip = "Frames addressed to this station: those heard on the air plus those this station sent it."
 
         static let packetsOutLabel = "Packets Out"
-        static let packetsOutTooltip = "Number of packets sent by this station."
+        static let packetsOutTooltip = "Frames this station sent: those heard on the air, or all of them when it is this station."
 
         static let bytesInLabel = "Bytes In"
-        static let bytesInTooltip = "Total payload bytes received."
+        static let bytesInTooltip = "Payload bytes in the frames counted under Packets In."
 
         static let bytesOutLabel = "Bytes Out"
-        static let bytesOutTooltip = "Total payload bytes sent."
+        static let bytesOutTooltip = "Payload bytes in the frames counted under Packets Out."
 
         static let degreeLabel = "Connections"
         static let degreeTooltip = "Number of unique stations this node has communicated with."
@@ -352,6 +352,9 @@ nonisolated enum GraphCopy {
 
         static let heardViaSection = "Heard Via"
         static let heardViaSectionTooltip = "Stations observed through digipeaters. Reachable on the network, but not proof of direct RF reception."
+
+        static let heardBySection = "Heard By"
+        static let heardBySectionTooltip = "Stations that decoded this one, directly or through digipeaters. One-way evidence: no frame shows this station hearing them back."
 
         static let viaDigipeaterTemplate = "via %@"
         static let lastHeardTemplate = "Last: %@"

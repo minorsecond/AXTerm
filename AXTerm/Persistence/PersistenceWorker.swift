@@ -48,6 +48,11 @@ actor PersistenceWorker {
         return try store.loadPackets(in: timeframe)
     }
 
+    func loadTransmittedPackets(in timeframe: DateInterval) throws -> [Packet]? {
+        guard let store = packetStore as? (any PacketStoreTimeRangeQuerying) else { return nil }
+        return try store.loadTransmittedPackets(in: timeframe)
+    }
+
     func loadConsole(limit: Int) throws -> [ConsoleLine] {
         guard let consoleStore else { return [] }
         let records = try consoleStore.loadRecent(limit: limit)

@@ -235,6 +235,9 @@ struct AXTermiOSRootView: View {
                 guard let events = await client.captureConnectionEvents(around: interval) else { return nil }
                 let isLive = await MainActor.run { client.status == .connected }
                 return (events.connects, events.disconnects, isLive)
+            },
+            transmittedPacketsProvider: { interval in
+                await client.loadTransmittedPackets(in: interval)
             }))
 
         // The coordinator's wiring and the mailbox services are built once,

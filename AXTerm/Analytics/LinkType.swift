@@ -239,6 +239,9 @@ nonisolated struct StationRelationship: Hashable, Sendable, Identifiable {
     let lastHeard: Date?
     let viaDigipeaters: [String]  // For heardVia only
     let score: Double         // HeardDirect eligibility score (0-1) (also used for HeardMutual)
+    /// The other side of a one-way relationship: `id` heard this station,
+    /// rather than this station hearing `id`.
+    var isHeardBy: Bool = false
 }
 
 // MARK: - HeardDirect Scoring

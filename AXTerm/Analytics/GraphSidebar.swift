@@ -946,8 +946,19 @@ private struct SidebarInspectorContent: View {
             )
         }
 
+        if !details.heardBy.isEmpty {
+            relationshipSection(
+                title: Copy.Inspector.heardBySection,
+                tooltip: Copy.Inspector.heardBySectionTooltip,
+                relationships: details.heardBy,
+                icon: "ear",
+                iconColor: Color(platform: .systemTeal)
+            )
+        }
+
         // Show empty state if no relationships at all
-        if details.directPeers.isEmpty && details.heardDirect.isEmpty && details.seenVia.isEmpty {
+        if details.directPeers.isEmpty && details.heardDirect.isEmpty && details.seenVia.isEmpty
+            && details.heardBy.isEmpty {
             Text(Copy.HubMetric.noNeighborsFound)
                 .font(.caption)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
