@@ -73,6 +73,38 @@ final class NetRomCircuitSessionTests: XCTestCase {
                        ["AXTerm Node EPINDB:K0EPI-3", "N"])
     }
 
+    // MARK: - Which session typing and Disconnect act on
+
+    /// The Sessions picker filters what is shown. With All Traffic selected,
+    /// typing went out as plain AX.25 text on the neighbor link and
+    /// Disconnect sent DISC on it, while the compose bar still said NET/ROM
+    /// to K0EPI-3 and the circuit was up (smoke run 2026-10-03-1, issue 76).
+    /// What the bar points at decides.
+    func testAllTrafficLeavesTypingWithTheCircuitTheBarPointsAt() {
+        let station = AX25Address(call: "K0EPI", ssid: 3)
+        var circuit = summary(.connected, destination: station, neighbor: station)
+        circuit.requestedAlias = "EPINDB"
+        let record = NetRomCircuitSession.recordID(for: circuit.id)
+
+        for bar in ["K0EPI-3", "EPINDB", "k0epi-3"] {
+            XCTAssertEqual(NetRomCircuitSession.composeRecordID(
+                activeRecordID: nil, barIsNetRom: true, barDestination: bar, circuits: [circuit]),
+                record, "bar \(bar)")
+        }
+        // The picker's own choice still wins.
+        XCTAssertEqual(NetRomCircuitSession.composeRecordID(
+            activeRecordID: "W0ARP-1", barIsNetRom: true, barDestination: "K0EPI-3", circuits: [circuit]),
+            "W0ARP-1")
+        // An AX.25 bar, another station, or no live circuit: nothing to adopt.
+        XCTAssertNil(NetRomCircuitSession.composeRecordID(
+            activeRecordID: nil, barIsNetRom: false, barDestination: "K0EPI-3", circuits: [circuit]))
+        XCTAssertNil(NetRomCircuitSession.composeRecordID(
+            activeRecordID: nil, barIsNetRom: true, barDestination: "W0ARP-1", circuits: [circuit]))
+        XCTAssertNil(NetRomCircuitSession.composeRecordID(
+            activeRecordID: nil, barIsNetRom: true, barDestination: "K0EPI-3",
+            circuits: [summary(.disconnected, destination: station, neighbor: station)]))
+    }
+
     // MARK: - Where typed text goes
 
     func testTextGoesToAnEstablishedCircuit() {

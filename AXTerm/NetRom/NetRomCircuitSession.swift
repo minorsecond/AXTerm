@@ -48,6 +48,29 @@ nonisolated enum NetRomCircuitSession {
         summary.destination.display
     }
 
+    /// The session record that typed text and Disconnect act on.
+    ///
+    /// The Sessions picker only filters what is shown. With a session picked,
+    /// that session; with All Traffic, the live circuit the compose bar points
+    /// at, when the bar is set to NET/ROM. Until 2026-10-06 All Traffic sent
+    /// typing as plain AX.25 text on the neighbor link and Disconnect dropped
+    /// that link, with the circuit still up (smoke run 2026-10-03-1, issue 76).
+    static func composeRecordID(activeRecordID: String?,
+                                barIsNetRom: Bool,
+                                barDestination: String,
+                                circuits: [NetRomCircuitSummary]) -> String? {
+        if let activeRecordID { return activeRecordID }
+        guard barIsNetRom else { return nil }
+        let wanted = barDestination.trimmingCharacters(in: .whitespaces).uppercased()
+        guard !wanted.isEmpty else { return nil }
+        let match = circuits
+            .filter { $0.state == .connecting || $0.state == .connected }
+            .filter { $0.destination.display.uppercased() == wanted
+                || $0.requestedAlias?.uppercased() == wanted }
+            .max { $0.openedAt < $1.openedAt }
+        return match.map { recordID(for: $0.id) }
+    }
+
     /// Where the compose field's text should go.
     enum SendTarget: Equatable {
         /// A live, established circuit.

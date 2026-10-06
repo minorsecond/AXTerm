@@ -3228,7 +3228,7 @@ struct TerminalView: View {
     /// AX.25 text.
     private func sendOnCircuit(_ circuitID: NetRomCircuitID) {
         let text = txViewModel.viewModel.composeText
-        if let id = activeSessionRecordID, !text.isEmpty {
+        if let id = composeRecordID, !text.isEmpty {
             sessionRecorder?.recorded(line: "> \(text)", for: id,
                                       sent: true, bytes: text.utf8.count)
         }
@@ -3392,7 +3392,7 @@ struct TerminalView: View {
     private func sendRawChunk(_ chunk: Data, committedLines: [String]) {
         let shown = RawKeyCoalescer.consoleText(for: chunk)
         switch NetRomCircuitSession.sendTarget(
-            activeRecordID: activeSessionRecordID,
+            activeRecordID: composeRecordID,
             circuits: sessionCoordinator.netRomDriver.circuits
         ) {
         case .circuit(let circuitID):
@@ -3428,7 +3428,7 @@ struct TerminalView: View {
         // A native NET/ROM circuit is its own session with its own
         // transport; the AX.25 path below cannot carry it.
         switch NetRomCircuitSession.sendTarget(
-            activeRecordID: activeSessionRecordID,
+            activeRecordID: composeRecordID,
             circuits: sessionCoordinator.netRomDriver.circuits
         ) {
         case .circuit(let circuitID):
@@ -4794,13 +4794,23 @@ struct TerminalView: View {
         }
     }
 
+    /// The session typing and Disconnect act on: the picked one, or with All
+    /// Traffic picked, the circuit the compose bar points at (issue 76).
+    private var composeRecordID: String? {
+        NetRomCircuitSession.composeRecordID(
+            activeRecordID: activeSessionRecordID,
+            barIsNetRom: connectBarViewModel.mode == .netrom,
+            barDestination: connectBarViewModel.toCall,
+            circuits: sessionCoordinator.netRomDriver.circuits)
+    }
+
     /// Disconnect from current session
     private func disconnectFromDestination() {
         // Closing a circuit is a DISCREQ on the circuit, not a DISC on
         // the neighbor link — that link may be carrying other circuits.
-        if let activeSessionRecordID,
+        if let composeRecordID,
            let summary = NetRomCircuitSession.circuit(
-                forRecordID: activeSessionRecordID,
+                forRecordID: composeRecordID,
                 among: sessionCoordinator.netRomDriver.circuits) {
             sessionCoordinator.netRomDriver.disconnect(summary.id)
             updateActiveSessionRecordState("Disconnecting…")
