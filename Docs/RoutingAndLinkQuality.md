@@ -54,14 +54,36 @@ ETX = 1 / (max(df, 0.05) × max(dr, 0.05))
 
 ### Evidence Sources
 
-| Source | Forward Evidence | Reverse Evidence |
+Each observation has a target `s` (1 for a delivery, 0 for a loss) and a
+weight `w` that scales the step: `α_eff = α × w`. The weight says how much
+a piece of evidence counts. It is never the target, so a link whose frames
+all get through converges on 1 however small the weight of the evidence.
+
+| Source | Forward evidence (df) | Reverse evidence (dr) |
 |--------|-----------------|------------------|
-| I-frame data progress | weight=1.0 | — |
-| Routing broadcast | weight=0.8 | — |
-| UI beacon | weight=0.4 | — |
-| ACK-only (RR/RNR) | — | weight=0.1 |
-| N(R) progress | — | weight=0.6 |
-| Retry/duplicate | penalty (value=0.0) | — |
+| I-frame data progress | s=1, w=1.0 | — |
+| UA or DM answering a SABM/DISC | s=1, w=0.8, for the link that sent the command | — |
+| N(R) progress | s=1, w=0.6, for the link whose I-frames it acknowledges | s=1, w=0.6, same link |
+| ACK-only (RR/RNR) | — | s=1, w=0.1 |
+| Retry/duplicate | s=0, w=1.0 | — |
+| REJ/SREJ | s=0, w=1.0, for the link whose frame was missed | — |
+| Routing broadcast | presence credit 0.8 | — |
+| UI beacon | presence credit 0.4 | — |
+
+N(R) moving on counts for both halves of the acknowledged link's ETX: its
+I-frames arrived and the acknowledgment came back. This station never
+observes its own transmissions, so for our own outbound link it is the only
+positive df evidence there is. Before this was credited, a 20 KB transfer
+with 4 resends in 176 frames left A→B at df 0.32 (smoke run 2026-10-03-1,
+issue 93).
+
+Beacons and routing broadcasts are acknowledged by nobody, so a lost one
+leaves no trace and every one heard looks like a success. They can't
+measure delivery. On a link with no connected-mode evidence they pull the
+estimate toward their credit (s = credit, w = 1), so a beacon-only link
+settles near 0.4 and never reads as healthy. Once any connected-mode frame
+has fed the link, beacons and broadcasts are still counted as arrivals
+(for the adaptive TTL) but no longer move df.
 
 ---
 

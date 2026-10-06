@@ -302,10 +302,19 @@ nonisolated struct LinkQualityEstimator {
         let isSessionEvidence = RadioTrafficClassifier.isSessionEvidence(packet.frameType)
 
         // Forward evidence (data progress / routing broadcast / UI beacon).
+        // A connected-mode frame measures delivery, since its loss would show
+        // as a retry or REJ: it moves the estimate toward 1 by its weight. A
+        // beacon or broadcast cannot report a loss, so it is only a presence
+        // credit: it pulls a link with nothing better toward its weight, and
+        // once connected-mode frames have measured the link it records the
+        // arrival without moving the estimate.
         if classification.forwardEvidenceWeight > 0 && !isRetry {
+            let weight = classification.forwardEvidenceWeight
             s.addObservation(
                 channel: .forward,
-                value: classification.forwardEvidenceWeight,
+                value: isSessionEvidence ? 1.0 : weight,
+                weight: isSessionEvidence ? weight : 1.0,
+                updatesEstimate: isSessionEvidence || !s.hasSessionEvidence,
                 timestamp: timestamp,
                 isDuplicate: false,
                 isSessionEvidence: isSessionEvidence,
@@ -338,17 +347,28 @@ nonisolated struct LinkQualityEstimator {
         if isConnectionResponse && !isRetry {
             applyDirectionalForward(
                 from: to, to: from, radio: key.radio,
-                value: 0.8,
+                value: 1.0, weight: 0.8,
                 timestamp: timestamp
             )
         }
 
-        // Track N(R) for ACK progress and apply reverse evidence to the opposite direction.
+        // N(R) moving on acknowledges I-frames the opposite direction sent.
+        // That proves both halves of that link's ETX: its frames arrived (df)
+        // and this acknowledgment came back (dr). Crediting dr alone left
+        // our own outbound df with no positive evidence at all, since our
+        // transmissions are not observed: after a 20 KB transfer with 4
+        // resends in 176 frames, A→B read df 0.32 (smoke run 2026-10-03-1,
+        // issue 93).
         if let nr = decoded.nr, s.recordNrProgress(nr) {
             applyReverseEvidence(
                 from: to,
                 to: from, radio: key.radio,
-                value: config.ackProgressWeight,
+                value: 1.0, weight: config.ackProgressWeight,
+                timestamp: timestamp
+            )
+            applyDirectionalForward(
+                from: to, to: from, radio: key.radio,
+                value: 1.0, weight: config.ackProgressWeight,
                 timestamp: timestamp
             )
         }
@@ -358,7 +378,7 @@ nonisolated struct LinkQualityEstimator {
             applyReverseEvidence(
                 from: to,
                 to: from, radio: key.radio,
-                value: classification.reverseEvidenceWeight,
+                value: 1.0, weight: classification.reverseEvidenceWeight,
                 timestamp: timestamp
             )
         }
@@ -546,7 +566,8 @@ nonisolated struct LinkQualityEstimator {
     /// Every caller is a session frame (a REJ reporting a lost I-frame, a UA
     /// or DM answering a SABM or DISC), so the evidence always counts toward
     /// the link's session total.
-    private mutating func applyDirectionalForward(from: String, to: String, radio: RadioID, value: Double, timestamp: Date) {
+    private mutating func applyDirectionalForward(from: String, to: String, radio: RadioID, value: Double,
+                                                  weight: Double = 1.0, timestamp: Date) {
         let key = LinkKey(radio: radio, from: from, to: to)
         var s = stats[key] ?? DirectionalLinkStats(
             lastUpdated: timestamp,
@@ -555,6 +576,7 @@ nonisolated struct LinkQualityEstimator {
         s.addObservation(
             channel: .forward,
             value: value,
+            weight: weight,
             timestamp: timestamp,
             isDuplicate: false,
             isSessionEvidence: true,
@@ -563,7 +585,8 @@ nonisolated struct LinkQualityEstimator {
         stats[key] = s
     }
 
-    private mutating func applyReverseEvidence(from: String, to: String, radio: RadioID, value: Double, timestamp: Date) {
+    private mutating func applyReverseEvidence(from: String, to: String, radio: RadioID, value: Double,
+                                               weight: Double = 1.0, timestamp: Date) {
         let reverseKey = LinkKey(radio: radio, from: from, to: to)
         var reverseStats = stats[reverseKey] ?? DirectionalLinkStats(
             lastUpdated: timestamp,
@@ -572,6 +595,7 @@ nonisolated struct LinkQualityEstimator {
         reverseStats.addObservation(
             channel: .reverse,
             value: value,
+            weight: weight,
             timestamp: timestamp,
             isDuplicate: false,
             isSessionEvidence: true,
@@ -730,9 +754,20 @@ nonisolated private struct DirectionalLinkStats {
     }
 
     /// Add an observation and update EWMA.
+    /// - Parameters:
+    ///   - value: what the evidence says, 1.0 for a delivery and 0.0 for a
+    ///     loss.
+    ///   - weight: how much it counts (the evidence table's weights), which
+    ///     scales the EWMA step. It used to be passed as the value, so an
+    ///     acknowledgment weighted 0.6 pulled dr toward 0.6 however many
+    ///     arrived, and an RR weighted 0.1 pulled it toward 0.1 (issue 93).
+    ///   - updatesEstimate: false records the arrival (counts, TTL timing)
+    ///     without moving the EWMA.
     mutating func addObservation(
         channel: EvidenceChannel,
         value: Double,
+        weight: Double = 1.0,
+        updatesEstimate: Bool = true,
         timestamp: Date,
         isDuplicate: Bool,
         isSessionEvidence: Bool,
@@ -792,10 +827,12 @@ nonisolated private struct DirectionalLinkStats {
             if !isDuplicate {
                 arrivalCount += 1
             }
+            guard updatesEstimate else { return }
 
             forwardEstimate = updateEWMA(
                 current: forwardEstimate ?? config.initialDeliveryRatio,
                 value: clamp01(value),
+                weight: weight,
                 previousTimestamp: previous,
                 timestamp: timestamp,
                 halfLife: config.forwardHalfLifeSeconds,
@@ -804,10 +841,12 @@ nonisolated private struct DirectionalLinkStats {
             forwardSampleCount += 1
             lastForwardUpdate = timestamp
         case .reverse:
+            guard updatesEstimate else { return }
             let previous = lastReverseUpdate
             reverseEstimate = updateEWMA(
                 current: reverseEstimate ?? config.initialDeliveryRatio,
                 value: clamp01(value),
+                weight: weight,
                 previousTimestamp: previous,
                 timestamp: timestamp,
                 halfLife: config.reverseHalfLifeSeconds,
@@ -837,6 +876,13 @@ nonisolated private struct DirectionalLinkStats {
     /// Remove observations older than cutoff.
     mutating func pruneOld(cutoff: Date) {
         observations.removeAll { $0.timestamp < cutoff }
+    }
+
+    /// Whether any connected-mode frame has fed this link, counting the
+    /// evidence carried across a restart.
+    var hasSessionEvidence: Bool {
+        carriedSessionEvidenceCount > 0 || restoredSessionEvidenceCount > 0
+            || observations.elements.contains { $0.isSessionEvidence }
     }
 
     /// Convert to public LinkStats.
@@ -933,6 +979,7 @@ nonisolated private struct DirectionalLinkStats {
     private func updateEWMA(
         current: Double,
         value: Double,
+        weight: Double = 1.0,
         previousTimestamp: Date?,
         timestamp: Date,
         halfLife: TimeInterval,
@@ -950,7 +997,7 @@ nonisolated private struct DirectionalLinkStats {
             timeAlpha = 0.0
         }
         let countAlpha = 1.0 / Double(max(1, sampleCount) + 1)
-        let alpha = max(timeAlpha, countAlpha)
+        let alpha = max(timeAlpha, countAlpha) * clamp01(weight)
         let blended = (1.0 - alpha) * current + alpha * value
         return clamp01(blended)
     }

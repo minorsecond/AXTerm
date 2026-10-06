@@ -12,6 +12,11 @@ in [NetworkHealth.md](NetworkHealth.md).
   routing broadcasts, beacons, N(R) advancement, ACK-only frames; retries count
   as failures). `α = max(1 − exp(−Δt/H), 1/(n+1))` with H = 30 min — the
   count-based term is the cold-start warm-up: one packet yields df 0.75, not 1.0.
+  Each piece of evidence aims at 1 (delivered) or 0 (lost), and its weight
+  scales the step. N(R) advancing credits both df and dr of the link it
+  acknowledges. Beacons and broadcasts are only a presence credit and stop
+  moving df once connected-mode frames have measured the link. The table is in
+  [RoutingAndLinkQuality.md](RoutingAndLinkQuality.md#evidence-sources).
 - When dr is unobservable (UI-only traffic), a conservative dr of 0.99 is
   assumed, so a one-way link can never display as fully confirmed.
 
