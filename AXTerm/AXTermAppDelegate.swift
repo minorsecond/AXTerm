@@ -43,8 +43,15 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
     /// no open-untitled step, nothing it could open, and no window at all
     /// (smoke run 2026-10-03-1, issue 79). Registered in the app's init,
     /// before AppKit reads the arguments.
+    ///
+    /// The string "NO", not the Boolean: AppKit's finishLaunching reads the
+    /// value and sends it compare:options: against @"NO", so a Boolean made
+    /// every launch of the main app throw "-[__NSCFBoolean compare:options:]:
+    /// unrecognized selector" and crash (found 2026-10-06, issue 99). Runs
+    /// from Xcode hid it, because Xcode passes "-NSTreatUnknownArgumentsAsOpen
+    /// NO" on the command line, which outranks a registered default.
     static func registerLaunchDefaults(in defaults: UserDefaults = .standard) {
-        defaults.register(defaults: ["NSTreatUnknownArgumentsAsOpen": false])
+        defaults.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
     }
 
     /// Sleep and wake, handled here rather than in a view.

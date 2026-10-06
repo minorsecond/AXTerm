@@ -18,6 +18,12 @@
 //  AXTerm opens no documents, so it tells AppKit not to read arguments as
 //  files (NSTreatUnknownArgumentsAsOpen = NO).
 //
+//  The value must be the string "NO". AppKit's finishLaunching reads it
+//  with objectForKey: and sends it compare:options: against @"NO", so the
+//  Boolean false registered at first crashed every launch of the main app
+//  ("-[__NSCFBoolean compare:options:]: unrecognized selector"), found
+//  starting it for tests 10.4 and 11.2 on 2026-10-06.
+//
 
 import XCTest
 @testable import AXTerm
@@ -31,7 +37,13 @@ final class MainWindowAtLaunchTests: XCTestCase {
 
         AXTermAppDelegate.registerLaunchDefaults(in: defaults)
 
-        XCTAssertNotNil(defaults.object(forKey: "NSTreatUnknownArgumentsAsOpen"))
-        XCTAssertFalse(defaults.bool(forKey: "NSTreatUnknownArgumentsAsOpen"))
+        // Read the registration domain itself: Xcode starts the test host with
+        // "-NSTreatUnknownArgumentsAsOpen NO" on the command line, which
+        // outranks a registered default and hid the Boolean.
+        let registered = defaults.volatileDomain(forName: UserDefaults.registrationDomain)
+        let value = registered["NSTreatUnknownArgumentsAsOpen"]
+        XCTAssertNotNil(value)
+        XCTAssertTrue(value is String, "AppKit sends it compare:options:, so it must be a string, not \(type(of: value))")
+        XCTAssertEqual(value as? String, "NO")
     }
 }
