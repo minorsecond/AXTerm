@@ -889,9 +889,23 @@ closed 0.4 s after the DISCs were handed over. That suited a KISS TNC, which
 keeps a frame it has been handed, but AXTerm's own sound modem still had the
 DISC queued, and keying an IC-705 through Warbler takes seconds, so no DISC
 reached the air and the peer polled a dead link until a relaunched AXTerm
-answered DM (smoke run 2026-10-03-1, issue 85). Going to sleep sends the DISCs
-the same way but cannot wait: macOS gives no way to hold sleep off from the
-notification, so the radios go down after 0.4 s and a queued DISC may not air.
+answered DM (smoke run 2026-10-03-1, issue 85).
+
+**Going to sleep (Mac).** The same DISCs and the same wait, then the radios go
+down, then the machine sleeps. `SystemPowerMonitor` registers for IOKit's
+system power messages, which let an app hold a sleep until it acknowledges
+(macOS waits up to 30 s); the hold is capped at 15 s. NSWorkspace's sleep
+notification, used before, only says a sleep is happening. Idle sleep is not
+vetoed: keep-awake's power assertion already prevents it while the station is
+busy.
+
+**Leaving the screen (iPhone, iPad).** AXTerm has no background mode, so iOS
+suspends it a few seconds after it goes to the background, and its links died
+without a DISC. Leaving the screen now asks for background time
+(`BackgroundGoodbyeController`). After a grace of up to 10 s, so a quick trip
+to another app keeps the session, every live link gets its DISC and up to 12 s
+to settle, with 3 s of the allowance kept in hand (`BackgroundGoodbye.plan`).
+Coming back first cancels it.
 
 ### 7.5 Receive logic (I frames)
 On receiving an I-frame with seq `ns`:

@@ -21,6 +21,8 @@ struct AXTermiOSRootView: View {
     @ObservedObject var client: PacketEngine
 
     @StateObject private var sessionCoordinator: SessionCoordinator
+    /// DISCs the live links before iOS suspends the app (issue 85).
+    @State private var goodbye: BackgroundGoodbyeController
     /// The personal mailbox: settings, the service that answers calls, and
     /// the folders it shares. Built here for the same reason the Mac builds
     /// them in `StationServices.build` — this is the one place holding
@@ -235,6 +237,7 @@ struct AXTermiOSRootView: View {
         _bbsLibrary = StateObject(wrappedValue: setup.services.bbsLibrary)
         _callsignLookup = StateObject(wrappedValue: setup.services.callsignLookup)
         _bbsService = StateObject(wrappedValue: setup.services.bbsService)
+        _goodbye = State(initialValue: BackgroundGoodbyeController(coordinator: setup.services.coordinator))
     }
 
     /// The shared session coordinator, wired to the engine, and the mailbox
@@ -431,12 +434,14 @@ struct AXTermiOSRootView: View {
             // notice, so this is the moment.
             switch phase {
             case .background:
+                goodbye.enteredBackground()
                 bbsService.shutdown(reason: "this device is going to sleep")
                 // Detached as well, so a call that somehow arrives while the
                 // app is suspended is not half-answered by a service whose
                 // socket is gone. Re-attached on return, below.
                 bbsService.detach()
             case .active:
+                goodbye.becameActive()
                 bbsService.attach()
                 syncServiceAddresses()
             default:

@@ -145,3 +145,55 @@ final class SystemPowerMonitorTests: XCTestCase {
         XCTAssertNil(reported)
     }
 }
+
+/// Holding sleep until the station has said goodbye. macOS waits up to 30 s
+/// for an app that registered for system power to acknowledge a sleep, so
+/// the DISCs can settle before the radios go down (smoke run 2026-10-03-1,
+/// issue 85: with the sound modem, a DISC queued for the air was lost when
+/// the radio closed 0.4 s later).
+@MainActor
+final class SleepHoldTests: XCTestCase {
+
+    func testWithNothingToPrepareSleepIsAcknowledgedAtOnce() {
+        let monitor = SystemPowerMonitor()
+        var acknowledged = 0
+        monitor.noteWillSleep(acknowledge: { acknowledged += 1 })
+        XCTAssertEqual(acknowledged, 1)
+    }
+
+    func testSleepWaitsForThePreparationToFinish() {
+        let monitor = SystemPowerMonitor()
+        var finish: (() -> Void)?
+        monitor.sleepPreparation = { done in finish = done }
+        var acknowledged = 0
+        monitor.noteWillSleep(acknowledge: { acknowledged += 1 })
+        XCTAssertEqual(acknowledged, 0, "acknowledged before the goodbyes were sent")
+        finish?()
+        XCTAssertEqual(acknowledged, 1)
+        finish?()
+        XCTAssertEqual(acknowledged, 1, "a sleep is acknowledged once")
+    }
+
+    func testAPreparationThatNeverFinishesIsCutOffAtTheCap() {
+        let monitor = SystemPowerMonitor()
+        monitor.sleepPreparation = { _ in }
+        let acknowledged = expectation(description: "acknowledged at the cap")
+        monitor.noteWillSleep(acknowledge: { acknowledged.fulfill() }, holdCap: 0.2)
+        wait(for: [acknowledged], timeout: 2)
+    }
+
+    func testTheCapStaysWellInsideWhatMacOSAllows() {
+        XCTAssertLessThanOrEqual(SystemPowerMonitor.sleepHoldCap, 20,
+                                 "macOS gives up waiting after 30 s")
+    }
+
+    func testTheWarningStillGoesOutBeforeThePreparation() {
+        let monitor = SystemPowerMonitor()
+        var order: [String] = []
+        let token = monitor.willSleep.sink { _ in order.append("willSleep") }
+        defer { token.cancel() }
+        monitor.sleepPreparation = { done in order.append("prepare"); done() }
+        monitor.noteWillSleep(acknowledge: { order.append("ack") })
+        XCTAssertEqual(order, ["willSleep", "prepare", "ack"])
+    }
+}

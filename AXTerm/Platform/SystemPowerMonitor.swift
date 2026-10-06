@@ -3,6 +3,8 @@ import Combine
 
 #if os(macOS)
 import AppKit
+import IOKit
+import IOKit.pwr_mgt
 #endif
 
 /// Why a link went down.
@@ -99,6 +101,29 @@ final class SystemPowerMonitor: ObservableObject {
 
     private var observers: [NSObjectProtocol] = []
 
+    /// What the station does before the machine may sleep: send its DISCs,
+    /// wait for them to settle, put the radios down. Called with a `done`
+    /// to call when finished. Nil means nothing to do.
+    var sleepPreparation: ((_ done: @escaping () -> Void) -> Void)?
+
+    /// The longest sleep is held for `sleepPreparation`. macOS waits up to
+    /// 30 s for an acknowledgment, then sleeps anyway.
+    static let sleepHoldCap: TimeInterval = 15
+
+    #if os(macOS)
+    /// IOKit's system power registration. With it, a sleep can be held until
+    /// the station has said goodbye; NSWorkspace's notification only says it
+    /// is happening (smoke run 2026-10-03-1, issue 85).
+    private var rootPort: io_connect_t = 0
+    private var notifyPort: IONotificationPortRef?
+    private var notifier: io_object_t = 0
+
+    // IOKit's message macros do not import into Swift.
+    private static let messageCanSystemSleep: UInt32 = 0xE000_0270
+    private static let messageSystemWillSleep: UInt32 = 0xE000_0280
+    private static let messageSystemHasPoweredOn: UInt32 = 0xE000_0300
+    #endif
+
     /// Whether the machine is away, or was until a moment ago.
     var isAsleep: Bool {
         guard let sleptAt else { return false }
@@ -118,9 +143,13 @@ final class SystemPowerMonitor: ObservableObject {
         #if os(macOS)
         guard observers.isEmpty else { return }
         let center = NSWorkspace.shared.notificationCenter
+        let holdsSleep = registerForSystemPower()
         observers = [
             center.addObserver(forName: NSWorkspace.willSleepNotification,
                                object: nil, queue: .main) { [weak self] _ in
+                // IOKit delivers this one, with a way to hold it, when the
+                // registration took.
+                guard !holdsSleep else { return }
                 MainActor.assumeIsolated { self?.noteWillSleep() }
             },
             center.addObserver(forName: NSWorkspace.didWakeNotification,
@@ -143,15 +172,72 @@ final class SystemPowerMonitor: ObservableObject {
         #if os(macOS)
         let center = NSWorkspace.shared.notificationCenter
         for observer in observers { center.removeObserver(observer) }
+        if let notifyPort {
+            IODeregisterForSystemPower(&notifier)
+            IOServiceClose(rootPort)
+            IONotificationPortDestroy(notifyPort)
+            self.notifyPort = nil
+        }
         #endif
         observers.removeAll()
     }
 
     /// The machine is going away. Also reachable from tests.
-    func noteWillSleep(at date: Date = Date()) {
+    ///
+    /// - Parameter acknowledge: tells the system it may sleep. Called once,
+    ///   after `sleepPreparation` finishes or at `holdCap`, whichever comes
+    ///   first. Nil when nothing waits on an answer (NSWorkspace's warning).
+    func noteWillSleep(at date: Date = Date(), acknowledge: (() -> Void)? = nil,
+                       holdCap: TimeInterval = SystemPowerMonitor.sleepHoldCap) {
         sleptAt = date
         willSleep.send(date)
+        var acknowledged = false
+        let once = {
+            guard !acknowledged else { return }
+            acknowledged = true
+            acknowledge?()
+        }
+        guard let sleepPreparation else { return once() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + holdCap) { once() }
+        sleepPreparation { once() }
     }
+
+    #if os(macOS)
+    /// Registers for IOKit's system power messages. Returns whether it took.
+    private func registerForSystemPower() -> Bool {
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let port = IORegisterForSystemPower(refcon, &notifyPort, { refcon, _, messageType, messageArgument in
+            guard let refcon else { return }
+            let monitor = Unmanaged<SystemPowerMonitor>.fromOpaque(refcon).takeUnretainedValue()
+            let notificationID = Int(bitPattern: messageArgument)
+            MainActor.assumeIsolated {
+                monitor.handlePowerMessage(messageType, notificationID: notificationID)
+            }
+        }, &notifier)
+        guard port != 0, let notifyPort else { return false }
+        rootPort = port
+        IONotificationPortSetDispatchQueue(notifyPort, .main)
+        return true
+    }
+
+    private func handlePowerMessage(_ messageType: UInt32, notificationID: Int) {
+        switch messageType {
+        case Self.messageCanSystemSleep:
+            // Idle sleep asks first. Keep-awake already holds a power
+            // assertion while the station is busy, so anything that reaches
+            // here may go ahead.
+            IOAllowPowerChange(rootPort, notificationID)
+        case Self.messageSystemWillSleep:
+            let port = rootPort
+            noteWillSleep(acknowledge: { IOAllowPowerChange(port, notificationID) })
+        case Self.messageSystemHasPoweredOn:
+            // NSWorkspace's didWake reports the wake; nothing to answer.
+            break
+        default:
+            break
+        }
+    }
+    #endif
 
     /// The machine is back. Also reachable from tests.
     func noteDidWake(at date: Date = Date()) {

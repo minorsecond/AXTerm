@@ -60,10 +60,14 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
     private func watchForSleep() {
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         let monitor = SystemPowerMonitor.shared
+        // Set before start(): a sleep that arrives first must already be held.
+        monitor.sleepPreparation = { [weak self] done in
+            MainActor.assumeIsolated {
+                guard let self else { return done() }
+                self.prepareForSleep(then: done)
+            }
+        }
         monitor.start()
-        monitor.willSleep
-            .sink { [weak self] _ in MainActor.assumeIsolated { self?.prepareForSleep() } }
-            .store(in: &powerSubscriptions)
         monitor.didWake
             .sink { [weak self] wake in
                 MainActor.assumeIsolated { self?.resumeAfterSleep(outage: wake.outage) }
@@ -71,17 +75,20 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &powerSubscriptions)
     }
 
-    /// Say goodbye on the air, then put the radios down deliberately.
+    /// Say goodbye on the air, then put the radios down deliberately, then
+    /// let the machine sleep.
     ///
-    /// The same order `applicationShouldTerminate` uses below, and for the same
-    /// reason: a peer that is told the session ended stops retransmitting into
-    /// it. The DISCs are transmitted and not waited on. A UA needs a round trip
-    /// over a radio link and there is no waiting for one on a machine that is
-    /// about to stop executing; macOS's window here is short and not
-    /// guaranteed. A lost DISC still leaves the peer to time out, and nothing
-    /// on this side can fix that.
+    /// The same order as quitting, for the same reason: a peer that is told
+    /// the session ended stops retransmitting into it. macOS holds the sleep
+    /// until `done` (IOKit's system power registration, `SystemPowerMonitor`),
+    /// so the DISCs get to settle: the peer's UA or DM, or one T1 with the
+    /// DISC on the air. Until 2026-10-06 the radios went down 0.4 s after the
+    /// DISCs were handed over, and with AXTerm's own sound modem a DISC still
+    /// queued behind a slow key-up never aired (smoke run 2026-10-03-1, issue
+    /// 85). Capped by `SystemPowerMonitor.sleepHoldCap`, well inside the 30 s
+    /// macOS waits.
     @MainActor
-    private func prepareForSleep() {
+    private func prepareForSleep(then done: @escaping () -> Void) {
         let coordinator = SessionCoordinator.shared
         let discs = coordinator?.prepareForTermination() ?? 0
         let engine = coordinator?.packetEngine
@@ -90,23 +97,16 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
             ? "Going to sleep. Released \(discs) live session\(discs == 1 ? "" : "s") and put the radios down."
             : "Going to sleep. Radios down until this machine wakes.")
 
-        // The same grace `applicationShouldTerminate` takes, for the same
-        // reason: `prepareForTermination` hands the DISCs to the link, and
-        // tearing the socket down in the next statement would cancel them
-        // before a byte left. Suspending immediately is worse than a delay
-        // that may not get its turn — one guarantees the peer is never told.
-        //
-        // Best-effort, and knowingly so. macOS's window after
-        // `willSleepNotification` is short and not promised, and this does not
-        // block in it. A DISC that does not make it out leaves the peer to
-        // time out, which is where we were before.
-        let releaseRadios = { [weak engine] in engine?.radioManager.suspendAll() }
-        if discs > 0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { releaseRadios() }
-        } else {
-            releaseRadios()
+        let releaseRadios = { [weak engine] in
+            engine?.radioManager.suspendAll()
+            KeepAwakeController.shared.release()
+            // A moment for the radios' closing datagrams to leave.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: done)
         }
-        KeepAwakeController.shared.release()
+        guard discs > 0, let coordinator else { return releaseRadios() }
+        coordinator.whenTerminationDisconnectsSettle(
+            minimum: 0.4, deadline: Date().addingTimeInterval(Self.disconnectWaitCap),
+            then: releaseRadios)
     }
 
     /// Back. Reopen everything that was up, say how long we were gone, and tell
@@ -197,7 +197,11 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + backstop, execute: replyOnce)
         }
         let waitUntil = Date().addingTimeInterval(discCount > 0 ? Self.disconnectWaitCap : 0.4)
-        Self.whenDisconnectsHaveSettled(coordinator, minimum: 0.4, until: waitUntil, then: closeRadios)
+        if let coordinator {
+            coordinator.whenTerminationDisconnectsSettle(minimum: 0.4, deadline: waitUntil, then: closeRadios)
+        } else {
+            closeRadios()
+        }
         return .terminateLater
     }
 
@@ -205,24 +209,6 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
     /// radios anyway. One T1 on a slow path plus a slow key-up fits well
     /// inside it; the peer times out any link still up, as before.
     static let disconnectWaitCap: TimeInterval = 12
-
-    /// Call `done` once the quit's DISCs have settled (and at least
-    /// `minimum` has passed, for the frames to reach the link), or at
-    /// `deadline`, checking every tenth of a second.
-    private static func whenDisconnectsHaveSettled(_ coordinator: SessionCoordinator?,
-                                                   minimum: TimeInterval, until deadline: Date,
-                                                   started: Date = Date(),
-                                                   then done: @escaping () -> Void) {
-        let settled = coordinator?.terminationDisconnectsSettled ?? true
-        if (settled && Date().timeIntervalSince(started) >= minimum) || Date() >= deadline {
-            done()
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            whenDisconnectsHaveSettled(coordinator, minimum: minimum, until: deadline,
-                                       started: started, then: done)
-        }
-    }
 
     /// Call `done` once no link is still closing, checking every tenth of a
     /// second, then a short moment more for the last datagrams to leave.

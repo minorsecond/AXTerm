@@ -3408,6 +3408,11 @@ final class SessionCoordinator: ObservableObject {
             }
     }
 
+    /// Whether any AX.25 link is up or coming up.
+    var hasLiveLinks: Bool {
+        sessionManager.sessions.values.contains { $0.state == .connected || $0.state == .connecting }
+    }
+
     /// Links `prepareForTermination` sent DISC on.
     private(set) var terminationDisconnects: Set<SessionKey> = []
 
@@ -3418,6 +3423,26 @@ final class SessionCoordinator: ObservableObject {
         terminationDisconnects.allSatisfy { sessionManager.disconnectSettled($0) }
     }
 
+    /// Call `done` once the DISCs `prepareForTermination` sent have settled
+    /// (and at least `minimum` has passed, for the frames to reach the
+    /// link), or at `deadline`, checking every tenth of a second. Quitting,
+    /// a Mac going to sleep and an iPhone leaving the screen all wait on it
+    /// before the radios go down (smoke run 2026-10-03-1, issue 85).
+    func whenTerminationDisconnectsSettle(minimum: TimeInterval, deadline: Date,
+                                          started: Date = Date(),
+                                          then done: @escaping () -> Void) {
+        let elapsed = Date().timeIntervalSince(started)
+        if (terminationDisconnectsSettled && elapsed >= minimum) || Date() >= deadline {
+            done()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return done() }
+            self.whenTerminationDisconnectsSettle(minimum: minimum, deadline: deadline,
+                                                  started: started, then: done)
+        }
+    }
+
     /// Send DISC for every live session before the app exits, so peers can
     /// tear their side down instead of T1-polling a zombie until N2 exhausts.
     ///
@@ -3425,8 +3450,8 @@ final class SessionCoordinator: ObservableObject {
     /// node retransmitting old session data and command-polling us for minutes
     /// against a link that no longer existed on our side. On a healthy path
     /// this DISC clears the peer immediately; on a broken one it costs nothing.
-    /// The quit then waits for each DISC to settle before closing the radios
-    /// (`terminationDisconnectsSettled`); going to sleep does not wait.
+    /// Callers then wait for each DISC to settle before the radios go down
+    /// (`whenTerminationDisconnectsSettle`).
     ///
     /// - Returns: the number of DISC frames put on the air.
     @discardableResult
