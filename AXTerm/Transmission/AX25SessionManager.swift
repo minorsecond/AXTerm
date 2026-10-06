@@ -1423,6 +1423,19 @@ final class AX25SessionManager: ObservableObject {
         return sessions[key]
     }
 
+    /// The live link to `destination` over `path`, on whichever radio it is:
+    /// connected first, then one connecting or disconnecting. A lookup keyed
+    /// on one radio found a session on the primary that never connected
+    /// while the link was up on another radio, and the terminal queued its
+    /// lines there (smoke run 2026-10-03-1, issue 100).
+    func liveSession(for destination: AX25Address, path: DigiPath = DigiPath()) -> AX25Session? {
+        let matching = sessions.values.filter {
+            $0.remoteAddress == destination && $0.path == path
+        }
+        return matching.first { $0.state == .connected }
+            ?? matching.first { $0.state == .connecting || $0.state == .disconnecting }
+    }
+
     /// Find any connected session (useful for responder UIs that don't have destination set)
     /// Returns the most recently active connected session, or nil if none
     func anyConnectedSession() -> AX25Session? {

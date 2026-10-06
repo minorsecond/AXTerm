@@ -1855,7 +1855,16 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             let dest = parseCallsign(wire.call)
             let path = parsePath(wire.path)
 
-            if let session = sessionManager.existingSession(for: dest, path: path) {
+            // A live link wins, on whichever radio it is; otherwise the
+            // session on the radio the next connect would use. Looking on the
+            // primary alone picked a session there that never connected while
+            // the link was up on the 705 (smoke run 2026-10-03-1, issue 100).
+            if let live = sessionManager.liveSession(for: dest, path: path) {
+                currentSession = live
+                return
+            }
+            if let session = sessionManager.existingSession(for: dest, path: path,
+                                                            radio: radio(for: dest, path: path)) {
                 currentSession = session
                 return
             }
