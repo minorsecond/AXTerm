@@ -1747,6 +1747,16 @@ final class AX25SessionManager: ObservableObject {
 
     /// Force disconnect immediately without on-air DISC/UA exchange.
     /// Use for emergency stop or immediate cancellation of a stuck connection.
+    /// Whether a DISC we sent has settled: the link is gone, or left
+    /// awaiting release with the peer's UA or DM, or the DISC's first T1 has
+    /// run out. T1 starts when the frame has left the radio (spec 7.3), so a
+    /// slow key-up is waited out. Quitting waits on this before it closes
+    /// the radios (smoke run 2026-10-03-1, issue 85).
+    func disconnectSettled(_ key: SessionKey) -> Bool {
+        guard let session = sessions[key], session.state == .disconnecting else { return true }
+        return session.stateMachine.retryCount > 0
+    }
+
     func forceDisconnect(session: AX25Session) {
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .forceDisconnect)

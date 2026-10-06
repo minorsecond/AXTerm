@@ -3408,6 +3408,16 @@ final class SessionCoordinator: ObservableObject {
             }
     }
 
+    /// Links `prepareForTermination` sent DISC on.
+    private(set) var terminationDisconnects: Set<SessionKey> = []
+
+    /// Whether every DISC sent for the quit has settled (UA, DM, or a T1 on
+    /// the air without an answer), so the radios can close without throwing
+    /// a queued DISC away (smoke run 2026-10-03-1, issue 85).
+    var terminationDisconnectsSettled: Bool {
+        terminationDisconnects.allSatisfy { sessionManager.disconnectSettled($0) }
+    }
+
     /// Send DISC for every live session before the app exits, so peers can
     /// tear their side down instead of T1-polling a zombie until N2 exhausts.
     ///
@@ -3415,7 +3425,8 @@ final class SessionCoordinator: ObservableObject {
     /// node retransmitting old session data and command-polling us for minutes
     /// against a link that no longer existed on our side. On a healthy path
     /// this DISC clears the peer immediately; on a broken one it costs nothing.
-    /// Best-effort: we do not wait for UA — the process is exiting.
+    /// The quit then waits for each DISC to settle before closing the radios
+    /// (`terminationDisconnectsSettled`); going to sleep does not wait.
     ///
     /// - Returns: the number of DISC frames put on the air.
     @discardableResult
@@ -3428,6 +3439,7 @@ final class SessionCoordinator: ObservableObject {
         for session in live {
             if let disc = sessionManager.disconnect(session: session) {
                 sendFrame(disc)
+                terminationDisconnects.insert(session.key)
                 sent += 1
             }
         }

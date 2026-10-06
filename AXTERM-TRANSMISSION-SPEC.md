@@ -879,6 +879,20 @@ T3, the idle poll timer, is the operator's setting (Link Layer, "Idle Poll (T3)"
   duplicate of an old frame sat out of sequence here) answered RR P with RR F
   every T1 for as long as the link lasted (full-stack fuzz, 2026-10-02).
 
+**Quitting.** Quitting is layer 3 going away, so every live link gets a
+DL-DISCONNECT: DISC, then awaiting release. The quit waits until each one
+settles (the peer's UA or DM, or the DISC's first T1 running out, counted from
+when the frame left the radio, §7.3) before it closes the radios, up to 12 s
+in all. It does not retry the DISC to N2: a link still up after one T1 is left
+for the peer to time out, as it would be anyway. Until 2026-10-06 the radios
+closed 0.4 s after the DISCs were handed over. That suited a KISS TNC, which
+keeps a frame it has been handed, but AXTerm's own sound modem still had the
+DISC queued, and keying an IC-705 through Warbler takes seconds, so no DISC
+reached the air and the peer polled a dead link until a relaunched AXTerm
+answered DM (smoke run 2026-10-03-1, issue 85). Going to sleep sends the DISCs
+the same way but cannot wait: macOS gives no way to hold sleep off from the
+notification, so the radios go down after 0.4 s and a queued DISC may not air.
+
 ### 7.5 Receive logic (I frames)
 On receiving an I-frame with seq `ns`:
 - If `ns == VR` (expected):

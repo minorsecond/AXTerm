@@ -177,20 +177,51 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
         // for the closes to finish rather than guessing a delay, up to the
         // link's own restore budget plus a margin.
         let restoresRig = radioManager?.hasPreparedRadios ?? false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+        // Close the radios once every DISC has settled: the peer's UA or DM,
+        // or one T1 with the DISC on the air. A fixed 0.4 s suited a KISS TNC,
+        // which keeps a frame it has been handed, but AXTerm's own sound modem
+        // still had the DISC queued, and keying an IC-705 through Warbler takes
+        // seconds, so no DISC reached the air (smoke run 2026-10-03-1, issue
+        // 85). Capped, so a quit never hangs on a link that will not settle.
+        let closeRadios = {
             radioManager?.closeAll()
             if restoresRig {
                 Self.whenRigsHaveClosed(radioManager, then: replyOnce)
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + (restoresTNC4 ? 0.8 : 0.3), execute: replyOnce)
             }
+            // Backstop: reply no later than this regardless of how the close goes.
+            let backstop: TimeInterval = restoresRig
+                ? ModemRadioLink.restoreBudget + 2
+                : (restoresTNC4 ? 2.5 : 1.5)
+            DispatchQueue.main.asyncAfter(deadline: .now() + backstop, execute: replyOnce)
         }
-        // Backstop: reply no later than this regardless of how the close goes.
-        let backstop: TimeInterval = restoresRig
-            ? ModemRadioLink.restoreBudget + 2
-            : (restoresTNC4 ? 2.5 : 1.5)
-        DispatchQueue.main.asyncAfter(deadline: .now() + backstop, execute: replyOnce)
+        let waitUntil = Date().addingTimeInterval(discCount > 0 ? Self.disconnectWaitCap : 0.4)
+        Self.whenDisconnectsHaveSettled(coordinator, minimum: 0.4, until: waitUntil, then: closeRadios)
         return .terminateLater
+    }
+
+    /// The longest a quit waits for its DISCs to settle before closing the
+    /// radios anyway. One T1 on a slow path plus a slow key-up fits well
+    /// inside it; the peer times out any link still up, as before.
+    static let disconnectWaitCap: TimeInterval = 12
+
+    /// Call `done` once the quit's DISCs have settled (and at least
+    /// `minimum` has passed, for the frames to reach the link), or at
+    /// `deadline`, checking every tenth of a second.
+    private static func whenDisconnectsHaveSettled(_ coordinator: SessionCoordinator?,
+                                                   minimum: TimeInterval, until deadline: Date,
+                                                   started: Date = Date(),
+                                                   then done: @escaping () -> Void) {
+        let settled = coordinator?.terminationDisconnectsSettled ?? true
+        if (settled && Date().timeIntervalSince(started) >= minimum) || Date() >= deadline {
+            done()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            whenDisconnectsHaveSettled(coordinator, minimum: minimum, until: deadline,
+                                       started: started, then: done)
+        }
     }
 
     /// Call `done` once no link is still closing, checking every tenth of a
