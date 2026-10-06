@@ -3697,15 +3697,29 @@ struct TerminalView: View {
     /// where all the stores live.
     private func buildStrategyEvidence(destination: String) -> ConnectStrategyEvidence {
         var evidence = ConnectStrategyEvidence(destination: destination, now: Date())
+        // Under every name the station goes by: EPINDB is heard as K0EPI-3,
+        // and its routes may be filed under either (issue 87).
+        let directory = nodeAliases.directory
+        let names = ConnectStrategyEvidence.lookupNames(
+            for: destination,
+            callsignForAlias: { directory.callsign(for: $0) },
+            aliasesForCallsign: { directory.aliases(for: $0).map(\.alias) })
 
-        if let station = client.stations.first(where: {
-            CallsignValidator.normalize($0.call) == destination
-        }), let lastHeard = station.lastHeard {
+        if let station = client.stations
+            .filter({ names.contains(CallsignValidator.normalize($0.call)) && $0.lastHeard != nil })
+            .max(by: { ($0.lastHeard ?? .distantPast) < ($1.lastHeard ?? .distantPast) }),
+           let lastHeard = station.lastHeard {
             evidence.direct = .init(lastHeard: lastHeard, heardVia: station.lastVia)
         }
 
         evidence.digiPaths = connectBarViewModel.digiPathEvidence(for: destination)
-        evidence.candidateRoutes = client.netRomIntegration?.candidateRoutes(to: destination) ?? []
+        var routes: [RouteInfo] = []
+        for name in names {
+            for route in client.netRomIntegration?.candidateRoutes(to: name) ?? [] where !routes.contains(route) {
+                routes.append(route)
+            }
+        }
+        evidence.candidateRoutes = routes
 
         if let capabilities = nodeCapabilities {
             for route in evidence.candidateRoutes {
@@ -3716,9 +3730,15 @@ struct TerminalView: View {
             }
         }
 
-        evidence.tellers = nodeAliases.directory.tellerClaims(for: destination).map {
-            .init(teller: $0.teller, claimedAt: $0.claimedAt)
+        var claims: [String: Date] = [:]
+        for name in names {
+            for claim in directory.tellerClaims(for: name) {
+                claims[claim.teller] = max(claims[claim.teller] ?? .distantPast, claim.claimedAt)
+            }
         }
+        evidence.tellers = claims
+            .sorted { $0.value > $1.value }
+            .map { .init(teller: $0.key, claimedAt: $0.value) }
         evidence.nativeCircuitCoolingDown = !sessionCoordinator.shouldTryNativeNetRom(to: destination)
         evidence.advertiseSelfEnabled = sessionCoordinator.netRomDriver.advertisesItself
         return evidence

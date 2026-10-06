@@ -211,3 +211,31 @@ final class ConnectStrategyPlannerTests: XCTestCase {
         XCTAssertEqual(digiKinds, [.ax25ViaDigis(["A0AAA"]), .ax25ViaDigis(["B0BBB"])])
     }
 }
+
+/// Auto gathers evidence under every name the station goes by. Smoke run
+/// 2026-10-03-1, issue 87: an Auto connect to EPINDB said "never heard this
+/// station direct" and "no NET/ROM route known" minutes after A heard
+/// K0EPI-3 announce itself as EPINDB, and the NET/ROM button had just used
+/// a route through K0EPI-3. The evidence was looked up under "EPINDB" only.
+final class ConnectStrategyEvidenceNamesTests: XCTestCase {
+    private let aliases = ["EPINDB": "K0EPI-3"]
+
+    func testAnAliasIsLookedUpUnderItsCallsignToo() {
+        XCTAssertEqual(ConnectStrategyEvidence.lookupNames(
+            for: "epindb", callsignForAlias: { self.aliases[$0] }, aliasesForCallsign: { _ in [] }),
+            ["K0EPI-3", "EPINDB"])
+    }
+
+    func testACallsignIsLookedUpUnderItsAliasesToo() {
+        XCTAssertEqual(ConnectStrategyEvidence.lookupNames(
+            for: "K0EPI-3", callsignForAlias: { self.aliases[$0] },
+            aliasesForCallsign: { $0 == "K0EPI-3" ? ["EPINDB"] : [] }),
+            ["K0EPI-3", "EPINDB"])
+    }
+
+    func testAnUnknownNameIsLookedUpAsTyped() {
+        XCTAssertEqual(ConnectStrategyEvidence.lookupNames(
+            for: "COSCO", callsignForAlias: { _ in nil }, aliasesForCallsign: { _ in [] }),
+            ["COSCO"])
+    }
+}

@@ -46,6 +46,23 @@ nonisolated struct ConnectStrategyEvidence {
     /// Whether this station advertises itself — without it, a far node has
     /// no route home for the CONACK and native circuits usually die.
     var advertiseSelfEnabled: Bool = false
+
+    /// Every name evidence about `destination` may be filed under: the
+    /// callsign an alias resolves to and the alias itself, or a callsign
+    /// and its aliases. Sightings are by callsign and routes are keyed by
+    /// whatever the broadcast said, so looking under the typed name alone
+    /// missed both (smoke run 2026-10-03-1, issue 87).
+    static func lookupNames(for destination: String,
+                            callsignForAlias: (String) -> String?,
+                            aliasesForCallsign: (String) -> [String]) -> [String] {
+        let resolution = NetRomDestinationResolver.resolve(destination, callsignForAlias: callsignForAlias)
+        var names = NetRomDestinationResolver.routeLookupKeys(for: resolution)
+        if !resolution.didResolve {
+            names += aliasesForCallsign(resolution.address.display).map { $0.uppercased() }
+        }
+        var seen = Set<String>()
+        return names.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
 }
 
 nonisolated enum ConnectStrategyPlanner {

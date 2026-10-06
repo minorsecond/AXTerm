@@ -355,6 +355,15 @@ BPQ resolves the alias before building the header, and
   the tactical name still traveling in the entry's own alias field.
   Split horizon is compared after resolution, so an alias and its
   callsign cannot slip past each other.
+- **Auto connect's evidence.** The Auto ladder looks for sightings,
+  routes and tellers under every name the station goes by
+  (`ConnectStrategyEvidence.lookupNames`): an alias and the callsign it
+  resolves to, or a callsign and its aliases. Until 2026-10-06 it looked
+  under the typed name only, so an Auto connect to EPINDB reported
+  "never heard this station direct" and "no NET/ROM route known" minutes
+  after K0EPI-3 announced itself as EPINDB, while the NET/ROM button,
+  which resolves the alias, used a route through K0EPI-3 (smoke run
+  2026-10-03-1, issue 87).
 
 Note the hard limit underneath all of this: an AX.25 address field holds
 **six characters**, which is why NET/ROM aliases are six. Resolving a
