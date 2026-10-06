@@ -1983,16 +1983,20 @@ final class AX25SessionManager: ObservableObject {
             if let sabm = connect(to: destination, path: path, radio: radio) {
                 frames.append(sabm)
             }
-            // Queue each chunk for when connection is established
+            // Queue each chunk for when connection is established, on the
+            // session connect() left in place: it replaces an ended session
+            // with a fresh one, and data queued on the old object never went
+            // out (smoke run 2026-10-03-1, 7.2: a lost NET/ROM CONREQ).
+            let connecting = self.session(for: destination, path: path, radio: radio)
             for (i, chunk) in chunks.enumerated() {
                 let info = (i == 0) ? displayInfo : nil
-                session.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
+                connecting.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
             }
             TxLog.debug(.session, "Queued data pending connection", [
                 "peer": destination.display,
                 "size": data.count,
                 "chunks": chunks.count,
-                "queueDepth": session.pendingDataQueue.count
+                "queueDepth": connecting.pendingDataQueue.count
             ])
 
         case .connecting:

@@ -310,6 +310,33 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
                        "the discard transfers whatever the carcass held — zero here, but never less")
     }
 
+    /// Data sent to a peer whose last link has ended goes out on the new
+    /// link. sendData picked the ended session, then connect() replaced it
+    /// with a fresh one, and the data was queued on the session just thrown
+    /// away. Smoke run 2026-10-03-1, 7.2: after two Winlink calls to
+    /// K0EPI-3, a NET/ROM circuit's CONREQ was lost this way; the link came
+    /// up and A never sent it.
+    func testDataSentAfterTheLastLinkEndedGoesOutOnTheNewLink() {
+        let manager = AX25SessionManager(localCallsign: local)
+        let path = DigiPath()
+        let ended = connectSession(manager: manager, destination: remote, path: path)
+        _ = manager.handleInboundDISC(from: remote, path: path, radio: .primary)
+        XCTAssertEqual(ended.state, .disconnected, "precondition: the peer ended the first link")
+
+        let payload = Data("conreq".utf8)
+        _ = manager.sendData(payload, to: remote, path: path, radio: .primary)
+
+        let fresh = manager.session(for: remote, path: path, radio: .primary)
+        XCTAssertNotIdentical(fresh, ended)
+        XCTAssertEqual(fresh.pendingDataQueue.map(\.data), [payload],
+                       "the data waits on the session that is connecting")
+
+        manager.handleInboundUA(from: remote, path: path, radio: .primary)
+        XCTAssertEqual(fresh.state, .connected)
+        XCTAssertTrue(fresh.pendingDataQueue.isEmpty)
+        XCTAssertEqual(fresh.outstandingCount, 1, "the data went out as the new link's first I-frame")
+    }
+
     // MARK: - Link-failure escalation (keeps Sentry quiet for normal RF life)
 
     /// A single link failure is normal packet-radio life (out of range, node
