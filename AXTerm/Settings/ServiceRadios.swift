@@ -24,6 +24,13 @@ nonisolated enum ServiceRadios {
     static func mailbox(_ radios: [RadioProfile]) -> [String] {
         names(radios) { $0.mayAnswerMailbox }
     }
+
+    /// The radios inbound Winlink calls can be answered on: every packet
+    /// radio. A call arriving on an APRS channel is refused at the link
+    /// (`AX25SessionManager.refusesInboundLinks`).
+    static func winlinkPeerToPeer(_ radios: [RadioProfile]) -> [String] {
+        names(radios) { $0.runsPacketServices }
+    }
 }
 
 /// "Runs on: Base, IC-705", read-only.

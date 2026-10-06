@@ -150,6 +150,10 @@ nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
     var lastTrafficAt: (() -> Date?)?
     /// Operator-facing note.
     var onNote: ((String) -> Void)?
+    /// Whether a probe may leave on a radio. Never on an APRS channel, even
+    /// when the operator asks: the operator ruled pinging out there entirely
+    /// (2026-10-06), and the automatic pass already skipped those radios.
+    var mayProbe: ((RadioID) -> Bool)?
     /// An XID probe drew a definitive firmware answer: (callsign,
     /// unsupported). DM or FRMR answering XID means a pre-2.2 stack
     /// (unsupported: true); an XID answer means v2.2 (false). Fired only
@@ -247,6 +251,10 @@ nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
 
     private func send(_ kind: ProbeKind, to call: String, radio: RadioID, now: Date,
                       manual: Bool = false) {
+        guard mayProbe?(radio) ?? true else {
+            onNote?("Not pinging \(call): its radio is on an APRS channel, where pinging is never done.")
+            return
+        }
         guard let localAddress = localAddress?(radio) else { return }
         let peer = CallsignNormalizer.toAddress(call)
         let frame: OutboundFrame

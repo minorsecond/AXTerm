@@ -926,6 +926,18 @@ to another app keeps the session, every live link gets its DISC and up to 12 s
 to settle, with 3 s of the allowance kept in hand (`BackgroundGoodbye.plan`).
 Coming back first cancels it.
 
+
+#### Calls arriving on an APRS channel
+
+A radio on an APRS channel accepts no inbound link. A SABM that arrives on it,
+with no link of ours to that peer up, is answered DM from the address it was
+sent to, as AX.25 2.2's disconnected state answers a station it cannot accept;
+no session is created. An XID command with P set is answered DM and one
+without P is ignored. A link this station opened on the radio is never
+refused, so the peer's link reset still reaches it. Ping probes never leave on
+such a radio, even when the operator asks. Operator ruling, 2026-10-06; see
+`RadioProfile.runsPacketServices` and Docs/Settings.md.
+
 ### 7.5 Receive logic (I frames)
 On receiving an I-frame with seq `ns`:
 - If `ns == VR` (expected):

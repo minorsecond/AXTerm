@@ -1868,6 +1868,9 @@ final class SessionCoordinator: ObservableObject {
         pingProber.onXIDVerdict = { [weak self] call, unsupported in
             self?.sessionManager.rememberXIDAnswer(peer: call, unsupported: unsupported)
         }
+        pingProber.mayProbe = { [weak self] radio in
+            self?.appSettings?.radio(radio)?.runsPacketServices ?? true
+        }
     }
 
     /// Arm the NODES timer, and announce immediately **only** when
@@ -2713,6 +2716,9 @@ final class SessionCoordinator: ObservableObject {
         sessionManager.idleT3Seconds = { [weak self] in
             AppSettingsStore.sanitizeAX25T3IdleSeconds(
                 self?.appSettings?.ax25T3IdleSeconds ?? AppSettingsStore.defaultAX25T3IdleSeconds)
+        }
+        sessionManager.refusesInboundLinks = { [weak self] radio in
+            !(self?.appSettings?.radio(radio)?.runsPacketServices ?? true)
         }
         sessionManager.keyUpSeconds = { [weak self] radio in
             guard let txDelay = self?.appSettings?.radio(radio).map({ Double($0.txDelayMs) / 1000.0 })

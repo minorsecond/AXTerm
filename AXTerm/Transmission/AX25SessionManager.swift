@@ -713,6 +713,26 @@ final class AX25SessionManager: ObservableObject {
         serviceAddresses[service] = address
     }
 
+    /// Whether calls arriving on a radio are refused: true for a radio on an
+    /// APRS channel (`RadioProfile.runsPacketServices`). The node, ping and
+    /// mailbox already stayed off those radios, but a SABM arriving on one was
+    /// answered UA, so anything that answers calls, Winlink peer-to-peer
+    /// included, could take it on a shared beacon frequency. The operator
+    /// ruled that out (2026-10-06). A link this station opened itself is
+    /// never refused.
+    var refusesInboundLinks: ((RadioID) -> Bool)?
+
+    /// Whether a frame from `source` on `radio` must be refused rather than
+    /// open or negotiate a link.
+    private func refusesLink(from source: AX25Address, path: DigiPath, radio: RadioID) -> Bool {
+        guard refusesInboundLinks?(radio) == true else { return false }
+        if let session = existingSession(for: source, path: path, radio: radio),
+           session.state == .connected || session.state == .connecting || session.state == .disconnecting {
+            return false
+        }
+        return true
+    }
+
     /// What a frame is, for answering it in the disconnected state.
     enum UnheldLinkFrameKind {
         case sabm
@@ -1993,6 +2013,14 @@ final class AX25SessionManager: ObservableObject {
         let peerKey = source.display
         let parsed = AX25XIDParameters.parse(info)
 
+        // A negotiation for a link that would be refused is answered the way
+        // the disconnected state answers a polled command: DM, or nothing.
+        if isCommand, refusesLink(from: source, path: path, radio: radio) {
+            guard pf else { return [] }
+            return [AX25FrameBuilder.buildDM(from: destination ?? localAddress(for: radio), to: source,
+                                             via: path, pf: true).onRadio(radio)]
+        }
+
         if isCommand {
             // The peer negotiates with us. Answer with the intersection of
             // its offer and our capabilities, and remember the outcome for
@@ -2367,6 +2395,15 @@ final class AX25SessionManager: ObservableObject {
             "path": path.display.isEmpty ? "(empty)" : path.display,
             "radio": radio.rawValue
         ])
+
+        if refusesLink(from: source, path: path, radio: radio) {
+            TxLog.debug(.session, "SABM refused with DM: the radio is on an APRS channel", [
+                "peer": source.display, "radio": radio.rawValue
+            ])
+            transmit(AX25FrameBuilder.buildDM(from: destination, to: source, via: path, pf: pf)
+                .onRadio(radio))
+            return
+        }
 
         // Create session if it doesn't exist (we're the responder). A LIVE
         // existing session is reused — SABM into a connected session is the

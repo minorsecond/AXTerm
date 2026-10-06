@@ -1345,6 +1345,7 @@ struct AXTermiOSRootView: View {
             WinlinkSettingsTab(settings: context.settings,
                                profile: context.profile,
                                stationCallsign: settings.primaryCallsign,
+                               answeringRadios: ServiceRadios.winlinkPeerToPeer(settings.activeRadios),
                                locationService: context.locationService,
                                stationDistanceMiles: { callsign, hz in
                                    // Read straight from the cache: Settings has

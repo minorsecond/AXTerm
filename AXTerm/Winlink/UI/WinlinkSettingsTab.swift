@@ -11,6 +11,12 @@ struct WinlinkSettingsTab: View {
     /// Shows what an empty listen callsign resolves to, and names the
     /// account the password is verified against.
     var stationCallsign: String = ""
+    /// The radios inbound calls can be answered on (`ServiceRadios
+    /// .winlinkPeerToPeer`); nil when the caller does not know. Empty means
+    /// every radio is on an APRS channel, where no call is answered.
+    var answeringRadios: [String]? = nil
+
+    private var canAnswerCalls: Bool { answeringRadios.map { !$0.isEmpty } ?? true }
 
     @State private var passwordDraft = ""
     @State private var apiKeyDraft = ""
@@ -123,9 +129,23 @@ struct WinlinkSettingsTab: View {
             }
 
             Section("Peer-to-peer (grid-down)") {
-                Toggle("Answer inbound Winlink calls", isOn: $settings.p2pListenEnabled)
+                // Shown off and locked where no radio can answer, without
+                // clearing the stored switch: a radio moved back to a packet
+                // channel finds it where it was (RadioProfile.runsPacketServices).
+                Toggle("Answer inbound Winlink calls", isOn: Binding(
+                    get: { settings.p2pListenEnabled && canAnswerCalls },
+                    set: { settings.p2pListenEnabled = $0 }))
+                    .disabled(!canAnswerCalls)
                     .help("Lets other stations connect directly to you and exchange mail with no gateway, no CMS, and no internet. It is the mode that still works when infrastructure is gone.\n\nOff by default: an armed station accepts mail from anyone who calls and transmits in reply with no operator present. Arm it for an activation, not for everyday operating.")
-                if settings.p2pListenEnabled {
+                if !canAnswerCalls {
+                    Label("Off: every radio is on an APRS channel, and a shared beacon channel is no place for it. Calls arriving there are refused. A radio's channel is set on its page under Radios.",
+                          systemImage: "mappin.and.ellipse")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let answeringRadios {
+                    RunsOnRow(names: answeringRadios, none: "")
+                }
+                if settings.p2pListenEnabled && canAnswerCalls {
                     Label("Armed: this station answers inbound Winlink calls and will transmit in reply.",
                           systemImage: "antenna.radiowaves.left.and.right")
                         .font(.caption)

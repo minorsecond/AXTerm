@@ -122,6 +122,7 @@ struct SettingsView: View {
         case .winlink:
             WinlinkSettingsTab(settings: winlinkSettings, profile: stationProfile,
                                stationCallsign: settings.primaryCallsign,
+                               answeringRadios: ServiceRadios.winlinkPeerToPeer(settings.activeRadios),
                                locationService: locationService, sync: winlinkSync)
         case .bbs:
             // The mailbox UI is macOS-only; see AXTerm/BBS/UI.

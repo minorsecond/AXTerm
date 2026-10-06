@@ -165,6 +165,20 @@ calls), its **digipeater** (on, fill-in, wide-area hops 0 to 7, aliases, dupe
 window) and its **ID beacon** (text, via path, interval, Send one now). With no
 packet radio, one note says so.
 
+### Nothing connected-mode on an APRS channel
+
+A radio on an APRS channel never runs a packet service, and the operator cannot
+switch one on there (`RadioProfile.runsPacketServices`): no node announcing,
+no pinging (the automatic pass skips the radio and a manual probe is refused,
+`PingProber.mayProbe`), no mailbox, and no Winlink peer-to-peer answering. A
+call that arrives on such a radio is refused at the link with DM, from the
+address that was called, and an XID with P set gets DM too
+(`AX25SessionManager.refusesInboundLinks`); a link the operator opened there
+is left alone. The Winlink page names the radios a call can be answered on
+and shows the switch off and locked when every radio is on an APRS channel.
+The stored switches are not cleared, so a radio moved back to a packet
+channel finds its services where it left them. Operator ruling, 2026-10-06.
+
 "Send one now" needs the radio's link up. It reads the link from
 `PacketEngine.radioSummaries`, the same state the Radios list shows.
 
