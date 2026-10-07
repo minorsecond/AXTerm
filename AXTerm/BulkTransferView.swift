@@ -34,108 +34,132 @@ struct BulkTransferRow: View {
         }
     }
 
+    /// The file: direction, icon, name and badges. `wholeName` keeps the
+    /// name from shortening, so a line that cannot hold it does not fit.
+    @ViewBuilder
+    private func headerName(wholeName: Bool) -> some View {
+        // Direction indicator
+        Image(systemName: transfer.direction == .outbound ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
+            .foregroundStyle(transfer.direction == .outbound ? .blue : .green)
+            .font(.caption)
+
+        // File icon
+        Image(systemName: fileIcon)
+            .foregroundStyle(.secondary)
+
+        // File name
+        // One line, shortened in the middle so the extension stays:
+        // on a phone the name broke mid-word ("t20k_bin.bi" / "n").
+        Text(transfer.fileName)
+            .font(.system(.body, design: .monospaced))
+            .fontWeight(.medium)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .fixedSize(horizontal: wholeName, vertical: false)
+            .help(transfer.fileName)
+
+        // Protocol badge
+        transferProtocolBadge(transfer.transferProtocol)
+
+        // Compression badge - show when compression was used
+        if let metrics = transfer.compressionMetrics, metrics.wasEffective {
+            compressionBadge(metrics)
+        } else if let metrics = transfer.compressionMetrics, metrics.algorithm != nil && !metrics.wasEffective {
+            // Compression was attempted but not effective
+            HStack(spacing: 2) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.caption2)
+                Text("No savings")
+            }
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.gray.opacity(0.2))
+            .foregroundStyle(.secondary)
+            .clipShape(Capsule())
+            .help("Compression was attempted but provided no benefit")
+        }
+    }
+
+    /// The status badge and the row's buttons.
+    @ViewBuilder
+    private func headerStatus(now: Date) -> some View {
+        // Status badge
+        statusBadge(now: now)
+
+        // Info button
+        Button {
+            showDetails.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("Show transfer details")
+
+        // Control buttons
+        if transfer.canPause {
+            Button(action: onPause) {
+                Image(systemName: "pause.fill")
+            }
+            .buttonStyle(.borderless)
+            .help("Pause transfer")
+        }
+
+        if transfer.canResume {
+            Button(action: onResume) {
+                Image(systemName: "play.fill")
+            }
+            .buttonStyle(.borderless)
+            .help("Resume transfer")
+        }
+
+        if transfer.canCancel {
+            Button {
+                if CancelTransferPrompt.isNeeded(for: transfer.status) {
+                    confirmingCancel = true
+                } else {
+                    onCancel()
+                }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    #if os(iOS)
+                    .iconHitTarget(44)
+                    #endif
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.red)
+            .help("Cancel transfer")
+            .accessibilityLabel("Cancel Transfer")
+            .confirmationDialog(CancelTransferPrompt(transfer: transfer).title,
+                                isPresented: $confirmingCancel, titleVisibility: .visible) {
+                let prompt = CancelTransferPrompt(transfer: transfer)
+                Button(prompt.cancelLabel, role: .destructive, action: onCancel)
+                Button(prompt.keepLabel, role: .cancel) {}
+            } message: {
+                Text(CancelTransferPrompt(transfer: transfer).message)
+            }
+        }
+    }
+
     @ViewBuilder
     private func rowContent(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Header row
-            HStack {
-                // Direction indicator
-                Image(systemName: transfer.direction == .outbound ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
-                    .foregroundStyle(transfer.direction == .outbound ? .blue : .green)
-                    .font(.caption)
-
-                // File icon
-                Image(systemName: fileIcon)
-                    .foregroundStyle(.secondary)
-
-                // File name
-                // One line, shortened in the middle so the extension stays:
-                // on a phone the name broke mid-word ("t20k_bin.bi" / "n").
-                Text(transfer.fileName)
-                    .font(.system(.body, design: .monospaced))
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(transfer.fileName)
-
-                // Protocol badge
-                transferProtocolBadge(transfer.transferProtocol)
-
-                // Compression badge - show when compression was used
-                if let metrics = transfer.compressionMetrics, metrics.wasEffective {
-                    compressionBadge(metrics)
-                } else if let metrics = transfer.compressionMetrics, metrics.algorithm != nil && !metrics.wasEffective {
-                    // Compression was attempted but not effective
-                    HStack(spacing: 2) {
-                        Image(systemName: "arrow.down.right.and.arrow.up.left")
-                            .font(.caption2)
-                        Text("No savings")
-                    }
-                    .font(.caption2)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.gray.opacity(0.2))
-                    .foregroundStyle(.secondary)
-                    .clipShape(Capsule())
-                    .help("Compression was attempted but provided no benefit")
+            // Header: one line where it all fits. Where it does not (a
+            // phone), the name keeps the first line and the status and
+            // buttons take a second: sharing it cut the name to "t20k_…n.bin"
+            // (smoke run 2026-10-03-1, issue 109).
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    headerName(wholeName: true)
+                    Spacer()
+                    headerStatus(now: now)
                 }
-
-                Spacer()
-
-                // Status badge
-                statusBadge(now: now)
-
-                // Info button
-                Button {
-                    showDetails.toggle()
-                } label: {
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help("Show transfer details")
-
-                // Control buttons
-                if transfer.canPause {
-                    Button(action: onPause) {
-                        Image(systemName: "pause.fill")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Pause transfer")
-                }
-
-                if transfer.canResume {
-                    Button(action: onResume) {
-                        Image(systemName: "play.fill")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Resume transfer")
-                }
-
-                if transfer.canCancel {
-                    Button {
-                        if CancelTransferPrompt.isNeeded(for: transfer.status) {
-                            confirmingCancel = true
-                        } else {
-                            onCancel()
-                        }
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            #if os(iOS)
-                            .iconHitTarget(44)
-                            #endif
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.red)
-                    .help("Cancel transfer")
-                    .accessibilityLabel("Cancel Transfer")
-                    .confirmationDialog(CancelTransferPrompt(transfer: transfer).title,
-                                        isPresented: $confirmingCancel, titleVisibility: .visible) {
-                        let prompt = CancelTransferPrompt(transfer: transfer)
-                        Button(prompt.cancelLabel, role: .destructive, action: onCancel)
-                        Button(prompt.keepLabel, role: .cancel) {}
-                    } message: {
-                        Text(CancelTransferPrompt(transfer: transfer).message)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack { headerName(wholeName: false) }
+                    HStack {
+                        Spacer()
+                        headerStatus(now: now)
                     }
                 }
             }
