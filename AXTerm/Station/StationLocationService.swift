@@ -7,6 +7,17 @@ import CoreLocation
 protocol GPSProviding: Sendable {
     /// Resolves a single fix, or throws when unavailable/denied/timeout.
     func requestOneShotFix(timeout: TimeInterval) async throws -> (latitude: Double, longitude: Double)
+    /// Delivers a fix each time the device has moved `distanceFilter`
+    /// meters, until `stopTracking()`.
+    func startTracking(distanceFilter: Double,
+                       onFix: @escaping @Sendable ((latitude: Double, longitude: Double)) -> Void)
+    func stopTracking()
+}
+
+extension GPSProviding {
+    func startTracking(distanceFilter: Double,
+                       onFix: @escaping @Sendable ((latitude: Double, longitude: Double)) -> Void) {}
+    func stopTracking() {}
 }
 
 nonisolated enum GPSError: Error, Equatable {
@@ -137,6 +148,42 @@ final class StationLocationService: ObservableObject {
         return nil
     }
 
+    /// Follow the device as it moves: a fix each time it has moved
+    /// `distanceFilter` meters. A handheld does this while it is on screen,
+    /// the way a navigation app does; it took one fix and never another, so
+    /// its map pin and beacon stayed where a drive began (smoke run
+    /// 2026-10-03-1, issue 118). The distance filter keeps a station that
+    /// stands still from being redrawn every second.
+    func startTracking(distanceFilter: Double = 10) {
+        guard deviceLocationEnabled(), let gps, !isTracking else { return }
+        isTracking = true
+        gps.startTracking(distanceFilter: distanceFilter) { [weak self] fix in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.noteTrackedFix(fix) }
+            }
+        }
+    }
+
+    func stopTracking() {
+        guard isTracking else { return }
+        isTracking = false
+        gps?.stopTracking()
+    }
+
+    private var isTracking = false
+
+    private func noteTrackedFix(_ fix: (latitude: Double, longitude: Double)) {
+        guard isTracking, deviceLocationEnabled() else { return }
+        lastGPSAttempt = now()
+        lastGPSError = nil
+        held = StationLocation(
+            latitude: fix.latitude,
+            longitude: fix.longitude,
+            gridSquare: Maidenhead.gridSquare(latitude: fix.latitude, longitude: fix.longitude) ?? "",
+            source: .gps,
+            timestamp: now())
+    }
+
     /// A position from the last `window` when there is one, else a fresh
     /// one; for callers that stamp many records in a row and should not
     /// wake CoreLocation for each.
@@ -167,6 +214,25 @@ final class StationLocationService: ObservableObject {
 nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocationManagerDelegate, @unchecked Sendable {
 
     private var manager: CLLocationManager?
+    /// Its own manager, so tracking and a one-shot fix never stop each other.
+    private var tracker: LocationTracker?
+
+    func startTracking(distanceFilter: Double,
+                       onFix: @escaping @Sendable ((latitude: Double, longitude: Double)) -> Void) {
+        DispatchQueue.main.async {
+            self.tracker?.stop()
+            let tracker = LocationTracker(distanceFilter: distanceFilter, onFix: onFix)
+            self.tracker = tracker
+            tracker.start()
+        }
+    }
+
+    func stopTracking() {
+        DispatchQueue.main.async {
+            self.tracker?.stop()
+            self.tracker = nil
+        }
+    }
     private var continuation: CheckedContinuation<(latitude: Double, longitude: Double), Error>?
     private let lock = NSLock()
 
@@ -262,6 +328,46 @@ nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocat
             // Authorized (any form, either platform): start the scan the
             // request may have deferred until the grant came through.
             manager.startUpdatingLocation()
+        }
+    }
+}
+
+/// Continuous updates for `CoreLocationGPSProvider.startTracking`: a fix
+/// each time the device has moved `distanceFilter` meters, at the accuracy
+/// a navigation app uses.
+nonisolated private final class LocationTracker: NSObject, CLLocationManagerDelegate, @unchecked Sendable {
+    private let manager = CLLocationManager()
+    private let onFix: @Sendable ((latitude: Double, longitude: Double)) -> Void
+
+    init(distanceFilter: Double, onFix: @escaping @Sendable ((latitude: Double, longitude: Double)) -> Void) {
+        self.onFix = onFix
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = distanceFilter
+    }
+
+    func start() {
+        if manager.authorizationStatus == .notDetermined { manager.requestWhenInUseAuthorization() }
+        manager.startUpdatingLocation()
+    }
+
+    func stop() { manager.stopUpdatingLocation() }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        // A negative accuracy marks an invalid fix.
+        guard let location = locations.last, location.horizontalAccuracy >= 0 else { return }
+        onFix((location.coordinate.latitude, location.coordinate.longitude))
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        // CoreLocation keeps trying after a transient failure; nothing to do.
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        switch manager.authorizationStatus {
+        case .denied, .restricted, .notDetermined: break
+        default: manager.startUpdatingLocation()
         }
     }
 }

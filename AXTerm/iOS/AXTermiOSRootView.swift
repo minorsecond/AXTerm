@@ -458,6 +458,7 @@ struct AXTermiOSRootView: View {
             // notice, so this is the moment.
             switch phase {
             case .background:
+                context.locationService.stopTracking()
                 sessionCoordinator.isOffScreen = true
                 goodbye.enteredBackground(coordinator: sessionCoordinator)
                 bbsService.shutdown(reason: "this device is going to sleep")
@@ -466,6 +467,7 @@ struct AXTermiOSRootView: View {
                 // socket is gone. Re-attached on return, below.
                 bbsService.detach()
             case .active:
+                if useDeviceLocation { context.locationService.startTracking() }
                 sessionCoordinator.isOffScreen = false
                 goodbye.becameActive()
                 bbsService.attach()
@@ -475,6 +477,13 @@ struct AXTermiOSRootView: View {
             }
         }
         .task { applyKeepAwake() }
+        // On screen with device location on, follow the device as a
+        // navigation app does: the map pin and every beacon use where it
+        // is now (smoke run 2026-10-03-1, issue 118).
+        .onChange(of: useDeviceLocation, initial: true) { _, on in
+            if on, scenePhase == .active { context.locationService.startTracking() }
+            if !on { context.locationService.stopTracking() }
+        }
         // So "AXTerm Transfers" is in the Files app before the first file.
         .task { ReceivedFileStore.prepareFolder() }
         // Files from other apps: "Open in AXTerm", the share sheet's AXTerm
