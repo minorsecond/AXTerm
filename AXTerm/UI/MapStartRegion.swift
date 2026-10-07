@@ -26,7 +26,19 @@ nonisolated struct MapStartRegion: Equatable, Sendable {
     /// actually works, close enough to read a callsign.
     static let defaultLatitudeDelta: Double = 0.9
 
-    static let storageKey = "map.lastRegion"
+    /// "map.lastRegion" until 2026-10-07 held whatever region the map last
+    /// reported, including ones nobody chose (an iPhone opened over
+    /// Antarctica); those are left behind once by the new key.
+    static let storageKey = "map.lastRegion.v2"
+
+    /// Whether a region change is remembered as where the operator last
+    /// looked: only one they made themselves, by panning, zooming or
+    /// scrolling the map, after it has opened. A camera the app set, or
+    /// MapKit's own while the map was hidden or still sizing, is not a
+    /// place anyone looked (smoke run 2026-10-03-1, test 13.3).
+    static func remembers(mapHasOpened: Bool, operatorMoved: Bool) -> Bool {
+        mapHasOpened && operatorMoved
+    }
 
     /// The widest view worth reopening: a few states across. Past this the
     /// station's own network is a dot, and MapKit reports a fully zoomed-out

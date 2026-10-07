@@ -877,6 +877,36 @@ struct OfflineBasemapMapView {
 
         private var lastRegionReportAt: CFAbsoluteTime = 0
 
+        /// Whether the region change under way is the operator's own: a
+        /// pan, pinch or scroll, rather than a camera the app or MapKit set.
+        private var operatorMoving = false
+
+        func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+            operatorMoving = Self.operatorIsMoving(mapView)
+        }
+
+        /// A gesture under way on the map, or on the Mac an input event that
+        /// moves it (scroll, drag, pinch, a zoom button or key).
+        static func operatorIsMoving(_ mapView: MKMapView) -> Bool {
+            #if os(iOS)
+            let views: [UIView] = [mapView] + mapView.subviews
+            return views.contains { view in
+                (view.gestureRecognizers ?? []).contains {
+                    $0.state == .began || $0.state == .changed || $0.state == .ended
+                }
+            }
+            #else
+            let movingEvents: Set<NSEvent.EventType> = [
+                .scrollWheel, .magnify, .rotate, .smartMagnify, .swipe,
+                .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+                .leftMouseDown, .leftMouseUp, .keyDown]
+            if let type = NSApp.currentEvent?.type, movingEvents.contains(type) { return true }
+            return mapView.gestureRecognizers.contains {
+                $0.state == .began || $0.state == .changed || $0.state == .ended
+            }
+            #endif
+        }
+
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             #if DEBUG
             // A region that oscillates moves every marker at once, which is
@@ -904,8 +934,11 @@ struct OfflineBasemapMapView {
             // a Release build never remembered anything; and before the
             // camera is ours it is MapKit's default, which a hidden map once
             // saved as "the last place looked" (open water off Sumatra).
+            // Only a move the operator made counts: an iPhone saved a camera
+            // nobody chose, over Antarctica, and opened on blank ice.
             let now = CFAbsoluteTimeGetCurrent()
-            if hasOpened, now - lastRegionReportAt > 0.6 {
+            if MapStartRegion.remembers(mapHasOpened: hasOpened, operatorMoved: operatorMoving),
+               now - lastRegionReportAt > 0.6 {
                 lastRegionReportAt = now
                 let current = mapView.region
                 parent.onRegionChanged?(MapStartRegion(

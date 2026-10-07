@@ -149,4 +149,25 @@ final class MapStartRegionTests: XCTestCase {
             XCTAssertEqual(UserDefaults.standard.string(forKey: key), before, "written to the shared domain")
         }
     }
+
+    // MARK: - Smoke run 2026-10-03-1, test 13.3 (issue 107)
+
+    /// The iPhone had saved a region over Antarctica (-80.447, 145.864)
+    /// that nobody had panned to, and opened on blank ice every time. The
+    /// map now remembers only where the operator moved it by hand.
+    func testOnlyARegionTheOperatorMovedToIsRemembered() {
+        XCTAssertTrue(MapStartRegion.remembers(mapHasOpened: true, operatorMoved: true))
+        XCTAssertFalse(MapStartRegion.remembers(mapHasOpened: true, operatorMoved: false),
+                       "a camera the app or MapKit set is not the place the operator last looked")
+        XCTAssertFalse(MapStartRegion.remembers(mapHasOpened: false, operatorMoved: true))
+    }
+
+    /// Regions saved under the old rule may be ones nobody chose, so they
+    /// are left behind once rather than trusted.
+    func testARegionSavedUnderTheOldRuleIsNotReopened() {
+        let suite = TestDefaults.make("MapStartRegionLegacy")
+        suite.set("-80.447431,145.863916,1.113120,4.500000", forKey: "map.lastRegion")
+        XCTAssertNotEqual(MapStartRegion.storageKey, "map.lastRegion")
+        XCTAssertNil(MapStartRegion.load(suite))
+    }
 }
