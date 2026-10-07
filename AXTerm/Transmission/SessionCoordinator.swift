@@ -1980,7 +1980,7 @@ final class SessionCoordinator: ObservableObject {
         }
 
         for radio in wanted {
-            let interval = TimeInterval(max(5, radio.beacon.intervalMinutes) * 60)
+            let interval = TimeInterval(radio.beacon.scheduledMinutes * 60)
             let id = radio.id
             // A running countdown is left alone. This is called on every
             // keystroke in the beacon editor, and re-arming each time restarted

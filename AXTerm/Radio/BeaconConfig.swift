@@ -36,6 +36,26 @@ nonisolated struct BeaconConfig: Codable, Equatable, Sendable {
     /// Minutes between beacons; clamped to a sane floor when scheduled.
     var intervalMinutes: Int = 30
 
+    /// The interval the timer runs at: never under the floor for the kind.
+    var scheduledMinutes: Int { max(Self.floorMinutes(for: kind), intervalMinutes) }
+
+    /// A mobile APRS station beacons every minute or two, so a position
+    /// beacon goes down to 1 minute; at 5 a short drive got one or two
+    /// positions (operator, 2026-10-07). A text ID beacon keeps 5.
+    static func floorMinutes(for kind: BeaconKind) -> Int { kind == .aprsPosition ? 1 : 5 }
+
+    /// The interval after `minutes` one stepper press up or down.
+    static func step(from minutes: Int, up: Bool, kind: BeaconKind) -> Int {
+        let steps = intervalSteps(for: kind)
+        if up { return steps.first { $0 > minutes } ?? steps.last! }
+        return steps.last { $0 < minutes } ?? steps.first!
+    }
+
+    private static func intervalSteps(for kind: BeaconKind) -> [Int] {
+        let fives = Array(stride(from: 5, through: 240, by: 5))
+        return kind == .aprsPosition ? [1, 2, 3] + fives : fives
+    }
+
     // APRS position beacon (kind == .aprsPosition) — populated in a later
     // phase; kept optional so it is absent (and free) until used.
     var aprs: APRSPositionConfig?

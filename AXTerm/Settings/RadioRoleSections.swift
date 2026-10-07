@@ -90,8 +90,11 @@ struct RadioAPRSSections: View {
                 Toggle("Send a position beacon", isOn: bind.beacon(\.enabled))
                 if bind.beacon(\.enabled).wrappedValue {
                     positionBeaconRows
-                    Stepper("Send every \(bind.beacon(\.intervalMinutes).wrappedValue) min",
-                            value: bind.beacon(\.intervalMinutes), in: 5...240, step: 5)
+                    let interval = bind.beacon(\.intervalMinutes)
+                    let kind = bind.beacon(\.kind).wrappedValue
+                    Stepper("Send every \(max(BeaconConfig.floorMinutes(for: kind), interval.wrappedValue)) min",
+                            onIncrement: { interval.wrappedValue = BeaconConfig.step(from: interval.wrappedValue, up: true, kind: kind) },
+                            onDecrement: { interval.wrappedValue = BeaconConfig.step(from: interval.wrappedValue, up: false, kind: kind) })
                     RadioBeaconNowRow(radioID: radioID, settings: settings,
                                       linkUp: client.radioSummaries.first { $0.id == radioID }?.status == .connected)
                 }
