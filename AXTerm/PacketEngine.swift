@@ -693,6 +693,40 @@ final class PacketEngine: ObservableObject {
         netRomSnapshotTimer?.invalidate()
     }
 
+    // MARK: - Battery (TNC4)
+
+    /// Whether a radio has an AX.25 link up. The session coordinator sets it;
+    /// the battery is never read while one is.
+    var radioHasLink: ((RadioID) -> Bool)?
+    private var batteryAskedAt: [RadioID: Date] = [:]
+    private var batteryTimer: Timer?
+
+    /// Re-reads each connected TNC4's battery every 30 minutes, only when
+    /// that costs nothing (TNC4BatteryRefresh). Started with the first
+    /// connection, like the receive-level check.
+    private func startBatteryWatch() {
+        guard batteryTimer == nil else { return }
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tickBatteryWatch() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        batteryTimer = timer
+    }
+
+    func tickBatteryWatch(now: Date = Date()) {
+        for radio in radioSummaries where radio.status == .connected {
+            guard let control = mobilinkdControl(for: radio.id) else { continue }
+            guard TNC4BatteryRefresh.isDue(lastReadAt: mobilinkdDevices[radio.id]?.batteryReadAt,
+                                           lastAskedAt: batteryAskedAt[radio.id], now: now) else { continue }
+            let lastActivity = [lastRxByRadio[radio.id], lastTxByRadio[radio.id]].compactMap { $0 }.max()
+            guard TNC4BatteryRefresh.mayAsk(tncIdle: control.mobilinkdActivity == .idle,
+                                            linkUp: radioHasLink?(radio.id) ?? false,
+                                            lastActivity: lastActivity, now: now) else { continue }
+            batteryAskedAt[radio.id] = now
+            control.refreshMobilinkdBattery()
+        }
+    }
+
     // MARK: - Receive level (TNC4)
 
     /// Receive-level calibration and the drift watch for TNC4 radios (see
@@ -3393,6 +3427,7 @@ extension PacketEngine: RadioManagerDelegate {
             // the first connection, not at launch, so an engine that never
             // connects (the tests, a station with no TNC4) runs no timer.
             receiveLevel.start()
+            startBatteryWatch()
             addSystemLine("Connected to \(endpoint)", category: .connection,
                           radios: radioManager.radios(carriedBy: link))
             eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)

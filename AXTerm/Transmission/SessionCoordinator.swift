@@ -3397,6 +3397,11 @@ final class SessionCoordinator: ObservableObject {
     /// Safe to call multiple times — replaces any existing subscription.
     func subscribeToPackets(from client: PacketEngine) {
         self.packetEngine = client
+        client.radioHasLink = { [weak self] radio in
+            self?.sessionManager.sessions.values.contains {
+                $0.radio == radio && [.connecting, .connected, .disconnecting].contains($0.state)
+            } ?? false
+        }
         client.onTransmissionEnded = { [weak self] radio in
             self?.sessionManager.transmissionEnded(on: radio)
         }

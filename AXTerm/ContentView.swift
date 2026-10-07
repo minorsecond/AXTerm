@@ -2530,20 +2530,14 @@ struct ContentView: View {
         return HStack(spacing: 8) {
             receiveWarningGlyph(warnings)
 
-            if radios.contains(where: { $0.status == .connected }) {
-                HStack(spacing: 2) {
-                    Blinkenlight(color: .green, trigger: client.lastRxTime)
-                        .help("RX Activity, any radio")
-                    Blinkenlight(color: .red, trigger: client.lastTxTime)
-                        .help("TX Activity, any radio")
-                }
-            }
-
+            // One dot per radio, each showing its own traffic (see
+            // ActivityStatusDot): the separate activity lights made five or
+            // more dots in a row.
             HStack(spacing: 3) {
                 ForEach(radios, id: \.id) { radio in
-                    Circle()
-                        .fill(radioTint(radio.status))
-                        .frame(width: 8, height: 8)
+                    ActivityStatusDot(color: radioTint(radio.status),
+                                      rxTrigger: client.lastRxByRadio[radio.id] ?? .distantPast,
+                                      txTrigger: client.lastTxByRadio[radio.id] ?? .distantPast)
                         .help(RadioPresentation.dotHelp(radio))
                 }
             }
@@ -2582,14 +2576,43 @@ struct ContentView: View {
                     SettingsRouter.shared.navigate(to: .radios)
                 }
             } label: {
-                Text(RadioPresentation.capsuleLabel(radios))
-                    .font(.system(size: 11, weight: .medium))
+                HStack(spacing: 5) {
+                    Text(RadioPresentation.capsuleLabel(radios))
+                        .font(.system(size: 11, weight: .medium))
+                    tnc4BatteryGlyph(for: radios.filter { $0.status == .connected }.map(\.id))
+                }
             }
             .menuStyle(.borderlessButton)
             .help(warnings.isEmpty ? "Radio connection actions"
                   : "Radio connection actions\n\n" + receiveWarningHelp(warnings))
         }
         .toolbarPill()
+    }
+
+    /// The lowest battery among these radios' TNC4s, as a glyph beside the
+    /// radio's name; nothing when none has reported one. The tooltip lists
+    /// each.
+    @ViewBuilder
+    private func tnc4BatteryGlyph(for radios: [RadioID]) -> some View {
+        let readings = radios.compactMap { radio -> (RadioID, Int, Double, Date?)? in
+            guard let device = client.mobilinkdDevices[radio], let mV = device.batteryMillivolts,
+                  let fraction = device.batteryFraction else { return nil }
+            return (radio, mV, fraction, device.batteryReadAt)
+        }
+        if let lowest = readings.min(by: { $0.2 < $1.2 }) {
+            let low = TNC4BatteryPresentation.isLow(fraction: lowest.2)
+            Image(systemName: TNC4BatteryPresentation.symbol(fraction: lowest.2))
+                .font(.system(size: 12))
+                .foregroundStyle(low ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+                .help(readings.map { reading in
+                    let line = TNC4BatteryPresentation.help(
+                        millivolts: reading.1, fraction: reading.2, readAt: reading.3,
+                        timeFormatter: { $0.formatted(date: .omitted, time: .shortened) })
+                    return readings.count > 1
+                        ? "\(settings.radio(reading.0)?.name ?? "TNC4"): \(line)" : line
+                }.joined(separator: "\n"))
+                .accessibilityLabel("TNC4 battery \(Int((lowest.2 * 100).rounded())) percent")
+        }
     }
 
     private func radioTint(_ status: ConnectionStatus) -> Color {
@@ -2607,22 +2630,10 @@ struct ContentView: View {
         return HStack(spacing: 8) {
             receiveWarningGlyph(warnings)
 
-            // TX / RX Blinkenlights, only while connected. Idle, two gray
-            // dots beside the status dot read as a loading indicator.
-            if client.status == .connected {
-                HStack(spacing: 2) {
-                    Blinkenlight(color: .green, trigger: client.lastRxTime)
-                        .help("RX Activity")
-                    Blinkenlight(color: .red, trigger: client.lastTxTime)
-                        .help("TX Activity")
-                }
-            }
-            
-            // Connection status dot
-            Circle()
-                .fill(tncLedColor)
-                .frame(width: 8, height: 8)
-                .help("TNC connection status")
+            // The status dot carries the traffic too (ActivityStatusDot):
+            // two activity lights beside it read as a loading indicator.
+            ActivityStatusDot(color: tncLedColor, rxTrigger: client.lastRxTime, txTrigger: client.lastTxTime)
+                .help("TNC connection status. The dot turns red while sending; a ring pulses out on receive.")
 
             Menu {
                 switch client.status {
@@ -2670,8 +2681,13 @@ struct ContentView: View {
                     SettingsRouter.shared.navigate(to: .radioConnection, radio: settings.primaryRadio?.id)
                 }
             } label: {
-                Text(tncCapsuleLabel)
-                    .font(.system(size: 11, weight: .medium))
+                HStack(spacing: 5) {
+                    Text(tncCapsuleLabel)
+                        .font(.system(size: 11, weight: .medium))
+                    if client.status == .connected, let primary {
+                        tnc4BatteryGlyph(for: [primary])
+                    }
+                }
             }
             .menuStyle(.borderlessButton)
             .help(warning == nil ? "TNC connection actions" : "TNC connection actions\n\n" + receiveWarningHelp(warnings))

@@ -24,3 +24,43 @@ struct Blinkenlight: View {
             }
     }
 }
+
+/// A link's status dot that also shows its traffic, in place of two activity
+/// lights beside it: three dots in a row read as a loading indicator. The dot
+/// turns red while a frame goes out, and a ring pulses outward from it when
+/// one comes in.
+struct ActivityStatusDot: View {
+    let color: Color
+    let rxTrigger: Date
+    let txTrigger: Date
+    @State private var transmitting = false
+    @State private var ringScale: CGFloat = 1
+    @State private var ringOpacity: Double = 0
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.green, lineWidth: 1.5)
+                .frame(width: 8, height: 8)
+                .scaleEffect(ringScale)
+                .opacity(ringOpacity)
+            Circle()
+                .fill(transmitting ? Color.red : color)
+                .frame(width: 8, height: 8)
+                .animation(transmitting ? .easeIn(duration: 0.05) : .easeOut(duration: 0.4), value: transmitting)
+        }
+        .frame(width: 10, height: 10)
+        .onChange(of: rxTrigger) { _, _ in
+            ringScale = 1
+            ringOpacity = 0.9
+            withAnimation(.easeOut(duration: 0.6)) {
+                ringScale = 2.2
+                ringOpacity = 0
+            }
+        }
+        .onChange(of: txTrigger) { _, _ in
+            transmitting = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { transmitting = false }
+        }
+    }
+}

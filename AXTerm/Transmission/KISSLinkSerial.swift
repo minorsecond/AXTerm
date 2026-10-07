@@ -1268,6 +1268,7 @@ extension KISSLinkSerial: MobilinkdControlling {
     var mobilinkdActivity: MobilinkdActivity { mobilinkd.activity }
 
     func refreshMobilinkdStatus() { serialQueue.async { [weak self] in self?.mobilinkd.refreshStatus() } }
+    func refreshMobilinkdBattery() { serialQueue.async { [weak self] in self?.mobilinkd.refreshBattery() } }
     func startMeasuringInput() { serialQueue.async { [weak self] in self?.mobilinkd.startMeasuring() } }
     func stopMeasuringInput() { serialQueue.async { [weak self] in self?.mobilinkd.stopMeasuring() } }
     func startTestTone(_ tone: MobilinkdTestTone, for seconds: TimeInterval) {

@@ -11,9 +11,13 @@ final class RadioPresentationTests: XCTestCase {
 
     // MARK: - One radio: parity
 
-    func testOneRadioKeepsTheCapsuleStringsItAlwaysHad() {
-        XCTAssertEqual(RadioPresentation.capsuleLabel([.fixture(status: .connected)]),
-                       "TNC: 192.168.3.218")
+    /// Connected, one radio shows its short name: "TNC: " and the endpoint
+    /// made the longest label in the toolbar (operator, 2026-10-07). The
+    /// endpoint is in the menu.
+    func testOneRadioShowsItsNameWhenConnected() {
+        XCTAssertEqual(RadioPresentation.capsuleLabel([.fixture(status: .connected)]), "Direwolf")
+        XCTAssertEqual(RadioPresentation.capsuleLabel([.fixture(name: "", status: .connected)]),
+                       "192.168.3.218", "with no name, the host")
         XCTAssertEqual(RadioPresentation.capsuleLabel([.fixture(status: .connecting)]),
                        "TNC Connecting\u{2026}")
         XCTAssertEqual(RadioPresentation.capsuleLabel([.fixture(status: .disconnected)]),
@@ -22,20 +26,19 @@ final class RadioPresentationTests: XCTestCase {
                        "TNC Failed")
     }
 
-    /// A serial TNC has no host. The capsule shows the device instead of a
-    /// blank after the colon.
+    /// A serial TNC with no name shows its device rather than a blank.
     func testASerialRadioShowsItsDeviceWhereAHostWouldGo() {
         let serial = RadioStatusSummary.fixture(
-            status: .connected, host: "", port: nil, endpoint: "/dev/cu.usbserial-1420")
-        XCTAssertEqual(RadioPresentation.capsuleLabel([serial]), "TNC: /dev/cu.usbserial-1420")
+            name: "", status: .connected, host: "", port: nil, endpoint: "/dev/cu.usbserial-1420")
+        XCTAssertEqual(RadioPresentation.capsuleLabel([serial]), "/dev/cu.usbserial-1420")
     }
 
     /// A Bluetooth TNC shows its device name. The toolbar once read the
     /// profile's host for every transport and showed "TNC: localhost".
     func testABluetoothRadioShowsItsDeviceName() {
         let ble = RadioStatusSummary.fixture(
-            status: .connected, host: "", port: nil, endpoint: "TNC4 Mobilinkd")
-        XCTAssertEqual(RadioPresentation.capsuleLabel([ble]), "TNC: TNC4 Mobilinkd")
+            name: "TNC4 Mobilinkd", status: .connected, host: "", port: nil, endpoint: "TNC4 Mobilinkd")
+        XCTAssertEqual(RadioPresentation.capsuleLabel([ble]), "TNC4 Mobilinkd")
         XCTAssertEqual(TNCStatusStrip.Presentation.spoken([ble]), "Connected to the radio at TNC4 Mobilinkd")
     }
 

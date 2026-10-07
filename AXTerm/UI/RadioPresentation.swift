@@ -66,8 +66,13 @@ nonisolated enum RadioPresentation {
             let radio = radios.first
             switch radio?.status ?? .disconnected {
             case .connected:
+                // The radio's short name ("TNC4 Mobilinkd", "IC-705",
+                // "Direwolf"). "TNC: " and the endpoint made the longest
+                // label in the toolbar ("TNC: IC-705 over Icom LAN on this
+                // Mac (localhost:50100)"); the endpoint is in the menu.
+                if let name = radio?.name, !name.isEmpty { return name }
                 let shown = (radio?.host.isEmpty == false) ? radio!.host : (radio?.endpoint ?? "")
-                return "TNC: \(shown)"
+                return shown
             case .connecting: return "TNC Connecting\u{2026}"
             case .disconnected: return "TNC Disconnected"
             case .failed: return "TNC Failed"

@@ -19,22 +19,20 @@ struct AdaptiveToolbarControl: View {
         Button {
             isPopoverPresented.toggle()
         } label: {
+            // Bars and the two figures that change: the window and the
+            // frame size. N2 and the scope are in the tooltip and popover;
+            // on the face they made this the busiest pill in the toolbar
+            // (operator, 2026-10-07).
             HStack(spacing: 6) {
-                Text("Adaptive")
-                    .font(.system(size: 11, weight: .semibold))
-
                 if let effective = store.effectiveAdaptive {
                     LinkQualityIcon(lossRate: effective.lossRate)
-                    Text("· K\(effective.displayK) P\(effective.displayP) N2 \(effective.n2)")
-                        .font(.system(size: 11))
+                    Text("K\(effective.displayK) \u{b7} P\(effective.displayP)")
+                        .font(.system(size: 11, weight: .medium))
                         .monospacedDigit()
-                    if let destination = effective.destination, !destination.isEmpty {
-                        Text("· Session")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
                 } else {
-                    Text("· Waiting")
+                    Text("Adaptive")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("Waiting")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -50,7 +48,22 @@ struct AdaptiveToolbarControl: View {
         .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
             AdaptivePopoverContent(store: store, linkViz: linkViz, onOpenAnalytics: onOpenAnalytics)
         }
-        .help(store.effectiveAdaptive?.live?.explanation ?? "Adaptive transmission status")
+        .help(helpText)
+        .accessibilityLabel(store.effectiveAdaptive.map {
+            "Adaptive transmission: window \($0.displayK), frame size \($0.displayP)"
+        } ?? "Adaptive transmission: waiting")
+    }
+}
+
+extension AdaptiveToolbarControl {
+    /// What the face no longer spells out: retries and scope, then why.
+    private var helpText: String {
+        guard let effective = store.effectiveAdaptive else { return "Adaptive transmission: waiting for a link" }
+        let scope = (effective.destination?.isEmpty == false) ? "this session" : "the channel"
+        var lines = ["Adaptive transmission for \(scope): window K \(effective.displayK), "
+                     + "frame size P \(effective.displayP), retries N2 \(effective.n2)"]
+        if let why = effective.live?.explanation { lines.append(why) }
+        return lines.joined(separator: "\n")
     }
 }
 

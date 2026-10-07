@@ -149,6 +149,9 @@ nonisolated struct MobilinkdDeviceState: Equatable, Sendable {
     var inputLevel: MobilinkdInputLevel?
     var inputLevelAt: Date?
     var lastSavedAt: Date?
+    /// When the battery was last read, for the toolbar's tooltip and the
+    /// 30-minute refresh (TNC4BatteryRefresh).
+    var batteryReadAt: Date?
 
     /// The TNC4 can store its settings in flash (CAP_EEPROM_SAVE).
     var canSave: Bool { (capabilities ?? 0) & 0x0002 != 0 }
@@ -157,7 +160,7 @@ nonisolated struct MobilinkdDeviceState: Equatable, Sendable {
         switch reply {
         case .apiVersion(let x): apiVersion = x
         case .capabilities(let x): capabilities = x
-        case .batteryMillivolts(let x): batteryMillivolts = x
+        case .batteryMillivolts(let x): batteryMillivolts = x; batteryReadAt = now
         case .firmwareVersion(let x): firmwareVersion = x
         case .hardwareVersion(let x): hardwareVersion = x
         case .serialNumber(let x): serialNumber = x

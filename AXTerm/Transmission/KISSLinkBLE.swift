@@ -1386,6 +1386,7 @@ extension KISSLinkBLE: MobilinkdControlling {
     var mobilinkdActivity: MobilinkdActivity { mobilinkd.activity }
 
     func refreshMobilinkdStatus() { bleQueue.async { [weak self] in self?.mobilinkd.refreshStatus() } }
+    func refreshMobilinkdBattery() { bleQueue.async { [weak self] in self?.mobilinkd.refreshBattery() } }
     func startMeasuringInput() { bleQueue.async { [weak self] in self?.mobilinkd.startMeasuring() } }
     func stopMeasuringInput() { bleQueue.async { [weak self] in self?.mobilinkd.stopMeasuring() } }
     func startTestTone(_ tone: MobilinkdTestTone, for seconds: TimeInterval) {

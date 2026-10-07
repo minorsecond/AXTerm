@@ -22,6 +22,7 @@ final class ReceiveLevelMonitorTests: XCTestCase {
         var cancels = 0
 
         func refreshMobilinkdStatus() {}
+        func refreshMobilinkdBattery() {}
         func startMeasuringInput() {}
         func stopMeasuringInput() {}
         func startTestTone(_ tone: MobilinkdTestTone, for seconds: TimeInterval) {}

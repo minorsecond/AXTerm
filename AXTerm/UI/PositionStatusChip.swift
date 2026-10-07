@@ -47,11 +47,16 @@ struct PositionStatusChip: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(problem == nil ? AnyShapeStyle(.secondary)
                                                     : AnyShapeStyle(Color.orange))
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(problem == nil ? AnyShapeStyle(.secondary)
-                                                    : AnyShapeStyle(.primary))
+                // A problem is the orange icon alone, its words in the
+                // tooltip: "No position" sat at full width for as long as a
+                // station had none (operator, 2026-10-07). The quiet normal
+                // case keeps its short text, so the source stays in view.
+                if problem == nil {
+                    Text(title)
+                        .font(.system(size: 11, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
             }
             .lineLimit(1)
             .fixedSize()

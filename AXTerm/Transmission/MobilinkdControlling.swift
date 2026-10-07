@@ -54,6 +54,10 @@ protocol MobilinkdControlling: AnyObject {
     /// (see MobilinkdSession.statusRequests for why not GET_ALL_VALUES).
     func refreshMobilinkdStatus()
 
+    /// Ask for the battery alone, then restart the demodulator: the one
+    /// reading that needs the audio task (see MobilinkdSession.statusRequests).
+    func refreshMobilinkdBattery()
+
     /// Stream input levels until `stopMeasuringInput`, or two minutes at most.
     func startMeasuringInput()
     func stopMeasuringInput()

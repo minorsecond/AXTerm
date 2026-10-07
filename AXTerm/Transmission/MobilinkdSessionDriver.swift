@@ -263,6 +263,12 @@ nonisolated final class MobilinkdSessionDriver: @unchecked Sendable {
         hooks.writeSequence(MobilinkdSession.statusRequests) {}
     }
 
+    /// The battery alone, then RESET: what `statusRequests` ends with.
+    func refreshBattery() {
+        guard isMobilinkd, activity == .idle, phase == .idle else { return }
+        hooks.write(Data(MobilinkdTNC.pollBatteryLevelAndResume()))
+    }
+
     func startMeasuring() {
         guard isMobilinkd, activity == .idle else { return }
         beginActivity(.measuring, for: MobilinkdTNC.maxMeasuringSeconds) { [weak self] in self?.stopMeasuring() }

@@ -11,9 +11,12 @@ struct ActiveTransfersChip: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: 5) {
+                // A plain arrow, secondary: the progress bar is the
+                // accent, and a circled glyph in accent read as an info
+                // badge (operator, 2026-10-07).
                 Image(systemName: symbol)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
                 if let fraction = summary.fraction {
                     ProgressView(value: fraction)
                         .progressViewStyle(.linear)
@@ -37,9 +40,9 @@ struct ActiveTransfersChip: View {
 
     private var symbol: String {
         switch summary.direction {
-        case .outbound: return "arrow.up.circle"
-        case .inbound: return "arrow.down.circle"
-        case nil: return "arrow.up.arrow.down.circle"
+        case .outbound: return "arrow.up"
+        case .inbound: return "arrow.down"
+        case nil: return "arrow.up.arrow.down"
         }
     }
 }
