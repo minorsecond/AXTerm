@@ -319,7 +319,8 @@ nonisolated final class AX25Session: @unchecked Sendable {
             initialSRT: initialSRT,
             resumingT1V: config.learnedPathRto,
             adaptiveTimeout: config.adaptiveTimeout,
-            t2AckDelay: config.t2AckDelay ?? 2.0
+            t2AckDelay: config.t2AckDelay ?? AX25SessionTimers.defaultT2(maxFrameBytes: config.paclenCeiling),
+            maxFrameBytes: config.paclenCeiling
         )
         self.statistics = AX25SessionStatistics()
         self.lastActivityAt = Date()
@@ -2033,7 +2034,8 @@ final class AX25SessionManager: ObservableObject {
                 peerKeyUpSeconds: updated.peerKeyUpSeconds),
             resumingT1V: nil,
             adaptiveTimeout: updated.adaptiveTimeout,
-            t2AckDelay: updated.t2AckDelay ?? 2.0)
+            t2AckDelay: updated.t2AckDelay ?? AX25SessionTimers.defaultT2(maxFrameBytes: updated.paclenCeiling),
+            maxFrameBytes: updated.paclenCeiling)
         debugTrace("Starting T1 worked out again with the measured key-up", [
             "peer": session.remoteAddress.display,
             "keyUp": String(format: "%.2fs", keyUp.ours),

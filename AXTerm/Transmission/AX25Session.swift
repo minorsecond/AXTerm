@@ -456,8 +456,14 @@ nonisolated struct AX25SessionTimers: Sendable {
     ///   the last session's Select T1 left off. Until 2026-10-05 it was
     ///   taken as SRT, so T1V came out near double it and climbed with each
     ///   reconnect (smoke run issue 50).
+    /// - Parameter maxFrameBytes: the largest information field the peer
+    ///   may send us (our N1). T2 restarts on each frame of a burst, so the
+    ///   cap below never takes it under one such frame's airtime and a
+    ///   tenth. Without it, a link resuming a learned T1V near 5 s got T2
+    ///   ≈ 1.67 s, under a 256-byte frame's 1.83 s, and the phone acked each
+    ///   frame of A (705)'s bursts separately (smoke run 2026-10-03-1).
     init(initialSRT: Double = 3.0, resumingT1V: Double? = nil,
-         adaptiveTimeout: Bool = true, t2AckDelay: Double = 2.0) {
+         adaptiveTimeout: Bool = true, t2AckDelay: Double = 2.0, maxFrameBytes: Int? = nil) {
         let defaultSRT = initialSRT.isFinite && initialSRT > 0 ? initialSRT : 3.0
         if let learned = resumingT1V, learned.isFinite, learned > 0 {
             self.initialSRT = learned / 2.0
@@ -469,7 +475,20 @@ nonisolated struct AX25SessionTimers: Sendable {
         self.srt = self.initialSRT
         self.t1v = self.initialT1V
         self.adaptiveTimeout = adaptiveTimeout
-        self.t2AckDelay = max(0.1, min(t2AckDelay, self.initialSRT * 2.0 / 3.0))
+        let frameFloor = maxFrameBytes.map(Self.frameGap(maxFrameBytes:)) ?? 0
+        self.t2AckDelay = max(0.1, min(t2AckDelay, max(self.initialSRT * 2.0 / 3.0, frameFloor)))
+    }
+
+    /// One frame of `maxFrameBytes` information on the air at 1200 bit/s,
+    /// with address, control, PID and FCS, and a tenth on top.
+    static func frameGap(maxFrameBytes: Int) -> Double {
+        Double(max(0, maxFrameBytes) + 18) * 8.0 / TxAdaptiveSettings.airtimeBitsPerSecond * 1.1
+    }
+
+    /// T2 when none is configured: 2 s, or a full frame's gap when that is
+    /// longer.
+    static func defaultT2(maxFrameBytes: Int) -> Double {
+        max(2.0, frameGap(maxFrameBytes: maxFrameBytes))
     }
 
     /// The SDL's Select T1 subroutine.

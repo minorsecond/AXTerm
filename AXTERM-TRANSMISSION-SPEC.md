@@ -1009,7 +1009,14 @@ inbound loss and a go-back-N resend. Rules:
 - **T2 must sit inside every plausible peer T1.** Production default 2.0 s:
   longer than one max-size frame's airtime at 1200 baud (~1.9 s, so
   back-to-back frames batch), under the 3.0 s T1 default a peer starts
-  from. Timers clamp T2 to ⅔ of the link's initial SRT (§7.3).
+  from. Timers clamp T2 to ⅔ of the link's initial SRT (§7.3), but never
+  below one frame of our N1 on the air plus a tenth
+  (`AX25SessionTimers.frameGap`), and with no T2 configured the default is
+  that gap when it is longer than 2 s. A clamp under one frame let T2 run
+  out between the frames of a burst: a link resuming a learned T1V near
+  5 s got T2 ≈ 1.67 s against 256-byte frames of 1.83 s, and the phone
+  acked every frame of A (705)'s bursts separately (smoke run 2026-10-03-1,
+  test 13.3). A T2 set explicitly is kept as set.
 - In practice T2 rarely fires: RMS gateways end every burst with a P=1 frame
   (field capture 2026-08-24: 208 inbound I-frames, every burst
   poll-terminated), and the mandatory F=1 response carries the ack.
