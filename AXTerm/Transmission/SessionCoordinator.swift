@@ -2719,7 +2719,8 @@ final class SessionCoordinator: ObservableObject {
                 self?.appSettings?.ax25T3IdleSeconds ?? AppSettingsStore.defaultAX25T3IdleSeconds)
         }
         sessionManager.refusesInboundLinks = { [weak self] radio in
-            !(self?.appSettings?.radio(radio)?.runsPacketServices ?? true)
+            guard let self else { return false }
+            return self.isOffScreen || !(self.appSettings?.radio(radio)?.runsPacketServices ?? true)
         }
         sessionManager.keyUpSeconds = { [weak self] radio in
             guard let txDelay = self?.appSettings?.radio(radio).map({ Double($0.txDelayMs) / 1000.0 })
@@ -3393,6 +3394,13 @@ final class SessionCoordinator: ObservableObject {
         // The radios' own addresses are resolved against the station callsign.
         updateRadioAddresses()
     }
+
+    /// Whether the app is off screen (iOS, in the background). A call then
+    /// is refused with DM: the bluetooth-central background mode lets iOS
+    /// wake the app for frames after its goodbye, and a link answered then
+    /// would die when it is suspended again (smoke run 2026-10-03-1, issue
+    /// 115).
+    var isOffScreen = false
 
     /// Subscribe to incoming packets from PacketEngine.
     /// Safe to call multiple times — replaces any existing subscription.

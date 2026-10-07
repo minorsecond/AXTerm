@@ -131,9 +131,17 @@ these differences, all covered in `Docs/PacketFileTransfer.md`:
 
 `KISSLinkNetwork` (NWConnection) works as-is against Direwolf or LinBPQ over
 WiFi. `KISSLinkBLE` builds for iOS too, and the target carries the Bluetooth
-usage string it needs (added 2026-09-29), but it hasn't been tried on a device.
-It runs in the foreground only; there is no background Bluetooth mode. See
+usage string it needs (added 2026-09-29). It has run on an iPhone 14 and an
+iPad Air against a TNC4 through the 2026-10-03 smoke run (13.3, 13.4). See
 `Docs/MobilinkdTNC4.md`.
+
+The target declares one background mode, `bluetooth-central`. Without it
+iOS holds Bluetooth events for a backgrounded app until it returns, so the
+DISC sent on leaving the screen went out but the peer's UA was never heard
+(smoke run issue 115). Links still do not run off screen: after a short
+grace the goodbye closes them, and while the app is in the background a
+call is refused with DM, since iOS can wake the app for a frame and a link
+answered then would die when it is suspended again.
 
 ---
 

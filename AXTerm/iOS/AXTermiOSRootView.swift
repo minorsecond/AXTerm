@@ -455,6 +455,7 @@ struct AXTermiOSRootView: View {
             // notice, so this is the moment.
             switch phase {
             case .background:
+                sessionCoordinator.isOffScreen = true
                 goodbye.enteredBackground(coordinator: sessionCoordinator)
                 bbsService.shutdown(reason: "this device is going to sleep")
                 // Detached as well, so a call that somehow arrives while the
@@ -462,6 +463,7 @@ struct AXTermiOSRootView: View {
                 // socket is gone. Re-attached on return, below.
                 bbsService.detach()
             case .active:
+                sessionCoordinator.isOffScreen = false
                 goodbye.becameActive()
                 bbsService.attach()
                 syncServiceAddresses()
