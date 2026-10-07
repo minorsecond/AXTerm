@@ -2179,7 +2179,10 @@ struct StationsMapView: View {
         VStack(spacing: 0) {
             mapStack(observer: observer)
                 .overlay(alignment: .bottom) {
-                    if showsEmptyNote { emptyMapNote }
+                    // Not when the banner above already says why nothing is
+                    // placed and offers the lookup: the two said the same
+                    // thing, one on top of the other (issue 107).
+                    if showsEmptyNote, entries.isEmpty || !showsUnplacedBanner { emptyMapNote }
                 }
             // Below the map, not over it: the map's own bottom-corner
             // overlays (the legend, the selection card) keep their space.
