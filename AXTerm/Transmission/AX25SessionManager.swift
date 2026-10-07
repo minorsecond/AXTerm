@@ -1885,7 +1885,7 @@ final class AX25SessionManager: ObservableObject {
             parameters: localXIDParameters(config: session.stateMachine.config),
             isCommand: true,
             pf: true
-        )
+        ).onRadio(session.radio)
         debugTrace("TX XID command", ["peer": peerKey])
 
         let sessionKey = session.key
@@ -4206,6 +4206,11 @@ final class AX25SessionManager: ObservableObject {
         // Increment V(S) in state machine
         session.stateMachine.sequenceState.incrementVS()
 
+        // On the session's radio. Built without one, every I-frame (and every
+        // retransmission of it, from the send buffer) carried the default,
+        // the primary radio: on a station whose link ran on its second radio
+        // they all went to the primary's transport, which was down, until N2
+        // ended the link (smoke run 2026-10-03-1, test 10.4, issue 100).
         return AX25FrameBuilder.buildIFrame(
             from: session.localAddress,
             to: session.remoteAddress,
@@ -4217,7 +4222,7 @@ final class AX25SessionManager: ObservableObject {
             pf: pf,
             sessionId: session.id,
             displayInfo: displayInfo
-        )
+        ).onRadio(session.radio)
     }
 
     private func retransmitOutstandingFrames(
