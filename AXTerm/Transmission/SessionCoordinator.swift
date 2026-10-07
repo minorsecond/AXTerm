@@ -454,8 +454,9 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// AXDP transfers whose last chunk the session holds queued whole, none
-    /// of it numbered or on the air. A cancel drops it so the NACK is next.
-    var axdpChunkQueuedWhole: Set<UUID> = []
+    /// of it numbered or on the air, with that chunk's index. A cancel drops
+    /// it so the NACK is next; a pause drops it and owes it again.
+    var axdpChunkQueuedWhole: [UUID: Int] = [:]
 
     /// What a capability check put on the air, so it can be sent again.
     private enum CapabilityProbeKind {
@@ -4963,6 +4964,11 @@ final class SessionCoordinator: ObservableObject {
         if let transferId = transferSessionIds.first(where: { $0.value == message.sessionId })?.key,
            let transferIndex = transfers.firstIndex(where: { $0.id == transferId }),
            transfers[transferIndex].direction == .outbound {
+            // Nothing more of it goes out: a chunk still queued whole is
+            // dropped (issue 105). One already started finishes, as on a
+            // local cancel. Before the status changes, which lets go of the
+            // transfer's route.
+            dropChunkQueuedWhole(for: transferId)
             transfers[transferIndex].status = .cancelled
             TxLog.outbound(.axdp, "Transfer canceled by remote", [
                 "transfer": String(transferId.uuidString.prefix(8)),
@@ -5738,9 +5744,9 @@ final class SessionCoordinator: ObservableObject {
         }
 
         if frameSent {
-            axdpChunkQueuedWhole.remove(transferId)
+            axdpChunkQueuedWhole.removeValue(forKey: transferId)
         } else {
-            axdpChunkQueuedWhole.insert(transferId)
+            axdpChunkQueuedWhole[transferId] = nextChunk
         }
 
         // Mark chunk as sent and update progress - use explicit reassignment for SwiftUI

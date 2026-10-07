@@ -31,10 +31,31 @@ extension SessionCoordinator {
 
     /// Stops sending after the chunk or block already handed to the link.
     /// Only outbound transfers pause: a receiver cannot make the sender stop.
+    ///
+    /// A chunk the session still holds queued whole is dropped and owed
+    /// again, so a pause goes quiet once the chunk already started is out.
+    /// It used to drain whatever was queued: through a 30 s pause A (705)
+    /// kept sending a frame every 3 s (smoke run 2026-10-03-1, issue 105).
     func pauseTransfer(_ id: UUID) {
         guard let index = transfers.firstIndex(where: { $0.id == id }), transfers[index].canPause else { return }
         yappTransfers[id]?.pause()
         transfers[index].status = .paused
+        if let chunk = dropChunkQueuedWhole(for: id) {
+            transfers[index].markChunkNeedsRetry(chunk)
+        }
+    }
+
+    /// Drops a transfer's chunk that the session holds queued whole, none
+    /// of it numbered or on the air, and returns its index. A chunk already
+    /// started is left to finish, or the receiver would read what follows
+    /// as the rest of it.
+    @discardableResult
+    func dropChunkQueuedWhole(for id: UUID) -> Int? {
+        guard let chunk = axdpChunkQueuedWhole.removeValue(forKey: id),
+              let route = transferRoutes[id],
+              let session = sessionManager.connectedSession(withPeer: route.destination) else { return nil }
+        _ = sessionManager.discardQueuedData(for: session.key)
+        return chunk
     }
 
     /// Picks a paused transfer up where it stopped.
@@ -87,11 +108,7 @@ extension SessionCoordinator {
         // next; on 2026-10-05 it waited behind twelve 64-byte frames, 37 s
         // (smoke run issue 52). Part of a chunk already started is still
         // sent, or the receiver would read the NACK as the rest of it.
-        if axdpChunkQueuedWhole.remove(id) != nil,
-           let route = transferRoutes[id],
-           let session = sessionManager.connectedSession(withPeer: route.destination) {
-            _ = sessionManager.discardQueuedData(for: session.key)
-        }
+        dropChunkQueuedWhole(for: id)
         sendAXDPCancel(for: id)
         setStatus(.cancelled, for: id)
     }

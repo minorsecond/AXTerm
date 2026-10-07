@@ -86,4 +86,49 @@ final class AXDPCancelQueueTests: XCTestCase {
         XCTAssertEqual(session.pendingDataQueue.count, rest + 1,
                        "the rest of a chunk already started is still sent, then the NACK")
     }
+
+    // Smoke run 2026-10-03-1, test 13.3, issue 105: after the phone canceled
+    // at 12:40:03, A (705) kept sending queued 64-byte frames until 12:40:33,
+    // and through a 30 s pause it kept sending one every 3 s.
+
+    func testTheReceiverCancelingDropsAChunkThatIsStillQueuedWhole() throws {
+        let (station, session) = try station()
+        defer { station.tearDown() }
+        let id = transferWithAChunkQueued(on: station, session: session)
+        XCTAssertGreaterThan(session.pendingDataQueue.count, 1)
+
+        let nack = AXDP.Message(type: .nack, sessionId: 7, messageId: 1)
+        station.coordinator.handleNackMessage(nack, from: peer)
+
+        XCTAssertEqual(station.coordinator.transfers.first { $0.id == id }?.status, .cancelled)
+        XCTAssertTrue(session.pendingDataQueue.isEmpty, "nothing more goes out for a canceled transfer")
+        XCTAssertEqual(session.sendBuffer.count, 1, "the numbered frame is still owed to the peer")
+    }
+
+    func testAPauseDropsAChunkStillQueuedWholeAndResumeSendsItAgain() throws {
+        let (station, session) = try station()
+        defer { station.tearDown() }
+        let c = station.coordinator
+        let id = transferWithAChunkQueued(on: station, session: session)
+        XCTAssertGreaterThan(session.pendingDataQueue.count, 1)
+
+        c.pauseTransfer(id)
+
+        XCTAssertTrue(session.pendingDataQueue.isEmpty, "a pause stops what has not gone on the air")
+        let paused = try XCTUnwrap(c.transfers.first { $0.id == id })
+        XCTAssertEqual(paused.status, .paused)
+        XCTAssertEqual(paused.nextChunkToSend, 0, "the dropped chunk is owed again")
+
+        c.resumeTransfer(id)
+
+        // The chunk loop turn scheduled before the pause carries on now the
+        // status is Sending again; it runs on the next tick.
+        let deadline = Date().addingTimeInterval(2)
+        while session.pendingDataQueue.count <= 1, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertGreaterThan(session.pendingDataQueue.count, 1, "resume hands the same chunk over again")
+        // Queued as 64-byte segments; the first carries the chunk's label.
+        XCTAssertEqual(session.pendingDataQueue.first?.displayInfo, "AXDP CHUNK 1/4")
+    }
 }

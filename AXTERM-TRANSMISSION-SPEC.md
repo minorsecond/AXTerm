@@ -1392,9 +1392,19 @@ SessionId and MessageId 1.
   a NACK for an inbound session, which is harmless; a newer one marks the
   transfer canceled and drops its partial state.
 - Completion NACKs (MessageId 0xFFFFFFFF) are never read as a cancel.
+- Nothing more of a canceled or paused transfer goes on the air than has to.
+  The sender hands the link one chunk at a time; a chunk the session still
+  holds queued whole, none of it numbered or sent, is dropped when the
+  sender cancels, when the receiver's cancel arrives, and when the sender
+  pauses (resume sends it again). A chunk already started is finished, or
+  the receiver would read what follows as the rest of it. Before this, A
+  (705) went on sending queued 64-byte frames for 30 s after the phone
+  canceled, and through a 30 s pause (smoke run 2026-10-03-1, issue 105).
 
 Checklist:
 - [x] Cancel reaches the other station and both ends finish canceled
+- [x] Cancel from either side, and pause, drop a chunk still queued whole
+  - Tested in `AXDPCancelQueueTests`.
   - Implementation notes: `SessionCoordinator.cancelTransfer` /
     `sendAXDPCancel` (SessionCoordinator+FileTransfers.swift);
     `handleNackMessage` for the receiving side of it. Tested in
