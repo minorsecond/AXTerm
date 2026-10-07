@@ -316,7 +316,6 @@ struct ConsoleView: View {
     var repinSignal: Int = 0
 
     @State private var autoScroll = true
-    @State private var isUserNearBottom = true
     @State private var scrollViewHeight: CGFloat = 0
     @State private var showUndoClear = false
     @State private var undoClearTask: Task<Void, Never>?
@@ -328,11 +327,9 @@ struct ConsoleView: View {
     /// so every keep-alive line pulled them to the bottom.
     @State private var isFollowing = true
     @State private var userIsScrolling = false
-    /// Debounced write of `isUserNearBottom` from the bottom sentinel, and the
-    /// deferred re-pin after a rebuild. Both are `QuietWindowTimer` rather than
+    /// The deferred re-pin after a rebuild. A `QuietWindowTimer` rather than
     /// a canceled-and-replaced `DispatchWorkItem`: see that type for the
     /// frozen build that distinction came out of.
-    @State private var nearBottomTimer = QuietWindowTimer(window: 0.12)
     @State private var repinTimer = QuietWindowTimer(window: 0.2)
 
     // Message type filters — persisted across view switches and app restarts
@@ -415,21 +412,6 @@ struct ConsoleView: View {
         // above the viewport with blank space below. Re-pin AFTER the rebuild
         // settles. See `scheduleRepin`.
         scheduleRepin()
-    }
-
-    /// Coalesce the bottom sentinel's near-bottom signal: a burst of
-    /// appear/disappear flips (rapid appends plus the scroll-to-bottom below)
-    /// collapses to one write once the scrolling settles, never a per-flip write
-    /// storm inside the update pass. The write runs on a later main-queue turn,
-    /// so it also can't recurse synchronously through `propagate_dirty`.
-    ///
-    /// The sentinel pokes this from inside the SwiftUI update pass, which is the
-    /// worst case for a debounce that allocates per poke — see
-    /// `QuietWindowTimer`.
-    private func scheduleNearBottom(_ value: Bool) {
-        nearBottomTimer.poke {
-            if isUserNearBottom != value { isUserNearBottom = value }
-        }
     }
 
     /// Re-pin the transcript to the bottom AFTER the visible line set settles.
@@ -572,27 +554,6 @@ struct ConsoleView: View {
                             Color.clear
                                 .frame(height: 10)
                                 .id("bottom")
-                                // DEBOUNCED, never a synchronous write. These
-                                // appearance actions fire from inside SwiftUI's
-                                // update pass; a burst of console appends with the
-                                // scroll-to-bottom below makes this sentinel flip
-                                // appeared/disappeared many times per pass, and
-                                // writing `isUserNearBottom` on each flip re-dirties
-                                // the attribute graph inside the same pass —
-                                // `propagate_dirty` recursing into a 100% main-thread
-                                // stack (sampled twice, 2026-08-29/30, leaf here).
-                                //
-                                // The write is coalesced through `scheduleNearBottom`,
-                                // which cancels-and-reschedules: during a flip storm
-                                // every scheduled write is canceled by the next flip,
-                                // so ZERO writes land until the scrolling settles, when
-                                // one final write applies the real value. (A naive
-                                // deferred write — schedule on every flip without
-                                // canceling — is the opposite trap: it re-fires every
-                                // turn into a 100% async loop. Cancel-and-reschedule is
-                                // the difference.)
-                                .onAppear { scheduleNearBottom(true) }
-                                .onDisappear { scheduleNearBottom(false) }
                         }
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -669,23 +630,24 @@ struct ConsoleView: View {
             // Always in the tree, shown/hidden by opacity + scale — never by
             // `if`, and animated by a modifier scoped to the button alone.
             //
-            // Why: this button's visibility is driven by `isUserNearBottom`,
-            // which the bottom sentinel flips from its onAppear/onDisappear. If
-            // toggling the button reflowed the ScrollView — or if an animation
-            // on the whole ZStack animated the ScrollView on each flip — the
-            // reflow moved the sentinel across its own visibility boundary,
-            // flipped the flag again, and re-armed the animation: a self-
-            // sustaining 100% main-thread layout loop that beach-balled the app
-            // (sampled 2026-08-29; kicked off by any layout nudge, e.g. opening
-            // the routing popover). Kept as a pure overlay and animating only
-            // opacity/scale (render transforms, not layout), the flag can no
-            // longer feed back into layout, so it cannot oscillate.
+            // Why: it used to be driven by a sentinel below the last line,
+            // flipped from its onAppear/onDisappear. When toggling the button
+            // reflowed the ScrollView, the reflow moved the sentinel across its
+            // own visibility boundary and re-armed the animation: a 100%
+            // main-thread layout loop that beach-balled the app (sampled
+            // 2026-08-29). Kept as a pure overlay animating only opacity and
+            // scale, it cannot feed back into layout.
+            //
+            // It now follows `isFollowing`, which the scroll geometry decides
+            // (`PacketListFollow`). The sentinel lives in a lazy stack and is
+            // not created while just off screen, and the re-pin lands on the
+            // last line rather than the sentinel, so the arrow stayed up at the
+            // newest line (smoke run 2026-10-03-1, test 13.3).
             VStack {
                 Spacer()
                 HStack {
                     Spacer()
                     Button {
-                        isUserNearBottom = true // Optimistic update
                         isFollowing = true
                         autoScroll = true
                         scrollToBottomToken += 1
@@ -701,10 +663,10 @@ struct ConsoleView: View {
                     .padding([.bottom, .trailing], 20)
                 }
             }
-            .opacity(isUserNearBottom ? 0 : 1)
-            .scaleEffect(isUserNearBottom ? 0.8 : 1, anchor: .bottomTrailing)
-            .allowsHitTesting(!isUserNearBottom)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isUserNearBottom)
+            .opacity(isFollowing ? 0 : 1)
+            .scaleEffect(isFollowing ? 0.8 : 1, anchor: .bottomTrailing)
+            .allowsHitTesting(!isFollowing)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFollowing)
         }
         .animation(.easeInOut(duration: 0.2), value: showUndoClear)
         // A callsign tapped inside a message opens the station, not a browser.
