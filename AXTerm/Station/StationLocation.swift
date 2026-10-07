@@ -14,6 +14,11 @@ nonisolated struct StationLocation: Equatable, Sendable {
     var gridSquare: String
     var source: Source
     var timestamp: Date
+    /// Direction of travel, degrees true, from a tracked fix; nil when the
+    /// device does not know or is not moving.
+    var course: Double? = nil
+    /// Meters per second, from a tracked fix.
+    var speed: Double? = nil
 }
 
 /// Position text formats matching the Winlink insertion-tag conventions

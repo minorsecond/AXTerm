@@ -1073,6 +1073,8 @@ struct AXTermiOSRootView: View {
                 gatewayGrids: gatewayGrids,
                 observerGrid: context.settings.gridSquare,
                 observerPosition: myPosition,
+                observerCourse: useDeviceLocation ? context.locationService.lastLocation?.course : nil,
+                observerSpeed: useDeviceLocation ? context.locationService.lastLocation?.speed : nil,
                 myCallsign: settings.primaryCallsign,
                 ownCallsigns: ownAddresses,
                 ownTransmittedAddresses: ownTransmittedAddresses,

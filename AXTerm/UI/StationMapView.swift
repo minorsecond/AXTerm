@@ -71,6 +71,13 @@ struct StationMapView: View {
     /// entry. Empty draws nothing: no evidence, no ring.
     var coverageRings: [CoverageEstimate.Ring] = []
     @Binding var selection: String?
+    /// Following the station (`MapFollow`): the "show me" button's state.
+    var followMode: Binding<MapFollow.Mode> = .constant(.free)
+    /// Where the station is now, unrounded, and which way and how fast it
+    /// moves, for the follow camera. Nil follows `observer`.
+    var followPoint: GreatCircle.Point? = nil
+    var followCourse: Double? = nil
+    var followSpeed: Double? = nil
 
     private var hasNodeSites: Bool { scope.sites.contains(where: \.isNode) }
 
@@ -79,6 +86,61 @@ struct StationMapView: View {
     }
 
     @State private var camera: MapCameraPosition = .automatic
+    /// The heading the follow camera last used, kept while the station
+    /// stands still and its course means nothing.
+    @State private var lastFollowHeading: Double = 0
+
+    private var followCamera: MapFollow.Camera? {
+        guard showsObserver else { return nil }
+        return MapFollow.camera(mode: followMode.wrappedValue, at: followPoint ?? observer,
+                                courseDegrees: followCourse, speedMetersPerSecond: followSpeed,
+                                lastHeading: lastFollowHeading)
+    }
+
+    private func applyFollow(_ follow: MapFollow.Camera?) {
+        guard let follow else { return }
+        lastFollowHeading = follow.heading
+        withAnimation(.easeInOut(duration: 0.8)) {
+            camera = .camera(MapCamera(centerCoordinate: follow.center, distance: follow.distanceMeters,
+                                       heading: follow.heading, pitch: follow.pitch))
+        }
+    }
+
+    /// The "show me" button: follow, then turn with travel, then let go.
+    @ViewBuilder
+    private var followButton: some View {
+        if showsObserver {
+            let mode = followMode.wrappedValue
+            Button {
+                followMode.wrappedValue = mode.next
+            } label: {
+                Image(systemName: mode == .free ? "location"
+                      : mode == .follow ? "location.fill" : "location.north.line.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 40, height: 40)
+                    .background(.regularMaterial, in: Circle())
+                    .overlay(Circle().stroke(.separator, lineWidth: 0.5))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(mode == .free ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
+            .help(mode == .free ? "Show your station and follow it."
+                  : mode == .follow ? "Turn the map with your direction of travel."
+                  : "Stop following and move the map yourself.")
+            .accessibilityLabel(mode == .free ? "Show My Location"
+                                : mode == .follow ? "Follow With Heading" : "Stop Following")
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
+        }
+    }
+
+    /// The coverage chips and, under them, the "show me" button.
+    private var trailingControls: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            coverageChip
+            followButton
+        }
+    }
 
     var body: some View {
         // The MKMapView path whenever there is anything to draw over the
@@ -127,7 +189,9 @@ struct StationMapView: View {
             selection: $selection,
             region: openingRegion,
             onRegionChanged: { MapStartRegion.save($0) },
-            coverageRings: coverageRings)
+            coverageRings: coverageRings,
+            followCamera: followCamera,
+            onOperatorMoved: { followMode.wrappedValue = .free })
         .modifier(MapTopBleed())
         .overlay(alignment: .bottomLeading) {
             if !legendGivesWayToSelection {
@@ -139,7 +203,7 @@ struct StationMapView: View {
                     .padding(10)
             }
         }
-        .overlay(alignment: .topTrailing) { coverageChip }
+        .overlay(alignment: .topTrailing) { trailingControls }
         .overlay(alignment: .bottomTrailing) {
             Text(store == nil ? "" : tileSource.attribution)
                 .font(.system(size: 9))
@@ -204,7 +268,11 @@ struct StationMapView: View {
         }
         .mapStyle(basemap.mapStyle)
         .mapControls {
-            MapCompass()
+            // In heading mode the map turns itself with the travel; a
+            // compass there would only invite a tap that is undone at once.
+            if followMode.wrappedValue != .heading {
+                MapCompass()
+            }
             MapScaleView()
             // A zoom stepper is a pointer control. On a touch screen the
             // pinch gesture is the zoom, and a stepper would only take room
@@ -228,9 +296,14 @@ struct StationMapView: View {
                     .padding(.bottom, safeAreaBottomInset)
             }
         }
-        .overlay(alignment: .topTrailing) { coverageChip }
+        .overlay(alignment: .topTrailing) { trailingControls }
         .onAppear(perform: frameEverything)
         .onChange(of: scope.sites.count) { _, _ in frameEverything() }
+        .onChange(of: followCamera) { _, follow in applyFollow(follow) }
+        // A pan or pinch of the operator's own lets go of following.
+        .onChange(of: camera.positionedByUser) { _, byUser in
+            if byUser, followMode.wrappedValue != .free { followMode.wrappedValue = .free }
+        }
     }
 
     #if os(iOS)
@@ -339,6 +412,8 @@ struct StationMapView: View {
     /// Frame the observer *and* every station, so nothing sits off the
     /// edge on open.
     private func frameEverything() {
+        // Following the station, the camera is the follow's.
+        guard followMode.wrappedValue == .free else { return }
         let points = framingPoints
         guard let region = MapRegionFit.region(covering: points) else { return }
         camera = .region(MKCoordinateRegion(

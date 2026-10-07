@@ -17,14 +17,13 @@ import XCTest
 final class HandheldTracksPositionTests: XCTestCase {
 
     private final class TrackingGPS: GPSProviding, @unchecked Sendable {
-        var onFix: (@Sendable ((latitude: Double, longitude: Double)) -> Void)?
+        var onFix: (@Sendable (GPSFix) -> Void)?
         var filter: Double?
         var stopped = 0
         func requestOneShotFix(timeout: TimeInterval) async throws -> (latitude: Double, longitude: Double) {
             (39.60, -104.80)
         }
-        func startTracking(distanceFilter: Double,
-                           onFix: @escaping @Sendable ((latitude: Double, longitude: Double)) -> Void) {
+        func startTracking(distanceFilter: Double, onFix: @escaping @Sendable (GPSFix) -> Void) {
             filter = distanceFilter
             self.onFix = onFix
         }
@@ -43,14 +42,16 @@ final class HandheldTracksPositionTests: XCTestCase {
         service.startTracking()
         XCTAssertEqual(gps.filter, 10, "a fix every 10 m moved")
 
-        gps.onFix?((39.61, -104.79))
+        gps.onFix?(GPSFix(latitude: 39.61, longitude: -104.79))
         settle()
         XCTAssertEqual(try XCTUnwrap(service.lastLocation).latitude, 39.61, accuracy: 1e-9)
-        gps.onFix?((39.70, -104.60))
+        gps.onFix?(GPSFix(latitude: 39.70, longitude: -104.60, course: 92, speed: 24))
         settle()
         let moved = try XCTUnwrap(service.lastLocation)
         XCTAssertEqual(moved.latitude, 39.70, accuracy: 1e-9)
         XCTAssertEqual(moved.source, .gps)
+        XCTAssertEqual(moved.course, 92, "the direction of travel, for the map's heading view")
+        XCTAssertEqual(moved.speed, 24)
     }
 
     func testStoppingStopsTheProvider() {

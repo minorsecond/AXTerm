@@ -97,6 +97,11 @@ struct OfflineBasemapMapView {
     /// Measured coverage rings around the observer, one pair per ring.
     /// Empty draws none.
     var coverageRings: [CoverageEstimate.Ring] = []
+    /// Where the map follows the station to (`MapFollow`); nil leaves the
+    /// camera to the operator.
+    var followCamera: MapFollow.Camera?
+    /// The operator moved the map themselves, which lets go of following.
+    var onOperatorMoved: () -> Void = {}
 
     // MARK: - Annotations
 
@@ -880,9 +885,15 @@ struct OfflineBasemapMapView {
         /// Whether the region change under way is the operator's own: a
         /// pan, pinch or scroll, rather than a camera the app or MapKit set.
         private var operatorMoving = false
+        /// The follow camera last applied, so it is set once per change.
+        var lastFollowCamera: MapFollow.Camera?
 
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
             operatorMoving = Self.operatorIsMoving(mapView)
+            if operatorMoving, lastFollowCamera != nil {
+                let letGo = parent.onOperatorMoved
+                DispatchQueue.main.async { letGo() }
+            }
         }
 
         /// A gesture under way on the map, or on the Mac an input event that
@@ -1634,6 +1645,20 @@ struct OfflineBasemapMapView {
             context.coordinator.hasOpened = true
         }
         Self.tuneDragPress(on: mapView, wanted: !draggableSiteIDs.isEmpty)
+        // Following the station: move the camera when where it should be
+        // has changed, and only then, so a pass for arriving traffic does
+        // not restart the animation.
+        if let follow = followCamera {
+            if context.coordinator.lastFollowCamera != follow {
+                context.coordinator.lastFollowCamera = follow
+                mapView.setCamera(MKMapCamera(lookingAtCenter: follow.center,
+                                              fromDistance: follow.distanceMeters,
+                                              pitch: follow.pitch, heading: follow.heading),
+                                  animated: true)
+            }
+        } else {
+            context.coordinator.lastFollowCamera = nil
+        }
         // The throttle exists to absorb packet-rate churn, not to make the
         // operator wait. Flipping a layer switch changed nothing on screen for
         // up to ten seconds and then applied in a visible lurch, which reads

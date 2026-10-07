@@ -37,6 +37,10 @@ struct StationsMapView: View {
     /// square is known. The grid string stays for the label and the cache
     /// key; this is what gets plotted and measured from.
     var observerPosition: StationPosition?
+    /// Which way and how fast this station moves, from a tracked GPS fix,
+    /// for the map's follow camera. Nil when unknown or standing still.
+    var observerCourse: Double? = nil
+    var observerSpeed: Double? = nil
     /// Excluded from the heard list and used to label the center marker.
     let myCallsign: String
     /// Every address this station transmits as — the beacon callsign plus
@@ -377,6 +381,8 @@ struct StationsMapView: View {
     /// path that does not validate. Nil when the beacon can go out.
     var beaconObstacle: (() -> String?)?
     /// Drawing state. Taps become vertices while this is active.
+    /// The map following this station (`MapFollow`).
+    @State private var followMode: MapFollow.Mode = .free
     @State private var drawing = MapDrawingSession()
     /// The station the Ask sheet is open for. A wrapper rather than a bare
     /// string so `sheet(item:)` re-presents when the operator picks another
@@ -2228,7 +2234,11 @@ struct StationsMapView: View {
                                    movingObject = nil
                                },
                                coverageRings: coverageRings,
-                               selection: $selection)
+                               selection: $selection,
+                               followMode: $followMode,
+                               followPoint: observerPosition?.point,
+                               followCourse: observerCourse,
+                               followSpeed: observerSpeed)
             .overlay(alignment: .bottomTrailing) { selectionCard }
             .sheet(item: $pendingObject) { pending in
                 APRSPlaceObjectSheet(

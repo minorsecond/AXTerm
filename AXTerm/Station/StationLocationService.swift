@@ -9,14 +9,22 @@ protocol GPSProviding: Sendable {
     func requestOneShotFix(timeout: TimeInterval) async throws -> (latitude: Double, longitude: Double)
     /// Delivers a fix each time the device has moved `distanceFilter`
     /// meters, until `stopTracking()`.
-    func startTracking(distanceFilter: Double,
-                       onFix: @escaping @Sendable ((latitude: Double, longitude: Double)) -> Void)
+    func startTracking(distanceFilter: Double, onFix: @escaping @Sendable (GPSFix) -> Void)
     func stopTracking()
 }
 
+/// One tracked fix: where, and which way and how fast the device moves.
+nonisolated struct GPSFix: Equatable, Sendable {
+    var latitude: Double
+    var longitude: Double
+    /// Degrees true; nil when CoreLocation reports none.
+    var course: Double? = nil
+    /// Meters per second; nil when CoreLocation reports none.
+    var speed: Double? = nil
+}
+
 extension GPSProviding {
-    func startTracking(distanceFilter: Double,
-                       onFix: @escaping @Sendable ((latitude: Double, longitude: Double)) -> Void) {}
+    func startTracking(distanceFilter: Double, onFix: @escaping @Sendable (GPSFix) -> Void) {}
     func stopTracking() {}
 }
 
@@ -172,7 +180,7 @@ final class StationLocationService: ObservableObject {
 
     private var isTracking = false
 
-    private func noteTrackedFix(_ fix: (latitude: Double, longitude: Double)) {
+    private func noteTrackedFix(_ fix: GPSFix) {
         guard isTracking, deviceLocationEnabled() else { return }
         lastGPSAttempt = now()
         lastGPSError = nil
@@ -181,7 +189,9 @@ final class StationLocationService: ObservableObject {
             longitude: fix.longitude,
             gridSquare: Maidenhead.gridSquare(latitude: fix.latitude, longitude: fix.longitude) ?? "",
             source: .gps,
-            timestamp: now())
+            timestamp: now(),
+            course: fix.course,
+            speed: fix.speed)
     }
 
     /// A position from the last `window` when there is one, else a fresh
@@ -217,8 +227,7 @@ nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocat
     /// Its own manager, so tracking and a one-shot fix never stop each other.
     private var tracker: LocationTracker?
 
-    func startTracking(distanceFilter: Double,
-                       onFix: @escaping @Sendable ((latitude: Double, longitude: Double)) -> Void) {
+    func startTracking(distanceFilter: Double, onFix: @escaping @Sendable (GPSFix) -> Void) {
         DispatchQueue.main.async {
             self.tracker?.stop()
             let tracker = LocationTracker(distanceFilter: distanceFilter, onFix: onFix)
@@ -337,9 +346,9 @@ nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocat
 /// a navigation app uses.
 nonisolated private final class LocationTracker: NSObject, CLLocationManagerDelegate, @unchecked Sendable {
     private let manager = CLLocationManager()
-    private let onFix: @Sendable ((latitude: Double, longitude: Double)) -> Void
+    private let onFix: @Sendable (GPSFix) -> Void
 
-    init(distanceFilter: Double, onFix: @escaping @Sendable ((latitude: Double, longitude: Double)) -> Void) {
+    init(distanceFilter: Double, onFix: @escaping @Sendable (GPSFix) -> Void) {
         self.onFix = onFix
         super.init()
         manager.delegate = self
@@ -357,7 +366,9 @@ nonisolated private final class LocationTracker: NSObject, CLLocationManagerDele
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         // A negative accuracy marks an invalid fix.
         guard let location = locations.last, location.horizontalAccuracy >= 0 else { return }
-        onFix((location.coordinate.latitude, location.coordinate.longitude))
+        onFix(GPSFix(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
+                     course: location.course >= 0 ? location.course : nil,
+                     speed: location.speed >= 0 ? location.speed : nil))
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
