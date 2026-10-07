@@ -623,6 +623,15 @@ struct BulkTransferRow: View {
 
 /// List of all transfers with grouped sections
 struct BulkTransferListView: View {
+    /// One identity for a transfer's whole life. Keyed on its status and
+    /// chunk count, SwiftUI made a new row for every chunk and the row's
+    /// state went with it: details the operator had opened closed each time
+    /// (smoke run 2026-10-03-1, issue 112). The row still redraws from the
+    /// new value, and a running one every second besides.
+    static func rowIdentity(for transfer: BulkTransfer) -> UUID {
+        transfer.id
+    }
+
     let transfers: [BulkTransfer]
     var pendingIncomingTransfers: [IncomingTransferRequest] = []
     var suppressIncomingRequests: Bool = false
@@ -727,8 +736,7 @@ struct BulkTransferListView: View {
                                         onResume: { onResume(transfer.id) },
                                         onCancel: { onCancel(transfer.id) }
                                     )
-                                    // Force re-render when status or progress changes
-                                    .id("\(transfer.id)-\(transfer.status)-\(transfer.completedChunks)")
+                                    .id(Self.rowIdentity(for: transfer))
                                 }
                             } header: {
                                 SectionHeader(title: "Active", count: activeTransfers.count)
@@ -745,8 +753,7 @@ struct BulkTransferListView: View {
                                         onResume: { },
                                         onCancel: { }
                                     )
-                                    // Force re-render when status changes
-                                    .id("\(transfer.id)-\(transfer.status)")
+                                    .id(Self.rowIdentity(for: transfer))
                                 }
                             } header: {
                                 // Finished rather than Completed: canceled, declined and
