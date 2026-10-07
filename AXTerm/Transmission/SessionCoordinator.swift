@@ -3419,8 +3419,20 @@ final class SessionCoordinator: ObservableObject {
         packetSubscription = client.packetPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] packet in
+                Self.rxTrace("delivered to the session layer", packet)
                 self?.handleIncomingPacket(packet)
             }
+    }
+
+    /// Debug builds: where a received frame went in the session layer, so a
+    /// frame the packet log has and the session never acted on can be traced
+    /// to the stage that dropped it (smoke run 2026-10-03-1, issue 104).
+    nonisolated static func rxTrace(_ stage: String, _ packet: Packet) {
+        #if DEBUG
+        print(String(format: "[SESSION RX] %@ | from=%@ ctl=0x%02X id=%@", stage,
+                     packet.from?.display ?? "?", packet.control,
+                     String(packet.id.uuidString.prefix(8))))
+        #endif
     }
 
     /// Whether any AX.25 link is up or coming up.
@@ -3561,6 +3573,7 @@ final class SessionCoordinator: ObservableObject {
     /// this is where it is applied.
     func handleIncomingPacket(_ packet: Packet) {
         guard let from = packet.from, let to = packet.to else {
+            Self.rxTrace("dropped: no addresses", packet)
             return
         }
 
@@ -3588,6 +3601,7 @@ final class SessionCoordinator: ObservableObject {
                 "frameType": decoded.frameClass.rawValue,
                 "uType": decoded.uType?.rawValue ?? "N/A"
             ])
+            Self.rxTrace("dropped: not addressed to us", packet)
             return
         }
 
@@ -3606,6 +3620,7 @@ final class SessionCoordinator: ObservableObject {
                 "to": to.display,
                 "via": packet.viaDisplay
             ])
+            Self.rxTrace("dropped: still in transit via a digipeater", packet)
             return
         }
 
@@ -3630,6 +3645,7 @@ final class SessionCoordinator: ObservableObject {
                 kind: kind, isCommand: packet.isCommand,
                 pf: decoded.pf.map { $0 == 1 } ?? ((packet.control & 0x10) != 0)) {
             if let dm = taken.response { sendFrame(dm) }
+            Self.rxTrace("taken: for a link this station does not hold", packet)
             return
         }
 

@@ -2007,6 +2007,7 @@ final class PacketEngine: ObservableObject {
             data: ["packetID": packet.id.uuidString, "currentCount": packets.count]
         )
         insertPacketSorted(packet)
+        SessionCoordinator.rxTrace("published by the packet engine", packet)
         packetInsertSubject.send(packet)
 
         // Log RX control frames (SABM, UA, DM, DISC, RR, REJ, I) as SYS lines with digi H-bit status
