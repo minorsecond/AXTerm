@@ -19,6 +19,7 @@ struct BulkTransferRow: View {
     let onCancel: () -> Void
 
     @State private var showDetails = false
+    @State private var confirmingCancel = false
 
     var body: some View {
         // A running transfer is redrawn every second, so a receiver that
@@ -112,12 +113,30 @@ struct BulkTransferRow: View {
                 }
 
                 if transfer.canCancel {
-                    Button(action: onCancel) {
+                    Button {
+                        if CancelTransferPrompt.isNeeded(for: transfer.status) {
+                            confirmingCancel = true
+                        } else {
+                            onCancel()
+                        }
+                    } label: {
                         Image(systemName: "xmark.circle.fill")
+                            #if os(iOS)
+                            .iconHitTarget(44)
+                            #endif
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.red)
                     .help("Cancel transfer")
+                    .accessibilityLabel("Cancel Transfer")
+                    .confirmationDialog(CancelTransferPrompt(transfer: transfer).title,
+                                        isPresented: $confirmingCancel, titleVisibility: .visible) {
+                        let prompt = CancelTransferPrompt(transfer: transfer)
+                        Button(prompt.cancelLabel, role: .destructive, action: onCancel)
+                        Button(prompt.keepLabel, role: .cancel) {}
+                    } message: {
+                        Text(CancelTransferPrompt(transfer: transfer).message)
+                    }
                 }
             }
 
