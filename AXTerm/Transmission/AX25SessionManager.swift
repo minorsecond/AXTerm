@@ -414,12 +414,21 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Account for a frame handed to the radio at `now`: it starts after the
     /// radio keys up, or after what is already going out, and takes its
     /// airtime at 1200 bit/s.
-    func noteHandedToRadio(bytes: Int, at now: TimeInterval) {
+    func noteHandedToRadio(bytes: Int, at now: TimeInterval, ns: Int? = nil) {
         let keyUp = stateMachine.config.keyUpSeconds ?? 0
+        // A new transmission: what was handed for the last one has gone.
+        if now >= onAirUntil { handedSinceOnAir.removeAll() }
+        handedSinceOnAir.append((at: now, bytes: max(0, bytes), ns: ns))
         let begins = now >= onAirUntil ? now + keyUp : onAirUntil
         onAirUntil = begins + Double(max(0, bytes)) * 8.0 / TxAdaptiveSettings.airtimeBitsPerSecond
         lastHandedAt = now
     }
+
+    /// The frames handed to the radio for the transmission still being
+    /// estimated, so hearing the peer can tell those already sent from those
+    /// still waiting for the channel.
+    /// `ns` is set for I-frames, so an acknowledgment can prove them sent.
+    private var handedSinceOnAir: [(at: TimeInterval, bytes: Int, ns: Int?)] = []
 
     /// When this link last handed the radio a frame, manager clock.
     private(set) var lastHandedAt: TimeInterval?
@@ -432,6 +441,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
     func noteLeftRadio(at now: TimeInterval) -> Bool {
         guard onAirUntil < now else { return false }
         onAirUntil = now
+        handedSinceOnAir.removeAll()
         return true
     }
 
@@ -442,19 +452,59 @@ nonisolated final class AX25Session: @unchecked Sendable {
     }
 
     /// Hearing the peer proves our transmission has ended (the channel is
-    /// half duplex), so the estimate comes back to `now`. It is made at
-    /// 1200 bit/s and would otherwise run ahead without bound on a faster
-    /// link. Returns whether it moved.
+    /// half duplex), but only for frames handed to the radio before the
+    /// peer began transmitting. Frames handed while it was on the air were
+    /// held by the radio's carrier detect and go out after it: a key-up,
+    /// then their airtime. Those are kept in the estimate; the rest comes
+    /// back to `now`, which also stops an estimate made at 1200 bit/s from
+    /// running ahead without bound on a faster link. Returns whether it
+    /// moved.
+    ///
+    /// Until 2026-10-07 every frame came back to `now`. A (705) handed four
+    /// 256-byte frames to the modem while the phone's RRs arrived, each RR
+    /// wrote their airtime off, and T1 expired during its own 7.5 s burst
+    /// (smoke run 2026-10-03-1, issue 103).
+    ///
+    /// A frame the peer has answered has certainly gone, whenever it was
+    /// handed over: `acknowledgedUpTo` is the N(R) of the frame heard, which
+    /// covers our I-frames from V(A) up to it, and `answered` says the frame
+    /// heard answers everything we sent (a UA to our SABM).
     @discardableResult
-    func capOnAir(at now: TimeInterval) -> Bool {
-        guard onAirUntil > now else { return false }
-        onAirUntil = now
+    func capOnAir(at now: TimeInterval, acknowledgedUpTo nr: Int? = nil, answered: Bool = false) -> Bool {
+        let keyUp = stateMachine.config.keyUpSeconds ?? 0
+        let peerBegan = now - Self.peerFrameWindow(keyUp: keyUp)
+        if answered { handedSinceOnAir.removeAll() }
+        if let nr {
+            let modulo = stateMachine.config.modulo
+            let va = self.va
+            let acked = (nr - va + modulo) % modulo
+            handedSinceOnAir.removeAll { entry in
+                guard let ns = entry.ns else { return false }
+                return (ns - va + modulo) % modulo < acked
+            }
+        }
+        handedSinceOnAir.removeAll { $0.at < peerBegan }
+        let waitingBytes = handedSinceOnAir.reduce(0) { $0 + $1.bytes }
+        let estimate = waitingBytes == 0
+            ? now
+            : now + keyUp + Double(waitingBytes) * 8.0 / TxAdaptiveSettings.airtimeBitsPerSecond
+        if waitingBytes == 0, onAirUntil <= now { return false }
+        guard estimate != onAirUntil else { return false }
+        onAirUntil = estimate
         return true
+    }
+
+    /// How long before a peer frame was heard the peer may already have
+    /// been transmitting: its key-up, taken as ours since it is not known,
+    /// and the airtime of a full 256-byte frame. Erring long only starts T1
+    /// a little late; erring short resends frames still going out.
+    static func peerFrameWindow(keyUp: TimeInterval) -> TimeInterval {
+        keyUp + Double(256 + 18) * 8.0 / TxAdaptiveSettings.airtimeBitsPerSecond
     }
 
     private func noteOnAir(ns: Int, at time: TimeInterval) {
         guard let frame = sendBuffer[ns] else { return }
-        noteHandedToRadio(bytes: Self.airBytes(frame), at: time)
+        noteHandedToRadio(bytes: Self.airBytes(frame), at: time, ns: ns)
     }
 
     /// Mark a frame N(S) as retransmitted (Karn's algorithm).
@@ -2610,7 +2660,7 @@ final class AX25SessionManager: ObservableObject {
         // once (RC = 0) the time T1 ran is a round trip and folds into SRT;
         // after a retry RC ≠ 0 and T1 did not expire, so T1V stays.
         if session.state == .connecting {
-            peerHeard(session)
+            peerHeard(session, answered: true)
             let started = session.t1StartedAt ?? session.sabmSentAt
             session.timers.selectT1(
                 retryCount: session.sabmRetransmitted ? max(1, session.stateMachine.retryCount) : 0,
@@ -2992,7 +3042,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         // Capture V(A) before state machine updates it - piggybacked N(R) acks [V(A), N(R))
-        peerHeard(session)
+        peerHeard(session, acknowledgedUpTo: nr)
         let vaBefore = session.va
         let retryCountBefore = session.stateMachine.retryCount
 
@@ -3151,7 +3201,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         // Capture V(A) BEFORE state machine update - RR only acks [V(A), N(R))
-        peerHeard(session)
+        peerHeard(session, acknowledgedUpTo: nr)
         let vaBefore = session.va
         let retryCountBefore = session.stateMachine.retryCount
 
@@ -3837,10 +3887,16 @@ final class AX25SessionManager: ObservableObject {
     /// A frame from the peer arrived: our transmission is over, so the
     /// on-air estimate is capped at now, and a T1 still waiting for our
     /// frames to leave starts now instead.
-    func peerHeard(_ session: AX25Session) {
+    func peerHeard(_ session: AX25Session, acknowledgedUpTo nr: Int? = nil, answered: Bool = false) {
         let now = clock.currentTime
-        guard session.capOnAir(at: now) else { return }
-        if let started = session.t1StartedAt, started > now {
+        guard session.capOnAir(at: now, acknowledgedUpTo: nr, answered: answered) else { return }
+        // A T1 waiting for our frames to leave starts when they now will:
+        // sooner when they had gone, later when some were still waiting for
+        // the channel. Later only before any retry, as `extendT1AcrossBurst`,
+        // so it never postpones a recovery.
+        guard let started = session.t1StartedAt else { return }
+        let laterThanAssumed = session.onAirUntil > started && session.stateMachine.retryCount == 0
+        if started > now || laterThanAssumed {
             startT1Timer(for: session)
         }
     }

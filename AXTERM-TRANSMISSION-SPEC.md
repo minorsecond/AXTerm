@@ -812,10 +812,28 @@ retry, moves T1's start to the new end. Without this, a burst of four
 rules produce: each T1 expired with frames still going out, RC never got
 back to 0 with everything acknowledged, SRT never learned, and the link
 failed (stress matrix, 2026-10-05). The time T1 ran, for Select T1, is
-counted from that start. The estimate assumes 1200 bit/s; hearing any frame
+counted from that start. The estimate assumes 1200 bit/s; hearing a frame
 from the peer proves our transmission has ended, so it is brought back to
 that moment, and a T1 still waiting for our frames starts then. Without
 that it ran ahead without bound on a faster link and T1 never started.
+
+The proof covers only frames handed to the radio before the peer began
+transmitting. A frame handed over while the peer was on the air was held by
+the radio's carrier detect and goes out after it, so those frames stay in
+the estimate: from the moment the peer was heard, our key-up and then their
+airtime. The peer may have been transmitting for its key-up plus a full
+256-byte frame before we heard it (`AX25Session.peerFrameWindow`, with our
+key-up standing in for the peer's), and frames handed in that window count
+as waiting, except frames the heard frame answers: its N(R) proves our
+I-frames from V(A) up to it sent, and a UA proves the SABM sent, however
+recently they were handed over. Erring long starts T1 a little late; erring short resends frames
+that are still going out, which is what happened when every frame was
+written off: A (705) handed four 256-byte frames to the modem while B's four
+RRs were arriving, each RR pulled the estimate back to "now", T1 expired
+during A's own 7.5 s burst, and the false losses shrank its window to K 1
+P 64 (smoke run 2026-10-03-1, issue 103). When the estimate moves later on a
+peer frame, T1 starts again from the new end only before any retry, so it
+never postpones a recovery.
 
 A sound modem also reports when each transmission really ends
 (`PacketEngine.onTransmissionEnded`, from the modem's sent-frame count). Every
