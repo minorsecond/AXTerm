@@ -253,7 +253,12 @@ struct AXTermiOSRootView: View {
         _bbsLibrary = StateObject(wrappedValue: setup.services.bbsLibrary)
         _callsignLookup = StateObject(wrappedValue: setup.services.callsignLookup)
         _bbsService = StateObject(wrappedValue: setup.services.bbsService)
-        _goodbye = State(initialValue: BackgroundGoodbyeController(coordinator: setup.services.coordinator))
+        // Not `setup.services`: `State(initialValue:)` is evaluated on every
+        // initializer, unlike the autoclosures above, so reading the box here
+        // built the services again on every settings change, and the packet
+        // subscription was remade under frames in flight (smoke run
+        // 2026-10-03-1, issue 104).
+        _goodbye = State(initialValue: BackgroundGoodbyeController())
     }
 
     /// The shared session coordinator, wired to the engine, and the mailbox
@@ -450,7 +455,7 @@ struct AXTermiOSRootView: View {
             // notice, so this is the moment.
             switch phase {
             case .background:
-                goodbye.enteredBackground()
+                goodbye.enteredBackground(coordinator: sessionCoordinator)
                 bbsService.shutdown(reason: "this device is going to sleep")
                 // Detached as well, so a call that somehow arrives while the
                 // app is suspended is not half-answered by a service whose

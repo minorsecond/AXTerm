@@ -3397,6 +3397,7 @@ final class SessionCoordinator: ObservableObject {
     /// Subscribe to incoming packets from PacketEngine.
     /// Safe to call multiple times — replaces any existing subscription.
     func subscribeToPackets(from client: PacketEngine) {
+        let alreadyListening = packetSubscription != nil && packetEngine === client
         self.packetEngine = client
         client.radioHasLink = { [weak self] radio in
             self?.sessionManager.sessions.values.contains {
@@ -3411,10 +3412,13 @@ final class SessionCoordinator: ObservableObject {
         }
         // Note: onDataDeliveredForReassembly is wired up in setupCallbacks() already
 
-        // Cancel previous subscription to prevent duplicate packet processing.
-        // The Mac wires the coordinator once at launch (StationServices); the
-        // iPhone once per install (MainWindowServicesBox). A second call
-        // replaces the first rather than adding to it.
+        // Already listening to this engine: keep the subscription. Cancelling
+        // it threw away any frame still queued for the main queue, and the
+        // iPhone wired the coordinator again on every settings change, so
+        // I-frames went missing mid-transfer (smoke run 2026-10-03-1, issue
+        // 104). A different engine replaces the subscription rather than
+        // adding a second one beside it.
+        guard !alreadyListening else { return }
         packetSubscription?.cancel()
         packetSubscription = client.packetPublisher
             .receive(on: DispatchQueue.main)

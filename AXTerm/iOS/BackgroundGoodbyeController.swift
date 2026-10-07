@@ -16,13 +16,16 @@ final class BackgroundGoodbyeController {
     private var task: UIBackgroundTaskIdentifier = .invalid
     private var pendingGoodbye: DispatchWorkItem?
 
-    init(coordinator: SessionCoordinator) {
-        self.coordinator = coordinator
-    }
+    /// Takes no coordinator: the root view builds this in its initializer,
+    /// which runs on every settings change, and reaching for the coordinator
+    /// there built the station's services again each time (issue 104). The
+    /// coordinator comes with `enteredBackground(coordinator:)`.
+    init() {}
 
-    func enteredBackground() {
+    func enteredBackground(coordinator: SessionCoordinator) {
+        self.coordinator = coordinator
         guard task == .invalid else { return }
-        guard coordinator?.hasLiveLinks == true else { return }
+        guard coordinator.hasLiveLinks else { return }
         task = UIApplication.shared.beginBackgroundTask(withName: "AXTerm goodbye") { [weak self] in
             // Out of time: iOS is about to suspend the app regardless.
             MainActor.assumeIsolated { self?.finish() }
