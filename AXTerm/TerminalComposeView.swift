@@ -1567,6 +1567,16 @@ struct TerminalComposeView: View {
                                     send()
                                 }
                             }
+                            #if os(iOS)
+                            // A hardware keyboard's Return: the field takes it
+                            // itself, or on iPadOS it did not send (issue 111).
+                            .onKeyPress(.return, phases: .down) { press in
+                                guard ComposeReturnKey.sends(modifiers: press.modifiers,
+                                                             canSend: canSendMessage) else { return .ignored }
+                                send()
+                                return .handled
+                            }
+                            #endif
                             .disabled(!isConnected || !canTypeMessage)
                     }
 
