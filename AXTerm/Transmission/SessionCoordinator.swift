@@ -4056,12 +4056,15 @@ final class SessionCoordinator: ObservableObject {
             return false
         }
         
-        // Check for connected session first (more efficient path)
-        if sessionManager.connectedSession(withPeer: destination) != nil {
+        // Check for connected session first (more efficient path). The link's
+        // own radio, or sendData takes the primary's, finds no link there and
+        // opens one (smoke run 2026-10-03-1, issue 110).
+        if let link = sessionManager.connectedSession(withPeer: destination) {
             let frames = sessionManager.sendData(
                 payload,
                 to: destination,
                 path: path,
+                radio: link.radio,
                 pid: 0xF0,
                 displayInfo: displayInfo
             )
