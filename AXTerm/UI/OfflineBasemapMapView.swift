@@ -897,6 +897,10 @@ struct OfflineBasemapMapView {
         private var operatorMoving = false
         /// The follow camera last applied, so it is set once per change.
         var lastFollowCamera: MapFollow.Camera?
+        /// When it was applied, to time the next glide.
+        var lastFollowAt: Date?
+        /// The glide in progress this pass, for our own marker to match.
+        var observerGlide: TimeInterval?
 
         /// Point the observer's marker the way the station travels, against
         /// the map's current rotation.
@@ -1659,6 +1663,31 @@ struct OfflineBasemapMapView {
         }
     }
 
+    /// Run `change` as a linear animation of `duration`: MapKit then moves
+    /// the camera, or a marker whose coordinate changes, at a steady pace.
+    @discardableResult
+    static func glide<T>(_ duration: TimeInterval, _ change: () -> T) -> T {
+        var result: T!
+        #if os(iOS)
+        // UIKit runs the animations block before returning, so `change`
+        // never actually escapes.
+        withoutActuallyEscaping(change) { change in
+            UIView.animate(withDuration: duration, delay: 0,
+                           options: [.curveLinear, .beginFromCurrentState, .allowUserInteraction]) {
+                result = change()
+            }
+        }
+        #else
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .linear)
+            context.allowsImplicitAnimation = true
+            result = change()
+        }
+        #endif
+        return result
+    }
+
     fileprivate func updateMapView(_ mapView: MKMapView, context: Context) {
         context.coordinator.parent = self
         // Built before the station had a position (the map is mounted
@@ -1674,18 +1703,30 @@ struct OfflineBasemapMapView {
         // Following the station: move the camera when where it should be
         // has changed, and only then, so a pass for arriving traffic does
         // not restart the animation.
+        context.coordinator.observerGlide = nil
         if let follow = followCamera {
             if context.coordinator.lastFollowCamera != follow {
+                let now = Date()
+                // A steady glide over the time since the last fix, so the
+                // camera and the arrow move like a navigation app's rather
+                // than hopping to each fix and waiting.
+                let glide = MapFollow.glide(sinceLastFix: context.coordinator.lastFollowAt.map {
+                    now.timeIntervalSince($0) })
+                context.coordinator.lastFollowAt = now
                 context.coordinator.lastFollowCamera = follow
-                mapView.setCamera(MKMapCamera(lookingAtCenter: follow.center,
-                                              fromDistance: follow.distanceMeters,
-                                              pitch: follow.pitch, heading: follow.heading),
-                                  animated: true)
+                context.coordinator.observerGlide = glide
+                let camera = MKMapCamera(lookingAtCenter: follow.center, fromDistance: follow.distanceMeters,
+                                         pitch: follow.pitch, heading: follow.heading)
+                Self.glide(glide) { mapView.camera = camera }
             }
         } else {
             context.coordinator.lastFollowCamera = nil
+            context.coordinator.lastFollowAt = nil
         }
         context.coordinator.refreshObserverArrow(on: mapView)
+        // In the heading view the map turns itself with the travel; a compass
+        // there would only invite a tap that is undone at once.
+        mapView.showsCompass = (followCamera?.pitch ?? 0) == 0
         // The throttle exists to absorb packet-rate churn, not to make the
         // operator wait. Flipping a layer switch changed nothing on screen for
         // up to ten seconds and then applied in a visible lurch, which reads
@@ -1811,7 +1852,11 @@ struct OfflineBasemapMapView {
         var arrived: [SiteAnnotation] = []
         for annotation in wanted {
             if let current = existingByID[annotation.id] {
-                if current.absorb(annotation),
+                // Our own marker glides with the follow camera.
+                let absorbed = current.isObserver && context.coordinator.observerGlide != nil
+                    ? Self.glide(context.coordinator.observerGlide!) { current.absorb(annotation) }
+                    : current.absorb(annotation)
+                if absorbed,
                    let view = mapView.view(for: current) as? StationDotAnnotationView {
                     #if DEBUG
                     print("[MAPDIAG] reconfigure \(current.id)")

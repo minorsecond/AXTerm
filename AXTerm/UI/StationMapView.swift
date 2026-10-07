@@ -100,10 +100,16 @@ struct StationMapView: View {
                                 lastHeading: lastFollowHeading)
     }
 
+    /// When the follow camera last moved, to time the next glide.
+    @State private var lastFollowAt: Date?
+
     private func applyFollow(_ follow: MapFollow.Camera?) {
-        guard let follow else { return }
+        guard let follow else { lastFollowAt = nil; return }
         lastFollowHeading = follow.heading
-        withAnimation(.easeInOut(duration: 0.8)) {
+        let now = Date()
+        let glide = MapFollow.glide(sinceLastFix: lastFollowAt.map { now.timeIntervalSince($0) })
+        lastFollowAt = now
+        withAnimation(.linear(duration: glide)) {
             camera = .camera(MapCamera(centerCoordinate: follow.center, distance: follow.distanceMeters,
                                        heading: follow.heading, pitch: follow.pitch))
         }

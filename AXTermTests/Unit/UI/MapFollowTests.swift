@@ -48,6 +48,11 @@ final class MapFollowTests: XCTestCase {
         XCTAssertEqual(camera.heading, 135, "a course from a station standing still means nothing")
     }
 
+    func testTheTiltedViewStaysLowEnoughToKeepItsTilt() throws {
+        let highway = try XCTUnwrap(MapFollow.camera(mode: .heading, at: home, courseDegrees: 0, speedMetersPerSecond: 30))
+        XCTAssertLessThanOrEqual(highway.distanceMeters, MapFollow.tiltedCeiling)
+    }
+
     func testFasterZoomsOut() throws {
         let walking = try XCTUnwrap(MapFollow.camera(mode: .follow, at: home, courseDegrees: nil, speedMetersPerSecond: 1))
         let town = try XCTUnwrap(MapFollow.camera(mode: .follow, at: home, courseDegrees: nil, speedMetersPerSecond: 13))

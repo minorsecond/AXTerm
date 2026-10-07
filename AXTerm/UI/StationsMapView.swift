@@ -636,19 +636,11 @@ struct StationsMapView: View {
         // than the noise floor; a base station holds still, and a rover
         // driving at any real speed crosses the threshold every couple of
         // seconds anyway.
-        if let held = observerAnchor.point,
-           GreatCircle.kilometres(from: held, to: live) * 1000
-               < Self.observerJitterFloorMetres {
-            return held
-        }
-        observerAnchor.point = live
-        return live
+        // Moving, the station is drawn where it is (`OwnPositionAnchor`).
+        let drawn = OwnPositionAnchor.drawn(held: observerAnchor.point, live: live, speed: observerSpeed)
+        observerAnchor.point = drawn
+        return drawn
     }
-
-    /// How far a fresh fix must move before the map redraws around it.
-    /// Above any plausible GPS wobble for a stationary antenna, far below
-    /// anything that matters at map zoom.
-    static let observerJitterFloorMetres = 25.0
 
     /// What the map is drawn around: this station, or without its position
     /// the heard stations (`MapCenterRule`). Nil only with neither.

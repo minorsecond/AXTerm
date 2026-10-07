@@ -39,6 +39,16 @@ nonisolated enum MapFollow {
 
     /// How far a navigation view tilts.
     static let navigationPitch: Double = 45
+    /// How long the camera and the own arrow take to reach a new fix: the
+    /// time since the last one, so they move at a steady pace rather than
+    /// hopping and waiting.
+    static func glide(sinceLastFix: TimeInterval?) -> TimeInterval {
+        guard let since = sinceLastFix else { return 0.8 }
+        return min(1.5, max(0.3, since))
+    }
+
+    /// The farthest a tilted camera sits, so MapKit keeps the tilt.
+    static let tiltedCeiling: Double = 3_500
 
     /// Below this a GPS course is noise: a station standing still or
     /// walking slowly reports one that wanders.
@@ -71,7 +81,9 @@ nonisolated enum MapFollow {
             // backs off; and it looks ahead only far enough to keep the
             // station in the lower third (a quarter put it off the bottom
             // edge in the simulator).
-            let tilted = distance * 1.5
+            // Capped: MapKit flattens the tilt as the camera rises, and at a
+            // highway view (over 6 km) a flat map lost it altogether.
+            let tilted = min(Self.tiltedCeiling, distance * 1.5)
             return Camera(center: offset(center, meters: tilted * 0.14, bearing: heading),
                           distanceMeters: tilted, heading: heading, pitch: navigationPitch)
         }
