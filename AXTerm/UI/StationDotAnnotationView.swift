@@ -106,6 +106,10 @@ final class StationDotAnnotationView: MKAnnotationView {
     /// geometry is never disturbed by it. Hidden for stations that beacon no
     /// symbol, for the observer, and for nodes.
     private let glyph = CALayer()
+    /// The observer as an arrow pointing the way it travels
+    /// (`OwnMarkerArrow`); hidden while the dot is shown.
+    private let arrow = CAShapeLayer()
+    private static let arrowSize: CGFloat = 26
     private let label = PlatformLabel()
 
     /// Implicit animation is the default for a bare `CALayer`, and it is
@@ -266,6 +270,8 @@ final class StationDotAnnotationView: MKAnnotationView {
         host.addSublayer(fill)
         host.addSublayer(ring)
         host.addSublayer(glyph)
+        host.addSublayer(arrow)
+        arrow.isHidden = true
         configureLabel()
         addSubview(label)
     }
@@ -547,6 +553,44 @@ final class StationDotAnnotationView: MKAnnotationView {
         // the header contradicts it. Overlapping labels are a legibility
         // problem the operator can solve by zooming; a hidden station is not.
         displayPriority = .required
+    }
+
+    /// Draw the observer as an arrow turned `rotation` degrees clockwise
+    /// on screen, or as its dot when nil. Rotation changes animate.
+    func showHeading(_ rotation: Double?, tint: PlatformColor) {
+        guard let rotation else {
+            arrow.isHidden = true
+            fill.isHidden = false
+            ring.isHidden = false
+            return
+        }
+        let size = Self.arrowSize
+        let center = CGPoint(x: lastDotRect.midX, y: lastDotRect.midY)
+        arrow.bounds = CGRect(x: 0, y: 0, width: size, height: size)
+        arrow.position = center
+        arrow.path = OwnMarkerArrow.path(in: arrow.bounds)
+        arrow.fillColor = tint.cgColor
+        arrow.strokeColor = PlatformColor.white.cgColor
+        arrow.lineWidth = 2.5
+        arrow.lineJoin = .round
+        arrow.shadowColor = PlatformColor.black.cgColor
+        arrow.shadowOpacity = 0.3
+        arrow.shadowRadius = 2.5
+        arrow.shadowOffset = .zero
+        let radians = CGFloat(rotation) * .pi / 180
+        #if os(iOS)
+        arrow.setAffineTransform(CGAffineTransform(rotationAngle: radians))
+        #else
+        // An unflipped AppKit view counts y up: mirror the arrow so it points
+        // up, and turn the other way for clockwise on screen.
+        arrow.setAffineTransform(isFlipped
+            ? CGAffineTransform(rotationAngle: radians)
+            : CGAffineTransform(rotationAngle: -radians).scaledBy(x: 1, y: -1))
+        #endif
+        arrow.isHidden = false
+        fill.isHidden = true
+        ring.isHidden = true
+        glyph.isHidden = true
     }
 
     // The bouncing, finally pinned by the diagnostics above: with the camera

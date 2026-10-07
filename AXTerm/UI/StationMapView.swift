@@ -197,7 +197,9 @@ struct StationMapView: View {
             onRegionChanged: { MapStartRegion.save($0) },
             coverageRings: coverageRings,
             followCamera: followCamera,
-            onOperatorMoved: { followMode.wrappedValue = .free })
+            onOperatorMoved: { followMode.wrappedValue = .free },
+            observerCourse: followCourse,
+            observerSpeed: followSpeed)
         .modifier(MapTopBleed())
         .overlay(alignment: .bottomLeading) {
             if showsChrome, !legendGivesWayToSelection {
@@ -306,6 +308,7 @@ struct StationMapView: View {
         .onAppear(perform: frameEverything)
         .onChange(of: scope.sites.count) { _, _ in frameEverything() }
         .onChange(of: followCamera) { _, follow in applyFollow(follow) }
+        .onMapCameraChange(frequency: .continuous) { context in mapHeading = context.camera.heading }
         // A pan or pinch of the operator's own lets go of following.
         .onChange(of: camera.positionedByUser) { _, byUser in
             if byUser, followMode.wrappedValue != .free { followMode.wrappedValue = .free }
@@ -431,8 +434,24 @@ struct StationMapView: View {
 
     // MARK: - Markers
 
+    /// The map's rotation, for turning the own marker's arrow against it.
+    @State private var mapHeading: Double = 0
+
+    private var observerArrowRotation: Double? {
+        OwnMarkerArrow.rotation(courseDegrees: followCourse, speed: followSpeed, mapHeading: mapHeading)
+    }
+
     private var observerMarker: some View {
         VStack(spacing: 1) {
+            if let rotation = observerArrowRotation {
+                OwnArrowShape()
+                    .fill(.tint)
+                    .overlay(OwnArrowShape().stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineJoin: .round)))
+                    .frame(width: 26, height: 26)
+                    .rotationEffect(.degrees(rotation))
+                    .animation(.easeInOut(duration: 0.3), value: rotation)
+                    .frame(width: 30, height: 30)
+            } else {
             ZStack {
                 Circle()
                     .fill(.tint.opacity(0.25))
@@ -451,6 +470,7 @@ struct StationMapView: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.tint)
                 }
+            }
             }
             Text(observerLabel)
                 .font(.system(size: 10, weight: .semibold))
@@ -601,4 +621,9 @@ private struct MapTopBleed: ViewModifier {
         content
         #endif
     }
+}
+
+/// The own marker's arrow (`OwnMarkerArrow.path`), pointing up.
+private struct OwnArrowShape: Shape {
+    func path(in rect: CGRect) -> Path { Path(OwnMarkerArrow.path(in: rect)) }
 }

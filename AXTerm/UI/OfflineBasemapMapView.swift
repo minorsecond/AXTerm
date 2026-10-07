@@ -102,6 +102,10 @@ struct OfflineBasemapMapView {
     var followCamera: MapFollow.Camera?
     /// The operator moved the map themselves, which lets go of following.
     var onOperatorMoved: () -> Void = {}
+    /// Which way and how fast this station moves, so its marker can point
+    /// the way it travels (`OwnMarkerArrow`).
+    var observerCourse: Double?
+    var observerSpeed: Double?
 
     // MARK: - Annotations
 
@@ -674,6 +678,12 @@ struct OfflineBasemapMapView {
                            aprsSymbol: site.aprsSymbol,
                            weatherBadge: site.weatherBadge,
                            isActive: MapActivity.isActive(lastHeard: site.lastHeard, now: Date()))
+            if site.isObserver {
+                view.showHeading(OwnMarkerArrow.rotation(courseDegrees: parent.observerCourse,
+                                                         speed: parent.observerSpeed,
+                                                         mapHeading: mapView.camera.heading),
+                                 tint: Self.tint(for: site))
+            }
             // Fresh stations at full strength, stale ones faded, infrastructure
             // quieted — so "who's active now" reads at a glance without hiding
             // anyone. Recency is the map's whole point; let it carry visually.
@@ -887,6 +897,22 @@ struct OfflineBasemapMapView {
         private var operatorMoving = false
         /// The follow camera last applied, so it is set once per change.
         var lastFollowCamera: MapFollow.Camera?
+
+        /// Point the observer's marker the way the station travels, against
+        /// the map's current rotation.
+        func refreshObserverArrow(on mapView: MKMapView) {
+            guard let observer = mapView.annotations.compactMap({ $0 as? SiteAnnotation })
+                    .first(where: { $0.isObserver }),
+                  let view = mapView.view(for: observer) as? StationDotAnnotationView else { return }
+            let rotation = OwnMarkerArrow.rotation(courseDegrees: parent.observerCourse,
+                                                   speed: parent.observerSpeed,
+                                                   mapHeading: mapView.camera.heading)
+            view.showHeading(rotation, tint: Self.tint(for: observer))
+        }
+
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            refreshObserverArrow(on: mapView)
+        }
 
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
             operatorMoving = Self.operatorIsMoving(mapView)
@@ -1659,6 +1685,7 @@ struct OfflineBasemapMapView {
         } else {
             context.coordinator.lastFollowCamera = nil
         }
+        context.coordinator.refreshObserverArrow(on: mapView)
         // The throttle exists to absorb packet-rate churn, not to make the
         // operator wait. Flipping a layer switch changed nothing on screen for
         // up to ten seconds and then applied in a visible lurch, which reads
