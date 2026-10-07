@@ -84,6 +84,8 @@ struct AXTermiOSRootView: View {
     // same defaults. The ladder itself is shared; only the storage keys are
     // repeated, because `@AppStorage` has to be declared per view.
     @AppStorage("station.useDeviceLocation") private var useDeviceLocation = false
+    /// The map's car mode (`CarMode`), which keeps the screen on.
+    @AppStorage(CarMode.storageKey) private var carMode = false
     @AppStorage("station.manualLatitude") private var manualLatitude = ""
     @AppStorage("station.manualLongitude") private var manualLongitude = ""
 
@@ -442,6 +444,7 @@ struct AXTermiOSRootView: View {
             sessionCoordinator.applyLocalCallsign(newValue)
         }
         .onChange(of: settings.keepAwakePolicy) { _, _ in applyKeepAwake() }
+        .onChange(of: carMode) { _, _ in applyKeepAwake() }
         .onChange(of: client.status) { _, _ in applyKeepAwake() }
         .onChange(of: sessionCoordinator.transfers.isEmpty) { _, _ in applyKeepAwake() }
         .onChange(of: context.settings.p2pListenEnabled) { _, _ in applyKeepAwake() }
@@ -705,7 +708,8 @@ struct AXTermiOSRootView: View {
             isConnected: client.status == .connected,
             isTransferring: !sessionCoordinator.transfers.isEmpty
                 || (context.runner?.isRunning ?? false),
-            isListening: context.settings.p2pListenEnabled)
+            isListening: context.settings.p2pListenEnabled,
+            isDriving: carMode)
     }
 
     /// A tab's label. On an iPad narrower than `namedTabsMinWidth` the bar

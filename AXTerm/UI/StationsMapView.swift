@@ -383,6 +383,16 @@ struct StationsMapView: View {
     /// Drawing state. Taps become vertices while this is active.
     /// The map following this station (`MapFollow`).
     @State private var followMode: MapFollow.Mode = .free
+    /// Car mode (`CarMode`): the map follows like a navigation app and
+    /// draws only what helps at a glance. iPhone and iPad.
+    @AppStorage(CarMode.storageKey) private var carMode = false
+    private var chrome: CarMode.Chrome {
+        #if os(iOS)
+        CarMode.Chrome(carMode: carMode)
+        #else
+        CarMode.Chrome(carMode: false)
+        #endif
+    }
     @State private var drawing = MapDrawingSession()
     /// The station the Ask sheet is open for. A wrapper rather than a bare
     /// string so `sheet(item:)` re-presents when the operator picks another
@@ -1248,13 +1258,14 @@ struct StationsMapView: View {
             } else {
                 // No position of our own: the heard stations are still drawn,
                 // centered on them, and this says why no distances are shown.
-                if observer == nil { noOwnPositionBanner }
+                if chrome.banners, observer == nil { noOwnPositionBanner }
                 // Above every other banner: a hazard or a live warning is the
                 // reason someone opens this page in an emergency, and it must
-                // not sit below a note about callsign lookups.
+                // not sit below a note about callsign lookups. Kept in car
+                // mode for the same reason.
                 emergencyBanner
-                if showsUnplacedBanner { unplacedBanner }
-                if hidesDistantStations, !distantStations.isEmpty { distantBanner }
+                if chrome.banners, showsUnplacedBanner { unplacedBanner }
+                if chrome.banners, hidesDistantStations, !distantStations.isEmpty { distantBanner }
                 // A draggable split is a Mac affordance. On a touch screen
                 // the list is a sheet over the map — the way Maps shows its
                 // results — so the map keeps the whole screen instead of
@@ -1747,6 +1758,14 @@ struct StationsMapView: View {
     @ToolbarContentBuilder
     private var mapToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
+          if chrome.toolbar {
+            Button {
+                carMode = true
+            } label: {
+                Label("Car Mode", systemImage: "car")
+            }
+            .accessibilityHint("Follows you like a navigation app and shows only what helps at a glance")
+
             Button {
                 showingStationList = true
             } label: {
@@ -1766,6 +1785,66 @@ struct StationsMapView: View {
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
             }
+          }
+        }
+    }
+
+    // MARK: - Car mode
+
+    /// Your last beacon, from the frames this station sent.
+    private var lastOwnBeacon: Date? {
+        recentPackets.last { $0.direction == .tx && $0.frameType == .ui
+            && ownCallsigns.contains($0.from?.display ?? "") }?.timestamp
+    }
+
+    /// The car mode card: one line about the last beacon, big enough to
+    /// read at a glance, and big buttons. Nothing here needs a tap while
+    /// driving; Re-center appears only after the map was moved by hand.
+    private var carCard: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let last = lastOwnBeacon
+            let heard = last.map { CarMode.heardBy(recentPackets, ownAddresses: ownCallsigns, since: $0) } ?? []
+            VStack(spacing: 12) {
+                Text(CarMode.beaconLine(lastBeacon: last, now: context.date, heardBy: heard))
+                    .font(.title3.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+                HStack(spacing: 10) {
+                    if followMode == .free {
+                        Button {
+                            followMode = .heading
+                        } label: {
+                            Label("Re-center", systemImage: "location.north.line.fill")
+                                .frame(maxWidth: .infinity, minHeight: 50)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    Button {
+                        if let coordinator = SessionCoordinator.shared, let station = coordinator.appSettings {
+                            coordinator.sendBeacon(station)
+                        }
+                    } label: {
+                        Label("Beacon Now", systemImage: "dot.radiowaves.left.and.right")
+                            .frame(maxWidth: .infinity, minHeight: 50)
+                    }
+                    .buttonStyle(.bordered)
+                    Button {
+                        carMode = false
+                    } label: {
+                        Label("Exit", systemImage: "xmark")
+                            .labelStyle(.iconOnly)
+                            .frame(minWidth: 50, minHeight: 50)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Exit Car Mode")
+                }
+                .font(.headline)
+            }
+            .padding(16)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
         }
     }
 
@@ -2192,7 +2271,7 @@ struct StationsMapView: View {
                 }
             // Below the map, not over it: the map's own bottom-corner
             // overlays (the legend, the selection card) keep their space.
-            trafficChin
+            if chrome.trafficStrip { trafficChin }
         }
         .textEntryPrompt($drawPrompt)
     }
@@ -2205,17 +2284,17 @@ struct StationsMapView: View {
                                coordinates: coordinates,
                                observerCallsign: myCallsign,
                                basemap: basemap, legend: .recency,
-                               pathLinks: pathLinks,
+                               pathLinks: chrome.paths ? pathLinks : [],
                                aprsSymbols: aprsSymbols,
                                ownAPRSSymbol: ownAPRSSymbol,
-                               tracks: tracks,
-                               terrainOverlays: terrainOverlays,
-                               weatherFieldOverlays: weatherFieldOverlays,
+                               tracks: chrome.trails ? tracks : [],
+                               terrainOverlays: chrome.overlays ? terrainOverlays : [],
+                               weatherFieldOverlays: chrome.overlays ? weatherFieldOverlays : [],
                                layerGeneration: layerGeneration,
                                clustersStations: clustersStations,
                                tileStore: offlineTiles.hasStoredTiles ? offlineTiles.store : nil,
                                tileSource: offlineTiles.storedSource,
-                               overlays: overlayStore.visibleLayers,
+                               overlays: chrome.overlays ? overlayStore.visibleLayers : [],
                                drawing: $drawing,
                                onDrawTap: handleDrawTap,
                                onSecondaryClick: { coordinate in
@@ -2233,13 +2312,22 @@ struct StationsMapView: View {
                                                                  moving: placed)
                                    movingObject = nil
                                },
-                               coverageRings: coverageRings,
+                               coverageRings: chrome.rings ? coverageRings : [],
                                selection: $selection,
+                               showsChrome: chrome.legend,
                                followMode: $followMode,
                                followPoint: observerPosition?.point,
                                followCourse: observerCourse,
                                followSpeed: observerSpeed)
-            .overlay(alignment: .bottomTrailing) { selectionCard }
+            .overlay(alignment: .bottomTrailing) { if !carMode { selectionCard } }
+            #if os(iOS)
+            // An inset, not an overlay: MapKit then keeps its logo and Legal
+            // link above the card, where Apple requires them visible.
+            .safeAreaInset(edge: .bottom, spacing: 0) { if carMode { carCard } }
+            .onChange(of: carMode, initial: true) { _, on in
+                if on { followMode = .heading } else if followMode != .free { followMode = .free }
+            }
+            #endif
             .sheet(item: $pendingObject) { pending in
                 APRSPlaceObjectSheet(
                     coordinate: pending.coordinate,

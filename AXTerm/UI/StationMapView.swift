@@ -71,6 +71,9 @@ struct StationMapView: View {
     /// entry. Empty draws nothing: no evidence, no ring.
     var coverageRings: [CoverageEstimate.Ring] = []
     @Binding var selection: String?
+    /// The legend, the coverage chips and the "show me" button. Car mode
+    /// leaves them out (`CarMode`).
+    var showsChrome: Bool = true
     /// Following the station (`MapFollow`): the "show me" button's state.
     var followMode: Binding<MapFollow.Mode> = .constant(.free)
     /// Where the station is now, unrounded, and which way and how fast it
@@ -135,10 +138,13 @@ struct StationMapView: View {
     }
 
     /// The coverage chips and, under them, the "show me" button.
+    @ViewBuilder
     private var trailingControls: some View {
-        VStack(alignment: .trailing, spacing: 0) {
-            coverageChip
-            followButton
+        if showsChrome {
+            VStack(alignment: .trailing, spacing: 0) {
+                coverageChip
+                followButton
+            }
         }
     }
 
@@ -194,7 +200,7 @@ struct StationMapView: View {
             onOperatorMoved: { followMode.wrappedValue = .free })
         .modifier(MapTopBleed())
         .overlay(alignment: .bottomLeading) {
-            if !legendGivesWayToSelection {
+            if showsChrome, !legendGivesWayToSelection {
                 MapLegend(kind: legend, overDarkBasemap: store == nil && basemap.isDark,
                           showsCoverage: !coverageRings.isEmpty,
                           coverageRings: coverageRings,
@@ -283,7 +289,7 @@ struct StationMapView: View {
         }
         .modifier(MapTopBleed())
         .overlay(alignment: .bottomLeading) {
-            if !legendGivesWayToSelection {
+            if showsChrome, !legendGivesWayToSelection {
                 MapLegend(kind: legend, overDarkBasemap: basemap.isDark,
                           showsCoverage: !coverageRings.isEmpty,
                           coverageRings: coverageRings,

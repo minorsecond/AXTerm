@@ -138,6 +138,8 @@ final class KeepAwakeController: ObservableObject {
 
     /// Why sleep is being held, for the indicator.
     @Published private(set) var reason: String?
+    /// The map's car mode is on (`CarMode`).
+    private var isDriving = false
 
     #if os(macOS)
     /// The live `beginActivity` token, if any. Ending it is what releases the
@@ -152,7 +154,11 @@ final class KeepAwakeController: ObservableObject {
     nonisolated static func hold(policy: KeepAwakePolicy,
                                  isConnected: Bool,
                                  isTransferring: Bool,
-                                 isListening: Bool) -> KeepAwakeHold {
+                                 isListening: Bool,
+                                 isDriving: Bool = false) -> KeepAwakeHold {
+        // Car mode asked for the screen on, whatever the setting says: a map
+        // that dims on the dashboard stops tracking and beaconing.
+        if isDriving { return .schedulingAndAwake }
         // Nothing live: ask for nothing. An idle AXTerm has no business
         // pinning a Mac's scheduler, let alone its power state.
         guard isConnected || isTransferring || isListening else { return .none }
@@ -167,7 +173,9 @@ final class KeepAwakeController: ObservableObject {
     func update(policy: KeepAwakePolicy,
                 isConnected: Bool,
                 isTransferring: Bool,
-                isListening: Bool) {
+                isListening: Bool,
+                isDriving: Bool = false) {
+        self.isDriving = isDriving
         self.isConnected = isConnected
         self.isTransferring = isTransferring
         self.isListening = isListening
@@ -188,7 +196,8 @@ final class KeepAwakeController: ObservableObject {
     /// Re-applies from what is currently known.
     func refresh() {
         let next = Self.hold(policy: policy, isConnected: isConnected,
-                             isTransferring: isTransferring, isListening: isListening)
+                             isTransferring: isTransferring, isListening: isListening,
+                             isDriving: isDriving)
 
         isHoldingAwake = next == .schedulingAndAwake
         reason = isHoldingAwake ? Self.reasonText(
