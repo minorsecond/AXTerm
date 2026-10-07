@@ -3407,6 +3407,9 @@ final class SessionCoordinator: ObservableObject {
         client.onTransmissionEnded = { [weak self] radio in
             self?.sessionManager.transmissionEnded(on: radio)
         }
+        client.onChannelCleared = { [weak self] radio in
+            self?.sessionManager.channelCleared(on: radio)
+        }
         if let store = client.learnedRoutes {
             attachLearnedRouteStore(store)
         }

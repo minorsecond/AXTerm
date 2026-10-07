@@ -152,6 +152,17 @@ final class PacketEngine: ObservableObject {
     /// from it.
     var onTransmissionEnded: ((RadioID) -> Void)?
 
+    /// The radio's modem heard a carrier end: the channel is clear. Only a
+    /// radio that can tell reports it (a sound modem); layer 2 sends an ack
+    /// it was holding on T2.
+    var onChannelCleared: ((RadioID) -> Void)?
+
+    /// Whether a telemetry report is a carrier ending. A first report is not
+    /// a transition.
+    nonisolated static func channelCleared(from previous: ModemTelemetry?, to current: ModemTelemetry) -> Bool {
+        previous?.dcd == true && !current.dcd
+    }
+
     // MARK: - Debug Logging (Debug Builds Only)
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
         #if DEBUG
@@ -3345,6 +3356,9 @@ extension PacketEngine: RadioManagerDelegate {
         }
         if previous?.dcd != telemetry.dcd {
             TxLog.debug(.modem, telemetry.dcd ? "Carrier detected" : "Channel clear", ["link": link.endpointDescription])
+        }
+        if Self.channelCleared(from: previous, to: telemetry) {
+            for radio in manager.radios(onLink: link.key) { onChannelCleared?(radio) }
         }
         // What actually reached the air since the last report. A first report
         // carries the counters' whole history, which is not news about any

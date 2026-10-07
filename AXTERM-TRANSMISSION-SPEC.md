@@ -1017,6 +1017,15 @@ inbound loss and a go-back-N resend. Rules:
   5 s got T2 ≈ 1.67 s against 256-byte frames of 1.83 s, and the phone
   acked every frame of A (705)'s bursts separately (smoke run 2026-10-03-1,
   test 13.3). A T2 set explicitly is kept as set.
+- **A clear channel ends T2 early** on a radio whose modem is AXTerm's own
+  (the sound modem), which reports carrier detect. T2 only waits in case
+  more of the peer's transmission follows; when the carrier ends (DCD falls,
+  about 0.25 s after the last flag), nothing more of that transmission is
+  coming, and an ack T2 is holding for a session on that radio goes out
+  then. A lone typed line is acked in well under a second instead of about
+  2 s (smoke run 2026-10-03-1, test 13.4, issue 113). A hardware TNC over
+  KISS reports no carrier and keeps the full T2. A frame decoded with no
+  carrier seen leaves no transition, so T2 acks it as before.
 - In practice T2 rarely fires: RMS gateways end every burst with a P=1 frame
   (field capture 2026-08-24: 208 inbound I-frames, every burst
   poll-terminated), and the mandatory F=1 response carries the ack.

@@ -4066,13 +4066,31 @@ final class AX25SessionManager: ObservableObject {
             guard let self = self else { return }
             guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else { return }
             guard session.t2Generation == generation else { return }
-            session.t2TimerTask = nil
-            session.t2HoldStartedAt = nil
-            let actions = session.stateMachine.handle(event: .t2Timeout)
-            let frames = self.processActions(actions, for: session)
-            for frame in frames {
-                self.onSendFrame?(frame)
-            }
+            self.fireT2(for: session)
+        }
+    }
+
+    /// Send the ack T2 was holding, now.
+    private func fireT2(for session: AX25Session) {
+        session.t2Generation &+= 1
+        session.t2TimerTask?.cancel()
+        session.t2TimerTask = nil
+        session.t2HoldStartedAt = nil
+        let actions = session.stateMachine.handle(event: .t2Timeout)
+        for frame in processActions(actions, for: session) {
+            onSendFrame?(frame)
+        }
+    }
+
+    /// The radio's own modem heard the carrier end. T2 waits in case more
+    /// of the peer's transmission follows (AX.25 2.2 §6.7.1.2); once the
+    /// channel is clear nothing more of it is coming, so an ack held for it
+    /// goes out now rather than a full frame's airtime later. Only a radio
+    /// that reports carrier calls this (a sound modem); a TNC keeps T2
+    /// (smoke run 2026-10-03-1, 13.4, issue 113).
+    func channelCleared(on radio: RadioID) {
+        for session in sessions.values where session.radio == radio && session.t2TimerTask != nil {
+            fireT2(for: session)
         }
     }
 
