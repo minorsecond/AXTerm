@@ -1990,7 +1990,9 @@ final class SessionCoordinator: ObservableObject {
             if beaconTimers[id] != nil, beaconIntervals[id] == interval { continue }
             beaconTimers[id]?.invalidate()
             let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.sendBeacon(for: id, settings: settings) }
+                MainActor.assumeIsolated {
+                    Task { @MainActor in await self?.sendBeaconWithFreshPosition(for: id, settings: settings) }
+                }
             }
             RunLoop.main.add(timer, forMode: .common)
             beaconTimers[id] = timer
@@ -2230,6 +2232,24 @@ final class SessionCoordinator: ObservableObject {
     /// install `StationPositionResolver.beaconProvider`, the resolver the map
     /// uses; a fixed position needs no provider. Nil when no position is set.
     var aprsLocationProvider: (() -> (latitude: Double, longitude: Double)?)?
+
+    /// Asks the station's location service for a fix no older than the
+    /// given age. A position beacon that follows the station calls it before
+    /// it is built: the provider above reads a cached fix, and on a drive
+    /// every beacon carried the position from setup (smoke run 2026-10-03-1,
+    /// issue 118).
+    var aprsLocationRefresh: ((_ maxFixAge: TimeInterval) async -> Void)?
+
+    /// A radio's beacon, with a fresh fix first when it is a position beacon
+    /// that follows the station: no older than half its interval.
+    @discardableResult
+    func sendBeaconWithFreshPosition(for radioID: RadioID, settings: AppSettingsStore) async -> String? {
+        if let radio = settings.radio(radioID), radio.beacon.kind == .aprsPosition,
+           (radio.beacon.aprs ?? .followingStation).useGPS, let refresh = aprsLocationRefresh {
+            await refresh(TimeInterval(radio.beacon.scheduledMinutes * 60) / 2)
+        }
+        return sendBeacon(for: radioID, settings: settings)
+    }
 
     private func buildAPRSBeaconFrame(for radio: RadioProfile) -> (OutboundFrame, String)? {
         let aprs = radio.beacon.aprs ?? .followingStation

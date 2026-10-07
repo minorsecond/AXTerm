@@ -440,10 +440,12 @@ private struct RadioBeaconNowRow: View {
                         beaconNowResult = .failed("AXTerm isn't ready to transmit yet.")
                         return
                     }
-                    if let why = coordinator.sendBeacon(for: radioID, settings: settings) {
-                        beaconNowResult = .failed(why)
-                    } else {
-                        beaconNowResult = .sent(Date())
+                    Task {
+                        if let why = await coordinator.sendBeaconWithFreshPosition(for: radioID, settings: settings) {
+                            beaconNowResult = .failed(why)
+                        } else {
+                            beaconNowResult = .sent(Date())
+                        }
                     }
                 }
                 .disabled(obstacle != nil)

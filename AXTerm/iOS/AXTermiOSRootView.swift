@@ -306,6 +306,9 @@ struct AXTermiOSRootView: View {
         // position the map draws. Missing here, such a beacon never went out.
         coordinator.aprsLocationProvider = StationPositionResolver.beaconProvider(
             defaults: settings.defaults, locationService: context.locationService)
+        coordinator.aprsLocationRefresh = { [weak service = context.locationService] maxAge in
+            _ = await service?.currentLocation(maxFixAge: maxAge)
+        }
         coordinator.subscribeToPackets(from: client)
         // APRS messaging, wired exactly as the Mac wires it.
         if let aprs = client.aprsMessaging {

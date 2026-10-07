@@ -242,6 +242,9 @@ final class StationServices {
         // position at send time, from the same resolver the map uses.
         coordinator.aprsLocationProvider = StationPositionResolver.beaconProvider(
             defaults: settings.defaults, locationService: winlinkContext.locationService)
+        coordinator.aprsLocationRefresh = { [weak service = winlinkContext.locationService] maxAge in
+            _ = await service?.currentLocation(maxFixAge: maxAge)
+        }
         coordinator.subscribeToPackets(from: client)
         // APRS messaging: wire the transmit funnel, the query-answer
         // providers, and start the ACK-retry sweep. Auto-reply defaults to
