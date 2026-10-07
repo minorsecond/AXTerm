@@ -643,9 +643,15 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
     /// than its pace explains (a sender's pause) are left out, so the rate
     /// holds still while nothing moves instead of sinking toward zero.
     func throughputBytesPerSecond(now: Date) -> Double {
-        guard let elapsed = dataSeconds(now: now), elapsed > 0 else { return 0 }
+        guard let elapsed = dataSeconds(now: now), elapsed >= Self.shortestMeasuredSeconds else { return 0 }
         return Double(bytesSent) / elapsed
     }
+
+    /// No rate from less data time than this. A receiver's clock starts when
+    /// the first chunk arrives, so until a second one the data time is
+    /// microseconds, and the first chunk over it read 206.61 Mbps (smoke
+    /// run 2026-10-03-1, issue 109).
+    static let shortestMeasuredSeconds: TimeInterval = 1
 
     private func dataSeconds(now: Date) -> TimeInterval? {
         guard let start = dataPhaseStart else { return nil }
@@ -670,7 +676,7 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
 
     /// Air throughput in bytes per second (actual transmitted bytes)
     var airThroughputBytesPerSecond: Double {
-        guard let elapsed = dataSeconds(now: Date()), elapsed > 0 else { return 0 }
+        guard let elapsed = dataSeconds(now: Date()), elapsed >= Self.shortestMeasuredSeconds else { return 0 }
         return Double(bytesTransmitted) / elapsed
     }
 
