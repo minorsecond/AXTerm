@@ -449,6 +449,17 @@ nonisolated struct BulkTransfer: Identifiable, Sendable {
     /// Current status
     var status: BulkTransferStatus = .pending
 
+    /// The reason recorded when the other station refuses an AXDP offer.
+    static let declinedByRemoteReason = "Transfer declined by remote station"
+
+    /// The other station said no: its choice, not a fault, so the row reads
+    /// "Declined" rather than a red "Failed". A rule that refuses an offer
+    /// records "Declined: <why>".
+    var wasDeclined: Bool {
+        guard case .failed(let reason) = status else { return false }
+        return reason == Self.declinedByRemoteReason || reason.hasPrefix("Declined")
+    }
+
     /// Bytes successfully acknowledged (sent) or received
     var bytesSent: Int = 0 {
         didSet {

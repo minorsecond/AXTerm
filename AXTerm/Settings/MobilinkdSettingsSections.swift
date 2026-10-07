@@ -81,7 +81,10 @@ struct MobilinkdSettingsSections: View {
                             ProgressView(value: fraction)
                                 .tint(fraction < 0.15 ? .red : fraction < 0.33 ? .orange : .green)
                                 .frame(width: 80)
-                            Text(String(format: "%.2f V", Double(mV) / 1000))
+                            // The charge first, as the toolbar's battery
+                            // reads; the voltage after it (issue 107).
+                            Text(String(format: "%d%% · %.2f V", Int((fraction * 100).rounded()),
+                                        Double(mV) / 1000))
                                 .monospacedDigit()
                         }
                     }

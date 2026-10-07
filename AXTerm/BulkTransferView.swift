@@ -48,9 +48,14 @@ struct BulkTransferRow: View {
                     .foregroundStyle(.secondary)
 
                 // File name
+                // One line, shortened in the middle so the extension stays:
+                // on a phone the name broke mid-word ("t20k_bin.bi" / "n").
                 Text(transfer.fileName)
                     .font(.system(.body, design: .monospaced))
                     .fontWeight(.medium)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(transfer.fileName)
 
                 // Protocol badge
                 transferProtocolBadge(transfer.transferProtocol)
@@ -200,14 +205,15 @@ struct BulkTransferRow: View {
                     .font(.caption)
             }
 
-            // Failure explanation (if failed)
+            // Failure explanation (if failed). A decline is the other
+            // station's choice, so it is said plainly, not in red.
             if case .failed(let reason) = transfer.status {
                 HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                    Image(systemName: transfer.wasDeclined ? "hand.raised" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(transfer.wasDeclined ? Color.secondary : Color.red)
                     Text(reason)
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(transfer.wasDeclined ? Color.secondary : Color.red)
                 }
             }
         }
@@ -580,9 +586,15 @@ struct BulkTransferRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .failed:
-            Label("Failed", systemImage: "exclamationmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.red)
+            if transfer.wasDeclined {
+                Label("Declined", systemImage: "hand.raised")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("Failed", systemImage: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
     }
 
@@ -595,6 +607,8 @@ struct BulkTransferRow: View {
 
     private var backgroundColor: Color {
         switch transfer.status {
+        case .failed where transfer.wasDeclined:
+            return Color.secondary.opacity(0.1)
         case .failed:
             return Color.red.opacity(0.1)
         case .completed:
@@ -644,7 +658,7 @@ struct BulkTransferListView: View {
                 Spacer()
 
                 if !completedTransfers.isEmpty {
-                    Button("Clear Completed") {
+                    Button("Clear Finished") {
                         onClearCompleted()
                     }
                     .buttonStyle(.bordered)
@@ -735,7 +749,9 @@ struct BulkTransferListView: View {
                                     .id("\(transfer.id)-\(transfer.status)")
                                 }
                             } header: {
-                                SectionHeader(title: "Completed", count: completedTransfers.count)
+                                // Finished rather than Completed: canceled, declined and
+                                // failed transfers are listed here too.
+                                SectionHeader(title: "Finished", count: completedTransfers.count)
                             }
                         }
                     }
@@ -843,7 +859,6 @@ struct SendFileSheet: View {
     @State private var compressionMode: CompressionMode = .useGlobal
     @State private var selectedAlgorithm: AXDPCompression.Algorithm = .lz4
     @State private var selectedProtocol: TransferProtocolType = .axdp
-    @State private var showAdvanced = false
 
     enum CompressionMode: String, CaseIterable {
         case useGlobal = "Global"
@@ -915,30 +930,16 @@ struct SendFileSheet: View {
                     }
                 }
 
-                // Advanced options
-                if showAdvanced {
-                    Section {
-                        advancedContent
-                    } header: {
-                        Text("Advanced")
-                    }
-                }
             }
             .formStyle(.grouped)
 
             Divider()
 
             // Footer with buttons
+            // "More Options" used to sit here and open a placeholder
+            // ("Additional options coming soon"); it is gone until there
+            // are options to show (issue 107).
             HStack {
-                Button {
-                    showAdvanced.toggle()
-                } label: {
-                    Text(showAdvanced ? "Hide Options" : "More Options")
-                        .font(.callout)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-
                 Spacer()
 
                 Button("Send") {
@@ -1284,28 +1285,6 @@ struct SendFileSheet: View {
         }
     }
 
-    // MARK: - Advanced Content (for Form)
-
-    @ViewBuilder
-    private var advancedContent: some View {
-        // Future: chunk size override, priority, etc.
-        Text("Additional options coming soon")
-            .font(.subheadline)
-            .foregroundStyle(.tertiary)
-    }
-
-    // Legacy wrapper for compatibility
-    @ViewBuilder
-    private var advancedSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
-            Text("Advanced")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            advancedContent
-        }
-    }
-
     // MARK: - Helpers
 
     private var compressionSettings: TransferCompressionSettings {
@@ -1632,13 +1611,13 @@ struct IncomingTransferSheet: View {
                 // a phone, where the two labels ran into each other.
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 16) {
-                        alwaysDenyButton
+                        alwaysDenyButton(fullWidth: false)
                         Spacer()
-                        alwaysAcceptButton
+                        alwaysAcceptButton(fullWidth: false)
                     }
-                    VStack(alignment: .leading, spacing: 10) {
-                        alwaysAcceptButton
-                        alwaysDenyButton
+                    VStack(spacing: 10) {
+                        alwaysAcceptButton(fullWidth: true)
+                        alwaysDenyButton(fullWidth: true)
                     }
                 }
             }
@@ -1655,28 +1634,32 @@ struct IncomingTransferSheet: View {
         #endif
     }
 
-    private var alwaysDenyButton: some View {
+    // Bordered buttons rather than caption-sized text: as text they were
+    // well under a comfortable tap target on a phone (issue 107).
+    private func alwaysDenyButton(fullWidth: Bool) -> some View {
         Button {
             onAlwaysDeny()
             isPresented = false
         } label: {
             Label("Always Deny from \(request.sourceCallsign)", systemImage: "xmark.shield")
-                .font(.caption)
+                .font(.subheadline)
+                .frame(maxWidth: fullWidth ? .infinity : nil)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.red)
+        .buttonStyle(.bordered)
+        .tint(.red)
     }
 
-    private var alwaysAcceptButton: some View {
+    private func alwaysAcceptButton(fullWidth: Bool) -> some View {
         Button {
             onAlwaysAccept()
             isPresented = false
         } label: {
             Label("Always Accept from \(request.sourceCallsign)", systemImage: "checkmark.shield")
-                .font(.caption)
+                .font(.subheadline)
+                .frame(maxWidth: fullWidth ? .infinity : nil)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.green)
+        .buttonStyle(.bordered)
+        .tint(.green)
     }
 
     private func fileIcon(for fileName: String) -> String {

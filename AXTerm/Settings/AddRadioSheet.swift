@@ -298,18 +298,14 @@ struct AddRadioSheet: View {
                             + "handheld. Each of your radios needs its own."
                         : "Packet has no standard for SSIDs. Pick one none of your other radios uses, "
                             + "so callers can reach this radio in particular.") {
-                HStack(spacing: 6) {
-                    Text("Suggested")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(SSIDSuggestion.suggest(for: channel, taken: taken), id: \.self) { ssid in
-                        Button(ssid == 0 ? stationCallsign : "\(stationCallsign)-\(ssid)") {
-                            usesOwnCallsign = false
-                            flow.setSSID(ssid)
-                        }
-                        .font(.system(.callout, design: .monospaced))
-                        .buttonStyle(.bordered)
-                        .tint(flow.ssid == ssid && !usesOwnCallsign ? .accentColor : nil)
+                // Each chip on one line. Squeezed, "K0EPI-1" broke over two
+                // lines on a phone (issue 107); the label goes first, then
+                // the row scrolls.
+                ViewThatFits(in: .horizontal) {
+                    suggestedSSIDs(taken: taken, labeled: true)
+                    suggestedSSIDs(taken: taken, labeled: false)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        suggestedSSIDs(taken: taken, labeled: false)
                     }
                 }
                 Divider()
@@ -322,6 +318,29 @@ struct AddRadioSheet: View {
                 if ssidBinding.wrappedValue == nil {
                     CallsignField(title: stationCallsign, text: $viewModel.callsign)
                 }
+            }
+        }
+    }
+
+    private func suggestedSSIDs(taken: Set<Int>, labeled: Bool) -> some View {
+        HStack(spacing: 6) {
+            if labeled {
+                Text("Suggested")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(SSIDSuggestion.suggest(for: channel, taken: taken), id: \.self) { ssid in
+                Button {
+                    usesOwnCallsign = false
+                    flow.setSSID(ssid)
+                } label: {
+                    Text(ssid == 0 ? stationCallsign : "\(stationCallsign)-\(ssid)")
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .font(.system(.callout, design: .monospaced))
+                .buttonStyle(.bordered)
+                .tint(flow.ssid == ssid && !usesOwnCallsign ? .accentColor : nil)
             }
         }
     }

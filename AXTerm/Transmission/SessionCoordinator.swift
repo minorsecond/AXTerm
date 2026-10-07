@@ -4941,7 +4941,7 @@ final class SessionCoordinator: ObservableObject {
             transfersAwaitingAcceptance.removeValue(forKey: axdpSessionId)
 
             // Fail the transfer
-            transfers[transferIndex].status = .failed(reason: "Transfer declined by remote station")
+            transfers[transferIndex].status = .failed(reason: BulkTransfer.declinedByRemoteReason)
             transferFileData.removeValue(forKey: transferId)
             transferSessionIds.removeValue(forKey: transferId)
 

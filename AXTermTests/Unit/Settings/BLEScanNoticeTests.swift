@@ -61,14 +61,33 @@ final class BLEScanNoticeTests: XCTestCase {
                        BLEScanNotice.nothingFound)
         XCTAssertNil(BLEScanNotice.afterScan(found: 2, bluetoothState: .poweredOn, thisRadioConnected: false))
         XCTAssertNil(BLEScanNotice.afterScan(found: 0, bluetoothState: .poweredOn, thisRadioConnected: true),
-                     "a TNC connected to this radio stops advertising, and the picker already says it is connected")
+                     "a TNC connected to this radio stops advertising, and the radio page already says it is connected")
         XCTAssertEqual(BLEScanNotice.afterScan(found: 0, bluetoothState: .poweredOff, thisRadioConnected: false),
                        BLEScanNotice.bluetoothOff)
         XCTAssertEqual(BLEScanNotice.afterScan(found: 0, bluetoothState: .unauthorized, thisRadioConnected: false),
                        BLEScanNotice.notAllowed)
 
-        for text in [BLEScanNotice.nothingFound, BLEScanNotice.bluetoothOff, BLEScanNotice.notAllowed] {
+        XCTAssertEqual(BLEScanNotice.afterScan(found: 0, bluetoothState: .unknown, thisRadioConnected: false),
+                       BLEScanNotice.notReady,
+                       "Bluetooth not answering yet is not \"no TNC\": iOS may still be asking for permission")
+        XCTAssertEqual(BLEScanNotice.afterScan(found: 0, bluetoothState: .resetting, thisRadioConnected: false),
+                       BLEScanNotice.notReady)
+
+        for text in [BLEScanNotice.nothingFound, BLEScanNotice.bluetoothOff, BLEScanNotice.notAllowed,
+                     BLEScanNotice.notReady] {
             XCTAssertFalse(text.contains("\u{2014}"), "no em dashes in UI text")
         }
+    }
+
+    /// While iOS asks for Bluetooth permission the scanner hears `.unknown`.
+    /// Ending the scan there reported "No TNC found" before the operator had
+    /// even answered (smoke run 2026-10-03-1, test 13.3, issue 107).
+    func testAScanWaitsWhileBluetoothIsNotReady() {
+        XCTAssertFalse(BLEScanNotice.endsScan(on: .unknown))
+        XCTAssertFalse(BLEScanNotice.endsScan(on: .resetting))
+        XCTAssertFalse(BLEScanNotice.endsScan(on: .poweredOn))
+        XCTAssertTrue(BLEScanNotice.endsScan(on: .poweredOff))
+        XCTAssertTrue(BLEScanNotice.endsScan(on: .unauthorized))
+        XCTAssertTrue(BLEScanNotice.endsScan(on: .unsupported))
     }
 }

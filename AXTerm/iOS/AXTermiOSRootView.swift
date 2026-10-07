@@ -1259,8 +1259,10 @@ struct AXTermiOSRootView: View {
                         Label("Packet Node", systemImage: SettingsTab.packetNode.settingsIcon)
                     }
                     .accessibilityHint("The NET/ROM node, ping, the AX.25 link layer and AXDP")
+                    // "BBS Settings", because the mailbox itself is the BBS
+                    // row at the top of this list on a phone (issue 107).
                     NavigationLink(value: SettingsDestination.mailbox) {
-                        Label("BBS", systemImage: "tray.full")
+                        Label(horizontalSizeClass != .regular ? "BBS Settings" : "BBS", systemImage: "tray.full")
                     }
                     .accessibilityHint("What the BBS answers as, its greeting, and what it shares")
                     NavigationLink(value: SettingsDestination.winlink) {

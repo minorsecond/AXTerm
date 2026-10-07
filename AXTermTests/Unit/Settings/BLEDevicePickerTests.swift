@@ -19,28 +19,31 @@ final class BLEDevicePickerTests: XCTestCase {
         BLEDiscoveredDevice(id: id, name: name, rssi: rssi, serviceUUIDs: [])
     }
 
+    /// By its name alone: the radio page says Connected right below, and
+    /// "(connected)" made the menu truncate to "TNC4…nnected)" on a phone
+    /// (smoke run 2026-10-03-1, issue 107).
     func testTheSavedDeviceIsListedWhenTheScanMissedIt() {
         let other = device(UUID(), "Other TNC")
         let rows = BLEDevicePicker.rows(scanned: [other], selectedID: saved.uuidString,
-                                        savedName: "TNC4 Mobilinkd", connected: true)
-        XCTAssertEqual(rows.first, .init(id: saved.uuidString, label: "TNC4 Mobilinkd (connected)"))
+                                        savedName: "TNC4 Mobilinkd")
+        XCTAssertEqual(rows.first, .init(id: saved.uuidString, label: "TNC4 Mobilinkd"))
         XCTAssertEqual(rows.count, 2)
     }
 
     func testANamelessSavedDeviceFallsBackToItsUUID() {
         let rows = BLEDevicePicker.rows(scanned: [], selectedID: saved.uuidString,
-                                        savedName: "", connected: false)
+                                        savedName: "")
         XCTAssertEqual(rows, [.init(id: saved.uuidString, label: saved.uuidString)])
     }
 
     func testASeenDeviceIsNotListedTwice() {
         let rows = BLEDevicePicker.rows(scanned: [device(saved, "TNC4 Mobilinkd", rssi: -55)],
                                         selectedID: saved.uuidString,
-                                        savedName: "TNC4 Mobilinkd", connected: true)
+                                        savedName: "TNC4 Mobilinkd")
         XCTAssertEqual(rows, [.init(id: saved.uuidString, label: "TNC4 Mobilinkd (-55 dBm)")])
     }
 
     func testNothingSavedAddsNothing() {
-        XCTAssertEqual(BLEDevicePicker.rows(scanned: [], selectedID: "", savedName: "", connected: false), [])
+        XCTAssertEqual(BLEDevicePicker.rows(scanned: [], selectedID: "", savedName: ""), [])
     }
 }

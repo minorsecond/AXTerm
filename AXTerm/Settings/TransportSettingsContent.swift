@@ -168,8 +168,7 @@ struct BLESettingsContent: View {
                     Divider()
                     ForEach(BLEDevicePicker.rows(scanned: viewModel.bleDevices,
                                                  selectedID: viewModel.selectedBLEPeripheralID,
-                                                 savedName: viewModel.savedBLEPeripheralName,
-                                                 connected: viewModel.radioConnected)) { row in
+                                                 savedName: viewModel.savedBLEPeripheralName)) { row in
                         Text(row.label).tag(row.id)
                     }
                 }
@@ -231,12 +230,13 @@ enum BLEDevicePicker {
         let label: String
     }
 
+    /// The saved device is listed by name alone; whether it is connected
+    /// is said right below the picker (issue 107).
     static func rows(scanned: [BLEDiscoveredDevice], selectedID: String,
-                     savedName: String, connected: Bool) -> [Row] {
+                     savedName: String) -> [Row] {
         var rows = scanned.map { Row(id: $0.id.uuidString, label: "\($0.displayName) (\($0.rssi) dBm)") }
         if !selectedID.isEmpty, !rows.contains(where: { $0.id == selectedID }) {
-            let name = savedName.isEmpty ? selectedID : savedName
-            rows.insert(Row(id: selectedID, label: connected ? "\(name) (connected)" : name), at: 0)
+            rows.insert(Row(id: selectedID, label: savedName.isEmpty ? selectedID : savedName), at: 0)
         }
         return rows
     }
@@ -264,10 +264,29 @@ nonisolated enum BLEScanNotice {
         switch bluetoothState {
         case .poweredOff: return bluetoothOff
         case .unauthorized: return notAllowed
+        case .unsupported: return unsupported
+        case .unknown, .resetting: return notReady
         default: break
         }
         guard found == 0, !thisRadioConnected else { return nil }
         return nothingFound
+    }
+
+    /// Bluetooth had not answered when the scan window ran out.
+    static let notReady = "Bluetooth didn't answer in time. If you were asked to allow Bluetooth, allow it, then scan again."
+    static let unsupported = "This device has no Bluetooth LE."
+
+    /// Whether a Bluetooth state ends a scan that is waiting for it. Only a
+    /// definite answer does: `.unknown` and `.resetting` are Bluetooth not
+    /// ready yet, which is what the scanner hears while iOS asks for
+    /// permission. Ending the scan on them reported "No TNC found" before
+    /// the operator had answered (smoke run 2026-10-03-1, issue 107).
+    static func endsScan(on state: CBManagerState) -> Bool {
+        switch state {
+        case .poweredOff, .unauthorized, .unsupported: return true
+        case .poweredOn, .unknown, .resetting: return false
+        @unknown default: return false
+        }
     }
 }
 

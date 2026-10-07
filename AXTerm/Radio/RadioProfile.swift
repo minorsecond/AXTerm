@@ -10,6 +10,21 @@ nonisolated enum RadioTransportKind: String, Codable, CaseIterable, Sendable {
     /// The built-in sound modem: audio through a sound device, PTT and
     /// frequency over CI-V. An IC-705 over USB, with no TNC in between.
     case modem = "modem"
+
+    /// How a new radio starts out. A phone or tablet cannot run Direwolf,
+    /// so its new radio starts on Bluetooth; a fresh iPhone install used to
+    /// begin with Direwolf at localhost:8001 (smoke run 2026-10-03-1, issue 107).
+    static func defaultForNewRadio(onHandheld: Bool) -> RadioTransportKind {
+        onHandheld ? .ble : .tcp
+    }
+
+    static var defaultForNewRadio: RadioTransportKind {
+        #if os(iOS)
+        defaultForNewRadio(onHandheld: true)
+        #else
+        defaultForNewRadio(onHandheld: false)
+        #endif
+    }
 }
 
 /// One radio: a TNC port on a link, operating under a callsign.
@@ -29,7 +44,7 @@ nonisolated enum RadioTransportKind: String, Codable, CaseIterable, Sendable {
 nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     var id: RadioID
     var name: String
-    var kind: RadioTransportKind = .tcp
+    var kind: RadioTransportKind = .defaultForNewRadio
 
     var host: String = "localhost"
     var port: Int = 8001

@@ -158,18 +158,18 @@ final class BLEDeviceScanner: NSObject, ObservableObject {
         // handleStateUpdate will see isScanning==true and start scanning when poweredOn fires.
         isScanning = true
 
-        // Start the scan timeout regardless of BT state so we don't hang forever
-        scanTimer?.invalidate()
-        scanTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.stopScan()
-            }
-        }
+        scanDuration = duration
 
         guard centralManager?.state == .poweredOn else {
             bluetoothState = centralManager?.state ?? .unknown
+            // Bluetooth not ready, often because iOS is asking for
+            // permission. The scan window starts once it is; this longer
+            // backstop only keeps an unanswered prompt from scanning forever.
+            armScanTimer(Self.readinessBackstop)
             return
         }
+
+        armScanTimer(duration)
 
         // Pass nil for services to discover ALL BLE peripherals,
         // or pass known TNC services to filter
@@ -196,8 +196,24 @@ final class BLEDeviceScanner: NSObject, ObservableObject {
                 withServices: serviceFilter,
                 options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
             )
-        } else if state != .poweredOn {
-            isScanning = false
+            // The scan window counts from now, not from the tap.
+            armScanTimer(scanDuration)
+        } else if BLEScanNotice.endsScan(on: state) {
+            stopScan()
+        }
+    }
+
+    /// How long a scan listens once Bluetooth is ready.
+    private var scanDuration: TimeInterval = 10
+    /// How long a scan waits for Bluetooth to become ready at all.
+    private static let readinessBackstop: TimeInterval = 120
+
+    private func armScanTimer(_ seconds: TimeInterval) {
+        scanTimer?.invalidate()
+        scanTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.stopScan()
+            }
         }
     }
 
