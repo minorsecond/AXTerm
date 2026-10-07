@@ -1,6 +1,6 @@
 # AXTerm smoke test plan
 
-**Plan version 2, 2026-10-04.** Version 2: 6.5 expects mailbox uploads by YAPP only.
+**Plan version 3, 2026-10-07.** Version 3: adds 13.4, the iPad as B (ID-50)'s host. Version 2: 6.5 expects mailbox uploads by YAPP only.
 
 This is the formal smoke test for AXTerm. It is run live on the air, the same
 way every time, before a release and after any change to AX.25 or a service
@@ -287,6 +287,7 @@ Kept in the plan as regression checks; each names the bug it guards.
 | 13.1 | Callsign lookup, elevation downloads, solar conditions | data arrives and is shown | C (needs internet) |
 | 13.2 | Network graph and link metrics (df, dr, ETX, quality) after a long session | values and tooltips make sense | C, with Y to look |
 | 13.3 | The iPhone as B (ID-50)'s host, TNC4 over Bluetooth: repeat layers 1 to 3 against A (705) | as in 1 to 3 | Y for the iPhone, C to check A (705) |
+| 13.4 | The iPad as B (ID-50)'s host, TNC4 over Bluetooth: 1.1, 1.2, 1.4, 1.5, 2.1, 3.1 (`t3k_text.txt` only), 3.4, one 3.5 cancel each way, 3.8; then the layout full screen in portrait and landscape and in Split View at its narrowest; then leave the app with a link up | as in 1 to 3; no control clipped or overlapping at any width, the narrow layout matches the iPhone's; leaving the app sends DISC and UA ends the link | Y to tap on the iPad, C to drive A (705) and check |
 
 ## Closing steps
 
