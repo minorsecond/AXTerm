@@ -113,6 +113,32 @@ final class PacketListFollowDecisionTests: XCTestCase {
                        .init(isFollowing: false, scrollToNewest: false))
     }
 
+    /// Turning the iPad (or resizing its window) reflows the lines and
+    /// moves the view up by less than a screen with nobody scrolling. That
+    /// was taken for the reader: the terminal stopped following and new
+    /// lines stayed below the jump arrow (smoke run 2026-10-03-1, 13.4,
+    /// issue 116).
+    func testTurningTheScreenWhileFollowingStaysOnTheNewest() {
+        let portrait = G(contentHeight: 3_000, visibleMinY: 1_400, visibleHeight: 1_600, visibleWidth: 1_000)
+        let landscape = G(contentHeight: 2_200, visibleMinY: 1_100, visibleHeight: 700, visibleWidth: 1_400)
+        XCTAssertEqual(decide(portrait, landscape, following: true),
+                       .init(isFollowing: true, scrollToNewest: true))
+    }
+
+    func testANarrowerWindowWhileFollowingStaysOnTheNewest() {
+        let wide = G(contentHeight: 2_000, visibleMinY: 1_600, visibleHeight: 400, visibleWidth: 1_400)
+        let narrow = G(contentHeight: 2_600, visibleMinY: 1_500, visibleHeight: 400, visibleWidth: 600)
+        XCTAssertEqual(decide(wide, narrow, following: true),
+                       .init(isFollowing: true, scrollToNewest: true))
+    }
+
+    func testTurningTheScreenWhileReadingStaysPut() {
+        let portrait = G(contentHeight: 3_000, visibleMinY: 400, visibleHeight: 1_600, visibleWidth: 1_000)
+        let landscape = G(contentHeight: 2_200, visibleMinY: 300, visibleHeight: 700, visibleWidth: 1_400)
+        XCTAssertEqual(decide(portrait, landscape, following: false),
+                       .init(isFollowing: false, scrollToNewest: false))
+    }
+
     func testAJumpToTheNewestDoesNotStopFollowingOnTheWay() {
         // An animated scroll toward the bottom passes through offsets that
         // are not the bottom yet.

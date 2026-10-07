@@ -570,7 +570,8 @@ struct ConsoleView: View {
                     .onScrollGeometryChange(for: PacketListFollow.Geometry.self) { geometry in
                         PacketListFollow.Geometry(contentHeight: geometry.contentSize.height,
                                                   visibleMinY: geometry.visibleRect.minY,
-                                                  visibleHeight: geometry.visibleRect.height)
+                                                  visibleHeight: geometry.visibleRect.height,
+                                                  visibleWidth: geometry.visibleRect.width)
                     } action: { old, new in
                         let decision = PacketListFollow.decide(from: old, to: new, isFollowing: isFollowing,
                                                                userIsScrolling: userIsScrolling)

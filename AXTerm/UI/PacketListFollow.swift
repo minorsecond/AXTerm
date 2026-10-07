@@ -25,6 +25,7 @@ nonisolated extension PacketListFollow {
         var contentHeight: CGFloat
         var visibleMinY: CGFloat
         var visibleHeight: CGFloat
+        var visibleWidth: CGFloat = 0
 
         var isAtBottom: Bool {
             PacketListFollow.isAtBottom(contentHeight: contentHeight,
@@ -51,7 +52,12 @@ nonisolated extension PacketListFollow {
             return Decision(isFollowing: true, scrollToNewest: false)
         }
         let movedUp = old.visibleMinY - new.visibleMinY
-        if userIsScrolling || (movedUp > 0 && movedUp < new.visibleHeight) {
+        // The view itself changed size (the screen turned, the window or the
+        // keyboard moved): the lines reflowed under it and nobody scrolled.
+        // Taken for the reader, that stopped the iPad's terminal following
+        // (smoke run 2026-10-03-1, issue 116).
+        let viewResized = new.visibleHeight != old.visibleHeight || new.visibleWidth != old.visibleWidth
+        if userIsScrolling || (movedUp > 0 && movedUp < new.visibleHeight && !viewResized) {
             return Decision(isFollowing: false, scrollToNewest: false)
         }
         // New rows, a resized window, or a jump nobody made. Only a follower
