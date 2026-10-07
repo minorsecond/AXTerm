@@ -116,6 +116,22 @@ fileprivate enum NetRomRelayPhase {
     case established(destination: String, nextHop: String)
 }
 
+/// When a change in the terminal's session state means a link ended.
+nonisolated enum TerminalLinkLifecycle {
+    /// Whether arriving at `.disconnected` from `oldState` ends a link.
+    ///
+    /// `.disconnected` is both "the link went away" and "this session has
+    /// not connected yet": a session is created in that state and stays
+    /// there while its XID is out. Treating the level as the end closed the
+    /// History record of every connect that negotiated XID 70 ms after it
+    /// opened, and nothing was recorded on it (smoke run 2026-10-03-1,
+    /// issue 102). Only a transition from a state the link reached ends it.
+    static func linkEnded(onDisconnectFrom oldState: AX25SessionState?) -> Bool {
+        guard let oldState else { return false }
+        return oldState != .disconnected
+    }
+}
+
 /// When a change in session state means a live NET/ROM relay is gone.
 nonisolated enum NetRomRelayLifecycle {
     /// Whether a `.disconnected` session state ends an armed relay.
@@ -126,8 +142,7 @@ nonisolated enum NetRomRelayLifecycle {
     /// negotiation can stretch to eight seconds. Only a transition *from* a
     /// state the link actually reached says the link is gone.
     static func abandonsRelay(onDisconnectFrom oldState: AX25SessionState?) -> Bool {
-        guard let oldState else { return false }
-        return oldState != .disconnected
+        TerminalLinkLifecycle.linkEnded(onDisconnectFrom: oldState)
     }
 
     /// What to do when a prompt relay is armed.
@@ -2184,6 +2199,9 @@ struct TerminalView: View {
                     connectBarViewModel.markDisconnecting()
                     updateActiveSessionRecordState("Disconnecting")
                 case .disconnected:
+                    // Only a link that existed can end: a new session sits in
+                    // .disconnected while its XID is out (issue 102).
+                    guard TerminalLinkLifecycle.linkEnded(onDisconnectFrom: oldState) else { break }
                     // Abandon a relay only when a link that existed went away.
                     //
                     // `.disconnected` is also the state a brand-new session sits
@@ -5054,7 +5072,11 @@ struct TerminalView: View {
         } else {
             // The same event, kept. `sessionRecords` is a strip of live tabs
             // capped at twenty and gone on relaunch; this is the history.
-            let radio = txViewModel.currentSession?.radio ?? .primary
+            // The radio the connect is about to use; `.primary` named the
+            // wrong radio on a station whose link runs on another one.
+            let radio = txViewModel.currentSession?.radio
+                ?? txViewModel.radio(for: CallsignNormalizer.toAddress(intent.normalizedTo),
+                                     path: DigiPath(via.map { CallsignNormalizer.toAddress($0) }))
             sessionRecorder?.began(id: key, remote: intent.normalizedTo,
                                    via: via, transport: mode.rawValue, radio: radio)
             sessionRecords.insert(
