@@ -2554,6 +2554,9 @@ struct ContentView: View {
                             Button("Connect") { client.radioManager.open(radio.id) }
                         }
                         Text(radio.endpoint)
+                        if radio.status == .connected, let battery = tnc4BatteryLines(for: [radio.id]).first {
+                            Text(battery)
+                        }
                         if radio.status == .failed, let error = radio.lastError {
                             Text(error)
                         }
@@ -2583,36 +2586,51 @@ struct ContentView: View {
                 }
             }
             .menuStyle(.borderlessButton)
-            .help(warnings.isEmpty ? "Radio connection actions"
-                  : "Radio connection actions\n\n" + receiveWarningHelp(warnings))
+            .help(radioPillHelp(warnings.isEmpty ? "Radio connection actions"
+                                : "Radio connection actions\n\n" + receiveWarningHelp(warnings),
+                                radios: radios.filter { $0.status == .connected }.map(\.id)))
         }
         .toolbarPill()
     }
 
-    /// The lowest battery among these radios' TNC4s, as a glyph beside the
-    /// radio's name; nothing when none has reported one. The tooltip lists
-    /// each.
-    @ViewBuilder
-    private func tnc4BatteryGlyph(for radios: [RadioID]) -> some View {
-        let readings = radios.compactMap { radio -> (RadioID, Int, Double, Date?)? in
+    /// The batteries of these radios' TNC4s that have reported one.
+    private func tnc4BatteryReadings(for radios: [RadioID]) -> [(radio: RadioID, mV: Int, fraction: Double, readAt: Date?)] {
+        radios.compactMap { radio in
             guard let device = client.mobilinkdDevices[radio], let mV = device.batteryMillivolts,
                   let fraction = device.batteryFraction else { return nil }
             return (radio, mV, fraction, device.batteryReadAt)
         }
-        if let lowest = readings.min(by: { $0.2 < $1.2 }) {
-            let low = TNC4BatteryPresentation.isLow(fraction: lowest.2)
-            Image(systemName: TNC4BatteryPresentation.symbol(fraction: lowest.2))
+    }
+
+    /// One line per reporting TNC4, for the pill's tooltip and its menu.
+    private func tnc4BatteryLines(for radios: [RadioID]) -> [String] {
+        let readings = tnc4BatteryReadings(for: radios)
+        return readings.map { reading in
+            let line = TNC4BatteryPresentation.help(
+                millivolts: reading.mV, fraction: reading.fraction, readAt: reading.readAt,
+                timeFormatter: { $0.formatted(date: .omitted, time: .shortened) })
+            return readings.count > 1 ? "\(settings.radio(reading.radio)?.name ?? "TNC4"): \(line)" : line
+        }
+    }
+
+    /// The lowest battery among these radios' TNC4s, as a glyph beside the
+    /// radio's name; nothing when none has reported one. Its words are in
+    /// the pill's tooltip and menu: a tooltip on the glyph itself is hidden
+    /// by the menu's own.
+    @ViewBuilder
+    private func tnc4BatteryGlyph(for radios: [RadioID]) -> some View {
+        if let lowest = tnc4BatteryReadings(for: radios).min(by: { $0.fraction < $1.fraction }) {
+            let low = TNC4BatteryPresentation.isLow(fraction: lowest.fraction)
+            Image(systemName: TNC4BatteryPresentation.symbol(fraction: lowest.fraction))
                 .font(.system(size: 12))
                 .foregroundStyle(low ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
-                .help(readings.map { reading in
-                    let line = TNC4BatteryPresentation.help(
-                        millivolts: reading.1, fraction: reading.2, readAt: reading.3,
-                        timeFormatter: { $0.formatted(date: .omitted, time: .shortened) })
-                    return readings.count > 1
-                        ? "\(settings.radio(reading.0)?.name ?? "TNC4"): \(line)" : line
-                }.joined(separator: "\n"))
-                .accessibilityLabel("TNC4 battery \(Int((lowest.2 * 100).rounded())) percent")
+                .accessibilityLabel("TNC4 battery \(Int((lowest.fraction * 100).rounded())) percent")
         }
+    }
+
+    /// The pill's tooltip: the battery first when there is one.
+    private func radioPillHelp(_ base: String, radios: [RadioID]) -> String {
+        (tnc4BatteryLines(for: radios) + [base]).joined(separator: "\n")
     }
 
     private func radioTint(_ status: ConnectionStatus) -> Color {
@@ -2663,6 +2681,11 @@ struct ContentView: View {
                     Text(connectionEndpointLabel)
                 }
 
+                if client.status == .connected, let primary,
+                   let battery = tnc4BatteryLines(for: [primary]).first {
+                    Section("Battery") { Text(battery) }
+                }
+
                 if let primary, warning != nil {
                     Section("Receive") {
                         receiveWarningItems(primary, warning: warning)
@@ -2690,7 +2713,9 @@ struct ContentView: View {
                 }
             }
             .menuStyle(.borderlessButton)
-            .help(warning == nil ? "TNC connection actions" : "TNC connection actions\n\n" + receiveWarningHelp(warnings))
+            .help(radioPillHelp(warning == nil ? "TNC connection actions"
+                                : "TNC connection actions\n\n" + receiveWarningHelp(warnings),
+                                radios: client.status == .connected ? primary.map { [$0] } ?? [] : []))
         }
         .toolbarPill()
     }
