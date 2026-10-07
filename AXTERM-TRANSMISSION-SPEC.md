@@ -1403,12 +1403,12 @@ SessionId and MessageId 1.
 
 Checklist:
 - [x] Cancel reaches the other station and both ends finish canceled
-- [x] Cancel from either side, and pause, drop a chunk still queued whole
-  - Tested in `AXDPCancelQueueTests`.
   - Implementation notes: `SessionCoordinator.cancelTransfer` /
     `sendAXDPCancel` (SessionCoordinator+FileTransfers.swift);
     `handleNackMessage` for the receiving side of it. Tested in
     `TwoStationTransferTests`.
+- [x] Cancel from either side, and pause, drop a chunk still queued whole
+  - `dropChunkQueuedWhole`. Tested in `AXDPCancelQueueTests`.
 
 ### 9.5 Transfers that cannot finish
 
