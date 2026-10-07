@@ -2537,7 +2537,8 @@ struct ContentView: View {
                 ForEach(radios, id: \.id) { radio in
                     ActivityStatusDot(color: radioTint(radio.status),
                                       rxTrigger: client.lastRxByRadio[radio.id] ?? .distantPast,
-                                      txTrigger: client.lastTxByRadio[radio.id] ?? .distantPast)
+                                      txTrigger: client.lastTxByRadio[radio.id] ?? .distantPast,
+                                      isTransmitting: client.transmittingRadios.contains(radio.id))
                         .help(RadioPresentation.dotHelp(radio))
                 }
             }
@@ -2650,7 +2651,8 @@ struct ContentView: View {
 
             // The status dot carries the traffic too (ActivityStatusDot):
             // two activity lights beside it read as a loading indicator.
-            ActivityStatusDot(color: tncLedColor, rxTrigger: client.lastRxTime, txTrigger: client.lastTxTime)
+            ActivityStatusDot(color: tncLedColor, rxTrigger: client.lastRxTime, txTrigger: client.lastTxTime,
+                              isTransmitting: !client.transmittingRadios.isEmpty)
                 .help("TNC connection status. The dot turns red while sending; a ring pulses out on receive.")
 
             Menu {

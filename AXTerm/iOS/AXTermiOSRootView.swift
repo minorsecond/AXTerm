@@ -161,7 +161,8 @@ struct AXTermiOSRootView: View {
             // 30 seconds: a deaf receiver brings no frames that would redraw it.
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 TNCStatusStrip(radios: client.radioSummaries,
-                               receiveWarning: receiveWarning(now: context.date))
+                               receiveWarning: receiveWarning(now: context.date),
+                               transmitting: client.transmittingRadios)
             }
         }
     }

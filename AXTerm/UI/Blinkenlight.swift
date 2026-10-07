@@ -33,6 +33,9 @@ struct ActivityStatusDot: View {
     let color: Color
     let rxTrigger: Date
     let txTrigger: Date
+    /// The radio is keyed (`PacketEngine.transmittingRadios`): red for the
+    /// whole transmission, not only the flash a hand-off gives.
+    var isTransmitting = false
     @State private var transmitting = false
     @State private var ringScale: CGFloat = 1
     @State private var ringOpacity: Double = 0
@@ -45,9 +48,11 @@ struct ActivityStatusDot: View {
                 .scaleEffect(ringScale)
                 .opacity(ringOpacity)
             Circle()
-                .fill(transmitting ? Color.red : color)
+                .fill(TransmitLight.dotColor(base: color, transmitting: transmitting || isTransmitting))
                 .frame(width: 8, height: 8)
-                .animation(transmitting ? .easeIn(duration: 0.05) : .easeOut(duration: 0.4), value: transmitting)
+                .transmitGlow(isTransmitting)
+                .animation(transmitting || isTransmitting ? .easeIn(duration: 0.05) : .easeOut(duration: 0.4),
+                           value: transmitting || isTransmitting)
         }
         .frame(width: 10, height: 10)
         .onChange(of: rxTrigger) { _, _ in

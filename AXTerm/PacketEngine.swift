@@ -416,6 +416,10 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var bytesReceived: Int = 0
     @Published private(set) var lastRxTime: Date = .distantPast
     @Published private(set) var lastTxTime: Date = .distantPast
+    /// The radios transmitting now, for the TX light (`TransmitIndicator`).
+    @Published private(set) var transmittingRadios: Set<RadioID> = []
+    private var transmitLights: [RadioID: TransmitIndicator] = [:]
+    private var transmitLightTimer: Timer?
     /// The built-in modem's last telemetry per link, to log only transitions.
     private var lastModemTelemetry: [String: ModemTelemetry] = [:]
     /// The same two clocks, per radio, for the sidebar's radio rows.
@@ -924,6 +928,35 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Transmission
 
+    /// A frame went to a radio: a TNC's light is estimated from its TX delay
+    /// and the frame's airtime. A sound modem's follows its PTT instead.
+    private func noteTransmitLight(radio: RadioID, bytes: Int) {
+        let txDelay = Double(settings.radio(radio)?.txDelayMs ?? 300) / 1000
+        transmitLights[radio, default: TransmitIndicator()].noteHandedOff(bytes: bytes, txDelay: txDelay, at: Date())
+        refreshTransmitLights()
+    }
+
+    private func noteTransmitPTT(_ on: Bool, radios: [RadioID]) {
+        for radio in radios { transmitLights[radio, default: TransmitIndicator()].notePTT(on) }
+        refreshTransmitLights()
+    }
+
+    /// Publish which radios are transmitting, and come back when the next
+    /// estimate runs out.
+    private func refreshTransmitLights() {
+        let now = Date()
+        let on = Set(transmitLights.filter { $0.value.isTransmitting(at: now) }.keys)
+        if on != transmittingRadios { transmittingRadios = on }
+        transmitLightTimer?.invalidate()
+        transmitLightTimer = nil
+        if let next = transmitLights.values.compactMap(\.endsAt).filter({ $0 > now }).min() {
+            transmitLightTimer = Timer.scheduledTimer(withTimeInterval: next.timeIntervalSince(now) + 0.01,
+                                                      repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshTransmitLights() }
+            }
+        }
+    }
+
     /// Send an outbound frame via KISS
     /// - Parameter frame: The frame to send
     /// - Parameter completion: Callback with success or error
@@ -968,6 +1001,8 @@ final class PacketEngine: ObservableObject {
             size: ax25Data.count
         )
         TxLog.hexDump(.ax25, "AX.25 frame", data: ax25Data)
+
+        noteTransmitLight(radio: frame.radio, bytes: ax25Data.count)
 
         // Wrap in KISS frame for the radio's port on its link.
         let port = radioManager.kissPort(for: frame.radio)
@@ -3349,6 +3384,7 @@ extension PacketEngine: RadioManagerDelegate {
                 at: now, carriers: telemetry.carriersHeard, decoded: telemetry.framesDecoded)
         }
         if previous?.ptt != telemetry.ptt {
+            noteTransmitPTT(telemetry.ptt, radios: manager.radios(onLink: link.key))
             LinkDebugLog.shared.recordStateChange(from: previous?.ptt == true ? "PTT on" : "PTT off",
                                                   to: telemetry.ptt ? "PTT on" : "PTT off",
                                                   endpoint: link.endpointDescription)

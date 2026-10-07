@@ -31,6 +31,9 @@ struct TNCStatusStrip: View {
     /// (ReceiveHealth, ReceiveLevelMonitor), and the line to show for it.
     /// Shown only while nothing more urgent is.
     var receiveWarning: ReceiveWarning?
+    /// The radios transmitting now (`PacketEngine.transmittingRadios`):
+    /// their dots turn red and the strip says TX.
+    var transmitting: Set<RadioID> = []
 
     struct ReceiveWarning: Equatable {
         let radio: RadioID
@@ -44,9 +47,11 @@ struct TNCStatusStrip: View {
     }
 
     /// One dot per radio, one line about whichever needs attention.
-    init(radios: [RadioStatusSummary], receiveWarning: ReceiveWarning? = nil) {
+    init(radios: [RadioStatusSummary], receiveWarning: ReceiveWarning? = nil,
+         transmitting: Set<RadioID> = []) {
         self.radios = radios
         self.receiveWarning = receiveWarning
+        self.transmitting = transmitting
         self.status = RadioPresentation.aggregateStatus(radios.map(\.status))
         self.host = radios.first?.host ?? ""
         self.port = radios.first?.port ?? 0
@@ -62,16 +67,26 @@ struct TNCStatusStrip: View {
             if radios.count > 1 {
                 HStack(spacing: 3) {
                     ForEach(radios, id: \.id) { radio in
+                        let keyed = transmitting.contains(radio.id)
                         Circle()
-                            .fill(Self.tint(for: radio.status))
+                            .fill(TransmitLight.dotColor(base: Self.tint(for: radio.status), transmitting: keyed))
                             .frame(width: 6, height: 6)
+                            .transmitGlow(keyed)
                             .accessibilityHidden(true)
                     }
                 }
             } else {
                 Circle()
-                    .fill(tint)
+                    .fill(TransmitLight.dotColor(base: tint, transmitting: !transmitting.isEmpty))
                     .frame(width: 6, height: 6)
+                    .transmitGlow(!transmitting.isEmpty)
+            }
+
+            if let tx = TransmitLight.label(transmitting: !transmitting.isEmpty, needsAttention: needsAttention) {
+                Text(tx)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(TransmitLight.color)
+                    .accessibilityLabel("Transmitting")
             }
 
             if let label {
