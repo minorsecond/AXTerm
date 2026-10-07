@@ -1530,7 +1530,13 @@ struct TerminalComposeView: View {
 
                 // Row 1 — compose. The message/broadcast field + Send.
                 HStack(spacing: 8) {
-                    if showsInputModeSwitch {
+                    if composeRows.accessoriesInMenu {
+                        // A phone: one button for everything that is not
+                        // the message, so the field gets the row (issue 106).
+                        if hasComposeAccessories {
+                            composeAccessoryMenu
+                        }
+                    } else if showsInputModeSwitch {
                         Picker("Input", selection: inputMode) {
                             ForEach(TerminalInputMode.allCases) { mode in
                                 Text(mode.label).tag(mode)
@@ -1564,11 +1570,11 @@ struct TerminalComposeView: View {
                             .disabled(!isConnected || !canTypeMessage)
                     }
 
-                    if let onSendControl, connectionMode == .connected {
+                    if !composeRows.accessoriesInMenu, let onSendControl, connectionMode == .connected {
                         controlCharacterMenu(onSendControl)
                     }
 
-                    if let onInsertPosition, !isRawMode {
+                    if !composeRows.accessoriesInMenu, let onInsertPosition, !isRawMode {
                         Button {
                             onInsertPosition()
                         } label: {
@@ -1583,7 +1589,7 @@ struct TerminalComposeView: View {
                     // Capture: keep what the station sends as a text file.
                     // Offered while a session is up, and kept on screen while
                     // a capture runs so it can always be turned off.
-                    if let onToggleCapture,
+                    if !composeRows.accessoriesInMenu, let onToggleCapture,
                        isCapturing || (connectionMode == .connected && sessionState == .connected) {
                         Button {
                             onToggleCapture()
@@ -1687,11 +1693,15 @@ struct TerminalComposeView: View {
                     broadcastStrip
                 }
             }
-            if connectionMode == .connected {
+            // On a phone a link that is up drops both rows: the station is
+            // in the session header and the route is fixed (issue 106).
+            if composeRows.destination {
                 HStack(spacing: 8) {
                     destinationControl
                     routingCapsule
                 }
+            }
+            if composeRows.routingPicker {
                 // Full width rather than intrinsic: four segments
                 // across a phone is 90 points each, which is a
                 // readable control. Intrinsic width plus the
@@ -1699,6 +1709,12 @@ struct TerminalComposeView: View {
                 routingPicker
             }
         }
+    }
+
+    private var composeRows: CompactTerminalLayout.ComposeRows {
+        CompactTerminalLayout.composeRows(compact: isCompactWidth,
+                                          sessionMode: connectionMode == .connected,
+                                          linkUp: sessionState == .connected)
     }
 
     // Extracted so the compact and regular arrangements share one definition
@@ -1876,7 +1892,9 @@ struct TerminalComposeView: View {
         case .connecting, .disconnecting:
             return "Cancel"
         case .disconnected, .error, .none:
-            return connectBarViewModel.autoRouting ? "Auto Connect" : "Connect"
+            // A phone shows the route choice right under the button, so
+            // "Auto" there says what "Auto Connect" said.
+            return connectBarViewModel.autoRouting && !isCompactWidth ? "Auto Connect" : "Connect"
         }
     }
 
@@ -2013,6 +2031,58 @@ struct TerminalComposeView: View {
               : "Send a control character now, on its own. The message box is left as it is.")
         .accessibilityLabel("Control Characters")
         .accessibilityIdentifier("terminalControlMenu")
+    }
+
+    /// Whether the phone's accessory menu has anything in it.
+    private var hasComposeAccessories: Bool {
+        showsInputModeSwitch
+            || (onSendControl != nil && connectionMode == .connected)
+            || (onInsertPosition != nil && !isRawMode)
+            || (onToggleCapture != nil && (isCapturing || sessionIsUp))
+    }
+
+    /// Line/Raw, control keys, position and capture in one button, for a
+    /// phone. The label turns red while a capture runs, so it can always be
+    /// seen and stopped.
+    private var composeAccessoryMenu: some View {
+        Menu {
+            if showsInputModeSwitch {
+                Picker("Input", selection: inputMode) {
+                    ForEach(TerminalInputMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+            if let onSendControl, connectionMode == .connected {
+                Section("Send Now") {
+                    Button("Ctrl-C (interrupt)") { onSendControl(0x03) }
+                    Button("Ctrl-D (end of input)") { onSendControl(0x04) }
+                    Button("Ctrl-Z (end of message)") { onSendControl(0x1A) }
+                    Button("Esc") { onSendControl(0x1B) }
+                }
+                .disabled(!isConnected || !sessionIsUp)
+                if isRawMode {
+                    Toggle("Local Echo", isOn: $rawLocalEcho)
+                }
+            }
+            if let onInsertPosition, !isRawMode {
+                Button("Insert Position", systemImage: "location") { onInsertPosition() }
+                    .disabled(!isConnected || !canTypeMessage)
+            }
+            if let onToggleCapture, isCapturing || sessionIsUp {
+                Button(isCapturing ? "Stop Capture" : "Capture",
+                       systemImage: isCapturing ? "stop.circle" : "record.circle") { onToggleCapture() }
+            }
+        } label: {
+            Image(systemName: isCapturing ? "record.circle.fill" : "plus.circle")
+                .font(.title3)
+                .foregroundStyle(isCapturing ? Color.red : Color.accentColor)
+                .frame(minWidth: 32, minHeight: 32)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(isCapturing ? "Message options, capturing" : "Message options")
+        .accessibilityIdentifier("terminalComposeOptions")
     }
 
     /// Whether the user can type a message

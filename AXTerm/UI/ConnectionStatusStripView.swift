@@ -60,7 +60,15 @@ struct ConnectionStatusStripView: View {
             // Connection strip background
             HStack(spacing: 12) {
                 if isConnected, let session = session {
-                    connectedStatusView(session: session)
+                    // The whole line at its own width, or on a narrow screen
+                    // the delivery note as its icon, truncating rather than
+                    // wrapping. Squeezed, "Delivered to K0EPI-2" wrapped a
+                    // few letters per line down a phone (issue 106).
+                    ViewThatFits(in: .horizontal) {
+                        connectedStatusView(session: session, compact: false)
+                            .fixedSize(horizontal: true, vertical: false)
+                        connectedStatusView(session: session, compact: true)
+                    }
                 } else if isConnecting {
                     connectingStatusView()
                 } else if isDisconnecting {
@@ -175,7 +183,7 @@ struct ConnectionStatusStripView: View {
     }
 
     @ViewBuilder
-    private func connectedStatusView(session: AX25Session) -> some View {
+    private func connectedStatusView(session: AX25Session, compact: Bool) -> some View {
         HStack(spacing: 6) {
             // Status dot - vertically aligned with text baseline
             Circle()
@@ -219,9 +227,11 @@ struct ConnectionStatusStripView: View {
                     Text("·")
                         .foregroundStyle(.tertiary)
                     Label(deliverySummary, systemImage: deliveryIcon)
+                        .labelStyle(DeliveryLabelStyle(iconOnly: compact))
                         .font(.subheadline)
                         .foregroundStyle(deliverySummary.hasPrefix("Answered") ? .green : .secondary)
                         .help(deliveryDetail ?? deliverySummary)
+                        .accessibilityLabel(deliverySummary)
                 }
                 
                 if let srtt = session.timers.srtt {
@@ -250,8 +260,21 @@ struct ConnectionStatusStripView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            
-            Spacer()
+        }
+        .lineLimit(1)
+    }
+
+    /// The delivery note in words, or as its icon alone where the strip is
+    /// narrow (the words stay in the tooltip and the accessibility label).
+    private struct DeliveryLabelStyle: LabelStyle {
+        let iconOnly: Bool
+
+        func makeBody(configuration: Configuration) -> some View {
+            if iconOnly {
+                configuration.icon
+            } else {
+                Label(configuration)
+            }
         }
     }
     

@@ -4,6 +4,10 @@ CLAUDE.md §6 asks for line-oriented and raw modes. The compose row in a
 connected session has a Line/Raw switch. Line is the default and is how
 AXTerm has always worked. Raw sends keys as they are typed.
 
+On a phone the switch is in the + menu beside the message field, with the
+control characters, Insert Position and Capture, so the field gets the width
+of the row. The + turns into a red record symbol while a capture runs.
+
 ## Line mode
 
 The operator edits a whole line in the message field and nothing leaves until

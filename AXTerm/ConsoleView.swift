@@ -1163,106 +1163,21 @@ struct ConsoleLineView: View {
             // Enhanced indicator bar with premium styling for system/error messages
             indicatorBar
 
-            // Printed on every row, dimmed where it repeats the row above.
-            //
-            // Suppressing it outright left a blank, and a blank in the
-            // leftmost column reads as a time that failed to appear rather
-            // than one that was inherited. The fix for that was a hairline
-            // tying the run together — but a full-height rule between two
-            // columns is a column divider, and one that exists only on
-            // grouped runs appears and disappears as the log scrolls. It read
-            // as broken chrome for as long as it existed.
-            //
-            // So don't create the blank. A quiet repeat says "same second"
-            // without inventing a mark to explain itself, every row can be
-            // read on its own, and nothing in the gutter flickers.
-            Text(line.timestampString)
-                .foregroundStyle(.tertiary)
-                .font(.system(size: fontSize, design: .monospaced))
-                .opacity(timestampRun.printsTimestamp ? 1 : ConsoleTheme.repeatedTimestampOpacity)
-                .help(line.timestampString)
-
-            // Which transmitter we actually heard. Shown for *any* repeated
-            // copy, not just echoes of our own frames: a station's beacon
-            // heard direct and heard off a digi arrive a second apart with
-            // identical text, and without this marker the two rows are the
-            // same words — so "I hear KB5YZB-7" and "DRLNOD hears KB5YZB-7"
-            // looked like a duplicate (2026-08-31).
-            if let attribution = line.repeatAttribution(localCallsigns: echoCallsigns) {
-                HStack(spacing: 3) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text(attribution.digis.joined(separator: ","))
-                        .font(.system(size: fontSize, weight: .medium, design: .monospaced))
+            // A phone puts the message under its time and calls; beside them
+            // a long line wrapped three words per row (issue 106).
+            if CompactTerminalLayout.stacksMessageUnderHeader(compact: isCompactWidth) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .top, spacing: 6) {
+                        headerItems
+                    }
+                    // An APRS symbol stays beside its text.
+                    HStack(alignment: .top, spacing: 6) {
+                        messageContent
+                    }
                 }
-                .foregroundStyle(.indigo)
-                .help(repeatHelp(attribution))
-                .accessibilityLabel(repeatHelp(attribution))
-            }
-
-            // Callsigns
-            if let from = line.from {
-                callsign(from)
-
-                if let to = line.to {
-                    Text("\u{2192}")
-                        .foregroundStyle(.tertiary)
-
-                    callsign(to)
-                }
-            }
-
-            // Via path indicator (icon with tooltip)
-            if !allViaPaths.isEmpty {
-                DigiPathIndicator(paths: allViaPaths)
-            } else if !line.via.isEmpty {
-                DigiPathIndicator(paths: [line.via])
-            }
-
-            // Duplicate count badge
-            if duplicateCount > 0 {
-                DuplicateCountBadge(count: duplicateCount, kind: line.kind)
-            }
-
-            // Which radio heard this line. Only when there is more than one
-            // radio to tell apart — `radioNames` is empty otherwise — so the
-            // operator can see at a glance whether a line came from the 705 or
-            // Direwolf, the same attribution the Packets Radio column shows.
-            if let id = line.radioID, let name = radioNames[id] {
-                HStack(spacing: 2) {
-                    Image(systemName: "dot.radiowaves.left.and.right")
-                        .font(.system(size: fontSize - 2, weight: .semibold))
-                    Text(name)
-                        .font(.system(size: fontSize - 1, weight: .medium, design: .rounded))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(.teal)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(.teal.opacity(0.12), in: Capsule())
-                .help("Heard on \(name)")
-                .accessibilityLabel("Heard on \(name)")
-            }
-
-            // Message text (wraps to container width; no chopping)
-            //
-            // Decoded for APRS, raw for everything else. An AX.25 payload is
-            // readable as sent and the terminal is where you go to read it;
-            // a Mic-E position is not text at all. The tooltip carries the raw
-            // bytes either way, so nothing here has to be taken on trust.
-            if let digest = line.aprs, !showsRawAPRS {
-                if let symbol = digest.symbol {
-                    Image(systemName: APRSSymbolGlyph.systemImage(table: symbol.table, code: symbol.code))
-                        .font(.system(size: fontSize))
-                        .foregroundStyle(.secondary)
-                        .help(APRSSymbolGlyph.label(table: symbol.table, code: symbol.code))
-                }
-                messageText(APRSDigestLine.text(for: digest, observer: observer,
-                                                inMiles: distanceInMiles,
-                                                definition: telemetryDefinition))
-                    .help(rawHelp)
             } else {
-                messageText(line.text)
+                headerItems
+                messageContent
             }
         }
         .font(.system(size: 12, design: .monospaced))
@@ -1276,6 +1191,123 @@ struct ConsoleLineView: View {
                     in: RoundedRectangle(cornerRadius: ConsoleTheme.rowCornerRadius,
                                          style: .continuous))
         .opacity(isDigipeatEcho ? 0.6 : 1.0)
+    }
+
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isCompactWidth: Bool { horizontalSizeClass == .compact }
+    #else
+    private var isCompactWidth: Bool { false }
+    #endif
+
+    /// Time, calls, path and badges: everything on the row before the message.
+    @ViewBuilder
+    private var headerItems: some View {
+        // Printed on every row, dimmed where it repeats the row above.
+        //
+        // Suppressing it outright left a blank, and a blank in the
+        // leftmost column reads as a time that failed to appear rather
+        // than one that was inherited. The fix for that was a hairline
+        // tying the run together — but a full-height rule between two
+        // columns is a column divider, and one that exists only on
+        // grouped runs appears and disappears as the log scrolls. It read
+        // as broken chrome for as long as it existed.
+        //
+        // So don't create the blank. A quiet repeat says "same second"
+        // without inventing a mark to explain itself, every row can be
+        // read on its own, and nothing in the gutter flickers.
+        Text(line.timestampString)
+            .foregroundStyle(.tertiary)
+            .font(.system(size: fontSize, design: .monospaced))
+            .opacity(timestampRun.printsTimestamp ? 1 : ConsoleTheme.repeatedTimestampOpacity)
+            .help(line.timestampString)
+
+        // Which transmitter we actually heard. Shown for *any* repeated
+        // copy, not just echoes of our own frames: a station's beacon
+        // heard direct and heard off a digi arrive a second apart with
+        // identical text, and without this marker the two rows are the
+        // same words — so "I hear KB5YZB-7" and "DRLNOD hears KB5YZB-7"
+        // looked like a duplicate (2026-08-31).
+        if let attribution = line.repeatAttribution(localCallsigns: echoCallsigns) {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(attribution.digis.joined(separator: ","))
+                    .font(.system(size: fontSize, weight: .medium, design: .monospaced))
+            }
+            .foregroundStyle(.indigo)
+            .help(repeatHelp(attribution))
+            .accessibilityLabel(repeatHelp(attribution))
+        }
+
+        // Callsigns
+        if let from = line.from {
+            callsign(from)
+
+            if let to = line.to {
+                Text("\u{2192}")
+                    .foregroundStyle(.tertiary)
+
+                callsign(to)
+            }
+        }
+
+        // Via path indicator (icon with tooltip)
+        if !allViaPaths.isEmpty {
+            DigiPathIndicator(paths: allViaPaths)
+        } else if !line.via.isEmpty {
+            DigiPathIndicator(paths: [line.via])
+        }
+
+        // Duplicate count badge
+        if duplicateCount > 0 {
+            DuplicateCountBadge(count: duplicateCount, kind: line.kind)
+        }
+
+        // Which radio heard this line. Only when there is more than one
+        // radio to tell apart — `radioNames` is empty otherwise — so the
+        // operator can see at a glance whether a line came from the 705 or
+        // Direwolf, the same attribution the Packets Radio column shows.
+        if let id = line.radioID, let name = radioNames[id] {
+            HStack(spacing: 2) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: fontSize - 2, weight: .semibold))
+                Text(name)
+                    .font(.system(size: fontSize - 1, weight: .medium, design: .rounded))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.teal)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(.teal.opacity(0.12), in: Capsule())
+            .help("Heard on \(name)")
+            .accessibilityLabel("Heard on \(name)")
+        }
+    }
+
+    /// The message: decoded APRS or the text as sent.
+    @ViewBuilder
+    private var messageContent: some View {
+        // Message text (wraps to container width; no chopping)
+        //
+        // Decoded for APRS, raw for everything else. An AX.25 payload is
+        // readable as sent and the terminal is where you go to read it;
+        // a Mic-E position is not text at all. The tooltip carries the raw
+        // bytes either way, so nothing here has to be taken on trust.
+        if let digest = line.aprs, !showsRawAPRS {
+            if let symbol = digest.symbol {
+                Image(systemName: APRSSymbolGlyph.systemImage(table: symbol.table, code: symbol.code))
+                    .font(.system(size: fontSize))
+                    .foregroundStyle(.secondary)
+                    .help(APRSSymbolGlyph.label(table: symbol.table, code: symbol.code))
+            }
+            messageText(APRSDigestLine.text(for: digest, observer: observer,
+                                            inMiles: distanceInMiles,
+                                            definition: telemetryDefinition))
+                .help(rawHelp)
+        } else {
+            messageText(line.text)
+        }
     }
     
     /// The message, with any callsigns in it drawn as links.

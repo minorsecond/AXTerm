@@ -1942,6 +1942,20 @@ enum TerminalTab: String, CaseIterable {
     case history = "History"
 }
 
+/// The tab strip at its own width beside the session picker, or across the
+/// whole row on a phone.
+private struct TabStripSizing: ViewModifier {
+    let fillsRow: Bool
+
+    func body(content: Content) -> some View {
+        if fillsRow {
+            content.frame(maxWidth: .infinity)
+        } else {
+            content.fixedSize()
+        }
+    }
+}
+
 private struct TerminalAutoPathCandidate: Identifiable, Hashable {
     let pathInput: String
     let pathDisplay: String
@@ -2028,6 +2042,10 @@ struct TerminalView: View {
     /// What the operator's other devices connected to, for the History pane's
     /// "Other devices" switch. Nil where sync has no database.
     var remoteSessionStore: TerminalSessionReplicationStore?
+    #if os(iOS)
+    /// Compact means a phone; see `CompactTerminalLayout`.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     @State private var selectedTab: TerminalTab = .session
     @State private var showingTransferSheet = false
@@ -2314,6 +2332,10 @@ struct TerminalView: View {
             // One row of chrome: which pane, and — on the session pane —
             // which session. These were two stacked full-width bars; the
             // terminal's vertical space is worth more than either needed.
+            //
+            // On a phone the tabs take the row and the session picker is a
+            // menu button (issue 106): side by side they were wider than the
+            // screen, and the overflow widened the whole page past both edges.
             HStack(spacing: 12) {
                 Picker("", selection: $selectedTab) {
                     ForEach(TerminalTab.allCases, id: \.self) { tab in
@@ -2321,13 +2343,19 @@ struct TerminalView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .fixedSize()
+                .labelsHidden()
+                .modifier(TabStripSizing(fillsRow: isCompactWidth))
 
-                if selectedTab == .session, !sessionRecords.isEmpty {
+                switch CompactTerminalLayout.sessionControl(tab: selectedTab,
+                                                            hasRecords: !sessionRecords.isEmpty,
+                                                            compact: isCompactWidth) {
+                case .inline:
                     Divider().frame(height: 14)
                     sessionSelectorView
-                } else {
-                    Spacer(minLength: 0)
+                case .menu:
+                    sessionMenu
+                case .none:
+                    if !isCompactWidth { Spacer(minLength: 0) }
                 }
             }
             .padding(.horizontal, 12)
@@ -2888,7 +2916,9 @@ struct TerminalView: View {
                 }
 
                 // Session status pill (shown during active session lifecycle)
-                if txViewModel.viewModel.connectionMode == .connected {
+                if CompactTerminalLayout.showsSessionStrip(
+                    sessionMode: txViewModel.viewModel.connectionMode == .connected,
+                    linkUp: displayedSessionState == .connected) {
                     ConnectionStatusStripView(
                         session: txViewModel.currentSession,
                         sessionState: displayedSessionState,
@@ -2945,8 +2975,8 @@ struct TerminalView: View {
                         ))
                 }
 
-                // TX Queue (collapsible)
-                if !txViewModel.queueEntries.isEmpty {
+                // TX Queue, while something is still going out (issue 106)
+                if TxQueuePresentation.isVisible(statuses: txViewModel.queueEntries.map(\.state.status)) {
                     TxQueueView(
                         entries: txViewModel.queueEntries,
                     onCancel: { frameId in
@@ -3139,17 +3169,61 @@ struct TerminalView: View {
 
             Spacer()
 
-            Button("Clear Closed") {
-                sessionRecords.removeAll { $0.statusText == "Disconnected" || $0.statusText == "Failed" }
-                if let activeID = activeSessionRecordID,
-                   !sessionRecords.contains(where: { $0.id == activeID }) {
-                    activeSessionRecordID = nil
+            Button("Clear Closed", action: clearClosedSessionRecords)
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(!hasClosedSessionRecords)
+        }
+    }
+
+    /// The session picker as one button, for a phone: the same choices and
+    /// Clear Closed, in a menu that takes one icon's width beside the tabs.
+    private var sessionMenu: some View {
+        Menu {
+            Picker("Sessions", selection: $activeSessionRecordID) {
+                Text("All Traffic").tag(Optional<String>.none)
+                ForEach(sessionRecords) { record in
+                    Text(sessionRecordLabels[record.id] ?? record.label)
+                        .tag(Optional(record.id))
                 }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .disabled(sessionRecords.allSatisfy { $0.statusText != "Disconnected" && $0.statusText != "Failed" })
+            .pickerStyle(.inline)
+            .onChange(of: activeSessionRecordID) { _, newValue in
+                guard let newValue else { return }
+                focusSessionRecord(id: newValue)
+            }
+            Divider()
+            Button("Clear Closed", systemImage: "xmark.circle", action: clearClosedSessionRecords)
+                .disabled(!hasClosedSessionRecords)
+        } label: {
+            Image(systemName: "rectangle.stack")
+                .font(.body.weight(.medium))
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
+        .accessibilityLabel("Sessions")
+    }
+
+    private var hasClosedSessionRecords: Bool {
+        sessionRecords.contains { $0.statusText == "Disconnected" || $0.statusText == "Failed" }
+    }
+
+    private func clearClosedSessionRecords() {
+        sessionRecords.removeAll { $0.statusText == "Disconnected" || $0.statusText == "Failed" }
+        if let activeID = activeSessionRecordID,
+           !sessionRecords.contains(where: { $0.id == activeID }) {
+            activeSessionRecordID = nil
+        }
+    }
+
+    /// True on a phone-width screen; the Mac and the iPad keep the wide
+    /// arrangement.
+    private var isCompactWidth: Bool {
+        #if os(iOS)
+        horizontalSizeClass == .compact
+        #else
+        false
+        #endif
     }
 
     private var connectionMessage: String {
