@@ -398,10 +398,15 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
     func broadcastNodes() -> Int {
         guard advertisesItself else { return 0 }
         let routes = forwardingEnabled ? (advertisableRoutesProvider?() ?? []) : []
-        var announcements = announcementsProvider?() ?? []
-        if announcements.isEmpty {
-            announcements = [NetRomAnnouncement(radio: .primary, node: endpoint.localNode, alias: localAlias)]
-        }
+        // A provider that names no radio means none announces: each has its
+        // switch off or is on an APRS channel. Falling back to the primary
+        // then overrode every switch, and in the main app tried to announce
+        // on a disabled radio whose switch was off (smoke run 2026-10-03-1,
+        // issue 101). Only a driver with no provider at all, as in the
+        // single-radio tests, announces on the primary.
+        let announcements = announcementsProvider?()
+            ?? [NetRomAnnouncement(radio: .primary, node: endpoint.localNode, alias: localAlias)]
+        guard !announcements.isEmpty else { return 0 }
         var total = 0
         var notes: [String] = []
         for announcement in announcements {

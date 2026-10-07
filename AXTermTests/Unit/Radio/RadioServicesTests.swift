@@ -74,6 +74,23 @@ final class RadioServicesTests: XCTestCase {
         XCTAssertEqual(transport.broadcasts.map(\.radio), [.primary])
     }
 
+    /// A provider that names no radio means no radio announces: each one
+    /// has its switch off, or is on an APRS channel. The driver used to fall
+    /// back to the primary radio then, overriding every switch; in the main
+    /// app it tried to announce EPINOD on a disabled radio whose announce
+    /// switch was off (smoke run 2026-10-03-1, issue 101).
+    func testNoAnnouncingRadioMeansNoBroadcast() {
+        let transport = RadioTransport()
+        let (driver, _) = announcingDriver(transport)
+        var notes: [String] = []
+        driver.onOperatorNote = { notes.append($0) }
+        driver.announcementsProvider = { [] }
+
+        XCTAssertEqual(driver.broadcastNodes(), 0)
+        XCTAssertTrue(transport.broadcasts.isEmpty)
+        XCTAssertTrue(notes.isEmpty, "and nothing claims it announced")
+    }
+
     /// One node on every radio: the same payload leaves each announcing
     /// radio, and the operator reads one line.
     func testOneNodeOnEveryRadioSendsTheSamePayloadFromEachRadio() {
