@@ -1604,8 +1604,17 @@ struct TerminalComposeView: View {
                         Button {
                             onToggleCapture()
                         } label: {
-                            Image(systemName: isCapturing ? "record.circle.fill" : "record.circle")
-                                .foregroundStyle(isCapturing ? Color.red : Color.secondary)
+                            HStack(spacing: 4) {
+                                Image(systemName: isCapturing ? "record.circle.fill" : "record.circle")
+                                    .foregroundStyle(isCapturing ? Color.red : Color.secondary)
+                                if let caption = CaptureIndicator.caption(isCapturing: isCapturing,
+                                                                          touch: CaptureIndicator.isTouch) {
+                                    Text(caption)
+                                        .font(.caption)
+                                        .foregroundStyle(.red)
+                                        .fixedSize()
+                                }
+                            }
                         }
                         .buttonStyle(.borderless)
                         .help(isCapturing
