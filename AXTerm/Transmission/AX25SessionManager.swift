@@ -3840,11 +3840,15 @@ final class AX25SessionManager: ObservableObject {
             }
 
             // Filter out any S-frame RR poll command returned by processActions,
-            // as the retransmitted oldest I-frame with P=1 acts as the poll per §6.4.4.1.
+            // as a retransmitted I-frame with P=1 acts as the poll per §6.4.4.1.
             frames.removeAll(where: { $0.frameType == "s" && $0.isCommand == true })
 
+            // The poll rides the last frame of the resend, as it does a
+            // normal burst. On the first, the peer answered before the rest
+            // had arrived, its ack for them was lost, and T1 went back one
+            // frame per round (smoke run 2026-10-03-1, issue 108).
             axDebugPrint("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) vr=\(session.vr) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted())")
-            frames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "T1-timeout", preservePollFinal: false, forcePollOnFirst: true))
+            frames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "T1-timeout", preservePollFinal: false, forcePollOnLast: true))
             // T1 started for the poll the resend replaced; time it from the
             // resend instead.
             restartT1IfOutLater(session)
@@ -4306,7 +4310,7 @@ final class AX25SessionManager: ObservableObject {
         from nr: Int,
         reason: String,
         preservePollFinal: Bool = true,
-        forcePollOnFirst: Bool = false
+        forcePollOnLast: Bool = false
     ) -> [OutboundFrame] {
         let retransmitFrames = session.framesToRetransmit(from: nr)
         let nsValues = retransmitFrames.compactMap { frame -> Int? in
@@ -4323,7 +4327,7 @@ final class AX25SessionManager: ObservableObject {
         ])
 
         return retransmitFrames.enumerated().map { index, frame in
-            let shouldForcePoll = forcePollOnFirst && (index == 0)
+            let shouldForcePoll = forcePollOnLast && (index == retransmitFrames.count - 1)
             let updatedFrame = frame.withUpdatedNR(session.vr, preservePollFinal: preservePollFinal, forcePoll: shouldForcePoll)
             debugTrace("TX I (retransmit)", ["reason": reason, "frame": describeFrame(updatedFrame)])
             onLinkVizEvent?(.retransmit(peer: session.remoteAddress.display, count: 1))

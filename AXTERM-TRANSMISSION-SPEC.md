@@ -1166,6 +1166,12 @@ Maintain send buffer for unacked frames:
   response does, §6.7.1.1). T1 keeps its deadline, each expiry resends and
   counts, and N2 trips on T1 expiries alone. The poll path does not count
   toward N2: it retransmits nothing.
+- **A T1 expiry resends every outstanding frame and polls on the last of
+  them** (the resent I-frame is the poll, §6.4.4.1; no separate RR command).
+  The poll used to ride the first: the peer answered RR F as soon as that
+  frame arrived, before the rest, its ack for them was not heard, and T1
+  went back one frame per round. Four times in one 20 KB transfer (smoke
+  run 2026-10-03-1, F2, issue 108; operator approval 2026-10-07).
 
 ### 7.7 UI/UX for connected mode
 - Show connection state as a compact pill: **Connected / Connecting / No response**
