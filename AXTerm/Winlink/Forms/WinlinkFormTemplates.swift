@@ -8,6 +8,8 @@ nonisolated enum WinlinkFormTemplates {
 
     static let all: [WinlinkFormTemplate] = [
         checkIn, checkOut, ics213, fieldSituationReport, severeWeather, gpsPositionReport,
+        // AXTerm's own, filed apart under their own category.
+        parkTest, activationReport,
     ]
 
     static func template(id: String) -> WinlinkFormTemplate? {
