@@ -426,3 +426,39 @@ enum TransferDropLoader {
         return loadedExt.isEmpty ? suggested : "\(suggested).\(loadedExt)"
     }
 }
+
+/// Photos picked from the library for Send File on the phone and iPad
+/// (operator, 2026-10-08). They arrive as bytes with no name, so each gets
+/// one from when it was picked, and is staged like a file from Files.
+nonisolated enum PickedPhotos {
+    /// "Photo-20261008-084210.heic", with "-1", "-2" when several are
+    /// picked together. No spaces: the name goes over the air and into the
+    /// other station's folder as it is.
+    static func name(index: Int, of count: Int, contentType: UTType?, at date: Date,
+                     timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let ext = contentType?.preferredFilenameExtension ?? "jpg"
+        let number = count > 1 ? "-\(index + 1)" : ""
+        return "Photo-\(formatter.string(from: date))\(number).\(ext)"
+    }
+
+    /// Stages each photo whose bytes loaded, and names the ones that did not.
+    static func stage(_ photos: [(data: Data?, contentType: UTType?)], at date: Date,
+                      timeZone: TimeZone = .current) -> (urls: [URL], failed: [String]) {
+        var urls: [URL] = []
+        var failed: [String] = []
+        for (index, photo) in photos.enumerated() {
+            let name = name(index: index, of: photos.count, contentType: photo.contentType,
+                            at: date, timeZone: timeZone)
+            if let data = photo.data, let url = try? OutgoingFileStaging.stage(data: data, name: name) {
+                urls.append(url)
+            } else {
+                failed.append(name)
+            }
+        }
+        return (urls, failed)
+    }
+}

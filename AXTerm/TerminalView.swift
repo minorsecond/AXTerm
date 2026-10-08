@@ -9,6 +9,9 @@
 import SwiftUI
 import Combine
 import UniformTypeIdentifiers
+#if os(iOS)
+import PhotosUI
+#endif
 
 // MARK: - Observable View Model Wrapper
 
@@ -2055,6 +2058,13 @@ struct TerminalView: View {
     @State private var outgoingQueue: [URL] = []
     /// Drives the iOS file importer; unused on macOS, which runs a panel.
     @State private var isPickingTransfer = false
+    #if os(iOS)
+    /// Photos or Files, asked first on iOS: a photo comes from the library,
+    /// anything else from Files (operator, 2026-10-08).
+    @State private var choosingTransferSource = false
+    @State private var isPickingTransferPhotos = false
+    @State private var transferPhotoSelection: [PhotosPickerItem] = []
+    #endif
     @ObservedObject private var transferRouter = TransferUIRouter.shared
 
     // Transfer error alert
@@ -2305,10 +2315,24 @@ struct TerminalView: View {
                 if transferRouter.consumeShowTransfersRequest() { selectedTab = .transfers }
             }
             #if os(iOS)
+            .confirmationDialog("Send a Photo or a File", isPresented: $choosingTransferSource,
+                                titleVisibility: .hidden) {
+                Button("Photo Library") { isPickingTransferPhotos = true }
+                Button("Files") { isPickingTransfer = true }
+                Button("Cancel", role: .cancel) {}
+            }
             .fileImporter(isPresented: $isPickingTransfer,
                           allowedContentTypes: [.item],
                           allowsMultipleSelection: true,
                           onCompletion: acceptPickedTransfer)
+            .photosPicker(isPresented: $isPickingTransferPhotos, selection: $transferPhotoSelection,
+                          maxSelectionCount: 10, matching: .images,
+                          preferredItemEncoding: .current)
+            .onChange(of: transferPhotoSelection) { _, items in
+                guard !items.isEmpty else { return }
+                transferPhotoSelection = []
+                Task { await acceptPickedPhotos(items) }
+            }
             #endif
             .modifier(TerminalViewModifiers(
                 searchModel: searchModel,
@@ -5287,9 +5311,27 @@ struct TerminalView: View {
             enqueueOutgoing(panel.urls)
         }
         #else
-        isPickingTransfer = true
+        choosingTransferSource = true
         #endif
     }
+
+    #if os(iOS)
+    /// Photos from the library, staged and queued for the send sheet, where
+    /// the photo panel offers their size. Library photos come as their
+    /// original bytes (HEIC from an iPhone camera) with no names.
+    private func acceptPickedPhotos(_ items: [PhotosPickerItem]) async {
+        var loaded: [(data: Data?, contentType: UTType?)] = []
+        for item in items {
+            loaded.append((try? await item.loadTransferable(type: Data.self), item.supportedContentTypes.first))
+        }
+        let result = PickedPhotos.stage(loaded, at: Date())
+        enqueueOutgoing(result.urls)
+        if !result.failed.isEmpty {
+            transferError = "These photos could not be read: " + result.failed.joined(separator: ", ")
+            showingTransferError = true
+        }
+    }
+    #endif
 
     /// Accepts the files the operator chose on a platform with no modal panel.
     ///
