@@ -4643,7 +4643,10 @@ struct TerminalView: View {
                     negotiating: txViewModel.sessionManager.isNegotiating(key: session.key),
                     elapsed: Date().timeIntervalSince(start)) {
                 case .refused:
-                    return .refused(detail: "\(destination) answered the connect request with DM (refused).")
+                    let live = txViewModel.sessionManager.sessions.values
+                        .filter { $0.state == .connected }
+                        .map { $0.remoteAddress.display }
+                    return .refused(detail: RefusedConnectHint.detail(destination: destination, liveLinks: live))
                 case .connected:
                     return .success
                 case .failed(let detail):
@@ -5524,3 +5527,20 @@ struct TerminalViewModifiers: ViewModifier {
     )
     .frame(width: 800, height: 600)
 }
+
+/// Why a connect was refused, when the reason is likely ours: a link still
+/// up to another address of the same station (park rehearsal 2026-10-08,
+/// finding 19). Stations that take one link per caller, AXTerm among them,
+/// refuse a second, and DM carries no reason.
+nonisolated enum RefusedConnectHint {
+    static func detail(destination: String, liveLinks: [String]) -> String {
+        let refused = "\(destination) answered the connect request with DM (refused)."
+        let base = BBSMessage.baseCall(destination)
+        guard let other = liveLinks.first(where: {
+            BBSMessage.baseCall($0) == base && $0.uppercased() != destination.uppercased()
+        }) else { return refused }
+        return refused + " You are still connected to \(other), the same station, and some stations, "
+            + "AXTerm among them, take one link per caller. Disconnect from \(other) first."
+    }
+}
+
