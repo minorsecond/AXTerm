@@ -27,4 +27,22 @@ final class TransmitLightTests: XCTestCase {
     func testAProblemWithTheLinkKeepsItsOwnWords() {
         XCTAssertNil(TransmitLight.label(transmitting: true, needsAttention: true))
     }
+
+    #if os(macOS)
+    /// The status line keeps TX's room while nothing transmits, so the words
+    /// after it do not jump each time it comes and goes (park rehearsal
+    /// 2026-10-08, finding 15).
+    @MainActor
+    func testTheStatusLineDoesNotMoveWhenTXComesAndGoes() {
+        func width(transmitting: Bool) -> CGFloat {
+            let radio = RadioStatusSummary.fixture()
+            let strip = TNCStatusStrip(radios: [radio], transmitting: transmitting ? [radio.id] : [])
+                .fixedSize()
+            let hosting = NSHostingView(rootView: strip)
+            hosting.layoutSubtreeIfNeeded()
+            return hosting.fittingSize.width
+        }
+        XCTAssertEqual(width(transmitting: true), width(transmitting: false), accuracy: 0.5)
+    }
+    #endif
 }

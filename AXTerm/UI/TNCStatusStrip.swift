@@ -82,10 +82,15 @@ struct TNCStatusStrip: View {
                     .transmitGlow(!transmitting.isEmpty)
             }
 
-            if let tx = TransmitLight.label(transmitting: !transmitting.isEmpty, needsAttention: needsAttention) {
-                Text(tx)
+            // Its room is kept while nothing transmits, so the words after it
+            // stay put as TX comes and goes (park rehearsal 2026-10-08).
+            if !needsAttention {
+                let tx = TransmitLight.label(transmitting: !transmitting.isEmpty, needsAttention: false)
+                Text("TX")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(TransmitLight.color)
+                    .opacity(tx == nil ? 0 : 1)
+                    .accessibilityHidden(tx == nil)
                     .accessibilityLabel("Transmitting")
             }
 
