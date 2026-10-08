@@ -450,21 +450,39 @@ struct BBSFilesPane: View {
             Text("Callers see this beside the file. One line.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            // Return in the field saves too: a focused text field takes
+            // Return before the default button sees it (park rehearsal
+            // 2026-10-08).
             TextField("Description", text: $draftAbout)
                 .textFieldStyle(.roundedBorder)
+                .onSubmit { saveDescription(file) }
             HStack {
                 Spacer()
                 Button("Cancel") { editing = nil }
                     .keyboardShortcut(.cancelAction)
-                Button("Save") {
-                    library.setDescription(area: file.area, name: file.name, about: draftAbout)
-                    editing = nil
-                }
-                .keyboardShortcut(.defaultAction)
+                Button("Save") { saveDescription(file) }
+                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(16)
         .frame(width: 420)
+    }
+
+    private func saveDescription(_ file: BBSSharedFile) {
+        library.setDescription(area: file.area, name: file.name, about: draftAbout)
+        editing = nil
+    }
+
+    private var canShareArea: Bool {
+        pendingURL != nil && !newAreaName.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func shareArea() {
+        guard canShareArea, let url = pendingURL else { return }
+        library.addArea(name: newAreaName, about: newAreaAbout, url: url)
+        pendingURL = nil
+        newAreaName = ""
+        newAreaAbout = ""
     }
 
     private var newAreaSheet: some View {
@@ -473,14 +491,17 @@ struct BBSFilesPane: View {
             if let pendingURL {
                 Text(pendingURL.path).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
+            // Return in either field shares, as the Share button does.
             TextField("Area name", text: $newAreaName)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
+                .onSubmit(shareArea)
             Text("What callers type: F \(newAreaName.isEmpty ? "NAME" : newAreaName)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             TextField("What is in it", text: $newAreaAbout)
                 .textFieldStyle(.roundedBorder)
+                .onSubmit(shareArea)
             Text("Files are shared one level deep. Subfolders, hidden files and "
                  + "symlinks are skipped, and so is anything over "
                  + "\(BBSFileIndex.size(BBSFileLibrary.defaultMaxFileBytes)).")
@@ -490,16 +511,9 @@ struct BBSFilesPane: View {
                 Spacer()
                 Button("Cancel") { pendingURL = nil }
                     .keyboardShortcut(.cancelAction)
-                Button("Share") {
-                    if let url = pendingURL {
-                        library.addArea(name: newAreaName, about: newAreaAbout, url: url)
-                    }
-                    pendingURL = nil
-                    newAreaName = ""
-                    newAreaAbout = ""
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(newAreaName.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Share", action: shareArea)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canShareArea)
             }
         }
         .padding(16)

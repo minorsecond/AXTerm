@@ -644,17 +644,25 @@ struct LANPasswordField: View {
     let onSet: (String) -> Void
     @State private var editing = false
     @State private var draft = ""
+    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         if editing {
+            // The cursor goes straight to the field, Return saves and Escape
+            // cancels: the row felt janky without them, a field to click
+            // into and buttons to reach for (park rehearsal 2026-10-08).
             HStack(spacing: 6) {
                 SecureField("password", text: $draft)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 200)
-                Button("Save") { onSet(draft); draft = ""; editing = false }
+                    .focused($fieldFocused)
+                    .onSubmit(save)
+                    .onExitCommand(perform: cancel)
+                Button("Save", action: save)
                     .disabled(draft.isEmpty)
-                Button("Cancel") { draft = ""; editing = false }
+                Button("Cancel", action: cancel)
             }
+            .onAppear { fieldFocused = true }
         } else {
             HStack(spacing: 8) {
                 Text(hasPassword ? "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022} stored" : "Not set")
@@ -667,6 +675,18 @@ struct LANPasswordField: View {
                 }
             }
         }
+    }
+
+    private func save() {
+        guard !draft.isEmpty else { return }
+        onSet(draft)
+        draft = ""
+        editing = false
+    }
+
+    private func cancel() {
+        draft = ""
+        editing = false
     }
 }
 #endif
