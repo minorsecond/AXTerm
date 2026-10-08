@@ -147,16 +147,19 @@ struct AXTermiOSRootView: View {
         VStack(spacing: 0) {
             content
             // A file transfer under way, on every tab (issue 91).
-            if let transfers = ActiveTransfersSummary.make(sessionCoordinator.transfers) {
-                HStack {
-                    ActiveTransfersChip(summary: transfers) {
-                        selection = .terminal
-                        TransferUIRouter.shared.requestShowTransfers()
+            if !sessionCoordinator.transfers.isEmpty {
+                // Redrawn every second for the time left, which moves while
+                // the bytes may not.
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    if let transfers = ActiveTransfersSummary.make(sessionCoordinator.transfers, now: context.date) {
+                        ActiveTransferCard(summary: transfers) {
+                            selection = .terminal
+                            TransferUIRouter.shared.requestShowTransfers()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
                     }
-                    Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
             }
             // Summaries for one radio too: they know the transport, and the
             // profile's host is only meaningful for a TCP radio. Re-read every

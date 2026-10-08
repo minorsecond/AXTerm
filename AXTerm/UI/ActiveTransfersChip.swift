@@ -46,3 +46,53 @@ struct ActiveTransfersChip: View {
         }
     }
 }
+
+#if os(iOS)
+/// The iPhone and iPad version: a full-width card above the status strip,
+/// on every tab, with a bar and a line that can be read at arm's length
+/// (park rehearsal 2026-10-08: the chip's thin bar and percent were too
+/// small, and the full progress lived only on the Transfers tab). Tapping it
+/// still opens the Transfers tab.
+struct ActiveTransferCard: View {
+    let summary: ActiveTransfersSummary
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Image(systemName: summary.direction == .outbound ? "arrow.up"
+                          : summary.direction == .inbound ? "arrow.down" : "arrow.up.arrow.down")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(summary.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    if let fraction = summary.fraction {
+                        Text("\(Int((fraction * 100).rounded()))%")
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                    }
+                }
+                if let fraction = summary.fraction {
+                    ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
+                        .scaleEffect(x: 1, y: 1.6, anchor: .center)
+                }
+                Text(summary.progressLine ?? summary.detail)
+                    .font(.footnote.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(summary.detail + (summary.progressLine.map { ", " + $0 } ?? ""))
+        .accessibilityHint("Shows the Transfers tab")
+    }
+}
+#endif

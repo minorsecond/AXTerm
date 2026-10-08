@@ -43,9 +43,12 @@ struct BulkTransferRow: View {
             .foregroundStyle(transfer.direction == .outbound ? .blue : .green)
             .font(.caption)
 
-        // File icon
+        // File icon. Not on iPhone or iPad, where the row was too busy for
+        // its width (park rehearsal 2026-10-08).
+        #if os(macOS)
         Image(systemName: fileIcon)
             .foregroundStyle(.secondary)
+        #endif
 
         // File name
         // One line, shortened in the middle so the extension stays:
@@ -61,7 +64,9 @@ struct BulkTransferRow: View {
         // Protocol badge
         transferProtocolBadge(transfer.transferProtocol)
 
-        // Compression badge - show when compression was used
+        // Compression badges: on the Mac only, for the same reason. The
+        // details panel still says what compression did.
+        #if os(macOS)
         if let metrics = transfer.compressionMetrics, metrics.wasEffective {
             compressionBadge(metrics)
         } else if let metrics = transfer.compressionMetrics, metrics.algorithm != nil && !metrics.wasEffective {
@@ -79,6 +84,7 @@ struct BulkTransferRow: View {
             .clipShape(Capsule())
             .help("Compression was attempted but provided no benefit")
         }
+        #endif
     }
 
     /// The status badge and the row's buttons.

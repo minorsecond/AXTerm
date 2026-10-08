@@ -72,4 +72,22 @@ final class ActiveTransfersChipTests: XCTestCase {
         XCTAssertEqual(summary.fraction ?? 0, 0.25, accuracy: 0.001)
         XCTAssertEqual(summary.label, "2 transfers 25%")
     }
+
+    /// The iPhone and iPad card's second line (park rehearsal 2026-10-08:
+    /// the chip's thin bar and percent were too small to read).
+    func testTheCardSaysHowMuchAndHowLongIsLeft() {
+        XCTAssertEqual(ActiveTransfersSummary.progressLine(moved: 12_288, total: 24_576, secondsLeft: 170),
+                       "12 KB of 25 KB · about 3 min left")
+        XCTAssertEqual(ActiveTransfersSummary.progressLine(moved: 12_288, total: 24_576, secondsLeft: nil),
+                       "12 KB of 25 KB", "no estimate until there is a rate")
+        XCTAssertEqual(ActiveTransfersSummary.progressLine(moved: 0, total: 24_576, secondsLeft: 40),
+                       "0 bytes of 25 KB · under a minute left")
+    }
+
+    func testTimeLeftIsSaidTheSameWayEverywhere() {
+        XCTAssertEqual(TimeLeftPhrase.text(seconds: 50), "under a minute left")
+        XCTAssertEqual(TimeLeftPhrase.text(seconds: 170), "about 3 min left")
+        XCTAssertEqual(TimeLeftPhrase.text(seconds: 6_647), "about 1 h 51 min left")
+        XCTAssertEqual(TimeLeftPhrase.text(seconds: 7_200), "about 2 h left")
+    }
 }

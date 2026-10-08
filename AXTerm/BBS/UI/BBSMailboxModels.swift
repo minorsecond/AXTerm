@@ -580,12 +580,7 @@ nonisolated struct BBSTransferRowModel: Equatable, Sendable {
         let elapsed = now.timeIntervalSince(status.startedAt)
         guard elapsed >= 10, status.bytesDone > 0, status.bytesDone < status.totalBytes else { return nil }
         let seconds = Double(status.totalBytes - status.bytesDone) / (Double(status.bytesDone) / elapsed)
-        if seconds < 60 { return "under a minute left" }
-        var hours = Int(seconds / 3600)
-        var minutes = Int(((seconds - Double(hours) * 3600) / 60).rounded(.up))
-        if minutes == 60 { hours += 1; minutes = 0 }
-        if hours == 0 { return "about \(minutes) min left" }
-        return minutes == 0 ? "about \(hours) h left" : "about \(hours) h \(minutes) min left"
+        return TimeLeftPhrase.text(seconds: seconds)
     }
 }
 

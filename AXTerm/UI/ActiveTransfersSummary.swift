@@ -25,8 +25,19 @@ nonisolated struct ActiveTransfersSummary: Equatable {
     let label: String
     /// The chip's tooltip and accessibility label.
     let detail: String
+    /// The iPhone and iPad card's second line: how much has moved and,
+    /// once there is a rate, about how long is left.
+    var progressLine: String? = nil
 
-    static func make(_ transfers: [BulkTransfer]) -> ActiveTransfersSummary? {
+    /// "12 KB of 25 KB · about 3 min left" (park rehearsal 2026-10-08: the
+    /// chip's thin bar and percent were too small to read on a phone).
+    static func progressLine(moved: Int, total: Int, secondsLeft: Double?) -> String {
+        let amounts = "\(ByteCount.string(moved)) of \(ByteCount.string(total))"
+        guard let secondsLeft else { return amounts }
+        return amounts + " · " + TimeLeftPhrase.text(seconds: secondsLeft)
+    }
+
+    static func make(_ transfers: [BulkTransfer], now: Date = Date()) -> ActiveTransfersSummary? {
         let active = transfers.filter(\.isUnderWay)
         guard let first = active.first else { return nil }
         guard active.count == 1 else {
@@ -63,7 +74,10 @@ nonisolated struct ActiveTransfersSummary: Equatable {
         default:
             return ActiveTransfersSummary(
                 count: 1, title: name, direction: first.direction, fraction: fraction,
-                label: "\(name) \(percent(fraction))", detail: "\(verb): \(percent(fraction))")
+                label: "\(name) \(percent(fraction))", detail: "\(verb): \(percent(fraction))",
+                progressLine: progressLine(moved: min(first.bytesSent, first.targetBytes),
+                                           total: first.targetBytes,
+                                           secondsLeft: first.estimatedSecondsRemaining(now: now)))
         }
     }
 
@@ -81,4 +95,17 @@ private extension BulkTransfer {
     }
 
     var targetBytes: Int { transmissionSize > 0 ? transmissionSize : fileSize }
+}
+
+/// "about 3 min left", said the same way wherever a transfer's remaining
+/// time is shown.
+nonisolated enum TimeLeftPhrase {
+    static func text(seconds: Double) -> String {
+        if seconds < 60 { return "under a minute left" }
+        var hours = Int(seconds / 3600)
+        var minutes = Int(((seconds - Double(hours) * 3600) / 60).rounded(.up))
+        if minutes == 60 { hours += 1; minutes = 0 }
+        if hours == 0 { return "about \(minutes) min left" }
+        return minutes == 0 ? "about \(hours) h left" : "about \(hours) h \(minutes) min left"
+    }
 }
