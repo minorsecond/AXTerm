@@ -291,3 +291,12 @@ Warbler received SIGTERM at 19:00:53Z (not from this session) and launchd starte
 | Finding | Fix | Commit |
 |---|---|---|
 | 41 | The lookup runs only when the lines change; each row's names are remembered by its text. The phone and iPad reinstalled on `fce2b5ba` | `fce2b5ba` |
+
+| # | Where | Finding |
+|---|---|---|
+| 42 | iPhone, iPad, Mac, Session view | The history stops following new messages. A probe on the iPad: the re-pin left the padding under the last row (about 54 points) below the visible edge, which never counted as the bottom (40), so a one-point layout nudge read as the reader scrolling away and following stayed off |
+| 43 | iPad and phone, TNC4 | Twice the TNC4 stopped decoding right after AXTerm was killed while connected to it (an install at 16:05Z, a relaunch at 19:27Z). Once it recovered by itself in about a minute; once it needed the cable re-seated. Finding 30's cable explanation is probably this instead. To be worked on next with the operator |
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 42 | The follow geometry leaves out the padding below the last row, and an upward move of 3 points or less with nobody scrolling is layout. On the iPad, five lines from A each scrolled into view and following never switched off | `a6c80a16` |
