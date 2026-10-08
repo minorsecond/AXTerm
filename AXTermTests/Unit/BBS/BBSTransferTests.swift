@@ -23,6 +23,8 @@ final class BBSTransferTests: XCTestCase {
     private var library: BBSFileLibrary!
     private var service: BBSService!
     private var caller: BBSSimulatedCaller!
+    /// Added to the mailbox's clock, so a test can make a transfer take time.
+    private var clockOffset: TimeInterval = 0
 
     /// Small, so "just under the cap" is a file a test can move quickly.
     private let cap = 64 * 1024
@@ -86,7 +88,8 @@ final class BBSTransferTests: XCTestCase {
                 transferStallTimeout: stallTimeout,
                 // Fast enough that no file here trips the long-transfer
                 // confirmation; that has its own shell tests.
-                linkBytesPerSecond: { 1_000_000 })
+                linkBytesPerSecond: { 1_000_000 },
+                now: { [unowned self] in Date().addingTimeInterval(self.clockOffset) })
             service.attach()
         }
         caller.onBytes = nil
@@ -158,6 +161,43 @@ final class BBSTransferTests: XCTestCase {
         let files = await command("W OPS")
         XCTAssertTrue(files.contains("notes.txt"), files)
         XCTAssertTrue(files.contains("roster.bin"), files)
+    }
+
+    /// The TIME column uses the rate measured on this caller's last transfer
+    /// when there is one (operator, 2026-10-07: downloading from the BBS at a
+    /// park), and the link default otherwise.
+    func testTheListingTimesFilesAtTheCallersMeasuredRate() async throws {
+        try writeFile("photo.jpg", bytes: binary(9000))
+        library.rescan()
+        coordinator.measuredTransferRates["W0ARP-1"] = 30
+        try await connect()
+
+        let files = await command("W OPS")
+        let row = try XCTUnwrap(files.split(separator: "\r").first { $0.contains("photo.jpg") })
+        XCTAssertTrue(row.contains(" 5m "), "9000 bytes at 30 B/s is five minutes: \(row)")
+    }
+
+    /// A finished download records its rate, so the next listing for that
+    /// caller is timed by it.
+    func testAFinishedDownloadRecordsTheCallersRate() async throws {
+        try writeFile("photo.jpg", bytes: binary(6000))
+        library.rescan()
+        try await connect()
+
+        let receiver = CallerYAPPReceiver()
+        caller.onBytes = { [unowned self] bytes in
+            // The download started at the D; it ends 100 seconds later.
+            self.clockOffset = 100
+            receiver.consume(bytes)
+            self.caller.pendingSends.append(contentsOf: receiver.toSend)
+            receiver.toSend.removeAll()
+        }
+        caller.type("D photo.jpg")
+        await caller.pump { receiver.completed != nil && receiver.textString.hasSuffix(">\r") }
+        caller.onBytes = nil
+
+        let rate = try XCTUnwrap(coordinator.measuredTransferRates["W0ARP-1"])
+        XCTAssertEqual(rate, 60, accuracy: 2, "6000 bytes in about 100 seconds")
     }
 
     func testATextFileIsTypedOutInOrderWithThePromptLast() async throws {

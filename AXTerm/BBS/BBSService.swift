@@ -294,6 +294,13 @@ final class BBSService: ObservableObject {
     /// file list shows the same times the caller is told.
     var linkThroughput: Double { linkBytesPerSecond() }
 
+    /// The rate quoted to one caller: what their last finished transfer with
+    /// this station actually ran at, else the link default. A caller at the
+    /// edge of range gets times that fit their link (operator, 2026-10-07).
+    func bytesPerSecond(for caller: String) -> Double {
+        coordinator.measuredTransferRates[caller.uppercased()] ?? linkBytesPerSecond()
+    }
+
     var answeringCallsign: String {
         settings.effectiveCallsign(stationCallsign: stationCallsign())
     }
@@ -387,7 +394,7 @@ final class BBSService: ObservableObject {
             banner: settings.banner,
             publishesHeardList: settings.publishHeardList,
             publishesWhitePages: settings.publishWhitePages,
-            bytesPerSecond: linkBytesPerSecond())
+            bytesPerSecond: bytesPerSecond(for: caller))
 
         let callId = (store.flatMap { try? $0.beginCall(callsign: caller, at: at, radio: session.radio) }) ?? -1
         live = LiveCall(callsign: caller, startedAt: at, callId: callId)
@@ -912,12 +919,22 @@ final class BBSService: ObservableObject {
     /// cleared and explained, and its own "canceled" report is noise.
     private func finishTransfer(id: UUID, ok: Bool, error: String?) {
         guard let run = running, run.id == id else { return }
+        let status = transfer
         clearTransfer()
         guard session != nil else { return }
 
         switch run.direction {
         case .download:
             if ok {
+                // What the link really delivered, for the times this caller
+                // is quoted next (the same record Send File keeps).
+                if let status, status.totalBytes > 0 {
+                    let seconds = now().timeIntervalSince(status.startedAt)
+                    if seconds >= 1 {
+                        coordinator.measuredTransferRates[status.caller.uppercased()] =
+                            Double(status.totalBytes) / seconds
+                    }
+                }
                 write(["\(run.what) sent.", BBSShell.commandPrompt])
                 note("downloaded \(run.logName)")
             } else {
@@ -1365,7 +1382,7 @@ extension BBSService {
                 banner: service.settings.banner,
                 publishesHeardList: service.settings.publishHeardList,
                 publishesWhitePages: service.settings.publishWhitePages,
-                bytesPerSecond: service.linkBytesPerSecond(),
+                bytesPerSecond: service.bytesPerSecond(for: caller),
                 linesOnlyDirectCall: service.answeringCallsign)
         }
 
