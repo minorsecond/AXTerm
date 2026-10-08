@@ -235,6 +235,16 @@ final class WinlinkSettings: ObservableObject {
     }
 
     /// The address P2P actually answers on, given the station callsign.
+    /// Whether the listener answers on the station's own address, where it
+    /// takes every connect: terminal sessions and file offers to that
+    /// address land in Winlink (park rehearsal 2026-10-08).
+    nonisolated static func takesStationAddress(p2pCallsign: String, stationCallsign: String) -> Bool {
+        let station = stationCallsign.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !station.isEmpty else { return false }
+        let own = p2pCallsign.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return own.isEmpty || own == station
+    }
+
     func effectiveP2PCallsign(stationCallsign: String) -> String {
         let own = p2pListenCallsign.trimmingCharacters(in: .whitespaces)
         return own.isEmpty ? stationCallsign.uppercased() : own.uppercased()

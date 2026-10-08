@@ -156,6 +156,15 @@ struct WinlinkSettingsTab: View {
                                            : stationCallsign.uppercased()))
                         .callsignInput($settings.p2pListenCallsign)
                         .font(.system(.body, design: .monospaced))
+                    if WinlinkSettings.takesStationAddress(p2pCallsign: settings.p2pListenCallsign,
+                                                           stationCallsign: stationCallsign) {
+                        Label("Every call to \(stationCallsign.uppercased()) goes to Winlink, so terminal sessions "
+                              + "and file transfers to that address cannot reach this station. "
+                              + "Give Winlink its own SSID.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                     Text("Leave empty to answer as \(stationCallsign.isEmpty ? "your station callsign" : stationCallsign.uppercased()). "
                          + "Give the listener its own SSID to share the radio with another service, such as "
                          + "the mailbox, or a node on this host. Callers pick a service by the "
