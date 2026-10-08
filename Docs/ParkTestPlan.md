@@ -84,6 +84,18 @@ run log can be built from both afterward.
 | I2 | Repeat P1 and P2 from the iPad | As on the iPhone. The received-file banner sits at the bottom on the iPad | |
 | I3 | Send one photo from the iPad, by Transfers to K0EPI-2 or by Mail to K0EPI-5 | As P7 or P8 | |
 
+### Reporting results
+
+Fill in results either way, or both:
+
+- **The AXTerm Park Test form**: Mail › More (…) › Forms › AXTerm › AXTerm
+  Park Test. A pick list for each step and a notes box per section. Send it
+  to K0EPI-5 like any Winlink message (P8's steps). Plain text, so it is
+  small on the air.
+- **Park-Test.xlsx** in iCloud Drive › Ham Radio: the same steps as a
+  spreadsheet. Sending it back by packet tests a real spreadsheet transfer
+  (P6). Export as .xlsx if Numbers converted it.
+
 ## If something goes wrong
 
 | What you see | What to do |
