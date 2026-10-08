@@ -1463,6 +1463,8 @@ struct TerminalComposeView: View {
     /// Off for a far end that echoes what it receives.
     @AppStorage("terminalRawLocalEcho") private var rawLocalEcho = true
     @State private var showRoutingChangeConfirmation = false
+    /// Disconnect asks first on a touch screen (`SessionDisconnectPrompt`).
+    @State private var confirmingDisconnect = false
     @StateObject private var destinationPickerViewModel = DestinationPickerViewModel()
 
     private var routingChoiceBinding: Binding<ConnectRoutingChoice> {
@@ -1885,6 +1887,7 @@ struct TerminalComposeView: View {
     @ViewBuilder
     private var sessionActionButton: some View {
         if sessionState == .connected {
+            let prompt = SessionDisconnectPrompt(peer: destinationCall)
             Button(sessionActionTitle) {
                 handleSessionAction()
             }
@@ -1893,6 +1896,10 @@ struct TerminalComposeView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .accessibilityIdentifier("connectBar.disconnectButton")
+            .confirmationDialog(prompt.title, isPresented: $confirmingDisconnect, titleVisibility: .visible) {
+                Button(prompt.confirmLabel, role: .destructive) { onDisconnect() }
+                Button("Cancel", role: .cancel) {}
+            }
         } else {
             Button {
                 handleSessionAction()
@@ -1966,7 +1973,11 @@ struct TerminalComposeView: View {
         }
         switch sessionState {
         case .connected:
-            onDisconnect()
+            if SessionDisconnectPrompt.isNeeded {
+                confirmingDisconnect = true
+            } else {
+                onDisconnect()
+            }
         case .connecting, .disconnecting:
             onForceDisconnect()
         case .disconnected, .error, .none:
@@ -2438,3 +2449,23 @@ struct TxQueueView: View {
     }
     .padding()
 }
+
+/// What Disconnect asks on a touch screen, where the button sits beside the
+/// message field and was easy to tap by mistake (park rehearsal 2026-10-08).
+/// A click on the Mac is deliberate, so it does not ask there.
+nonisolated struct SessionDisconnectPrompt: Equatable {
+    let title: String
+    let confirmLabel = "Disconnect"
+
+    init(peer: String) {
+        let name = peer.trimmingCharacters(in: .whitespaces).uppercased()
+        title = name.isEmpty ? "Disconnect?" : "Disconnect from \(name)?"
+    }
+
+    #if os(iOS)
+    static let isNeeded = true
+    #else
+    static let isNeeded = false
+    #endif
+}
+
