@@ -786,12 +786,19 @@ nonisolated struct BBSShell {
     private func fileRows(_ files: [BBSSharedFile], mailbox: Mailbox) -> [String] {
         var lines = ["NAME              SIZE  TIME  ABOUT"]
         for file in files.prefix(maxListRows) {
-            lines.append(
-                Self.pad(file.name, to: 17) + " "
-                + Self.rightPad(BBSFileIndex.size(file.byteCount), to: 5) + " "
+            let details = Self.rightPad(BBSFileIndex.size(file.byteCount), to: 5) + " "
                 + Self.rightPad(BBSFileIndex.duration(bytes: file.byteCount,
                                                       bytesPerSecond: bytesPerSecond), to: 5) + "  "
-                + Self.truncate(file.about, to: 26))
+                + Self.truncate(file.about, to: 26)
+            // A name is never cut: D needs it. One too long for its column
+            // takes a line of its own, with its details under it (park
+            // rehearsal 2026-10-08).
+            if file.name.count > 17 {
+                lines.append(file.name)
+                lines.append(String(repeating: " ", count: 18) + details)
+            } else {
+                lines.append(Self.pad(file.name, to: 17) + " " + details)
+            }
         }
         if files.count > maxListRows {
             lines.append("… \(files.count - maxListRows) more not shown.")
@@ -837,6 +844,11 @@ nonisolated struct BBSShell {
         case .notFound:
             pendingDownload = nil
             return Output(lines: ["No file called \(request). W lists what is here."])
+        case .several(let names):
+            pendingDownload = nil
+            let shown = names.prefix(5).joined(separator: ", ")
+            return Output(lines: ["\(request) starts \(names.count) names: \(shown)"
+                                  + (names.count > 5 ? ", …" : "") + ". Type more of the one you want."])
         case .ambiguous(let areas):
             pendingDownload = nil
             return Output(lines: ["\(request) is in \(areas.joined(separator: ", ")) "

@@ -74,6 +74,46 @@ final class BBSFileCommandsTests: XCTestCase {
         XCTAssertTrue(row.contains("Duty roster"), row)
     }
 
+    /// A name is never cut. The listing cut names at 17 characters and `D`
+    /// needs the name, so a caller who saw "Photo-20261008-05" could not
+    /// fetch "Photo-20261008-052732.jpg" (park rehearsal 2026-10-08).
+    func testALongNameIsListedWhole() {
+        var sut = shell()
+        let box = mailbox([file("Photo-20261008-052732.jpg", bytes: 12_167, about: "Nova, backyard")])
+        let lines = sut.handle(line: "F OPS", mailbox: box, now: t(0)).lines
+        let nameLine = try! XCTUnwrap(lines.firstIndex { $0.contains("Photo-20261008-052732.jpg") },
+                                      "the whole name: \(lines)")
+        let details = lines[nameLine] + " " + (lines.indices.contains(nameLine + 1) ? lines[nameLine + 1] : "")
+        XCTAssertTrue(details.contains("12K"), details)
+        XCTAssertTrue(details.contains("3m"), details)
+        XCTAssertTrue(details.contains("Nova, backyard"), details)
+    }
+
+    func testTheStartOfANameFetchesItWhenOnlyOneFileMatches() {
+        var sut = shell()
+        let box = mailbox([file("Photo-20261008-052732.jpg", bytes: 1_000), file("notes.txt", bytes: 100)])
+        let out = sut.handle(line: "D photo-2026", mailbox: box, now: t(0))
+        XCTAssertFalse(out.effects.isEmpty, "started: \(out.lines)")
+        XCTAssertTrue(out.lines.joined().contains("Photo-20261008-052732.jpg"), "\(out.lines)")
+    }
+
+    func testTheStartOfSeveralNamesAsksForMore() {
+        var sut = shell()
+        let box = mailbox([file("Photo-1.jpg"), file("Photo-2.jpg")])
+        let out = sut.handle(line: "D photo", mailbox: box, now: t(0))
+        XCTAssertTrue(out.effects.isEmpty)
+        let said = out.lines.joined(separator: " ")
+        XCTAssertTrue(said.contains("Photo-1.jpg") && said.contains("Photo-2.jpg"), said)
+    }
+
+    func testAnExactNameWinsOverOneItStarts() {
+        var sut = shell()
+        let box = mailbox([file("a.txt", bytes: 10), file("a.txt.bak", bytes: 10)])
+        let out = sut.handle(line: "D a.txt", mailbox: box, now: t(0))
+        XCTAssertFalse(out.effects.isEmpty, "\(out.lines)")
+        XCTAssertFalse(out.lines.joined().contains("a.txt.bak"), "\(out.lines)")
+    }
+
     func testUnknownAreaPointsBackAtTheAreaList() {
         var sut = shell()
         let box = mailbox([file("a.txt")])

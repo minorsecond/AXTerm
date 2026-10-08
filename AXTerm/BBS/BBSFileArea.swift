@@ -101,6 +101,9 @@ nonisolated struct BBSFileIndex: Equatable, Sendable {
         /// The same name exists in more than one area, so the caller must say
         /// which. Listing the areas is the whole point of the answer.
         case ambiguous(areas: [String])
+        /// No name matches exactly, and the request starts more than one:
+        /// the caller types more of the one they want.
+        case several(names: [String])
     }
 
     func resolve(_ request: String) -> Resolution {
@@ -121,7 +124,15 @@ nonisolated struct BBSFileIndex: Equatable, Sendable {
             candidates = files
         }
 
-        let matches = candidates.filter { $0.name.lowercased() == wanted }
+        // An exact name first; otherwise the start of one, so a caller can
+        // fetch a long name without typing all of it (park rehearsal
+        // 2026-10-08).
+        var matches = candidates.filter { $0.name.lowercased() == wanted }
+        if matches.isEmpty {
+            matches = candidates.filter { $0.name.lowercased().hasPrefix(wanted) }
+            let names = Set(matches.map(\.name))
+            if names.count > 1 { return .several(names: names.sorted()) }
+        }
         switch matches.count {
         case 0: return .notFound
         case 1: return .found(matches[0])
