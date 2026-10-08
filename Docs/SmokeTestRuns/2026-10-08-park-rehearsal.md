@@ -153,3 +153,8 @@ A's frames for that link show the phone sent no probe, and A, having answered th
 | 28 | In the Session view, a file name in a line from another station is a link. Tapping it puts the download command in the compose box, never sends it. The command word is the one last used to fetch a file from that station, `D` until one is typed. A name counts when it has an extension (AXTerm's table, DOS-style lists); names with spaces or no extension are still typed by hand. Long-press for Copy was dropped: the line's text is already selectable | `58059582` |
 
 A (705) rebuilt on `bd9500ec` (pid 5110) and set up again: IC-705 through Warbler as K0EPI-2, Direwolf off, mailbox K0EPI-4 answering, Winlink K0EPI-5 answering, PARK shared. It connected to the 705 at 15:54:08Z, still on 145.650 PKTFM. The phone and iPad reinstalled on `58059582`.
+
+| # | Where | Finding |
+|---|---|---|
+| 30 | On the air, not AXTerm | From 16:09Z the phone could reach A but never heard A's replies. The phone, run with its console attached, showed the Bluetooth link working both ways and the TNC4 passing up no packets at all, even after its demodulator was reset. The TNC4's receive level read about 100 peak to peak (silence), and the ID-50 itself showed no signal when A keyed. The 705 confirmed it was transmitting, but at 0% power its meter read 0.0014 against 0.106 at 100%. A 10-second carrier at 100% opened the ID-50. A at 0% had just enough signal to reach the ID-50 earlier in the day and then not enough; run A at about 10% |
+| 31 | iPhone, TNC4 page | "The TNC4's receive level hasn't been tuned for this radio" reads like an error when the TNC4 is fine on its own settings. Make it read as an option |
