@@ -339,6 +339,27 @@ final class BBSShellCommandsTests: XCTestCase {
         XCTAssertTrue(out.lines.contains { $0.contains("H = help") }, out.lines.joined())
     }
 
+    /// A mailbox command typed at a first-call question runs, and is not
+    /// kept as an answer (park rehearsal 2026-10-08: "W PARK" was saved as
+    /// the caller's name, town and home BBS, one try at a time).
+    func testACommandAtAFirstCallQuestionRunsInstead() {
+        var sut = shell(caller: "K0XYZ")
+        _ = sut.greeting(mailbox: .init(), now: t(0))
+        let out = sut.handle(line: "W PARK", mailbox: .init(), now: t(1))
+        XCTAssertTrue(out.effects.isEmpty, "nothing learned: \(out.effects)")
+        XCTAssertTrue(out.lines.contains { $0.contains("No area called PARK") }, "W ran: \(out.lines.joined())")
+        XCTAssertTrue(sut.handle(line: "V", mailbox: .init(), now: t(2)).lines.contains(BBSShell.version),
+                      "and the caller is at the prompt")
+    }
+
+    func testAnAnswerThatOnlyStartsLikeACommandIsKept() {
+        var sut = shell(caller: "K0XYZ")
+        _ = sut.greeting(mailbox: .init(), now: t(0))
+        let out = sut.handle(line: "Lisa", mailbox: .init(), now: t(1))
+        XCTAssertEqual(out.effects, [.learnWhitePages(callsign: "K0XYZ", key: .name, value: "Lisa",
+                                                      source: .selfReported, at: t(1))])
+    }
+
     func testAKnownCallerIsNotInterviewedAgain() {
         var sut = shell(caller: "K0XYZ")
         let box = BBSShell.Mailbox(whitePages: ["K0XYZ": entry("K0XYZ", name: "Bob")])

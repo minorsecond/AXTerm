@@ -273,7 +273,7 @@ nonisolated struct BBSShell {
             return takeBodyLine(line, to: to, subject: subject, homeBBS: homeBBS,
                                 soFar: lines, mailbox: mailbox, now: now)
         case .registering(let remaining):
-            return takeRegistration(line, remaining: remaining, now: now)
+            return takeRegistration(line, remaining: remaining, mailbox: mailbox, now: now)
         case .command:
             return runCommand(line, mailbox: mailbox, now: now)
         }
@@ -472,8 +472,20 @@ nonisolated struct BBSShell {
 
     // MARK: - Registration
 
+    /// Words that start a mailbox command. One typed at a first-call
+    /// question is a caller who wants the prompt, not an answer: "W PARK" was
+    /// saved as a caller's name, town and home BBS before this (park
+    /// rehearsal 2026-10-08). Only whole first words count, so "Lisa" or
+    /// "Denver" are still answers.
+    private static let commandWords: Set<String> = [
+        "H", "?", "HELP", "V", "I", "J", "MH", "WP", "W", "F", "FILES", "WN", "FN",
+        "D", "U", "L", "LM", "LB", "LL", "R", "RM", "S", "SP", "SB", "K", "KM",
+        "B", "BYE", "Q", "QUIT",
+    ]
+
     private mutating func takeRegistration(_ raw: String,
                                            remaining: [WhitePagesEntry.Key],
+                                           mailbox: Mailbox,
                                            now: Date) -> Output {
         guard let current = remaining.first else {
             state = .command
@@ -487,6 +499,12 @@ nonisolated struct BBSShell {
         if answer.uppercased() == "A" {
             state = .command
             return Output(lines: ["No problem.", Self.commandSummary])
+        }
+
+        let firstWord = answer.split(separator: " ", maxSplits: 1).first.map { $0.uppercased() } ?? ""
+        if Self.commandWords.contains(firstWord) {
+            state = .command
+            return runCommand(answer, mailbox: mailbox, now: now)
         }
 
         var effects: [Effect] = []
