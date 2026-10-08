@@ -79,7 +79,7 @@ final class NodesBroadcastSemanticsTests: XCTestCase {
     }
 
     func testTheNodesPageLearnsAliasesFromNODES() {
-        let suite = "NodesBroadcastSemanticsTests-\(UUID().uuidString)"
+        let suite = TestDefaults.name("NodesBroadcastSemanticsTests")
         let store = NodeAliasStore(defaults: UserDefaults(suiteName: suite)!)
         defer { UserDefaults().removePersistentDomain(forName: suite) }
 
@@ -95,7 +95,7 @@ final class NodesBroadcastSemanticsTests: XCTestCase {
     /// EPINDB under "No route known" while Routes had the route (smoke run
     /// 2026-10-03-1, issue 65).
     func testANodeHeardAnnouncingItselfIsReachableDirectly() throws {
-        let suite = "NodesBroadcastSemanticsTests-\(UUID().uuidString)"
+        let suite = TestDefaults.name("NodesBroadcastSemanticsTests")
         let store = NodeAliasStore(defaults: UserDefaults(suiteName: suite)!)
         defer { UserDefaults().removePersistentDomain(forName: suite) }
 
@@ -112,7 +112,7 @@ final class NodesBroadcastSemanticsTests: XCTestCase {
     /// Nodes, so a NODES heard with the Nodes page open never appeared
     /// (smoke run 2026-10-03-1, 7.2 retest).
     func testTheLiveHarvestLearnsANodeAsItIsHeard() throws {
-        let suite = "NodesBroadcastSemanticsTests-\(UUID().uuidString)"
+        let suite = TestDefaults.name("NodesBroadcastSemanticsTests")
         let defaults = UserDefaults(suiteName: suite)!
         defer { UserDefaults().removePersistentDomain(forName: suite) }
         let aliases = NodeAliasStore(defaults: defaults)

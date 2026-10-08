@@ -21,7 +21,7 @@ import XCTest
 final class NativeCircuitHoldTests: XCTestCase {
 
     private func aliases(_ name: String) -> (NodeAliasStore, UserDefaults) {
-        let suite = "NativeCircuitHoldTests-\(name)-\(UUID().uuidString)"
+        let suite = TestDefaults.name("NativeCircuitHoldTests-\(name)")
         let defaults = UserDefaults(suiteName: suite)!
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
         return (NodeAliasStore(defaults: defaults), defaults)

@@ -89,7 +89,7 @@ final class RigPrepSnapshotTests: XCTestCase {
     func testTheAppStoreKeepsSnapshotsWhereALaunchDoesNotClear() {
         XCTAssertTrue(RigPrepStore().defaults === AppEnvironment.owedToRadioDefaults)
 
-        let base = "com.rosswardrup.AXTerm.test.RigPrepLaunch-\(UUID().uuidString)"
+        let base = TestDefaults.name("RigPrepLaunch")
         let owedSuite = AppEnvironment.owedToRadioSuiteName(base: base)
         XCTAssertNotEqual(owedSuite, base)
         let owed = try! XCTUnwrap(UserDefaults(suiteName: owedSuite))

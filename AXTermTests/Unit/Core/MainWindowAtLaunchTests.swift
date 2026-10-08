@@ -31,7 +31,7 @@ import XCTest
 final class MainWindowAtLaunchTests: XCTestCase {
 
     func testArgumentsAreNotTreatedAsFilesToOpen() throws {
-        let suite = "MainWindowAtLaunchTests-\(UUID().uuidString)"
+        let suite = TestDefaults.name("MainWindowAtLaunchTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { UserDefaults().removePersistentDomain(forName: suite) }
 

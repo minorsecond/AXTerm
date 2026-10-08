@@ -75,6 +75,40 @@ final class TestDefaultsTests: XCTestCase {
         XCTAssertEqual(offenders, [], "use TestDefaults.make or TestDefaults.name for these suites")
     }
 
+    /// The same mistake one step removed: a name built in a variable, then
+    /// handed to UserDefaults, `let suite = "SomeTests-\(UUID())"`. Three
+    /// test classes doing that had left 470 plists in the container's
+    /// Preferences by 2026-10-08, one per test per run.
+    func testNoSuiteIsNamedByAStringLiteralInAVariable() throws {
+        let testsRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()      // Support
+            .deletingLastPathComponent()      // AXTermTests
+        // A non-empty literal: `var suiteName = ""` filled in by setUp is fine.
+        let literal = try NSRegularExpression(pattern: #"\b(?:let|var)\s+(\w+)(?:\s*:\s*String)?\s*=\s*"[^"]"#)
+        var offenders: [String] = []
+        let files = FileManager.default.enumerator(at: testsRoot, includingPropertiesForKeys: nil)
+        while let file = files?.nextObject() as? URL {
+            guard file.pathExtension == "swift", file.lastPathComponent != "TestDefaults.swift",
+                  let source = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            var named: [String: Int] = [:]
+            for (number, line) in source.components(separatedBy: "\n").enumerated() {
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") { continue }
+                let range = NSRange(line.startIndex..., in: line)
+                if let match = literal.firstMatch(in: line, range: range),
+                   let name = Range(match.range(at: 1), in: line) {
+                    named[String(line[name])] = number + 1
+                }
+            }
+            for (name, number) in named {
+                let uses = ["UserDefaults(suiteName: \(name))", "owedToRadioSuiteName(base: \(name))"]
+                if uses.contains(where: source.contains) {
+                    offenders.append("\(file.lastPathComponent):\(number) (\(name))")
+                }
+            }
+        }
+        XCTAssertEqual(offenders.sorted(), [], "name these suites with TestDefaults.name")
+    }
+
     private static func countSwiftFiles(in root: URL) -> Int {
         var count = 0
         let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
