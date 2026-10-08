@@ -535,6 +535,7 @@ struct ConsoleView: View {
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu,
                                                              linksFileNames: onFileName != nil,
+                                                             knownFileNames: knownFileNames,
                                                              radioNames: radioNames,
                                                              observer: observer,
                                                              distanceInMiles: distanceInMiles,
@@ -552,6 +553,7 @@ struct ConsoleView: View {
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu,
                                                              linksFileNames: onFileName != nil,
+                                                             knownFileNames: knownFileNames,
                                                              radioNames: radioNames,
                                                              observer: observer,
                                                              distanceInMiles: distanceInMiles,
@@ -700,6 +702,15 @@ struct ConsoleView: View {
             onIdentity(call)
             return .handled
         })
+    }
+
+    /// Names with spaces seen in listings in this console, so a later line
+    /// that mentions one links the whole name.
+    private var knownFileNames: Set<String> {
+        guard onFileName != nil else { return [] }
+        return lines.reduce(into: Set<String>()) { known, line in
+            known.formUnion(FileNameScanner.spacedNames(in: line.text))
+        }
     }
 
     // MARK: - Filter Toggles
@@ -969,6 +980,7 @@ struct ConsoleLineGroupView: View {
     var onIdentity: ((String) -> Void)?
     var onIdentityMenu: ((String) -> Void)?
     var linksFileNames = false
+    var knownFileNames: Set<String> = []
     var radioNames: [RadioID: String] = [:]
     var observer: GreatCircle.Point?
     var distanceInMiles: Bool = true
@@ -990,6 +1002,7 @@ struct ConsoleLineGroupView: View {
                 onIdentity: onIdentity,
                 onIdentityMenu: onIdentityMenu,
                 linksFileNames: linksFileNames,
+                knownFileNames: knownFileNames,
                 radioNames: radioNames,
                 observer: observer,
                 distanceInMiles: distanceInMiles,
@@ -1103,6 +1116,8 @@ struct ConsoleLineView: View {
     /// File names in lines from other stations are links that fill in the
     /// download command (see `ConsoleView.onFileName`).
     var linksFileNames = false
+    /// See `FileNameScanner.names(in:known:)`.
+    var knownFileNames: Set<String> = []
     /// Radio names by id. Empty (one radio) draws no badge, so a single-radio
     /// station's console reads exactly as it did.
     var radioNames: [RadioID: String] = [:]
@@ -1379,7 +1394,7 @@ struct ConsoleLineView: View {
         // Only in what another station sent: our own `D` line needs no link.
         if linksFileNames, line.kind == .packet, let from = line.from,
            !echoCallsigns.contains(from.uppercased()) {
-            for hit in FileNameScanner.names(in: text)
+            for hit in FileNameScanner.names(in: text, known: knownFileNames)
             where !targets.contains(where: { $0.range.overlaps(hit.range) }) {
                 guard let url = ConsoleFileLink.url(for: hit.name) else { continue }
                 targets.append((hit.range, url))

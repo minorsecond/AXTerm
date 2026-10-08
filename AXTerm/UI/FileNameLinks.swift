@@ -27,7 +27,17 @@ nonisolated enum FileNameScanner {
     /// The line under a long name: indented, then its size ("5K", "1.2M").
     private static let detailsRow = /\s{8,}\d+(?:\.\d+)?[BKMG]?\s.*/
 
-    static func names(in text: String) -> [(range: Range<String.Index>, name: String)] {
+    /// The names with spaces in a listing, to be recognized again in later
+    /// lines where nothing else marks them as names ("… v11.fcpxml sent.").
+    static func spacedNames(in text: String) -> Set<String> {
+        Set(names(in: text).map(\.name).filter { $0.contains(" ") })
+    }
+
+    /// File names in `text`, with every name in `known` that appears in it
+    /// taken whole. Without it, "Barro tal vez v11.fcpxml sent." linked only
+    /// "v11.fcpxml" (park rehearsal 2026-10-08, finding 36).
+    static func names(in text: String, known: Set<String> = [])
+        -> [(range: Range<String.Index>, name: String)] {
         var hits: [(range: Range<String.Index>, name: String)] = []
         // Each line without its line ending. CR LF is one Character in
         // Swift, so it is matched as a newline, not as "\n".
@@ -43,7 +53,11 @@ nonisolated enum FileNameScanner {
             if number + 1 < lines.count, let name = longName(in: text, line: line, details: lines[number + 1]) {
                 hits.append((name, String(text[name])))
             } else {
-                hits += words(in: text, line: line)
+                let whole = knownNames(known, in: text, line: line)
+                hits += whole
+                hits += words(in: text, line: line).filter { word in
+                    !whole.contains { $0.range.overlaps(word.range) }
+                }
             }
         }
         return hits
@@ -57,6 +71,22 @@ nonisolated enum FileNameScanner {
         guard trimmed.contains(" "), trimmed.wholeMatch(of: longNameRow) != nil,
               let range = text.range(of: trimmed, range: line) else { return nil }
         return range
+    }
+
+    /// Each known name found in the line, longest first so a name is never
+    /// cut short by another that it starts with.
+    private static func knownNames(_ known: Set<String>, in text: String, line: Range<String.Index>)
+        -> [(range: Range<String.Index>, name: String)] {
+        var hits: [(range: Range<String.Index>, name: String)] = []
+        for name in known.sorted(by: { $0.count > $1.count }) {
+            var searchFrom = line.lowerBound
+            while searchFrom < line.upperBound,
+                  let found = text.range(of: name, range: searchFrom..<line.upperBound) {
+                if !hits.contains(where: { $0.range.overlaps(found) }) { hits.append((found, name)) }
+                searchFrom = found.upperBound
+            }
+        }
+        return hits.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 
     private static func words(in text: String, line: Range<String.Index>)

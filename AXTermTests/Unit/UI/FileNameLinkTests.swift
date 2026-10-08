@@ -45,6 +45,22 @@ final class FileNameScannerTests: XCTestCase {
         XCTAssertEqual(names(listing), ["Barro tal vez v11.fcpxml", "IMG_2820.jpg", "Photo-20261008-052732.jpg"])
     }
 
+    /// The phone at 16:34Z: after the listing, "Barro tal vez v11.fcpxml
+    /// sent." linked only "v11.fcpxml". A spaced name seen in a listing is
+    /// linked whole wherever it appears again.
+    func testASpacedNameFromTheListingIsLinkedWholeInLaterLines() {
+        let known: Set<String> = ["Barro tal vez v11.fcpxml"]
+        XCTAssertEqual(FileNameScanner.names(in: "Barro tal vez v11.fcpxml sent.", known: known).map(\.name),
+                       ["Barro tal vez v11.fcpxml"])
+        XCTAssertEqual(FileNameScanner.names(in: "Sending Barro tal vez v11.fcpxml (<1m).", known: known)
+                        .map(\.name), ["Barro tal vez v11.fcpxml"])
+    }
+
+    func testTheSpacedNamesInAListingAreTheOnesRemembered() {
+        let listing = "NAME   SIZE  TIME\nBarro tal vez v11.fcpxml\n                   5K   <1m\nIMG_2820.jpg  24K  5m"
+        XCTAssertEqual(FileNameScanner.spacedNames(in: listing), ["Barro tal vez v11.fcpxml"])
+    }
+
     func testALongNameWithCRLFLineEnds() {
         XCTAssertEqual(names("Barro tal vez v11.fcpxml\r\n                   5K   <1m\r\n"),
                        ["Barro tal vez v11.fcpxml"])
