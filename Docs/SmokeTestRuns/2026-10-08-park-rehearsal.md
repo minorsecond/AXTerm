@@ -281,3 +281,13 @@ The phone and iPad reinstalled on `6245acfa`.
 | R9b | pass | The iPad sent t1k_bin.bin to K0EPI-2 by YAPP (19:08:59 to 19:09:20Z). A's banner read "t1k_bin.bin received from K0EPI-3"; its Transfers row reads "From K0EPI-3 · Oct 8, 2026 at 1:09 PM · 19:09 UTC" with Quick Look, Show in Finder and Open. One row, so no order to check |
 
 Warbler received SIGTERM at 19:00:53Z (not from this session) and launchd started it again; it was on the IC-705 over the LAN at 19:01:12Z after its Tailscale address went unanswered. A reconnected to Warbler by itself at 19:01:00Z. A Warbler restart costs A about 20 seconds and needs no help.
+| R9c | pass | From the iPad, `S K0EPI` to K0EPI-4 left "test send" at 19:12:05Z. A's mailbox Messages pane shows "K0EPI-3 · test send · Oct 8, 2026 at 1:12 PM · 19:12 UTC", with the sort menu beside the Mine, Bulletins, All and Killed filter |
+| R9d | not run | A is on the packet test frequency and hears no APRS; not needed for the park |
+
+| # | Where | Finding |
+|---|---|---|
+| 41 | iPad, terminal | Typing on the hardware keyboard felt jumpy: every key redrew the terminal, and the history-wide spaced-name lookup (36) and each visible row's file-name search (28) ran on every redraw |
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 41 | The lookup runs only when the lines change; each row's names are remembered by its text. The phone and iPad reinstalled on `fce2b5ba` | `fce2b5ba` |
