@@ -1576,8 +1576,25 @@ struct TerminalComposeView: View {
                                 send()
                                 return .handled
                             }
+                            // Callsigns and commands, not prose: autocorrect only
+                            // gets in the way, and its suggestion bar took a row of
+                            // a screen the keyboard already crowds (park rehearsal
+                            // 2026-10-08).
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
                             #endif
                             .disabled(!isConnected || !canTypeMessage)
+                        #if os(iOS)
+                        if isTextFieldFocused {
+                            Button {
+                                isTextFieldFocused = false
+                            } label: {
+                                Image(systemName: "keyboard.chevron.compact.down")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Hide Keyboard")
+                        }
+                        #endif
                     }
 
                     if !composeRows.accessoriesInMenu, let onSendControl, connectionMode == .connected {
