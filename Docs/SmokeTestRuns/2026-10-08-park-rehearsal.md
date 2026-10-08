@@ -132,3 +132,15 @@ The phone and iPad reinstalled with everything through `07e9f712`.
 
 A (705) rebuilt on `d2f9c244` (pid 87465), set up again (IC-705 K0EPI-2, Direwolf off, mailbox K0EPI-4 answering, Winlink K0EPI-5 answering, idle timeout back to its default 5 minutes, which now waits during transfers). The radio page shows the closed Advanced row. The phone and iPad reinstalled on `d2f9c244`.
 
+| # | Where | Finding |
+|---|---|---|
+| 28 | Terminal, downloads | Typing `D` and a long or odd file name is tedious. Proposed: tap a file row in an AXTerm listing to fill `D <name>`; long-press a file-like word from any host for Download or Copy, with a per-station command learned from what the operator typed; never sent automatically. Later, AXTerm to AXTerm, a structured file list over AXDP (needs the operator's approval) |
+
+| # | Result | Notes |
+|---|---|---|
+| 25 retest | pass | A (705) showed "t1k_bin.bin received from K0EPI-3" with Open and Show in Finder (screenshot), but closed it after ten seconds before the operator looked; the phone's first one went the same way. Changed to stay until closed or opened (`3e80337a`), reinstalled on the phone and iPad. A then sent the phone a 1 KB file by YAPP over the phone's link; the phone auto-accepted, and the banner came up and stayed |
+
+| # | Where | Finding |
+|---|---|---|
+| 29 | AXDP capabilities | With the phone connected to A (705), A could not send by AXDP: "K0EPI-3 AXDP capability unknown. Connect first to discover capabilities." A appears to learn a station's capabilities only on links it starts. YAPP worked |
+
