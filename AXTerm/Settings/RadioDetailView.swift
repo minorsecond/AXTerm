@@ -35,6 +35,10 @@ struct RadioDetailView: View {
     /// The TNC4 tuning wizard, while it is open.
     @State private var tuningFlow: TNC4TuningFlow?
 
+    /// Folded under Advanced: TNC levels, rig control, transmit and timing.
+    @AppStorage("settings.radio.showsAdvanced") private var showsAdvanced = false
+    static let foldedSections: Set<SettingsSection> = [.radioReceiveAudio, .radioTiming]
+
     /// The sections a deep link can land on.
     static let landingSections: Set<SettingsSection> = [
         .radioConnection, .radioReceiveAudio, .radioIdentity, .radioChannel, .radioTiming,
@@ -52,12 +56,17 @@ struct RadioDetailView: View {
         SettingsForm(landing: Self.landingSections) {
             connectionSection
             statusSection
-            tncSections
 
             identitySection
             channelSection
 
-            RadioTimingSection(viewModel: viewModel, delivery: profile.timingDelivery)
+            SettingsAdvancedToggle(isShown: $showsAdvanced,
+                                   summary: "TNC levels, rig control, transmit and timing.")
+            if SettingsFold.showsAdvanced(stored: showsAdvanced, landing: router.highlightSection,
+                                          folded: Self.foldedSections) {
+                tncSections
+                RadioTimingSection(viewModel: viewModel, delivery: profile.timingDelivery)
+            }
 
             if settings.hasMultipleRadios {
                 Section {
@@ -68,6 +77,7 @@ struct RadioDetailView: View {
                 }
             }
         }
+        .opensAdvanced($showsAdvanced, for: Self.foldedSections, router: router)
         // Read a TNC4 as soon as this radio's link comes up, while the page
         // is open (see MobilinkdSettingsSections.readTNC4WhenUp).
         .task(id: viewModel.radioState) {

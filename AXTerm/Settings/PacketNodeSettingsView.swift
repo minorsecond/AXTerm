@@ -15,6 +15,9 @@ struct PacketNodeSettingsView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var client: PacketEngine
     @EnvironmentObject var router: SettingsRouter
+    /// Folded under Advanced: the link layer and protocol tuning.
+    @AppStorage("settings.packetNode.showsAdvanced") private var showsAdvanced = false
+    static let foldedSections: Set<SettingsSection> = [.linkLayer, .adaptiveTransmission, .axdpProtocol]
     @Environment(\.openWindow) private var openWindow
     
     @State private var txAdaptiveSettings = TxAdaptiveSettings()
@@ -259,100 +262,105 @@ struct PacketNodeSettingsView: View {
                 }
             }
 
-            PreferencesSection("Link Layer (AX.25 Connected Mode)", id: .linkLayer) {
-                LinkLayerSettingsView(
-                    settings: settings,
-                    txAdaptiveSettings: $txAdaptiveSettings,
-                    syncToCoordinator: syncAdaptiveSettingsToSessionCoordinator
-                )
-            }
+            SettingsAdvancedToggle(isShown: $showsAdvanced,
+                                   summary: "Link layer, adaptive transmission and AXDP.")
+            if SettingsFold.showsAdvanced(stored: showsAdvanced, landing: router.highlightSection,
+                                          folded: Self.foldedSections) {
+                PreferencesSection("Link Layer (AX.25 Connected Mode)", id: .linkLayer) {
+                    LinkLayerSettingsView(
+                        settings: settings,
+                        txAdaptiveSettings: $txAdaptiveSettings,
+                        syncToCoordinator: syncAdaptiveSettingsToSessionCoordinator
+                    )
+                }
 
-            PreferencesSection("Adaptive Transmission", id: .adaptiveTransmission) {
-                Toggle("Enable Adaptive Transmission", isOn: Binding(
-                    get: { settings.adaptiveTransmissionEnabled },
-                    set: { newValue in
-                        settings.adaptiveTransmissionEnabled = newValue
-                        if let coordinator = SessionCoordinator.shared {
-                            coordinator.adaptiveTransmissionEnabled = newValue
-                            coordinator.syncSessionManagerConfigFromAdaptive()
-                            if newValue { TxLog.adaptiveEnabled() } else { TxLog.adaptiveDisabled() }
-                        }
-                    }
-                ))
-                
-                if settings.adaptiveTransmissionEnabled {
-                    LabeledContent("Status") {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chart.line.uptrend.xyaxis")
-                                .foregroundStyle(.green)
-                            Text("Learning from session and network")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    
-                    Text("PACLEN, K and N2 set to Auto under Link Layer follow what each link "
-                         + "achieves.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.bottom, 8)
-                    
-                    LabeledContent("Overrides") {
-                        HStack {
-                            Button("Reset Specific Station…") {
-                                resetStationAlert()
+                PreferencesSection("Adaptive Transmission", id: .adaptiveTransmission) {
+                    Toggle("Enable Adaptive Transmission", isOn: Binding(
+                        get: { settings.adaptiveTransmissionEnabled },
+                        set: { newValue in
+                            settings.adaptiveTransmissionEnabled = newValue
+                            if let coordinator = SessionCoordinator.shared {
+                                coordinator.adaptiveTransmissionEnabled = newValue
+                                coordinator.syncSessionManagerConfigFromAdaptive()
+                                if newValue { TxLog.adaptiveEnabled() } else { TxLog.adaptiveDisabled() }
                             }
+                        }
+                    ))
+                
+                    if settings.adaptiveTransmissionEnabled {
+                        LabeledContent("Status") {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chart.line.uptrend.xyaxis")
+                                    .foregroundStyle(.green)
+                                Text("Learning from session and network")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    
+                        Text("PACLEN, K and N2 set to Auto under Link Layer follow what each link "
+                             + "achieves.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 8)
+                    
+                        LabeledContent("Overrides") {
+                            HStack {
+                                Button("Reset Specific Station…") {
+                                    resetStationAlert()
+                                }
                             
-                            Button("Clear All Learned Data") {
-                                if let coordinator = SessionCoordinator.shared {
-                                    coordinator.clearAllLearned()
-                                    seedAdaptiveSettings()
+                                Button("Clear All Learned Data") {
+                                    if let coordinator = SessionCoordinator.shared {
+                                        coordinator.clearAllLearned()
+                                        seedAdaptiveSettings()
+                                    }
                                 }
                             }
                         }
+                        .disabled(!settings.adaptiveTransmissionEnabled)
                     }
-                    .disabled(!settings.adaptiveTransmissionEnabled)
                 }
-            }
 
-            PreferencesSection("AXDP Protocol", id: .axdpProtocol) {
-                if settings.allRadiosOnAPRS { aprsLockNote }
-                Toggle("Enable AXDP Extensions", isOn: $txAdaptiveSettings.axdpExtensionsEnabled)
-                    .disabled(settings.allRadiosOnAPRS)
-                    .onChange(of: txAdaptiveSettings.axdpExtensionsEnabled) { _, _ in
-                        syncAdaptiveSettingsToSessionCoordinator()
-                    }
-
-                if txAdaptiveSettings.axdpExtensionsEnabled {
-                    Toggle("Auto-negotiate Capabilities", isOn: $txAdaptiveSettings.autoNegotiateCapabilities)
-                        .onChange(of: txAdaptiveSettings.autoNegotiateCapabilities) { _, _ in
+                PreferencesSection("AXDP Protocol", id: .axdpProtocol) {
+                    if settings.allRadiosOnAPRS { aprsLockNote }
+                    Toggle("Enable AXDP Extensions", isOn: $txAdaptiveSettings.axdpExtensionsEnabled)
+                        .disabled(settings.allRadiosOnAPRS)
+                        .onChange(of: txAdaptiveSettings.axdpExtensionsEnabled) { _, _ in
                             syncAdaptiveSettingsToSessionCoordinator()
                         }
 
-                    Toggle("Enable Compression", isOn: $txAdaptiveSettings.compressionEnabled)
-                        .onChange(of: txAdaptiveSettings.compressionEnabled) { _, _ in
-                            syncAdaptiveSettingsToSessionCoordinator()
-                        }
+                    if txAdaptiveSettings.axdpExtensionsEnabled {
+                        Toggle("Auto-negotiate Capabilities", isOn: $txAdaptiveSettings.autoNegotiateCapabilities)
+                            .onChange(of: txAdaptiveSettings.autoNegotiateCapabilities) { _, _ in
+                                syncAdaptiveSettingsToSessionCoordinator()
+                            }
 
-                    if txAdaptiveSettings.compressionEnabled {
-                        Picker("Compression Algorithm", selection: $txAdaptiveSettings.compressionAlgorithm) {
-                            Text("LZ4 (fast)").tag(AXDPCompression.Algorithm.lz4)
-                            Text("Deflate (better ratio)").tag(AXDPCompression.Algorithm.deflate)
+                        Toggle("Enable Compression", isOn: $txAdaptiveSettings.compressionEnabled)
+                            .onChange(of: txAdaptiveSettings.compressionEnabled) { _, _ in
+                                syncAdaptiveSettingsToSessionCoordinator()
+                            }
+
+                        if txAdaptiveSettings.compressionEnabled {
+                            Picker("Compression Algorithm", selection: $txAdaptiveSettings.compressionAlgorithm) {
+                                Text("LZ4 (fast)").tag(AXDPCompression.Algorithm.lz4)
+                                Text("Deflate (better ratio)").tag(AXDPCompression.Algorithm.deflate)
+                            }
+                            .pickerStyle(.menu)
+                            .onChange(of: txAdaptiveSettings.compressionAlgorithm) { _, _ in
+                                syncAdaptiveSettingsToSessionCoordinator()
+                            }
                         }
-                        .pickerStyle(.menu)
-                        .onChange(of: txAdaptiveSettings.compressionAlgorithm) { _, _ in
-                            syncAdaptiveSettingsToSessionCoordinator()
-                        }
-                    }
                     
-                    Toggle("Show AXDP decode details in console", isOn: $txAdaptiveSettings.showAXDPDecodeDetails)
-                         .onChange(of: txAdaptiveSettings.showAXDPDecodeDetails) { _, _ in
-                             syncAdaptiveSettingsToSessionCoordinator()
-                         }
-                }
+                        Toggle("Show AXDP decode details in console", isOn: $txAdaptiveSettings.showAXDPDecodeDetails)
+                             .onChange(of: txAdaptiveSettings.showAXDPDecodeDetails) { _, _ in
+                                 syncAdaptiveSettingsToSessionCoordinator()
+                             }
+                    }
 
-                Text("AXDP extensions provide compression, capability negotiation, and reliable transfers.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    Text("AXDP extensions provide compression, capability negotiation, and reliable transfers.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             PreferencesSection("File Transfers", id: .fileTransfer) {
@@ -398,6 +406,7 @@ struct PacketNodeSettingsView: View {
             }
         }
         .settingsPagePadding()
+        .opensAdvanced($showsAdvanced, for: Self.foldedSections, router: router)
         .onAppear {
             seedAdaptiveSettings()
         }
