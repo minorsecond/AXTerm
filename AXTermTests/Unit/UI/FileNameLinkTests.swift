@@ -30,6 +30,37 @@ final class FileNameScannerTests: XCTestCase {
         XCTAssertEqual(names("README.TXT     1234  KEPS2810.ZIP  20480"), ["README.TXT", "KEPS2810.ZIP"])
     }
 
+    /// What the phone showed at 15:55Z: a long name with spaces on its own
+    /// line and its size under it, then two ordinary rows.
+    func testAnAXTermListingWithASpacedLongName() {
+        let listing = """
+        NAME              SIZE  TIME  ABOUT
+        Barro tal vez v11.fcpxml
+                           5K   <1m
+        IMG_2820.jpg       24K   5m
+        Photo-20261008-052732.jpg
+                           12K   3m
+        D <name> fetches one. U uploads to the sysop.
+        """
+        XCTAssertEqual(names(listing), ["Barro tal vez v11.fcpxml", "IMG_2820.jpg", "Photo-20261008-052732.jpg"])
+    }
+
+    func testALongNameWithCRLFLineEnds() {
+        XCTAssertEqual(names("Barro tal vez v11.fcpxml\r\n                   5K   <1m\r\n"),
+                       ["Barro tal vez v11.fcpxml"])
+    }
+
+    /// Without the size line under it, a sentence that ends in a file name
+    /// links only the name.
+    func testASentenceEndingInAFileNameLinksOnlyTheName() {
+        XCTAssertEqual(names("Look in my notes.txt"), ["notes.txt"])
+        XCTAssertEqual(names("Look in my notes.txt\nand tell me"), ["notes.txt"])
+    }
+
+    func testLongerExtensions() {
+        XCTAssertEqual(names("edit.fcpxml  big.torrent"), ["edit.fcpxml", "big.torrent"])
+    }
+
     func testTheRangeCoversTheNameOnly() {
         let text = "Try (notes.txt), then go."
         let hit = FileNameScanner.names(in: text).first

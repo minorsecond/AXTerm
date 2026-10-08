@@ -8,27 +8,68 @@ import Foundation
 /// Hosts list files in their own formats: AXTerm's NAME / SIZE / TIME table,
 /// DOS-style `README.TXT  1234` from older BBSes and nodes. What they share
 /// is a name with an extension, so that is what counts: a run of name
-/// characters, a dot, and an extension of one to five letters and digits
-/// starting with a letter. Names with no extension, or with spaces in them,
-/// are left for the operator to type.
+/// characters, a dot, and an extension of up to eight letters and digits
+/// starting with a letter. A name with spaces is found only in AXTerm's own
+/// listing, where a long name has a line to itself and its size is indented
+/// on the line under it. Names with no extension are left for the operator
+/// to type.
 nonisolated enum FileNameScanner {
     /// Extensions that make a web address, not a file.
     private static let webEndings: Set<String> = [
         "com", "org", "net", "edu", "gov", "mil", "io", "us", "uk", "ca", "de", "info", "biz"
     ]
 
-    private static let shape = /[A-Za-z0-9_][A-Za-z0-9_\-+~.]*\.[A-Za-z][A-Za-z0-9]{0,4}/
+    private static let shape = /[A-Za-z0-9_][A-Za-z0-9_\-+~.]*\.[A-Za-z][A-Za-z0-9]{0,7}/
+
+    /// A long name on its own line in AXTerm's listing, spaces allowed.
+    private static let longNameRow = /[A-Za-z0-9_(\[][A-Za-z0-9_\-+~.,'()\[\] ]*\.[A-Za-z][A-Za-z0-9]{0,7}/
+
+    /// The line under a long name: indented, then its size ("5K", "1.2M").
+    private static let detailsRow = /\s{8,}\d+(?:\.\d+)?[BKMG]?\s.*/
 
     static func names(in text: String) -> [(range: Range<String.Index>, name: String)] {
         var hits: [(range: Range<String.Index>, name: String)] = []
-        var index = text.startIndex
-        while index < text.endIndex {
+        // Each line without its line ending. CR LF is one Character in
+        // Swift, so it is matched as a newline, not as "\n".
+        var lines: [Range<String.Index>] = []
+        var lineStart = text.startIndex
+        for index in text.indices where text[index].isNewline {
+            lines.append(lineStart..<index)
+            lineStart = text.index(after: index)
+        }
+        lines.append(lineStart..<text.endIndex)
+
+        for (number, line) in lines.enumerated() {
+            if number + 1 < lines.count, let name = longName(in: text, line: line, details: lines[number + 1]) {
+                hits.append((name, String(text[name])))
+            } else {
+                hits += words(in: text, line: line)
+            }
+        }
+        return hits
+    }
+
+    /// The whole line, when it is a long name with its details under it.
+    private static func longName(in text: String, line: Range<String.Index>,
+                                 details: Range<String.Index>) -> Range<String.Index>? {
+        guard text[details].wholeMatch(of: detailsRow) != nil else { return nil }
+        let trimmed = text[line].trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains(" "), trimmed.wholeMatch(of: longNameRow) != nil,
+              let range = text.range(of: trimmed, range: line) else { return nil }
+        return range
+    }
+
+    private static func words(in text: String, line: Range<String.Index>)
+        -> [(range: Range<String.Index>, name: String)] {
+        var hits: [(range: Range<String.Index>, name: String)] = []
+        var index = line.lowerBound
+        while index < line.upperBound {
             guard !text[index].isWhitespace else {
                 index = text.index(after: index)
                 continue
             }
             let start = index
-            while index < text.endIndex, !text[index].isWhitespace {
+            while index < line.upperBound, !text[index].isWhitespace {
                 index = text.index(after: index)
             }
             if let range = fileName(in: text, token: start..<index) {
