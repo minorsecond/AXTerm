@@ -409,6 +409,10 @@ struct ConsoleView: View {
     }
 
     private func rebuildRenderedLines() {
+        if onFileName != nil {
+            let known = fileNameIndex.knownNames(in: lines.map(\.text))
+            if known != knownFileNames { knownFileNames = known }
+        }
         let visible = readsAsConversation ? ConversationTranscript.lines(typeFilteredLines) : typeFilteredLines
         let groups = ConsoleLineGrouper.group(visible)
         groupedLines = groups
@@ -538,6 +542,7 @@ struct ConsoleView: View {
                                                              onIdentityMenu: onIdentityMenu,
                                                              linksFileNames: onFileName != nil,
                                                              knownFileNames: knownFileNames,
+                                                             fileNameIndex: fileNameIndex,
                                                              radioNames: radioNames,
                                                              observer: observer,
                                                              distanceInMiles: distanceInMiles,
@@ -556,6 +561,7 @@ struct ConsoleView: View {
                                                              onIdentityMenu: onIdentityMenu,
                                                              linksFileNames: onFileName != nil,
                                                              knownFileNames: knownFileNames,
+                                                             fileNameIndex: fileNameIndex,
                                                              radioNames: radioNames,
                                                              observer: observer,
                                                              distanceInMiles: distanceInMiles,
@@ -718,10 +724,9 @@ struct ConsoleView: View {
 
     /// Names with spaces seen in listings in this console, so a later line
     /// that mentions one links the whole name.
-    private var knownFileNames: Set<String> {
-        guard onFileName != nil else { return [] }
-        return fileNameIndex.knownNames(in: lines.map(\.text))
-    }
+    /// Worked out when the lines change (`rebuildRenderedLines`), not on
+    /// every redraw: typing redraws the console on each key (finding 41).
+    @State private var knownFileNames: Set<String> = []
 
     /// Remembers each line's spaced names, so a redraw does not scan the
     /// whole history again.
@@ -995,6 +1000,7 @@ struct ConsoleLineGroupView: View {
     var onIdentityMenu: ((String) -> Void)?
     var linksFileNames = false
     var knownFileNames: Set<String> = []
+    var fileNameIndex: FileNameIndex?
     var radioNames: [RadioID: String] = [:]
     var observer: GreatCircle.Point?
     var distanceInMiles: Bool = true
@@ -1017,6 +1023,7 @@ struct ConsoleLineGroupView: View {
                 onIdentityMenu: onIdentityMenu,
                 linksFileNames: linksFileNames,
                 knownFileNames: knownFileNames,
+                fileNameIndex: fileNameIndex,
                 radioNames: radioNames,
                 observer: observer,
                 distanceInMiles: distanceInMiles,
@@ -1132,6 +1139,8 @@ struct ConsoleLineView: View {
     var linksFileNames = false
     /// See `FileNameScanner.names(in:known:)`.
     var knownFileNames: Set<String> = []
+    /// Remembers each row's names, so a redraw does not search again.
+    var fileNameIndex: FileNameIndex?
     /// Radio names by id. Empty (one radio) draws no badge, so a single-radio
     /// station's console reads exactly as it did.
     var radioNames: [RadioID: String] = [:]
@@ -1408,7 +1417,9 @@ struct ConsoleLineView: View {
         // Only in what another station sent: our own `D` line needs no link.
         if linksFileNames, line.kind == .packet, let from = line.from,
            !echoCallsigns.contains(from.uppercased()) {
-            for hit in FileNameScanner.names(in: text, known: knownFileNames)
+            let hits = fileNameIndex?.names(in: text, known: knownFileNames)
+                ?? FileNameScanner.names(in: text, known: knownFileNames)
+            for hit in hits
             where !targets.contains(where: { $0.range.overlaps(hit.range) }) {
                 guard let url = ConsoleFileLink.url(for: hit.name) else { continue }
                 targets.append((hit.range, url))

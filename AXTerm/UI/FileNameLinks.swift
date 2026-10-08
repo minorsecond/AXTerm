@@ -223,11 +223,46 @@ final class DownloadCommandMemory {
 final class FileNameIndex {
     private let scan: (String) -> Set<String>
     private var byText: [String: Set<String>] = [:]
+    private let rowScan: (String, Set<String>) -> [(range: Range<String.Index>, name: String)]
+    /// Each row's names as UTF-8 offsets, so they fit any copy of the text.
+    private var rowNames: [String: [(start: Int, end: Int, name: String)]] = [:]
+    private var rowNamesKnown: Set<String> = []
     /// Texts kept beyond those shown, before the rest are forgotten.
     private static let limit = 1_000
 
-    init(scan: @escaping (String) -> Set<String> = FileNameScanner.spacedNames(in:)) {
+    init(scan: @escaping (String) -> Set<String> = FileNameScanner.spacedNames(in:),
+         rowScan: @escaping (String, Set<String>) -> [(range: Range<String.Index>, name: String)]
+            = { FileNameScanner.names(in: $0, known: $1) }) {
         self.scan = scan
+        self.rowScan = rowScan
+    }
+
+    /// The file names in one row, searched once per text. Typing redraws
+    /// the history on every key, and each visible row searched again, which
+    /// made typing on the iPad's keyboard jumpy (park rehearsal 2026-10-08,
+    /// finding 41). A new set of known names starts the memory over.
+    func names(in text: String, known: Set<String>) -> [(range: Range<String.Index>, name: String)] {
+        if known != rowNamesKnown {
+            rowNames = [:]
+            rowNamesKnown = known
+        }
+        let found: [(start: Int, end: Int, name: String)]
+        if let remembered = rowNames[text] {
+            found = remembered
+        } else {
+            found = rowScan(text, known).map { hit in
+                (text.utf8.distance(from: text.startIndex, to: hit.range.lowerBound),
+                 text.utf8.distance(from: text.startIndex, to: hit.range.upperBound),
+                 hit.name)
+            }
+            if rowNames.count >= Self.limit { rowNames = [:] }
+            rowNames[text] = found
+        }
+        return found.map { hit in
+            let lower = text.utf8.index(text.startIndex, offsetBy: hit.start)
+            let upper = text.utf8.index(text.startIndex, offsetBy: hit.end)
+            return (lower..<upper, hit.name)
+        }
     }
 
     var remembered: Int { byText.count }

@@ -54,4 +54,42 @@ final class FileNameIndexTests: XCTestCase {
     func testASingleLineHasNoSpacedNames() {
         XCTAssertEqual(FileNameScanner.spacedNames(in: "Barro tal vez v11.fcpxml sent."), [])
     }
+    // MARK: Per-row names (park rehearsal 2026-10-08, finding 41)
+
+    /// Typing on the iPad's keyboard redrew the history on every key, and
+    /// each visible row searched its text for file names again.
+    func testARowsNamesAreFoundOncePerText() {
+        var scans = 0
+        let index = FileNameIndex(rowScan: { text, known in
+            scans += 1
+            return FileNameScanner.names(in: text, known: known)
+        })
+        let text = "IMG_2820.jpg       24K   5m"
+        XCTAssertEqual(index.names(in: text, known: []).map(\.name), ["IMG_2820.jpg"])
+        XCTAssertEqual(index.names(in: text, known: []).map(\.name), ["IMG_2820.jpg"])
+        XCTAssertEqual(scans, 1)
+    }
+
+    func testTheRangesFitTheTextTheyAreAskedFor() {
+        let index = FileNameIndex()
+        let first = "see notes.txt"
+        _ = index.names(in: first, known: [])
+        let again = String("see notes.txt".map { $0 })
+        let hit = index.names(in: again, known: []).first
+        XCTAssertEqual(hit.map { String(again[$0.range]) }, "notes.txt")
+    }
+
+    /// A new spaced name changes what a row links, so rows are searched again.
+    func testNewKnownNamesMeanANewSearch() {
+        var scans = 0
+        let index = FileNameIndex(rowScan: { text, known in
+            scans += 1
+            return FileNameScanner.names(in: text, known: known)
+        })
+        let text = "Barro tal vez v11.fcpxml sent."
+        XCTAssertEqual(index.names(in: text, known: []).map(\.name), ["v11.fcpxml"])
+        XCTAssertEqual(index.names(in: text, known: ["Barro tal vez v11.fcpxml"]).map(\.name),
+                       ["Barro tal vez v11.fcpxml"])
+        XCTAssertEqual(scans, 2)
+    }
 }
