@@ -156,5 +156,12 @@ A (705) rebuilt on `bd9500ec` (pid 5110) and set up again: IC-705 through Warble
 
 | # | Where | Finding |
 |---|---|---|
-| 30 | On the air, not AXTerm | From 16:09Z the phone could reach A but never heard A's replies. The phone, run with its console attached, showed the Bluetooth link working both ways and the TNC4 passing up no packets at all, even after its demodulator was reset. The TNC4's receive level read about 100 peak to peak (silence), and the ID-50 itself showed no signal when A keyed. The 705 confirmed it was transmitting, but at 0% power its meter read 0.0014 against 0.106 at 100%. A 10-second carrier at 100% opened the ID-50. A at 0% had just enough signal to reach the ID-50 earlier in the day and then not enough; run A at about 10% |
+| 30 | Between the TNC4 and the ID-50, not AXTerm | From 16:09Z the phone could reach A but never heard A's replies. The phone, run with its console attached, showed the Bluetooth link working both ways and the TNC4 passing up no packets, even after its demodulator was reset; its receive level read about 100 peak to peak (silence). After the operator unplugged the TNC4 from the ID-50 and plugged it back in at about 16:25Z, the phone decoded A again with the 705 at its usual 0%, and the ID-50's speaker played A's frames at 0% with the TNC4 out. So the receive audio was lost at the TNC4's plug or cable. An earlier guess that 0% power had become too weak was wrong |
 | 31 | iPhone, TNC4 page | "The TNC4's receive level hasn't been tuned for this radio" reads like an error when the TNC4 is fine on its own settings. Make it read as an option |
+
+| # | Where | Finding |
+|---|---|---|
+| 32 | A (705), AX.25 | Set up by my test at 16:24Z: A called K0EPI-3 as K0EPI-2 and hung up while the TNC4 was unplugged, leaving A a half-closed link to K0EPI-3. The phone's call to K0EPI-4 at 16:26:42Z was then answered with a UA from K0EPI-2. A reply must come from the address that was called. A then refused every call to K0EPI-4 with DM, taking its K0EPI-2 link to the phone as live, until that link was disconnected at 16:27:57Z. Tied to 19 (links held per caller rather than per address pair) |
+| 33 | iPhone, AX.25 | The phone accepted that UA from K0EPI-2 for its call to K0EPI-4, switched the session's peer to K0EPI-2 and showed Connected. A UA from an address other than the one called is not an answer to that call. `W PARK` then went to K0EPI-4, which answered DM |
+
+Both need the operator's approval: they change AX.25 behavior.
