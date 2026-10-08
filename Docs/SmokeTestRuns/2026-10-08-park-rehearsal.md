@@ -4,6 +4,37 @@ Plan: [ParkRehearsalPlan.md](../ParkRehearsalPlan.md). A (705) on `44ada7ba`
 (pid 46344), 145.650 PKTFM through Warbler; the iPhone on `44ada7ba` with the
 TNC4 and the ID-50 as K0EPI-3. Mailbox K0EPI-4, Winlink peer-to-peer K0EPI-2.
 
+## Summary
+
+Everything the park test needs works on the air between the phone (TNC4 and
+ID-50, K0EPI-3) and A (705): photo sizing with a preview, airtime and download
+times, mailbox listings and downloads, sending files from Photos and Files,
+Winlink peer-to-peer with a photo, and the local and UTC times with sorting.
+The run turned up 37 findings. All are fixed and retested except these:
+
+- 19, links held per caller rather than per address pair: deferred to after
+  the park. 32 and 33 cover the cases that came up.
+- 35 part B, letting a mailbox call grow its window for an AXTerm caller:
+  deferred. Part A removes the slow start that made it matter.
+- 28 follow-up, a structured file list between AXTerm stations over AXDP:
+  waits for the operator's approval.
+- R8b, the photo panel on the iPad's wider screen: waits for the iPad.
+- R9b to R9d: A's lists were empty after its last rebuild; unit tests cover
+  them.
+
+Two of the day's failures were on the air rather than in AXTerm: the phone
+lost receive audio until the TNC4 was plugged into the ID-50 again (30), and
+a test call of mine left A holding a half-open link that blocked the mailbox
+(32 and 33 fix what that exposed). The last builds: A (705) on `a44fdcd2`
+(pid 36105), the phone and iPad on `19e2b8fb`. A stays on 145.650 with the
+mailbox answering as K0EPI-4 and Winlink as K0EPI-5 for the park test, and
+goes back to 144.390 afterward.
+
+Closing: X1 pass (every quit of A was deliberate; pid 36105 ran without a
+fault). X2 pass, with the open items above. X3 done: the operator disconnected
+the TNC4 in AXTerm; AXTerm sets nothing on it for this radio, so nothing
+needed restoring. X4: A left on 145.650 for the park test.
+
 ## Results
 
 | # | Result | Notes |
