@@ -29,4 +29,24 @@ final class RefusedConnectHintTests: XCTestCase {
                        "K0EPI-4 answered the connect request with DM (refused).",
                        "a link to the very address is not another link")
     }
+    // MARK: Winlink (park rehearsal 2026-10-08, finding 40)
+
+    /// The iPad still held its mailbox link to K0EPI-4 when it called
+    /// K0EPI-5 for Winlink, and Mail said only "refused the connection".
+    func testAWinlinkRefusalSaysWhichLinkIsStillUp() {
+        let text = RefusedConnectHint.winlink(destination: "K0EPI-5", liveLinks: ["K0EPI-4"])
+        XCTAssertTrue(text.hasPrefix("K0EPI-5 refused the connection"), text)
+        XCTAssertTrue(text.contains("Disconnect from K0EPI-4 first"), text)
+    }
+
+    func testAWinlinkRefusalWithNoOtherLinkIsPlain() {
+        XCTAssertEqual(RefusedConnectHint.winlink(destination: "K0EPI-5", liveLinks: []),
+                       "K0EPI-5 refused the connection")
+    }
+
+    func testTheRunnerUsesTheHintForARefusedConnect() {
+        let text = WinlinkSessionRunner.transportErrorText(
+            WinlinkTransportError.connectRefused("K0EPI-5"), liveLinks: ["K0EPI-4"])
+        XCTAssertTrue(text.contains("Disconnect from K0EPI-4 first"), text)
+    }
 }

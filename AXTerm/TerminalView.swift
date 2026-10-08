@@ -5555,11 +5555,25 @@ struct TerminalViewModifiers: ViewModifier {
 nonisolated enum RefusedConnectHint {
     static func detail(destination: String, liveLinks: [String]) -> String {
         let refused = "\(destination) answered the connect request with DM (refused)."
+        guard let note = otherLinkNote(destination: destination, liveLinks: liveLinks) else { return refused }
+        return refused + " " + note
+    }
+
+    /// A Winlink exchange's wording for the same refusal (park rehearsal
+    /// 2026-10-08, finding 40). Starts with "refused the connection", which
+    /// the gateway ladder reads to move on to the next gateway.
+    static func winlink(destination: String, liveLinks: [String]) -> String {
+        let refused = "\(destination) refused the connection"
+        guard let note = otherLinkNote(destination: destination, liveLinks: liveLinks) else { return refused }
+        return refused + ". " + note
+    }
+
+    private static func otherLinkNote(destination: String, liveLinks: [String]) -> String? {
         let base = BBSMessage.baseCall(destination)
         guard let other = liveLinks.first(where: {
             BBSMessage.baseCall($0) == base && $0.uppercased() != destination.uppercased()
-        }) else { return refused }
-        return refused + " You are still connected to \(other), the same station, and some stations, "
+        }) else { return nil }
+        return "You are still connected to \(other), the same station, and some stations, "
             + "AXTerm among them, take one link per caller. Disconnect from \(other) first."
     }
 }

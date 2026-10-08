@@ -713,14 +713,23 @@ final class WinlinkSessionRunner: ObservableObject {
         return "Exchange complete: " + parts.joined(separator: ", ") + "."
     }
 
-    private func describeTransportError(_ error: Error) -> String {
+    /// The links this station holds now, so a refusal can say when one to
+    /// the same station is still up (finding 40).
+    var liveLinks: () -> [String] = { [] }
+
+    nonisolated static func transportErrorText(_ error: Error, liveLinks: [String]) -> String {
         switch error {
         case WinlinkTransportError.sessionBusy(let detail): return "session busy: \(detail)"
-        case WinlinkTransportError.connectRefused(let station): return "\(station) refused the connection"
+        case WinlinkTransportError.connectRefused(let station):
+            return RefusedConnectHint.winlink(destination: station, liveLinks: liveLinks)
         case WinlinkTransportError.connectTimeout(let station): return "no response from \(station)"
         case WinlinkTransportError.loginFailed(let detail): return detail
         default: return String(describing: error)
         }
+    }
+
+    private func describeTransportError(_ error: Error) -> String {
+        Self.transportErrorText(error, liveLinks: liveLinks())
     }
 
     // MARK: - Transcript

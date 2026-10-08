@@ -168,6 +168,9 @@ final class WinlinkContext: ObservableObject {
                 await locationService?.recentLocation(within: Self.positionReuseWindow)
             }
         }
+        runner?.liveLinks = {
+            SessionCoordinator.shared?.connectedSessions.map(\.remoteAddress.display) ?? []
+        }
         locationChanges = locationService.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
