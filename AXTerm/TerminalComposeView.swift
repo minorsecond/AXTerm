@@ -1586,10 +1586,10 @@ struct TerminalComposeView: View {
                             .disabled(!isConnected || !canTypeMessage)
                         #if os(iOS)
                         if isTextFieldFocused {
-                            Button {
+                            // Worded, not an icon alone: the icon was not
+                            // found (park rehearsal 2026-10-08).
+                            Button("Done") {
                                 isTextFieldFocused = false
-                            } label: {
-                                Image(systemName: "keyboard.chevron.compact.down")
                             }
                             .buttonStyle(.borderless)
                             .accessibilityLabel("Hide Keyboard")
