@@ -206,3 +206,7 @@ The phone was slow to the point of unusable on the build with fixes 31 to 36: fi
 | # | Where | Finding |
 |---|---|---|
 | 37 | iPhone, Winlink exchange | While sending, the rate falls steadily and jumps back up at each acknowledgment: it is bytes acknowledged over time since the start, and between acknowledgments only the time moves |
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 37 | The rate is measured to the last time the byte count moved and the estimate counts down from there; 30 s with nothing counts as a stall and is measured to now. Not yet on the phone | `edfba650` |
