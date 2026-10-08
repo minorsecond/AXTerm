@@ -563,6 +563,7 @@ nonisolated struct BBSTransferRowModel: Equatable, Sendable {
         }
         parts.append(status.protocolName)
         parts.append(BBSElapsed.format(from: status.startedAt, to: now))
+        if let left = timeLeft(status, now: now) { parts.append(left) }
 
         return BBSTransferRowModel(
             title: title,
@@ -570,6 +571,21 @@ nonisolated struct BBSTransferRowModel: Equatable, Sendable {
             fraction: fraction,
             systemImage: status.direction == .download
                 ? "arrow.down.doc" : "arrow.up.doc")
+    }
+
+    /// "about 3 min left", from the rate the transfer has run at so far
+    /// (operator, 2026-10-07). Nothing in the first ten seconds, which is
+    /// too little to have a rate, and nothing once it is all there.
+    static func timeLeft(_ status: BBSService.TransferStatus, now: Date) -> String? {
+        let elapsed = now.timeIntervalSince(status.startedAt)
+        guard elapsed >= 10, status.bytesDone > 0, status.bytesDone < status.totalBytes else { return nil }
+        let seconds = Double(status.totalBytes - status.bytesDone) / (Double(status.bytesDone) / elapsed)
+        if seconds < 60 { return "under a minute left" }
+        var hours = Int(seconds / 3600)
+        var minutes = Int(((seconds - Double(hours) * 3600) / 60).rounded(.up))
+        if minutes == 60 { hours += 1; minutes = 0 }
+        if hours == 0 { return "about \(minutes) min left" }
+        return minutes == 0 ? "about \(hours) h left" : "about \(hours) h \(minutes) min left"
     }
 }
 

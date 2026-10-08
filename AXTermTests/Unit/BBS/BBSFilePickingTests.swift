@@ -147,7 +147,7 @@ final class BBSTransferRowModelTests: XCTestCase {
         let model = BBSTransferRowModel.make(status(.download, done: 12_288, total: 40_960),
                                              now: start.addingTimeInterval(65))
         XCTAssertEqual(model.title, "Sending roster.zip to W0ARP-1")
-        XCTAssertEqual(model.detail, "12K of 40K · 30% · YAPP · 1:05")
+        XCTAssertEqual(model.detail, "12K of 40K · 30% · YAPP · 1:05 · about 3 min left")
         XCTAssertEqual(model.fraction ?? -1, 0.3, accuracy: 0.0001)
         XCTAssertEqual(model.systemImage, "arrow.down.doc")
     }
@@ -165,6 +165,32 @@ final class BBSTransferRowModelTests: XCTestCase {
                                              now: start.addingTimeInterval(3))
         XCTAssertEqual(model.title, "Receiving log.txt from W0ARP-1")
         XCTAssertEqual(model.detail, "512B of 1K · 50% · YAPP · 0:03")
+    }
+
+    /// Time left comes from the rate the transfer is running at
+    /// (operator, 2026-10-07), once it has run long enough to have one.
+    func testTimeLeftIsFromTheRateSoFar() {
+        // 6000 of 9000 bytes in 100 s: 60 B/s, so 50 s to go.
+        let nearly = BBSTransferRowModel.make(status(.download, done: 6000, total: 9000),
+                                              now: start.addingTimeInterval(100))
+        XCTAssertTrue(nearly.detail.hasSuffix(" · under a minute left"), nearly.detail)
+
+        // 1200 of 400 000 bytes in 20 s: 60 B/s, about 1 h 51 min to go.
+        let long = BBSTransferRowModel.make(status(.download, done: 1200, total: 400_000),
+                                            now: start.addingTimeInterval(20))
+        XCTAssertTrue(long.detail.hasSuffix(" · about 1 h 51 min left"), long.detail)
+    }
+
+    func testNoTimeLeftBeforeThereIsARate() {
+        let early = BBSTransferRowModel.make(status(.download, done: 500, total: 9000),
+                                             now: start.addingTimeInterval(5))
+        XCTAssertFalse(early.detail.contains("left"), early.detail)
+        let nothingYet = BBSTransferRowModel.make(status(.download, done: 0, total: 9000),
+                                                  now: start.addingTimeInterval(60))
+        XCTAssertFalse(nothingYet.detail.contains("left"), nothingYet.detail)
+        let done = BBSTransferRowModel.make(status(.download, done: 9000, total: 9000),
+                                            now: start.addingTimeInterval(60))
+        XCTAssertFalse(done.detail.contains("left"), done.detail)
     }
 
     func testProgressNeverReadsPastTheEnd() {
