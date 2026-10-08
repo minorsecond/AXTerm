@@ -146,14 +146,23 @@ struct AXTermiOSRootView: View {
     /// obvious reading that the screen was simply too short. Stacking gives
     /// the strip its own space and hands the rest to the tab.
     private func withTNCStrip<Content: View>(_ content: Content) -> some View {
-        VStack(spacing: 0) {
+        let bannerPlacement = ReceivedFileBannerPlacement.forWidth(isRegular: horizontalSizeClass == .regular)
+        return VStack(spacing: 0) {
             content
                 // A file that just arrived, with Open (park rehearsal
-                // 2026-10-08).
+                // 2026-10-08). On the iPad it goes at the bottom instead: the
+                // tab bar floats over the top there (finding 38).
                 .overlay(alignment: .top) {
-                    ReceivedFileBanner()
-                        .animation(.easeOut(duration: 0.25), value: transferRouter.receivedFile)
+                    if bannerPlacement == .top {
+                        ReceivedFileBanner()
+                            .animation(.easeOut(duration: 0.25), value: transferRouter.receivedFile)
+                    }
                 }
+            if bannerPlacement == .bottom {
+                ReceivedFileBanner(placement: .bottom)
+                    .frame(maxWidth: 560)
+                    .animation(.easeOut(duration: 0.25), value: transferRouter.receivedFile)
+            }
             // A file transfer under way, on every tab (issue 91).
             // Not over the terminal's Transfers tab, where the row already
             // says the same.

@@ -504,6 +504,8 @@ nonisolated struct ReceivedFileNotice: Identifiable, Equatable, Sendable {
 /// rehearsal 2026-10-08).
 struct ReceivedFileBanner: View {
     @ObservedObject var router: TransferUIRouter = .shared
+    /// The edge of the screen it is drawn against (finding 38).
+    var placement: ReceivedFileBannerPlacement = .top
     @State private var previewURL: URL?
 
     var body: some View {
@@ -547,8 +549,8 @@ struct ReceivedFileBanner: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
             .padding(.horizontal, 12)
-            .padding(.top, 6)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .padding(placement == .top ? .top : .vertical, 6)
+            .transition(.move(edge: placement == .top ? .top : .bottom).combined(with: .opacity))
             .quickLookPreview($previewURL)
             // Opened is seen: the banner goes when its preview closes.
             .onChange(of: previewURL) { old, new in
@@ -556,4 +558,14 @@ struct ReceivedFileBanner: View {
             }
         }
     }
+}
+
+/// Where the received-file banner goes. The iPad's tab bar floats at the
+/// top, and the banner sat under it (park rehearsal 2026-10-08, finding
+/// 38); there it goes at the bottom, where the transfer card was. The
+/// iPhone (tab bar at the bottom) and the Mac keep it at the top.
+nonisolated enum ReceivedFileBannerPlacement: Equatable {
+    case top, bottom
+
+    static func forWidth(isRegular: Bool) -> Self { isRegular ? .bottom : .top }
 }
