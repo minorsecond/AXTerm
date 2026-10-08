@@ -3475,6 +3475,15 @@ final class SessionCoordinator: ObservableObject {
         sessionManager.sessions.values.contains { $0.state == .connected || $0.state == .connecting }
     }
 
+    /// Live links on radios whose connection ends when iOS suspends the app.
+    /// A link on a radio that `survives` is left out: its call can carry on
+    /// in the background (park rehearsal 2026-10-08).
+    func hasLiveLinks(endingInBackground survives: (RadioID) -> Bool) -> Bool {
+        sessionManager.sessions.values.contains {
+            ($0.state == .connected || $0.state == .connecting) && !survives($0.radio)
+        }
+    }
+
     /// Links `prepareForTermination` sent DISC on.
     private(set) var terminationDisconnects: Set<SessionKey> = []
 
@@ -3517,10 +3526,12 @@ final class SessionCoordinator: ObservableObject {
     ///
     /// - Returns: the number of DISC frames put on the air.
     @discardableResult
-    func prepareForTermination() -> Int {
+    /// `keeping` names radios whose links outlast what is ending (iOS
+    /// suspending the app, for a Bluetooth TNC): their sessions are left up.
+    func prepareForTermination(keeping survives: (RadioID) -> Bool = { _ in false }) -> Int {
         flushLearnedRoutes()
         let live = sessionManager.sessions.values.filter {
-            $0.state == .connected || $0.state == .connecting
+            ($0.state == .connected || $0.state == .connecting) && !survives($0.radio)
         }
         var sent = 0
         for session in live {

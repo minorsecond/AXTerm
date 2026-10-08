@@ -464,6 +464,9 @@ struct AXTermiOSRootView: View {
             case .background:
                 context.locationService.stopTracking()
                 sessionCoordinator.isOffScreen = true
+                goodbye.survives = { [settings] id in
+                    settings.radio(id).map { BackgroundGoodbye.survivesSuspension($0.kind) } ?? false
+                }
                 goodbye.enteredBackground(coordinator: sessionCoordinator)
                 bbsService.shutdown(reason: "this device is going to sleep")
                 // Detached as well, so a call that somehow arrives while the

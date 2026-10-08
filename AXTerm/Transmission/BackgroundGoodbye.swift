@@ -33,6 +33,14 @@ nonisolated enum BackgroundGoodbye: Equatable {
     /// does while the app is still in the foreground).
     static let usualAllowance: TimeInterval = 30
 
+    /// Whether a radio's connection outlasts iOS suspending the app. A
+    /// Bluetooth TNC does: the app keeps Bluetooth running in the background
+    /// (`bluetooth-central`), so its calls are left up. A network TNC's
+    /// socket is dropped with the app, so its calls are closed first.
+    static func survivesSuspension(_ kind: RadioTransportKind) -> Bool {
+        kind == .ble
+    }
+
     static func plan(backgroundTimeRemaining remaining: TimeInterval) -> Plan {
         let budget = remaining.isFinite && remaining < 600 ? remaining : usualAllowance
         let usable = max(0, budget - reserve)

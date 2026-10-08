@@ -5,13 +5,18 @@ import UIKit
 ///
 /// iOS suspends AXTerm a few seconds after it goes to the background, and
 /// its links died without a DISC (the iOS side of smoke run 2026-10-03-1,
-/// issue 85). Its only background mode, bluetooth-central, lets a
-/// Bluetooth TNC's answer to the DISC reach it (issue 115); it does not keep
-/// links running off screen. Leaving the screen asks iOS for
-/// background time; after a short grace, so a quick trip to another app
-/// keeps the session, every live link gets its DISC and time to settle
-/// (`BackgroundGoodbye.plan`), then the time is handed back. Coming back
-/// first cancels it.
+/// issue 85). Leaving the screen asks iOS for background time; after a
+/// short grace, so a quick trip to another app keeps the session, every
+/// live link that will not survive the suspension gets its DISC and time to
+/// settle (`BackgroundGoodbye.plan`), then the time is handed back. Coming
+/// back first cancels it.
+///
+/// A link through a Bluetooth TNC is left up (park rehearsal 2026-10-08,
+/// operator's approval): the app's background mode, bluetooth-central, wakes
+/// it for every frame the TNC passes up, so a download carries on and each
+/// frame is acknowledged. The app sleeps between frames, though, so its own
+/// timers wait: a send from this device that loses an acknowledgment stalls
+/// until the other station polls or the operator comes back.
 @MainActor
 final class BackgroundGoodbyeController {
     private weak var coordinator: SessionCoordinator?
@@ -24,10 +29,14 @@ final class BackgroundGoodbyeController {
     /// coordinator comes with `enteredBackground(coordinator:)`.
     init() {}
 
+    /// Whether a radio's link outlasts the suspension; set by the root view,
+    /// which knows each radio's transport.
+    var survives: (RadioID) -> Bool = { _ in false }
+
     func enteredBackground(coordinator: SessionCoordinator) {
         self.coordinator = coordinator
         guard task == .invalid else { return }
-        guard coordinator.hasLiveLinks else { return }
+        guard coordinator.hasLiveLinks(endingInBackground: survives) else { return }
         task = UIApplication.shared.beginBackgroundTask(withName: "AXTerm goodbye") { [weak self] in
             // Out of time: iOS is about to suspend the app regardless.
             MainActor.assumeIsolated { self?.finish() }
@@ -49,7 +58,7 @@ final class BackgroundGoodbyeController {
 
     private func sayGoodbye(settleCap: TimeInterval) {
         pendingGoodbye = nil
-        guard let coordinator, coordinator.prepareForTermination() > 0 else { return finish() }
+        guard let coordinator, coordinator.prepareForTermination(keeping: survives) > 0 else { return finish() }
         coordinator.packetEngine?.appendSystemNotification(
             "AXTerm left the screen, so its sessions were closed before iOS suspends it.")
         coordinator.whenTerminationDisconnectsSettle(
