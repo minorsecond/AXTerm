@@ -291,8 +291,11 @@ final class BBSService: ObservableObject {
     var isAvailable: Bool { store != nil }
 
     /// The throughput figure quoted to callers, exposed so the operator's own
-    /// file list shows the same times the caller is told.
-    var linkThroughput: Double { linkBytesPerSecond() }
+    /// file list shows the same times the caller is told: the caller on the
+    /// air's rate during a call, the link default otherwise.
+    var linkThroughput: Double {
+        live.map { bytesPerSecond(for: $0.callsign) } ?? linkBytesPerSecond()
+    }
 
     /// The rate quoted to one caller: what their last finished transfer with
     /// this station actually ran at, else the link default. A caller at the

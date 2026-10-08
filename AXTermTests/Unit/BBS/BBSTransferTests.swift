@@ -177,6 +177,17 @@ final class BBSTransferTests: XCTestCase {
         XCTAssertTrue(row.contains(" 5m "), "9000 bytes at 30 B/s is five minutes: \(row)")
     }
 
+    /// The operator's Files list quotes the caller on the air the same
+    /// times the caller is told, not the link default.
+    func testTheOperatorsFileTimesMatchTheCallerOnTheAir() async throws {
+        coordinator.measuredTransferRates["W0ARP-1"] = 30
+        try await connect()
+        XCTAssertEqual(service.linkThroughput, 30)
+
+        service.shutdown(reason: "test over")
+        XCTAssertEqual(service.linkThroughput, 1_000_000, "no caller, the link default")
+    }
+
     /// A finished download records its rate, so the next listing for that
     /// caller is timed by it.
     func testAFinishedDownloadRecordsTheCallersRate() async throws {
