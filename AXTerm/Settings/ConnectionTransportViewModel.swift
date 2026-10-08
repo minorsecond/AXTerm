@@ -824,6 +824,25 @@ final class ConnectionTransportViewModel: ObservableObject {
         let stored = RadioSecrets.setLANPassword(cleaned, for: radioID)
         hasLANPassword = stored
         update { $0.hasLANPassword = stored }
+        // The password is in the Keychain, not the settings, so leaving the
+        // page saw no change and skipped the reconnect (park rehearsal
+        // 2026-10-08). A radio that should be up connects now.
+        let manager = packetEngine.radioManager
+        if let profile = settings.radio(radioID),
+           Self.connectsAfterSavingPassword(stored: stored, enabled: profile.enabled,
+                                            autoConnect: profile.autoConnect,
+                                            connected: radioConnected,
+                                            heldClosed: manager.isHeldClosed) {
+            manager.open(radioID)
+        }
+    }
+
+    /// Whether saving a password should connect the radio: one is now
+    /// stored, and the radio is on, connects by itself, is not up, and was
+    /// not closed with Disconnect.
+    nonisolated static func connectsAfterSavingPassword(stored: Bool, enabled: Bool, autoConnect: Bool,
+                                                        connected: Bool, heldClosed: Bool) -> Bool {
+        stored && enabled && autoConnect && !connected && !heldClosed
     }
 
     /// The Mac's sound devices, live.
