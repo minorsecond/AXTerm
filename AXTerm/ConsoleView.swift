@@ -341,6 +341,12 @@ struct ConsoleView: View {
     /// frozen build that distinction came out of.
     @State private var repinTimer = QuietWindowTimer(window: 0.2)
 
+    private static let contentPadding: CGFloat = 16
+    private static let bottomMarkerHeight: CGFloat = 10
+    /// What lies below the last row: the follow logic leaves it out, so the
+    /// last row pinned at the foot of the view is the bottom (finding 42).
+    private static var trailingSpace: CGFloat { contentPadding + bottomMarkerHeight }
+
     // Message type filters — persisted across view switches and app restarts
     @AppStorage("consoleFilter_showID") private var showID = true
     @AppStorage("consoleFilter_showBeacon") private var showBeacon = true
@@ -576,10 +582,10 @@ struct ConsoleView: View {
                                     .id("sendStatus")
                             }
                             Color.clear
-                                .frame(height: 10)
+                                .frame(height: Self.bottomMarkerHeight)
                                 .id("bottom")
                         }
-                        .padding()
+                        .padding(Self.contentPadding)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     // Open at the bottom and sit short content there. Size
@@ -595,7 +601,8 @@ struct ConsoleView: View {
                         PacketListFollow.Geometry(contentHeight: geometry.contentSize.height,
                                                   visibleMinY: geometry.visibleRect.minY,
                                                   visibleHeight: geometry.visibleRect.height,
-                                                  visibleWidth: geometry.visibleRect.width)
+                                                  visibleWidth: geometry.visibleRect.width,
+                                                  trailingSpace: Self.trailingSpace)
                     } action: { old, new in
                         let decision = PacketListFollow.decide(from: old, to: new, isFollowing: isFollowing,
                                                                userIsScrolling: userIsScrolling)

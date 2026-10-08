@@ -18,6 +18,16 @@ final class PacketListFollowTests: XCTestCase {
                       "an overscroll bounce past the end")
     }
 
+    /// Park rehearsal 2026-10-08, finding 42: the re-pin puts the last line
+    /// at the foot of the view, which leaves the padding under it, about 54
+    /// points on the iPad, below the visible edge. That has to count as the
+    /// bottom, or the next nudge reads as the reader leaving.
+    func testTheLastLinePinnedAboveThePaddingIsTheBottom() {
+        let pinned = PacketListFollow.Geometry(contentHeight: 10_058, visibleMinY: 9_535,
+                                               visibleHeight: 469, trailingSpace: 26)
+        XCTAssertTrue(pinned.isAtBottom)
+    }
+
     func testScrollingUpToReadStopsFollowing() {
         XCTAssertFalse(PacketListFollow.isAtBottom(contentHeight: 5_000, visibleMaxY: 4_900))
         XCTAssertFalse(PacketListFollow.isAtBottom(contentHeight: 5_000, visibleMaxY: 800))
@@ -63,6 +73,15 @@ final class PacketListFollowDecisionTests: XCTestCase {
         let up = G(contentHeight: 1_000, visibleMinY: 500, visibleHeight: 400)
         XCTAssertEqual(decide(atBottom, up, following: true),
                        .init(isFollowing: false, scrollToNewest: false))
+    }
+
+    /// Finding 42: the layout moved the iPad's view up one point with nobody
+    /// touching it, and following stopped for good. A move that small is the
+    /// layout settling, not a reader.
+    func testAOnePointNudgeWithNobodyScrollingKeepsFollowing() {
+        let pinned = G(contentHeight: 1_000, visibleMinY: 500, visibleHeight: 400)
+        let nudged = G(contentHeight: 1_000, visibleMinY: 499, visibleHeight: 400)
+        XCTAssertTrue(decide(pinned, nudged, following: true).isFollowing)
     }
 
     func testScrollingUpWhileRowsAreMeasuredStillStopsFollowing() {
