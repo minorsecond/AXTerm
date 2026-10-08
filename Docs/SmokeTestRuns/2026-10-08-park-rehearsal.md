@@ -181,3 +181,11 @@ Both need the operator's approval: they change AX.25 behavior.
 |---|---|---|
 | 34 | The outbound progress and the queue float over the foot of the history | `f8082ccd` |
 | 36 | Spaced names seen in a listing are linked whole wherever they appear again | `db3b8abc` |
+
+Correction to 35 after reading A's saved console notes: the route fell at 16:11:19Z, when A's T1 ran out and it resent the banner (`handleT1Timeout` reported each resend as loss), not from frames the phone sent. The route's learned values recovered to K 4 / P 256 by 16:31Z during the download, but the live call never took them up: it grows only toward a peer with AXDP confirmed, and a mailbox call never probes.
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 35 | A T1 timeout no longer reports a sample. Resends are held until a frame from the peer arrives and dropped when the peer resets the link; a link that dies with nothing heard teaches nothing. Reverses three tests from the 2026-08-22 audit, rewritten with the reason | `2c97f5ac` |
+| 35 | A caller on the air is quoted no faster than their link carries now (window of frames per round trip) | `4f8e2353` |
+| 31 | The TNC4 offer reads "Using the TNC4's own receive level. You can tune it for this radio if packets are missed." | `ce909a38` |
