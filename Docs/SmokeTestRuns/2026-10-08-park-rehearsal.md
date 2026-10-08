@@ -214,3 +214,5 @@ The phone was slow to the point of unusable on the build with fixes 31 to 36: fi
 | # | Result | Notes |
 |---|---|---|
 | R8 | pass (run on the phone) | Sent folder rows show the time with the UTC time under it; the sort menu by the search field sorts by Date, Correspondent, Subject and Size both ways, and stays set after leaving Mail (operator) |
+| R9 | pass | A's Winlink Inbox shows Date in local time ("Oct 8, 2026 at 11:46 AM") and a UTC column ("17:46 UTC"). Clicking the Size header made it the sort column and clicking Date toggled it between ascending and descending. With one message the order itself could not change, and the sort menu's label is withheld from the background tools, so its agreement with the header was not read |
+| R9b, R9c, R9d | not run | A's Transfers, BBS messages and APRS lists were empty: test mode started A fresh at 17:22Z and none had arrived since. Sorting and the local and UTC times are covered by ListSortTests, TransferListSortTests, BBSMessageSortTests and APRSThreadSortTests |
