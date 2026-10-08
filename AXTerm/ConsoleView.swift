@@ -297,6 +297,8 @@ struct ConsoleView: View {
     /// Tapping a file name another station sent fills in the command that
     /// downloads it. Nil leaves file names as plain text.
     var onFileName: ((String) -> Void)?
+    /// A message going out, drawn as the last row of the history (finding 39).
+    var trailingSendStatus: InlineSendStatus?
     /// Radio names by id, for the per-line radio badge. Empty with one radio,
     /// so the badge appears only when there is more than one radio to tell
     /// apart — the same rule the Packets table's Radio column follows.
@@ -563,6 +565,10 @@ struct ConsoleView: View {
                                         .id(group.id)
                                 }
                             }
+                            if let trailingSendStatus {
+                                InlineSendStatusRow(status: trailingSendStatus, fontSize: fontSize)
+                                    .id("sendStatus")
+                            }
                             Color.clear
                                 .frame(height: 10)
                                 .id("bottom")
@@ -594,13 +600,19 @@ struct ConsoleView: View {
                         guard followsNewLines else { return }
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
+                    .onChange(of: trailingSendStatus) { _, _ in
+                        guard followsNewLines else { return }
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
                     .onChange(of: scrollToBottomToken) { _, _ in
                         // Pin to the last real line, not the phantom "bottom"
                         // sentinel below the padding — anchoring to the sentinel is
                         // what an overshoot lands past. No animation: this fires
                         // after a settle (`scheduleRepin`) or on appear, where a
                         // slide would just look like the overshoot we're correcting.
-                        if let lastId = groupedLines.last?.id {
+                        if trailingSendStatus != nil {
+                            proxy.scrollTo("sendStatus", anchor: .bottom)
+                        } else if let lastId = groupedLines.last?.id {
                             proxy.scrollTo(lastId, anchor: .bottom)
                         } else {
                             proxy.scrollTo("bottom", anchor: .bottom)
@@ -1705,5 +1717,41 @@ nonisolated private struct ConsoleScrollBottomPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+
+/// The last row of the Session history while a message goes out (finding
+/// 39): the line itself, dimmed, until it is on the air; then a note under
+/// it as the acknowledgments come in.
+struct InlineSendStatusRow: View {
+    let status: InlineSendStatus
+    var fontSize: Double = 11
+
+    var body: some View {
+        switch status {
+        case .waiting(let text):
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text)
+                    .font(.system(size: fontSize, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                note("Waiting to send\u{2026}", systemImage: "clock")
+            }
+            .padding(.vertical, 2)
+            .accessibilityElement(children: .combine)
+        case .sending(let acknowledged, let total):
+            note(total > 1 ? "Sending\u{2026} \(acknowledged) of \(total) acknowledged" : "Sending\u{2026}",
+                 systemImage: "paperplane")
+        case .delivered:
+            note("Delivered", systemImage: "checkmark")
+        }
+    }
+
+    private func note(_ text: String, systemImage: String) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

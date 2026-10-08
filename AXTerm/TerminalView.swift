@@ -2051,6 +2051,9 @@ struct TerminalView: View {
     #endif
 
     @State private var selectedTab: TerminalTab = .session
+    /// The history's line count when the last connected send was fully
+    /// acknowledged; "Delivered" shows until it grows (finding 39).
+    @State private var deliveredAtLineCount: Int?
     @State private var showingTransferSheet = false
     @State private var selectedFileURL: URL?
     /// Files waiting their turn in the send sheet. Picking or dropping
@@ -3256,16 +3259,12 @@ struct TerminalView: View {
     /// What is going out now, drawn over the bottom of the history.
     @ViewBuilder
     private var transmitStatusOverlay: some View {
-        let progress = txViewModel.currentOutboundProgress
+        // The message going out is drawn in the history itself now
+        // (`ConsoleView.trailingSendStatus`, finding 39); only the queue of
+        // broadcast frames floats here.
         let showsQueue = TxQueuePresentation.isVisible(statuses: txViewModel.queueEntries.map(\.state.status))
-        if progress != nil || showsQueue {
+        if showsQueue {
             VStack(spacing: 0) {
-                // Outbound progress (sender: pending → sent → acked highlighting)
-                if let progress {
-                    OutboundProgressView(progress: progress, sourceCall: txViewModel.viewModel.sourceCall)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                }
                 // TX Queue, while something is still going out (issue 106)
                 if showsQueue {
                     TxQueueView(
@@ -3306,6 +3305,10 @@ struct TerminalView: View {
                     txViewModel.composeText.wrappedValue = DownloadCommandMemory.shared.command(
                         for: name, station: txViewModel.viewModel.destinationCall)
                 },
+                trailingSendStatus: InlineSendStatus.make(
+                    progress: txViewModel.currentOutboundProgress,
+                    deliveredAtLineCount: deliveredAtLineCount,
+                    lineCount: lines.count),
                 // Empty with one radio, so the badge appears only when there is
                 // more than one radio to tell apart.
                 radioNames: client.radioNames,
@@ -3320,6 +3323,14 @@ struct TerminalView: View {
                 readsAsConversation: Self.sessionReadsAsConversation
             )
             .opacity(lines.isEmpty ? 0 : 1)
+            // "Delivered" stays until the next line arrives (finding 39).
+            .onChange(of: txViewModel.currentOutboundProgress?.isComplete == true
+                        && txViewModel.currentOutboundProgress?.hasAcks == true) { _, delivered in
+                if delivered { deliveredAtLineCount = lines.count }
+            }
+            .onChange(of: txViewModel.currentOutboundProgress?.id) { _, id in
+                if id != nil, txViewModel.currentOutboundProgress?.isComplete != true { deliveredAtLineCount = nil }
+            }
 
             if lines.isEmpty {
                 emptyStateView

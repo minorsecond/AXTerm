@@ -105,3 +105,32 @@ nonisolated struct OutboundMessageProgress: Identifiable, Equatable {
     var ackedEndIndex: Int { min(bytesAcked, totalBytes) }
     var sentEndIndex: Int { min(bytesSent, totalBytes) }
 }
+
+/// A message going out, as the Session history shows it (park rehearsal
+/// 2026-10-08, finding 39). It used to sit in a panel floating over the
+/// foot of the history, which covered the last lines and came and went with
+/// each send. Like Messages: the line dimmed while it waits for the air,
+/// "Sending…" under it while acknowledgments come in, then "Delivered",
+/// which stays until the next line so nothing collapses under the reader.
+nonisolated enum InlineSendStatus: Equatable {
+    /// Not on the air yet: the line itself, dimmed.
+    case waiting(text: String)
+    /// On the air; the line is in the history above.
+    case sending(acknowledged: Int, of: Int)
+    case delivered
+
+    /// - Parameters:
+    ///   - deliveredAtLineCount: the history's line count when the last
+    ///     connected send was fully acknowledged, if it was.
+    ///   - lineCount: the history's line count now.
+    static func make(progress: OutboundMessageProgress?, deliveredAtLineCount: Int?,
+                     lineCount: Int) -> InlineSendStatus? {
+        if let progress, !(progress.hasAcks && progress.isComplete) {
+            if progress.bytesSent < progress.totalBytes { return .waiting(text: progress.text) }
+            // A broadcast on the air has no acknowledgments to wait for.
+            return progress.hasAcks ? .sending(acknowledged: progress.chunksAcked, of: progress.totalChunks) : nil
+        }
+        if let deliveredAtLineCount, deliveredAtLineCount == lineCount { return .delivered }
+        return nil
+    }
+}
