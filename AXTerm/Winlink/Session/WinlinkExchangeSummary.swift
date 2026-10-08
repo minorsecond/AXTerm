@@ -41,6 +41,25 @@ nonisolated struct WinlinkExchangeProgress: Equatable, Sendable {
     /// they never crossed the air here — the rate must not count them.
     var baselineBytes: Int = 0
     var startedAt: Date
+    /// When `bytesDone` last moved. Between acknowledgments the count
+    /// stands still; a rate measured to now fell steadily and jumped back at
+    /// each one (park rehearsal 2026-10-08, finding 37).
+    var lastProgressAt: Date?
+
+    /// A silence this long is a stall, and the rate is measured to now.
+    static let stallAfter: TimeInterval = 30
+
+    mutating func record(bytesDone: Int, at time: Date) {
+        if bytesDone != self.bytesDone { lastProgressAt = time }
+        self.bytesDone = bytesDone
+    }
+
+    /// The end of the window the rate is measured over: the last movement,
+    /// unless that was long enough ago to count as a stall.
+    private func rateWindowEnd(now: Date) -> Date {
+        guard let last = lastProgressAt, now.timeIntervalSince(last) < Self.stallAfter else { return now }
+        return last
+    }
 
     var fraction: Double? {
         guard bytesTotal > 0 else { return nil }
@@ -52,7 +71,7 @@ nonisolated struct WinlinkExchangeProgress: Equatable, Sendable {
 
     /// Smoothed transfer rate in bytes/second since this message started.
     func bytesPerSecond(now: Date = Date()) -> Double? {
-        let elapsed = now.timeIntervalSince(startedAt)
+        let elapsed = rateWindowEnd(now: now).timeIntervalSince(startedAt)
         guard elapsed > 1, bytesThisSession > 0 else { return nil }
         return Double(bytesThisSession) / elapsed
     }
@@ -60,7 +79,9 @@ nonisolated struct WinlinkExchangeProgress: Equatable, Sendable {
     /// Seconds remaining at the current rate.
     func estimatedSecondsRemaining(now: Date = Date()) -> Int? {
         guard bytesTotal > 0, let rate = bytesPerSecond(now: now), rate > 0 else { return nil }
-        let remaining = Double(bytesTotal - bytesDone) / rate
+        // Counted down from the last movement.
+        let sinceWindow = now.timeIntervalSince(rateWindowEnd(now: now))
+        let remaining = Double(bytesTotal - bytesDone) / rate - sinceWindow
         return remaining.isFinite ? max(0, Int(remaining)) : nil
     }
 }

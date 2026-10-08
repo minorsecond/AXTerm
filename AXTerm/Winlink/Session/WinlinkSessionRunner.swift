@@ -448,7 +448,7 @@ final class WinlinkSessionRunner: ObservableObject {
         case .receiveProgress(let mid, let bytes, let total, let resumedFrom):
             statusText = "Receiving \(mid)…"
             if progress?.kind == .receiving, progress?.mid == mid {
-                progress?.bytesDone = bytes
+                progress?.record(bytesDone: bytes, at: Date())
                 progress?.bytesTotal = total
                 progress?.baselineBytes = resumedFrom
             } else {
@@ -561,7 +561,7 @@ final class WinlinkSessionRunner: ObservableObject {
         lastDeliveredBytes = deliveredBytes
         lastSubmittedBytes = submittedBytes
         guard var current = progress, current.kind == .sending, current.bytesTotal > 0 else { return }
-        current.bytesDone = max(0, min(current.bytesTotal, deliveredBytes - sendBaselineBytes))
+        current.record(bytesDone: max(0, min(current.bytesTotal, deliveredBytes - sendBaselineBytes)), at: Date())
         progress = current
     }
 

@@ -186,6 +186,43 @@ final class WinlinkExchangeStatusTests: XCTestCase {
         XCTAssertEqual(status.rateSummary, "80 bps · about 1m 30s left")
     }
 
+    /// Park rehearsal 2026-10-08, finding 37: between acknowledgments the
+    /// byte count stands still, so a rate measured to now fell steadily and
+    /// jumped back at each acknowledgment. It is measured to the last time
+    /// the count moved, and the estimate counts down from there.
+    func testTheRateHoldsBetweenAcknowledgments() {
+        let progress = WinlinkExchangeProgress(
+            kind: .sending, bytesDone: 1000, bytesTotal: 2000, startedAt: start,
+            lastProgressAt: start.addingTimeInterval(10))
+        let status = WinlinkExchangeStatus.make(
+            phase: .exchanging, statusText: "", progress: progress, summary: nil,
+            now: start.addingTimeInterval(13))
+        // 1000 bytes in the 10 s to the last acknowledgment → 800 bps; 10 s
+        // left then, 3 s gone since.
+        XCTAssertEqual(status.rateSummary, "800 bps · about 7s left")
+    }
+
+    /// Nothing for a long while is a stall, and the rate shows it.
+    func testALongSilenceStillShowsInTheRate() {
+        let progress = WinlinkExchangeProgress(
+            kind: .sending, bytesDone: 1000, bytesTotal: 2000, startedAt: start,
+            lastProgressAt: start.addingTimeInterval(10))
+        let status = WinlinkExchangeStatus.make(
+            phase: .exchanging, statusText: "", progress: progress, summary: nil,
+            now: start.addingTimeInterval(50))
+        // 1000 bytes in 50 s → 20 B/s (160 bps), 1000 left → 50 s.
+        XCTAssertEqual(status.rateSummary, "160 bps · about 50s left")
+    }
+
+    func testRecordingProgressNotesTheTimeOnlyWhenTheCountMoves() {
+        var progress = WinlinkExchangeProgress(kind: .sending, bytesTotal: 2000, startedAt: start)
+        progress.record(bytesDone: 500, at: start.addingTimeInterval(4))
+        XCTAssertEqual(progress.lastProgressAt, start.addingTimeInterval(4))
+        progress.record(bytesDone: 500, at: start.addingTimeInterval(6))
+        XCTAssertEqual(progress.lastProgressAt, start.addingTimeInterval(4), "no new bytes, no new time")
+        XCTAssertEqual(progress.bytesDone, 500)
+    }
+
     func testNoRateBeforeAnyTimeHasPassed() {
         let progress = WinlinkExchangeProgress(
             kind: .receiving, bytesDone: 10, bytesTotal: 100, startedAt: start)
