@@ -219,7 +219,7 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
             }
             guard let link = linkFactory(representative) else {
                 for radio in desired where radio.linkKey == key {
-                    unavailable[radio.id] = Self.unsupportedReason(for: radio) ?? "This radio's link could not be created."
+                    unavailable[radio.id] = Self.unsupportedReason(for: radio) ?? Self.linkCouldNotBeCreated
                 }
                 continue
             }
@@ -343,6 +343,24 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         sentTiming[radio.id] = timing
         let frames = timing.frames(port: radio.kissPort).reduce(Data(), +)
         session.send(frames) { _ in }
+    }
+
+    /// Recorded when the factory made no link though the settings looked
+    /// complete: a real failure, which no check of the settings can see.
+    nonisolated static let linkCouldNotBeCreated = "This radio's link could not be created."
+
+    /// What a radio's page says about why it cannot connect, and whether its
+    /// Connect is grayed out.
+    ///
+    /// `live` is `unsupportedReason` run now; `recorded` is what the last
+    /// reconcile found. Reconciling waits while the radio's page is open, so
+    /// a settings reason recorded before the operator fixed the field outlives
+    /// the fix: on 2026-10-08 a saved password left the page saying "Enter
+    /// the radio's network password." with Connect grayed out. Once the live
+    /// check passes, only a real failure is still worth saying.
+    nonisolated static func unavailableReason(live: String?, recorded: String?) -> String? {
+        if let live { return live }
+        return recorded == linkCouldNotBeCreated ? recorded : nil
     }
 
     /// Why a radio can have no link here, in the operator's words; nil when

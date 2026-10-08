@@ -169,8 +169,9 @@ final class ConnectionTransportViewModel: ObservableObject {
     /// form tells the truth about itself.
     @Published private(set) var radioState: KISSLinkState = .disconnected
     /// Why the manager refused this radio's link, recorded the last time it
-    /// reconciled. `radioUnavailableReason` prefers this, then falls back to
-    /// a live check so an empty field warns before the operator even connects.
+    /// reconciled. `radioUnavailableReason` checks the settings live first,
+    /// so an empty field warns before the operator even connects, and keeps
+    /// this only for a real failure (`RadioManager.unavailableReason`).
     @Published private(set) var managerUnavailableReason: String?
 
     /// Whether this radio's own link is up (what the tests need).
@@ -185,7 +186,8 @@ final class ConnectionTransportViewModel: ObservableObject {
     var radioUnavailableReason: String? {
         guard selectedTransport == .modem, !radioConnected,
               let profile = settings.radio(radioID), profile.enabled else { return nil }
-        return RadioManager.unsupportedReason(for: profile) ?? managerUnavailableReason
+        return RadioManager.unavailableReason(live: RadioManager.unsupportedReason(for: profile),
+                                              recorded: managerUnavailableReason)
     }
     
     @Published var serialDevices: [SerialDevice] = []
