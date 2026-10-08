@@ -210,3 +210,7 @@ The phone was slow to the point of unusable on the build with fixes 31 to 36: fi
 | Finding | Fix | Commit |
 |---|---|---|
 | 37 | The rate is measured to the last time the byte count moved and the estimate counts down from there; 30 s with nothing counts as a stall and is measured to now. Not yet on the phone | `edfba650` |
+
+| # | Result | Notes |
+|---|---|---|
+| R8 | pass (run on the phone) | Sent folder rows show the time with the UTC time under it; the sort menu by the search field sorts by Date, Correspondent, Subject and Size both ways, and stays set after leaving Mail (operator) |
