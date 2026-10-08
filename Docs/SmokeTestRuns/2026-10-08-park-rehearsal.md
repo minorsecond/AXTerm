@@ -308,3 +308,7 @@ Warbler received SIGTERM at 19:00:53Z (not from this session) and launchd starte
 | 45 | Mac, BBS pane | The header read "Off air · Switched on, but not answering · Ignored: the mailbox is switched off on the radio this call came in on" while the mailbox was answering K0EPI-3 on the IC-705. It seems to judge the next call against the disabled Direwolf radio, whose mailbox is off |
 
 Five small files added to PARK for the park test (cheat-sheet.txt, fortune.txt, morse-cq.mid, pixel-yagi.png, qso-log.csv, 141 to 967 bytes each). A (705) rebuilt on `f5052272` (pid 83528) with the AXTerm forms, set up again, PARK shared and listing all eight files.
+
+| # | Where | Finding |
+|---|---|---|
+| 46 | Mac, Settings › Packet Node | The page is hard to follow (operator: "all confusing ... very fiddly"). Each service is set in two places that must both be on: a station-wide switch (run or announce the node, automatic ping) and a per-radio switch further down, greyed with a paragraph explaining why when the other is off. Every radio repeats its node, ping, mailbox, digipeater and beacon sections, including the unused Direwolf radio, which is only AXTerm's default Network KISS entry and not part of AXTerm. File Transfers sits on the same page. Planned for the weekend of 2026-10-10 (operator agreed): one card per service with the radios that carry it listed under it ("Carried on: IC-705"), idle radios folded to a line, a summary at the top, and File Transfers on its own page |
