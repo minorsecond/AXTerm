@@ -102,3 +102,25 @@ A (705) rebuilt on `a3826d01` (pid 59571) and set up again: IC-705 over Warbler,
 
 AXDP needed no change: it feeds chunks on acknowledgments and counts each acknowledged chunk as progress (R4's five-minute transfer finished). The terminal's YAPP was already paced. The iPad has these; the phone was locked; A (705) still runs `a3826d01` and gets them at its next rebuild.
 
+## Retest, continued
+
+| # | Result | Notes |
+|---|---|---|
+| R3 | pass | With A's idle timeout at 30 minutes: A's call log "downloaded PARK/IMG_2820.jpg" (call from 14:12:55Z). The photo opened full size on the phone; 251 × 335 is good enough for the operator, so the sizes stay |
+| R3b | **fail** | `W PARK` on the same call still quoted IMG_2820.jpg at 5m (finding 26) |
+
+| # | Where | Finding |
+|---|---|---|
+| 25 | iPhone, iPad, Mac | A received file is announced only on its Transfers row (and by a system notification only in the background, with no way to open the file from it). Wanted: a banner with Open and Share in the app, and an Open action on the notification |
+| 26 | Mailbox listing | The rate a caller is quoted is read once when the call starts, so a download changes the times only from the next call |
+| 27 | iPhone, iPad, terminal | Disconnect hangs up at once and is easy to tap by mistake; it should ask first |
+
+On a fresh call `W PARK` quoted IMG_2820.jpg at 7m, so the download's rate was recorded; only the same call missed it.
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 26 | A finished download updates the call's rate as well as the station's | `85e7c905` |
+| 27 | Disconnect asks first on iPhone and iPad | `07e9f712` |
+
+The phone and iPad reinstalled with everything through `07e9f712`.
+
