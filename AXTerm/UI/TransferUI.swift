@@ -498,15 +498,13 @@ nonisolated struct ReceivedFileNotice: Identifiable, Equatable, Sendable {
 
 
 /// The banner for a file that just arrived: Quick Look and Share (Show in
-/// Finder on the Mac), closing itself after a while. A banner rather than a
-/// dialog, so it never interrupts typing in a session (park rehearsal
-/// 2026-10-08).
+/// Finder on the Mac). A banner rather than a dialog, so it never interrupts
+/// typing in a session, and it stays until it is closed or the file is
+/// opened: ten seconds was easy to miss while watching the radio (park
+/// rehearsal 2026-10-08).
 struct ReceivedFileBanner: View {
     @ObservedObject var router: TransferUIRouter = .shared
     @State private var previewURL: URL?
-
-    /// How long the banner stays before closing itself.
-    static let lifetime: Duration = .seconds(10)
 
     var body: some View {
         if let notice = router.receivedFile {
@@ -519,7 +517,9 @@ struct ReceivedFileBanner: View {
                     .lineLimit(2)
                     .truncationMode(.middle)
                 Spacer(minLength: 6)
-                Button("Open") { previewURL = URL(fileURLWithPath: notice.path) }
+                Button("Open") {
+                    previewURL = URL(fileURLWithPath: notice.path)
+                }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 #if os(macOS)
@@ -550,11 +550,9 @@ struct ReceivedFileBanner: View {
             .padding(.top, 6)
             .transition(.move(edge: .top).combined(with: .opacity))
             .quickLookPreview($previewURL)
-            .task(id: notice.id) {
-                try? await Task.sleep(for: Self.lifetime)
-                // Kept while its preview is open.
-                guard previewURL == nil else { return }
-                withAnimation { router.dismissReceived(notice) }
+            // Opened is seen: the banner goes when its preview closes.
+            .onChange(of: previewURL) { old, new in
+                if old != nil, new == nil { withAnimation { router.dismissReceived(notice) } }
             }
         }
     }
