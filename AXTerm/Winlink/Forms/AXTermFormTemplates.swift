@@ -35,8 +35,11 @@ nonisolated extension WinlinkFormTemplates {
         Position: <var Position>  Grid: <var Grid>
 
         SETUP
-          S1 Arrow aimed, TNC4 on the ID-50: <var S1>
-          S2 TNC4 connected: <var S2>
+          Radio: <var Radio>
+          TNC: <var TNC>
+          Antenna: <var Antenna>, pointed <var Heading>
+          Power: <var Power>
+          Frequency: <var Frequency>
         Notes: <var SetupNotes>
 
         IPHONE
@@ -79,8 +82,15 @@ nonisolated extension WinlinkFormTemplates {
             WinlinkFormField(id: "Position", label: "Position", autoFill: .custom(position), section: "Where"),
             WinlinkFormField(id: "Grid", label: "Grid square", autoFill: .gridSquare, section: "Where"),
 
-            step("S1", "Arrow aimed, TNC4 on the ID-50", expect: "125° true, elements vertical", section: "Setup"),
-            step("S2", "TNC4 connected", expect: "Connected; its settings read", section: "Setup"),
+            // Typed, not picked: the station is whatever the operator brought
+            // (operator, 2026-10-08). Examples show as placeholders only.
+            WinlinkFormField(id: "Radio", label: "Radio", placeholder: "ID-50", section: "Setup"),
+            WinlinkFormField(id: "TNC", label: "TNC", placeholder: "Mobilinkd TNC4", section: "Setup"),
+            WinlinkFormField(id: "Antenna", label: "Antenna", placeholder: "Arrow yagi, elements vertical",
+                             section: "Setup"),
+            WinlinkFormField(id: "Heading", label: "Pointed", placeholder: "125° true, toward home", section: "Setup"),
+            WinlinkFormField(id: "Power", label: "Power", placeholder: "5 W", section: "Setup"),
+            WinlinkFormField(id: "Frequency", label: "Frequency", placeholder: "145.650 FM", section: "Setup"),
             WinlinkFormField(id: "SetupNotes", label: "Setup notes", kind: .multiline, section: "Setup"),
 
             step("P1", "Chat with K0EPI-2", expect: "Waiting to send, Sending, Delivered", section: "iPhone"),

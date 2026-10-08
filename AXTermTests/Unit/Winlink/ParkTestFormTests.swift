@@ -12,7 +12,7 @@ import XCTest
 
 final class ParkTestFormTests: XCTestCase {
 
-    private let steps = ["S1", "S2", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9",
+    private let steps = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9",
                          "M1", "M2", "I1", "I2", "I3", "R1"]
 
     private var context: WinlinkFormContext {
@@ -42,6 +42,32 @@ final class ParkTestFormTests: XCTestCase {
             XCTAssertEqual(options, ["PASS", "FAIL", "PARTIAL", "SKIP"], step)
             XCTAssertFalse(field.help.isEmpty, "\(step) says what to expect")
         }
+    }
+
+    /// The setup is the operator's to type: which radio, TNC and antenna,
+    /// where it points, the power and the frequency. Examples show as
+    /// placeholders; nothing is filled in for them (operator, 2026-10-08).
+    func testTheSetupIsTypedNotPicked() throws {
+        let form = try XCTUnwrap(template)
+        let values = WinlinkFormEngine.autoFilledValues(for: form, context: context)
+        for id in ["Radio", "TNC", "Antenna", "Heading", "Power", "Frequency"] {
+            let field = try XCTUnwrap(form.fields.first { $0.id == id }, id)
+            guard case .text = field.kind else { return XCTFail("\(id) is not typed") }
+            XCTAssertFalse(field.placeholder.isEmpty, "\(id) shows an example")
+            XCTAssertEqual(values[id] ?? "", "", "\(id) starts empty")
+        }
+        XCTAssertFalse(form.fields.contains { $0.id == "S1" || $0.id == "S2" })
+    }
+
+    func testTheSetupReadsBackAsTyped() throws {
+        let form = try XCTUnwrap(template)
+        var values = WinlinkFormEngine.autoFilledValues(for: form, context: context)
+        values["Radio"] = "ID-50"
+        values["Antenna"] = "Arrow yagi"
+        values["Heading"] = "125 true"
+        let body = WinlinkFormEngine.render(template: form, values: values, context: context).body
+        XCTAssertTrue(body.contains("Radio: ID-50"), body)
+        XCTAssertTrue(body.contains("Antenna: Arrow yagi, pointed 125 true"), body)
     }
 
     func testItGoesToA() throws {
