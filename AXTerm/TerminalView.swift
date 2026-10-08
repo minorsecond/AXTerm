@@ -3287,6 +3287,13 @@ struct TerminalView: View {
                 ownCallsigns: settings.onAirCallsigns,
                 onIdentity: onIdentity,
                 onIdentityMenu: onIdentityMenu,
+                // A file name in a listing fills in the download command, with
+                // the word used with this station before; nothing is sent
+                // until the operator sends it (park rehearsal, finding 28).
+                onFileName: { name in
+                    txViewModel.composeText.wrappedValue = DownloadCommandMemory.shared.command(
+                        for: name, station: txViewModel.viewModel.destinationCall)
+                },
                 // Empty with one radio, so the badge appears only when there is
                 // more than one radio to tell apart.
                 radioNames: client.radioNames,
@@ -3669,6 +3676,7 @@ struct TerminalView: View {
 
         // Build payload
         let text = txViewModel.viewModel.composeText
+        DownloadCommandMemory.shared.learn(typed: text, to: txViewModel.viewModel.destinationCall)
         let inboundRecord = txViewModel.currentSession.flatMap {
             sessionCoordinator.inboundRecordID(for: $0.remoteAddress)
         }

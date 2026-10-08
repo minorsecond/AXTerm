@@ -294,6 +294,9 @@ struct ConsoleView: View {
     /// read-only, which is what the Mac wants.
     var onIdentity: ((String) -> Void)?
     var onIdentityMenu: ((String) -> Void)?
+    /// Tapping a file name another station sent fills in the command that
+    /// downloads it. Nil leaves file names as plain text.
+    var onFileName: ((String) -> Void)?
     /// Radio names by id, for the per-line radio badge. Empty with one radio,
     /// so the badge appears only when there is more than one radio to tell
     /// apart — the same rule the Packets table's Radio column follows.
@@ -531,6 +534,7 @@ struct ConsoleView: View {
                                                              timestampRun: runs[group.id] ?? .alone,
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu,
+                                                             linksFileNames: onFileName != nil,
                                                              radioNames: radioNames,
                                                              observer: observer,
                                                              distanceInMiles: distanceInMiles,
@@ -547,6 +551,7 @@ struct ConsoleView: View {
                                                              timestampRun: timestampRunPositions[group.id] ?? .alone,
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu,
+                                                             linksFileNames: onFileName != nil,
                                                              radioNames: radioNames,
                                                              observer: observer,
                                                              distanceInMiles: distanceInMiles,
@@ -685,6 +690,10 @@ struct ConsoleView: View {
         // system: intercepting every URL in this subtree would quietly break
         // any ordinary link that ends up in a console line.
         .environment(\.openURL, OpenURLAction { url in
+            if let name = ConsoleFileLink.name(from: url), let onFileName {
+                onFileName(name)
+                return .handled
+            }
             guard let call = ConsoleCallsignLink.callsign(from: url), let onIdentity else {
                 return .systemAction
             }
@@ -959,6 +968,7 @@ struct ConsoleLineGroupView: View {
     var timestampRun: ConsoleTimestampRuler.RunPosition = .alone
     var onIdentity: ((String) -> Void)?
     var onIdentityMenu: ((String) -> Void)?
+    var linksFileNames = false
     var radioNames: [RadioID: String] = [:]
     var observer: GreatCircle.Point?
     var distanceInMiles: Bool = true
@@ -979,6 +989,7 @@ struct ConsoleLineGroupView: View {
                 ownCallsigns: ownCallsigns,
                 onIdentity: onIdentity,
                 onIdentityMenu: onIdentityMenu,
+                linksFileNames: linksFileNames,
                 radioNames: radioNames,
                 observer: observer,
                 distanceInMiles: distanceInMiles,
@@ -1089,6 +1100,9 @@ struct ConsoleLineView: View {
     var onIdentity: ((String) -> Void)?
     /// Long press: the menu of things you can do with an identity.
     var onIdentityMenu: ((String) -> Void)?
+    /// File names in lines from other stations are links that fill in the
+    /// download command (see `ConsoleView.onFileName`).
+    var linksFileNames = false
     /// Radio names by id. Empty (one radio) draws no badge, so a single-radio
     /// station's console reads exactly as it did.
     var radioNames: [RadioID: String] = [:]
@@ -1356,10 +1370,20 @@ struct ConsoleLineView: View {
     /// already refuses to look inside them, so the two cannot overlap.
     private func linkTargets(in text: String) -> [(range: Range<String.Index>, url: URL)] {
         var targets = CallsignScanner.webLinks(in: text)
-        guard onIdentity != nil else { return targets }
-        for hit in CallsignScanner.links(in: text, heard: heardCallsigns) {
-            guard let url = ConsoleCallsignLink.url(for: hit.callsign) else { continue }
-            targets.append((hit.range, url))
+        if onIdentity != nil {
+            for hit in CallsignScanner.links(in: text, heard: heardCallsigns) {
+                guard let url = ConsoleCallsignLink.url(for: hit.callsign) else { continue }
+                targets.append((hit.range, url))
+            }
+        }
+        // Only in what another station sent: our own `D` line needs no link.
+        if linksFileNames, line.kind == .packet, let from = line.from,
+           !echoCallsigns.contains(from.uppercased()) {
+            for hit in FileNameScanner.names(in: text)
+            where !targets.contains(where: { $0.range.overlaps(hit.range) }) {
+                guard let url = ConsoleFileLink.url(for: hit.name) else { continue }
+                targets.append((hit.range, url))
+            }
         }
         return targets
     }
