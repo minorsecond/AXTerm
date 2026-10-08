@@ -19,6 +19,9 @@ nonisolated enum NotificationAction {
     static let openPacket = "OPEN_PACKET"
     static let openApp = "OPEN_AXTERM"
     static let packetIDKey = "packetID"
+    /// Where a received file was saved, on its notification.
+    static let receivedFilePathKey = "receivedFilePath"
+    static let receivedFilePeerKey = "receivedFilePeer"
 }
 
 protocol AppStateProviding {
@@ -148,6 +151,10 @@ final class UserNotificationScheduler: NotificationScheduling {
     }
 
     func scheduleTransferNotification(_ event: TransferNotificationEvent) {
+        scheduleTransferNotification(event, filePath: nil)
+    }
+
+    func scheduleTransferNotification(_ event: TransferNotificationEvent, filePath: String?) {
         guard TransferNotificationPolicy.shouldNotify(
             event,
             enabled: settings.notifyOnFileTransfers,
@@ -159,6 +166,7 @@ final class UserNotificationScheduler: NotificationScheduling {
         content.title = text.title
         content.body = text.body
         content.categoryIdentifier = NotificationAction.watchCategory
+        content.userInfo = TransferNotificationPolicy.userInfo(for: event, path: filePath)
         if settings.notifyPlaySound { content.sound = .default }
 
         let request = UNNotificationRequest(identifier: "transfer-\(UUID().uuidString)", content: content, trigger: nil)
@@ -288,6 +296,15 @@ final class NotificationActionHandler: NSObject, UNUserNotificationCenterDelegat
             let userInfo = response.notification.request.content.userInfo
             let packetIDString = userInfo[NotificationAction.packetIDKey] as? String
             let packetID = packetIDString.flatMap(UUID.init)
+            // A received file's notification shows the file: the same
+            // banner, with Open, as if it had arrived on screen.
+            if let path = userInfo[NotificationAction.receivedFilePathKey] as? String {
+                let url = URL(fileURLWithPath: path)
+                TransferUIRouter.shared.announceReceived(ReceivedFileNotice(
+                    fileName: url.lastPathComponent,
+                    peer: userInfo[NotificationAction.receivedFilePeerKey] as? String ?? "",
+                    path: path))
+            }
 
             switch response.actionIdentifier {
             case NotificationAction.openPacket:

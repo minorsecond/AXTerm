@@ -128,9 +128,16 @@ protocol NotificationScheduling {
     func scheduleConnectionNotification(callsign: String)
     /// A file offer, or a transfer that finished or failed.
     func scheduleTransferNotification(_ event: TransferNotificationEvent)
+    /// The same, with where a received file was saved, so tapping the
+    /// notification can show it.
+    func scheduleTransferNotification(_ event: TransferNotificationEvent, filePath: String?)
 }
 
 extension NotificationScheduling {
     /// Schedulers that predate file-transfer notifications stay silent.
     func scheduleTransferNotification(_ event: TransferNotificationEvent) {}
+    /// Schedulers that do not open files hear the event alone.
+    func scheduleTransferNotification(_ event: TransferNotificationEvent, filePath: String?) {
+        scheduleTransferNotification(event)
+    }
 }

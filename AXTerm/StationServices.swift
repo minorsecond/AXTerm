@@ -334,6 +334,9 @@ final class StationServices {
                 return BBSShell.HeardStation(callsign: station.call, lastHeard: lastHeard)
             }
         }
+        // A file that arrives is shown where the operator is, with Open
+        // (park rehearsal 2026-10-08).
+        coordinator.onFileReceived = { TransferUIRouter.shared.announceReceived($0) }
         let bbsService = BBSService(
             store: client.bbsMessages,
             settings: bbsSettings,

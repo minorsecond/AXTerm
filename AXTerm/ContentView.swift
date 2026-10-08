@@ -354,6 +354,12 @@ struct ContentView: View {
     /// the same view as one below it.
     var body: some View {
         presentationLayer
+            // A file that just arrived, with Open (park rehearsal 2026-10-08).
+            .overlay(alignment: .top) {
+                ReceivedFileBanner()
+                    .frame(maxWidth: 560)
+                    .animation(.easeOut(duration: 0.25), value: TransferUIRouter.shared.receivedFile)
+            }
     }
 
 

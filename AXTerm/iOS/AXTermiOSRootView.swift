@@ -148,6 +148,12 @@ struct AXTermiOSRootView: View {
     private func withTNCStrip<Content: View>(_ content: Content) -> some View {
         VStack(spacing: 0) {
             content
+                // A file that just arrived, with Open (park rehearsal
+                // 2026-10-08).
+                .overlay(alignment: .top) {
+                    ReceivedFileBanner()
+                        .animation(.easeOut(duration: 0.25), value: transferRouter.receivedFile)
+                }
             // A file transfer under way, on every tab (issue 91).
             // Not over the terminal's Transfers tab, where the row already
             // says the same.
@@ -403,6 +409,9 @@ struct AXTermiOSRootView: View {
                 return BBSShell.HeardStation(callsign: station.call, lastHeard: lastHeard)
             }
         }
+        // A file that arrives is shown where the operator is, with Open
+        // (park rehearsal 2026-10-08).
+        coordinator.onFileReceived = { TransferUIRouter.shared.announceReceived($0) }
         let bbsService = BBSService(
             store: client.bbsMessages,
             settings: bbsSettings,

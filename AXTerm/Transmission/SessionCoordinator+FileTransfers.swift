@@ -253,7 +253,13 @@ extension SessionCoordinator {
             if let seconds = transfer.dataPhaseDurationSeconds, seconds >= 1, transfer.transmissionSize > 0 {
                 measuredTransferRates[peer.uppercased()] = Double(transfer.transmissionSize) / seconds
             }
-            notifyTransfer(.completed(fileName: transfer.fileName, peer: peer, direction: transfer.direction))
+            notifyTransfer(.completed(fileName: transfer.fileName, peer: peer, direction: transfer.direction),
+                           filePath: transfer.direction == .inbound ? transfer.savedFilePath : nil)
+            // Announced where the operator is, with a way to open it (park
+            // rehearsal 2026-10-08).
+            if transfer.direction == .inbound, let path = transfer.savedFilePath {
+                onFileReceived?(ReceivedFileNotice(fileName: transfer.fileName, peer: peer, path: path))
+            }
         case .failed(let reason):
             if !endedHere { notifyTransfer(.failed(fileName: transfer.fileName, peer: peer, reason: reason)) }
         case .cancelled:
@@ -280,8 +286,8 @@ extension SessionCoordinator {
         }
     }
 
-    func notifyTransfer(_ event: TransferNotificationEvent) {
-        packetEngine?.notificationScheduler?.scheduleTransferNotification(event)
+    func notifyTransfer(_ event: TransferNotificationEvent, filePath: String? = nil) {
+        packetEngine?.notificationScheduler?.scheduleTransferNotification(event, filePath: filePath)
     }
 
     // MARK: - Offers

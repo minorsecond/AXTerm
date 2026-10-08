@@ -423,6 +423,8 @@ final class SessionCoordinator: ObservableObject {
     /// Data rates measured on finished transfers with each station, bytes
     /// per second. The only rate the offer prompt quotes airtime from.
     var measuredTransferRates: [String: Double] = [:]
+    /// A file arrived and was saved: the app shows it with Open and Share.
+    var onFileReceived: ((ReceivedFileNotice) -> Void)?
 
     /// How long each kind of wait may last. Tests shorten these.
     var transferTimeouts = TransferTimeouts.standard

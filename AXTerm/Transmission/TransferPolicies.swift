@@ -230,6 +230,13 @@ nonisolated enum TransferNotificationPolicy {
         let body: String
     }
 
+    /// What a notification carries to act on when tapped: a received file's
+    /// path and sender, so it can be shown (park rehearsal 2026-10-08).
+    static func userInfo(for event: TransferNotificationEvent, path: String?) -> [String: Any] {
+        guard case .completed(_, let peer, .inbound) = event, let path else { return [:] }
+        return [NotificationAction.receivedFilePathKey: path, NotificationAction.receivedFilePeerKey: peer]
+    }
+
     static func content(for event: TransferNotificationEvent) -> Content {
         switch event {
         case .offer(let from, let fileName, let fileSize):

@@ -42,6 +42,19 @@ final class TransferUIRouter: ObservableObject {
         return hasPendingSendFileRequest
     }
 
+    /// The file that just arrived, shown in a banner with Open and Share
+    /// until it is dismissed or times out (park rehearsal 2026-10-08).
+    @Published private(set) var receivedFile: ReceivedFileNotice?
+
+    func announceReceived(_ notice: ReceivedFileNotice) {
+        receivedFile = notice
+    }
+
+    /// Closes this notice's banner; a newer one stays.
+    func dismissReceived(_ notice: ReceivedFileNotice) {
+        if receivedFile == notice { receivedFile = nil }
+    }
+
     /// Whether the terminal is showing its Transfers tab, where the
     /// transfer card would only repeat the row above it (park rehearsal
     /// 2026-10-08).
@@ -468,5 +481,81 @@ nonisolated enum PickedPhotos {
             }
         }
         return (urls, failed)
+    }
+}
+
+/// A file that arrived, for the banner that offers to open it.
+nonisolated struct ReceivedFileNotice: Identifiable, Equatable, Sendable {
+    let id = UUID()
+    let fileName: String
+    let peer: String
+    let path: String
+
+    var title: String {
+        peer.isEmpty ? "\(fileName) received" : "\(fileName) received from \(peer)"
+    }
+}
+
+
+/// The banner for a file that just arrived: Quick Look and Share (Show in
+/// Finder on the Mac), closing itself after a while. A banner rather than a
+/// dialog, so it never interrupts typing in a session (park rehearsal
+/// 2026-10-08).
+struct ReceivedFileBanner: View {
+    @ObservedObject var router: TransferUIRouter = .shared
+    @State private var previewURL: URL?
+
+    /// How long the banner stays before closing itself.
+    static let lifetime: Duration = .seconds(10)
+
+    var body: some View {
+        if let notice = router.receivedFile {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.title3)
+                Text(notice.title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                Spacer(minLength: 6)
+                Button("Open") { previewURL = URL(fileURLWithPath: notice.path) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                #if os(macOS)
+                Button("Show in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: notice.path)])
+                }
+                .controlSize(.small)
+                #else
+                ShareLink(item: URL(fileURLWithPath: notice.path)) {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .accessibilityLabel("Share")
+                #endif
+                Button {
+                    router.dismissReceived(notice)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .quickLookPreview($previewURL)
+            .task(id: notice.id) {
+                try? await Task.sleep(for: Self.lifetime)
+                // Kept while its preview is open.
+                guard previewURL == nil else { return }
+                withAnimation { router.dismissReceived(notice) }
+            }
+        }
     }
 }
