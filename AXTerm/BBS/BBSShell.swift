@@ -166,7 +166,10 @@ nonisolated struct BBSShell {
     /// than assumed: a nominal baud figure is roughly double what a shared
     /// channel actually delivers, and an estimate that flatters itself is
     /// worse than none.
-    let bytesPerSecond: Double
+    /// Updated during a call when a transfer measures the link (park
+    /// rehearsal 2026-10-08: a listing after a slow download still quoted
+    /// the rate read at connect).
+    var bytesPerSecond: Double
     /// Above this, `V` refuses and points at `D`.
     let maxInlineViewBytes: Int
     /// Above this many seconds, `D` asks before holding the channel.

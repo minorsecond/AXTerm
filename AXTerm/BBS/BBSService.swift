@@ -960,8 +960,10 @@ final class BBSService: ObservableObject {
                 if let status, status.totalBytes > 0 {
                     let seconds = now().timeIntervalSince(status.startedAt)
                     if seconds >= 1 {
-                        coordinator.measuredTransferRates[status.caller.uppercased()] =
-                            Double(status.totalBytes) / seconds
+                        let rate = Double(status.totalBytes) / seconds
+                        coordinator.measuredTransferRates[status.caller.uppercased()] = rate
+                        // And for the rest of this call, not only the next.
+                        shell?.bytesPerSecond = rate
                     }
                 }
                 write(["\(run.what) sent.", BBSShell.commandPrompt])

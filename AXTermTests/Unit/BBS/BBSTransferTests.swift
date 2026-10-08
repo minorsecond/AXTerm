@@ -188,6 +188,31 @@ final class BBSTransferTests: XCTestCase {
         XCTAssertEqual(service.linkThroughput, 1_000_000, "no caller, the link default")
     }
 
+    /// The next listing on the same call is timed at the rate the download
+    /// just ran at (park rehearsal 2026-10-08: the rate was read once at
+    /// connect, so W after a slow download still quoted the default).
+    func testAListingAfterADownloadUsesItsRateOnTheSameCall() async throws {
+        try writeFile("photo.jpg", bytes: binary(6000))
+        library.rescan()
+        try await connect()
+
+        let receiver = CallerYAPPReceiver()
+        caller.onBytes = { [unowned self] bytes in
+            // 6000 bytes in about 100 seconds: 60 B/s.
+            self.clockOffset = 100
+            receiver.consume(bytes)
+            self.caller.pendingSends.append(contentsOf: receiver.toSend)
+            receiver.toSend.removeAll()
+        }
+        caller.type("D photo.jpg")
+        await caller.pump { receiver.completed != nil && receiver.textString.hasSuffix(">\r") }
+        caller.onBytes = nil
+
+        let files = await command("W OPS")
+        let row = try XCTUnwrap(files.split(separator: "\r").first { $0.contains("photo.jpg") })
+        XCTAssertTrue(row.contains(" 2m "), "6000 bytes at 60 B/s is two minutes, not the default's <1m: \(row)")
+    }
+
     /// The idle timeout is for a caller who stops typing, not one receiving
     /// a download: the call was hung up five minutes into one (park
     /// rehearsal 2026-10-08). It waits while a transfer runs, which has its
