@@ -197,10 +197,16 @@ struct TNC4TuningSuggestionRow: View {
     @ObservedObject var monitor: ReceiveLevelMonitor
     let open: () -> Void
 
+    /// An offer, not a fault: the TNC4 decodes on its own setting. The old
+    /// wording, "hasn't been tuned", read like the cause of a receive
+    /// problem it had nothing to do with (park rehearsal 2026-10-08,
+    /// finding 31).
+    static let message = "Using the TNC4's own receive level. You can tune it for this radio if packets are missed."
+
     var body: some View {
         if monitor.suggestsTuning(radioID), monitor.finding(for: radioID, now: now) == nil {
             HStack {
-                Label("The TNC4's receive level hasn't been tuned for this radio.", systemImage: "slider.horizontal.3")
+                Label(Self.message, systemImage: "slider.horizontal.3")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
