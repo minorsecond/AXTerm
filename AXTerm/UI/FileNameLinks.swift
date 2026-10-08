@@ -30,7 +30,9 @@ nonisolated enum FileNameScanner {
     /// The names with spaces in a listing, to be recognized again in later
     /// lines where nothing else marks them as names ("… v11.fcpxml sent.").
     static func spacedNames(in text: String) -> Set<String> {
-        Set(names(in: text).map(\.name).filter { $0.contains(" ") })
+        // A long name needs its details on the line under it.
+        guard text.contains(where: \.isNewline) else { return [] }
+        return Set(names(in: text).map(\.name).filter { $0.contains(" ") })
     }
 
     /// File names in `text`, with every name in `known` that appears in it
@@ -210,5 +212,41 @@ final class DownloadCommandMemory {
 
     private static func normalize(_ station: String) -> String {
         station.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+}
+
+/// The spaced names in a console's lines, each text scanned once. Scanning
+/// every line on every redraw took about 0.4 s per 1,000 lines on the Mac
+/// and made the phone's Session view unbearably slow (park rehearsal
+/// 2026-10-08). Keyed by text: a conversation block grows under one id.
+@MainActor
+final class FileNameIndex {
+    private let scan: (String) -> Set<String>
+    private var byText: [String: Set<String>] = [:]
+    /// Texts kept beyond those shown, before the rest are forgotten.
+    private static let limit = 1_000
+
+    init(scan: @escaping (String) -> Set<String> = FileNameScanner.spacedNames(in:)) {
+        self.scan = scan
+    }
+
+    var remembered: Int { byText.count }
+
+    func knownNames(in texts: [String]) -> Set<String> {
+        var known = Set<String>()
+        for text in texts {
+            if let names = byText[text] {
+                known.formUnion(names)
+            } else {
+                let names = scan(text)
+                byText[text] = names
+                known.formUnion(names)
+            }
+        }
+        if byText.count > max(Self.limit, texts.count) {
+            let shown = Set(texts)
+            byText = byText.filter { shown.contains($0.key) }
+        }
+        return known
     }
 }

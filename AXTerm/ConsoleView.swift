@@ -708,10 +708,12 @@ struct ConsoleView: View {
     /// that mentions one links the whole name.
     private var knownFileNames: Set<String> {
         guard onFileName != nil else { return [] }
-        return lines.reduce(into: Set<String>()) { known, line in
-            known.formUnion(FileNameScanner.spacedNames(in: line.text))
-        }
+        return fileNameIndex.knownNames(in: lines.map(\.text))
     }
+
+    /// Remembers each line's spaced names, so a redraw does not scan the
+    /// whole history again.
+    @State private var fileNameIndex = FileNameIndex()
 
     // MARK: - Filter Toggles
 
