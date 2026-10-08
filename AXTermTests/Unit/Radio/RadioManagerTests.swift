@@ -40,6 +40,32 @@ final class RadioManagerTests: XCTestCase {
         Data([0xC0, port << 4] + payload + [0xC0])
     }
 
+    // MARK: - Connect
+
+    /// Connect makes the link when the first try could not (park rehearsal
+    /// 2026-10-08: the IC-705's password was missing at launch, so no link
+    /// was made, and the radio chip's Connect only reopened links that
+    /// existed; it did nothing once the password was saved).
+    func testConnectMakesTheLinkThatTheFirstTryCouldNot() {
+        var canMake = false
+        let manager = RadioManager(linkFactory: { _ in
+            guard canMake else { return nil }
+            let link = KISSLinkLoopback()
+            link.loopbackEnabled = false
+            return link
+        })
+        let radio = tcp("rig")
+        manager.reconcile([radio], open: true)
+        XCTAssertNil(manager.session(for: radio.id), "no link: the password was missing")
+        XCTAssertNotNil(manager.unavailableReasons[radio.id])
+
+        canMake = true
+        manager.open(radio.id)
+
+        XCTAssertNotNil(manager.session(for: radio.id), "Connect made the link")
+        XCTAssertNil(manager.unavailableReasons[radio.id])
+    }
+
     // MARK: - Demux
 
     /// Two radios on one Direwolf: one link, two ports, each frame to its

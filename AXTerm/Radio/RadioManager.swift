@@ -486,6 +486,13 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     }
 
     func open(_ radio: RadioID) {
+        // A radio with no link at all: its first try could not make one (a
+        // password not yet saved). Make it now, without opening links the
+        // operator closed, then open this one (park rehearsal 2026-10-08:
+        // the radio chip's Connect did nothing here).
+        if session(for: radio) == nil, profiles.contains(where: { $0.id == radio }) {
+            reconcile(profiles, open: false)
+        }
         session(for: radio)?.open()
         refreshRadioStates()
     }
