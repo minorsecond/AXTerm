@@ -177,6 +177,8 @@ final class BBSService: ObservableObject {
     private var running: RunningTransfer?
     private var lastTransferActivity: Date = .distantPast
     private var watchdog: Task<Void, Never>?
+    /// Feeds a download to the link while the link has room for it.
+    private var pumpTimer: Timer?
     /// An AXDP message arriving in pieces, collected until it can be read.
     private var axdpBuffer = Data()
     /// Text written while a command is being answered, sent as one batch so
@@ -368,6 +370,7 @@ final class BBSService: ObservableObject {
                 guard newState == .disconnected || newState == .error else { return }
                 self?.endCall(unexpected: true)
             },
+            ackHandler: { [weak self] _, _ in self?.linkAcknowledged() },
             netRomHandler: { [weak self] session in
                 // A neighbor node linked up to carry a NET/ROM circuit: the
                 // link is the node's, so the mailbox lets go of it rather
@@ -866,6 +869,11 @@ final class BBSService: ObservableObject {
         let id = UUID()
         let bridge = makeBridge(id: id)
         driver.delegate = bridge
+        // Fed as the link drains, the way the terminal's YAPP is. Handed over
+        // whole, the end of file sat behind minutes of queued data on a slow
+        // link and YAPP's reply timer ran out before the caller ever saw it
+        // (park rehearsal 2026-10-08, finding 17).
+        driver.readyForData = { [weak self] in self?.linkHasRoom ?? false }
         running = RunningTransfer(id: id, driver: driver, bridge: bridge,
                                   direction: .download, what: file.name,
                                   logName: "\(file.area)/\(file.name)")
@@ -883,6 +891,7 @@ final class BBSService: ObservableObject {
 
         // The announcement goes out before the first protocol byte does.
         flushLines()
+        startPumping()
         do {
             try driver.startSending(fileName: file.name, fileData: data)
         } catch {
@@ -1070,6 +1079,43 @@ final class BBSService: ObservableObject {
         running = nil
         transfer = nil
         stopWatchdog()
+        stopPumping()
+    }
+
+    // MARK: - Pacing
+
+    /// Room for another block: the session has nothing queued behind its
+    /// window, so a block handed over now goes out next.
+    private var linkHasRoom: Bool {
+        guard let session, session.state == .connected,
+              let live = coordinator.sessionManager.sessions[session.key] else { return false }
+        return live.pendingDataQueue.isEmpty
+    }
+
+    /// The caller acknowledged frames: the transfer is moving even though a
+    /// YAPP download hears nothing from the caller until its end of file, and
+    /// the window has room for more.
+    private func linkAcknowledged() {
+        guard let running else { return }
+        lastTransferActivity = now()
+        (running.driver as? YAPPProtocol)?.pumpData()
+    }
+
+    private func startPumping() {
+        guard pumpTimer == nil else { return }
+        // Acks pump too (`linkAcknowledged`); the timer covers a window that
+        // opens without one, such as a queue drained by a retransmission.
+        pumpTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let driver = self.running?.driver as? YAPPProtocol else { return }
+                driver.pumpData()
+            }
+        }
+    }
+
+    private func stopPumping() {
+        pumpTimer?.invalidate()
+        pumpTimer = nil
     }
 
     /// The sysop's Stop button.

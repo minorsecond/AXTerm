@@ -277,6 +277,38 @@ final class BBSTransferTests: XCTestCase {
 
     // MARK: - Binary downloads
 
+    /// A download is fed to the link as the link drains, never all at once
+    /// (park rehearsal 2026-10-08, finding 17). Handed over whole, the end of
+    /// file sat queued behind minutes of data on a slow link, YAPP's reply
+    /// timer ran out before it reached the caller, and the download was
+    /// canceled while the caller was still acknowledging every frame.
+    func testADownloadIsFedToTheLinkAsItDrains() async throws {
+        let file = binary(16 * 1024)
+        try writeFile("photo.jpg", bytes: file)
+        library.rescan()
+        try await connect()
+
+        let receiver = CallerYAPPReceiver()
+        var received = 0
+        var furthestAhead = 0
+        caller.onBytes = { [unowned self] bytes in
+            received += bytes.count
+            if let sent = self.service.transfer?.bytesDone {
+                furthestAhead = max(furthestAhead, sent - received)
+            }
+            receiver.consume(bytes)
+            self.caller.pendingSends.append(contentsOf: receiver.toSend)
+            receiver.toSend.removeAll()
+        }
+        caller.type("D photo.jpg")
+        await caller.pump { receiver.completed != nil && receiver.textString.hasSuffix(">\r") }
+        caller.onBytes = nil
+
+        XCTAssertEqual(receiver.file, file, "the download still arrives whole")
+        XCTAssertLessThan(furthestAhead, 2048,
+                          "never more than about a window ahead of what the caller has: \(furthestAhead) bytes")
+    }
+
     func testBinaryDownloadsArriveByteIdenticalAtEverySize() async throws {
         // Around the 250-byte block, a multi-block file, and one byte under
         // the library's cap. Each one is a fresh D in the same call, so this
