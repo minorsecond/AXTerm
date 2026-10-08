@@ -509,6 +509,10 @@ final class SessionCoordinator: ObservableObject {
     var testTextProbeFallbackDelay: TimeInterval?
     #endif
 
+    /// The time an AXDP send reads while it waits for the peer's capability
+    /// answer. Tests move it past the probe schedule.
+    var capabilityWaitClock: () -> Date = Date.init
+
     /// Callback for capability discovery events (for debug display)
     var onCapabilityEvent: ((CapabilityDebugEvent) -> Void)?
 
@@ -5321,6 +5325,23 @@ final class SessionCoordinator: ObservableObject {
         return .unknown
     }
 
+    /// Before an AXDP send to a connected station we know nothing about, ask
+    /// it and wait for the answer (spec 6.x.3: negotiate when a transfer
+    /// starts and the peer's support is unknown). The station that answered
+    /// a call never probes on its own, so without this it refused every AXDP
+    /// send to a caller that hadn't probed either (park rehearsal
+    /// 2026-10-08, finding 29). The wait ends with the PONG, or when the
+    /// probe schedule runs out and the station counts as having no AXDP.
+    private func awaitCapabilityAnswer(for destination: String) async {
+        let call = destination.uppercased()
+        if capabilityStatus(for: call, now: capabilityWaitClock()) == .unknown {
+            requestCapabilityCheck(for: call)
+        }
+        while capabilityStatus(for: call, now: capabilityWaitClock()) == .pending, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
     /// Validate that protocol requirements are met for a transfer
     /// - Parameters:
     ///   - destination: Destination callsign
@@ -5331,7 +5352,7 @@ final class SessionCoordinator: ObservableObject {
 
         // AXDP requires capability confirmation
         if transferProtocol == .axdp {
-            let status = capabilityStatus(for: call)
+            let status = capabilityStatus(for: call, now: capabilityWaitClock())
             switch status {
             case .unknown:
                 TxLog.warning(.session, "Cannot transfer: AXDP capability unknown", [
@@ -5514,6 +5535,9 @@ final class SessionCoordinator: ObservableObject {
         transferProtocol: TransferProtocolType = .axdp,
         compressionSettings: TransferCompressionSettings = .useGlobal
     ) async -> String? {
+        if transferProtocol == .axdp {
+            await awaitCapabilityAnswer(for: destination)
+        }
         // Validate before reading, so a refusal costs no disk read.
         if let error = validateProtocolRequirements(for: destination, protocol: transferProtocol) {
             return error
