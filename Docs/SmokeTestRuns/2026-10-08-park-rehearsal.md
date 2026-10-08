@@ -144,3 +144,10 @@ A (705) rebuilt on `d2f9c244` (pid 87465), set up again (IC-705 K0EPI-2, Direwol
 |---|---|---|
 | 29 | AXDP capabilities | With the phone connected to A (705), A could not send by AXDP: "K0EPI-3 AXDP capability unknown. Connect first to discover capabilities." A appears to learn a station's capabilities only on links it starts. YAPP worked |
 
+
+A's frames for that link show the phone sent no probe, and A, having answered the call, never probes on its own. The Send File sheets probe when they open and offer AXDP only once it is confirmed, so this refusal reached only callers that skip the sheet, here the test command channel.
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 29 | An AXDP send to a connected station whose support is unknown asks it first and waits for the answer (spec 6.x.3); no answer refuses with the no-AXDP reason, which points to YAPP | `925f4f43` |
+| 28 | In the Session view, a file name in a line from another station is a link. Tapping it puts the download command in the compose box, never sends it. The command word is the one last used to fetch a file from that station, `D` until one is typed. A name counts when it has an extension (AXTerm's table, DOS-style lists); names with spaces or no extension are still typed by hand. Long-press for Copy was dropped: the line's text is already selectable | `58059582` |
