@@ -42,6 +42,12 @@ nonisolated enum CarMode {
         return names
     }
 
+    /// Car mode draws stations heard in the last hour.
+    static func keeps(lastHeard: Date?, now: Date) -> Bool {
+        guard let lastHeard else { return false }
+        return now.timeIntervalSince(lastHeard) <= 3600
+    }
+
     static func beaconLine(lastBeacon: Date?, now: Date, heardBy: [String]) -> String {
         guard let lastBeacon else { return "No beacon yet" }
         let seconds = max(0, Int(now.timeIntervalSince(lastBeacon)))

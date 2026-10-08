@@ -522,6 +522,8 @@ nonisolated enum HeardStationMap {
                     subtitle: entry.gridSquare ?? "",
                     detail: text,
                     lastHeard: entry.lastHeard,
+                    courseDegrees: entry.courseDegrees,
+                    speedKnots: entry.speedKnots,
                     isStale: isStale(entry, now: now),
                     isApproximate: entry.confidence == .inferredFromOperator,
                     isNode: entry.isNodeAlias,

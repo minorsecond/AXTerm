@@ -459,7 +459,13 @@ final class StationDotAnnotationView: MKAnnotationView {
                    isNode: Bool = false, callsign: String?,
                    aprsSymbol: APRSMapSymbol? = nil,
                    weatherBadge: String? = nil,
-                   isActive: Bool = false) {
+                   isActive: Bool = false,
+                   compact: Bool = false) {
+        // A reused view may still carry another station's arrow; the caller
+        // shows this station's with `showHeading` after configuring.
+        arrow.isHidden = true
+        fill.isHidden = false
+        ring.isHidden = false
         // A station — or our own station — that carries a drawable APRS
         // symbol wears a larger marker so the glyph is legible; everything
         // else keeps the ordinary dot. A node keeps its diamond. Resolve the
@@ -473,10 +479,12 @@ final class StationDotAnnotationView: MKAnnotationView {
 
         // A diamond reads at a slightly smaller size than a circle of the
         // same box, and infrastructure should sit quietly under traffic.
-        let diameter = isObserver ? (glyphImage != nil ? Self.aprsSize : Self.observerSize)
+        let full = isObserver ? (glyphImage != nil ? Self.aprsSize : Self.observerSize)
             : isNode ? 12
             : glyphImage != nil ? Self.aprsSize
             : Self.size
+        // Car mode draws fixed stations smaller (`StationMotion.isQuiet`).
+        let diameter = compact ? (full * 0.7).rounded() : full
         let ringWidth: CGFloat = isObserver ? 2.5 : 1.5
 
         // The frame is the dot plus a little slop, because the frame is what

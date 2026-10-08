@@ -23,6 +23,9 @@ nonisolated struct MapTrack: Identifiable, Sendable, Equatable {
     /// are reconciled together and a trail never outlives its dot.
     var id: String
     var points: [GreatCircle.Point]
+    /// Drawn fading from clear at its oldest point to the station's color
+    /// at the newest: car mode's short tail.
+    var fades: Bool = false
 
     /// A rounded fingerprint of the geometry, so a trail's overlay is rebuilt
     /// only when the path actually changed — not on every map update pass.
@@ -74,4 +77,11 @@ nonisolated struct MapTrack: Identifiable, Sendable, Equatable {
         }
     }
 
+    /// Car mode's tails: every moving station's last `minutes`, fading.
+    static func tails(stations: [Station], placedIDs: Set<String>,
+                      minutes: Int = 10, now: Date = Date()) -> [MapTrack] {
+        trails(stations: stations, placedIDs: placedIDs, selection: nil, showsAll: true,
+               windowMinutes: minutes, now: now)
+            .map { var tail = $0; tail.fades = true; return tail }
+    }
 }

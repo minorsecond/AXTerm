@@ -106,6 +106,9 @@ struct OfflineBasemapMapView {
     /// the way it travels (`OwnMarkerArrow`).
     var observerCourse: Double?
     var observerSpeed: Double?
+    /// Car mode: fixed stations drawn smaller and dimmer so the mobiles
+    /// stand out (`StationMotion.isQuiet`).
+    var quietsFixedStations = false
 
     // MARK: - Annotations
 
@@ -161,12 +164,18 @@ struct OfflineBasemapMapView {
         /// marker churn this class spends so much effort avoiding. The ring is
         /// refreshed on its own cheap timer instead — see `refreshActivity`.
         var lastHeard: Date?
+        /// The station's reported course and speed. Carried like `lastHeard`,
+        /// never compared: the arrow is turned in place, not redrawn.
+        var courseDegrees: Int?
+        var speedKnots: Int?
 
         init(id: String, coordinate: CLLocationCoordinate2D, title: String?,
              subtitle: String?, signal: StationScope.Signal,
              isApproximate: Bool, isObserver: Bool, isNode: Bool = false,
              aprsSymbol: APRSMapSymbol? = nil, weatherBadge: String? = nil,
-             lastHeard: Date? = nil) {
+             lastHeard: Date? = nil, courseDegrees: Int? = nil, speedKnots: Int? = nil) {
+            self.courseDegrees = courseDegrees
+            self.speedKnots = speedKnots
             self.id = id
             self.coordinate = coordinate
             self.title = title
@@ -241,6 +250,8 @@ struct OfflineBasemapMapView {
             }
             // Carried, never compared: see the property's note.
             lastHeard = next.lastHeard
+            courseDegrees = next.courseDegrees
+            speedKnots = next.speedKnots
             let redraws = title != next.title
                 || signal != next.signal
                 || isApproximate != next.isApproximate
@@ -342,7 +353,9 @@ struct OfflineBasemapMapView {
                 isNode: site.isNode,
                 aprsSymbol: site.aprsSymbol,
                 weatherBadge: site.weatherBadge,
-                lastHeard: site.lastHeard))
+                lastHeard: site.lastHeard,
+                courseDegrees: site.courseDegrees,
+                speedKnots: site.speedKnots))
         }
         return result
     }
@@ -484,6 +497,8 @@ struct OfflineBasemapMapView {
         /// trail apart from a network path line at render time — MapKit hands
         /// back a bare `MKPolyline` either way.
         var trailLineIDs: Set<ObjectIdentifier> = []
+        /// The trails drawn as fading tails (`MapTrack.fades`).
+        var fadingTrailLineIDs: Set<ObjectIdentifier> = []
         /// When the map was last structurally mutated — an annotation added
         /// or removed, a line rebuilt. Inserting anything makes MapKit
         /// re-resolve its own label layer: an animated ripple of the city
@@ -538,6 +553,17 @@ struct OfflineBasemapMapView {
                 // A movement trail: the road a rover drove, drawn thin and
                 // quiet under its dot. Its color is the same recency tint the
                 // marker carries, so the trail and the station read as one.
+                // Car mode's tail fades from clear at its oldest fix to the
+                // station's color at its newest.
+                if fadingTrailLineIDs.contains(ObjectIdentifier(line)) {
+                    let gradient = MKGradientPolylineRenderer(polyline: line)
+                    gradient.setColors([color.withAlphaComponent(0), color.withAlphaComponent(0.85)],
+                                       locations: [0, 1])
+                    gradient.lineWidth = 3.5
+                    gradient.lineCap = .round
+                    gradient.lineJoin = .round
+                    return gradient
+                }
                 if trailLineIDs.contains(ObjectIdentifier(line)) {
                     renderer.strokeColor = color.withAlphaComponent(0.7)
                     renderer.lineWidth = 2.5
@@ -670,6 +696,7 @@ struct OfflineBasemapMapView {
             // Ordinary stations fold together when zoomed out; the observer,
             // objects and hazards never do.
             view.clusteringIdentifier = (clustersStations && site.mayCluster) ? "station" : nil
+            let quiet = isQuiet(site, now: Date())
             view.configure(tint: Self.tint(for: site),
                            isObserver: site.isObserver,
                            approximate: site.isApproximate,
@@ -677,17 +704,15 @@ struct OfflineBasemapMapView {
                            callsign: site.title,
                            aprsSymbol: site.aprsSymbol,
                            weatherBadge: site.weatherBadge,
-                           isActive: MapActivity.isActive(lastHeard: site.lastHeard, now: Date()))
-            if site.isObserver {
-                view.showHeading(OwnMarkerArrow.rotation(courseDegrees: parent.observerCourse,
-                                                         speed: parent.observerSpeed,
-                                                         mapHeading: mapView.camera.heading),
-                                 tint: Self.tint(for: site))
-            }
+                           isActive: MapActivity.isActive(lastHeard: site.lastHeard, now: Date()),
+                           compact: quiet)
+            view.showHeading(arrowRotation(for: site, heading: mapView.camera.heading, now: Date()),
+                             tint: Self.tint(for: site))
             // Fresh stations at full strength, stale ones faded, infrastructure
             // quieted — so "who's active now" reads at a glance without hiding
             // anyone. Recency is the map's whole point; let it carry visually.
-            let emphasis = Self.emphasisAlpha(for: site)
+            // Car mode quiets fixed stations further, so the mobiles stand out.
+            let emphasis = Self.emphasisAlpha(for: site) * (quiet ? 0.55 : 1)
             #if os(macOS)
             view.alphaValue = emphasis
             #else
@@ -905,13 +930,32 @@ struct OfflineBasemapMapView {
         /// Point the observer's marker the way the station travels, against
         /// the map's current rotation.
         func refreshObserverArrow(on mapView: MKMapView) {
-            guard let observer = mapView.annotations.compactMap({ $0 as? SiteAnnotation })
-                    .first(where: { $0.isObserver }),
-                  let view = mapView.view(for: observer) as? StationDotAnnotationView else { return }
-            let rotation = OwnMarkerArrow.rotation(courseDegrees: parent.observerCourse,
-                                                   speed: parent.observerSpeed,
-                                                   mapHeading: mapView.camera.heading)
-            view.showHeading(rotation, tint: Self.tint(for: observer))
+            let now = Date()
+            for site in mapView.annotations.compactMap({ $0 as? SiteAnnotation }) {
+                guard let view = mapView.view(for: site) as? StationDotAnnotationView else { continue }
+                view.showHeading(arrowRotation(for: site, heading: mapView.camera.heading, now: now),
+                                 tint: Self.tint(for: site))
+            }
+        }
+
+        /// How a marker's arrow turns on screen: ours from the GPS course,
+        /// another station's from the course it reported; nil for a dot.
+        func arrowRotation(for site: SiteAnnotation, heading: Double, now: Date) -> Double? {
+            site.isObserver
+                ? OwnMarkerArrow.rotation(courseDegrees: parent.observerCourse,
+                                          speed: parent.observerSpeed, mapHeading: heading)
+                : StationMotion.arrowRotation(courseDegrees: site.courseDegrees,
+                                              speedKnots: site.speedKnots,
+                                              lastHeard: site.lastHeard, now: now,
+                                              mapHeading: heading)
+        }
+
+        /// Car mode draws a fixed station smaller and dimmer.
+        func isQuiet(_ site: SiteAnnotation, now: Date) -> Bool {
+            guard parent.quietsFixedStations, !site.isObserver else { return false }
+            let moving = StationMotion.isMoving(speedKnots: site.speedKnots,
+                                                lastHeard: site.lastHeard, now: now)
+            return StationMotion.isQuiet(symbol: site.aprsSymbol, isNode: site.isNode, moving: moving)
         }
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
@@ -1412,6 +1456,7 @@ struct OfflineBasemapMapView {
                     coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
                 }
                 coordinator.trailLineIDs.removeAll()
+                coordinator.fadingTrailLineIDs.removeAll()
                 coordinator.trailLines.removeAll()
                 coordinator.trailGeometry.removeAll()
             }
@@ -1500,13 +1545,15 @@ struct OfflineBasemapMapView {
             mapView.removeOverlay(line)
             coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
             coordinator.trailLineIDs.remove(ObjectIdentifier(line))
+            coordinator.fadingTrailLineIDs.remove(ObjectIdentifier(line))
             coordinator.trailLines.removeValue(forKey: id)
             coordinator.trailGeometry.removeValue(forKey: id)
             coordinator.structuralMutationDidOccur = true
         }
 
         for (id, track) in wanted {
-            let geometry = track.geometrySignature
+            // A tail and a trail over the same fixes are drawn differently.
+            let geometry = track.geometrySignature + (track.fades ? "|tail" : "")
             let color = Self.tint(forSignalOfStation: id, in: scope)
 
             if coordinator.trailGeometry[id] == geometry,
@@ -1526,10 +1573,12 @@ struct OfflineBasemapMapView {
                 mapView.removeOverlay(stale)
                 coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(stale))
                 coordinator.trailLineIDs.remove(ObjectIdentifier(stale))
+                coordinator.fadingTrailLineIDs.remove(ObjectIdentifier(stale))
             }
             let line = track.polyline
             coordinator.overlayColors[ObjectIdentifier(line)] = color
             coordinator.trailLineIDs.insert(ObjectIdentifier(line))
+            if track.fades { coordinator.fadingTrailLineIDs.insert(ObjectIdentifier(line)) }
             coordinator.trailLines[id] = line
             coordinator.trailGeometry[id] = geometry
             mapView.addOverlay(line, level: .aboveRoads)
@@ -1869,7 +1918,8 @@ struct OfflineBasemapMapView {
                                    aprsSymbol: current.aprsSymbol,
                                    weatherBadge: current.weatherBadge,
                                    isActive: MapActivity.isActive(lastHeard: current.lastHeard,
-                                                                  now: Date()))
+                                                                  now: Date()),
+                                   compact: context.coordinator.isQuiet(current, now: Date()))
                 }
             } else {
                 arrived.append(annotation)

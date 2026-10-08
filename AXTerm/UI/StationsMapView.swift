@@ -386,6 +386,29 @@ struct StationsMapView: View {
     /// Car mode (`CarMode`): the map follows like a navigation app and
     /// draws only what helps at a glance. iPhone and iPad.
     @AppStorage(CarMode.storageKey) private var carMode = false
+    private var carModeOn: Bool {
+        #if os(iOS)
+        carMode
+        #else
+        false
+        #endif
+    }
+
+    /// What the map draws: in car mode, only stations heard in the last hour.
+    private var drawnScope: StationScope {
+        guard carModeOn else { return scope }
+        let now = Date()
+        return StationScope.build(observerLabel: scope.observerLabel,
+                                  sites: scope.sites.filter { CarMode.keeps(lastHeard: $0.lastHeard, now: now) })
+    }
+
+    /// Car mode's fading tails: each moving station's last ten minutes.
+    private var carTails: [MapTrack] {
+        guard carModeOn else { return [] }
+        return MapTrack.tails(stations: stations,
+                              placedIDs: Set(placed.filter { $0.origin == .transmittedAPRS }.map(\.id)))
+    }
+
     private var chrome: CarMode.Chrome {
         #if os(iOS)
         CarMode.Chrome(carMode: carMode)
@@ -2270,7 +2293,7 @@ struct StationsMapView: View {
 
     private func mapStack(observer: GreatCircle.Point) -> some View {
         ZStack(alignment: .top) {
-            StationMapView(scope: scope, distanceInMiles: settings.distanceUnitIsMiles,
+            StationMapView(scope: drawnScope, distanceInMiles: settings.distanceUnitIsMiles,
                            observer: observer,
                            showsObserver: self.observer != nil,
                                coordinates: coordinates,
@@ -2279,7 +2302,7 @@ struct StationsMapView: View {
                                pathLinks: chrome.paths ? pathLinks : [],
                                aprsSymbols: aprsSymbols,
                                ownAPRSSymbol: ownAPRSSymbol,
-                               tracks: chrome.trails ? tracks : [],
+                               tracks: chrome.trails ? tracks : carTails,
                                terrainOverlays: chrome.overlays ? terrainOverlays : [],
                                weatherFieldOverlays: chrome.overlays ? weatherFieldOverlays : [],
                                layerGeneration: layerGeneration,
@@ -2310,7 +2333,8 @@ struct StationsMapView: View {
                                followMode: $followMode,
                                followPoint: observerPosition?.point,
                                followCourse: observerCourse,
-                               followSpeed: observerSpeed)
+                               followSpeed: observerSpeed,
+                               quietsFixedStations: carModeOn)
             .overlay(alignment: .bottomTrailing) { if !carMode { selectionCard } }
             #if os(iOS)
             // An inset, not an overlay: MapKit then keeps its logo and Legal

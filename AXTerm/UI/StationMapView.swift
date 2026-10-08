@@ -81,6 +81,8 @@ struct StationMapView: View {
     var followPoint: GreatCircle.Point? = nil
     var followCourse: Double? = nil
     var followSpeed: Double? = nil
+    /// Car mode: fixed stations drawn smaller and dimmer.
+    var quietsFixedStations = false
 
     private var hasNodeSites: Bool { scope.sites.contains(where: \.isNode) }
 
@@ -205,7 +207,8 @@ struct StationMapView: View {
             followCamera: followCamera,
             onOperatorMoved: { followMode.wrappedValue = .free },
             observerCourse: followCourse,
-            observerSpeed: followSpeed)
+            observerSpeed: followSpeed,
+            quietsFixedStations: quietsFixedStations)
         .modifier(MapTopBleed())
         .overlay(alignment: .bottomLeading) {
             if showsChrome, !legendGivesWayToSelection {

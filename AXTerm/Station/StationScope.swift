@@ -42,6 +42,10 @@ nonisolated struct StationScope: Equatable, Sendable {
         /// marking. Distinct from `signal`/`isStale`, which grade recency over
         /// minutes and hours; this answers "is it on the air right now".
         var lastHeard: Date? = nil
+        /// The course and speed the station last reported, for drawing a
+        /// moving station as an arrow (`StationMotion`).
+        var courseDegrees: Int? = nil
+        var speedKnots: Int? = nil
         /// Drawn faded — known to exist, but not recently confirmed.
         var isStale: Bool
         /// The position is a lead rather than a location — drawn hollow
@@ -174,6 +178,8 @@ nonisolated struct StationScope: Equatable, Sendable {
         var subtitle: String = ""
         var detail: String = ""
         var lastHeard: Date? = nil
+        var courseDegrees: Int? = nil
+        var speedKnots: Int? = nil
         var isStale: Bool = false
         var isApproximate: Bool = false
         var isNode: Bool = false
@@ -205,6 +211,8 @@ nonisolated struct StationScope: Equatable, Sendable {
                 subtitle: entry.subtitle,
                 detail: entry.detail,
                 lastHeard: entry.lastHeard,
+                courseDegrees: entry.courseDegrees,
+                speedKnots: entry.speedKnots,
                 isStale: entry.isStale,
                 isApproximate: entry.isApproximate,
                 isNode: entry.isNode,
