@@ -188,6 +188,45 @@ final class BBSTransferTests: XCTestCase {
         XCTAssertEqual(service.linkThroughput, 1_000_000, "no caller, the link default")
     }
 
+    /// The idle timeout is for a caller who stops typing, not one receiving
+    /// a download: the call was hung up five minutes into one (park
+    /// rehearsal 2026-10-08). It waits while a transfer runs, which has its
+    /// own stall check, and acknowledgments never count as activity, since
+    /// a caller who walked away still answers polls.
+    func testACallIsNotIdleWhileATransferRuns() {
+        let start = Date(timeIntervalSince1970: 0)
+        XCTAssertFalse(BBSService.callIsIdle(now: start.addingTimeInterval(3_600), lastActivity: start,
+                                             timeout: 300, transferRunning: true))
+        XCTAssertTrue(BBSService.callIsIdle(now: start.addingTimeInterval(301), lastActivity: start,
+                                            timeout: 300, transferRunning: false))
+        XCTAssertFalse(BBSService.callIsIdle(now: start.addingTimeInterval(299), lastActivity: start,
+                                             timeout: 300, transferRunning: false))
+    }
+
+    /// The idle time starts again when a transfer ends, so a caller is not
+    /// dropped the moment a long download is stopped: nothing the caller
+    /// sent in that hour counts as typing.
+    func testTheIdleTimeStartsAgainWhenADownloadIsStopped() async throws {
+        try writeFile("photo.jpg", bytes: binary(16 * 1024))
+        library.rescan()
+        try await connect()
+        var stopped = false
+        caller.onBytes = { [unowned self] _ in
+            guard !stopped else { return }
+            stopped = true
+            // An hour into the download by the mailbox's clock, the sysop
+            // stops it.
+            self.clockOffset = 3_600
+            self.service.sysopStopTransfer()
+        }
+        caller.type("D photo.jpg")
+        await caller.pump { stopped && self.service.transfer == nil }
+        caller.onBytes = nil
+
+        XCTAssertTrue(stopped)
+        XCTAssertLessThan(service.secondsSinceCallActivity, 5, "counted from the end of the transfer")
+    }
+
     /// Serving a caller is not a reason the mailbox cannot answer (park
     /// rehearsal 2026-10-08: during a call the header said "Off air ·
     /// Switched on, but not answering" with "already serving K0EPI-3").

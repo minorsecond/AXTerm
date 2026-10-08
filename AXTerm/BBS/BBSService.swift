@@ -641,6 +641,19 @@ final class BBSService: ObservableObject {
 
     // MARK: - Idle
 
+    /// Whether a caller has been quiet for the idle timeout. It is for a
+    /// caller who stops typing, so it waits while a transfer runs, which has
+    /// its own stall check: the call was hung up five minutes into a download
+    /// (park rehearsal 2026-10-08). Acknowledgments never count: a caller
+    /// who walked away still answers the link's polls.
+    nonisolated static func callIsIdle(now: Date, lastActivity: Date, timeout: TimeInterval,
+                                       transferRunning: Bool) -> Bool {
+        !transferRunning && now.timeIntervalSince(lastActivity) >= timeout
+    }
+
+    /// Seconds since the caller last did something, for the idle timeout.
+    var secondsSinceCallActivity: TimeInterval { now().timeIntervalSince(lastActivity) }
+
     private func startIdleTimer() {
         idleTask?.cancel()
         let timeout = settings.idleTimeout
@@ -648,7 +661,8 @@ final class BBSService: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
                 guard let self, self.session != nil else { return }
-                guard self.now().timeIntervalSince(self.lastActivity) >= timeout else { continue }
+                guard Self.callIsIdle(now: self.now(), lastActivity: self.lastActivity, timeout: timeout,
+                                      transferRunning: self.running != nil) else { continue }
                 self.write(["", "*** no activity — disconnecting"])
                 self.disconnectCurrent()
                 return
@@ -1079,6 +1093,9 @@ final class BBSService: ObservableObject {
     }
 
     private func clearTransfer() {
+        // The idle time starts again from the end of a transfer, so a caller
+        // is not dropped the moment a long download finishes.
+        if running != nil { lastActivity = now() }
         running = nil
         transfer = nil
         stopWatchdog()
