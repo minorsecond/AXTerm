@@ -35,14 +35,26 @@ nonisolated enum ImageShrinker {
         /// photo taken at home tells every station that copies the message
         /// where home is, and packet radio is readable by anyone listening.
         var keepsLocation: Bool = false
+        /// What to write. JPEG opens everywhere; HEIC looks the same in less
+        /// airtime but wants an Apple device or a recent viewer.
+        var format: Format = .jpeg
 
         init(byteBudget: Int, maxLongEdge: Int = 1600, minLongEdge: Int = 320,
-             keepsLocation: Bool = false) {
+             keepsLocation: Bool = false, format: Format = .jpeg) {
             self.byteBudget = byteBudget
             self.maxLongEdge = maxLongEdge
             self.minLongEdge = minLongEdge
             self.keepsLocation = keepsLocation
+            self.format = format
         }
+    }
+
+    enum Format: String, CaseIterable, Equatable, Sendable {
+        case jpeg
+        case heic
+
+        var type: UTType { self == .jpeg ? .jpeg : .heic }
+        var fileExtension: String { self == .jpeg ? "jpg" : "heic" }
     }
 
     /// A photo that now fits.
@@ -159,8 +171,13 @@ nonisolated enum ImageShrinker {
 
     /// `name` with its extension replaced by `.jpg`.
     static func jpegName(for name: String) -> String {
+        fileName(for: name, format: .jpeg)
+    }
+
+    /// `name` with its extension replaced by the format's.
+    static func fileName(for name: String, format: Format) -> String {
         let stem = (name as NSString).deletingPathExtension
-        return (stem.isEmpty ? "Photo" : stem) + ".jpg"
+        return (stem.isEmpty ? "Photo" : stem) + "." + format.fileExtension
     }
 
     /// Shrinks `data` to fit `options.byteBudget`.
@@ -197,13 +214,13 @@ nonisolated enum ImageShrinker {
             guard let image = thumbnail(source, longEdge: edge) else { return .failure(.encodeFailed) }
             let isLast = index == ladder.count - 1
             for quality in qualities + (isLast ? lastResortQualities : []) {
-                guard let jpeg = encodeJPEG(image, quality: quality, gps: location) else {
+                guard let jpeg = encode(image, as: options.format, quality: quality, gps: location) else {
                     return .failure(.encodeFailed)
                 }
                 smallest = min(smallest, jpeg.count)
                 if jpeg.count <= options.byteBudget {
                     return .success(.shrunk(Shrunk(
-                        data: jpeg, name: jpegName(for: name),
+                        data: jpeg, name: fileName(for: name, format: options.format),
                         pixelWidth: image.width, pixelHeight: image.height,
                         quality: quality, originalByteCount: data.count)))
                 }
@@ -232,13 +249,14 @@ nonisolated enum ImageShrinker {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
-    /// A baseline JPEG carrying no metadata except, when asked for, the GPS
+    /// A baseline JPEG (or HEIC) carrying no metadata except, when asked for, the GPS
     /// position. The camera's EXIF and maker notes can be several kilobytes,
     /// and every one of them costs airtime.
-    private static func encodeJPEG(_ image: CGImage, quality: Double, gps: [CFString: Any]?) -> Data? {
+    private static func encode(_ image: CGImage, as format: Format, quality: Double,
+                               gps: [CFString: Any]?) -> Data? {
         let output = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(
-            output, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+            output, format.type.identifier as CFString, 1, nil) else { return nil }
         var properties: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: quality]
         if let gps { properties[kCGImagePropertyGPSDictionary] = gps }
         CGImageDestinationAddImage(destination, image, properties as CFDictionary)
