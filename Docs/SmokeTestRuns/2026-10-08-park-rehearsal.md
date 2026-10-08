@@ -189,3 +189,12 @@ Correction to 35 after reading A's saved console notes: the route fell at 16:11:
 | 35 | A T1 timeout no longer reports a sample. Resends are held until a frame from the peer arrives and dropped when the peer resets the link; a link that dies with nothing heard teaches nothing. Reverses three tests from the 2026-08-22 audit, rewritten with the reason | `2c97f5ac` |
 | 35 | A caller on the air is quoted no faster than their link carries now (window of frames per round trip) | `4f8e2353` |
 | 31 | The TNC4 offer reads "Using the TNC4's own receive level. You can tune it for this radio if packets are missed." | `ce909a38` |
+
+The phone was slow to the point of unusable on the build with fixes 31 to 36: fix 36 scanned the whole Session history for spaced names on every redraw (about 0.4 s per 1,000 lines on the Mac). Each line is now scanned once (`184f6364`). A (705) rebuilt on `a44fdcd2` (pid 36105), set up again, and on the air at 17:37:57Z; the phone and iPad reinstalled on `184f6364`.
+
+| # | Result | Notes |
+|---|---|---|
+| Slowness retest | pass | The operator reports the phone responsive again |
+| 34 retest | pass | The history stays put while a message goes out (operator) |
+| 36 retest | pass | After `D Barro tal vez v11.fcpxml`, "Barro tal vez v11.fcpxml sent." links the whole name (operator) |
+| 35 retest | pass | The same 5 KB file took 1 min 50 s (17:39:31 to 17:41:21Z) against about 5 min before; A's notes show the route growing to K 4 / P 256 during the call, with no collapse. The quote still said "<1m": no round trip had been measured when the listing went out, so it used the 90 B/s default |
