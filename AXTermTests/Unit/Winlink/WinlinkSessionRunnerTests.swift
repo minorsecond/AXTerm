@@ -56,8 +56,14 @@ final class WinlinkSessionRunnerTests: XCTestCase {
             emit("FAKE-RMS Gateway\r[WL2K-5.0-B2FWIHJM$]\r;PQ: 23753528\r>\r")
         }
 
+        private var deliveredTotal = 0
+
         func send(_ data: Data) {
             clientTranscript += String(data: data, encoding: .isoLatin1) ?? ""
+            // Delivered at once, as a fast link would report it: the runner
+            // starts its reply waits from delivery.
+            deliveredTotal += data.count
+            onDeliveryProgress?(deliveredTotal, deliveredTotal)
             if expectedBodies > 0 {
                 consumeBinary(data)
             } else {

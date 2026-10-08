@@ -93,9 +93,13 @@ final class WinlinkSessionRunner: ObservableObject {
     /// Bytes handed to the transport since the last timer was armed; used
     /// to stretch protocol timeouts over slow RF links (1200 bd moves
     /// ~100 B/s of payload — a 30 kB attachment takes minutes).
-    private var bytesQueuedSinceTimer = 0
-    /// Conservative effective link throughput used for timeout stretching.
-    private let assumedBytesPerSecond: Int
+    /// Waits for the other station, held until what we sent is delivered.
+    private lazy var replyTimers = DeliveryGatedTimers(
+        start: { [weak self] kind, seconds in self?.startTimer(kind, seconds: seconds) },
+        cancel: { [weak self] kind in
+            self?.timerTasks[kind]?.cancel()
+            self?.timerTasks[kind] = nil
+        })
 
     /// Where the operator is. Resolved in the background at exchange start
     /// so the session log can record where this link was measured from —
@@ -110,11 +114,9 @@ final class WinlinkSessionRunner: ObservableObject {
 
     init(
         store: WinlinkStore,
-        assumedBytesPerSecond: Int = 50,
         observationProvider: (@MainActor () async -> StationLocation?)? = nil
     ) {
         self.worker = WinlinkPersistenceWorker(store: store)
-        self.assumedBytesPerSecond = max(1, assumedBytesPerSecond)
         self.observationProvider = observationProvider
     }
 
@@ -153,7 +155,7 @@ final class WinlinkSessionRunner: ObservableObject {
         sessionAirtime = airtime
         sessionGatewayName = gatewayName
         pendingSelection = nil
-        bytesQueuedSinceTimer = 0
+        replyTimers.reset()
         // Fire and forget: a GPS fix takes seconds, the exchange takes
         // minutes, and the answer is only needed when the log is written.
         observedLocation = nil
@@ -234,6 +236,7 @@ final class WinlinkSessionRunner: ObservableObject {
 
         messageSubjects = Dictionary(uniqueKeysWithValues: prepared.map { ($0.message.mid, $0.message.subject) })
         messageCompressedSizes = Dictionary(uniqueKeysWithValues: prepared.map { ($0.message.mid, $0.compressed.count) })
+        replyTimers.reset()
         lastDeliveredBytes = 0
         lastSubmittedBytes = 0
         sendBaselineBytes = 0
@@ -349,27 +352,19 @@ final class WinlinkSessionRunner: ObservableObject {
         switch action {
         case .send(let data):
             logWire(.sent, data)
-            bytesQueuedSinceTimer += data.count
+            replyTimers.noteSubmitted(data.count)
             transport?.send(data)
 
         case .startTimer(let kind, let seconds):
-            // Stretch protocol timeouts by the time our own queued bytes
-            // still need on the air; the peer cannot answer sooner.
-            //
-            // The selection deadline is exempt: it measures a person, not
-            // a peer, and stretching it would leave the sheet's countdown
-            // reading 0:00 while the engine was still waiting.
-            guard kind != .selection else {
-                startTimer(kind, seconds: seconds)
-                return
-            }
-            let stretched = seconds + bytesQueuedSinceTimer / assumedBytesPerSecond
-            bytesQueuedSinceTimer = 0
-            startTimer(kind, seconds: min(stretched, 1800))
+            // The peer cannot answer what it has not received, so a wait
+            // counts from when our bytes are delivered, however slow the
+            // link (park rehearsal 2026-10-08: a two-minute reply timer
+            // armed while a nine-minute photo was still going out). The
+            // selection deadline measures a person and starts at once.
+            replyTimers.request(kind, seconds: seconds)
 
         case .cancelTimer(let kind):
-            timerTasks[kind]?.cancel()
-            timerTasks[kind] = nil
+            replyTimers.cancel(kind)
             // The selection timer exists only while a question is
             // outstanding, so canceling it means the question is answered.
             // `resolveInboundSelection` clears the request before it
@@ -562,6 +557,7 @@ final class WinlinkSessionRunner: ObservableObject {
 
     /// Feeds L2 ack (or socket-write) totals into the current send bar.
     private func handleDeliveryProgress(delivered deliveredBytes: Int, submitted submittedBytes: Int) {
+        replyTimers.noteDelivered(deliveredBytes)
         lastDeliveredBytes = deliveredBytes
         lastSubmittedBytes = submittedBytes
         guard var current = progress, current.kind == .sending, current.bytesTotal > 0 else { return }
