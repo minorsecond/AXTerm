@@ -410,7 +410,10 @@ final class AX25SessionTests: XCTestCase {
 
     }
 
-    func testHandleInboundUAWithSSIDMismatchCompletesConnect() {
+    /// AX.25 identifies a link by both addresses: a UA from N0HI-9 is not
+    /// N0HI-7 answering (park rehearsal 2026-10-08, finding 33). This test
+    /// used to require the opposite.
+    func testHandleInboundUAWithSSIDMismatchDoesNotCompleteConnect() {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
@@ -424,7 +427,7 @@ final class AX25SessionTests: XCTestCase {
         // Return value of handleInboundUA is irrelevant here, checking state transition
         _ = manager.handleInboundUA(from: uaSource, path: path, radio: .primary)
 
-        XCTAssertEqual(session.state, .connected)
+        XCTAssertEqual(session.state, .connecting)
         XCTAssertEqual(session.remoteAddress.display, destination.display)
     }
 

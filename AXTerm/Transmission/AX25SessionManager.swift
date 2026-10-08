@@ -2479,6 +2479,32 @@ final class AX25SessionManager: ObservableObject {
         discardEndedSession(for: source, path: path, radio: radio)
         let key = SessionKey(destination: source, path: path, radio: radio)
 
+        // A link is both addresses. A record for this caller on another of
+        // our addresses is a different link: refused with DM from the called
+        // address while it is live, replaced while it is not. A (705) kept a
+        // call it had abandoned before it connected, and answered the
+        // phone's call to its mailbox with UA from K0EPI-2 (park rehearsal
+        // 2026-10-08, finding 32).
+        if let other = sessions[key], !CallsignNormalizer.addressesMatch(other.localAddress, destination) {
+            switch other.state {
+            case .connected, .connecting, .disconnecting:
+                TxLog.debug(.session, "SABM refused with DM: a link to this caller is up on another address", [
+                    "peer": source.display, "to": destination.display, "link": other.localAddress.display
+                ])
+                transmit(AX25FrameBuilder.buildDM(from: destination, to: source, via: path, pf: pf)
+                    .onRadio(radio))
+                return
+            case .disconnected, .error:
+                stopT1Timer(for: other)
+                stopT2Timer(for: other)
+                stopT3Timer(for: other)
+                removeSession(other)
+                TxLog.debug(.session, "Replaced a session on another address for an inbound SABM", [
+                    "peer": source.display, "to": destination.display, "was": other.localAddress.display
+                ])
+            }
+        }
+
         let session: AX25Session
         if let existing = sessions[key] {
             debugTrace("SABM existing session", [
@@ -2597,30 +2623,10 @@ final class AX25SessionManager: ObservableObject {
             }
         }
 
-        // Last resort: match by callsign only (SSID mismatch)
-        if session == nil {
-            session = findAnySessionByCallsign(from: source, radio: radio)
-            if session != nil {
-                TxLog.debug(.session, "Found session by callsign only (SSID mismatch)", [
-                    "from": source.display,
-                    "state": session?.state.rawValue ?? "unknown",
-                    "expectedPeer": session?.remoteAddress.display ?? "(none)"
-                ])
-            }
-        }
-
-        // Final fallback: match by callsign even if channel differs
-        if session == nil {
-            session = findAnySessionByCallsignIgnoringChannel(from: source)
-            if session != nil {
-                TxLog.debug(.session, "Found session by callsign (ignoring radio)", [
-                    "from": source.display,
-                    "state": session?.state.rawValue ?? "unknown",
-                    "expectedPeer": session?.remoteAddress.display ?? "(none)",
-                    "expectedChannel": session?.radio ?? -1
-                ])
-            }
-        }
+        // Nothing by callsign alone. AX.25 identifies a link by both
+        // addresses, so a UA from another SSID is not the answer to our
+        // SABM: the phone took K0EPI-2's UA as the mailbox K0EPI-4 answering
+        // (park rehearsal 2026-10-08, finding 33).
 
         guard let session = session else {
             debugTrace("UA for unknown session", [
