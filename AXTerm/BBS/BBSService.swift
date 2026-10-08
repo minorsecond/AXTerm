@@ -313,7 +313,10 @@ final class BBSService: ObservableObject {
     /// The refusal the *next* call would get, or nil when it would be answered.
     /// Drives the status header, so the operator learns why before a caller does.
     func currentRefusal() -> String? {
-        let decision = listener().decide(called: answeringCallsign, isInitiator: false)
+        // Asked as if no one were calling: a mailbox serving a caller is
+        // busy, not off the air (park rehearsal 2026-10-08, the header said
+        // "Off air" all through a call).
+        let decision = listener(servingCaller: false).decide(called: answeringCallsign, isInitiator: false)
         return decision.isAnswer ? nil : decision.explanation
     }
 
@@ -327,13 +330,13 @@ final class BBSService: ObservableObject {
         return profile.name.isEmpty ? RadioProfile.defaultName(for: profile) : profile.name
     }
 
-    private func listener(for radio: RadioID = .primary) -> PersonalBBSListener {
+    private func listener(for radio: RadioID = .primary, servingCaller: Bool = true) -> PersonalBBSListener {
         PersonalBBSListener(
             isArmed: settings.onAir,
             winlinkP2PAddress: isWinlinkP2PArmed() ? winlinkP2PCallsign() : nil,
             myCallsign: answeringCallsign,
             contestedBy: contestedIdentityHolder(),
-            currentCaller: live?.callsign,
+            currentCaller: servingCaller ? live?.callsign : nil,
             servesThisRadio: coordinator.appSettings?.radio(radio)?.mayAnswerMailbox ?? true)
     }
 

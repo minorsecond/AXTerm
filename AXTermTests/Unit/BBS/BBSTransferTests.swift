@@ -188,6 +188,15 @@ final class BBSTransferTests: XCTestCase {
         XCTAssertEqual(service.linkThroughput, 1_000_000, "no caller, the link default")
     }
 
+    /// Serving a caller is not a reason the mailbox cannot answer (park
+    /// rehearsal 2026-10-08: during a call the header said "Off air ·
+    /// Switched on, but not answering" with "already serving K0EPI-3").
+    func testAMailboxServingACallerIsNotRefusing() async throws {
+        try await connect()
+        XCTAssertNotNil(service.live)
+        XCTAssertNil(service.currentRefusal(), "busy, not off the air")
+    }
+
     /// A finished download records its rate, so the next listing for that
     /// caller is timed by it.
     func testAFinishedDownloadRecordsTheCallersRate() async throws {
