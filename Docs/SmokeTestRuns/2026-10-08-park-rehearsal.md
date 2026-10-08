@@ -300,3 +300,4 @@ Warbler received SIGTERM at 19:00:53Z (not from this session) and launchd starte
 | Finding | Fix | Commit |
 |---|---|---|
 | 42 | The follow geometry leaves out the padding below the last row, and an upward move of 3 points or less with nobody scrolling is layout. On the iPad, five lines from A each scrolled into view and following never switched off | `a6c80a16` |
+| 42 retest | pass | The operator saw all five lines scroll into view on the iPad |
