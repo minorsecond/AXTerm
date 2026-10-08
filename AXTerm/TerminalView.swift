@@ -2313,6 +2313,11 @@ struct TerminalView: View {
             .onAppear {
                 takeSendFileRequest()
                 if transferRouter.consumeShowTransfersRequest() { selectedTab = .transfers }
+                transferRouter.terminalShowsTransfersTab = selectedTab == .transfers
+            }
+            .onDisappear { transferRouter.terminalShowsTransfersTab = false }
+            .onChange(of: selectedTab) { _, tab in
+                transferRouter.terminalShowsTransfersTab = tab == .transfers
             }
             #if os(iOS)
             .confirmationDialog("Send a Photo or a File", isPresented: $choosingTransferSource,

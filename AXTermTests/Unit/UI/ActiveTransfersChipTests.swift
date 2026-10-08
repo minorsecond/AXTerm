@@ -90,4 +90,16 @@ final class ActiveTransfersChipTests: XCTestCase {
         XCTAssertEqual(TimeLeftPhrase.text(seconds: 6_647), "about 1 h 51 min left")
         XCTAssertEqual(TimeLeftPhrase.text(seconds: 7_200), "about 2 h left")
     }
+
+    /// The card is not shown over the Transfers tab, where the row already
+    /// says the same (park rehearsal 2026-10-08, finding 21).
+    @MainActor
+    func testTheCardStepsAsideOnTheTransfersTab() {
+        let router = TransferUIRouter()
+        XCTAssertTrue(router.showsTransferCard)
+        router.terminalShowsTransfersTab = true
+        XCTAssertFalse(router.showsTransferCard)
+        router.terminalShowsTransfersTab = false
+        XCTAssertTrue(router.showsTransferCard)
+    }
 }

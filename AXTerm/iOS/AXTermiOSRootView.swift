@@ -73,6 +73,8 @@ struct AXTermiOSRootView: View {
     /// Holds the screen on while something would break if the device slept.
     @StateObject private var keepAwake = KeepAwakeController()
     @Environment(\.scenePhase) private var scenePhase
+    /// Whether the terminal shows its Transfers tab, for the transfer card.
+    @ObservedObject private var transferRouter = TransferUIRouter.shared
     /// Decides the tab bar's shape: an iPad seats six tabs, a phone five.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -147,7 +149,10 @@ struct AXTermiOSRootView: View {
         VStack(spacing: 0) {
             content
             // A file transfer under way, on every tab (issue 91).
-            if !sessionCoordinator.transfers.isEmpty {
+            // Not over the terminal's Transfers tab, where the row already
+            // says the same.
+            if !sessionCoordinator.transfers.isEmpty,
+               !(selection == .terminal && !transferRouter.showsTransferCard) {
                 // Redrawn every second for the time left, which moves while
                 // the bytes may not.
                 TimelineView(.periodic(from: .now, by: 1)) { context in

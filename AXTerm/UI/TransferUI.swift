@@ -42,6 +42,14 @@ final class TransferUIRouter: ObservableObject {
         return hasPendingSendFileRequest
     }
 
+    /// Whether the terminal is showing its Transfers tab, where the
+    /// transfer card would only repeat the row above it (park rehearsal
+    /// 2026-10-08).
+    @Published var terminalShowsTransfersTab = false
+
+    /// Whether the iPhone and iPad transfer card belongs on screen.
+    var showsTransferCard: Bool { !terminalShowsTransfersTab }
+
     /// Asks the terminal to show its Transfers tab (the transfer chip).
     @Published private(set) var showTransfersRequest = 0
     private(set) var hasPendingShowTransfersRequest = false
