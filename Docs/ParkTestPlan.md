@@ -88,10 +88,13 @@ run log can be built from both afterward.
 
 Fill in results either way, or both:
 
-- **The AXTerm Park Test form**: Mail › More (…) › Forms › AXTerm › AXTerm
-  Park Test. A pick list for each step and a notes box per section. Send it
-  to K0EPI-5 like any Winlink message (P8's steps). Plain text, so it is
-  small on the air.
+- **The AXTerm Park Test form**: on the iPad or iPhone, Mail › More (…) ›
+  Forms › AXTerm › AXTerm Park Test (on the Mac, the Forms button in Mail).
+  Type in the setup, then a pick list for each step and a notes box per
+  section. Send it to K0EPI-5 like any Winlink message (P8's steps). Plain
+  text, so it is small on the air. Position and grid fill in from GPS when
+  Settings › General › Station position › "This device's location" is on:
+  switch it on before you go.
 - **Park-Test.xlsx** in iCloud Drive › Ham Radio: the same steps as a
   spreadsheet. Sending it back by packet tests a real spreadsheet transfer
   (P6). Export as .xlsx if Numbers converted it.
