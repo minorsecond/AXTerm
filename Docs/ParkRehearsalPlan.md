@@ -14,7 +14,7 @@ each test runs.
 | Radio | IC-705 through Warbler (`localhost:50100`), low power | ID-50 on the Mobilinkd TNC4 over Bluetooth |
 | Callsign | K0EPI-2 (station, Winlink peer-to-peer), K0EPI-4 (mailbox) | K0EPI-3 |
 | Frequency | 145.650 FM, our test frequency | same |
-| Build | `b0868b31` (everything below except the Connect fix `ef448a00` and the photo library in Send File, which is iOS only) | `2680c8b8`, installed 2026-10-08 |
+| Build | `44ada7ba`, relaunched 2026-10-08 | `44ada7ba`, installed 2026-10-08 |
 
 The TNC4 talks to one device at a time. The phone runs R2 to R6 first; then
 the operator disconnects the phone in AXTerm and connects the iPad for R7 and
@@ -49,8 +49,9 @@ Who: **C** Claude, **Y** the operator, **C+Y** both.
 
 | # | Test | Who | Expect | Result |
 |---|---|---|---|---|
-| R1 | In A's BBS Files pane, select the area and Add Files: pick one phone photo (several MB) and one text file | Y picks, C checks | The text file goes in at once. A Photo Size sheet opens for the photo: the preview reads "As it will arrive", press and hold shows the original, sizes switch and the summary updates (size, pixels, airtime). Add puts it in at the chosen size; the original on disk is unchanged | |
-| R1b | Drag the same photo onto the area's file list from Finder | Y | The same sheet opens. Skip leaves the photo out and says nothing went in for it | |
+| R1 | In A's BBS Files pane, select the area and click Add Photos…: pick one camera photo from Photos | Y picks, C checks | The text file goes in at once. A Photo Size sheet opens for the photo: the preview reads "As it will arrive", press and hold shows the original, sizes switch and the summary updates (size, pixels, airtime). Add puts it in at the chosen size; the original on disk is unchanged | |
+| R1b | Add Files…: pick `~/Downloads/IMG_2820.HEIC` (4.9 MB, has a location) and a text file | Y | The text file goes in at once; the same sheet opens for the photo. Add it at Small; the copy in the area has no location | |
+| R1d | Drag another photo onto the area's file list from Finder | Y | The same sheet opens. Skip leaves the photo out and says nothing went in for it | |
 | R1c | The Files list for that area | C | Each file shows Size and On air; with no caller on the air, On air is at 90 B/s | |
 
 ### Phone
