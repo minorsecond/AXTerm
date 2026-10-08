@@ -278,3 +278,6 @@ The phone and iPad reinstalled on `6245acfa`.
 | 38 retest | pass | The finish banner showed at the bottom, clear of the tab bar (operator) |
 | 40 retest | pass | With the mailbox link closed first, the Winlink exchange with K0EPI-5 ran (operator) |
 | R8b | pass | The photo size panel fits on the iPad in both orientations, nothing clipped (operator) |
+| R9b | pass | The iPad sent t1k_bin.bin to K0EPI-2 by YAPP (19:08:59 to 19:09:20Z). A's banner read "t1k_bin.bin received from K0EPI-3"; its Transfers row reads "From K0EPI-3 · Oct 8, 2026 at 1:09 PM · 19:09 UTC" with Quick Look, Show in Finder and Open. One row, so no order to check |
+
+Warbler received SIGTERM at 19:00:53Z (not from this session) and launchd started it again; it was on the IC-705 over the LAN at 19:01:12Z after its Tailscale address went unanswered. A reconnected to Warbler by itself at 19:01:00Z. A Warbler restart costs A about 20 seconds and needs no help.
