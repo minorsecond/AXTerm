@@ -165,3 +165,19 @@ A (705) rebuilt on `bd9500ec` (pid 5110) and set up again: IC-705 through Warble
 | 33 | iPhone, AX.25 | The phone accepted that UA from K0EPI-2 for its call to K0EPI-4, switched the session's peer to K0EPI-2 and showed Connected. A UA from an address other than the one called is not an answer to that call. `W PARK` then went to K0EPI-4, which answered DM |
 
 Both need the operator's approval: they change AX.25 behavior.
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 32 | An inbound SABM that finds a record for the caller on another of our addresses replaces it when that link is down and is refused with DM from the called address while it is up | `3f6215ea` |
+| 33 | A UA is matched to a call by its full address; the callsign-only fallbacks in UA handling are gone | `3f6215ea` |
+
+| # | Where | Finding |
+|---|---|---|
+| 34 | iPhone, Session view | The history jumped up and down through every transmission: the outbound progress line and the transmit queue sat between it and the compose box and came and went with each frame |
+| 35 | Mailbox download | Barro tal vez v11.fcpxml (5 KB) was quoted at under a minute and took about 5 minutes: A sent one 63 or 64 byte frame per acknowledgment, about every 3.3 s (19 B/s), where the morning's downloads ran near 80 B/s. Suspected cause: A's adaptive link settings shrank the window and frame size after the 20 minutes the phone could not hear it. Not confirmed; A's adaptive log goes only to its console |
+| 36 | iPhone, Session view | "Barro tal vez v11.fcpxml sent." linked only "v11.fcpxml" |
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 34 | The outbound progress and the queue float over the foot of the history | `f8082ccd` |
+| 36 | Spaced names seen in a listing are linked whole wherever they appear again | `db3b8abc` |
