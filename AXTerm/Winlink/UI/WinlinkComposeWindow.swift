@@ -33,6 +33,8 @@ struct WinlinkComposeWindow: View {
     @State private var isPickingFile = false
     @State private var isPickingPhotos = false
     @State private var photoSelection: [PhotosPickerItem] = []
+    /// The photo whose size is being chosen (`PhotoSendPanel`).
+    @State private var sizingPhoto: WinlinkComposeViewModel.AttachmentItem?
     @State private var isTakingPhoto = false
     @State private var isDropTargeted = false
     /// Cancel asking what to do with what was typed, as Mail does.
@@ -131,6 +133,11 @@ struct WinlinkComposeWindow: View {
                       allowedContentTypes: [.item],
                       allowsMultipleSelection: true,
                       onCompletion: addPickedFiles)
+        .sheet(item: $sizingPhoto) { item in
+            WinlinkPhotoSizeSheet(item: item) { prepared in
+                viewModel.applyPhoto(id: item.id, prepared: prepared)
+            }
+        }
         .photosPicker(isPresented: $isPickingPhotos, selection: $photoSelection,
                       maxSelectionCount: 10, matching: .images,
                       preferredItemEncoding: .current)
@@ -297,7 +304,13 @@ struct WinlinkComposeWindow: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        // A photo opens its size and preview.
+        .onTapGesture { if item.isImage { sizingPhoto = item } }
         .contextMenu {
+            if item.isImage {
+                Button("Photo Size…") { sizingPhoto = item }
+            }
             if item.canSendOriginal {
                 Button("Send Original") { viewModel.sendOriginal(id: item.id) }
             }
@@ -532,10 +545,18 @@ struct WinlinkComposeWindow: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(viewModel.isOverBudget ? .red : .secondary)
+            // How long the message will be on the air at 1200 baud.
+            if total > 0 {
+                Text(AirtimeHint.short(bytes: total, measuredBytesPerSecond: nil))
+                    .fixedSize(horizontal: true, vertical: false)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Message size")
-        .accessibilityValue("\(Self.compactSize(total)) of \(Self.compactSize(budget))")
+        .accessibilityValue("\(Self.compactSize(total)) of \(Self.compactSize(budget)), "
+                            + AirtimeHint.short(bytes: total, measuredBytesPerSecond: nil))
         .explain(WinlinkCopy.attachmentBudgetTooltip, showsIndicator: false)
     }
 
@@ -673,5 +694,41 @@ struct WinlinkComposeWindow: View {
             await viewModel.addAttachments(loaded.files)
         }
         return true
+    }
+}
+
+/// A Winlink photo's size, chosen from its preview (`PhotoSendPanel`).
+/// JPEG only: the recipient may read the message in Winlink Express or a
+/// mail client that does not open HEIC.
+private struct WinlinkPhotoSizeSheet: View {
+    let item: WinlinkComposeViewModel.AttachmentItem
+    let onApply: (PhotoSendChoice.Prepared) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var prepared: PhotoSendChoice.Prepared?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                PhotoSendPanel(original: item.original?.data ?? item.data,
+                               name: item.original?.name ?? item.name,
+                               initialSize: item.isShrunk ? .medium : .original,
+                               prepared: $prepared)
+            }
+            .formStyle(.grouped)
+            .navigationTitle("Photo Size")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        if let prepared { onApply(prepared) }
+                        dismiss()
+                    }
+                    .disabled(prepared == nil)
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 460, minHeight: 520)
+        #endif
     }
 }

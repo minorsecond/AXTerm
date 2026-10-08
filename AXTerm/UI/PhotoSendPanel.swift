@@ -17,6 +17,8 @@ struct PhotoSendPanel: View {
     /// HEIC is offered only when the other end can be trusted to open it:
     /// another AXTerm.
     var offersHEIC: Bool = false
+    /// Where the size starts; nil starts at the suggestion for the link.
+    var initialSize: PhotoSendSize? = nil
     @Binding var prepared: PhotoSendChoice.Prepared?
 
     @State private var size: PhotoSendSize = .small
@@ -53,7 +55,7 @@ struct PhotoSendPanel: View {
             summary
         }
         .onAppear {
-            size = PhotoSendSize.suggested(bytesPerSecond: measuredBytesPerSecond)
+            size = initialSize ?? PhotoSendSize.suggested(bytesPerSecond: measuredBytesPerSecond)
         }
         .task {
             let data = original

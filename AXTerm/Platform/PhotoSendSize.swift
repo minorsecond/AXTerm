@@ -64,6 +64,15 @@ nonisolated struct AirtimeHint: Equatable, Sendable {
     /// frames, acknowledgments and turnarounds are paid for.
     static let typicalBytesPerSecond: Double = 60
 
+    /// A few characters for a footer: "~10 min on air".
+    static func short(bytes: Int, measuredBytesPerSecond: Double?) -> String {
+        let seconds = Double(bytes) / (measuredBytesPerSecond ?? typicalBytesPerSecond)
+        if seconds < 60 { return "<1 min on air" }
+        let minutes = Int((seconds / 60).rounded())
+        if minutes < 60 { return "~\(minutes) min on air" }
+        return "~\(minutes / 60) h \(minutes % 60) min on air"
+    }
+
     static func make(bytes: Int, measuredBytesPerSecond: Double?, peer: String?) -> AirtimeHint? {
         let rate = measuredBytesPerSecond ?? typicalBytesPerSecond
         guard let seconds = TransferAirtimeEstimate.seconds(bytes: bytes, bytesPerSecond: rate) else { return nil }

@@ -359,6 +359,25 @@ final class WinlinkComposeViewModel: ObservableObject {
         attachments.append(item)
     }
 
+    /// A photo at the size the operator picked from its preview
+    /// (`PhotoSendPanel`). The original stays with it for Send Original.
+    func applyPhoto(id: UUID, prepared: PhotoSendChoice.Prepared) {
+        guard let index = attachments.firstIndex(where: { $0.id == id }) else { return }
+        let item = attachments[index]
+        let source = item.original ?? (name: item.name, data: item.data)
+        var replacement: AttachmentItem
+        if prepared.isOriginal {
+            replacement = AttachmentItem(name: source.name, data: source.data, note: prepared.note)
+        } else {
+            replacement = AttachmentItem(
+                name: prepared.name, data: prepared.data, original: source,
+                change: .shrunk(pixelWidth: prepared.pixelWidth, pixelHeight: prepared.pixelHeight))
+        }
+        replacement.id = id
+        replacement.name = ComposeAttachmentIntake.uniqueName(replacement.name, existing: names(except: index))
+        attachments[index] = replacement
+    }
+
     /// Puts back the exact file the operator attached: unzipped, unshrunk,
     /// location and all.
     func sendOriginal(id: UUID) {
@@ -425,16 +444,17 @@ final class WinlinkComposeViewModel: ObservableObject {
 nonisolated enum ComposeAttachmentPlanner {
 
     /// The size a shrunk photo aims for when the message has room for more.
-    /// About five minutes at 1200 baud, and enough for a 1024-pixel photo a
-    /// recipient can actually read.
-    static let photoTargetBytes = 48 * 1024
+    /// The medium size (`PhotoSendSize`): about seven minutes at 1200 baud,
+    /// and a 1024-pixel photo a recipient can actually read. It was 48 KB,
+    /// a quarter of an hour on a VHF packet link (operator, 2026-10-07).
+    static let photoTargetBytes = PhotoSendSize.medium.byteBudget!
 
     /// Below this there is no room for a photo worth sending, and shrinking
     /// is not attempted.
     static let minimumPhotoBytes = 6 * 1024
 
     /// The longest edge a shrunk photo starts from.
-    static let photoMaxLongEdge = 1280
+    static let photoMaxLongEdge = PhotoSendSize.medium.maxLongEdge
 
     static func plan(name: String, data: Data, remainingBudget: Int, keepsLocation: Bool,
                      forceShrink: Bool = false) -> WinlinkComposeViewModel.AttachmentItem {
