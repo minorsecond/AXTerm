@@ -2991,31 +2991,12 @@ struct TerminalView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
+                // The outbound progress and the queue float over the foot of
+                // the history. In the stack they came and went with each frame
+                // sent, and the history jumped up and down every time (park
+                // rehearsal 2026-10-08, finding 34).
                 sessionOutputView
-
-                // Outbound progress (sender: pending → sent → acked highlighting)
-                if let progress = txViewModel.currentOutboundProgress {
-                    OutboundProgressView(progress: progress, sourceCall: txViewModel.viewModel.sourceCall)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .bottom).combined(with: .opacity),
-                            removal: .opacity
-                        ))
-                }
-
-                // TX Queue, while something is still going out (issue 106)
-                if TxQueuePresentation.isVisible(statuses: txViewModel.queueEntries.map(\.state.status)) {
-                    TxQueueView(
-                        entries: txViewModel.queueEntries,
-                    onCancel: { frameId in
-                        txViewModel.cancelFrame(frameId)
-                    },
-                    onClearCompleted: {
-                        txViewModel.clearCompleted()
-                    }
-                )
-            }
+                    .overlay(alignment: .bottom) { transmitStatusOverlay }
 
             // Compose area
             TerminalComposeView(
@@ -3271,6 +3252,37 @@ struct TerminalView: View {
     #else
     static let sessionReadsAsConversation = false
     #endif
+
+    /// What is going out now, drawn over the bottom of the history.
+    @ViewBuilder
+    private var transmitStatusOverlay: some View {
+        let progress = txViewModel.currentOutboundProgress
+        let showsQueue = TxQueuePresentation.isVisible(statuses: txViewModel.queueEntries.map(\.state.status))
+        if progress != nil || showsQueue {
+            VStack(spacing: 0) {
+                // Outbound progress (sender: pending → sent → acked highlighting)
+                if let progress {
+                    OutboundProgressView(progress: progress, sourceCall: txViewModel.viewModel.sourceCall)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                }
+                // TX Queue, while something is still going out (issue 106)
+                if showsQueue {
+                    TxQueueView(
+                        entries: txViewModel.queueEntries,
+                        onCancel: { frameId in
+                            txViewModel.cancelFrame(frameId)
+                        },
+                        onClearCompleted: {
+                            txViewModel.clearCompleted()
+                        }
+                    )
+                }
+            }
+            .background(.bar)
+            .transition(.opacity)
+        }
+    }
 
     @ViewBuilder
     private var sessionOutputView: some View {
