@@ -72,3 +72,33 @@ its settings on every launch).
 
 A (705) rebuilt on `a3826d01` (pid 59571) and set up again: IC-705 over Warbler, K0EPI-2, Direwolf off, mailbox K0EPI-4 answering, Winlink K0EPI-5 answering. The phone and iPad reinstalled on `a3826d01`.
 
+## Retest after the fixes (2026-10-08, from 13:13Z)
+
+| # | Result | Notes |
+|---|---|---|
+| Fixes 1–3 | pass | Password row: the cursor was in the field, Return saved, and A connected without leaving the page |
+| R2 | pass | `W PARK` from a caller new to A went straight to the listing (fix 8); one block on the phone, long names on their own lines (fixes 10, 11) |
+| R3 | **fail (new cause)** | `D IMG_2820.jpg` from 13:24:29Z. A's row: "2K of 24K · 7% · YAPP · 0:43 · about 9 min left" (fix 17); the phone's card "3 KB of 24 KB · about 7 min left" (fix 14); TX without the line moving (fix 15) |
+
+## More findings
+
+| # | Where | Finding |
+|---|---|---|
+| 19 | AX.25 links | A holds one link per station, keyed by the caller alone: while the phone's link to K0EPI-2 was up (13:13:48Z), its calls to K0EPI-4 got DM (issue 89's rule). The phone is told nothing about why. Holding a link per address pair is an AX.25 change and needs the operator's approval |
+| 20 | Mac, mailbox | The mailbox records why it refused a call (`lastRefusal`), but nothing shows it |
+| 21 | iPhone, Transfers tab | The transfer card repeats the row on the Transfers tab; hide it there |
+| 22 | iPhone, terminal | The hide-keyboard button (keyboard icon beside Send) was not found; consider a labeled button |
+| 23 | **Mailbox idle timeout, blocks the park test** | The mailbox hung up at 13:29:41Z, five minutes into the download, with the phone acknowledging every frame: its idle timeout counted only bytes from the caller, and a caller receiving a download sends none. It also typed its goodbye into the YAPP stream. Stopgap for the run: idle timeout set to 30 minutes on A |
+| 24 | **Winlink reply waits** | Found looking for the same pattern across the app: the B2F engine arms its two-minute reply timer as soon as our messages are handed to the link, stretched only by an assumed 50 B/s. A 25 KB photo message on this link would have failed R7 |
+
+## More fixes (test first; 9,103 macOS tests pass, iOS builds)
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 23 | The mailbox's idle timeout waits while a transfer runs and restarts when it ends; acknowledgments still do not count | `901612fb` |
+| 24 | Winlink's reply waits start once our bytes are delivered | `e25a2b27` |
+| 21 | The transfer card hides over the terminal's Transfers tab | `f544930a` |
+| 22 | The hide-keyboard button reads Done | `43345ab6` |
+
+AXDP needed no change: it feeds chunks on acknowledgments and counts each acknowledged chunk as progress (R4's five-minute transfer finished). The terminal's YAPP was already paced. The iPad has these; the phone was locked; A (705) still runs `a3826d01` and gets them at its next rebuild.
+
