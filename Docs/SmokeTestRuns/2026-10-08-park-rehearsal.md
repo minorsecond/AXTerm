@@ -124,3 +124,11 @@ On a fresh call `W PARK` quoted IMG_2820.jpg at 7m, so the download's rate was r
 
 The phone and iPad reinstalled with everything through `07e9f712`.
 
+| Finding | Fix | Commit |
+|---|---|---|
+| 25 | A received file brings up a banner with Open and Share (Show in Finder on the Mac); the notification carries the file | `08bd971f` |
+| 19 | A refused connect says when a link to another SSID of the same station is up. Holding a link per address pair stays as the spec has it: 86 places look links up by caller, too wide a change before the park test | `7a32c911` |
+| 6 | Radio page and Packet Node fold their rarer sections under a closed Advanced row (operator's choice) | `d2f9c244` |
+
+A (705) rebuilt on `d2f9c244` (pid 87465), set up again (IC-705 K0EPI-2, Direwolf off, mailbox K0EPI-4 answering, Winlink K0EPI-5 answering, idle timeout back to its default 5 minutes, which now waits during transfers). The radio page shows the closed Advanced row. The phone and iPad reinstalled on `d2f9c244`.
+
