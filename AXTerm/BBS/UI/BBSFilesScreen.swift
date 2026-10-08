@@ -7,6 +7,7 @@
 
 #if os(iOS)
 import SwiftUI
+import PhotosUI
 import UniformTypeIdentifiers
 
 /// Shared areas, and the upload switch beside the folder it fills.
@@ -317,6 +318,8 @@ struct BBSFileListScreen: View {
     @State private var addMessage: String?
     /// Photos waiting for the operator to pick their size.
     @State private var sizingPhotos: [BBSPendingPhoto] = []
+    @State private var isPickingPhotos = false
+    @State private var photoSelection: [PhotosPickerItem] = []
     @State private var dropTargeted = false
 
     private var files: [BBSSharedFile] {
@@ -400,10 +403,21 @@ struct BBSFileListScreen: View {
         .toolbar {
             if let area, !isMissing {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        picker.begin(.addFiles(area: area))
+                    // Photos from the library or files from Files
+                    // (operator, 2026-10-08).
+                    Menu {
+                        Button {
+                            isPickingPhotos = true
+                        } label: {
+                            Label("Photo Library", systemImage: "photo.on.rectangle")
+                        }
+                        Button {
+                            picker.begin(.addFiles(area: area))
+                        } label: {
+                            Label("Files", systemImage: "folder")
+                        }
                     } label: {
-                        Label("Add Files", systemImage: "plus")
+                        Label("Add", systemImage: "plus")
                     }
                 }
             }
@@ -433,6 +447,18 @@ struct BBSFileListScreen: View {
                 let lines = [addMessage, BBSAddFilesSummary.message(for: outcomes, area: area)].compactMap { $0 }
                 addMessage = lines.isEmpty ? nil : lines.joined(separator: "\n")
                 sizingPhotos = []
+            }
+        }
+        .photosPicker(isPresented: $isPickingPhotos, selection: $photoSelection,
+                      maxSelectionCount: 20, matching: .images, preferredItemEncoding: .current)
+        .onChange(of: photoSelection) { _, items in
+            guard !items.isEmpty, let area else { return }
+            photoSelection = []
+            Task {
+                let loaded = await BBSLibraryPhotos.load(items)
+                let result = BBSPhotoIntake.addFromLibrary(loaded, to: area, library: library)
+                addMessage = BBSAddFilesSummary.message(for: result.outcomes, area: area)
+                sizingPhotos = result.waiting
             }
         }
         .navigationTitle(area ?? "Files")

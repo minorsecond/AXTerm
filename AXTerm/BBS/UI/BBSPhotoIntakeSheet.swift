@@ -4,6 +4,8 @@
 //
 
 import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
 
 /// Sizes photos on their way into a BBS area, one at a time, with the same
 /// preview Send File uses: what callers will download, and how long it holds
@@ -71,5 +73,17 @@ struct BBSPhotoIntakeSheet: View {
         } else {
             finish(outcomes)
         }
+    }
+}
+
+/// Loads photos picked from the library, as their original bytes (HEIC from
+/// an iPhone camera), for `BBSPhotoIntake.addFromLibrary`.
+enum BBSLibraryPhotos {
+    static func load(_ items: [PhotosPickerItem]) async -> [(data: Data?, contentType: UTType?)] {
+        var loaded: [(data: Data?, contentType: UTType?)] = []
+        for item in items {
+            loaded.append((try? await item.loadTransferable(type: Data.self), item.supportedContentTypes.first))
+        }
+        return loaded
     }
 }

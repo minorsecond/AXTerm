@@ -10,6 +10,7 @@
 
 import XCTest
 import GRDB
+import UniformTypeIdentifiers
 @testable import AXTerm
 
 @MainActor
@@ -105,5 +106,29 @@ final class BBSPhotoIntakeTests: XCTestCase {
 
         XCTAssertEqual(photos.map(\.name), ["IMG_3.jpg"])
         XCTAssertTrue(library.index.files(in: "OPS").isEmpty)
+    }
+
+    // MARK: - From the photo library (operator, 2026-10-08: "shouldn't we
+    // have an add photos button too, that opens the macos photo picker?")
+
+    func testALibraryPhotoWaitsForItsSizeUnderAPickedName() throws {
+        let area = try folder("ops")
+        library.addArea(name: "OPS", about: "", url: area)
+        let small = try XCTUnwrap(SyntheticPhoto.data(width: 60, height: 60, seed: 2))
+        // 2026-10-08 14:42:10 UTC, 08:42:10 in Denver.
+        let when = Date(timeIntervalSince1970: 1_791_470_530)
+
+        let result = BBSPhotoIntake.addFromLibrary([(Self.photo, .heic), (small, .png), (nil, .jpeg)],
+                                                   to: "OPS", library: library, at: when,
+                                                   timeZone: TimeZone(identifier: "America/Denver")!)
+
+        XCTAssertEqual(result.waiting.map(\.name), ["Photo-20261008-084210-1.heic"])
+        XCTAssertEqual(result.waiting.first?.data, Self.photo)
+        XCTAssertEqual(result.waiting.first?.area, "OPS")
+        XCTAssertEqual(result.outcomes, [
+            .added(name: "Photo-20261008-084210-2.png"),
+            .refused(name: "Photo-20261008-084210-3.jpeg", reason: "it could not be read"),
+        ], "a photo already smaller than Small goes straight in, as from Files")
+        XCTAssertEqual(library.index.files(in: "OPS").map(\.name), ["Photo-20261008-084210-2.png"])
     }
 }

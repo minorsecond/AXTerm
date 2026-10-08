@@ -137,6 +137,34 @@ nonisolated enum BBSPhotoIntake {
         return BBSPendingPhoto(name: url.lastPathComponent, data: data, area: area)
     }
 
+    /// Photos picked from the photo library for an area (operator,
+    /// 2026-10-08). They arrive as bytes with no name, so each is named for
+    /// when it was picked (`PickedPhotos.name`). Then the same rule as from
+    /// Files: one bigger than Small waits for its size, a smaller one goes
+    /// straight in, and one whose bytes did not load is said so.
+    @MainActor
+    static func addFromLibrary(_ photos: [(data: Data?, contentType: UTType?)], to area: String,
+                               library: BBSFileLibrary, at date: Date = Date(),
+                               timeZone: TimeZone = .current)
+        -> (waiting: [BBSPendingPhoto], outcomes: [BBSFileLibrary.AddOutcome]) {
+        var waiting: [BBSPendingPhoto] = []
+        var outcomes: [BBSFileLibrary.AddOutcome] = []
+        for (index, photo) in photos.enumerated() {
+            let name = PickedPhotos.name(index: index, of: photos.count, contentType: photo.contentType,
+                                         at: date, timeZone: timeZone)
+            guard let data = photo.data else {
+                outcomes.append(.refused(name: name, reason: "it could not be read"))
+                continue
+            }
+            if wantsSizing(name: name, byteCount: data.count), ImageShrinker.isImage(data) {
+                waiting.append(BBSPendingPhoto(name: name, data: data, area: area))
+            } else {
+                outcomes.append(library.addFile(named: name, data: data, to: area))
+            }
+        }
+        return (waiting, outcomes)
+    }
+
     /// Puts the photo in its area as the operator chose it.
     @MainActor
     static func add(_ photo: BBSPendingPhoto, as prepared: PhotoSendChoice.Prepared,

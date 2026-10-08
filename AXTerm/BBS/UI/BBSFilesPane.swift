@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import PhotosUI
 import UniformTypeIdentifiers
 
 // The Mac pane. The iOS screens are BBSAreaListScreen and BBSFileListScreen;
@@ -36,6 +37,9 @@ struct BBSFilesPane: View {
     @State private var dropTargeted = false
     /// Photos waiting for the operator to pick their size.
     @State private var sizingPhotos: [BBSPendingPhoto] = []
+    /// The area photos from the library go into, while the picker is up.
+    @State private var photoArea: String?
+    @State private var photoSelection: [PhotosPickerItem] = []
 
     var body: some View {
         HSplitView {
@@ -63,6 +67,16 @@ struct BBSFilesPane: View {
                                     set: { if !$0 { sizingPhotos = [] } })) {
             photoSizeSheet
         }
+        .photosPicker(isPresented: Binding(get: { photoArea != nil },
+                                           set: { if !$0 && photoSelection.isEmpty { photoArea = nil } }),
+                      selection: $photoSelection, maxSelectionCount: 20, matching: .images,
+                      preferredItemEncoding: .current)
+        .onChange(of: photoSelection) { _, items in
+            guard !items.isEmpty, let area = photoArea else { return }
+            photoSelection = []
+            photoArea = nil
+            Task { await addLibraryPhotos(items, to: area) }
+        }
         .sheet(item: $editing) { file in
             descriptionSheet(file)
         }
@@ -70,6 +84,15 @@ struct BBSFilesPane: View {
                                     set: { if !$0 { pendingURL = nil } })) {
             newAreaSheet
         }
+    }
+
+    /// Photos from the library: small ones go straight in, the rest wait
+    /// for their size in the same sheet as photos from Files.
+    private func addLibraryPhotos(_ items: [PhotosPickerItem], to area: String) async {
+        let loaded = await BBSLibraryPhotos.load(items)
+        let result = BBSPhotoIntake.addFromLibrary(loaded, to: area, library: library)
+        addMessage = BBSAddFilesSummary.message(for: result.outcomes, area: area)
+        sizingPhotos = result.waiting
     }
 
     private var photoSizeSheet: some View {
@@ -144,6 +167,9 @@ struct BBSFilesPane: View {
                         if !missing {
                             Button("Add Files to \(area.name)…") {
                                 picker.begin(.addFiles(area: area.name))
+                            }
+                            Button("Add Photos to \(area.name)…") {
+                                photoArea = area.name
                             }
                         }
                         Button("Choose Folder Again…") {
@@ -320,6 +346,13 @@ struct BBSFilesPane: View {
                     Label("Add Files…", systemImage: "doc.badge.plus")
                 }
                 .disabled(addableArea == nil)
+                Button {
+                    photoArea = addableArea
+                } label: {
+                    Label("Add Photos…", systemImage: "photo.badge.plus")
+                }
+                .disabled(addableArea == nil)
+                .help("Choose photos from your Photos library. Each is sized before callers see it.")
                 Text(addableArea.map { "Copies files into \($0)'s folder. You can also drop them here." }
                      ?? "Select an area to add files to it.")
                     .font(.caption)
