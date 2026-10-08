@@ -5343,8 +5343,13 @@ struct TerminalView: View {
         DispatchQueue.main.async { presentNextOutgoing() }
     }
 
-    private func startTransfer(destination: String, path: String, transferProtocol: TransferProtocolType = .axdp, compressionSettings: TransferCompressionSettings = .useGlobal) {
-        guard let url = selectedFileURL else { return }
+    private func startTransfer(destination: String, path: String, transferProtocol: TransferProtocolType = .axdp,
+                               compressionSettings: TransferCompressionSettings = .useGlobal,
+                               replacement: URL? = nil) {
+        guard let picked = selectedFileURL else { return }
+        // A photo shrunk in the sheet goes instead; the picked copy is done with.
+        let url = replacement ?? picked
+        if replacement != nil { OutgoingFileStaging.discard(picked) }
         let digiPath = path.isEmpty ? DigiPath() : DigiPath.from(path.split(separator: ",").map { String($0.trimmingCharacters(in: .whitespaces)) })
 
         // The staged copy is the transfer's now: the sheet closing would
@@ -5379,7 +5384,7 @@ struct TerminalViewModifiers: ViewModifier {
     let txViewModel: ObservableTerminalTxViewModel
 
     let handleFileDrop: ([NSItemProvider]) -> Bool
-    let startTransfer: (String, String, TransferProtocolType, TransferCompressionSettings) -> Void
+    let startTransfer: (String, String, TransferProtocolType, TransferCompressionSettings, URL?) -> Void
     let onSendSheetDismissed: () -> Void
     let wireCallbacks: () -> Void
 
@@ -5395,8 +5400,8 @@ struct TerminalViewModifiers: ViewModifier {
                     isPresented: $showingTransferSheet,
                     selectedFileURL: selectedFileURL,
                     connectedSessions: sessionCoordinator.connectedSessions,
-                    onSend: { destination, path, transferProtocol, compressionSettings in
-                        startTransfer(destination, path, transferProtocol, compressionSettings)
+                    onSend: { destination, path, transferProtocol, compressionSettings, replacement in
+                        startTransfer(destination, path, transferProtocol, compressionSettings, replacement)
                     },
                     checkCapability: { callsign in
                         sessionCoordinator.capabilityStatus(for: callsign)
@@ -5406,6 +5411,9 @@ struct TerminalViewModifiers: ViewModifier {
                     },
                     requestCapabilityCheck: { callsign in
                         sessionCoordinator.requestCapabilityCheck(for: callsign)
+                    },
+                    measuredRate: { callsign in
+                        sessionCoordinator.measuredTransferRates[callsign.uppercased()]
                     }
                 )
             }

@@ -53,7 +53,7 @@ final class TransferSheetHostingTests: XCTestCase {
 
     func testTheSendSheetKeepsItsMacSize() throws {
         let sheet = SendFileSheet(isPresented: .constant(true), selectedFileURL: nil, connectedSessions: [],
-                                  onSend: { _, _, _, _ in })
+                                  onSend: { _, _, _, _, _ in })
         let (window, hosting) = host(sheet)
         defer { window.close() }
         spin(0.3)
@@ -76,7 +76,7 @@ final class TransferSheetHostingTests: XCTestCase {
         let start = Date()
 
         let send = host(SendFileSheet(isPresented: .constant(true), selectedFileURL: nil, connectedSessions: [],
-                                      onSend: { _, _, _, _ in }))
+                                      onSend: { _, _, _, _, _ in }))
         let offer = host(IncomingTransferSheet(isPresented: .constant(true), request: request(protocol: .yapp),
                                                onAccept: {}, onDecline: {}, onAlwaysAccept: {}, onAlwaysDeny: {}))
 

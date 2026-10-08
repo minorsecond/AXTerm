@@ -307,6 +307,22 @@ nonisolated enum OutgoingFileStaging {
         }
     }
 
+    /// Writes `data` to a folder of its own under `folder` as `name`: a photo
+    /// shrunk for sending, staged like any picked file.
+    static func stage(data: Data, name: String) throws -> URL {
+        let fileName = ReceivedFileStore.sanitize(name)
+        let holder = folder.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: holder, withIntermediateDirectories: true)
+            let target = holder.appendingPathComponent(fileName)
+            try data.write(to: target)
+            return target
+        } catch {
+            try? FileManager.default.removeItem(at: holder)
+            throw StagingError.unreadable(fileName, error.localizedDescription)
+        }
+    }
+
     /// Removes a staged copy. Files outside the staging folder are left alone.
     static func discard(_ url: URL) {
         let holder = url.deletingLastPathComponent()

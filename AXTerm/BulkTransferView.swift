@@ -893,7 +893,10 @@ struct SendFileSheet: View {
     @Binding var isPresented: Bool
     let selectedFileURL: URL?
     let connectedSessions: [AX25Session]
-    let onSend: (String, String, TransferProtocolType, TransferCompressionSettings) -> Void
+    /// Destination, path, protocol, compression, and the file to send in
+    /// place of the picked one: a photo shrunk to the size the operator
+    /// chose, or nil to send the file as picked.
+    let onSend: (String, String, TransferProtocolType, TransferCompressionSettings, URL?) -> Void
 
     /// Optional closure to check AXDP capability status for a callsign
     var checkCapability: ((String) -> SessionCoordinator.CapabilityStatus)?
@@ -903,8 +906,14 @@ struct SendFileSheet: View {
 
     /// Optional closure to start an AXDP check for a station nobody has asked yet
     var requestCapabilityCheck: ((String) -> Void)?
+    /// The rate of the last transfer with a station, for the airtime.
+    var measuredRate: ((String) -> Double?)?
 
     @State private var selectedSessionIndex: Int = 0
+    /// The picked file's bytes, when it is a photo (`PhotoSendPanel`).
+    @State private var photoData: Data?
+    @State private var preparedPhoto: PhotoSendChoice.Prepared?
+    @State private var sendError: String?
     @State private var compressibilityAnalysis: CompressibilityAnalysis?
     @State private var compressionMode: CompressionMode = .useGlobal
     @State private var selectedAlgorithm: AXDPCompression.Algorithm = .lz4
@@ -951,9 +960,31 @@ struct SendFileSheet: View {
                 // File info section
                 if let url = selectedFileURL {
                     Section {
-                        fileInfoContent(url)
+                        if let photoData {
+                            Text(url.lastPathComponent)
+                                .font(.headline)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            PhotoSendPanel(original: photoData, name: url.lastPathComponent,
+                                           measuredBytesPerSecond: selectedRate,
+                                           peer: selectedCallsign,
+                                           offersHEIC: selectedPeerIsAXTerm,
+                                           prepared: $preparedPhoto)
+                        } else {
+                            fileInfoContent(url)
+                            if let size = fileSize(url),
+                               let hint = AirtimeHint.make(bytes: size, measuredBytesPerSecond: selectedRate,
+                                                           peer: selectedCallsign) {
+                                Label(hint.text.prefix(1).uppercased() + hint.text.dropFirst(), systemImage: "clock")
+                                    .font(.callout)
+                                    .foregroundStyle(hint.seconds > 20 * 60 ? .orange : .secondary)
+                            }
+                        }
+                        if let sendError {
+                            Text(sendError).font(.callout).foregroundStyle(.red)
+                        }
                     } header: {
-                        Text("File")
+                        Text(photoData == nil ? "File" : "Photo")
                     }
                 }
 
@@ -994,7 +1025,20 @@ struct SendFileSheet: View {
 
                 Button("Send") {
                     if let session = connectedSessions[safe: selectedSessionIndex] {
-                        onSend(session.remoteAddress.display, session.path.display, selectedProtocol, compressionSettings)
+                        // A photo shrunk to the chosen size goes in place of
+                        // the picked file.
+                        var replacement: URL?
+                        if let preparedPhoto, !preparedPhoto.isOriginal {
+                            do {
+                                replacement = try OutgoingFileStaging.stage(data: preparedPhoto.data,
+                                                                            name: preparedPhoto.name)
+                            } catch {
+                                sendError = error.localizedDescription
+                                return
+                            }
+                        }
+                        onSend(session.remoteAddress.display, session.path.display, selectedProtocol,
+                               compressionSettings, replacement)
                     }
                     isPresented = false
                 }
@@ -1011,9 +1055,29 @@ struct SendFileSheet: View {
             analyzeFile()
             requestCheckForSelectedStation()
         }
+        .task {
+            guard let url = selectedFileURL, ImageShrinker.isImage(named: url.lastPathComponent) else { return }
+            let data = await Task.detached { try? Data(contentsOf: url) }.value
+            if let data, ImageShrinker.isImage(data) { photoData = data }
+        }
         .onChange(of: selectedSessionIndex) { _, _ in
             requestCheckForSelectedStation()
         }
+    }
+
+    private var selectedCallsign: String? {
+        connectedSessions[safe: selectedSessionIndex]?.remoteAddress.display
+    }
+
+    private var selectedRate: Double? {
+        selectedCallsign.flatMap { measuredRate?($0) }
+    }
+
+    /// The other end has answered AXDP, so it is AXTerm and opens HEIC.
+    private var selectedPeerIsAXTerm: Bool {
+        guard let callsign = selectedCallsign, let check = checkCapability else { return false }
+        if case .confirmed = check(callsign) { return true }
+        return false
     }
 
     /// Ask the selected station about AXDP if nobody has, so the badge does
