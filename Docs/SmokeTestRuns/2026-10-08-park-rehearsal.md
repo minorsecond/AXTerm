@@ -247,3 +247,26 @@ The phone was slow to the point of unusable on the build with fixes 31 to 36: fi
 | R8 | pass (run on the phone) | Sent folder rows show the time with the UTC time under it; the sort menu by the search field sorts by Date, Correspondent, Subject and Size both ways, and stays set after leaving Mail (operator) |
 | R9 | pass | A's Winlink Inbox shows Date in local time ("Oct 8, 2026 at 11:46 AM") and a UTC column ("17:46 UTC"). Clicking the Size header made it the sort column and clicking Date toggled it between ascending and descending. With one message the order itself could not change, and the sort menu's label is withheld from the background tools, so its agreement with the header was not read |
 | R9b, R9c, R9d | not run | A's Transfers, BBS messages and APRS lists were empty: test mode started A fresh at 17:22Z and none had arrived since. Sorting and the local and UTC times are covered by ListSortTests, TransferListSortTests, BBSMessageSortTests and APRSThreadSortTests |
+
+## iPad checks (from 18:12Z)
+
+| # | Result | Notes |
+|---|---|---|
+| iPad connect, W PARK, links | pass | Names linked, the long spaced name whole; tapping filled the command |
+| iPad download | pass, with finding 38 | Photo-20261008-052732.jpg downloaded; its banner sat under the floating tab bar |
+| iPad history while sending | finding 39 | The floating send panel covered the last lines and made the history jump |
+| iPad Winlink to K0EPI-5 | refused, finding 40 | The iPad still held its K0EPI-4 mailbox link (last frame 18:20:11Z, no DISC); A refused K0EPI-5 with DM at 18:21:55Z, one link per caller (19). Mail said only "refused the connection" |
+
+| # | Where | Finding |
+|---|---|---|
+| 38 | iPad | The received-file banner draws under the floating tab bar |
+| 39 | iPhone, iPad, Mac, Session view | The send panel from fix 34 covers the last lines and comes and goes with each send |
+| 40 | Winlink exchange | A refusal says nothing of the link to the same station still up |
+
+| Finding | Fix | Commit |
+|---|---|---|
+| 38 | A wide screen shows the banner at the bottom, where the transfer card was; the iPhone and Mac keep it at the top | `9133aa24` |
+| 40 | A Winlink refusal names a live link to the same station and says to disconnect from it first | `c2ea4be6` |
+| 39 | The message going out is drawn in the history: dimmed while waiting, then "Sending", then "Delivered" until the next line (operator's choice of layout) | `6245acfa` |
+
+The phone and iPad reinstalled on `6245acfa`.
