@@ -216,6 +216,15 @@ struct BulkTransferRow: View {
                 }
             }
 
+            // Who and when, in local time and UTC (operator, 2026-10-07).
+            if let time = TransferRowTime.line(transfer) {
+                Text(time)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .help(TransferRowTime.time(of: transfer).map { DualTime.help($0) } ?? "")
+            }
+
             // Expanded details panel
             if showDetails {
                 transferDetailsView
@@ -470,10 +479,7 @@ struct BulkTransferRow: View {
     }
 
     private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .medium
-        formatter.dateStyle = .none
-        return formatter.string(from: date)
+        DualTime.line(date)
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
@@ -685,6 +691,7 @@ struct BulkTransferListView: View {
     let onAddFile: () -> Void
     var onAcceptIncoming: ((UUID) -> Void)?
     var onDeclineIncoming: ((UUID) -> Void)?
+    @AppStorage("transfers.sort") private var sort = ListSort.natural(TransferSortKey.date)
 
     /// Offers waiting for this operator, shown with Accept and Decline so
     /// one that was swiped away, or arrived while the prompt showed another,
@@ -708,6 +715,11 @@ struct BulkTransferListView: View {
                     .font(.headline)
 
                 Spacer()
+
+                if visibleTransfers.count > 1 {
+                    ListSortMenu(sort: $sort)
+                        .buttonStyle(.borderless)
+                }
 
                 if !completedTransfers.isEmpty {
                     Button("Clear Finished") {
@@ -813,7 +825,7 @@ struct BulkTransferListView: View {
     }
 
     private var activeTransfers: [BulkTransfer] {
-        visibleTransfers.filter { transfer in
+        sort.apply(visibleTransfers).filter { transfer in
             switch transfer.status {
             case .pending, .awaitingAcceptance, .sending, .paused, .awaitingCompletion:
                 return true
@@ -824,7 +836,7 @@ struct BulkTransferListView: View {
     }
 
     private var completedTransfers: [BulkTransfer] {
-        visibleTransfers.filter { transfer in
+        sort.apply(visibleTransfers).filter { transfer in
             switch transfer.status {
             case .completed, .cancelled, .failed:
                 return true

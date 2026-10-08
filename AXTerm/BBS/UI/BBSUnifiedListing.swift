@@ -65,8 +65,9 @@ nonisolated enum BBSUnifiedListing {
                                 remote: [BBSMessagePayload],
                                 showsOtherInstances: Bool,
                                 filter: BBSMessageFilter,
-                                sysop: String) -> [Section<MessageRow>] {
-        let localRows = BBSMessageList.visible(local, filter: filter, sysop: sysop)
+                                sysop: String,
+                                sort: ListSort<BBSMessageSortKey> = .natural(.date)) -> [Section<MessageRow>] {
+        let localRows = BBSMessageList.visible(local, filter: filter, sysop: sysop, sort: sort)
             .map { MessageRow(id: "local|\($0.id)", message: $0, origin: .thisMailbox) }
 
         var remoteSections: [Section<MessageRow>] = []
@@ -78,7 +79,8 @@ nonisolated enum BBSUnifiedListing {
                                               deviceID: deviceID, deviceName: newest.deviceName,
                                               gridSquare: newest.provenance.gridSquare)
                     let byID = Dictionary(payloads.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
-                    let rows = BBSMessageList.visible(payloads.map(\.message), filter: filter, sysop: sysop)
+                    let rows = BBSMessageList.visible(payloads.map(\.message), filter: filter, sysop: sysop,
+                                                          sort: sort)
                         .map { message in
                             MessageRow(id: "\(deviceID)|\(message.id)", message: message,
                                        origin: .otherMailbox(byID[message.id].map { _ in origin } ?? origin))

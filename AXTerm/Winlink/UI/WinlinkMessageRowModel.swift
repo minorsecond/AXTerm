@@ -15,6 +15,8 @@ nonisolated struct WinlinkMessageRowModel: Equatable {
     var subjectIsPlaceholder: Bool
     /// Mail-client date: time today, "Yesterday", "Aug 24", "8/24/25".
     var dateLabel: String
+    /// The same moment in UTC, "20:41 UTC", for logs and other stations.
+    var utcLabel: String
     var sizeLabel: String
     var showsAttachmentIndicator: Bool
     var isUnread: Bool
@@ -31,6 +33,7 @@ nonisolated struct WinlinkMessageRowModel: Equatable {
             subject: summary.subject.isEmpty ? "(no subject)" : summary.subject,
             subjectIsPlaceholder: summary.subject.isEmpty,
             dateLabel: dateLabel(summary.date, now: now, calendar: calendar),
+            utcLabel: DualTime.utc(summary.date, localTimeZone: calendar.timeZone),
             sizeLabel: WinlinkExchangeStatus.compact(summary.totalSize),
             showsAttachmentIndicator: summary.attachmentCount > 0,
             isUnread: !summary.isRead,
@@ -101,6 +104,42 @@ nonisolated struct WinlinkMessageRowModel: Equatable {
         switch state {
         case .received, .sent: return nil
         case .draft, .queued, .sending, .failed: return state
+        }
+    }
+}
+
+/// The mailbox's sort columns (operator, 2026-10-07).
+nonisolated enum WinlinkMessageSortKey: String, ListSortKey {
+    case date, correspondent, subject, size
+
+    var title: String {
+        switch self {
+        case .date: return "Date"
+        case .correspondent: return "Correspondent"
+        case .subject: return "Subject"
+        case .size: return "Size"
+        }
+    }
+
+    var kind: SortKind {
+        switch self {
+        case .date: return .time
+        case .correspondent, .subject: return .text
+        case .size: return .size
+        }
+    }
+}
+
+extension ListSort where Key == WinlinkMessageSortKey {
+    /// Newest first within anything that ties, so a sort by correspondent
+    /// still reads as a conversation.
+    func apply(_ messages: [WinlinkMessageSummary]) -> [WinlinkMessageSummary] {
+        let byDate = messages.sorted { ($0.date, $0.mid) > ($1.date, $1.mid) }
+        switch key {
+        case .date: return sorted(byDate, by: \.date)
+        case .correspondent: return sorted(byDate, text: WinlinkMessageRowModel.correspondent(of:))
+        case .subject: return sorted(byDate, text: \.subject)
+        case .size: return sorted(byDate, by: \.totalSize)
         }
     }
 }

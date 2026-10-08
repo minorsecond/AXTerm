@@ -56,6 +56,7 @@ struct BBSScreen: View {
     /// Off, and remembered. The same key the Mac and the callers pane use, so
     /// "show me everything" is one decision rather than one per surface.
     @AppStorage("bbs.showsOtherMailboxes") private var showsOtherMailboxes = false
+    @AppStorage("bbs.messageSort") private var messageSort = ListSort.natural(BBSMessageSortKey.date)
     @State private var remoteMessages: [BBSMessagePayload] = []
     @State private var directorySelection: String?
     @State private var areaSelection: String?
@@ -88,7 +89,7 @@ struct BBSScreen: View {
         BBSUnifiedListing.messageSections(local: service.messages,
                                           remote: remoteMessages,
                                           showsOtherInstances: showsOtherMailboxes,
-                                          filter: filter, sysop: sysop)
+                                          filter: filter, sysop: sysop, sort: messageSort)
     }
 
     private var selectedMessageRow: BBSUnifiedListing.MessageRow? {
@@ -326,6 +327,7 @@ struct BBSScreen: View {
                                  filter: $filter,
                                  selection: $messageSelection,
                                  sections: messageSections,
+                                 sort: $messageSort,
                                  showsOtherMailboxes: $showsOtherMailboxes,
                                  showsChip: showsMailboxChip,
                                  onCompose: { compose = ComposeRequest(replyingTo: nil) },
@@ -370,6 +372,7 @@ struct BBSScreen: View {
                                  filter: $filter,
                                  selection: $messageSelection,
                                  sections: messageSections,
+                                 sort: $messageSort,
                                  showsOtherMailboxes: $showsOtherMailboxes,
                                  showsChip: showsMailboxChip,
                                  onCompose: { compose = ComposeRequest(replyingTo: nil) },

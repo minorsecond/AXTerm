@@ -121,10 +121,25 @@ nonisolated enum BBSMessageFilter: String, CaseIterable, Identifiable, Hashable,
     }
 }
 
+/// The mailbox's sort columns (operator, 2026-10-07).
+nonisolated enum BBSMessageSortKey: String, ListSortKey {
+    case date, from, subject
+
+    var title: String {
+        switch self {
+        case .date: return "Received"
+        case .from: return "From"
+        case .subject: return "Subject"
+        }
+    }
+
+    var kind: SortKind { self == .date ? .time : .text }
+}
+
 /// What the operator's message list shows, and which rows are unread.
 nonisolated enum BBSMessageList {
 
-    /// The messages a filter selects, newest first.
+    /// The messages a filter selects, newest first unless sorted otherwise.
     ///
     /// "Mine" is deliberately `isAddressed(to:)` rather than "not a bulletin
     /// addressed to something like us": addressing is by base callsign
@@ -138,14 +153,20 @@ nonisolated enum BBSMessageList {
     /// views of the mailbox disagree about what is in it.
     static func visible(_ messages: [BBSMessage],
                         filter: BBSMessageFilter,
-                        sysop: String) -> [BBSMessage] {
+                        sysop: String,
+                        sort: ListSort<BBSMessageSortKey> = .natural(.date)) -> [BBSMessage] {
         let filtered: [BBSMessage] = switch filter {
         case .mine: messages.filter { $0.killedAt == nil && $0.isAddressed(to: sysop) }
         case .bulletins: messages.filter { $0.killedAt == nil && $0.isBulletin }
         case .all: messages.filter { $0.killedAt == nil }
         case .killed: messages.filter { $0.killedAt != nil }
         }
-        return filtered.sorted { $0.receivedAt > $1.receivedAt }
+        let newest = filtered.sorted { ($0.receivedAt, $0.id) > ($1.receivedAt, $1.id) }
+        switch sort.key {
+        case .date: return sort.sorted(newest, by: \.receivedAt)
+        case .from: return sort.sorted(newest, text: \.from)
+        case .subject: return sort.sorted(newest, text: \.subject)
+        }
     }
 
     /// Unread means *unread by the sysop*, so only their own mail can be it.

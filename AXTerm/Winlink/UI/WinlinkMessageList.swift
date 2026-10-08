@@ -16,6 +16,8 @@ struct WinlinkMessageList: View {
     /// Double-click and the context menu both open a message in its own
     /// window — the habitual mail-client gesture.
     var onOpenInWindow: ((String) -> Void)?
+    /// The sort, kept between launches.
+    @AppStorage("winlink.messageSort") private var storedSort = ListSort.natural(WinlinkMessageSortKey.date)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,6 +39,9 @@ struct WinlinkMessageList: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Clear search")
                 }
+                ListSortMenu(sort: $viewModel.sort)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 9)
             .padding(.vertical, searchFieldPadding)
@@ -76,7 +81,7 @@ struct WinlinkMessageList: View {
                 // Bound straight to the set. Routing it through a single
                 // optional is what made Select All and shift-click land on
                 // one row.
-                Table(viewModel.filteredMessages, selection: $viewModel.selectedMIDs) {
+                Table(viewModel.filteredMessages, selection: $viewModel.selectedMIDs, sortOrder: tableSort) {
 
                     TableColumn("") { summary in
                         HStack(spacing: 2) {
@@ -94,24 +99,33 @@ struct WinlinkMessageList: View {
                     }
                     .width(30)
 
-                    TableColumn("Correspondent") { summary in
+                    TableColumn("Correspondent", value: \.fromAddr) { summary in
                         Text(correspondent(of: summary))
                             .fontWeight(summary.isRead ? .regular : .semibold)
                     }
                     .width(min: 90, ideal: 110)
 
-                    TableColumn("Subject") { summary in
+                    TableColumn("Subject", value: \.subject) { summary in
                         Text(summary.subject.isEmpty ? "(no subject)" : summary.subject)
                             .fontWeight(summary.isRead ? .regular : .semibold)
                             .foregroundStyle(summary.subject.isEmpty ? .secondary : .primary)
                     }
                     .width(min: 140, ideal: 240)
 
-                    TableColumn("Date") { summary in
-                        Text(summary.date.formatted(date: .abbreviated, time: .shortened))
+                    TableColumn("Date", value: \.date) { summary in
+                        Text(DualTime.local(summary.date))
                             .foregroundStyle(.secondary)
+                            .help(DualTime.help(summary.date))
                     }
                     .width(min: 100, ideal: 130)
+
+                    TableColumn("UTC", value: \.date) { summary in
+                        Text(DualTime.utc(summary.date))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .help(DualTime.help(summary.date))
+                    }
+                    .width(min: 70, ideal: 90)
 
                     // Only in the Trash, where "when did this go?" is the
                     // question. Everywhere else it would be an empty column
@@ -139,7 +153,7 @@ struct WinlinkMessageList: View {
                     }
                     .width(min: 60, ideal: 80)
 
-                    TableColumn("Size") { summary in
+                    TableColumn("Size", value: \.totalSize) { summary in
                         Text(ByteCount.string(Int64(summary.totalSize)))
                             .foregroundStyle(.secondary)
                     }
@@ -215,6 +229,8 @@ struct WinlinkMessageList: View {
                 #endif
             }
         }
+        .onAppear { viewModel.sort = storedSort }
+        .onChange(of: viewModel.sort) { _, sort in storedSort = sort }
         // The only path to a permanent delete in this view, and it always
         // says how many and that it cannot be undone. Mail that cost
         // airtime to receive deserves the extra keystroke.
@@ -273,6 +289,31 @@ struct WinlinkMessageList: View {
     }
 
 #if os(macOS)
+    /// The table's header clicks, read and written as the mailbox's sort.
+    private var tableSort: Binding<[KeyPathComparator<WinlinkMessageSummary>]> {
+        Binding(
+            get: {
+                let order: SortOrder = viewModel.sort.ascending ? .forward : .reverse
+                switch viewModel.sort.key {
+                case .date: return [KeyPathComparator(\.date, order: order)]
+                case .correspondent: return [KeyPathComparator(\.fromAddr, order: order)]
+                case .subject: return [KeyPathComparator(\.subject, order: order)]
+                case .size: return [KeyPathComparator(\.totalSize, order: order)]
+                }
+            },
+            set: { comparators in
+                guard let first = comparators.first else { return }
+                let key: WinlinkMessageSortKey
+                switch first.keyPath {
+                case \WinlinkMessageSummary.fromAddr: key = .correspondent
+                case \WinlinkMessageSummary.subject: key = .subject
+                case \WinlinkMessageSummary.totalSize: key = .size
+                default: key = .date
+                }
+                viewModel.sort = ListSort(key: key, ascending: first.order == .forward)
+            })
+    }
+
     /// "Move to Trash" for one, "Move 6 to Trash" for a selection — so a
     /// destructive item always says how much it is about to affect.
     private func label(_ verb: String, _ mids: Set<String>) -> String {
@@ -362,6 +403,9 @@ struct WinlinkMessageList: View {
                             .foregroundStyle(.secondary)
                     }
                     Text(model.sizeLabel)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                    Text(model.utcLabel)
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.tertiary)
                     Spacer(minLength: 0)

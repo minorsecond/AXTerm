@@ -40,8 +40,21 @@ final class TransferRowNameFitsTests: XCTestCase {
         XCTAssertGreaterThan(height(atWidth: 300), height(atWidth: 900) + 10)
     }
 
+    /// The who-and-when line under the header (operator, 2026-10-07),
+    /// measured alone so the header can be judged without it.
+    private func timeLineHeight(atWidth width: CGFloat) -> CGFloat {
+        let line = Text(TransferRowTime.line(finished()) ?? "")
+            .font(.caption)
+            .lineLimit(2)
+            .frame(width: width, alignment: .leading)
+        let hosting = NSHostingView(rootView: line)
+        hosting.layoutSubtreeIfNeeded()
+        return hosting.fittingSize.height + 6 // the row's spacing
+    }
+
     func testVeryNarrowStaysTwoTidyLines() {
-        XCTAssertLessThanOrEqual(height(atWidth: 200), 60, "name on one line, status and buttons on the next")
+        XCTAssertLessThanOrEqual(height(atWidth: 200) - timeLineHeight(atWidth: 200), 60,
+                                 "name on one line, status and buttons on the next")
     }
 
     func testAWideRowStaysOnOneLine() {

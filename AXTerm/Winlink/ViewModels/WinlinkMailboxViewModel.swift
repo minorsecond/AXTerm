@@ -14,6 +14,10 @@ final class WinlinkMailboxViewModel: ObservableObject {
         didSet { applyFilter() }
     }
     @Published private(set) var filteredMessages: [WinlinkMessageSummary] = []
+    /// How the list is sorted; the view keeps the choice between launches.
+    @Published var sort = ListSort.natural(WinlinkMessageSortKey.date) {
+        didSet { if sort != oldValue { applyFilter() } }
+    }
     /// Every selected message.
     ///
     /// The list is a real multi-selection table, so this is the truth and
@@ -106,14 +110,14 @@ final class WinlinkMailboxViewModel: ObservableObject {
     private func applyFilter() {
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         guard !query.isEmpty else {
-            filteredMessages = messages
+            filteredMessages = sort.apply(messages)
             return
         }
-        filteredMessages = messages.filter { summary in
+        filteredMessages = sort.apply(messages.filter { summary in
             summary.subject.lowercased().contains(query)
                 || summary.fromAddr.lowercased().contains(query)
                 || summary.toAddrs.contains { $0.lowercased().contains(query) }
-        }
+        })
     }
 
     private func loadSelectedMessage() {

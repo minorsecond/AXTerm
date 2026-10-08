@@ -33,6 +33,7 @@ struct BBSMessagesPane: View {
     /// Off, and remembered — see `BBSCallersPane`. Nothing from another
     /// station appears in this list until the operator asks for it.
     @AppStorage("bbs.showsOtherMailboxes") private var showsOtherMailboxes = false
+    @AppStorage("bbs.messageSort") private var sort = ListSort.natural(BBSMessageSortKey.date)
     @State private var remoteMessages: [BBSMessagePayload] = []
 
     var body: some View {
@@ -64,7 +65,7 @@ struct BBSMessagesPane: View {
         BBSUnifiedListing.messageSections(local: service.messages,
                                           remote: remoteMessages,
                                           showsOtherInstances: showsOtherMailboxes,
-                                          filter: filter, sysop: sysop)
+                                          filter: filter, sysop: sysop, sort: sort)
     }
 
     private var rows: [BBSUnifiedListing.MessageRow] { sections.flatMap(\.rows) }
@@ -90,11 +91,14 @@ struct BBSMessagesPane: View {
 
     private var list: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $filter) {
-                ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
+            HStack(spacing: 8) {
+                Picker("", selection: $filter) {
+                    ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                ListSortMenu(sort: $sort)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(8)
 
             if showsChip {
@@ -174,9 +178,10 @@ struct BBSMessagesPane: View {
                     .lineLimit(1)
                     .strikethrough(message.killedAt != nil)
                     .foregroundStyle(message.killedAt != nil ? .secondary : .primary)
-                Text(message.receivedAt.formatted(date: .abbreviated, time: .shortened))
+                Text(DualTime.line(message.receivedAt))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .help(DualTime.help(message.receivedAt))
             }
         }
         .padding(.vertical, 2)
@@ -243,13 +248,13 @@ struct BBSMessagesPane: View {
                     Text("\(message.from.uppercased()) → \(message.to.uppercased())")
                         .font(.system(.caption, design: .monospaced))
                     Text("·")
-                    Text(message.receivedAt.formatted(date: .abbreviated, time: .shortened))
+                    Text(DualTime.line(message.receivedAt))
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
                 if let killedAt = message.killedAt {
-                    Label("Killed \(killedAt.formatted(date: .abbreviated, time: .shortened)) (hidden from callers)",
+                    Label("Killed \(DualTime.line(killedAt)) (hidden from callers)",
                           systemImage: "trash")
                         .font(.caption)
                         .foregroundStyle(.orange)

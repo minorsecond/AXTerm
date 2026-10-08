@@ -27,6 +27,7 @@ struct BBSMessageListScreen: View {
     /// `BBSScreen` so the list and the detail column cannot disagree about
     /// what is in the list.
     let sections: [BBSUnifiedListing.Section<BBSUnifiedListing.MessageRow>]
+    @Binding var sort: ListSort<BBSMessageSortKey>
     @Binding var showsOtherMailboxes: Bool
     /// Whether to offer the chip at all — `BBSRemoteMailbox.showsToggle`.
     let showsChip: Bool
@@ -50,11 +51,14 @@ struct BBSMessageListScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Show", selection: $filter) {
-                ForEach(BBSMessageFilter.allCases) { Text($0.label).tag($0) }
+            HStack(spacing: 10) {
+                Picker("Show", selection: $filter) {
+                    ForEach(BBSMessageFilter.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                ListSortMenu(sort: $sort)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
 
@@ -212,9 +216,10 @@ struct BBSMessageListScreen: View {
                     .lineLimit(2)
                     .strikethrough(message.killedAt != nil)
                     .foregroundStyle(message.killedAt != nil ? .secondary : .primary)
-                Text(message.receivedAt.formatted(date: .abbreviated, time: .shortened))
+                Text(DualTime.line(message.receivedAt))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .help(DualTime.help(message.receivedAt))
             }
         }
         .padding(.vertical, 2)
@@ -320,7 +325,7 @@ struct BBSMessageDetailScreen: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(message.from.uppercased()) → \(message.to.uppercased())")
                         .font(.system(.caption, design: .monospaced))
-                    Text(message.receivedAt.formatted(date: .abbreviated, time: .shortened))
+                    Text(DualTime.line(message.receivedAt))
                         .font(.caption)
                 }
                 .foregroundStyle(.secondary)
@@ -333,7 +338,7 @@ struct BBSMessageDetailScreen: View {
                 }
 
                 if let killedAt = message.killedAt {
-                    Label("Killed \(killedAt.formatted(date: .abbreviated, time: .shortened)) "
+                    Label("Killed \(DualTime.line(killedAt)) "
                           + "(hidden from callers)",
                           systemImage: "trash")
                         .font(.caption)

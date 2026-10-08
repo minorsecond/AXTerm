@@ -36,6 +36,7 @@ struct APRSMessagesView: View {
     @State private var showNewBulletin = false
     @State private var showProbe = false
     @State private var draft = ""
+    @AppStorage("aprs.threadSort") private var threadSort = ListSort.natural(APRSThreadSortKey.recent)
 
     /// One conversation: a peer and the messages exchanged with it.
     private struct Thread: Identifiable {
@@ -51,8 +52,8 @@ struct APRSMessagesView: View {
         let grouped = Dictionary(grouping: messaging.messages) { rec -> String in
             rec.kind == .bulletin ? APRSMessagesView.bulletinsPeer : rec.peer.uppercased()
         }
-        return grouped.map { Thread(peer: $0.key, messages: $0.value) }
-            .sorted { ($0.last?.createdAt ?? .distantPast) > ($1.last?.createdAt ?? .distantPast) }
+        return threadSort.apply(grouped.map { Thread(peer: $0.key, messages: $0.value) },
+                                peer: \.peer, last: { $0.last?.createdAt ?? .distantPast })
     }
 
     var body: some View {
@@ -89,13 +90,15 @@ struct APRSMessagesView: View {
                 Divider()
                 List(selection: $selectedPeer) {
                     actionsSection
-                    Section("Conversations") {
+                    Section {
                         if threads.isEmpty {
                             emptyConversations
                         }
                         ForEach(threads) { thread in
                             threadRow(thread).tag(thread.peer)
                         }
+                    } header: {
+                        conversationsHeader
                     }
                 }
             }
@@ -122,7 +125,7 @@ struct APRSMessagesView: View {
     private var pushedBody: some View {
         List {
             actionsSection
-            Section("Conversations") {
+            Section {
                 if threads.isEmpty {
                     Text("No APRS messages yet.").foregroundStyle(.secondary)
                 }
@@ -133,6 +136,8 @@ struct APRSMessagesView: View {
                         threadRow(thread)
                     }
                 }
+            } header: {
+                conversationsHeader
             }
         }
         .navigationTitle("Messages")
@@ -215,6 +220,17 @@ struct APRSMessagesView: View {
         .padding(.vertical, 2)
     }
 
+    private var conversationsHeader: some View {
+        HStack {
+            Text("Conversations")
+            Spacer()
+            if threads.count > 1 {
+                ListSortMenu(sort: $threadSort)
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+
     @ViewBuilder
     private func threadRow(_ thread: Thread) -> some View {
         HStack {
@@ -225,6 +241,9 @@ struct APRSMessagesView: View {
                 if let last = thread.last {
                     Text(preview(of: last))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(DualTime.compact(last.createdAt))
+                        .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        .help(DualTime.help(last.createdAt))
                 }
             }
             Spacer()
@@ -345,7 +364,8 @@ struct APRSMessagesView: View {
     @ViewBuilder
     private func captionRow(_ msg: APRSMessageRecord, outgoing: Bool) -> some View {
         HStack(spacing: 5) {
-            Text(msg.createdAt, style: .time)
+            Text(DualTime.compact(msg.createdAt))
+                .help(DualTime.help(msg.createdAt))
             if outgoing {
                 deliveryCaption(msg)
             } else {
@@ -417,7 +437,8 @@ struct APRSMessagesView: View {
                     .background(.orange.opacity(0.2), in: RoundedRectangle(cornerRadius: 4))
                 Text(msg.peer).font(.caption.weight(.medium))
                 Spacer()
-                Text(msg.createdAt, style: .time).font(.caption2).foregroundStyle(.secondary)
+                Text(DualTime.compact(msg.createdAt)).font(.caption2).foregroundStyle(.secondary)
+                    .help(DualTime.help(msg.createdAt))
             }
             Text(msg.text).font(.callout)
         }
@@ -435,7 +456,8 @@ struct APRSMessagesView: View {
             Image(systemName: outgoing ? "arrow.up.right" : "arrow.down.left")
             Text(msg.text).monospaced()
             Spacer()
-            Text(msg.createdAt, style: .time)
+            Text(DualTime.compact(msg.createdAt))
+                .help(DualTime.help(msg.createdAt))
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -508,5 +530,23 @@ private struct ContentUnavailableViewCompat: View {
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The conversation list's sort columns (operator, 2026-10-07).
+nonisolated enum APRSThreadSortKey: String, ListSortKey {
+    case recent, station
+
+    var title: String { self == .recent ? "Last Message" : "Station" }
+    var kind: SortKind { self == .recent ? .time : .text }
+}
+
+extension ListSort where Key == APRSThreadSortKey {
+    func apply<T>(_ threads: [T], peer: (T) -> String, last: (T) -> Date) -> [T] {
+        let recent = ListSort(key: .recent, ascending: false).sorted(threads, by: last)
+        switch key {
+        case .recent: return sorted(threads, by: last)
+        case .station: return sorted(recent, text: peer)
+        }
     }
 }
