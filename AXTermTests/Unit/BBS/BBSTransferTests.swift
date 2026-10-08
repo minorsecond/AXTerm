@@ -25,6 +25,8 @@ final class BBSTransferTests: XCTestCase {
     private var caller: BBSSimulatedCaller!
     /// Added to the mailbox's clock, so a test can make a transfer take time.
     private var clockOffset: TimeInterval = 0
+    /// What the live link carries, in bytes per second; nil for no figure.
+    private var liveCapacity: Double?
 
     /// Small, so "just under the cap" is a file a test can move quickly.
     private let cap = 64 * 1024
@@ -89,6 +91,7 @@ final class BBSTransferTests: XCTestCase {
                 // Fast enough that no file here trips the long-transfer
                 // confirmation; that has its own shell tests.
                 linkBytesPerSecond: { 1_000_000 },
+                liveLinkCapacity: { [unowned self] _ in self.liveCapacity },
                 now: { [unowned self] in Date().addingTimeInterval(self.clockOffset) })
             service.attach()
         }
@@ -175,6 +178,21 @@ final class BBSTransferTests: XCTestCase {
         let files = await command("W OPS")
         let row = try XCTUnwrap(files.split(separator: "\r").first { $0.contains("photo.jpg") })
         XCTAssertTrue(row.contains(" 5m "), "9000 bytes at 30 B/s is five minutes: \(row)")
+    }
+
+    /// Finding 35: the caller's last download ran at 80 B/s, but this link is
+    /// carrying 20 now, so the listing says so.
+    func testTheListingIsNoFasterThanTheLiveLink() async throws {
+        try writeFile("photo.jpg", bytes: binary(6000))
+        library.rescan()
+        coordinator.measuredTransferRates["W0ARP-1"] = 80
+        try await connect()
+        liveCapacity = 20
+
+        let files = await command("W OPS")
+        let row = try XCTUnwrap(files.split(separator: "\r").first { $0.contains("photo.jpg") })
+        XCTAssertTrue(row.contains(" 5m "), "6000 bytes at 20 B/s is five minutes: \(row)")
+        XCTAssertEqual(service.linkThroughput, 20, "the operator's Files list agrees")
     }
 
     /// The operator's Files list quotes the caller on the air the same

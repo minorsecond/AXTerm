@@ -112,6 +112,7 @@ final class BBSService: ObservableObject {
     /// delivered rate is nearer two thirds of that. An estimate that flatters
     /// itself is worse than none, because a caller plans around it.
     private let linkBytesPerSecond: () -> Double
+    private let liveLinkCapacity: (AX25Session) -> Double?
     /// The license record for a callsign, from the directory AXTerm already
     /// caches. **Cached only** — a mailbox answering a call must not make an
     /// internet request about whoever just called it.
@@ -200,6 +201,7 @@ final class BBSService: ObservableObject {
          peerSupportsAXDP: @escaping (String) -> Bool = { _ in false },
          transferStallTimeout: TimeInterval = 180,
          linkBytesPerSecond: @escaping () -> Double = { 90 },
+         liveLinkCapacity: @escaping (AX25Session) -> Double? = BBSLinkRate.capacity(of:),
          licenceRecord: @escaping (String) -> CallsignRecord? = { _ in nil },
          announce: @escaping (String) -> Void = { _ in },
          resolveLicences: @escaping ([String]) async -> Void = { _ in },
@@ -217,6 +219,7 @@ final class BBSService: ObservableObject {
         self.peerSupportsAXDP = peerSupportsAXDP
         self.transferStallTimeout = transferStallTimeout
         self.linkBytesPerSecond = linkBytesPerSecond
+        self.liveLinkCapacity = liveLinkCapacity
         self.licenceRecord = licenceRecord
         self.announce = announce
         self.resolveLicences = resolveLicences
@@ -302,8 +305,14 @@ final class BBSService: ObservableObject {
     /// The rate quoted to one caller: what their last finished transfer with
     /// this station actually ran at, else the link default. A caller at the
     /// edge of range gets times that fit their link (operator, 2026-10-07).
+    /// While they are on the air it is held to what their link carries now
+    /// (finding 35).
     func bytesPerSecond(for caller: String) -> Double {
-        coordinator.measuredTransferRates[caller.uppercased()] ?? linkBytesPerSecond()
+        let onTheAir = live?.callsign.uppercased() == caller.uppercased()
+        let link = onTheAir ? session.flatMap { coordinator.sessionManager.sessions[$0.key] ?? $0 } : nil
+        return BBSLinkRate.quoted(measured: coordinator.measuredTransferRates[caller.uppercased()],
+                                  fallback: linkBytesPerSecond(),
+                                  capacity: link.flatMap(liveLinkCapacity))
     }
 
     var answeringCallsign: String {
@@ -483,6 +492,8 @@ final class BBSService: ObservableObject {
         // transfer now, and answering them would type into its stream.
         guard var shell, session != nil, running == nil else { return }
         append(.fromCaller, line)
+        // Times in a listing are for the link as it is now (finding 35).
+        if let caller = live?.callsign { shell.bytesPerSecond = bytesPerSecond(for: caller) }
 
         var output = shell.handle(line: line, mailbox: currentMailbox(), now: now())
         self.shell = shell
