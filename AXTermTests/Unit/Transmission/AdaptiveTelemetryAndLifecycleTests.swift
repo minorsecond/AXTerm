@@ -5,12 +5,13 @@
 //  Audit follow-up (2026-08-22): the adaptive controller's evidence stream
 //  and lifecycle must be complete, not just correct on the happy path.
 //
-//  1. Loss evidence must be TIMELY — a T1 timeout retransmission is loss the
-//     controller should hear immediately, not when the next inbound frame
-//     happens to arrive (a dying link never sends one).
-//  2. Loss evidence must survive LINK FAILURE — the final retransmissions of
-//     a dying session are exactly the evidence that should make the next
-//     attempt skeptical.
+//  1. Loss evidence comes from a link the peer is heard on. A T1 timeout
+//     resend is held until a frame from the peer arrives (park rehearsal
+//     2026-10-08, finding 35; this used to emit at once). A dying link that
+//     never answers has said nothing about the channel.
+//  2. Skepticism EARNED on a link (resends the peer then acknowledged)
+//     survives that link's failure; resends nobody acknowledged do not
+//     count (finding 35; the final unanswered resends used to be flushed).
 //  3. Learned state must survive DISCONNECT — the 30-minute TTL is the
 //     staleness authority, not session teardown. Evicting on disconnect
 //     silently defeated learned-RTO seeding for every reconnect.
@@ -41,10 +42,10 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
 
     // MARK: - Timely loss evidence
 
-    /// A T1 timeout retransmission is loss evidence NOW. Waiting for the next
-    /// inbound frame to carry the delta means a degrading link — the one case
-    /// where inbound frames stop coming — reports its loss last or never.
-    func testT1TimeoutRetransmissionEmitsLossSampleImmediately() {
+    /// A T1 timeout resend is held until the peer is heard, then counted.
+    /// Until 2026-10-08 it was reported at once, and 20 minutes of a phone
+    /// that could not hear A collapsed the route (finding 35).
+    func testT1TimeoutRetransmissionIsCountedOnceThePeerIsHeard() {
         let manager = AX25SessionManager(localCallsign: local)
         let path = DigiPath()
         let session = connectSession(manager: manager, destination: remote, path: path)
@@ -58,16 +59,19 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         let frames = manager.handleT1Timeout(session: session)
         XCTAssertFalse(frames.filter { $0.frameType == "i" }.isEmpty,
                        "precondition: T1 timeout retransmitted the frame")
-        XCTAssertEqual(samples.count, 1,
-                       "the retransmission must reach the controller without waiting for inbound traffic")
+        XCTAssertTrue(samples.isEmpty, "held until the peer is heard")
+
+        _ = manager.handleInboundRRFrames(from: remote, path: path, radio: .primary,
+                                          nr: 1, pf: false, isCommand: false)
+        XCTAssertEqual(samples.count, 1)
         XCTAssertGreaterThanOrEqual(samples.first?.retransmits ?? 0, 1)
         XCTAssertGreaterThan(samples.first?.lossRate ?? 0, 0)
     }
 
-    /// N2 exhaustion tears the link down — and the retransmissions on the way
-    /// down are exactly the evidence that should make the NEXT attempt on this
-    /// route skeptical. The final sample must flush even in the error state.
-    func testLinkFailureFlushesFinalLossEvidence() {
+    /// N2 exhaustion with nothing heard from the peer reports nothing: a
+    /// station that hears nothing is not helped by smaller frames
+    /// (finding 35). This used to flush the final resends as loss.
+    func testLinkFailureWithNothingHeardReportsNoLoss() {
         let manager = AX25SessionManager(localCallsign: local)
         let path = DigiPath()
         let session = connectSession(manager: manager, destination: remote, path: path)
@@ -82,11 +86,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
             if session.state == .error { break }
         }
         XCTAssertEqual(session.state, .error, "precondition: N2 exhausted the link")
-        XCTAssertFalse(samples.isEmpty, "the dying link's loss evidence must not vanish with it")
-        XCTAssertTrue(samples.allSatisfy { $0.retransmits >= 1 || $0.newFrames >= 1 },
-                      "every sample carries real evidence")
-        XCTAssertGreaterThanOrEqual(samples.last?.retransmits ?? 0, 1,
-                                    "the final flush carries the terminal retransmissions")
+        XCTAssertTrue(samples.isEmpty, "unanswered resends are not channel loss")
     }
 
     /// RNR acks were wired into the sampler alongside I-frame/REJ; pin it.
@@ -164,8 +164,9 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
                        "the learned full-path RTO must survive disconnect and seed the reconnect")
     }
 
-    /// A route that FAILED must stay remembered as skeptical: the collapsed
-    /// K/paclen carry into the next attempt instead of resetting to optimism.
+    /// Skepticism EARNED on a link survives its failure: resends the peer
+    /// acknowledged collapse the route, and the reconnect starts there.
+    /// Resends nobody acknowledged no longer earn it (finding 35).
     func testEarnedSkepticismSurvivesLinkFailure() {
         let coordinator = SessionCoordinator()
         defer { SessionCoordinator.shared = nil }
@@ -175,10 +176,17 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         let session = connectSession(manager: coordinator.sessionManager,
                                      destination: remote, path: path)
 
-        // The link dies for real: unanswered T1 retransmissions exhaust N2.
-        // Each retransmission is a live loss sample into the per-route cache
-        // (via the coordinator's own wiring), so the collapse to skepticism
-        // is driven end-to-end by genuine evidence, not injected samples.
+        // A lossy channel first: frames that needed resending before the
+        // peer acknowledged them, a live loss sample each time (via the
+        // coordinator's own wiring).
+        for i in 0..<3 {
+            _ = coordinator.sessionManager.sendData(Data("a\(i)\r".utf8), to: remote,
+                                                    path: path, radio: .primary)
+            _ = coordinator.sessionManager.handleT1Timeout(session: session)
+            _ = coordinator.sessionManager.handleInboundRRFrames(
+                from: remote, path: path, radio: .primary, nr: (i + 1) % 8, pf: false, isCommand: false)
+        }
+        // Then the link dies: unanswered T1 retransmissions exhaust N2.
         _ = coordinator.sessionManager.sendData(Data("b\r".utf8), to: remote,
                                                 path: path, radio: .primary)
         let maxRetries = session.stateMachine.config.maxRetries

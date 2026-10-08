@@ -196,6 +196,16 @@ nonisolated final class AX25Session: @unchecked Sendable {
     var lastSampledFramesReceived: Int = 0
     var lastSampledREJSent: Int = 0
 
+    /// Drops the evidence held since the last sample: the peer reset the
+    /// link, so whatever was sent and resent on the old one was never
+    /// heard (finding 35).
+    func discardUnsampledEvidence() {
+        lastSampledFramesSent = statistics.framesSent
+        lastSampledRetransmissions = statistics.retransmissions
+        lastSampledFramesReceived = statistics.framesReceived
+        lastSampledREJSent = statistics.rejSent
+    }
+
     /// Bumped on every T1 start/stop. A fired T1 closure whose captured generation
     /// no longer matches is stale: cancel() cannot recall a closure the scheduler
     /// already began dispatching, so stopT1 can lose the race against a fire that
@@ -2511,6 +2521,10 @@ final class AX25SessionManager: ObservableObject {
                 "peer": source.display,
                 "state": existing.state.rawValue
             ])
+            // A SABM on a link we hold means the peer never had it, or
+            // started over: what we sent on it before tells nothing about
+            // the channel (finding 35).
+            existing.discardUnsampledEvidence()
             session = existing
         } else {
             debugTrace("SABM creating session", [
@@ -3860,11 +3874,12 @@ final class AX25SessionManager: ObservableObject {
             restartT1IfOutLater(session)
         }
 
-        // Loss evidence must be TIMELY: a T1 retransmission reaches the
-        // controller now, not when the next inbound frame happens to arrive —
-        // a degrading link is exactly the case where inbound traffic stops.
-        // On N2 exhaustion (state == .error) this is the final evidence flush.
-        emitLinkQualitySampleIfNeeded(for: session)
+        // No sample here. A resend counts as loss only once the peer is
+        // heard on the link: the next frame from it carries the delta. A
+        // link that ends with nothing heard has said nothing about the
+        // channel. Reporting resends at once let 20 minutes of a phone that
+        // could not hear A collapse the route to K 1 / P 64 (park rehearsal
+        // 2026-10-08, finding 35).
 
         return frames
     }
