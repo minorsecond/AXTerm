@@ -124,7 +124,8 @@ final class BBSSettings: ObservableObject {
 
     /// The address the mailbox actually answers on, given the station callsign.
     func effectiveCallsign(stationCallsign: String) -> String {
-        let own = callsign.trimmingCharacters(in: .whitespaces)
+        // Newlines too: a pasted callsign often ends in one (2026-10-08).
+        let own = callsign.trimmingCharacters(in: .whitespacesAndNewlines)
         return own.isEmpty ? stationCallsign.uppercased() : own.uppercased()
     }
 }
