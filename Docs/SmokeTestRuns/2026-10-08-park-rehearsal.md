@@ -301,3 +301,10 @@ Warbler received SIGTERM at 19:00:53Z (not from this session) and launchd starte
 |---|---|---|
 | 42 | The follow geometry leaves out the padding below the last row, and an upward move of 3 points or less with nobody scrolling is layout. On the iPad, five lines from A each scrolled into view and following never switched off | `a6c80a16` |
 | 42 retest | pass | The operator saw all five lines scroll into view on the iPad |
+
+| # | Where | Finding |
+|---|---|---|
+| 44 | Mac, Settings › Radios, LAN password | Three times the IC-705 radio's name changed when the password was set: "Rward023" once, blank twice. Likely cause: Set… shows the password box and asks for focus in `onAppear`, before the box is in the window, so typing goes to the Name field, which still has focus. Not yet reproduced on purpose. Work round: click inside the password box before typing |
+| 45 | Mac, BBS pane | The header read "Off air · Switched on, but not answering · Ignored: the mailbox is switched off on the radio this call came in on" while the mailbox was answering K0EPI-3 on the IC-705. It seems to judge the next call against the disabled Direwolf radio, whose mailbox is off |
+
+Five small files added to PARK for the park test (cheat-sheet.txt, fortune.txt, morse-cq.mid, pixel-yagi.png, qso-log.csv, 141 to 967 bytes each). A (705) rebuilt on `f5052272` (pid 83528) with the AXTerm forms, set up again, PARK shared and listing all eight files.
