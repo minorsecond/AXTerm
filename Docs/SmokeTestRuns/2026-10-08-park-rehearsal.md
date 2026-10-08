@@ -151,3 +151,5 @@ A's frames for that link show the phone sent no probe, and A, having answered th
 |---|---|---|
 | 29 | An AXDP send to a connected station whose support is unknown asks it first and waits for the answer (spec 6.x.3); no answer refuses with the no-AXDP reason, which points to YAPP | `925f4f43` |
 | 28 | In the Session view, a file name in a line from another station is a link. Tapping it puts the download command in the compose box, never sends it. The command word is the one last used to fetch a file from that station, `D` until one is typed. A name counts when it has an extension (AXTerm's table, DOS-style lists); names with spaces or no extension are still typed by hand. Long-press for Copy was dropped: the line's text is already selectable | `58059582` |
+
+A (705) rebuilt on `bd9500ec` (pid 5110) and set up again: IC-705 through Warbler as K0EPI-2, Direwolf off, mailbox K0EPI-4 answering, Winlink K0EPI-5 answering, PARK shared. It connected to the 705 at 15:54:08Z, still on 145.650 PKTFM. The phone and iPad reinstalled on `58059582`.
