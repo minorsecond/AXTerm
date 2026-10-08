@@ -88,6 +88,61 @@ nonisolated enum BBSFilePickResult: Equatable, Sendable {
     case nameNewArea(URL)
     /// Done; tell the operator this, if anything.
     case finished(message: String?)
+    /// The other files are in (and `message` says so); these photos wait
+    /// for the operator to choose their size.
+    case sizePhotos([BBSPendingPhoto], message: String?)
+}
+
+/// A photo on its way into an area, held until the operator picks its size.
+nonisolated struct BBSPendingPhoto: Identifiable, Equatable, Sendable {
+    let id = UUID()
+    let name: String
+    let data: Data
+    let area: String
+}
+
+/// Photos added to an area are sized before callers can list them
+/// (operator, 2026-10-07, downloading from the BBS at a park). A phone photo
+/// is megabytes, which is hours of a shared channel; the operator picks the
+/// size from the same preview Send File uses.
+nonisolated enum BBSPhotoIntake {
+    /// An image bigger than the Small size is worth asking about. A smaller
+    /// one has nothing to gain and goes straight in.
+    static func wantsSizing(name: String, byteCount: Int) -> Bool {
+        ImageShrinker.isImage(named: name) && byteCount > (PhotoSendSize.small.byteBudget ?? 0)
+    }
+
+    /// Splits picked files into photos to size (read now, while the picker's
+    /// access lasts) and everything else.
+    static func split(_ urls: [URL], area: String) -> (photos: [BBSPendingPhoto], others: [URL]) {
+        var photos: [BBSPendingPhoto] = []
+        var others: [URL] = []
+        for url in urls {
+            if let photo = pending(at: url, area: area) {
+                photos.append(photo)
+            } else {
+                others.append(url)
+            }
+        }
+        return (photos, others)
+    }
+
+    /// The photo at `url` when it wants sizing, read into memory.
+    static func pending(at url: URL, area: String) -> BBSPendingPhoto? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        guard wantsSizing(name: url.lastPathComponent, byteCount: size),
+              let data = try? Data(contentsOf: url), ImageShrinker.isImage(data) else { return nil }
+        return BBSPendingPhoto(name: url.lastPathComponent, data: data, area: area)
+    }
+
+    /// Puts the photo in its area as the operator chose it.
+    @MainActor
+    static func add(_ photo: BBSPendingPhoto, as prepared: PhotoSendChoice.Prepared,
+                    library: BBSFileLibrary) -> BBSFileLibrary.AddOutcome {
+        library.addFile(named: prepared.name, data: prepared.data, to: photo.area)
+    }
 }
 
 @MainActor
@@ -110,8 +165,10 @@ enum BBSFilePick {
             library.relocateArea(name: area, url: url)
             return .finished(message: nil)
         case .addFiles(let area):
-            let outcomes = library.addFiles(urls, to: area)
-            return .finished(message: BBSAddFilesSummary.message(for: outcomes, area: area))
+            let (photos, others) = BBSPhotoIntake.split(urls, area: area)
+            let outcomes = others.isEmpty ? [] : library.addFiles(others, to: area)
+            let message = BBSAddFilesSummary.message(for: outcomes, area: area)
+            return photos.isEmpty ? .finished(message: message) : .sizePhotos(photos, message: message)
         }
     }
 }
@@ -130,10 +187,10 @@ enum BBSFileDrop {
     @MainActor
     static func add(_ providers: [NSItemProvider], to area: String,
                     library: BBSFileLibrary,
-                    completion: @escaping @MainActor (String?) -> Void) {
+                    completion: @escaping @MainActor (String?, [BBSPendingPhoto]) -> Void) {
         guard !providers.isEmpty else { return }
-        let collector = Collector(expected: providers.count) { outcomes in
-            completion(BBSAddFilesSummary.message(for: outcomes, area: area))
+        let collector = Collector(expected: providers.count) { outcomes, photos in
+            completion(BBSAddFilesSummary.message(for: outcomes, area: area), photos)
         }
         for provider in providers {
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -145,13 +202,20 @@ enum BBSFileDrop {
                                                     reason: "it could not be read")])
                             return
                         }
-                        collector.add(library.addFiles([url], to: area))
+                        if let photo = BBSPhotoIntake.pending(at: url, area: area) {
+                            collector.hold(photo)
+                        } else {
+                            collector.add(library.addFiles([url], to: area))
+                        }
                     }
                 }
             } else {
                 loadRepresentation(of: provider) { name, data, failure in
                     Task { @MainActor in
-                        if let data {
+                        if let data, BBSPhotoIntake.wantsSizing(name: name, byteCount: data.count),
+                           ImageShrinker.isImage(data) {
+                            collector.hold(BBSPendingPhoto(name: name, data: data, area: area))
+                        } else if let data {
                             collector.add([library.addFile(named: name, data: data, to: area)])
                         } else {
                             collector.add([.refused(name: name, reason: failure ?? "it could not be read")])
@@ -193,17 +257,29 @@ enum BBSFileDrop {
     private final class Collector {
         private var remaining: Int
         private var outcomes: [BBSFileLibrary.AddOutcome] = []
-        private let finish: @MainActor ([BBSFileLibrary.AddOutcome]) -> Void
+        private var photos: [BBSPendingPhoto] = []
+        private let finish: @MainActor ([BBSFileLibrary.AddOutcome], [BBSPendingPhoto]) -> Void
 
-        init(expected: Int, finish: @escaping @MainActor ([BBSFileLibrary.AddOutcome]) -> Void) {
+        init(expected: Int,
+             finish: @escaping @MainActor ([BBSFileLibrary.AddOutcome], [BBSPendingPhoto]) -> Void) {
             remaining = expected
             self.finish = finish
         }
 
         func add(_ more: [BBSFileLibrary.AddOutcome]) {
             outcomes += more
+            settle()
+        }
+
+        /// A photo that waits for its size instead of going in now.
+        func hold(_ photo: BBSPendingPhoto) {
+            photos.append(photo)
+            settle()
+        }
+
+        private func settle() {
             remaining -= 1
-            if remaining == 0 { finish(outcomes) }
+            if remaining == 0 { finish(outcomes, photos) }
         }
     }
 }

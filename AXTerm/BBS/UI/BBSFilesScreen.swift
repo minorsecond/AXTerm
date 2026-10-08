@@ -315,6 +315,8 @@ struct BBSFileListScreen: View {
     @State private var picker = BBSFilePicker()
     /// What happened to the last files added, until dismissed.
     @State private var addMessage: String?
+    /// Photos waiting for the operator to pick their size.
+    @State private var sizingPhotos: [BBSPendingPhoto] = []
     @State private var dropTargeted = false
 
     private var files: [BBSSharedFile] {
@@ -389,7 +391,10 @@ struct BBSFileListScreen: View {
         // area's folder; the originals stay where they were.
         .onDrop(of: BBSFileDrop.acceptedTypes, isTargeted: $dropTargeted) { providers in
             guard let area, !isMissing else { return false }
-            BBSFileDrop.add(providers, to: area, library: library) { addMessage = $0 }
+            BBSFileDrop.add(providers, to: area, library: library) { message, photos in
+                addMessage = message
+                sizingPhotos = photos
+            }
             return true
         }
         .toolbar {
@@ -409,8 +414,25 @@ struct BBSFileListScreen: View {
                       allowsMultipleSelection: picker.allowsMultipleSelection) { result in
             let purpose = picker.finish()
             guard let purpose, case .success(let urls) = result else { return }
-            if case .finished(let message) = BBSFilePick.apply(purpose, urls: urls, library: library) {
+            switch BBSFilePick.apply(purpose, urls: urls, library: library) {
+            case .finished(let message):
                 addMessage = message
+            case .sizePhotos(let photos, let message):
+                addMessage = message
+                sizingPhotos = photos
+            case .nameNewArea:
+                break
+            }
+        }
+        .sheet(isPresented: Binding(get: { !sizingPhotos.isEmpty },
+                                    set: { if !$0 { sizingPhotos = [] } })) {
+            BBSPhotoIntakeSheet(photos: sizingPhotos) { photo, prepared in
+                BBSPhotoIntake.add(photo, as: prepared, library: library)
+            } finish: { outcomes in
+                let area = sizingPhotos.first?.area ?? ""
+                let lines = [addMessage, BBSAddFilesSummary.message(for: outcomes, area: area)].compactMap { $0 }
+                addMessage = lines.isEmpty ? nil : lines.joined(separator: "\n")
+                sizingPhotos = []
             }
         }
         .navigationTitle(area ?? "Files")

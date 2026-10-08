@@ -34,6 +34,8 @@ struct BBSFilesPane: View {
     /// What happened to the last files added, until the operator dismisses it.
     @State private var addMessage: String?
     @State private var dropTargeted = false
+    /// Photos waiting for the operator to pick their size.
+    @State private var sizingPhotos: [BBSPendingPhoto] = []
 
     var body: some View {
         HSplitView {
@@ -52,7 +54,14 @@ struct BBSFilesPane: View {
                 newAreaName = BBSFileArea.normalize(url.lastPathComponent)
             case .finished(let message):
                 addMessage = message
+            case .sizePhotos(let photos, let message):
+                addMessage = message
+                sizingPhotos = photos
             }
+        }
+        .sheet(isPresented: Binding(get: { !sizingPhotos.isEmpty },
+                                    set: { if !$0 { sizingPhotos = [] } })) {
+            photoSizeSheet
         }
         .sheet(item: $editing) { file in
             descriptionSheet(file)
@@ -60,6 +69,17 @@ struct BBSFilesPane: View {
         .sheet(isPresented: Binding(get: { pendingURL != nil },
                                     set: { if !$0 { pendingURL = nil } })) {
             newAreaSheet
+        }
+    }
+
+    private var photoSizeSheet: some View {
+        BBSPhotoIntakeSheet(photos: sizingPhotos) { photo, prepared in
+            BBSPhotoIntake.add(photo, as: prepared, library: library)
+        } finish: { outcomes in
+            let area = sizingPhotos.first?.area ?? ""
+            let lines = [addMessage, BBSAddFilesSummary.message(for: outcomes, area: area)].compactMap { $0 }
+            addMessage = lines.isEmpty ? nil : lines.joined(separator: "\n")
+            sizingPhotos = []
         }
     }
 
@@ -258,7 +278,10 @@ struct BBSFilesPane: View {
         // area. Copied, so the originals stay where they were.
         .onDrop(of: BBSFileDrop.acceptedTypes, isTargeted: $dropTargeted) { providers in
             guard let area = addableArea else { return false }
-            BBSFileDrop.add(providers, to: area, library: library) { addMessage = $0 }
+            BBSFileDrop.add(providers, to: area, library: library) { message, photos in
+                addMessage = message
+                sizingPhotos = photos
+            }
             return true
         }
         .overlay {
