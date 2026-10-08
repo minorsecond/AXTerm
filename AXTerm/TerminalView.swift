@@ -3259,6 +3259,14 @@ struct TerminalView: View {
         }
     }
 
+    /// The phone's and iPad's Session view reads as a conversation (park
+    /// rehearsal 2026-10-08); the Mac keeps every frame and its filter chips.
+    #if os(iOS)
+    static let sessionReadsAsConversation = true
+    #else
+    static let sessionReadsAsConversation = false
+    #endif
+
     @ViewBuilder
     private var sessionOutputView: some View {
         let lines = displayedSessionLines
@@ -3284,7 +3292,8 @@ struct TerminalView: View {
                 // Flips on every Broadcast⇄Session toggle so the console re-pins
                 // to the bottom even when the line set doesn't change (and no
                 // incoming packet would otherwise trigger a re-pin).
-                repinSignal: txViewModel.viewModel.connectionMode == .connected ? 1 : 0
+                repinSignal: txViewModel.viewModel.connectionMode == .connected ? 1 : 0,
+                readsAsConversation: Self.sessionReadsAsConversation
             )
             .opacity(lines.isEmpty ? 0 : 1)
 

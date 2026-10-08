@@ -314,6 +314,10 @@ struct ConsoleView: View {
     /// viewport; on a quiet channel no incoming packet rebuilds the list to fix
     /// it, so the parent signals the toggle here directly. See `scheduleRepin`.
     var repinSignal: Int = 0
+    /// Reads as a conversation: protocol frames and link chatter left out,
+    /// and a run of text from one station joined into one block
+    /// (`ConversationTranscript`). The iPhone and iPad Session view.
+    var readsAsConversation = false
 
     @State private var autoScroll = true
     @State private var scrollViewHeight: CGFloat = 0
@@ -400,7 +404,8 @@ struct ConsoleView: View {
     }
 
     private func rebuildRenderedLines() {
-        let groups = ConsoleLineGrouper.group(typeFilteredLines)
+        let visible = readsAsConversation ? ConversationTranscript.lines(typeFilteredLines) : typeFilteredLines
+        let groups = ConsoleLineGrouper.group(visible)
         groupedLines = groups
         timestampRunPositions = ConsoleTimestampRuler.runPositions(
             groups, timestamp: \.primary.timestampString)
@@ -611,6 +616,11 @@ struct ConsoleView: View {
                         scheduleRepin()
                     }
                 }
+                #if os(iOS)
+                // Scrolling the transcript takes the keyboard away, which
+                // could not be hidden at all (park rehearsal 2026-10-08).
+                .scrollDismissesKeyboard(.interactively)
+                #endif
                 .background(.background)
                 // Rebuilt here rather than read from `body`: see
                 // `groupedLines`. One pass per actual change instead of one
