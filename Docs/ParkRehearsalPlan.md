@@ -12,7 +12,7 @@ each test runs.
 |---|---|---|
 | Role | BBS and Winlink host | Caller, as at the park |
 | Radio | IC-705 through Warbler (`localhost:50100`), low power | ID-50 on the Mobilinkd TNC4 over Bluetooth |
-| Callsign | K0EPI-2 (mailbox and station) | K0EPI-3 |
+| Callsign | K0EPI-2 (station, Winlink peer-to-peer), K0EPI-4 (mailbox) | K0EPI-3 |
 | Frequency | 145.650 FM, our test frequency | same |
 | Build | `b0868b31` (everything below except the Connect fix `ef448a00` and the photo library in Send File, which is iOS only) | `2680c8b8`, installed 2026-10-08 |
 
@@ -37,9 +37,9 @@ Who: **C** Claude, **Y** the operator, **C+Y** both.
 | # | Step | Who | Result |
 |---|---|---|---|
 | P1 | A (705) connected through Warbler, the 705 reads 145.650 PKTFM | C | |
-| P2 | A's mailbox answers calls (Settings > BBS) | C | |
+| P2 | A's mailbox answers calls as K0EPI-4 (Settings > BBS) | C | |
 | P3 | A answers Winlink peer-to-peer as K0EPI-2 (Settings > Winlink) | C | |
-| P4 | A has a BBS file area to add to (Settings > BBS or the BBS pane > Files) | C+Y | |
+| P4 | A has a BBS file area to add to: the BBS pane > Files > Share a Folder, picking `~/Documents/AXTerm-BBS-Park` | Y picks, C checks | |
 | P5 | The phone and iPad each have two or three camera photos in Photos, one of them also saved to Files, and one photo is on the Mac | Y | |
 | P6 | Note A's pid, to tell later whether it quit by itself | C | |
 
@@ -57,7 +57,7 @@ Who: **C** Claude, **Y** the operator, **C+Y** both.
 
 | # | Test | Who | Expect | Result |
 |---|---|---|---|---|
-| R2 | Connect to K0EPI-2 and list the area with `W <area>` | Y | The NAME / SIZE / TIME table arrives. TIME is at 90 B/s (no transfers yet in this run). A's live call transcript shows the same table | |
+| R2 | Connect to K0EPI-4 and list the area with `W <area>` | Y | The NAME / SIZE / TIME table arrives. TIME is at 90 B/s (no transfers yet in this run). A's live call transcript shows the same table | |
 | R3 | `D <photo>` to download the photo added in R1 | Y; C watches A | A's transfer row shows bytes, percent, YAPP, elapsed, and after 10 s "about N min left", counting down. The phone saves the photo and it opens, at the size picked in R1 | |
 | R3b | `W <area>` again on the same call | Y | TIME now reflects the rate the download actually ran at (a new call is needed if the shell keeps its rate per call; note which) | |
 | R3c | A's Files list during the call | C | On air matches the caller's TIME for each file | |
