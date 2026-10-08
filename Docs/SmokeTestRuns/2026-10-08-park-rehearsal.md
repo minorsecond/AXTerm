@@ -198,3 +198,11 @@ The phone was slow to the point of unusable on the build with fixes 31 to 36: fi
 | 34 retest | pass | The history stays put while a message goes out (operator) |
 | 36 retest | pass | After `D Barro tal vez v11.fcpxml`, "Barro tal vez v11.fcpxml sent." links the whole name (operator) |
 | 35 retest | pass | The same 5 KB file took 1 min 50 s (17:39:31 to 17:41:21Z) against about 5 min before; A's notes show the route growing to K 4 / P 256 during the call, with no collapse. The quote still said "<1m": no round trip had been measured when the listing went out, so it used the 90 B/s default |
+
+| # | Result | Notes |
+|---|---|---|
+| R7, R7b, R7c | pass (run on the phone) | "Testing" from K0EPI to K0EPI-5 with a photo at Small, sent peer-to-peer from 17:49:44 to 17:51:53Z. A logged one message received, 9,529 bytes. The photo arrived as Photo 1.jpg, 9.4 KB, 196 x 262, inside Small's 12 KB, with no GPS position. R8b (the panel on the iPad's wider screen) waits for the iPad |
+
+| # | Where | Finding |
+|---|---|---|
+| 37 | iPhone, Winlink exchange | While sending, the rate falls steadily and jumps back up at each acknowledgment: it is bytes acknowledged over time since the start, and between acknowledgments only the time moves |
