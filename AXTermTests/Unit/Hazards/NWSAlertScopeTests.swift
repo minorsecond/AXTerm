@@ -205,4 +205,12 @@ final class NWSAlertScopeTests: XCTestCase {
         XCTAssertEqual(list.count, USStates.all.count)
         XCTAssertEqual(list[2].code, "AL")
     }
+
+    /// Menus name one or two states in full ("Alert area: Florida"); more
+    /// than that stays as codes so the line fits.
+    func testMenusNameAFewStatesInFull() {
+        XCTAssertEqual(NWSAlertScope.states(["FL"]).summary(counties: nil), "Florida")
+        XCTAssertEqual(NWSAlertScope.states(["CO", "WY"]).summary(counties: nil), "Colorado, Wyoming")
+        XCTAssertEqual(NWSAlertScope.states(["CO", "WY", "NE"]).summary(counties: nil), "CO, WY, NE")
+    }
 }

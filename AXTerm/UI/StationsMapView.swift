@@ -1364,6 +1364,11 @@ struct StationsMapView: View {
             }
             .frame(minWidth: 460, minHeight: 520)
         }
+        // At the root, which stays put: hung on the map stack, the sheet
+        // closed whenever that branch was rebuilt under it.
+        .sheet(item: $tappedAlerts) { tapped in
+            HazardAlertsSheet(features: tapped.features)
+        }
         #if os(iOS)
         .toolbar { mapToolbar }
         .sheet(isPresented: $showingStationList) { stationListSheet }
@@ -1930,29 +1935,32 @@ struct StationsMapView: View {
                 Text(caption)
             }
             if showsNWSAlerts {
-                // States and counties are ticked in a sheet; a choice made
-                // there shows here as its summary.
-                Picker("Alert area: \(NWSAlertScope(stored: nwsScopeText).summary(counties: CountyCenters.bundled))",
-                       selection: $nwsScopeText) {
-                    Text("Where I am").tag(NWSAlertScope.here.stored)
-                    ForEach(NWSAlertScope.offeredRadii, id: \.self) { miles in
-                        Text("Within \(miles) mi").tag(NWSAlertScope.within(miles: Double(miles)).stored)
+                // One submenu: distances pick at once, States and Counties
+                // open their checklist.
+                Menu("Alert area: \(NWSAlertScope(stored: nwsScopeText).summary(counties: CountyCenters.bundled))") {
+                    Picker("Alert area", selection: $nwsScopeText) {
+                        Text("Where I am").tag(NWSAlertScope.here.stored)
+                        ForEach(NWSAlertScope.offeredRadii, id: \.self) { miles in
+                            Text("Within \(miles) mi").tag(NWSAlertScope.within(miles: Double(miles)).stored)
+                        }
+                        switch NWSAlertScope(stored: nwsScopeText) {
+                        case .states, .zones, .counties:
+                            Text(NWSAlertScope(stored: nwsScopeText).summary(counties: CountyCenters.bundled))
+                                .tag(nwsScopeText)
+                        default:
+                            EmptyView()
+                        }
                     }
-                    switch NWSAlertScope(stored: nwsScopeText) {
-                    case .states, .zones, .counties:
-                        Text(NWSAlertScope(stored: nwsScopeText).summary(counties: CountyCenters.bundled)).tag(nwsScopeText)
-                    default:
-                        EmptyView()
+                    .pickerStyle(.inline)
+                    Divider()
+                    Button("Choose States…", systemImage: "map") {
+                        nwsScopeText = NWSAreaChecklist.starting(.states).stored
+                        nwsChecklist = .states
                     }
-                }
-                .pickerStyle(.menu)
-                Button("Choose States…") {
-                    nwsScopeText = NWSAreaChecklist.starting(.states).stored
-                    nwsChecklist = .states
-                }
-                Button("Choose Counties…") {
-                    nwsScopeText = NWSAreaChecklist.starting(.counties).stored
-                    nwsChecklist = .counties
+                    Button("Choose Counties…", systemImage: "square.grid.3x3") {
+                        nwsScopeText = NWSAreaChecklist.starting(.counties).stored
+                        nwsChecklist = .counties
+                    }
                 }
             }
             Toggle("Observed Paths", isOn: $showsPaths)
@@ -2407,9 +2415,6 @@ struct StationsMapView: View {
                 if on { followMode = .heading } else if followMode != .free { followMode = .free }
             }
             #endif
-            .sheet(item: $tappedAlerts) { tapped in
-                HazardAlertsSheet(features: tapped.features)
-            }
             .sheet(item: $pendingObject) { pending in
                 APRSPlaceObjectSheet(
                     coordinate: pending.coordinate,

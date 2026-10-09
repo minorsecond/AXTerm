@@ -281,6 +281,12 @@ extension HazardText {
             if let expires = feature.expires { timing.append("until " + time.string(from: expires)) }
         }
         var timingText = timing.joined(separator: " · ")
+        // The zone, once: the agency's text names its own, and the two read
+        // as a conflict without it.
+        if let last = feature.expires ?? feature.issued,
+           let zone = timeZone.abbreviation(for: last), !timingText.isEmpty {
+            timingText += " " + zone
+        }
         if let first = timingText.first { timingText = first.uppercased() + timingText.dropFirst() }
         let qualifiers = [feature.severity, feature.properties["urgency"], feature.properties["certainty"]]
             .compactMap { $0 }.filter { !$0.isEmpty && $0 != "Unknown" }
@@ -311,8 +317,16 @@ extension HazardText {
             if line.isEmpty { flush(); continue }
             if line.hasPrefix("* ") || line.hasPrefix("- ") { flush() }
             current += current.isEmpty ? line : " " + line
+            // A warning lists each area on a line of its own, ending "...".
+            if line.hasSuffix("...") { flush() }
         }
         flush()
+        // The product's code (EWWMOB, SVRBOU) leads some texts; it is not
+        // part of what the agency says.
+        if let first = result.first, first.count <= 9,
+           first.allSatisfy({ $0.isUppercase || $0.isNumber }), result.count > 1 {
+            result.removeFirst()
+        }
         return result
     }
 }

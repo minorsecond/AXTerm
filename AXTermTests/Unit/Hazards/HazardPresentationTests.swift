@@ -212,7 +212,9 @@ final class HazardPresentationTests: XCTestCase {
         let card = HazardText.detail(feature, now: now, timeZone: denver, locale: locale)
         XCTAssertEqual(card.title, "Red Flag Warning")
         XCTAssertEqual(card.headline, feature.headline)
-        XCTAssertEqual(plain(card.timing), "Issued 10:28 AM · until 8:00 PM")
+        // With the zone: the agency's own text names its zone, and the two
+        // read as a conflict without it (5:45 PM CDT beside 4:45 PM).
+        XCTAssertEqual(plain(card.timing), "Issued 10:28 AM · until 8:00 PM MDT")
         XCTAssertEqual(card.area, "Arapahoe; Douglas; Elbert")
         XCTAssertEqual(card.severity, "Severe · Expected · Likely")
         XCTAssertEqual(card.description, ["* WHAT...Gusty winds and low humidity.", "* WHERE...Fire weather zone 238."])
@@ -232,5 +234,12 @@ final class HazardPresentationTests: XCTestCase {
         XCTAssertEqual(HazardText.paragraphs("* LOCATIONS AFFECTED\n- Homewood\n- Monroeville\n\n* WIND\n- Peak wind 35-45\nmph with gusts."),
                        ["* LOCATIONS AFFECTED", "- Homewood", "- Monroeville", "* WIND", "- Peak wind 35-45 mph with gusts."])
         XCTAssertEqual(HazardText.paragraphs(""), [])
+        // The product's code on a line of its own leads; it is not text.
+        XCTAssertEqual(HazardText.paragraphs("EWWMOB\n\nThe National Weather Service in Mobile has issued a"),
+                       ["The National Weather Service in Mobile has issued a"])
+        // Each area in a warning's list ends "..." on its own line.
+        XCTAssertEqual(HazardText.paragraphs("* Extreme Wind Warning for...\nSouthern Okaloosa County in northwestern Florida...\nSouthern Santa Rosa County in northwestern Florida...\n\n* Until 845 PM CDT."),
+                       ["* Extreme Wind Warning for...", "Southern Okaloosa County in northwestern Florida...",
+                        "Southern Santa Rosa County in northwestern Florida...", "* Until 845 PM CDT."])
     }
 }

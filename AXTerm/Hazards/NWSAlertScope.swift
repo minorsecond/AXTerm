@@ -78,8 +78,16 @@ nonisolated enum NWSAlertScope: Equatable, Sendable {
     /// The summary with county names where the table knows them, e.g.
     /// "Arapahoe, Douglas".
     func summary(counties table: CountyCenters?) -> String {
-        guard case .counties(let codes) = self, let table else { return summary }
-        return codes.map { table.county($0)?.shortName ?? $0 }.joined(separator: ", ")
+        switch self {
+        case .states(let codes) where codes.count <= 2:
+            // One or two in full ("Florida"); more stay as codes to fit.
+            return codes.map { USStates.name($0) ?? $0 }.joined(separator: ", ")
+        case .counties(let codes):
+            guard let table else { return summary }
+            return codes.map { table.county($0)?.shortName ?? $0 }.joined(separator: ", ")
+        default:
+            return summary
+        }
     }
 
     /// The radii the area control offers.
@@ -503,38 +511,14 @@ struct NWSAreaChecklist: View {
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                 switch kind {
-                case .states:
-                    let home = Self.stationPoint.flatMap { CountyCenters.bundled?.state(at: $0) }
-                    ForEach(scope.stateChoices(home: home).filter(matchesSearch)) { state in
-                        Toggle(isOn: Binding(get: { scope.isChosen(state: state.code) },
-                                             set: { _ in stored = scope.toggling(state: state.code).stored })) {
-                            Text(state.name)
-                        }
-                    }
-                case .counties:
-                    let entries = scope.countyChoices(table: CountyCenters.bundled, near: Self.stationPoint, search: search)
-                    if entries.isEmpty {
-                        Text(Self.stationPoint == nil && search.isEmpty
-                             ? "Search for a county by name. Set a grid square to list the nearest ones."
-                             : "No county by that name.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(entries, id: \.geoid) { entry in
-                        Toggle(isOn: Binding(get: { scope.isChosen(county: entry.geoid) },
-                                             set: { _ in stored = scope.toggling(county: entry.geoid).stored })) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("\(entry.county.name), \(entry.county.state)")
-                                if !entry.distanceText.isEmpty {
-                                    Text(entry.distanceText)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
+                case .states: statesList
+                case .counties: countiesList
                 }
             }
             .navigationTitle(kind == .states ? "Alert States" : "Alert Counties")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -542,13 +526,103 @@ struct NWSAreaChecklist: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 360, minHeight: 440)
+        .frame(minWidth: 380, minHeight: 480)
+        #else
+        .presentationDragIndicator(.visible)
         #endif
+    }
+
+    @ViewBuilder
+    private var statesList: some View {
+        let home = Self.stationPoint.flatMap { CountyCenters.bundled?.state(at: $0) }
+        let all = scope.stateChoices(home: home).filter(matchesSearch)
+        let chosen = all.filter { scope.isChosen(state: $0.code) }
+        if !chosen.isEmpty {
+            Section("Chosen") {
+                ForEach(chosen) { state in stateRow(state, home: home) }
+            }
+        }
+        Section {
+            ForEach(all.filter { !scope.isChosen(state: $0.code) }) { state in stateRow(state, home: home) }
+        } header: {
+            Text("States")
+        } footer: {
+            Text("Every alert the NWS has for the states you tick.")
+        }
+    }
+
+    private func stateRow(_ state: USStates.State, home: String?) -> some View {
+        ChecklistRow(title: state.name, detail: state.code == home ? "Your station" : nil,
+                     chosen: scope.isChosen(state: state.code)) {
+            withAnimation { stored = scope.toggling(state: state.code).stored }
+        }
+    }
+
+    @ViewBuilder
+    private var countiesList: some View {
+        let entries = scope.countyChoices(table: CountyCenters.bundled, near: Self.stationPoint, search: search)
+        let chosen = entries.filter { scope.isChosen(county: $0.geoid) }
+        let rest = entries.filter { !scope.isChosen(county: $0.geoid) }
+        if !chosen.isEmpty {
+            Section("Chosen") {
+                ForEach(chosen, id: \.geoid) { entry in countyRow(entry) }
+            }
+        }
+        Section {
+            if rest.isEmpty {
+                Text(Self.stationPoint == nil && search.isEmpty
+                     ? "Search for a county by name. Set a grid square to list the nearest ones."
+                     : "No other county by that name.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(rest, id: \.geoid) { entry in countyRow(entry) }
+        } header: {
+            Text(search.trimmingCharacters(in: .whitespaces).isEmpty ? "Nearby" : "Matches")
+        } footer: {
+            Text("The NWS is asked for these counties' states, and the alerts that name one of them are kept, "
+                 + "including ones issued by forecast zone.")
+        }
+    }
+
+    private func countyRow(_ entry: CountyCenters.Entry) -> some View {
+        ChecklistRow(title: "\(entry.county.name), \(entry.county.state)",
+                     detail: entry.distanceText.isEmpty ? nil : entry.distanceText,
+                     chosen: scope.isChosen(county: entry.geoid)) {
+            withAnimation { stored = scope.toggling(county: entry.geoid).stored }
+        }
     }
 
     private func matchesSearch(_ state: USStates.State) -> Bool {
         let query = search.trimmingCharacters(in: .whitespaces)
         return query.isEmpty || state.name.localizedCaseInsensitiveContains(query) || state.code == query.uppercased()
+    }
+}
+/// A row that ticks on a tap: a checkmark, the way a list of choices
+/// reads on iPhone, iPad and Mac alike.
+private struct ChecklistRow: View {
+    let title: String
+    let detail: String?
+    let chosen: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).foregroundStyle(.primary)
+                    if let detail {
+                        Text(detail).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
+                    .imageScale(.large)
+                    .foregroundStyle(chosen ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 #endif
