@@ -23,6 +23,9 @@ nonisolated struct MapTrack: Identifiable, Sendable, Equatable {
     /// are reconciled together and a trail never outlives its dot.
     var id: String
     var points: [GreatCircle.Point]
+    /// When each point was beaconed, oldest first, so a trail can fade by
+    /// age and dash the stretches between fixes far apart (`TrailPlan`).
+    var times: [Date] = []
     /// Drawn fading from clear at its oldest point to the station's color
     /// at the newest: car mode's short tail.
     var fades: Bool = false
@@ -73,7 +76,8 @@ nonisolated struct MapTrack: Identifiable, Sendable, Equatable {
                 id: id,
                 points: recent.map {
                     GreatCircle.Point(latitude: $0.latitude, longitude: $0.longitude)
-                })
+                },
+                times: recent.map(\.timestamp))
         }
     }
 

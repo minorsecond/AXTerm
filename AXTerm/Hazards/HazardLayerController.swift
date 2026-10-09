@@ -16,6 +16,7 @@ final class HazardLayerController: ObservableObject {
     private let now: () -> Date
     private var lastAttempt: Date?
     private var lastPoint: GreatCircle.Point?
+    private var lastScope: NWSAlertScope?
     private var cancellable: AnyCancellable?
 
     init(nws: NWSAlertLayer, now: @escaping () -> Date = Date.init) {
@@ -29,17 +30,24 @@ final class HazardLayerController: ObservableObject {
     var drawnFeatures: [HazardFeature] { nwsEnabled ? nws.features : [] }
 
     func tick(nwsEnabled enabled: Bool, position: GreatCircle.Point?) async {
+        await tick(nwsEnabled: enabled, scope: .here, position: position)
+    }
+
+    func tick(nwsEnabled enabled: Bool, scope: NWSAlertScope, position: GreatCircle.Point?) async {
         if enabled != nwsEnabled {
             nwsEnabled = enabled
             // Back on: show the saved copy, at its real age, until a fetch.
             if enabled, nws.features.isEmpty { nws.loadCached() }
         }
         guard HazardRefreshPolicy.shouldRefresh(enabled: enabled, position: position,
-                                                lastAttempt: lastAttempt, lastPoint: lastPoint,
-                                                now: now()), let position else { return }
+                                                lastAttempt: lastAttempt, lastPoint: lastPoint, now: now(),
+                                                needsPosition: scope.needsPosition,
+                                                scopeChanged: lastScope.map { $0 != scope } ?? false)
+        else { return }
         lastAttempt = now()
         lastPoint = position
-        await nws.refresh(near: position)
+        lastScope = scope
+        await nws.refresh(scope, at: position)
     }
 
     /// Where the hazard layers keep their last good copy: Application
@@ -76,7 +84,8 @@ final class HazardLayerController: ObservableObject {
         while !Task.isCancelled {
             let enabled = AppEnvironment.defaults.object(forKey: "stations.showsNWSAlerts") as? Bool
                 ?? MapLayerDefaults.showsNWSAlerts
-            await tick(nwsEnabled: enabled, position: position())
+            let scope = NWSAlertScope(stored: AppEnvironment.defaults.string(forKey: NWSAlertScope.storageKey) ?? "")
+            await tick(nwsEnabled: enabled, scope: scope, position: position())
             status.nwsCaption = nwsCaption()
             try? await Task.sleep(nanoseconds: 15_000_000_000)
         }

@@ -95,11 +95,22 @@ final class NWSAlertLayer: ObservableObject {
         lastFetched = saved.fetchedAt
     }
 
+    /// Alerts at the station's position.
     func refresh(near point: GreatCircle.Point) async {
+        await refresh(.here, at: point)
+    }
+
+    /// Alerts for a scope (`NWSAlertScope`): at the station, within a radius
+    /// of it, for chosen states, or for chosen zones.
+    func refresh(_ scope: NWSAlertScope, at point: GreatCircle.Point?) async {
+        guard let request = NWSAlertFeed.alertsRequest(scope, at: point) else {
+            problem = "No position for this station, so no alerts can be fetched for where it is."
+            return
+        }
         let parsed: [HazardFeature]
         let fetchedAt = now()
         do {
-            let data = try await fetcher.data(for: NWSAlertFeed.alertsRequest(near: point))
+            let data = try await fetcher.data(for: request)
             parsed = try NWSAlertFeed.parse(data, fetchedAt: fetchedAt)
             try? cache.saveAlerts(data, fetchedAt: fetchedAt)
         } catch {
@@ -118,7 +129,7 @@ final class NWSAlertLayer: ObservableObject {
             try? cache.saveZone(id, data: data)
         }
         outlines = known
-        features = NWSAlertFeed.resolvingZones(parsed, outlines: known)
+        features = scope.keeping(NWSAlertFeed.resolvingZones(parsed, outlines: known), near: point)
         // History is a record, not the display: a write that fails costs
         // the record, never the alerts on screen.
         try? history?.record(features)

@@ -8,8 +8,10 @@ final class HazardLayerControllerTests: XCTestCase {
     private final class CountingFetcher: HazardFetching, @unchecked Sendable {
         var data = Data()
         private(set) var count = 0
+        private(set) var lastURL: String?
         func data(for request: URLRequest) async throws -> Data {
             count += 1
+            lastURL = request.url?.absoluteString
             return data
         }
     }
@@ -77,6 +79,18 @@ final class HazardLayerControllerTests: XCTestCase {
         XCTAssertEqual(controller.nwsCaption(now: now), "1 alert · fetched just now")
         await controller.tick(nwsEnabled: false, position: home)
         XCTAssertNil(controller.nwsCaption(now: now))
+    }
+
+    /// The area choice reaches the fetch, and a change fetches at once.
+    func testTheAreaChoiceReachesTheFetchAndAChangeFetchesAtOnce() async throws {
+        let fetcher = CountingFetcher()
+        let controller = try controller(fetcher)
+        await controller.tick(nwsEnabled: true, scope: .here, position: home)
+        XCTAssertEqual(fetcher.count, 1)
+        now = now.addingTimeInterval(10)
+        await controller.tick(nwsEnabled: true, scope: .states(["CO"]), position: home)
+        XCTAssertEqual(fetcher.count, 2, "a new area fetches without waiting")
+        XCTAssertEqual(fetcher.lastURL, "https://api.weather.gov/alerts/active?area=CO")
     }
 
     // MARK: - The position it fetches for

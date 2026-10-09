@@ -149,4 +149,29 @@ final class NWSAlertLayerTests: XCTestCase {
         XCTAssertEqual(try history.versions(of: id).first?.lastSeen, layer.lastFetched,
                        "a failed fetch is not a sighting")
     }
+
+    // MARK: - Scopes
+
+    /// Chosen states: fetched by state, with no position needed.
+    func testAStateScopeFetchesByStateWithoutAPosition() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers["https://api.weather.gov/alerts/active?area=CO"] = .success(try fixture("nws-alerts-polygon"))
+        let layer = layer(fetcher)
+        await layer.refresh(.states(["CO"]), at: nil)
+        XCTAssertEqual(fetcher.asked, ["https://api.weather.gov/alerts/active?area=CO"])
+        XCTAssertEqual(layer.features.count, 1)
+    }
+
+    /// Within a radius: only what comes within it is kept. The fixture's
+    /// warning is in Alabama, far outside 50 miles of home.
+    func testARadiusKeepsOnlyWhatIsWithinIt() async throws {
+        let fetcher = FakeFetcher()
+        let url = try XCTUnwrap(NWSAlertFeed.alertsRequest(.within(miles: 50), at: home)?.url?.absoluteString)
+        fetcher.answers[url] = .success(try fixture("nws-alerts-polygon"))
+        let layer = layer(fetcher)
+        await layer.refresh(.within(miles: 50), at: home)
+        XCTAssertEqual(fetcher.asked, [url])
+        XCTAssertTrue(layer.features.isEmpty)
+        XCTAssertEqual(layer.lastFetched, now, "fetched, and nothing was near")
+    }
 }

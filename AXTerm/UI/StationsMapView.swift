@@ -185,6 +185,7 @@ struct StationsMapView: View {
     /// arrive uninvited alongside one.
     @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = MapLayerDefaults.showsPredictedPaths
     @AppStorage("stations.showsNWSAlerts") private var showsNWSAlerts = MapLayerDefaults.showsNWSAlerts
+    @AppStorage(NWSAlertScope.storageKey) private var nwsScopeText = NWSAlertScope.here.stored
     /// Graph analysis of the observed network: which stations everything
     /// depends on, and which stations cluster together.
     /// Which terrain shading is drawn, if any. Off by default: the map's
@@ -1127,7 +1128,7 @@ struct StationsMapView: View {
         // the same ones.
         let entriesForMap = visibility.entriesForMap(visibleEntries)
         let stationScope = HeardStationMap.scope(
-            observerLabel: observerGrid.uppercased(),
+            observerLabel: StationLabel.grid(at: observerPosition?.point, settingsGrid: observerGrid),
             observer: observer, entries: entriesForMap, now: Date(),
             distanceInMiles: settings.distanceUnitIsMiles,
             showsDistance: center.showsDistances)
@@ -1916,6 +1917,23 @@ struct StationsMapView: View {
             Toggle("NWS Alerts", isOn: $showsNWSAlerts)
             if showsNWSAlerts, let caption = layerStatus.nwsCaption {
                 Text(caption)
+            }
+            if showsNWSAlerts {
+                // Typing state or zone codes does not fit a menu; a choice
+                // made elsewhere still shows here as its summary.
+                Picker("Alert area: \(NWSAlertScope(stored: nwsScopeText).summary)", selection: $nwsScopeText) {
+                    Text("Where I am").tag(NWSAlertScope.here.stored)
+                    ForEach(NWSAlertScope.offeredRadii, id: \.self) { miles in
+                        Text("Within \(miles) mi").tag(NWSAlertScope.within(miles: Double(miles)).stored)
+                    }
+                    if case .states = NWSAlertScope(stored: nwsScopeText) {
+                        Text(NWSAlertScope(stored: nwsScopeText).summary).tag(nwsScopeText)
+                    }
+                    if case .zones = NWSAlertScope(stored: nwsScopeText) {
+                        Text(NWSAlertScope(stored: nwsScopeText).summary).tag(nwsScopeText)
+                    }
+                }
+                .pickerStyle(.menu)
             }
             Toggle("Observed Paths", isOn: $showsPaths)
             Toggle("Predicted Paths", isOn: $showsPredictedPaths)

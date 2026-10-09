@@ -446,6 +446,12 @@ struct MapLayerToggles: View {
                       + "connection the last copy stays, fainter once it is ten minutes old, "
                       + "and an expired alert becomes a dashed outline.")
 
+            if showsNWSAlerts {
+                NWSAlertAreaControl()
+                    .controlSize(.small)
+                    .padding(.leading, 22)
+            }
+
             layer("Cluster Markers", "circle.grid.3x3.fill",
                   isOn: $clustersStations,
                   caption: clustersStations ? "Zoomed out, never hazards" : nil,

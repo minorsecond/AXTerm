@@ -494,14 +494,14 @@ struct OfflineBasemapMapView {
         /// each. A trail grows a fix at a time; the polyline for one is rebuilt
         /// only when its path actually changed, on the same batching clock as
         /// the links so a new fix does not ripple the whole label layer.
-        var trailLines: [String: MKPolyline] = [:]
+        /// Each station's trail as drawn: its pieces (`TrailPieceLine`) and,
+        /// for the selection, its fix dots (`TrailFixesOverlay`).
+        var trailLines: [String: [MKOverlay]] = [:]
         var trailGeometry: [String: String] = [:]
         /// Identity set of the trail polylines, so the renderer can tell a
         /// trail apart from a network path line at render time — MapKit hands
         /// back a bare `MKPolyline` either way.
         var trailLineIDs: Set<ObjectIdentifier> = []
-        /// The trails drawn as fading tails (`MapTrack.fades`).
-        var fadingTrailLineIDs: Set<ObjectIdentifier> = []
         /// When the map was last structurally mutated — an annotation added
         /// or removed, a line rebuilt. Inserting anything makes MapKit
         /// re-resolve its own label layer: an animated ripple of the city
@@ -539,6 +539,22 @@ struct OfflineBasemapMapView {
             if overlay is ElevationOverlay {
                 return ElevationOverlayRenderer(overlay: overlay)
             }
+            if let piece = overlay as? TrailPieceLine {
+                // A movement trail (`TrailPlan`): the marker's color, fading
+                // from its oldest fix to now, dashed where fixes are far apart.
+                let renderer = MKGradientPolylineRenderer(polyline: piece)
+                renderer.setColors([piece.color.withAlphaComponent(piece.startAlpha),
+                                    piece.color.withAlphaComponent(piece.endAlpha)],
+                                   locations: [0, 1])
+                renderer.lineWidth = piece.width
+                renderer.lineCap = .round
+                renderer.lineJoin = .round
+                if piece.dashed { renderer.lineDashPattern = [5, 6] }
+                return renderer
+            }
+            if let fixes = overlay as? TrailFixesOverlay {
+                return TrailFixesRenderer(fixes: fixes)
+            }
             if let hazard = overlay as? HazardPolygon {
                 let renderer = MKPolygonRenderer(polygon: hazard)
                 let rgb = HazardOverlayBuilder.rgb(hazard.hex) ?? (red: 0.66, green: 0.66, blue: 0.66)
@@ -565,27 +581,6 @@ struct OfflineBasemapMapView {
                 return renderer
             case let line as MKPolyline:
                 let renderer = MKPolylineRenderer(polyline: line)
-                // A movement trail: the road a rover drove, drawn thin and
-                // quiet under its dot. Its color is the same recency tint the
-                // marker carries, so the trail and the station read as one.
-                // Car mode's tail fades from clear at its oldest fix to the
-                // station's color at its newest.
-                if fadingTrailLineIDs.contains(ObjectIdentifier(line)) {
-                    let gradient = MKGradientPolylineRenderer(polyline: line)
-                    gradient.setColors([color.withAlphaComponent(0), color.withAlphaComponent(0.85)],
-                                       locations: [0, 1])
-                    gradient.lineWidth = 3.5
-                    gradient.lineCap = .round
-                    gradient.lineJoin = .round
-                    return gradient
-                }
-                if trailLineIDs.contains(ObjectIdentifier(line)) {
-                    renderer.strokeColor = color.withAlphaComponent(0.7)
-                    renderer.lineWidth = 2.5
-                    renderer.lineCap = .round
-                    renderer.lineJoin = .round
-                    return renderer
-                }
                 if let link = linkStyles[ObjectIdentifier(line)] {
                     renderer.strokeColor = color.withAlphaComponent(
                         link.isPrediction ? 0.5
@@ -1468,12 +1463,8 @@ struct OfflineBasemapMapView {
 
                 // And the trails, for the same reason — they too must sit
                 // above the terrain the operator just added.
-                mapView.removeOverlays(Array(coordinator.trailLines.values))
-                for (_, line) in coordinator.trailLines {
-                    coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
-                }
+                mapView.removeOverlays(coordinator.trailLines.values.flatMap { $0 })
                 coordinator.trailLineIDs.removeAll()
-                coordinator.fadingTrailLineIDs.removeAll()
                 coordinator.trailLines.removeAll()
                 coordinator.trailGeometry.removeAll()
             }
@@ -1543,64 +1534,64 @@ struct OfflineBasemapMapView {
         }
     }
 
-    /// Reconciles the APRS movement trails, one polyline per station, on the
-    /// same batching clock as the links. A trail is touched only when its
-    /// path changed — a rover beaconing a new fix rebuilds its own line and
-    /// nothing else's. Drawn below the network links (`.aboveRoads`, added
-    /// before them within a pass is not guaranteed, but trails and links do
-    /// not overlap in meaning, so their order among each other is immaterial;
-    /// both sit under the labels and the dots).
+    /// Reconciles the APRS movement trails on the same batching clock as the
+    /// links. Each station's trail is drawn as `TrailPlan` lays it out: in
+    /// its marker's color, fading from its oldest fix to now, dashed where
+    /// fixes are far apart, and with the selected station's fixes marked. A
+    /// trail is rebuilt only when its plan or color changed, so a rover
+    /// beaconing a new fix touches its own trail and nothing else's.
     private func applyTrails(to mapView: MKMapView, coordinator: Coordinator) {
         let wanted = Dictionary(
             tracks.filter { $0.points.count >= 2 }.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first })
         let mayMutate = coordinator.structuralMutationsAllowed
 
-        // Trails whose station is gone, or which no longer have enough fixes.
-        for (id, line) in coordinator.trailLines where wanted[id] == nil {
-            guard mayMutate else { break }
-            mapView.removeOverlay(line)
-            coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
-            coordinator.trailLineIDs.remove(ObjectIdentifier(line))
-            coordinator.fadingTrailLineIDs.remove(ObjectIdentifier(line))
+        func remove(_ id: String) {
+            for overlay in coordinator.trailLines[id] ?? [] {
+                mapView.removeOverlay(overlay)
+                coordinator.trailLineIDs.remove(ObjectIdentifier(overlay))
+            }
             coordinator.trailLines.removeValue(forKey: id)
             coordinator.trailGeometry.removeValue(forKey: id)
+        }
+
+        // Trails whose station is gone, or which no longer have enough fixes.
+        for id in coordinator.trailLines.keys where wanted[id] == nil {
+            guard mayMutate else { break }
+            remove(id)
             coordinator.structuralMutationDidOccur = true
         }
 
         for (id, track) in wanted {
-            // A tail and a trail over the same fixes are drawn differently.
-            let geometry = track.geometrySignature + (track.fades ? "|tail" : "")
-            let color = Self.tint(forSignalOfStation: id, in: scope)
-
-            if coordinator.trailGeometry[id] == geometry,
-               let line = coordinator.trailLines[id] {
-                // Same path; the recency color may have shifted as the
-                // station aged. Repaint the existing overlay in place — no
-                // insert, so the label layer is not disturbed.
-                if coordinator.overlayColors[ObjectIdentifier(line)] != color {
-                    coordinator.overlayColors[ObjectIdentifier(line)] = color
-                    mapView.renderer(for: line)?.setNeedsDisplay()
-                }
-                continue
-            }
-
+            let site = scope.sites.first { $0.id == id }
+            let color = Self.trailTint(symbol: aprsSymbols[id], signal: site?.signal)
+            let plan = TrailPlan.plan(points: track.points, times: track.times,
+                                      emphasis: TrailPlan.emphasis(for: id, selection: selection),
+                                      baseAlpha: TrailPlan.baseAlpha(for: site?.signal ?? .unknown))
+            let signature = "\(plan)|\(color.description)"
+            guard coordinator.trailGeometry[id] != signature else { continue }
             guard mayMutate else { continue }
-            if let stale = coordinator.trailLines[id] {
-                mapView.removeOverlay(stale)
-                coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(stale))
-                coordinator.trailLineIDs.remove(ObjectIdentifier(stale))
-                coordinator.fadingTrailLineIDs.remove(ObjectIdentifier(stale))
+            remove(id)
+            var overlays: [MKOverlay] = plan.pieces.map { TrailPieceLine.make($0, color: color) }
+            if !plan.fixes.isEmpty { overlays.append(TrailFixesOverlay(points: plan.fixes, color: color)) }
+            for overlay in overlays {
+                coordinator.trailLineIDs.insert(ObjectIdentifier(overlay))
+                mapView.addOverlay(overlay, level: .aboveRoads)
             }
-            let line = track.polyline
-            coordinator.overlayColors[ObjectIdentifier(line)] = color
-            coordinator.trailLineIDs.insert(ObjectIdentifier(line))
-            if track.fades { coordinator.fadingTrailLineIDs.insert(ObjectIdentifier(line)) }
-            coordinator.trailLines[id] = line
-            coordinator.trailGeometry[id] = geometry
-            mapView.addOverlay(line, level: .aboveRoads)
+            coordinator.trailLines[id] = overlays
+            coordinator.trailGeometry[id] = signature
             coordinator.structuralMutationDidOccur = true
         }
+    }
+
+    /// A trail wears its marker's color: the type color for a station that
+    /// beaconed a symbol, the recency color for one with none, gray for a
+    /// station no longer in the scope. Recency is the trail's opacity
+    /// (`TrailPlan.baseAlpha`), as it is the marker's.
+    static func trailTint(symbol: APRSMapSymbol?, signal: StationScope.Signal?) -> PlatformColor {
+        if let symbol { return Coordinator.typeColour(forCode: symbol.code) }
+        guard let signal else { return .systemGray }
+        return Coordinator.tint(forSignal: signal)
     }
 
     /// The recency tint for a station id, so its trail matches its dot. Falls

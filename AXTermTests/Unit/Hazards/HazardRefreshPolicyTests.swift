@@ -44,4 +44,17 @@ final class HazardRefreshPolicyTests: XCTestCase {
                                                         lastAttempt: now.addingTimeInterval(-30),
                                                         lastPoint: home, now: now))
     }
+
+    /// States and zones need no position.
+    func testAScopeThatNeedsNoPositionFetchesWithoutOne() {
+        XCTAssertTrue(HazardRefreshPolicy.shouldRefresh(enabled: true, position: nil, lastAttempt: nil,
+                                                       lastPoint: nil, now: now, needsPosition: false))
+    }
+
+    /// A different area chosen: fetch now, not two minutes later.
+    func testChangingTheAreaFetchesAtOnce() {
+        XCTAssertTrue(HazardRefreshPolicy.shouldRefresh(enabled: true, position: home,
+                                                       lastAttempt: now.addingTimeInterval(-10),
+                                                       lastPoint: home, now: now, scopeChanged: true))
+    }
 }
