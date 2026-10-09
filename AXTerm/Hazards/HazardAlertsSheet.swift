@@ -37,7 +37,9 @@ struct HazardAlertsSheet: View {
         #if os(macOS)
         .frame(minWidth: 440, idealWidth: 520, minHeight: 420, idealHeight: 600)
         #else
-        .presentationDetents([.medium, .large])
+        // Half height on a phone, over the map; full on an iPad, where half
+        // a form sheet showed three rows of seven.
+        .presentationDetents(UIDevice.current.userInterfaceIdiom == .pad ? [.large] : [.medium, .large])
         .presentationDragIndicator(.visible)
         #endif
     }
