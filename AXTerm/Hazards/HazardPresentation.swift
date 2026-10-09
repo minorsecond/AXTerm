@@ -236,3 +236,83 @@ nonisolated enum HazardText {
         return hours < 48 ? "\(hours) h ago" : "\(hours / 24) days ago"
     }
 }
+
+/// What the alert card shows for one alert (`HazardText.detail`).
+struct HazardDetail: Equatable, Identifiable {
+    let id: String
+    let title: String
+    let headline: String?
+    let timing: String
+    let expired: Bool
+    let area: String?
+    let severity: String?
+    let description: [String]
+    let instruction: [String]
+    let source: String
+    let hex: String
+}
+
+extension HazardText {
+    /// The alerts whose shape holds a tapped point, the most urgent first
+    /// (NWS priority), then the one that lasts longest.
+    static func alerts(at point: GreatCircle.Point, in features: [HazardFeature]) -> [HazardFeature] {
+        features.filter { feature in
+            guard let geometry = feature.geometry, case .polygons = geometry else { return false }
+            return HazardContainment.contains(geometry, point)
+        }
+        .sorted { a, b in
+            let (pa, pb) = (NWSHazardStyle.style(for: a.event).priority, NWSHazardStyle.style(for: b.event).priority)
+            if pa != pb { return pa < pb }
+            return (a.expires ?? .distantFuture) > (b.expires ?? .distantFuture)
+        }
+    }
+
+    /// The card for one alert: the agency's own words and times, its area,
+    /// and where the copy came from and how old it is.
+    static func detail(_ feature: HazardFeature, now: Date, timeZone: TimeZone = .current,
+                       locale: Locale = .current) -> HazardDetail {
+        let time = formatter(timeZone, locale)
+        let expired = feature.expires.map { $0 <= now } ?? false
+        var timing: [String] = []
+        if let expires = feature.expires, expired {
+            timing.append("Expired at " + time.string(from: expires))
+        } else {
+            if let issued = feature.issued { timing.append("Issued " + time.string(from: issued)) }
+            if let expires = feature.expires { timing.append("until " + time.string(from: expires)) }
+        }
+        var timingText = timing.joined(separator: " · ")
+        if let first = timingText.first { timingText = first.uppercased() + timingText.dropFirst() }
+        let qualifiers = [feature.severity, feature.properties["urgency"], feature.properties["certainty"]]
+            .compactMap { $0 }.filter { !$0.isEmpty && $0 != "Unknown" }
+        return HazardDetail(
+            id: feature.id, title: feature.event, headline: feature.headline,
+            timing: timingText, expired: expired,
+            area: feature.properties["areaDesc"].flatMap { $0.isEmpty ? nil : $0 },
+            severity: qualifiers.isEmpty ? nil : qualifiers.joined(separator: " · "),
+            description: paragraphs(feature.properties["description"] ?? ""),
+            instruction: paragraphs(feature.properties["instruction"] ?? ""),
+            source: feature.source + " · fetched " + age(from: feature.fetchedAt, to: now),
+            hex: NWSHazardStyle.style(for: feature.event).hex)
+    }
+
+    /// Agency text, which arrives wrapped at about 69 columns, joined back
+    /// into paragraphs. A blank line or a bullet ("* ", "- ") starts a new
+    /// one.
+    static func paragraphs(_ text: String) -> [String] {
+        var result: [String] = []
+        var current = ""
+        func flush() {
+            let trimmed = current.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { result.append(trimmed) }
+            current = ""
+        }
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { flush(); continue }
+            if line.hasPrefix("* ") || line.hasPrefix("- ") { flush() }
+            current += current.isEmpty ? line : " " + line
+        }
+        flush()
+        return result
+    }
+}

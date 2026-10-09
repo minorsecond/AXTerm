@@ -63,6 +63,7 @@ struct StationMapView: View {
     /// which is the only one that can host overlays and intercept taps.
     var drawing: Binding<MapDrawingSession>?
     var onDrawTap: (CLLocationCoordinate2D) -> Void = { _ in }
+    var onPlainTap: (CLLocationCoordinate2D) -> Void = { _ in }
     /// Secondary click on open map — see `OfflineBasemapMapView`.
     var onSecondaryClick: (CLLocationCoordinate2D) -> Void = { _ in }
     var draggableSiteIDs: Set<String> = []
@@ -200,6 +201,7 @@ struct StationMapView: View {
             drawing: drawing ?? .constant(MapDrawingSession()),
             onDrawTap: onDrawTap,
             onSecondaryClick: onSecondaryClick,
+            onPlainTap: onPlainTap,
             draggableSiteIDs: draggableSiteIDs,
             onObjectDragged: onObjectDragged,
             selection: $selection,

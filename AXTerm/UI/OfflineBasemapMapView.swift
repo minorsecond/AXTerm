@@ -82,6 +82,9 @@ struct OfflineBasemapMapView {
     /// The place-an-object affordance: the Mac idiom for "act on this point"
     /// is a secondary click, not a long press, and a drag must not become one.
     var onSecondaryClick: (CLLocationCoordinate2D) -> Void = { _ in }
+    /// A tap on open map, outside drawing and off any marker: used to show
+    /// the hazard alerts under the tap.
+    var onPlainTap: (CLLocationCoordinate2D) -> Void = { _ in }
     /// Site ids the operator may drag — our own live objects, and nothing
     /// else. A station's marker is a report of where it said it was; dragging
     /// it would be editing somebody else's claim.
@@ -434,7 +437,7 @@ struct OfflineBasemapMapView {
         /// A tap in a drawing mode becomes a vertex; otherwise MapKit's own
         /// selection handling is left alone.
         @objc func handleTap(_ recognizer: PlatformTapGestureRecognizer) {
-            guard parent.drawing.isDrawing, let mapView else { return }
+            guard let mapView else { return }
             let point = recognizer.location(in: mapView)
             // Ignore taps that landed on a station marker: the operator meant
             // to look at the station, not to place a vertex on top of it.
@@ -443,7 +446,35 @@ struct OfflineBasemapMapView {
                 return
             }
             let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
+            guard parent.drawing.isDrawing else {
+                plainTap(coordinate)
+                return
+            }
             parent.onDrawTap(coordinate)
+        }
+
+        #if os(iOS)
+        private var pendingPlainTap: DispatchWorkItem?
+        private var lastPlainTap = Date.distantPast
+        #endif
+
+        /// On iOS a double tap zooms the map, so a single tap waits a moment
+        /// and is dropped when a second one follows.
+        private func plainTap(_ coordinate: CLLocationCoordinate2D) {
+            #if os(iOS)
+            let now = Date()
+            defer { lastPlainTap = now }
+            if now.timeIntervalSince(lastPlainTap) < 0.3 {
+                pendingPlainTap?.cancel()
+                pendingPlainTap = nil
+                return
+            }
+            let work = DispatchWorkItem { [weak self] in self?.parent.onPlainTap(coordinate) }
+            pendingPlainTap = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+            #else
+            parent.onPlainTap(coordinate)
+            #endif
         }
 
         /// A secondary click on open map offers to place an object there.

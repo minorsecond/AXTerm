@@ -179,4 +179,58 @@ final class HazardPresentationTests: XCTestCase {
                                                activity: .loadingOutlines(done: 2, total: 18)),
                        "Loading outlines 3 of 18…")
     }
+
+    // MARK: - Tapping an alert
+
+    /// A tap inside overlapping alerts lists every one there, the most
+    /// urgent first; a tap outside lists none.
+    func testATapListsTheAlertsUnderItMostUrgentFirst() {
+        var storm = redFlag()
+        storm.event = "Severe Thunderstorm Warning"
+        var tornado = redFlag()
+        tornado.event = "Tornado Warning"
+        var far = redFlag()
+        far.geometry = .polygons([[[GreatCircle.Point(latitude: 30, longitude: -90),
+                                    GreatCircle.Point(latitude: 30, longitude: -89),
+                                    GreatCircle.Point(latitude: 31, longitude: -89)]]])
+        let inside = GreatCircle.Point(latitude: 39.5, longitude: -104.5)
+        XCTAssertEqual(HazardText.alerts(at: inside, in: [storm, far, tornado]).map(\.event),
+                       ["Tornado Warning", "Severe Thunderstorm Warning"])
+        XCTAssertTrue(HazardText.alerts(at: GreatCircle.Point(latitude: 45, longitude: -100), in: [storm]).isEmpty)
+    }
+
+    /// What the alert card shows: the agency's words, its times, its area,
+    /// where it came from and how old the copy is.
+    func testTheCardShowsTheAlertInFull() {
+        var feature = redFlag()
+        feature.headline = "Red Flag Warning issued October 9 at 10:28AM MDT by NWS Boulder CO"
+        feature.severity = "Severe"
+        feature.properties = ["areaDesc": "Arapahoe; Douglas; Elbert",
+                              "urgency": "Expected", "certainty": "Likely",
+                              "description": "* WHAT...Gusty winds and low humidity.\n\n* WHERE...Fire weather zone\n238.",
+                              "instruction": "A Red Flag Warning means that critical fire\nweather conditions are occurring now."]
+        let card = HazardText.detail(feature, now: now, timeZone: denver, locale: locale)
+        XCTAssertEqual(card.title, "Red Flag Warning")
+        XCTAssertEqual(card.headline, feature.headline)
+        XCTAssertEqual(plain(card.timing), "Issued 10:28 AM · until 8:00 PM")
+        XCTAssertEqual(card.area, "Arapahoe; Douglas; Elbert")
+        XCTAssertEqual(card.severity, "Severe · Expected · Likely")
+        XCTAssertEqual(card.description, ["* WHAT...Gusty winds and low humidity.", "* WHERE...Fire weather zone 238."])
+        XCTAssertEqual(card.instruction, ["A Red Flag Warning means that critical fire weather conditions are occurring now."])
+        XCTAssertEqual(card.source, "NWS Boulder CO · fetched 3 min ago")
+        XCTAssertEqual(card.hex, NWSHazardStyle.style(for: "Red Flag Warning").hex)
+        XCTAssertFalse(card.expired)
+
+        let old = HazardText.detail(redFlag(expiresIn: -600), now: now, timeZone: denver, locale: locale)
+        XCTAssertTrue(old.expired)
+        XCTAssertTrue(plain(old.timing)?.hasPrefix("Expired") == true, old.timing)
+    }
+
+    /// The NWS wraps its text at about 69 columns. Lines are joined back
+    /// into paragraphs; blank lines and bullets ("* ", "- ") start new ones.
+    func testWrappedAgencyTextBecomesParagraphs() {
+        XCTAssertEqual(HazardText.paragraphs("* LOCATIONS AFFECTED\n- Homewood\n- Monroeville\n\n* WIND\n- Peak wind 35-45\nmph with gusts."),
+                       ["* LOCATIONS AFFECTED", "- Homewood", "- Monroeville", "* WIND", "- Peak wind 35-45 mph with gusts."])
+        XCTAssertEqual(HazardText.paragraphs(""), [])
+    }
 }

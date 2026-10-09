@@ -187,6 +187,13 @@ struct StationsMapView: View {
     @AppStorage("stations.showsNWSAlerts") private var showsNWSAlerts = MapLayerDefaults.showsNWSAlerts
     @AppStorage(NWSAlertScope.storageKey) private var nwsScopeText = NWSAlertScope.here.stored
     @State private var nwsChecklist: NWSAreaChecklist.Kind?
+    /// The NWS alerts under the last tap on the map, shown in a sheet.
+    @State private var tappedAlerts: TappedAlerts?
+
+    private struct TappedAlerts: Identifiable {
+        let id = UUID()
+        let features: [HazardFeature]
+    }
     /// Graph analysis of the observed network: which stations everything
     /// depends on, and which stations cluster together.
     /// Which terrain shading is drawn, if any. Off by default: the map's
@@ -2362,6 +2369,12 @@ struct StationsMapView: View {
                                overlays: chrome.overlays ? overlayStore.visibleLayers : [],
                                drawing: $drawing,
                                onDrawTap: handleDrawTap,
+                               onPlainTap: { coordinate in
+                                   let point = GreatCircle.Point(latitude: coordinate.latitude,
+                                                                 longitude: coordinate.longitude)
+                                   let hits = HazardText.alerts(at: point, in: hazards)
+                                   if !hits.isEmpty { tappedAlerts = TappedAlerts(features: hits) }
+                               },
                                onSecondaryClick: { coordinate in
                                    // Only where placing is possible at all.
                                    guard onPlaceObject != nil else { return }
@@ -2394,6 +2407,9 @@ struct StationsMapView: View {
                 if on { followMode = .heading } else if followMode != .free { followMode = .free }
             }
             #endif
+            .sheet(item: $tappedAlerts) { tapped in
+                HazardAlertsSheet(features: tapped.features)
+            }
             .sheet(item: $pendingObject) { pending in
                 APRSPlaceObjectSheet(
                     coordinate: pending.coordinate,
