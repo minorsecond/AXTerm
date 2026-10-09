@@ -50,6 +50,46 @@ final class HazardLayerController: ObservableObject {
         await nws.refresh(scope, at: position)
     }
 
+    /// Keeps the caption current while the layer works, so a fetch shows
+    /// as it happens instead of after the next tick.
+    func watch(status: MapLayerStatus) {
+        watching = [
+            nws.$activity.sink { [weak self, weak status] activity in
+                guard let self else { return }
+                status?.nwsCaption = self.nwsCaption(activity: activity)
+            },
+            nws.objectWillChange.sink { [weak self, weak status] in
+                // Published values change after this fires; read them once
+                // they have.
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    status?.nwsCaption = self.nwsCaption()
+                }
+            },
+        ]
+    }
+    private var watching: [AnyCancellable] = []
+
+    /// Waits out the loop's interval, or less when the NWS layer's switch or
+    /// area changes, so a new choice is fetched at once.
+    static func waitForNextTick(seconds: Double, defaults: UserDefaults) async {
+        let keys = ["stations.showsNWSAlerts", NWSAlertScope.storageKey]
+        let before = keys.map { defaults.object(forKey: $0) as? NSObject }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+            group.addTask {
+                // Any instance may write the suite (AppStorage keeps its
+                // own), so every change is compared against the values.
+                for await _ in NotificationCenter.default.notifications(named: UserDefaults.didChangeNotification) {
+                    let after = keys.map { defaults.object(forKey: $0) as? NSObject }
+                    if after != before { return }
+                }
+            }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
     /// Where the hazard layers keep their last good copy: Application
     /// Support for a normal install, and a folder of its own for a test-mode
     /// instance, apart from the operator's install and from other instances.
@@ -82,18 +122,21 @@ final class HazardLayerController: ObservableObject {
     /// layer's switch and tick. `HazardRefreshPolicy` decides whether a tick
     /// fetches, so this costs nothing while the layer is off.
     func run(position: @escaping @MainActor () -> GreatCircle.Point?, status: MapLayerStatus) async {
+        watch(status: status)
         while !Task.isCancelled {
             let enabled = AppEnvironment.defaults.object(forKey: "stations.showsNWSAlerts") as? Bool
                 ?? MapLayerDefaults.showsNWSAlerts
             let scope = NWSAlertScope(stored: AppEnvironment.defaults.string(forKey: NWSAlertScope.storageKey) ?? "")
             await tick(nwsEnabled: enabled, scope: scope, position: position())
             status.nwsCaption = nwsCaption()
-            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            await Self.waitForNextTick(seconds: 15, defaults: AppEnvironment.defaults)
         }
     }
 
     /// The caption under the NWS layer's switch, or nil while it is off.
-    func nwsCaption(now: Date = Date()) -> String? {
+    func nwsCaption(now: Date = Date()) -> String? { nwsCaption(activity: nws.activity, now: now) }
+
+    private func nwsCaption(activity: NWSAlertLayer.Activity?, now: Date = Date()) -> String? {
         guard nwsEnabled else { return nil }
         return HazardText.layerCaption(count: nws.features.count, lastFetched: nws.lastFetched,
                                        problem: nws.problem, stale: nws.isStale, now: now,
@@ -101,7 +144,8 @@ final class HazardLayerController: ObservableObject {
                                        pausedUntil: nws.pausedUntil.flatMap { $0 > now ? $0 : nil },
                                        rejected: nws.requestRejected,
                                        unplaced: nws.unplacedCount,
-                                       zonesLoading: nws.zonesStillLoading)
+                                       zonesLoading: nws.zonesStillLoading,
+                                       activity: activity)
     }
 
     /// The station's position as the map draws it, read from the settings

@@ -1,3 +1,4 @@
+import Combine
 import GRDB
 import XCTest
 @testable import AXTerm
@@ -94,14 +95,46 @@ final class HazardLayerControllerTests: XCTestCase {
         XCTAssertEqual(fetcher.lastURL, "https://api.weather.gov/alerts/active?area=CO")
     }
 
-    /// A new distance is a new area: fetched at once.
-    func testChangingTheDistanceFetchesAtOnce() async throws {
+    /// A new distance applies at once, from the copy fetched moments ago
+    /// when it covers the same states (operator, 2026-10-09: "we should
+    /// cache so we don't have to refetch every time a user changes a
+    /// setting"). It used to fetch again.
+    func testChangingTheDistanceAppliesAtOnceWithoutFetchingAgain() async throws {
         let fetcher = CountingFetcher()
         let controller = try controller(fetcher)
         await controller.tick(nwsEnabled: true, scope: .within(miles: 25), position: home)
         now = now.addingTimeInterval(10)
         await controller.tick(nwsEnabled: true, scope: .within(miles: 50), position: home)
-        XCTAssertEqual(fetcher.count, 2)
+        XCTAssertEqual(fetcher.count, 1)
+    }
+
+    /// The caption follows the layer as it works, not only after each tick.
+    func testTheCaptionFollowsAFetchAsItHappens() async throws {
+        let controller = try controller(CountingFetcher())
+        let status = MapLayerStatus()
+        controller.watch(status: status)
+        var captions: [String?] = []
+        let watching = status.$nwsCaption.sink { captions.append($0) }
+        await controller.tick(nwsEnabled: true, position: home)
+        let settled = expectation(description: "caption settles")
+        DispatchQueue.main.async { settled.fulfill() }
+        await fulfillment(of: [settled], timeout: 2)
+        watching.cancel()
+        XCTAssertTrue(captions.contains("Fetching alerts…"), "\(captions)")
+        XCTAssertTrue(status.nwsCaption?.hasPrefix("1 alert") == true, status.nwsCaption ?? "nil")
+    }
+
+    /// A change to the layer's settings wakes the loop rather than waiting
+    /// out its 15 seconds.
+    func testASettingChangeWakesTheLoop() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: TestDefaults.name("hazard-wake")))
+        let started = Date()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            defaults.set("states:CO", forKey: NWSAlertScope.storageKey)
+        }
+        await HazardLayerController.waitForNextTick(seconds: 10, defaults: defaults)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
     }
 
     /// States need no position, end to end.

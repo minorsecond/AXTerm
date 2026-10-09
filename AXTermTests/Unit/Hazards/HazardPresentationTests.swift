@@ -165,4 +165,18 @@ final class HazardPresentationTests: XCTestCase {
                                                stale: false, now: now, rejected: true),
                        "NWS did not accept that area · showing 8 alerts fetched 1 min ago")
     }
+
+    /// A fetch in progress shows in the caption, first time or not.
+    func testTheCaptionSaysWhatIsBeingFetched() {
+        let now = Date(timeIntervalSince1970: 1_791_590_000)
+        XCTAssertEqual(HazardText.layerCaption(count: 0, lastFetched: nil, problem: nil, stale: false, now: now,
+                                               activity: .fetchingAlerts),
+                       "Fetching alerts…")
+        XCTAssertEqual(HazardText.layerCaption(count: 3, lastFetched: now.addingTimeInterval(-120), problem: nil,
+                                               stale: false, now: now, activity: .fetchingAlerts),
+                       "Fetching alerts… · showing 3 alerts fetched 2 min ago")
+        XCTAssertEqual(HazardText.layerCaption(count: 0, lastFetched: nil, problem: nil, stale: false, now: now,
+                                               activity: .loadingOutlines(done: 2, total: 18)),
+                       "Loading outlines 3 of 18…")
+    }
 }

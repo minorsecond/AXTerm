@@ -84,6 +84,30 @@ final class NWSAlertLayer: ObservableObject {
     /// the problem, not the connection.
     @Published private(set) var requestRejected = false
 
+    /// What a refresh is doing right now, for the caption; nil when idle.
+    enum Activity: Equatable {
+        case fetchingAlerts
+        case loadingOutlines(done: Int, total: Int)
+    }
+
+    @Published private(set) var activity: Activity?
+
+    /// How long a fetched answer serves a change of area without asking
+    /// again: a setting change is not a reason to refetch. Shorter than the
+    /// timed refresh (`HazardRefreshPolicy.interval`), so that one always
+    /// asks.
+    static let reuseWindow: TimeInterval = 90
+
+    /// The last answer the NWS gave, kept for `reuseWindow`.
+    private struct Recent {
+        let url: String
+        /// The states it covered when asked by area, else nil.
+        let states: Set<String>?
+        let parsed: [HazardFeature]
+        let fetchedAt: Date
+    }
+    private var recent: Recent?
+
     /// At most this many new zone outlines per refresh, `zonePause` apart. A
     /// statewide storm can name a hundred zones, and asking for all of them
     /// at once is how a client gets throttled.
@@ -138,17 +162,27 @@ final class NWSAlertLayer: ObservableObject {
     func refresh(_ scope: NWSAlertScope, at point: GreatCircle.Point?) async {
         // Paused at the server's request: ask for nothing until it is over.
         if let pausedUntil, now() < pausedUntil { return }
-        guard let request = NWSAlertFeed.alertsRequest(scope, at: point, counties: counties ?? CountyCenters.bundled) else {
+        guard let request = NWSAlertFeed.alertsRequest(scope, at: point, counties: counties ?? CountyCenters.bundled),
+              let url = request.url else {
             problem = "No position for this station, so no alerts can be fetched for where it is."
             return
         }
+        defer { activity = nil }
         var parsed: [HazardFeature]
-        let fetchedAt = now()
-        do {
-            let data = try await fetcher.data(for: request)
-            parsed = try NWSAlertFeed.parse(data, fetchedAt: fetchedAt)
-            try? cache.saveAlerts(data, fetchedAt: fetchedAt)
-        } catch HazardFetchError.throttled(let retryAfter) {
+        let fetchedAt: Date
+        let wanted = Self.areaStates(of: url)
+        if let reused = reusable(url: url.absoluteString, states: wanted) {
+            parsed = reused.parsed
+            fetchedAt = reused.fetchedAt
+        } else {
+            activity = .fetchingAlerts
+            fetchedAt = now()
+            do {
+                let data = try await fetcher.data(for: request)
+                parsed = try NWSAlertFeed.parse(data, fetchedAt: fetchedAt)
+                try? cache.saveAlerts(data, fetchedAt: fetchedAt)
+                recent = Recent(url: url.absoluteString, states: wanted, parsed: parsed, fetchedAt: fetchedAt)
+            } catch HazardFetchError.throttled(let retryAfter) {
             pause(retryAfter: retryAfter)
             return
         } catch HazardFetchError.status(let code) where (400..<500).contains(code) {
@@ -161,6 +195,7 @@ final class NWSAlertLayer: ObservableObject {
             problem = "Could not reach the National Weather Service (\(error.localizedDescription)). "
                 + (lastFetched == nil ? "No alerts have been fetched yet." : "Showing the alerts fetched earlier.")
             return
+            }
         }
         // Within a radius, an alert whose counties are all far away is
         // dropped before any of its zones' outlines is fetched.
@@ -178,7 +213,9 @@ final class NWSAlertLayer: ObservableObject {
         pausedUntil = nil
         consecutiveThrottles = 0
         var known = knownOutlines()
-        for url in NWSAlertFeed.zonesToFetch(for: parsed, cached: Set(known.keys)).prefix(maxZonesPerRefresh) {
+        let zoneURLs = Array(NWSAlertFeed.zonesToFetch(for: parsed, cached: Set(known.keys)).prefix(maxZonesPerRefresh))
+        for (done, url) in zoneURLs.enumerated() {
+            activity = .loadingOutlines(done: done, total: zoneURLs.count)
             await sleep(zonePause)
             let id = url.lastPathComponent
             let data: Data
@@ -202,6 +239,32 @@ final class NWSAlertLayer: ObservableObject {
         // History is a record, not the display: a write that fails costs
         // the record, never the alerts on screen.
         try? history?.record(features)
+    }
+
+    /// A fresh answer to this request, or to a wider one by state, trimmed
+    /// to the states asked for.
+    private func reusable(url: String, states wanted: Set<String>?) -> Recent? {
+        guard let recent, now().timeIntervalSince(recent.fetchedAt) < Self.reuseWindow else { return nil }
+        if recent.url == url { return recent }
+        guard let wanted, let covered = recent.states, wanted.isSubset(of: covered) else { return nil }
+        let trimmed = recent.parsed.filter { !Self.states(of: $0).isDisjoint(with: wanted) }
+        return Recent(url: url, states: wanted, parsed: trimmed, fetchedAt: recent.fetchedAt)
+    }
+
+    /// The states an `area=` request asks for; nil for any other request.
+    static func areaStates(of url: URL) -> Set<String>? {
+        guard let area = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "area" })?.value else { return nil }
+        return Set(area.split(separator: ",").map(String.init))
+    }
+
+    /// The states an alert covers, from the first two letters of its UGC
+    /// zone and county codes (COZ039, COC005).
+    static func states(of feature: HazardFeature) -> Set<String> {
+        guard let json = feature.properties["geocode"]?.data(using: .utf8),
+              let geocode = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+              let ugc = geocode["UGC"] as? [String] else { return [] }
+        return Set(ugc.map { String($0.prefix(2)) })
     }
 
     /// The server asked us to slow down: its Retry-After when it gave one,

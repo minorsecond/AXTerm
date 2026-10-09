@@ -174,6 +174,7 @@ nonisolated enum HazardText {
                              scope: NWSAlertScope = .here, pausedUntil: Date? = nil, rejected: Bool = false,
                              unplaced: Int = 0,
                              zonesLoading: Int = 0,
+                             activity: NWSAlertLayer.Activity? = nil,
                              timeZone: TimeZone = .current, locale: Locale = .current) -> String {
         let loading: String
         switch (unplaced, zonesLoading) {
@@ -185,6 +186,15 @@ nonisolated enum HazardText {
             "NWS asked to slow down; next try " + formatter(timeZone, locale).string(from: $0)
         }
         let refused = rejected ? "NWS did not accept that area" : nil
+        if let activity {
+            let doing: String
+            switch activity {
+            case .fetchingAlerts: doing = "Fetching alerts…"
+            case .loadingOutlines(let done, let total): doing = "Loading outlines \(min(done + 1, total)) of \(total)…"
+            }
+            guard let lastFetched, count > 0 else { return doing }
+            return "\(doing) · showing \(count == 1 ? "1 alert" : "\(count) alerts") fetched \(age(from: lastFetched, to: now))"
+        }
         guard let lastFetched else {
             return paused ?? refused ?? (problem == nil ? "Not fetched yet" : "Could not reach the NWS")
         }

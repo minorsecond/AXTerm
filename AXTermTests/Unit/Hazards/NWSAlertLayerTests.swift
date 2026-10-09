@@ -1,3 +1,4 @@
+import Combine
 import GRDB
 import XCTest
 @testable import AXTerm
@@ -72,6 +73,7 @@ final class NWSAlertLayerTests: XCTestCase {
         XCTAssertNotNil(first.features.first?.geometry, "every zone known: drawn")
         XCTAssertEqual(fetcher.asked.count, 1 + 18)
 
+        now = now.addingTimeInterval(HazardRefreshPolicy.interval)
         await first.refresh(near: home)
         XCTAssertEqual(fetcher.asked.count, 1 + 18 + 1, "the second refresh asks for the alerts only")
 
@@ -215,6 +217,7 @@ final class NWSAlertLayerTests: XCTestCase {
         XCTAssertNil(layer.problem)
 
         fetcher.answers[alertsURL] = .failure(HazardFetchError.throttled(retryAfter: nil))
+        now = now.addingTimeInterval(HazardRefreshPolicy.interval)
         await layer.refresh(near: home)
         XCTAssertEqual(layer.pausedUntil, now.addingTimeInterval(120), "a success starts the doubling over")
     }
@@ -256,6 +259,7 @@ final class NWSAlertLayerTests: XCTestCase {
         XCTAssertNil(layer.features.first?.geometry, "not all its zones yet: listed, not drawn")
         XCTAssertEqual(layer.zonesStillLoading, 8)
 
+        now = now.addingTimeInterval(HazardRefreshPolicy.interval)
         await layer.refresh(near: home)
         XCTAssertEqual(fetcher.asked.count, 1 + 10 + 1 + 8)
         XCTAssertNotNil(layer.features.first?.geometry)
@@ -356,5 +360,73 @@ final class NWSAlertLayerTests: XCTestCase {
         let kept = self.layer(archuleta)
         await kept.refresh(.counties(["08007"]), at: nil)
         XCTAssertEqual(kept.features.count, 1)
+    }
+
+    // MARK: - Not fetching again for a setting change
+
+    /// Switching from a state to one of its counties asks for the same
+    /// thing: answered from the copy fetched a moment ago.
+    func testTheSameRequestMomentsLaterIsNotFetchedAgain() async throws {
+        let fetcher = FakeFetcher()
+        let url = "https://api.weather.gov/alerts/active?area=CO"
+        fetcher.answers[url] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(fetcher)
+        let layer = layer(fetcher)
+        await layer.refresh(.states(["CO"]), at: nil)
+        now = now.addingTimeInterval(30)
+        await layer.refresh(.counties(["08007"]), at: nil)
+        XCTAssertEqual(fetcher.asked.filter { $0 == url }.count, 1)
+        XCTAssertEqual(layer.features.count, 1)
+    }
+
+    /// A wider area fetched moments ago serves a narrower one, trimmed to
+    /// the states asked for: Colorado and Wyoming, then Wyoming alone.
+    func testAWiderAreaServesANarrowerOne() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers["https://api.weather.gov/alerts/active?area=CO,WY"] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(fetcher)
+        let layer = layer(fetcher)
+        await layer.refresh(.states(["CO", "WY"]), at: nil)
+        XCTAssertEqual(layer.features.count, 1)
+        let asked = fetcher.asked.count
+        now = now.addingTimeInterval(30)
+        await layer.refresh(.states(["WY"]), at: nil)
+        XCTAssertEqual(fetcher.asked.count, asked, "no new request")
+        XCTAssertTrue(layer.features.isEmpty, "the Colorado outlook is not Wyoming's")
+    }
+
+    /// Past the reuse window it is fetched again: the copy is for setting
+    /// changes, not a way around the refresh.
+    func testAnOldCopyIsFetchedAgain() async throws {
+        let fetcher = FakeFetcher()
+        let url = "https://api.weather.gov/alerts/active?area=CO"
+        fetcher.answers[url] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(fetcher)
+        let layer = layer(fetcher)
+        await layer.refresh(.states(["CO"]), at: nil)
+        now = now.addingTimeInterval(NWSAlertLayer.reuseWindow + 1)
+        await layer.refresh(.states(["CO"]), at: nil)
+        XCTAssertEqual(fetcher.asked.filter { $0 == url }.count, 2)
+    }
+
+    // MARK: - Saying what it is doing
+
+    /// While it works, the layer says what it is doing: the alerts, then
+    /// each outline, then nothing once done.
+    func testTheLayerSaysWhatItIsDoing() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers["https://api.weather.gov/alerts/active?zone=COC007"] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(fetcher)
+        let layer = layer(fetcher)
+        var seen: [NWSAlertLayer.Activity?] = []
+        let watching = layer.$activity.sink { seen.append($0) }
+        await layer.refresh(.zones(["COC007"]), at: nil)
+        watching.cancel()
+        XCTAssertEqual(seen.first ?? nil, nil)
+        XCTAssertTrue(seen.contains(.fetchingAlerts))
+        XCTAssertTrue(seen.contains(.loadingOutlines(done: 0, total: 18)))
+        XCTAssertTrue(seen.contains(.loadingOutlines(done: 17, total: 18)))
+        XCTAssertEqual(seen.last ?? .fetchingAlerts, nil)
+        XCTAssertNil(layer.activity)
     }
 }
