@@ -47,7 +47,8 @@ struct OfflineMapsView: View {
             importSection
             if suggestedRegion != nil { downloadSection }
             terrainSection
-            statusSection
+            // With a region to download, its status sits under its button.
+            if suggestedRegion == nil { statusSection }
         }
         .formStyle(.grouped)
         .fileImporter(isPresented: $isPickingFile,
@@ -172,15 +173,8 @@ struct OfflineMapsView: View {
                 Text("The elevation store could not be opened, so terrain analysis is unavailable.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if case .downloading(let done, let total) = elevation.downloadState {
-                HStack {
-                    ProgressView(value: Double(done), total: Double(max(total, 1)))
-                    Text("\(done) of \(total)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Button("Cancel") { elevation.cancelDownload() }
-                        .buttonStyle(.borderless)
-                }
+            } else if elevation.downloadState.isBusy, let progress = DownloadProgress.terrain(elevation.downloadState) {
+                DownloadProgressRow(progress: progress, stopTitle: "Cancel") { elevation.cancelDownload() }
             } else if let drawnRegion {
                 let estimate = elevation.estimate(covering: drawnRegion)
                 Button {
@@ -220,6 +214,10 @@ struct OfflineMapsView: View {
                 Text("Set your grid square first. Terrain is fetched around your station, so it needs to know where that is.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            if !elevation.downloadState.isBusy, let progress = DownloadProgress.terrain(elevation.downloadState) {
+                DownloadProgressRow(progress: progress, stopTitle: nil, stop: {})
             }
 
             if case .failed(let message) = elevation.downloadState {
@@ -302,17 +300,18 @@ struct OfflineMapsView: View {
                     Stepper("z\(zoomRange.lowerBound)", value: Binding(
                         get: { zoomRange.lowerBound },
                         set: { zoomRange = min($0, zoomRange.upperBound)...zoomRange.upperBound }),
-                            in: 1...18)
+                            in: selectedSource.offeredZoom)
                     Stepper("z\(zoomRange.upperBound)", value: Binding(
                         get: { zoomRange.upperBound },
                         set: { zoomRange = zoomRange.lowerBound...max($0, zoomRange.lowerBound) }),
-                            in: 1...18)
+                            in: selectedSource.offeredZoom)
                 }
             }
             .explain("Zoom levels to store, lowest to highest. Every extra level roughly quadruples the tile count, so the top of the range is what decides the size. z8–z13 covers 'see the region' to 'see the roads'.")
 
             if let region = suggestedRegion {
-                let estimate = OfflineRegionDownloader.estimate(region: region, zoomRange: zoomRange)
+                let estimate = OfflineRegionDownloader.estimate(region: region, zoomRange: zoomRange,
+                                                                source: selectedSource)
                 LabeledContent("Estimated size") {
                     Text("\(estimate.tileCount.formatted()) tiles · about \(estimate.sizeDescription)")
                         .font(.caption)
@@ -327,6 +326,38 @@ struct OfflineMapsView: View {
                 Label("Download \(suggestedRegionName)", systemImage: "arrow.down.circle")
             }
             .disabled(store.downloader.state.isBusy || !selectedSource.permitsBulkDownload)
+
+            regionStatus
+        }
+        .onChange(of: selectedSource) { source in
+            // A source with fewer levels pulls the range down to what it has.
+            let top = source.offeredZoom.upperBound
+            if zoomRange.upperBound > top {
+                zoomRange = min(zoomRange.lowerBound, top)...top
+            }
+        }
+    }
+
+    /// The download's status right under its button, where the eye already
+    /// is when it is pressed.
+    @ViewBuilder
+    private var regionStatus: some View {
+        if let progress = DownloadProgress.region(store.downloader.state), store.downloader.state.isBusy {
+            DownloadProgressRow(progress: progress, stopTitle: "Stop") { store.downloader.cancel() }
+                // Stopping keeps what has already been stored: a partial
+                // download is a partial map, not a wasted one.
+                .explain("Tiles already stored are kept if you stop. The download resumes from where it left off rather than starting again.")
+        } else if let progress = DownloadProgress.region(store.downloader.state) {
+            DownloadProgressRow(progress: progress, stopTitle: nil, stop: {})
+        } else {
+            switch store.downloader.state {
+            case .failed(let message), .refused(let message):
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            default:
+                EmptyView()
+            }
         }
     }
 
@@ -382,7 +413,8 @@ struct OfflineMapsView: View {
 
     private func startDownload(confirmed: Bool) {
         guard let region = suggestedRegion else { return }
-        let estimate = OfflineRegionDownloader.estimate(region: region, zoomRange: zoomRange)
+        let estimate = OfflineRegionDownloader.estimate(region: region, zoomRange: zoomRange,
+                                                        source: selectedSource)
         if estimate.isLarge && !confirmed {
             confirmation = Self.basemapConfirmation(estimate)
             return
@@ -586,6 +618,41 @@ final class MapOverlayInteraction: ObservableObject {
             }
 
             store.add(data: data, filename: url.lastPathComponent, projectionWKT: projection)
+        }
+    }
+}
+
+/// A spinner until something has landed, then a bar, with the line that
+/// says what is happening and, while it runs, a way to stop it.
+private struct DownloadProgressRow: View {
+    let progress: DownloadProgress
+    let stopTitle: String?
+    let stop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !progress.isDone {
+                if let fraction = progress.fraction {
+                    ProgressView(value: fraction)
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
+            }
+            HStack {
+                if progress.isDone {
+                    Label(progress.text, systemImage: "checkmark.circle")
+                        .foregroundStyle(.green)
+                } else {
+                    Text(progress.text)
+                        .monospacedDigit()
+                }
+                Spacer()
+                if let stopTitle {
+                    Button(stopTitle, action: stop)
+                        .controlSize(.small)
+                }
+            }
+            .font(.caption)
         }
     }
 }
