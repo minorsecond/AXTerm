@@ -1,3 +1,4 @@
+import GRDB
 import XCTest
 @testable import AXTerm
 
@@ -124,5 +125,28 @@ final class NWSAlertLayerTests: XCTestCase {
         XCTAssertEqual(layer.features.count, 1, "the product is still listed")
         XCTAssertNil(layer.features.first?.geometry, "but not drawn with a zone missing")
         XCTAssertEqual(layer.lastFetched, now, "the alerts themselves were fetched")
+    }
+
+    // MARK: - History (§8)
+
+    /// Every good fetch goes into history, recorded from the start so
+    /// nothing fetched before the time slider exists is lost.
+    func testAGoodRefreshIsRecordedInHistoryAndAFailedOneIsNot() async throws {
+        let queue = try DatabaseQueue()
+        try DatabaseManager.migrator.migrate(queue)
+        let history = SQLiteHazardHistoryStore(dbQueue: queue)
+        let fetcher = FakeFetcher()
+        fetcher.answers[alertsURL] = .success(try fixture("nws-alerts-polygon"))
+        let layer = NWSAlertLayer(fetcher: fetcher, cache: HazardDiskCache(directory: directory),
+                                  history: history, now: { [unowned self] in self.now })
+        await layer.refresh(near: home)
+        let id = try XCTUnwrap(layer.features.first?.id)
+        XCTAssertEqual(try history.versions(of: id).count, 1)
+
+        fetcher.answers[alertsURL] = .failure(URLError(.notConnectedToInternet))
+        now = now.addingTimeInterval(300)
+        await layer.refresh(near: home)
+        XCTAssertEqual(try history.versions(of: id).first?.lastSeen, layer.lastFetched,
+                       "a failed fetch is not a sighting")
     }
 }

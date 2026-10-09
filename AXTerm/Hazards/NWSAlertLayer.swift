@@ -69,12 +69,16 @@ final class NWSAlertLayer: ObservableObject {
 
     private let fetcher: HazardFetching
     private let cache: HazardDiskCache
+    /// Every good fetch is recorded (Docs/HazardLayers.md §8).
+    private let history: SQLiteHazardHistoryStore?
     private let now: () -> Date
     private var outlines: [String: NWSAlertFeed.Zone]?
 
-    init(fetcher: HazardFetching, cache: HazardDiskCache, now: @escaping () -> Date = Date.init) {
+    init(fetcher: HazardFetching, cache: HazardDiskCache, history: SQLiteHazardHistoryStore? = nil,
+         now: @escaping () -> Date = Date.init) {
         self.fetcher = fetcher
         self.cache = cache
+        self.history = history
         self.now = now
     }
 
@@ -115,6 +119,9 @@ final class NWSAlertLayer: ObservableObject {
         }
         outlines = known
         features = NWSAlertFeed.resolvingZones(parsed, outlines: known)
+        // History is a record, not the display: a write that fails costs
+        // the record, never the alerts on screen.
+        try? history?.record(features)
     }
 
     private func knownOutlines() -> [String: NWSAlertFeed.Zone] {

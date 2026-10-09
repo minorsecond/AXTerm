@@ -834,8 +834,42 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 37, name: "createLearnedRoutes") { db in
             try createLearnedRoutes(db)
         }
+        registerReportedMigration(&migrator, version: 38, name: "createHazardHistory") { db in
+            try createHazardHistory(db)
+        }
         return migrator
     }()
+
+    /// Every version of every hazard fetched or received
+    /// (`SQLiteHazardHistoryStore`, Docs/HazardLayers.md §8). One row per
+    /// hazard and content; times are seconds since 1970 so they come back
+    /// exactly.
+    static func createHazardHistory(_ db: Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS hazard_history (
+                featureID TEXT NOT NULL,
+                contentHash TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                event TEXT NOT NULL,
+                headline TEXT,
+                severity TEXT,
+                source TEXT NOT NULL,
+                issued REAL,
+                expires REAL,
+                firstSeen REAL NOT NULL,
+                lastSeen REAL NOT NULL,
+                geometry TEXT,
+                zoneIDs TEXT NOT NULL DEFAULT '[]',
+                properties TEXT NOT NULL DEFAULT '{}',
+                replaces TEXT NOT NULL DEFAULT '[]',
+                PRIMARY KEY (featureID, contentHash)
+            )
+            """)
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_hazard_history_effective
+                ON hazard_history(issued, expires)
+            """)
+    }
 
     /// What each route learned, so a restart does not start every route over
     /// (`SQLiteLearnedRouteStore`). One row per radio, station and path, and
