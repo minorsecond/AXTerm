@@ -62,6 +62,9 @@ struct OfflineBasemapMapView {
     /// The inferred temperature wash, drawn beneath the network. Empty draws
     /// nothing, so a map with the layer off looks exactly as it did.
     var weatherFieldOverlays: [WeatherFieldOverlay] = []
+    /// Hazards from the hazard layers (`HazardDrawing`), drawn above the
+    /// labels in their NWS colors. Empty draws none.
+    var hazardItems: [HazardDrawing.Item] = []
     /// Fingerprint of the layer switches. When it changes, the annotation
     /// throttle is bypassed for one pass so the operator's action lands at
     /// once. See `structuralMutationsAllowed`.
@@ -524,6 +527,7 @@ struct OfflineBasemapMapView {
         #endif
         var installedTerrainIDs: [String] = []
         var installedWeatherFieldIDs: [String] = []
+        var installedHazardItems: [HazardDrawing.Item] = []
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tileOverlay = overlay as? MKTileOverlay {
@@ -534,6 +538,17 @@ struct OfflineBasemapMapView {
             }
             if overlay is ElevationOverlay {
                 return ElevationOverlayRenderer(overlay: overlay)
+            }
+            if let hazard = overlay as? HazardPolygon {
+                let renderer = MKPolygonRenderer(polygon: hazard)
+                let rgb = HazardOverlayBuilder.rgb(hazard.hex) ?? (red: 0.66, green: 0.66, blue: 0.66)
+                let color = PlatformColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+                renderer.fillColor = color.withAlphaComponent(hazard.fillAlpha)
+                renderer.strokeColor = color.withAlphaComponent(hazard.strokeAlpha)
+                renderer.lineWidth = 2
+                // Expired: a dashed outline, so it reads as history.
+                if hazard.dashed { renderer.lineDashPattern = [6, 4] }
+                return renderer
             }
 
             let color = overlayColors[ObjectIdentifier(overlay)] ?? .systemBlue
@@ -1396,6 +1411,7 @@ struct OfflineBasemapMapView {
         // path link appeared would make every new packet stutter the map.
         let terrainChanged = applyTerrain(to: mapView, coordinator: coordinator)
         applyWeatherField(to: mapView, coordinator: coordinator)
+        applyHazards(to: mapView, coordinator: coordinator)
 
         // Boundaries rebuild only when the layer set itself changes — not,
         // as before, whenever a path link appeared. The two were keyed
@@ -1420,6 +1436,7 @@ struct OfflineBasemapMapView {
             let existing = mapView.overlays.filter {
                 !($0 is MKTileOverlay) && !($0 is ElevationOverlay)
                     && !($0 is WeatherFieldOverlay)
+                    && !($0 is HazardPolygon)
                     && !coverageIDs.contains(ObjectIdentifier($0))
                     && !linkIDs.contains(ObjectIdentifier($0))
                     && !trailIDs.contains(ObjectIdentifier($0))
@@ -1632,6 +1649,19 @@ struct OfflineBasemapMapView {
             mapView.addOverlay(overlay, level: .aboveRoads)
         }
         return true
+    }
+
+    /// Adds or replaces the hazard polygons when the plan changes, in its
+    /// order: the most urgent last, on top.
+    private func applyHazards(to mapView: MKMapView, coordinator: Coordinator) {
+        guard coordinator.installedHazardItems != hazardItems else { return }
+        coordinator.installedHazardItems = hazardItems
+        mapView.removeOverlays(mapView.overlays.compactMap { $0 as? HazardPolygon })
+        for item in hazardItems {
+            for polygon in HazardOverlayBuilder.polygons(for: item) {
+                mapView.addOverlay(polygon, level: .aboveLabels)
+            }
+        }
     }
 
     /// Adds or replaces the inferred temperature wash. Its id changes when any

@@ -67,4 +67,31 @@ final class HazardLayerControllerTests: XCTestCase {
         await controller.tick(nwsEnabled: true, position: home)
         XCTAssertEqual(controller.drawnFeatures.count, 1)
     }
+
+    /// The caption under the switch: nothing while off, the count and age
+    /// once on.
+    func testTheCaptionFollowsTheSwitch() async throws {
+        let controller = try controller(CountingFetcher())
+        XCTAssertNil(controller.nwsCaption(now: now))
+        await controller.tick(nwsEnabled: true, position: home)
+        XCTAssertEqual(controller.nwsCaption(now: now), "1 alert · fetched just now")
+        await controller.tick(nwsEnabled: false, position: home)
+        XCTAssertNil(controller.nwsCaption(now: now))
+    }
+
+    // MARK: - Where the last copy is kept
+
+    /// A normal install keeps it in Application Support; a test-mode
+    /// instance keeps its own, apart from the operator's install and from
+    /// other instances, like the rest of test mode.
+    func testTheCacheFolderIsKeptApartInTestMode() {
+        let support = URL(fileURLWithPath: "/Support")
+        let temporary = URL(fileURLWithPath: "/Temp")
+        XCTAssertEqual(HazardLayerController.cacheDirectory(testInstance: nil, applicationSupport: support,
+                                                           temporary: temporary).path,
+                       "/Support/AXTerm/Hazards")
+        XCTAssertEqual(HazardLayerController.cacheDirectory(testInstance: "Station A", applicationSupport: support,
+                                                           temporary: temporary).path,
+                       "/Temp/AXTerm-Test/hazards-Station_A")
+    }
 }

@@ -62,6 +62,10 @@ nonisolated enum MapLayerCatalog {
                  family: .ax25),
 
         // Neither: the map itself.
+        // Internet-fed and off until the operator turns it on: each fetch
+        // carries the station's position (Docs/HazardLayers.md §1).
+        MapLayer(title: "NWS Alerts", storageKey: "stations.showsNWSAlerts",
+                 family: nil),
         MapLayer(title: "Cluster Markers", storageKey: "stations.clustersStations",
                  family: nil),
         MapLayer(title: "Hide Distant Stations", storageKey: "stations.hidesDistantStations",

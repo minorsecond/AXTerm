@@ -168,6 +168,17 @@ nonisolated enum HazardText {
         return line
     }
 
+    /// The line under the layer's switch: how many alerts and how old, or
+    /// that the ones shown are old because no newer copy came.
+    static func layerCaption(count: Int, lastFetched: Date?, problem: String?, stale: Bool, now: Date) -> String {
+        guard let lastFetched else { return problem == nil ? "Not fetched yet" : "Could not reach the NWS" }
+        let alerts = count == 1 ? "1 alert" : "\(count) alerts"
+        let age = age(from: lastFetched, to: now)
+        if problem != nil { return "Offline · showing \(alerts) fetched \(age)" }
+        let lead = count == 0 ? "No alerts here" : alerts
+        return "\(lead) · fetched \(age)" + (stale ? ", no newer copy" : "")
+    }
+
     private static func formatter(_ timeZone: TimeZone, _ locale: Locale) -> DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = locale

@@ -156,6 +156,7 @@ struct MapLayerToggles: View {
     @AppStorage("stations.preferTransmittedPosition") private var prefersTransmittedPosition = MapLayerDefaults.preferTransmittedPosition
     @AppStorage("stations.showsObjects") private var showsObjects = MapLayerDefaults.showsObjects
     @AppStorage("stations.clustersStations") private var clustersStations = MapLayerDefaults.clustersStations
+    @AppStorage("stations.showsNWSAlerts") private var showsNWSAlerts = MapLayerDefaults.showsNWSAlerts
     @AppStorage("stations.falloffMinutes") private var falloffMinutes = MapLayerDefaults.falloffMinutes
     /// Which layers have their options expanded. Collapsed by default: the
     /// sidebar is a list of what the map draws, and the tuning underneath it
@@ -433,6 +434,17 @@ struct MapLayerToggles: View {
                     .foregroundStyle(.tertiary)
                     .padding(.leading, 22)
             }
+
+            layer("NWS Alerts", "exclamationmark.triangle",
+                  isOn: $showsNWSAlerts,
+                  caption: showsNWSAlerts ? status.nwsCaption : nil,
+                  help: "National Weather Service watches, warnings and advisories for where "
+                      + "this station is, drawn in the NWS's own colors with the most urgent on "
+                      + "top. Fetched from api.weather.gov every two minutes while on, which "
+                      + "sends the station's position rounded to about 11 m; off, nothing is "
+                      + "sent. Each alert says who issued it and when it was fetched. With no "
+                      + "connection the last copy stays, fainter once it is ten minutes old, "
+                      + "and an expired alert becomes a dashed outline.")
 
             layer("Cluster Markers", "circle.grid.3x3.fill",
                   isOn: $clustersStations,

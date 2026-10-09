@@ -90,4 +90,34 @@ final class HazardPresentationTests: XCTestCase {
                                                    timeZone: denver, locale: locale)),
                        "Inside: Tornado Warning until 2:30 PM, and 1 more")
     }
+
+    // MARK: - The sidebar caption
+
+    func testTheCaptionSaysHowManyAndHowOld() {
+        let fetched = now.addingTimeInterval(-180)
+        XCTAssertEqual(HazardText.layerCaption(count: 2, lastFetched: fetched, problem: nil, stale: false, now: now),
+                       "2 alerts · fetched 3 min ago")
+        XCTAssertEqual(HazardText.layerCaption(count: 1, lastFetched: fetched, problem: nil, stale: false, now: now),
+                       "1 alert · fetched 3 min ago")
+        XCTAssertEqual(HazardText.layerCaption(count: 0, lastFetched: fetched, problem: nil, stale: false, now: now),
+                       "No alerts here · fetched 3 min ago")
+    }
+
+    func testTheCaptionBeforeAnyFetch() {
+        XCTAssertEqual(HazardText.layerCaption(count: 0, lastFetched: nil, problem: nil, stale: false, now: now),
+                       "Not fetched yet")
+        XCTAssertEqual(HazardText.layerCaption(count: 0, lastFetched: nil, problem: "no connection",
+                                               stale: false, now: now),
+                       "Could not reach the NWS")
+    }
+
+    /// Offline or stale: the caption says the alerts shown are old.
+    func testTheCaptionSaysWhenTheAlertsAreOld() {
+        let fetched = now.addingTimeInterval(-47 * 60)
+        XCTAssertEqual(HazardText.layerCaption(count: 2, lastFetched: fetched, problem: "no connection",
+                                               stale: true, now: now),
+                       "Offline · showing 2 alerts fetched 47 min ago")
+        XCTAssertEqual(HazardText.layerCaption(count: 2, lastFetched: fetched, problem: nil, stale: true, now: now),
+                       "2 alerts · fetched 47 min ago, no newer copy")
+    }
 }

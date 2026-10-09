@@ -25,6 +25,8 @@ struct AXTermiOSApp: App {
     /// store, as on the Mac (`AXTermApp.bbsSettings`), because the mailbox is
     /// a service the station runs rather than a preference of the app.
     @StateObject private var bbsSettings = BBSSettings()
+    /// The hazard layers (Docs/HazardLayers.md), all off until switched on.
+    @StateObject private var hazards: HazardLayerController
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -41,6 +43,7 @@ struct AXTermiOSApp: App {
 
         let queue = try? DatabaseManager.makeDatabaseQueue()
 
+        _hazards = StateObject(wrappedValue: HazardLayerController.make(database: queue))
         let packetStore = queue.map { SQLitePacketStore(dbQueue: $0) }
         let consoleStore = queue.map { SQLiteConsoleStore(dbQueue: $0) }
         let rawStore = queue.map { SQLiteRawStore(dbQueue: $0) }
@@ -73,7 +76,7 @@ struct AXTermiOSApp: App {
     var body: some Scene {
         WindowGroup {
             AXTermiOSRootView(context: winlinkContext, settings: settings, client: client,
-                              bbsSettings: bbsSettings)
+                              bbsSettings: bbsSettings, hazards: hazards)
                 .environmentObject(winlinkContext)
                 .defaultAppStorage(AppEnvironment.defaults)
                 // Launch is not a scene-phase *change*: the phase is already

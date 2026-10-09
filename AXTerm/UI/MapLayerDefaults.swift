@@ -45,6 +45,7 @@ nonisolated enum MapLayerDefaults {
         "stations.showsTracks": showsTracks,
         "stations.showsAllTracks": showsAllTracks,
         "stations.showsWeatherField": showsWeatherField,
+        "stations.showsNWSAlerts": showsNWSAlerts,
         "stations.showsObjects": showsObjects,
         "stations.showsAPRSCoverageRing": showsAPRSCoverageRing,
         "stations.showsCoverageRing": showsCoverageRing,

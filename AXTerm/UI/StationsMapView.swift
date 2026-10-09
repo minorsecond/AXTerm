@@ -53,6 +53,11 @@ struct StationsMapView: View {
     /// beacon under an SSID we no longer use is still us; a sibling SSID we
     /// never sent from is another radio.
     var ownEchoAddresses: Set<String> = []
+    /// Hazards from the hazard layers that are on (`HazardLayerController`).
+    /// Empty when every hazard layer is off, which is the default.
+    var hazards: [HazardFeature] = []
+    /// No good fetch for a while: the hazards shown are an old copy.
+    var hazardsStale = false
     /// Radios the operator has marked as on an APRS channel. They count as
     /// APRS for the map whatever else they have heard; see
     /// `RadioTrafficClassifier.mapFamilies`.
@@ -179,6 +184,7 @@ struct StationsMapView: View {
     /// is a different kind of claim from an observation and should never
     /// arrive uninvited alongside one.
     @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = MapLayerDefaults.showsPredictedPaths
+    @AppStorage("stations.showsNWSAlerts") private var showsNWSAlerts = MapLayerDefaults.showsNWSAlerts
     /// Graph analysis of the observed network: which stations everything
     /// depends on, and which stations cluster together.
     /// Which terrain shading is drawn, if any. Off by default: the map's
@@ -1818,6 +1824,15 @@ struct StationsMapView: View {
             let last = lastOwnBeacon
             let heard = last.map { CarMode.heardBy(recentPackets, ownAddresses: ownCallsigns, since: $0) } ?? []
             VStack(spacing: 12) {
+                if let observer,
+                   let inside = HazardText.insideLine(hazards, at: observer, now: context.date) {
+                    Label(inside, systemImage: "exclamationmark.triangle.fill")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                        .minimumScaleFactor(0.7)
+                        .frame(maxWidth: .infinity)
+                }
                 Text(CarMode.beaconLine(lastBeacon: last, now: context.date, heardBy: heard))
                     .font(.title3.weight(.semibold))
                     .multilineTextAlignment(.center)
@@ -1898,6 +1913,10 @@ struct StationsMapView: View {
             }
 
             Divider()
+            Toggle("NWS Alerts", isOn: $showsNWSAlerts)
+            if showsNWSAlerts, let caption = layerStatus.nwsCaption {
+                Text(caption)
+            }
             Toggle("Observed Paths", isOn: $showsPaths)
             Toggle("Predicted Paths", isOn: $showsPredictedPaths)
                 .disabled(!elevation.hasTerrain)
@@ -2303,6 +2322,8 @@ struct StationsMapView: View {
                                tracks: chrome.trails ? tracks : carTails,
                                terrainOverlays: chrome.overlays ? terrainOverlays : [],
                                weatherFieldOverlays: chrome.overlays ? weatherFieldOverlays : [],
+                               // Kept in car mode: a warning is what matters on the road.
+                               hazardItems: HazardDrawing.plan(hazards, now: Date(), stale: hazardsStale).items,
                                layerGeneration: layerGeneration,
                                clustersStations: clustersStations,
                                tileStore: offlineTiles.hasStoredTiles ? offlineTiles.store : nil,

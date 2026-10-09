@@ -20,6 +20,10 @@ final class MapLayerStatus: ObservableObject {
     /// is the "enabled but invisible" report that layer collected twice.
     @Published var hasTerrain = false
 
+    /// The NWS layer's state under its switch (`HazardText.layerCaption`):
+    /// how many alerts and how old. Nil while the layer is off.
+    @Published var nwsCaption: String?
+
     /// What the terrain forecast found, or how far off it was. Nil when
     /// there is nothing to say.
     ///

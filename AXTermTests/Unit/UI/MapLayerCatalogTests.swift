@@ -95,4 +95,15 @@ final class MapLayerCatalogTests: XCTestCase {
             MapLayerCatalog.summaryText(in: .families([]), defaults: defaults),
             "No layers")
     }
+
+    /// Hazard layers belong to the map, not to a radio, and start off: each
+    /// fetch carries the station's position (Docs/HazardLayers.md §1).
+    func testTheNWSAlertsLayerIsMapWideAndStartsOff() throws {
+        let layer = try XCTUnwrap(MapLayerCatalog.all.first { $0.storageKey == "stations.showsNWSAlerts" })
+        XCTAssertEqual(layer.title, "NWS Alerts")
+        XCTAssertNil(layer.family)
+        XCTAssertFalse(layer.defaultOn)
+        XCTAssertTrue(MapLayerCatalog.layers(in: .shared([])).contains(layer),
+                      "listed with the map-wide switches")
+    }
 }

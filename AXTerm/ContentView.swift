@@ -71,6 +71,9 @@ struct ContentView: View {
     /// Held here rather than in the map so an answer that arrives after the
     /// operator navigates away is still there when they come back.
     @StateObject private var aprsPings = APRSPingTracker()
+    /// The hazard layers. Passed by the app; a preview or a test gets one
+    /// of its own, which fetches nothing while its layers are off.
+    @StateObject private var hazards: HazardLayerController
     /// Who has decoded us and who we have decoded, for the map's coverage
     /// rings. Seeded from history rather than built live only — see
     /// `CoverageEvidenceStore`.
@@ -296,7 +299,9 @@ struct ContentView: View {
     @State private var lastTapTimes: [String: Date] = [:]
 
 
-    init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter, winlinkContext: WinlinkContext, bbsSettings: BBSSettings, station: StationServices) {
+    init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter, winlinkContext: WinlinkContext, bbsSettings: BBSSettings, station: StationServices,
+         hazards: HazardLayerController? = nil) {
+        _hazards = StateObject(wrappedValue: hazards ?? HazardLayerController.make(database: nil))
         _client = StateObject(wrappedValue: client)
         _settings = ObservedObject(wrappedValue: settings)
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
@@ -354,6 +359,8 @@ struct ContentView: View {
     /// the same view as one below it.
     var body: some View {
         presentationLayer
+            // The hazard layers: nothing is fetched until one is switched on.
+            .task { await hazards.run(position: { myPosition?.point }, status: mapLayerStatus) }
             // A file that just arrived, with Open (park rehearsal 2026-10-08).
             .overlay(alignment: .top) {
                 ReceivedFileBanner()
@@ -1749,6 +1756,8 @@ struct ContentView: View {
             myCallsign: settings.primaryCallsign,
             ownCallsigns: ownAddresses,
             ownEchoAddresses: ownEchoAddresses,
+            hazards: hazards.drawnFeatures,
+            hazardsStale: hazards.nws.isStale,
             aprsChannelRadios: aprsChannelRadios,
             possibleFamilies: possibleMapFamilies,
             lookup: callsignLookup,

@@ -64,6 +64,9 @@ struct AXTermiOSRootView: View {
     /// APRS pings from the map and the coverage evidence behind the rings,
     /// wired as on the Mac (`APRSPingWiring`).
     @StateObject private var aprsPings = APRSPingTracker()
+    /// The hazard layers. Passed by the app; a preview or a test gets one
+    /// of its own, which fetches nothing while its layers are off.
+    @StateObject private var hazards: HazardLayerController
     @StateObject private var coverageEvidence = CoverageEvidenceStore()
     @State private var pingAttachment: AnyCancellable?
     /// Downloaded terrain, owned by the shell for the same reason as on the
@@ -250,7 +253,8 @@ struct AXTermiOSRootView: View {
     }
 
     init(context: WinlinkContext, settings: AppSettingsStore, client: PacketEngine,
-         bbsSettings: BBSSettings) {
+         bbsSettings: BBSSettings, hazards: HazardLayerController? = nil) {
+        _hazards = StateObject(wrappedValue: hazards ?? HazardLayerController.make(database: nil))
         self.context = context
         self.settings = settings
         self.client = client
@@ -464,6 +468,8 @@ struct AXTermiOSRootView: View {
             tabs
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { shellWidth = $0 }
+        // The hazard layers: nothing is fetched until one is switched on.
+        .task { await hazards.run(position: { myPosition?.point }, status: mapLayerStatus) }
         .animation(.default, value: client.identityCollision)
         .modifier(FirstRunSetupHost(router: SettingsRouter.shared, settings: settings,
                                     winlinkSettings: context.settings,
@@ -1130,6 +1136,8 @@ struct AXTermiOSRootView: View {
                 myCallsign: settings.primaryCallsign,
                 ownCallsigns: ownAddresses,
                 ownEchoAddresses: ownEchoAddresses,
+                hazards: hazards.drawnFeatures,
+                hazardsStale: hazards.nws.isStale,
                 aprsChannelRadios: Set(settings.activeRadios.filter(\.aprsEnabled).map(\.id)),
                 possibleFamilies: RadioTrafficClassifier.possibleFamilies(of: settings.activeRadios),
                 lookup: callsignLookup,

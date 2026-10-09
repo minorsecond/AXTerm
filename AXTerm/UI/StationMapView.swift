@@ -46,6 +46,7 @@ struct StationMapView: View {
     /// The inferred temperature wash. Non-empty forces the MKMapView path,
     /// which is the only one that can host an overlay.
     var weatherFieldOverlays: [WeatherFieldOverlay] = []
+    var hazardItems: [HazardDrawing.Item] = []
     /// Fingerprint of the layer switches, so a deliberate change skips the
     /// annotation throttle.
     var layerGeneration: String = ""
@@ -165,7 +166,7 @@ struct StationMapView: View {
         if basemap.isOffline, let tileStore {
             mapKitMap(store: tileStore)
         } else if drawing != nil || !overlays.isEmpty || !terrainOverlays.isEmpty
-                    || !weatherFieldOverlays.isEmpty {
+                    || !weatherFieldOverlays.isEmpty || !hazardItems.isEmpty {
             mapKitMap(store: nil)
         } else {
             appleMap
@@ -193,6 +194,7 @@ struct StationMapView: View {
             tracks: tracks,
             terrainOverlays: terrainOverlays,
             weatherFieldOverlays: weatherFieldOverlays,
+            hazardItems: hazardItems,
             layerGeneration: layerGeneration,
             clustersStations: clustersStations,
             drawing: drawing ?? .constant(MapDrawingSession()),

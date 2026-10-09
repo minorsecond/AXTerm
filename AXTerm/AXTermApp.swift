@@ -19,6 +19,8 @@ struct AXTermApp: App {
     /// would each read the same defaults and neither would see the other's
     /// changes until relaunch.
     @StateObject private var bbsSettings: BBSSettings
+    /// The hazard layers (Docs/HazardLayers.md), all off until switched on.
+    @StateObject private var hazards: HazardLayerController
     // The menu bar item's visibility is read straight from UserDefaults
     // by StatusItemController; no scene state is involved any more.
     private let packetStore: PacketStore?
@@ -93,6 +95,7 @@ struct AXTermApp: App {
         } else {
             queue = try? DatabaseManager.makeDatabaseQueue()
         }
+        _hazards = StateObject(wrappedValue: HazardLayerController.make(database: queue))
         let packetStore = queue.map { SQLitePacketStore(dbQueue: $0) }
         let consoleStore = queue.map { SQLiteConsoleStore(dbQueue: $0) }
         let rawStore = queue.map { SQLiteRawStore(dbQueue: $0) }
@@ -214,7 +217,8 @@ struct AXTermApp: App {
                 // ConsoleHangReproHarness.
                 ConsoleHangReproHarness()
             } else if let station {
-                ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings, station: station)
+                ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings, station: station,
+                            hazards: hazards)
                     // @AppStorage follows the isolated suite under test
                     // mode; in production this is .standard, so it is a
                     // no-op. Belt-and-suspenders with AppEnvironment.defaults.
