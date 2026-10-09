@@ -25,6 +25,9 @@ the one where the internet goes away (`Docs/WeatherDataSources.md`). So:
 - **The last good copy is kept.** With no connection the layer stays on the
   map, marked stale, its expiry still shown. An expired item fades; it does
   not vanish without a trace, and it never looks current.
+- **Every hazard layer starts off.** Each one sends a request carrying the
+  station's position, so each waits until the operator switches it on in
+  the map's Layers sidebar (operator, 2026-10-09).
 - **Nothing transmits on its own.** Sharing is something the operator does.
 - **Our station never poses as the agency.** A relayed warning is signed as
   ours and carries the agency's own text and times. On 144.390, WXSVR already

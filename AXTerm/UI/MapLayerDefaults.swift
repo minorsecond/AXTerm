@@ -16,6 +16,10 @@ nonisolated enum MapLayerDefaults {
     /// selected read as broken rather than as a setting (2026-09-17).
     static let showsAllTracks = true
     static let showsWeatherField = false
+    /// Off until the operator turns it on: every fetch carries the
+    /// station's position (Docs/HazardLayers.md §1). So do the other hazard
+    /// layers.
+    static let showsNWSAlerts = false
     static let showsObjects = true
     static let showsAPRSCoverageRing = true
     static let showsCoverageRing = true
