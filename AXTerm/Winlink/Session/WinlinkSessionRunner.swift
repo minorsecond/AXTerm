@@ -724,6 +724,9 @@ final class WinlinkSessionRunner: ObservableObject {
             return RefusedConnectHint.winlink(destination: station, liveLinks: liveLinks)
         case WinlinkTransportError.connectTimeout(let station): return "no response from \(station)"
         case WinlinkTransportError.loginFailed(let detail): return detail
+        case WinlinkTransportError.radioOnAPRSChannel:
+            return "the radio is on the APRS channel, where connected sessions are off. "
+                + "Switch it to Packet in Settings › Radios"
         default: return String(describing: error)
         }
     }

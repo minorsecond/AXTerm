@@ -834,12 +834,23 @@ private struct InlineConnectBar: View {
                     Text(failure.detail ?? "Connection failed")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                    Button("Show settings") {
-                        isAdvancedExpanded = true
+                    if case let .radioOnAPRSChannel(radio) = failure.reason {
+                        Button("Switch to Packet") {
+                            viewModel.switchRadioToPacket(radio)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help("Sets this radio's Channel to Packet, as in Settings › Radios. "
+                              + "Its beacon becomes an ID beacon and its packet services come back.")
+                    } else {
+                        Button("Show settings") {
+                            isAdvancedExpanded = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
             }
 

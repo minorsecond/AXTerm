@@ -2744,6 +2744,9 @@ final class SessionCoordinator: ObservableObject {
             AppSettingsStore.sanitizeAX25T3IdleSeconds(
                 self?.appSettings?.ax25T3IdleSeconds ?? AppSettingsStore.defaultAX25T3IdleSeconds)
         }
+        sessionManager.refusesOutboundLinks = { [weak self] radio in
+            !(self?.appSettings?.radio(radio)?.runsPacketServices ?? true)
+        }
         sessionManager.refusesInboundLinks = { [weak self] radio in
             guard let self else { return false }
             return self.isOffScreen || !(self.appSettings?.radio(radio)?.runsPacketServices ?? true)

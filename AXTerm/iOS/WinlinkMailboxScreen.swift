@@ -51,6 +51,9 @@ struct WinlinkMailboxScreen: View {
     @State private var showingConsole = false
     @State private var activeExchangeGateway = ""
     @State private var exchangeAlert: String?
+    /// Set with `exchangeAlert` when the exchange stopped because its radio is
+    /// on an APRS channel, so the alert can offer Switch to Packet.
+    @State private var channelBlockedRadio: RadioID?
     /// The download picker's request, mirrored from the runner.
     @State private var inboundSelection: WinlinkSessionRunner.InboundSelectionRequest?
 
@@ -367,8 +370,15 @@ struct WinlinkMailboxScreen: View {
             }
             .alert("Mail Exchange", isPresented: Binding(
                 get: { exchangeAlert != nil },
-                set: { if !$0 { exchangeAlert = nil } })) {
-                Button("OK", role: .cancel) {}
+                set: { if !$0 { exchangeAlert = nil; channelBlockedRadio = nil } })) {
+                if let radio = channelBlockedRadio {
+                    Button("Switch to Packet") {
+                        appSettings.updateRadio(radio) { PacketChannelGate.switchToPacket(&$0) }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } else {
+                    Button("OK", role: .cancel) {}
+                }
             } message: {
                 Text(exchangeAlert ?? "")
             }
@@ -783,6 +793,20 @@ struct WinlinkMailboxScreen: View {
         }
         guard client.status == .connected else {
             exchangeAlert = "Connect to your TNC before starting a packet exchange."
+            return
+        }
+        // Nothing goes out from a radio on an APRS channel; say so before
+        // the ladder starts rather than failing on every rung.
+        let first = CallsignNormalizer.parse(rungs[0].callsign)
+        let firstDestination = AX25Address(call: first.call, ssid: first.ssid)
+        let firstPath = rungs[0].path.isEmpty
+            ? DigiPath()
+            : DigiPath.from(rungs[0].path.split(separator: ",").map(String.init))
+        let radio = sessionCoordinator.radio(
+            preferring: context.settings.preferredRadioID, for: firstDestination, path: firstPath)
+        if let blocked = PacketChannelGate.connectFailure(for: appSettings.radio(radio)) {
+            channelBlockedRadio = radio
+            exchangeAlert = blocked.detail
             return
         }
 

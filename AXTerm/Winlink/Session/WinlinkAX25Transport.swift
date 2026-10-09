@@ -84,6 +84,12 @@ final class WinlinkAX25Transport: WinlinkTransport {
             if let refusal { throw WinlinkTransportError.sessionBusy(refusal) }
         }
 
+        // Nothing goes out from a radio on an APRS channel, and answering a
+        // call there was already refused.
+        if !answering, sessionManager.refusesOutboundLink(on: radio) {
+            throw WinlinkTransportError.radioOnAPRSChannel
+        }
+
         // Claim before any frame goes out so no delivered byte can leak
         // to the terminal path, and so a terminal session to the same
         // station blocks us instead of corrupting both.

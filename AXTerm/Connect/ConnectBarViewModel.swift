@@ -672,6 +672,19 @@ final class ConnectBarViewModel: ObservableObject {
         markDisconnected()
     }
 
+    /// Puts a radio on the Packet channel; set by the terminal, which holds
+    /// the settings.
+    var onSwitchRadioToPacket: ((RadioID) -> Void)?
+
+    /// The failure row's Switch to Packet: switch the radio, then clear the
+    /// failure so Connect can be pressed again.
+    func switchRadioToPacket(_ radio: RadioID) {
+        onSwitchRadioToPacket?(radio)
+        if case let .failed(draft, _) = barState {
+            barState = ConnectBarStateReducer.reduce(state: barState, event: .draftUpdated(draft))
+        }
+    }
+
     func markFailed(reason: ConnectFailure.Reason, detail: String?) {
         let failure = ConnectFailure(reason: reason, detail: detail)
         barState = ConnectBarStateReducer.reduce(state: barState, event: .connectFailed(failure))

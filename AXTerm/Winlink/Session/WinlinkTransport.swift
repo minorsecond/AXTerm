@@ -59,6 +59,9 @@ nonisolated enum WinlinkTransportError: Error, Equatable {
     case connectRefused(String)
     case connectTimeout(String)
     case loginFailed(String)
+    /// The radio is on an APRS channel, where connected sessions are off
+    /// (`PacketChannelGate`). Every gateway would fail the same way.
+    case radioOnAPRSChannel
 }
 
 
@@ -74,7 +77,7 @@ nonisolated enum WinlinkExchangeFailureClass {
         // CMS/account-level failures follow us to every gateway.
         let fatalMarkers = [
             "unknown client", "not allowed", "invalid password", "login failure",
-            "cms refused", "failed to encode", "already running",
+            "cms refused", "failed to encode", "already running", "on the aprs channel",
         ]
         if fatalMarkers.contains(where: { lowered.contains($0) }) {
             return false

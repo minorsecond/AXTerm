@@ -89,4 +89,24 @@ final class APRSChannelRefusesLinksTests: XCTestCase {
         XCTAssertEqual(ServiceRadios.winlinkPeerToPeer([packet, beacon]), ["Base"])
         XCTAssertEqual(ServiceRadios.winlinkPeerToPeer([beacon]), [])
     }
+
+    // MARK: - Links we would open (2026-10-09)
+
+    /// On the APRS drive the phone, its only radio on the APRS channel, put
+    /// an XID and two SABMs for K0EPI-2 on the air; A (705) refused each with
+    /// DM. A radio on the APRS channel does not open links either.
+    func testNoLinkIsOpenedFromAnAPRSRadio() {
+        let manager = manager()
+        manager.refusesOutboundLinks = { [aprs] radio in radio == aprs }
+        XCTAssertTrue(manager.refusesOutboundLink(on: aprs))
+        XCTAssertNil(manager.connect(to: caller, path: DigiPath(), radio: aprs), "nothing goes on the air")
+        XCTAssertNil(manager.existingSession(for: caller, path: DigiPath(), radio: aprs))
+    }
+
+    func testAPacketRadioStillOpensLinks() {
+        let manager = manager()
+        manager.refusesOutboundLinks = { [aprs] radio in radio == aprs }
+        XCTAssertFalse(manager.refusesOutboundLink(on: .primary))
+        XCTAssertNotNil(manager.connect(to: caller, path: DigiPath(), radio: .primary))
+    }
 }

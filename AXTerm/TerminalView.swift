@@ -1741,6 +1741,11 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         updateCurrentSession()
     }
 
+    /// The radio a connect to the current destination would leave on.
+    func connectRadio() -> RadioID {
+        radio(for: parseCallsign(viewModel.destinationCall), path: parsePath(viewModel.digiPath))
+    }
+
     /// Connect to the current destination (for connected mode)
     func connect() -> OutboundFrame? {
         guard !viewModel.destinationCall.isEmpty else { return nil }
@@ -2537,6 +2542,10 @@ struct TerminalView: View {
         // with one radio the answer is that radio.
         txViewModel.autoRadio = { [weak sessionCoordinator] dest, path in
             sessionCoordinator?.autoRadio(for: dest, path: path)?.radio
+        }
+        // The failure row's way out when the radio is on an APRS channel.
+        connectBarViewModel.onSwitchRadioToPacket = { [weak settings] radio in
+            settings?.updateRadio(radio) { PacketChannelGate.switchToPacket(&$0) }
         }
         connectBarViewModel.autoRadioDescriber = { [weak sessionCoordinator] destination, digis in
             let parsed = CallsignNormalizer.parse(destination)
@@ -4152,6 +4161,12 @@ struct TerminalView: View {
         }
     }
 
+    /// Why a connect refused to start when its radio is on an APRS channel
+    /// (`PacketChannelGate`); nil for any other reason.
+    private func connectChannelFailure() -> ConnectFailure? {
+        PacketChannelGate.connectFailure(for: settings.radio(txViewModel.connectRadio()))
+    }
+
     private func executeAX25AutoAttempt(
         intent: ConnectIntent,
         digis: [String],
@@ -4167,7 +4182,9 @@ struct TerminalView: View {
         }
         guard let frame = txViewModel.connect() else {
             connectBarViewModel.recordAttempt(intent: intent, result: .failed)
-            connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build SABM frame")
+            let failure = connectChannelFailure()
+                ?? ConnectFailure(reason: .unknown, detail: "Unable to build SABM frame")
+            connectBarViewModel.markFailed(reason: failure.reason, detail: failure.detail)
             updateActiveSessionRecordState("Failed")
             return .failed
         }
@@ -4842,7 +4859,9 @@ struct TerminalView: View {
             return
         }
         guard let frame = txViewModel.connect() else {
-            connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build SABM frame")
+            let failure = connectChannelFailure()
+                ?? ConnectFailure(reason: .unknown, detail: "Unable to build SABM frame")
+            connectBarViewModel.markFailed(reason: failure.reason, detail: failure.detail)
             updateActiveSessionRecordState("Failed")
             return
         }
@@ -5098,7 +5117,9 @@ struct TerminalView: View {
         guard let frame = txViewModel.connect() else {
             txViewModel.netRomRelayPhase = nil
             connectBarViewModel.recordAttempt(intent: intent, result: .failed)
-            connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build SABM to \(nextHop)")
+            let failure = connectChannelFailure()
+                ?? ConnectFailure(reason: .unknown, detail: "Unable to build SABM to \(nextHop)")
+            connectBarViewModel.markFailed(reason: failure.reason, detail: failure.detail)
             updateActiveSessionRecordState("Failed")
             return
         }

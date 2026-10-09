@@ -117,6 +117,9 @@ nonisolated struct ConnectFailure: Equatable {
         case tncDisconnected
         case connectRejected
         case timeout
+        /// The radio the connect would leave on is on an APRS channel
+        /// (`PacketChannelGate`); the bar offers to switch it to Packet.
+        case radioOnAPRSChannel(RadioID)
         case unknown
     }
 

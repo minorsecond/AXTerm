@@ -13,6 +13,27 @@ final class ConnectBarViewModelTests: XCTestCase {
     private func waitForSuggestions() async {
         try? await Task.sleep(nanoseconds: 300_000_000)
     }
+    /// A connect stopped because its radio is on the APRS channel offers
+    /// Switch to Packet; tapping it switches the radio and clears the
+    /// failure, so Connect can be pressed again (2026-10-09).
+    @MainActor
+    func testSwitchToPacketSwitchesTheRadioAndClearsTheFailure() {
+        let vm = makeViewModel()
+        let tnc4 = RadioID(rawValue: "tnc4")
+        var switched: [RadioID] = []
+        vm.onSwitchRadioToPacket = { switched.append($0) }
+        vm.markConnecting()
+        vm.markFailed(reason: .radioOnAPRSChannel(tnc4), detail: "on the APRS channel")
+        guard case .failed = vm.barState else { return XCTFail("fixture: the bar shows the failure") }
+
+        vm.switchRadioToPacket(tnc4)
+
+        XCTAssertEqual(switched, [tnc4])
+        guard case .disconnectedDraft = vm.barState else {
+            return XCTFail("the failure is cleared, got \(vm.barState)")
+        }
+    }
+
     func testDigipeaterParserHandlesSpacesAndCommas() {
         let parsed = DigipeaterListParser.parse("DIGI1 DIGI2,DIGI3")
         XCTAssertEqual(parsed, ["DIGI1", "DIGI2", "DIGI3"])

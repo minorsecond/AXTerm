@@ -173,8 +173,12 @@ no pinging (the automatic pass skips the radio and a manual probe is refused,
 `PingProber.mayProbe`), no mailbox, and no Winlink peer-to-peer answering. A
 call that arrives on such a radio is refused at the link with DM, from the
 address that was called, and an XID with P set gets DM too
-(`AX25SessionManager.refusesInboundLinks`); a link the operator opened there
-is left alone. The Winlink page names the radios a call can be answered on
+(`AX25SessionManager.refusesInboundLinks`); a link already open there is left
+alone. The station does not open links there either
+(`AX25SessionManager.refusesOutboundLinks`, operator ruling 2026-10-09): a
+Terminal connect or a Winlink exchange from such a radio sends nothing and
+says why, with a Switch to Packet button that sets the radio's Channel as
+Settings does (`PacketChannelGate`). The Winlink page names the radios a call can be answered on
 and shows the switch off and locked when every radio is on an APRS channel.
 The stored switches are not cleared, so a radio moved back to a packet
 channel finds its services where it left them. Operator ruling, 2026-10-06.

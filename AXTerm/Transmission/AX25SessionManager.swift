@@ -783,6 +783,17 @@ final class AX25SessionManager: ObservableObject {
     /// never refused.
     var refusesInboundLinks: ((RadioID) -> Bool)?
 
+    /// Whether this station may not open links on a radio: true for a radio
+    /// on an APRS channel. On 2026-10-09 the phone, its only radio on APRS,
+    /// put an XID and two SABMs on the beacon frequency for a station that
+    /// refused them; the operator ruled it out. Kept apart from
+    /// `refusesInboundLinks`, which also holds while the app is off screen.
+    var refusesOutboundLinks: ((RadioID) -> Bool)?
+
+    func refusesOutboundLink(on radio: RadioID) -> Bool {
+        refusesOutboundLinks?(radio) == true
+    }
+
     /// Whether a frame from `source` on `radio` must be refused rather than
     /// open or negotiate a link.
     private func refusesLink(from source: AX25Address, path: DigiPath, radio: RadioID) -> Bool {
@@ -1746,6 +1757,12 @@ final class AX25SessionManager: ObservableObject {
             "path": path.display.isEmpty ? "(direct)" : path.display,
             "radio": radio.rawValue
         ])
+        if refusesOutboundLink(on: radio) {
+            TxLog.warning(.session, "Cannot connect: the radio is on an APRS channel", [
+                "peer": destination.display, "radio": radio.rawValue
+            ])
+            return nil
+        }
         if let existing = connectedSession(withPeer: destination, radio: radio) {
             logPathOverrideIfNeeded(session: existing, requestedPath: path, reason: "connect")
             TxLog.warning(.session, "Cannot connect: session already connected", [
