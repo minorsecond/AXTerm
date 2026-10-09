@@ -348,8 +348,20 @@ final class PacketEngine: ObservableObject {
     /// packet log in one pass, at the moment the query goes out — a station's
     /// cadence does not change inside a two-minute window.
     func aprsBeaconIntervals() -> [String: TimeInterval] {
+        Self.beaconIntervals(in: packets)
+    }
+
+    /// Each station's usual gap between its own UI frames.
+    ///
+    /// UI frames only: a station's rhythm is what it sends on its own, and
+    /// connected-session traffic happens only while somebody talks to it.
+    /// Counting it, 2,084 I-frames from earlier file transfers made K0EPI-2
+    /// look like it transmitted every few seconds, and the phone never
+    /// credited its answer to a ping (2026-10-09). Frames we sent are not
+    /// another station's cadence.
+    nonisolated static func beaconIntervals(in packets: [Packet]) -> [String: TimeInterval] {
         var times: [String: [Date]] = [:]
-        for packet in packets {
+        for packet in packets where packet.direction == .rx && packet.frameType == .ui {
             guard let from = packet.from?.display.uppercased() else { continue }
             times[from, default: []].append(packet.timestamp)
         }

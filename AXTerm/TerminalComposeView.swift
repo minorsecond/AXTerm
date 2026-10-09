@@ -834,23 +834,12 @@ private struct InlineConnectBar: View {
                     Text(failure.detail ?? "Connection failed")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                    if case let .radioOnAPRSChannel(radio) = failure.reason {
-                        Button("Switch to Packet") {
-                            viewModel.switchRadioToPacket(radio)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .help("Sets this radio's Channel to Packet, as in Settings › Radios. "
-                              + "Its beacon becomes an ID beacon and its packet services come back.")
-                    } else {
-                        Button("Show settings") {
-                            isAdvancedExpanded = true
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                    Button("Show settings") {
+                        isAdvancedExpanded = true
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
 
@@ -1439,6 +1428,10 @@ struct TerminalComposeView: View {
     /// The connect bar holds the next hop while a relay runs — right for the
     /// link, wrong as a name for whoever is on the other end of it.
     var relayDestination: String?
+    /// Set when the radio a connect would leave on is on an APRS channel
+    /// (`PacketChannelGate`): Connect is disabled and a notice says why,
+    /// with Switch to Packet.
+    var channelBlock: ConnectFailure? = nil
     let connectContext: ConnectSourceContext
     let autoPathSuggestions: [AutoPathSuggestionItem]
     let onApplyAutoPath: (String) -> Void
@@ -1508,6 +1501,28 @@ struct TerminalComposeView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.yellow.opacity(0.15))
+            }
+
+            if let notice = PacketChannelGate.notice(block: channelBlock, mode: connectionMode,
+                                                     sessionState: sessionState) {
+                HStack(spacing: 8) {
+                    Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                        .foregroundStyle(.orange)
+                    Text(notice.text)
+                        .font(.system(size: 11, weight: .medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Switch to Packet") {
+                        connectBarViewModel.switchRadioToPacket(notice.radio)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .help("Sets this radio's Channel to Packet, as in Settings › Radios. "
+                          + "Its beacon becomes an ID beacon and its packet services come back.")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.12))
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -1961,6 +1976,7 @@ struct TerminalComposeView: View {
             // The destination is judged by what is in the field, which
             // Connect commits; the bar's own copy is stale until then.
             return !isConnected || destinationValidationIsBlocking || nonDestinationValidationError != nil
+                || PacketChannelGate.blocksConnect(channelBlock, mode: connectionMode)
         }
     }
 

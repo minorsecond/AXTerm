@@ -3027,6 +3027,7 @@ struct TerminalView: View {
                 capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall),
                 connectBarViewModel: connectBarViewModel,
                 relayDestination: txViewModel.relayConversation?.destination,
+                channelBlock: connectChannelFailure(),
                 connectContext: connectCoordinator.activeContext,
                 autoPathSuggestions: autoPathSuggestions.map { suggestion in
                     AutoPathSuggestionItem(

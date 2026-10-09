@@ -23,4 +23,27 @@ nonisolated enum PacketChannelGate {
     static func switchToPacket(_ radio: inout RadioProfile) {
         RadioChannel.packet.apply(to: &radio)
     }
+
+    /// What the Terminal shows above its controls while a connect is
+    /// blocked: the reason and the radio Switch to Packet acts on. Shown in
+    /// session mode until a link is up; broadcast is APRS's own business, and
+    /// a link already open is left alone.
+    struct Notice: Equatable {
+        let text: String
+        let radio: RadioID
+    }
+
+    static func notice(block: ConnectFailure?, mode: TxConnectionMode,
+                       sessionState: AX25SessionState?) -> Notice? {
+        guard let block, case let .radioOnAPRSChannel(radio) = block.reason,
+              mode == .connected, sessionState != .connected else { return nil }
+        return Notice(text: block.detail ?? "This radio is on the APRS channel.", radio: radio)
+    }
+
+    /// Whether Connect is disabled: in session mode, while the radio is on
+    /// an APRS channel. The operator could press it on the drive and see
+    /// nothing happen (2026-10-09).
+    static func blocksConnect(_ block: ConnectFailure?, mode: TxConnectionMode) -> Bool {
+        block != nil && mode == .connected
+    }
 }

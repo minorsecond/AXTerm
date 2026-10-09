@@ -299,4 +299,36 @@ final class APRSPingTrackerTests: XCTestCase {
         XCTAssertEqual(t.pings.count, 1)
         XCTAssertEqual(t.outcome(for: "W0ARP")?.outcome, .waiting)
     }
+
+    // MARK: - Cadence from APRS frames only (2026-10-09)
+
+    /// The phone pinged A (705), which answered in 3 to 5 s, and the ping
+    /// was never credited: 2,084 I-frames from earlier file transfers made
+    /// K0EPI-2 look like a station that transmits every few seconds. A
+    /// station's own rhythm is its APRS frames; session traffic only happens
+    /// when somebody is talking to it.
+    func testABeaconCadenceIgnoresConnectedSessionTraffic() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        func frame(_ type: FrameType, at offset: TimeInterval) -> Packet {
+            Packet(timestamp: start.addingTimeInterval(offset), from: AX25Address(call: "K0EPI", ssid: 2),
+                   to: AX25Address(call: type == .ui ? "APZAXT" : "K0EPI"), frameType: type)
+        }
+        let beacons = [0.0, 600, 1200, 1800].map { frame(.ui, at: $0) }
+        let session = (0..<200).map { frame(.i, at: 2000 + Double($0) * 2) }
+        let intervals = PacketEngine.beaconIntervals(in: beacons + session)
+        XCTAssertEqual(intervals["K0EPI-2"], 600)
+        XCTAssertEqual(APRSAnswerEvidence.verdict(elapsed: 5, typicalInterval: intervals["K0EPI-2"]),
+                       .answered)
+    }
+
+    /// A frame we sent says nothing about another station's cadence, nor
+    /// about our own as heard.
+    func testFramesWeSentAreLeftOut() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let sent = (0..<4).map {
+            Packet(timestamp: start.addingTimeInterval(Double($0) * 5), from: AX25Address(call: "K0EPI", ssid: 3),
+                   to: AX25Address(call: "APZAXT"), frameType: .ui, direction: .tx)
+        }
+        XCTAssertNil(PacketEngine.beaconIntervals(in: sent)["K0EPI-3"])
+    }
 }

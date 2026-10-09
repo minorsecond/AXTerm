@@ -42,4 +42,29 @@ final class PacketChannelGateTests: XCTestCase {
                        + "Switch it to Packet in Settings › Radios")
         XCTAssertFalse(WinlinkExchangeFailureClass.isWorthTryingNextGateway(text))
     }
+
+    // MARK: - On screen, before Connect is pressed
+
+    /// The phone refused the connect but said nothing, and Connect looked
+    /// pressable (operator, 2026-10-09). The notice shows in session mode
+    /// while not connected, and Connect is disabled while it does.
+    func testTheNoticeShowsInSessionModeUntilConnected() {
+        let block = PacketChannelGate.connectFailure(for: radio(aprs: true))
+        XCTAssertEqual(PacketChannelGate.notice(block: block, mode: .connected, sessionState: nil)?.radio,
+                       RadioID(rawValue: "tnc4"))
+        XCTAssertEqual(PacketChannelGate.notice(block: block, mode: .connected, sessionState: .disconnected)?.text,
+                       block?.detail)
+        XCTAssertNil(PacketChannelGate.notice(block: block, mode: .datagram, sessionState: nil),
+                     "broadcast mode is APRS's own business")
+        XCTAssertNil(PacketChannelGate.notice(block: block, mode: .connected, sessionState: .connected),
+                     "a link already open is left alone")
+        XCTAssertNil(PacketChannelGate.notice(block: nil, mode: .connected, sessionState: nil))
+    }
+
+    func testConnectIsDisabledWhileTheRadioIsOnAPRS() {
+        let block = PacketChannelGate.connectFailure(for: radio(aprs: true))
+        XCTAssertTrue(PacketChannelGate.blocksConnect(block, mode: .connected))
+        XCTAssertFalse(PacketChannelGate.blocksConnect(nil, mode: .connected))
+        XCTAssertFalse(PacketChannelGate.blocksConnect(block, mode: .datagram))
+    }
 }
