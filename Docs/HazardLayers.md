@@ -56,13 +56,22 @@ shows comes from NIFC perimeters and NOAA/NASA satellite hotspots, which are
 above.
 
 **County centers, built in.** `Resources/us-county-centers.csv` lists every
-US county's Census code, center and area (3,222 counties, 88 KB), reduced
+US county's Census code, center, area, state and name (3,222 counties, 147 KB), reduced
 from the US Census Bureau's 2024 Gazetteer counties file, which is public
 domain. NWS alerts name their counties by SAME code, so "Within N miles"
 rules out an alert whose counties are all far away before fetching any zone
 outline (`CountyCenters`). A county counts as near when its center, less
 half again its own radius, is within the distance: a county's edge can be
 much nearer than its center, and a miss would hide a warning.
+
+**Choosing the area.** The NWS layer fetches for where the station is,
+within a distance of it, or for ticked states or counties. Nothing is typed.
+Switching to States ticks the station's own state; switching to Counties
+ticks its county, and the list leads with the nearest 25 counties, with a
+search for the rest. Counties are fetched as their states and kept when an
+alert names one of them by SAME code, so an alert issued by forecast zone is
+not missed. Close in, the list says "Nearby" instead of a distance, since a
+county's edge is estimated from a circle of its area.
 
 **Not getting throttled.** At most 25 new zone outlines per refresh, 0.2 s
 apart. HTTP 429 or 503 pauses all fetching: the server's Retry-After when it

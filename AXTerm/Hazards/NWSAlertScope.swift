@@ -314,21 +314,76 @@ extension NWSAlertFeed {
     }
 }
 
+/// The States and Counties checklists: what ticking does and what each
+/// list offers, so neither asks for a typed code.
+extension NWSAlertScope {
+    /// How many nearby counties the list offers before a search.
+    static let nearbyCountyCount = 25
+
+    func toggling(state code: String) -> NWSAlertScope {
+        var list: [String] = []
+        if case .states(let chosen) = self { list = chosen }
+        if let index = list.firstIndex(of: code) { list.remove(at: index) } else { list.append(code) }
+        return list.isEmpty ? .here : .states(list)
+    }
+
+    func toggling(county geoid: String) -> NWSAlertScope {
+        var list: [String] = []
+        if case .counties(let chosen) = self { list = chosen }
+        if let index = list.firstIndex(of: geoid) { list.remove(at: index) } else { list.append(geoid) }
+        return list.isEmpty ? .here : .counties(list)
+    }
+
+    func isChosen(state code: String) -> Bool {
+        if case .states(let chosen) = self { return chosen.contains(code) }
+        return false
+    }
+
+    func isChosen(county geoid: String) -> Bool {
+        if case .counties(let chosen) = self { return chosen.contains(geoid) }
+        return false
+    }
+
+    /// Ticked counties first, wherever they are, then the nearest ones, or
+    /// the matches when there is a search.
+    func countyChoices(table: CountyCenters?, near point: GreatCircle.Point?, search: String) -> [CountyCenters.Entry] {
+        guard let table else { return [] }
+        var chosen: [String] = []
+        if case .counties(let list) = self { chosen = list }
+        let ticked = chosen.compactMap { table.entry($0, from: point) }
+        let query = search.trimmingCharacters(in: .whitespaces)
+        let rest = query.isEmpty
+            ? (point.map { table.nearest(to: $0, limit: Self.nearbyCountyCount) } ?? [])
+            : table.search(query, near: point)
+        return ticked + rest.filter { !chosen.contains($0.geoid) }
+    }
+
+    /// The station's state and the ticked ones first, then the rest by name.
+    func stateChoices(home: String?) -> [USStates.State] {
+        var leading: [String] = home.map { [$0] } ?? []
+        if case .states(let chosen) = self {
+            leading += chosen.filter { !leading.contains($0) }
+        }
+        let first = leading.compactMap { code in USStates.name(code).map { USStates.State(code: code, name: $0) } }
+        return first + USStates.all.filter { !leading.contains($0.code) }
+    }
+}
+
 #if canImport(SwiftUI)
 import SwiftUI
 
 /// The NWS layer's area choice under its switch (`NWSAlertScope`): where the
-/// station is, within a distance of it, chosen states, or chosen zones.
-/// Typed codes are checked (`NWSAlertScope.entry`) and stored only when
-/// they are codes the NWS uses; otherwise the field says why.
+/// station is, within a distance of it, or ticked states or counties.
+/// Nothing is typed: States and Counties open a checklist, and switching to
+/// either starts with the station's own state or county ticked.
 struct NWSAlertAreaControl: View {
     @AppStorage(NWSAlertScope.storageKey) private var stored = "here"
-    @State private var codes = ""
-    @State private var choice: Kind?
-    @State private var entryProblem: String?
+    @State private var checklist: NWSAreaChecklist.Kind?
 
     private enum Kind: String, CaseIterable, Identifiable {
-        case here = "Where I am", within = "Within", states = "States", zones = "Zones"
+        case here = "Where I am", within = "Within", states = "States", counties = "Counties"
+        /// Only while an older typed zone list is stored.
+        case zones = "Zones"
         var id: String { rawValue }
     }
 
@@ -339,21 +394,24 @@ struct NWSAlertAreaControl: View {
         case .here: return .here
         case .within: return .within
         case .states: return .states
-        case .zones, .counties: return .zones
+        case .counties: return .counties
+        case .zones: return .zones
         }
     }
 
     private var kind: Binding<Kind> {
-        Binding(get: { choice ?? storedKind }, set: { kind in
-            choice = kind
-            entryProblem = nil
+        Binding(get: { storedKind }, set: { kind in
+            guard kind != storedKind else { return }
             switch kind {
             case .here: stored = NWSAlertScope.here.stored
             case .within: stored = NWSAlertScope.within(miles: 50).stored
-            case .states, .zones:
-                // Stored once valid codes are typed; until then the last
-                // area stands.
-                codes = storedKind == kind ? Self.codesText(scope) : ""
+            case .states:
+                stored = NWSAreaChecklist.starting(.states).stored
+                checklist = .states
+            case .counties:
+                stored = NWSAreaChecklist.starting(.counties).stored
+                checklist = .counties
+            case .zones: break
             }
         })
     }
@@ -361,13 +419,13 @@ struct NWSAlertAreaControl: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Picker("Alert area", selection: kind) {
-                ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(Kind.allCases.filter { $0 != .zones || storedKind == .zones }) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.menu)
             .help("Where the NWS layer fetches for. Where I am: alerts at this station's position. "
-                  + "Within: every alert whose shape comes within that distance. States and Zones: "
-                  + "everything the NWS has for those codes, e.g. CO, or COZ039 and COC005.")
-            switch kind.wrappedValue {
+                  + "Within: every alert whose shape comes within that distance. States and Counties: "
+                  + "everything the NWS has for the ones you tick.")
+            switch storedKind {
             case .within:
                 Picker("Distance", selection: Binding(
                     get: { if case .within(let miles) = scope { return Int(miles) } else { return 50 } },
@@ -375,37 +433,122 @@ struct NWSAlertAreaControl: View {
                     ForEach(NWSAlertScope.offeredRadii, id: \.self) { Text("\($0) mi").tag($0) }
                 }
                 .pickerStyle(.menu)
-            case .states, .zones:
-                TextField(kind.wrappedValue == .states ? "e.g. CO, WY" : "e.g. COZ039, COC005", text: $codes)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        switch NWSAlertScope.entry(codes, asStates: kind.wrappedValue == .states) {
-                        case .success(let entered):
-                            stored = entered.stored
-                            codes = Self.codesText(entered)
-                            entryProblem = nil
-                        case .failure(let problem):
-                            entryProblem = problem.message
-                        }
-                    }
-                if let entryProblem {
-                    Text(entryProblem)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
+            case .states, .counties:
+                HStack {
+                    Text(scope.summary(counties: CountyCenters.bundled))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer()
+                    Button("Choose…") { checklist = storedKind == .states ? .states : .counties }
                 }
+            case .zones:
+                Text(scope.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             case .here:
                 EmptyView()
             }
         }
-        .onAppear { codes = Self.codesText(scope) }
+        .sheet(item: $checklist) { kind in
+            NWSAreaChecklist(kind: kind)
+        }
+    }
+}
+
+/// Tick the states or counties the NWS layer fetches for. Counties lead
+/// with the nearest ones, so most stations never need the search.
+struct NWSAreaChecklist: View {
+    enum Kind: String, Identifiable {
+        case states, counties
+        var id: String { rawValue }
     }
 
-    private static func codesText(_ scope: NWSAlertScope) -> String {
-        switch scope {
-        case .states(let list), .zones(let list): return list.joined(separator: ", ")
-        default: return ""
+    let kind: Kind
+    @AppStorage(NWSAlertScope.storageKey) private var stored = "here"
+    @State private var search = ""
+    @Environment(\.dismiss) private var dismiss
+
+    private var scope: NWSAlertScope { NWSAlertScope(stored: stored) }
+
+    /// Where the station is, from its grid or set position.
+    static var stationPoint: GreatCircle.Point? {
+        StationPositionResolver.ownStation(defaults: AppEnvironment.defaults, deviceLocation: nil)?.point
+    }
+
+    /// The area a switch to States or Counties starts from: what was ticked
+    /// before, else the station's own state or county.
+    static func starting(_ kind: Kind) -> NWSAlertScope {
+        let current = NWSAlertScope(stored: AppEnvironment.defaults.string(forKey: NWSAlertScope.storageKey) ?? "")
+        let table = CountyCenters.bundled
+        let point = stationPoint
+        switch kind {
+        case .states:
+            if case .states = current { return current }
+            guard let point, let home = table?.state(at: point) else { return .here }
+            return .states([home])
+        case .counties:
+            if case .counties = current { return current }
+            guard let point, let home = table?.nearest(to: point, limit: 1).first else { return .here }
+            return .counties([home.geoid])
         }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // A plain field: only the window may install a search
+                // field (ToolbarUniquenessTests).
+                TextField(kind == .states ? "Filter states" : "Find a county by name", text: $search)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                switch kind {
+                case .states:
+                    let home = Self.stationPoint.flatMap { CountyCenters.bundled?.state(at: $0) }
+                    ForEach(scope.stateChoices(home: home).filter(matchesSearch)) { state in
+                        Toggle(isOn: Binding(get: { scope.isChosen(state: state.code) },
+                                             set: { _ in stored = scope.toggling(state: state.code).stored })) {
+                            Text(state.name)
+                        }
+                    }
+                case .counties:
+                    let entries = scope.countyChoices(table: CountyCenters.bundled, near: Self.stationPoint, search: search)
+                    if entries.isEmpty {
+                        Text(Self.stationPoint == nil && search.isEmpty
+                             ? "Search for a county by name. Set a grid square to list the nearest ones."
+                             : "No county by that name.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(entries, id: \.geoid) { entry in
+                        Toggle(isOn: Binding(get: { scope.isChosen(county: entry.geoid) },
+                                             set: { _ in stored = scope.toggling(county: entry.geoid).stored })) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("\(entry.county.name), \(entry.county.state)")
+                                if !entry.distanceText.isEmpty {
+                                    Text(entry.distanceText)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(kind == .states ? "Alert States" : "Alert Counties")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 360, minHeight: 440)
+        #endif
+    }
+
+    private func matchesSearch(_ state: USStates.State) -> Bool {
+        let query = search.trimmingCharacters(in: .whitespaces)
+        return query.isEmpty || state.name.localizedCaseInsensitiveContains(query) || state.code == query.uppercased()
     }
 }
 #endif

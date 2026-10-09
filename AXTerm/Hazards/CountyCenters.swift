@@ -38,6 +38,14 @@ nonisolated struct CountyCenters: Sendable {
         let county: County
         /// To the county's edge, roughly; zero when the station is inside.
         let miles: Double
+        var hasPosition = true
+
+        /// For the list. Close in, the circle estimate cannot tell inside
+        /// from next door, so it says close rather than a number.
+        var distanceText: String {
+            guard hasPosition else { return "" }
+            return miles < 8 ? "Nearby" : "\(Int(miles.rounded())) mi"
+        }
     }
 
     /// Whether an alert could come within a radius, judged by its counties.
@@ -97,10 +105,18 @@ nonisolated struct CountyCenters: Sendable {
         guard !query.isEmpty else { return [] }
         let matches = counties.filter { $0.value.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
         guard let point else {
-            return matches.map { Entry(geoid: $0.key, county: $0.value, miles: 0) }
+            return matches.map { Entry(geoid: $0.key, county: $0.value, miles: 0, hasPosition: false) }
                 .sorted { ($0.county.name, $0.county.state) < ($1.county.name, $1.county.state) }
         }
         return matches.map { entry(geoid: $0.key, county: $0.value, from: point) }.sorted { $0.miles < $1.miles }
+    }
+
+    /// One county as a list entry, with its distance when there is a
+    /// position.
+    func entry(_ geoid: String, from point: GreatCircle.Point?) -> Entry? {
+        guard let county = counties[geoid] else { return nil }
+        guard let point else { return Entry(geoid: geoid, county: county, miles: 0, hasPosition: false) }
+        return entry(geoid: geoid, county: county, from: point)
     }
 
     private func entries(near point: GreatCircle.Point) -> [Entry] {

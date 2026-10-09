@@ -186,6 +186,7 @@ struct StationsMapView: View {
     @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = MapLayerDefaults.showsPredictedPaths
     @AppStorage("stations.showsNWSAlerts") private var showsNWSAlerts = MapLayerDefaults.showsNWSAlerts
     @AppStorage(NWSAlertScope.storageKey) private var nwsScopeText = NWSAlertScope.here.stored
+    @State private var nwsChecklist: NWSAreaChecklist.Kind?
     /// Graph analysis of the observed network: which stations everything
     /// depends on, and which stations cluster together.
     /// Which terrain shading is drawn, if any. Off by default: the map's
@@ -1800,6 +1801,9 @@ struct StationsMapView: View {
                 Label("Layers", systemImage: "square.3.layers.3d")
             }
             .accessibilityHint("Basemap, terrain, and which layers the map draws")
+            .sheet(item: $nwsChecklist) { kind in
+                NWSAreaChecklist(kind: kind)
+            }
 
             Menu {
                 actionsMenu
@@ -1919,21 +1923,30 @@ struct StationsMapView: View {
                 Text(caption)
             }
             if showsNWSAlerts {
-                // Typing state or zone codes does not fit a menu; a choice
-                // made elsewhere still shows here as its summary.
-                Picker("Alert area: \(NWSAlertScope(stored: nwsScopeText).summary)", selection: $nwsScopeText) {
+                // States and counties are ticked in a sheet; a choice made
+                // there shows here as its summary.
+                Picker("Alert area: \(NWSAlertScope(stored: nwsScopeText).summary(counties: CountyCenters.bundled))",
+                       selection: $nwsScopeText) {
                     Text("Where I am").tag(NWSAlertScope.here.stored)
                     ForEach(NWSAlertScope.offeredRadii, id: \.self) { miles in
                         Text("Within \(miles) mi").tag(NWSAlertScope.within(miles: Double(miles)).stored)
                     }
-                    if case .states = NWSAlertScope(stored: nwsScopeText) {
-                        Text(NWSAlertScope(stored: nwsScopeText).summary).tag(nwsScopeText)
-                    }
-                    if case .zones = NWSAlertScope(stored: nwsScopeText) {
-                        Text(NWSAlertScope(stored: nwsScopeText).summary).tag(nwsScopeText)
+                    switch NWSAlertScope(stored: nwsScopeText) {
+                    case .states, .zones, .counties:
+                        Text(NWSAlertScope(stored: nwsScopeText).summary(counties: CountyCenters.bundled)).tag(nwsScopeText)
+                    default:
+                        EmptyView()
                     }
                 }
                 .pickerStyle(.menu)
+                Button("Choose States…") {
+                    nwsScopeText = NWSAreaChecklist.starting(.states).stored
+                    nwsChecklist = .states
+                }
+                Button("Choose Counties…") {
+                    nwsScopeText = NWSAreaChecklist.starting(.counties).stored
+                    nwsChecklist = .counties
+                }
             }
             Toggle("Observed Paths", isOn: $showsPaths)
             Toggle("Predicted Paths", isOn: $showsPredictedPaths)

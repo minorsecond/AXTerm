@@ -83,9 +83,21 @@ final class CountyCentersTests: XCTestCase {
         XCTAssertGreaterThan(found.count, 5, "there are Douglas Counties in many states")
         XCTAssertTrue(try XCTUnwrap(CountyCenters.bundled).search("", near: home).isEmpty)
     }
+
+    /// Edges are judged from a circle of the county's area, so close in
+    /// the list cannot tell inside from next door: live, the station's own
+    /// county read "4 mi".
+    func testCloseCountiesSayCloseRatherThanAFalseDistance() throws {
+        let table = try XCTUnwrap(CountyCenters.bundled)
+        let home = GreatCircle.Point(latitude: 39.6123, longitude: -104.7332)
+        let arapahoe = try XCTUnwrap(table.nearest(to: home, limit: 1).first)
+        XCTAssertEqual(arapahoe.distanceText, "Nearby")
+        let far = try XCTUnwrap(table.entry("56021", from: home))
+        XCTAssertEqual(far.distanceText, "\(Int(far.miles.rounded())) mi")
+        XCTAssertEqual(try XCTUnwrap(table.entry("08005", from: nil)).distanceText, "")
+    }
 }
 
-/// State names for the States checklist.
 final class USStatesTests: XCTestCase {
     func testEveryStateCodeHasAName() {
         XCTAssertEqual(USStates.name("CO"), "Colorado")

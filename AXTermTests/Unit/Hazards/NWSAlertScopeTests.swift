@@ -159,4 +159,50 @@ final class NWSAlertScopeTests: XCTestCase {
         let kept = scope.keeping([alert("ours", ["008005", "008039"]), alert("theirs", ["008007"])], near: nil)
         XCTAssertEqual(kept.map(\.id), ["ours"])
     }
+
+    // MARK: - Checklists
+
+    /// Ticking a state adds it, unticking takes it out, and the last one out
+    /// leaves the area where the station is rather than an empty list.
+    func testTickingStatesInAndOut() {
+        XCTAssertEqual(NWSAlertScope.here.toggling(state: "CO"), .states(["CO"]))
+        XCTAssertEqual(NWSAlertScope.states(["CO"]).toggling(state: "WY"), .states(["CO", "WY"]))
+        XCTAssertEqual(NWSAlertScope.states(["CO", "WY"]).toggling(state: "CO"), .states(["WY"]))
+        XCTAssertEqual(NWSAlertScope.states(["WY"]).toggling(state: "WY"), .here)
+        XCTAssertTrue(NWSAlertScope.states(["CO", "WY"]).isChosen(state: "WY"))
+        XCTAssertFalse(NWSAlertScope.within(miles: 50).isChosen(state: "CO"))
+    }
+
+    func testTickingCountiesInAndOut() {
+        XCTAssertEqual(NWSAlertScope.within(miles: 50).toggling(county: "08005"), .counties(["08005"]))
+        XCTAssertEqual(NWSAlertScope.counties(["08005"]).toggling(county: "08035"), .counties(["08005", "08035"]))
+        XCTAssertEqual(NWSAlertScope.counties(["08005", "08035"]).toggling(county: "08005"), .counties(["08035"]))
+        XCTAssertEqual(NWSAlertScope.counties(["08035"]).toggling(county: "08035"), .here)
+        XCTAssertTrue(NWSAlertScope.counties(["08035"]).isChosen(county: "08035"))
+    }
+
+    /// The county list: what is ticked first, even far away, then the
+    /// nearest counties; a search replaces the nearest with the matches.
+    func testTheCountyListLeadsWithWhatIsTicked() {
+        let table = CountyCenters.bundled
+        let ticked = NWSAlertScope.counties(["56021"])   // Laramie County, Wyoming
+        let list = ticked.countyChoices(table: table, near: home, search: "")
+        XCTAssertEqual(list.first?.geoid, "56021")
+        XCTAssertEqual(list.dropFirst().first?.geoid, "08005")
+        XCTAssertEqual(list.count, 1 + NWSAlertScope.nearbyCountyCount)
+
+        let searched = ticked.countyChoices(table: table, near: home, search: "douglas")
+        XCTAssertEqual(searched.first?.geoid, "56021")
+        XCTAssertEqual(searched.dropFirst().first?.geoid, "08035")
+        XCTAssertFalse(searched.dropFirst().contains { !$0.county.name.localizedCaseInsensitiveContains("douglas") })
+    }
+
+    /// States: what is ticked and the station's own state first, then the
+    /// rest by name.
+    func testTheStateListLeadsWithHome() {
+        let list = NWSAlertScope.states(["TX"]).stateChoices(home: "CO")
+        XCTAssertEqual(list.prefix(2).map(\.code), ["CO", "TX"])
+        XCTAssertEqual(list.count, USStates.all.count)
+        XCTAssertEqual(list[2].code, "AL")
+    }
 }
