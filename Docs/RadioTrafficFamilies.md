@@ -135,11 +135,17 @@ Each row shows distance and compass direction from our station
 unknown.
 
 Our own station is drawn once. Heard entries are removed when their address is
-one we have transmitted as (old SSIDs included, from the tx packets in memory),
-when they are a sibling SSID of ours placed within 50 m of our position, or
-when they are a node alias operated under one of our callsigns
-(`HeardStationMap.withoutOwnStation`). A sibling SSID farther away, such as a
-mobile or an HT down the street, is another radio and stays.
+one we answer to, when every frame heard from them is one of ours coming back,
+or when they are a node alias operated under one of our callsigns
+(`HeardStationMap.withoutOwnStation`). "One of ours coming back" is matched by
+content: the frame's source, destination, control field and info equal a frame
+we transmitted, with the via path ignored because a digipeater rewrites it
+(`HeardStationMap.ownEchoAddresses`). That catches a beacon sent under an old
+SSID and repeated by a digipeater. Position plays no part: any sibling SSID we
+did not send from, such as a phone at the house, a mobile or an HT down the
+street, is another radio and is drawn and listed. A 50 m rule used to fold
+nearby sibling SSIDs into our marker; on 2026-10-09 it hid the operator's phone
+beaconing as K0EPI-3 from home.
 
 **A family goes under a radio only when exactly one visible radio carries it.**
 A layer switch is one setting and must appear once; two APRS radios would

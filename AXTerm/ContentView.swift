@@ -1182,10 +1182,8 @@ struct ContentView: View {
     /// packets in memory. Wider than `ownAddresses`, which only knows the
     /// current identity: a beacon sent as K0EPI before the SSID was set to -5
     /// still comes back off a digipeater, and it is still us.
-    private var ownTransmittedAddresses: Set<String> {
-        Set(client.packets.lazy
-            .filter { $0.direction == .tx }
-            .compactMap { $0.from?.display.uppercased() })
+    private var ownEchoAddresses: Set<String> {
+        HeardStationMap.ownEchoAddresses(in: client.packets)
     }
 
     /// Which family's layers sit under which radio, and which are left in the
@@ -1750,7 +1748,7 @@ struct ContentView: View {
             observerPosition: myPosition,
             myCallsign: settings.primaryCallsign,
             ownCallsigns: ownAddresses,
-            ownTransmittedAddresses: ownTransmittedAddresses,
+            ownEchoAddresses: ownEchoAddresses,
             aprsChannelRadios: aprsChannelRadios,
             possibleFamilies: possibleMapFamilies,
             lookup: callsignLookup,

@@ -48,11 +48,11 @@ struct StationsMapView: View {
     /// is; any *other* SSID on the same license is a different radio and
     /// belongs on the map like anyone else's.
     var ownCallsigns: Set<String> = []
-    /// Every address this station has actually transmitted as, including
-    /// SSIDs it no longer uses. Our own old beacon heard back off a
-    /// digipeater is still us, and without this it drew a second marker on
-    /// top of the center one.
-    var ownTransmittedAddresses: Set<String> = []
+    /// Addresses heard only as our own frames coming back off a digipeater,
+    /// matched by content (`HeardStationMap.ownEchoAddresses`). Our old
+    /// beacon under an SSID we no longer use is still us; a sibling SSID we
+    /// never sent from is another radio.
+    var ownEchoAddresses: Set<String> = []
     /// Radios the operator has marked as on an APRS channel. They count as
     /// APRS for the map whatever else they have heard; see
     /// `RadioTrafficClassifier.mapFamilies`.
@@ -680,23 +680,22 @@ struct StationsMapView: View {
 
     /// Every address that is this station. Falls back to the beacon callsign
     /// alone when the caller has not said what else this station answers to.
-    /// Everything we have transmitted as is included too, so a beacon sent
-    /// under an old SSID is recognized when it comes back.
+    /// Addresses heard only as our own frames coming back are included too,
+    /// so a beacon sent under an old SSID is recognized when it returns.
     private var ownAddresses: Set<String> {
         let current = ownCallsigns.isEmpty ? [myCallsign.uppercased()] : ownCallsigns
-        return current.union(ownTransmittedAddresses.map { $0.uppercased() })
+        return current.union(ownEchoAddresses.map { $0.uppercased() })
     }
 
     /// Stations the radio has actually met: heard stations plus the
     /// via-path aliases. These are the entries the *analysis* layers
     /// (paths, terrain, coverage) are allowed to see.
     ///
-    /// This station is taken out: a sibling SSID sitting on our own
-    /// position, or our own node alias, would draw a second marker on top of
-    /// the center one. See `HeardStationMap.withoutOwnStation`.
+    /// This station is taken out: our own frames heard back, or our own
+    /// node alias, would draw a second marker on top of the center one. See
+    /// `HeardStationMap.withoutOwnStation`.
     private var coreEntries: [HeardStationMap.Entry] {
-        HeardStationMap.withoutOwnStation(
-            heardAndAliasEntries, ownAddresses: ownAddresses, observer: observer)
+        HeardStationMap.withoutOwnStation(heardAndAliasEntries, ownAddresses: ownAddresses)
     }
 
     private var heardAndAliasEntries: [HeardStationMap.Entry] {

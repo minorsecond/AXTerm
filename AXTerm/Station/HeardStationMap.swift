@@ -558,53 +558,68 @@ nonisolated enum HeardStationMap {
 
     // MARK: - Our own station
 
-    /// How close a sibling SSID has to be to our own position to count as
-    /// this station rather than another radio. Our own beacon heard back
-    /// carries the fix we sent, a few meters from the observer at most; the
-    /// operator's HT (K0EPI-4, below) was ninety yards from the desk and is
-    /// a separate station.
-    static let ownStationRadiusMetres = 50.0
-
     /// Heard entries with this station taken out.
     ///
     /// `entries(excluding:)` drops the exact addresses this station operates
-    /// as, which is right for sibling SSIDs that are other radios. It missed
-    /// our own beacon heard back under an address we no longer use: K0EPI
-    /// beaconed as SSID 0 before the SSID was set to -5, a digipeater
-    /// repeated it, and the repeat became a heard station drawn on top of
-    /// the K0EPI-5 marker. The rules:
+    /// as. This also drops what the caller adds to `ownAddresses` from
+    /// `ownEchoAddresses`: our own frames heard back off a digipeater, under
+    /// whatever SSID we sent them. On 2026-09-29 that was a beacon sent as
+    /// K0EPI before the SSID became -5, drawn on top of the K0EPI-5 marker.
+    /// A node alias operated under one of our callsigns goes too, since it is
+    /// our own node placed at our own license address.
     ///
-    /// - any address in `ownAddresses` goes, which the caller fills with
-    ///   every address we have transmitted as, old SSIDs included;
-    /// - a sibling SSID of one of our own callsigns goes when it is placed
-    ///   within `ownStationRadiusMetres` of us, because a marker there is
-    ///   our own marker a second time whatever SSID it wears;
-    /// - a node alias operated under one of our callsigns goes, since it is
-    ///   our own node placed at our own license address.
-    ///
-    /// A sibling farther away (a mobile K0EPI-9 across town) stays: it is
-    /// another radio, and APRS treats it as another station.
+    /// Where an entry sits plays no part. A 50 m rule once folded any sibling
+    /// SSID near us into our own marker, and on 2026-10-09 it hid the
+    /// operator's phone, beaconing as K0EPI-3 from the house, from the map,
+    /// the station list and the heard count. A sibling SSID is another radio
+    /// unless its frames are ours.
     static func withoutOwnStation(_ entries: [Entry],
-                                  ownAddresses: Set<String>,
-                                  observer: GreatCircle.Point?) -> [Entry] {
+                                  ownAddresses: Set<String>) -> [Entry] {
         let own = Set(ownAddresses.map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
             .filter { !$0.isEmpty })
         guard !own.isEmpty else { return entries }
         let ownBases = Set(own.map(CallsignQuery.normalize))
         return entries.filter { entry in
-            let call = entry.callsign.uppercased()
-            if own.contains(call) { return false }
-            // Our own node alias in somebody's via path is this station too,
-            // placed at our own license address.
-            if entry.isNodeAlias {
-                guard let operatorCall = entry.nodeCallsign else { return true }
-                return !ownBases.contains(CallsignQuery.normalize(operatorCall))
-            }
-            guard ownBases.contains(CallsignQuery.normalize(call)),
-                  let observer, let position = entry.position else { return true }
-            return GreatCircle.kilometres(from: observer, to: position) * 1000
-                > ownStationRadiusMetres
+            if own.contains(entry.callsign.uppercased()) { return false }
+            guard entry.isNodeAlias else { return true }
+            guard let operatorCall = entry.nodeCallsign else { return true }
+            return !ownBases.contains(CallsignQuery.normalize(operatorCall))
         }
+    }
+
+    /// The addresses heard only as our own frames coming back.
+    ///
+    /// A received frame is ours when its source, destination, control and
+    /// info match a frame we transmitted (`StationIdentityMonitor.fingerprint`,
+    /// which ignores the via path a digipeater rewrites). An address counts
+    /// only when every frame heard from it is ours: one frame we never sent
+    /// means another radio uses it too, and that radio belongs on the map.
+    static func ownEchoAddresses(in packets: [Packet]) -> Set<String> {
+        func key(_ packet: Packet, _ source: String) -> Int {
+            StationIdentityMonitor.fingerprint(
+                source: source, destination: packet.to?.display ?? "",
+                control: packet.control, info: packet.info)
+        }
+        var sent: Set<Int> = []
+        var sentFrom: Set<String> = []
+        for packet in packets where packet.direction == .tx {
+            guard let source = packet.from?.display.uppercased() else { continue }
+            sent.insert(key(packet, source))
+            sentFrom.insert(source)
+        }
+        guard !sentFrom.isEmpty else { return [] }
+        var echoed: Set<String> = []
+        var notOurs: Set<String> = []
+        for packet in packets where packet.direction == .rx {
+            guard let source = packet.from?.display.uppercased(),
+                  sentFrom.contains(source) else { continue }
+            if sent.contains(key(packet, source)) {
+                echoed.insert(source)
+            } else {
+                notOurs.insert(source)
+            }
+        }
+        return echoed.subtracting(notOurs)
     }
 
     // MARK: - Station list text

@@ -1110,7 +1110,7 @@ struct AXTermiOSRootView: View {
                 observerSpeed: useDeviceLocation ? context.locationService.lastLocation?.speed : nil,
                 myCallsign: settings.primaryCallsign,
                 ownCallsigns: ownAddresses,
-                ownTransmittedAddresses: ownTransmittedAddresses,
+                ownEchoAddresses: ownEchoAddresses,
                 aprsChannelRadios: Set(settings.activeRadios.filter(\.aprsEnabled).map(\.id)),
                 possibleFamilies: RadioTrafficClassifier.possibleFamilies(of: settings.activeRadios),
                 lookup: callsignLookup,
@@ -1538,13 +1538,11 @@ struct AXTermiOSRootView: View {
         return answered.isEmpty ? settings.onAirCallsigns : answered
     }
 
-    /// Every address this station has transmitted as, so a beacon sent under
-    /// an earlier SSID and heard back off a digipeater is not drawn as
+    /// Addresses heard only as our own frames coming back, so a beacon sent
+    /// under an earlier SSID and heard back off a digipeater is not drawn as
     /// somebody else. Same as the Mac's.
-    private var ownTransmittedAddresses: Set<String> {
-        Set(client.packets.lazy
-            .filter { $0.direction == .tx }
-            .compactMap { $0.from?.display.uppercased() })
+    private var ownEchoAddresses: Set<String> {
+        HeardStationMap.ownEchoAddresses(in: client.packets)
     }
 
     private var resolver: NodeProfileResolver {
