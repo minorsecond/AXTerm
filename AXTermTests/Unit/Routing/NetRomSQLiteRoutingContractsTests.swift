@@ -106,6 +106,9 @@ final class NetRomSQLiteRoutingContractsTests: XCTestCase {
         }
 
         settings.addIgnoredServiceEndpoint(endpointToIgnore)
+        // The ignore list is also the validator's, process-wide. Left set, it
+        // made a later test in the same worker reject AF0AJ-7 (2026-10-09).
+        defer { CallsignValidator.configureIgnoredServiceEndpoints([]) }
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         viewModel.refresh()
 
