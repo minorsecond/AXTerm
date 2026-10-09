@@ -96,7 +96,9 @@ final class HazardLayerController: ObservableObject {
         guard nwsEnabled else { return nil }
         return HazardText.layerCaption(count: nws.features.count, lastFetched: nws.lastFetched,
                                        problem: nws.problem, stale: nws.isStale, now: now,
-                                       scope: lastScope ?? .here)
+                                       scope: lastScope ?? .here,
+                                       pausedUntil: nws.pausedUntil.flatMap { $0 > now ? $0 : nil },
+                                       zonesLoading: nws.zonesStillLoading)
     }
 
     /// The station's position as the map draws it, read from the settings

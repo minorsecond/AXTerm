@@ -40,7 +40,8 @@ final class NWSAlertLayerTests: XCTestCase {
     }
 
     private func layer(_ fetcher: FakeFetcher) -> NWSAlertLayer {
-        NWSAlertLayer(fetcher: fetcher, cache: HazardDiskCache(directory: directory), now: { [unowned self] in self.now })
+        NWSAlertLayer(fetcher: fetcher, cache: HazardDiskCache(directory: directory), now: { [unowned self] in self.now },
+                      sleep: { _ in })
     }
 
     /// The zone fixture's 18 zones, all answered with Archuleta's outline.
@@ -173,5 +174,134 @@ final class NWSAlertLayerTests: XCTestCase {
         XCTAssertEqual(fetcher.asked, [url])
         XCTAssertTrue(layer.features.isEmpty)
         XCTAssertEqual(layer.lastFetched, now, "fetched, and nothing was near")
+    }
+
+    // MARK: - Not getting throttled
+
+    private final class Pauses: @unchecked Sendable {
+        var taken: [TimeInterval] = []
+    }
+
+    private func pacedLayer(_ fetcher: FakeFetcher, maxZones: Int = 25, pauses: Pauses = Pauses()) -> NWSAlertLayer {
+        NWSAlertLayer(fetcher: fetcher, cache: HazardDiskCache(directory: directory),
+                      now: { [unowned self] in self.now },
+                      maxZonesPerRefresh: maxZones, zonePause: 0.2,
+                      sleep: { pauses.taken.append($0) })
+    }
+
+    /// Asked to slow down: nothing more for two minutes, then four, then
+    /// eight; a success starts over.
+    func testASlowDownPausesThenDoubles() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers[alertsURL] = .failure(HazardFetchError.throttled(retryAfter: nil))
+        let layer = pacedLayer(fetcher)
+        await layer.refresh(near: home)
+        XCTAssertEqual(fetcher.asked.count, 1)
+        XCTAssertEqual(layer.pausedUntil, now.addingTimeInterval(120))
+
+        now = now.addingTimeInterval(60)
+        await layer.refresh(near: home)
+        XCTAssertEqual(fetcher.asked.count, 1, "paused: no request")
+
+        now = now.addingTimeInterval(61)
+        await layer.refresh(near: home)
+        XCTAssertEqual(fetcher.asked.count, 2)
+        XCTAssertEqual(layer.pausedUntil, now.addingTimeInterval(240), "doubled")
+
+        now = now.addingTimeInterval(241)
+        fetcher.answers[alertsURL] = .success(try fixture("nws-alerts-polygon"))
+        await layer.refresh(near: home)
+        XCTAssertNil(layer.pausedUntil)
+        XCTAssertNil(layer.problem)
+
+        fetcher.answers[alertsURL] = .failure(HazardFetchError.throttled(retryAfter: nil))
+        await layer.refresh(near: home)
+        XCTAssertEqual(layer.pausedUntil, now.addingTimeInterval(120), "a success starts the doubling over")
+    }
+
+    func testTheServersRetryAfterIsHonored() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers[alertsURL] = .failure(HazardFetchError.throttled(retryAfter: 600))
+        let layer = pacedLayer(fetcher)
+        await layer.refresh(near: home)
+        XCTAssertEqual(layer.pausedUntil, now.addingTimeInterval(600))
+        XCTAssertTrue(layer.problem?.contains("slow down") == true)
+    }
+
+    func testThePauseNeverPassesThirtyMinutes() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers[alertsURL] = .failure(HazardFetchError.throttled(retryAfter: nil))
+        let layer = pacedLayer(fetcher)
+        for _ in 0..<10 {
+            await layer.refresh(near: home)
+            now = try XCTUnwrap(layer.pausedUntil).addingTimeInterval(1)
+        }
+        XCTAssertEqual(fetcher.asked.count, 10)
+        await layer.refresh(near: home)
+        let pause = try XCTUnwrap(layer.pausedUntil).timeIntervalSince(now)
+        XCTAssertEqual(pause, 30 * 60, accuracy: 1)
+    }
+
+    /// A statewide storm can name a hundred zones. At most N new outlines per
+    /// refresh, paced, and the rest on the next refresh.
+    func testZoneOutlinesAreCappedPerRefreshAndPaced() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers[alertsURL] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(fetcher)
+        let pauses = Pauses()
+        let layer = pacedLayer(fetcher, maxZones: 10, pauses: pauses)
+        await layer.refresh(near: home)
+        XCTAssertEqual(fetcher.asked.count, 1 + 10)
+        XCTAssertEqual(pauses.taken, Array(repeating: 0.2, count: 10), "a pause before each outline")
+        XCTAssertNil(layer.features.first?.geometry, "not all its zones yet: listed, not drawn")
+        XCTAssertEqual(layer.zonesStillLoading, 8)
+
+        await layer.refresh(near: home)
+        XCTAssertEqual(fetcher.asked.count, 1 + 10 + 1 + 8)
+        XCTAssertNotNil(layer.features.first?.geometry)
+        XCTAssertEqual(layer.zonesStillLoading, 0)
+    }
+
+    /// Told to slow down while fetching outlines: stop asking for them, and
+    /// pause everything.
+    func testASlowDownOnAZoneStopsTheZonesAndPauses() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers[alertsURL] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(fetcher)
+        fetcher.answers["https://api.weather.gov/zones/county/COC029"] = .failure(HazardFetchError.throttled(retryAfter: nil))
+        let layer = pacedLayer(fetcher)
+        await layer.refresh(near: home)
+        XCTAssertEqual(fetcher.asked.count, 1 + 2, "the alerts, COC007, then COC029 refused")
+        XCTAssertEqual(layer.pausedUntil, now.addingTimeInterval(120))
+        XCTAssertEqual(layer.features.count, 1, "the alerts themselves are kept")
+    }
+
+    // MARK: - Zones and radius together
+
+    /// Zones chosen: fetched by zone, everything kept.
+    func testAZoneScopeFetchesByZone() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers["https://api.weather.gov/alerts/active?zone=COC007"] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(fetcher)
+        let layer = layer(fetcher)
+        await layer.refresh(.zones(["COC007"]), at: nil)
+        XCTAssertEqual(fetcher.asked.first, "https://api.weather.gov/alerts/active?zone=COC007")
+        XCTAssertEqual(layer.features.count, 1)
+    }
+
+    /// A zone-based alert takes its zones' shape before the radius is
+    /// judged: Archuleta County is about 200 miles from home, so it is
+    /// dropped at 50 miles and kept at 300.
+    func testARadiusJudgesAZoneBasedAlertByItsZones() async throws {
+        for (miles, kept) in [(50.0, 0), (300.0, 1)] {
+            let fetcher = FakeFetcher()
+            let url = try XCTUnwrap(NWSAlertFeed.alertsRequest(.within(miles: miles), at: home)?.url?.absoluteString)
+            fetcher.answers[url] = .success(try fixture("nws-alerts-zones"))
+            try answerEveryZone(fetcher)
+            try? FileManager.default.removeItem(at: directory)
+            let layer = layer(fetcher)
+            await layer.refresh(.within(miles: miles), at: home)
+            XCTAssertEqual(layer.features.count, kept, "within \(miles) mi")
+        }
     }
 }

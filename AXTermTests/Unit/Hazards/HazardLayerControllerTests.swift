@@ -1,3 +1,4 @@
+import GRDB
 import XCTest
 @testable import AXTerm
 
@@ -91,6 +92,44 @@ final class HazardLayerControllerTests: XCTestCase {
         await controller.tick(nwsEnabled: true, scope: .states(["CO"]), position: home)
         XCTAssertEqual(fetcher.count, 2, "a new area fetches without waiting")
         XCTAssertEqual(fetcher.lastURL, "https://api.weather.gov/alerts/active?area=CO")
+    }
+
+    /// A new distance is a new area: fetched at once.
+    func testChangingTheDistanceFetchesAtOnce() async throws {
+        let fetcher = CountingFetcher()
+        let controller = try controller(fetcher)
+        await controller.tick(nwsEnabled: true, scope: .within(miles: 25), position: home)
+        now = now.addingTimeInterval(10)
+        await controller.tick(nwsEnabled: true, scope: .within(miles: 50), position: home)
+        XCTAssertEqual(fetcher.count, 2)
+    }
+
+    /// States need no position, end to end.
+    func testStatesFetchWithNoPosition() async throws {
+        let fetcher = CountingFetcher()
+        let controller = try controller(fetcher)
+        await controller.tick(nwsEnabled: true, scope: .states(["CO"]), position: nil)
+        XCTAssertEqual(fetcher.lastURL, "https://api.weather.gov/alerts/active?area=CO")
+        XCTAssertEqual(controller.drawnFeatures.count, 1)
+    }
+
+    /// History is recorded through the app's own controller into a real
+    /// database: what was fetched is there afterward.
+    func testAFetchLandsInHistory() async throws {
+        let queue = try DatabaseQueue()
+        try DatabaseManager.migrator.migrate(queue)
+        let history = SQLiteHazardHistoryStore(dbQueue: queue)
+        let fetcher = CountingFetcher()
+        let url = try XCTUnwrap(Bundle(for: HazardLayerControllerTests.self)
+            .url(forResource: "nws-alerts-polygon", withExtension: "json"))
+        fetcher.data = try Data(contentsOf: url)
+        let layer = NWSAlertLayer(fetcher: fetcher, cache: HazardDiskCache(directory: directory), history: history,
+                                  now: { [unowned self] in self.now }, sleep: { _ in })
+        let controller = HazardLayerController(nws: layer, now: { [unowned self] in self.now })
+        await controller.tick(nwsEnabled: true, position: home)
+        let id = try XCTUnwrap(controller.drawnFeatures.first?.id)
+        XCTAssertEqual(try history.versions(of: id).count, 1)
+        XCTAssertEqual(try history.inEffect(at: now).map(\.id), [id])
     }
 
     // MARK: - The position it fetches for

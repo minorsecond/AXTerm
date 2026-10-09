@@ -134,4 +134,22 @@ final class HazardPresentationTests: XCTestCase {
         XCTAssertEqual(caption(.states(["CO", "WY"])), "No alerts in CO, WY · fetched 1 min ago")
         XCTAssertEqual(caption(.zones(["COZ039"])), "No alerts in zones COZ039 · fetched 1 min ago")
     }
+
+    /// Paused at the NWS's request: said, with when the next try is, rather
+    /// than "Offline".
+    func testAPauseAtTheNWSRequestIsSaid() {
+        let text = plain(HazardText.layerCaption(count: 2, lastFetched: now.addingTimeInterval(-180),
+                                                 problem: "slow down", stale: false, now: now,
+                                                 pausedUntil: now.addingTimeInterval(120),
+                                                 timeZone: denver, locale: locale))
+        XCTAssertEqual(text, "NWS asked to slow down; next try 2:02 PM · showing 2 alerts fetched 3 min ago")
+    }
+
+    /// Zone outlines still loading a few at a time: counted, so an alert
+    /// listed without a shape is explained.
+    func testZonesStillLoadingAreCounted() {
+        XCTAssertEqual(HazardText.layerCaption(count: 1, lastFetched: now.addingTimeInterval(-60), problem: nil,
+                                               stale: false, now: now, zonesLoading: 8),
+                       "1 alert · fetched 1 min ago · 8 zones still loading")
+    }
 }

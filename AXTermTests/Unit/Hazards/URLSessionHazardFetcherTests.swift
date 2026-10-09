@@ -10,13 +10,14 @@ final class URLSessionHazardFetcherTests: XCTestCase {
     final class StubProtocol: URLProtocol {
         nonisolated(unsafe) static var status = 200
         nonisolated(unsafe) static var body = Data()
+        nonisolated(unsafe) static var headers: [String: String] = [:]
         nonisolated(unsafe) static var requests = 0
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
             Self.requests += 1
             let response = HTTPURLResponse(url: request.url!, statusCode: Self.status,
-                                           httpVersion: "HTTP/1.1", headerFields: nil)!
+                                           httpVersion: "HTTP/1.1", headerFields: Self.headers)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Self.body)
             client?.urlProtocolDidFinishLoading(self)
@@ -33,6 +34,7 @@ final class URLSessionHazardFetcherTests: XCTestCase {
     override func setUp() {
         StubProtocol.status = 200
         StubProtocol.body = Data()
+        StubProtocol.headers = [:]
         StubProtocol.requests = 0
     }
 
@@ -44,16 +46,37 @@ final class URLSessionHazardFetcherTests: XCTestCase {
         XCTAssertEqual(data, StubProtocol.body)
     }
 
-    /// The NWS answers an overload with 503 and a JSON problem document;
-    /// reading that as alerts would draw nothing and call it current.
+    /// An HTTP error is a failure, never data: a problem document read as
+    /// alerts would draw nothing and call it current.
     func testAnHTTPErrorIsAFailureNotData() async {
+        StubProtocol.status = 500
+        StubProtocol.body = Data("{\"title\":\"Internal Server Error\"}".utf8)
+        do {
+            _ = try await fetcher().data(for: local)
+            XCTFail("a 500 must not come back as data")
+        } catch {
+            XCTAssertEqual(error as? HazardFetchError, .status(500))
+        }
+    }
+
+    /// 429 and 503 are the server asking us to slow down, and are told apart
+    /// from other errors so the layer backs off.
+    func testSlowDownIsToldApartWithTheServersRetryAfter() async {
+        StubProtocol.status = 429
+        StubProtocol.headers = ["Retry-After": "120"]
+        do {
+            _ = try await fetcher().data(for: local)
+            XCTFail("a 429 must not come back as data")
+        } catch {
+            XCTAssertEqual(error as? HazardFetchError, .throttled(retryAfter: 120))
+        }
         StubProtocol.status = 503
-        StubProtocol.body = Data("{\"title\":\"Service Unavailable\"}".utf8)
+        StubProtocol.headers = [:]
         do {
             _ = try await fetcher().data(for: local)
             XCTFail("a 503 must not come back as data")
         } catch {
-            XCTAssertEqual(error as? HazardFetchError, .status(503))
+            XCTAssertEqual(error as? HazardFetchError, .throttled(retryAfter: nil))
         }
     }
 

@@ -171,13 +171,21 @@ nonisolated enum HazardText {
     /// The line under the layer's switch: how many alerts and how old, or
     /// that the ones shown are old because no newer copy came.
     static func layerCaption(count: Int, lastFetched: Date?, problem: String?, stale: Bool, now: Date,
-                             scope: NWSAlertScope = .here) -> String {
-        guard let lastFetched else { return problem == nil ? "Not fetched yet" : "Could not reach the NWS" }
+                             scope: NWSAlertScope = .here, pausedUntil: Date? = nil, zonesLoading: Int = 0,
+                             timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+        let loading = zonesLoading > 0 ? " · \(zonesLoading) zones still loading" : ""
+        let paused = pausedUntil.map {
+            "NWS asked to slow down; next try " + formatter(timeZone, locale).string(from: $0)
+        }
+        guard let lastFetched else {
+            return paused ?? (problem == nil ? "Not fetched yet" : "Could not reach the NWS")
+        }
         let alerts = count == 1 ? "1 alert" : "\(count) alerts"
         let age = age(from: lastFetched, to: now)
-        if problem != nil { return "Offline · showing \(alerts) fetched \(age)" }
+        if let paused { return "\(paused) · showing \(alerts) fetched \(age)" + loading }
+        if problem != nil { return "Offline · showing \(alerts) fetched \(age)" + loading }
         let lead = count == 0 ? noAlerts(in: scope) : alerts
-        return "\(lead) · fetched \(age)" + (stale ? ", no newer copy" : "")
+        return "\(lead) · fetched \(age)" + (stale ? ", no newer copy" : "") + loading
     }
 
     /// "No alerts here" for the station's point; a wider area is named.

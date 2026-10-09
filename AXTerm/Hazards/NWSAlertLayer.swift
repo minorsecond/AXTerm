@@ -74,8 +74,31 @@ final class NWSAlertLayer: ObservableObject {
     private let now: () -> Date
     private var outlines: [String: NWSAlertFeed.Zone]?
 
+    /// Asked to slow down (HTTP 429 or 503): nothing is fetched before this.
+    @Published private(set) var pausedUntil: Date?
+    /// Zone outlines still to fetch, a few each refresh (`maxZonesPerRefresh`).
+    @Published private(set) var zonesStillLoading = 0
+
+    /// At most this many new zone outlines per refresh, `zonePause` apart. A
+    /// statewide storm can name a hundred zones, and asking for all of them
+    /// at once is how a client gets throttled.
+    private let maxZonesPerRefresh: Int
+    private let zonePause: TimeInterval
+    private let sleep: (TimeInterval) async -> Void
+    /// Slow-downs in a row; each doubles the pause, up to `maxPause`.
+    private var consecutiveThrottles = 0
+    static let firstPause: TimeInterval = 120
+    static let maxPause: TimeInterval = 30 * 60
+
     init(fetcher: HazardFetching, cache: HazardDiskCache, history: SQLiteHazardHistoryStore? = nil,
-         now: @escaping () -> Date = Date.init) {
+         now: @escaping () -> Date = Date.init,
+         maxZonesPerRefresh: Int = 25, zonePause: TimeInterval = 0.2,
+         sleep: @escaping (TimeInterval) async -> Void = {
+             try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
+         }) {
+        self.maxZonesPerRefresh = maxZonesPerRefresh
+        self.zonePause = zonePause
+        self.sleep = sleep
         self.fetcher = fetcher
         self.cache = cache
         self.history = history
@@ -103,6 +126,8 @@ final class NWSAlertLayer: ObservableObject {
     /// Alerts for a scope (`NWSAlertScope`): at the station, within a radius
     /// of it, for chosen states, or for chosen zones.
     func refresh(_ scope: NWSAlertScope, at point: GreatCircle.Point?) async {
+        // Paused at the server's request: ask for nothing until it is over.
+        if let pausedUntil, now() < pausedUntil { return }
         guard let request = NWSAlertFeed.alertsRequest(scope, at: point) else {
             problem = "No position for this station, so no alerts can be fetched for where it is."
             return
@@ -113,6 +138,9 @@ final class NWSAlertLayer: ObservableObject {
             let data = try await fetcher.data(for: request)
             parsed = try NWSAlertFeed.parse(data, fetchedAt: fetchedAt)
             try? cache.saveAlerts(data, fetchedAt: fetchedAt)
+        } catch HazardFetchError.throttled(let retryAfter) {
+            pause(retryAfter: retryAfter)
+            return
         } catch {
             problem = "Could not reach the National Weather Service (\(error.localizedDescription)). "
                 + (lastFetched == nil ? "No alerts have been fetched yet." : "Showing the alerts fetched earlier.")
@@ -120,19 +148,43 @@ final class NWSAlertLayer: ObservableObject {
         }
         lastFetched = fetchedAt
         problem = nil
+        pausedUntil = nil
+        consecutiveThrottles = 0
         var known = knownOutlines()
-        for url in NWSAlertFeed.zonesToFetch(for: parsed, cached: Set(known.keys)) {
+        for url in NWSAlertFeed.zonesToFetch(for: parsed, cached: Set(known.keys)).prefix(maxZonesPerRefresh) {
+            await sleep(zonePause)
             let id = url.lastPathComponent
-            guard let data = try? await fetcher.data(for: NWSAlertFeed.zoneRequest(url)),
-                  let zone = try? NWSAlertFeed.parseZone(data) else { continue }
+            let data: Data
+            do {
+                data = try await fetcher.data(for: NWSAlertFeed.zoneRequest(url))
+            } catch HazardFetchError.throttled(let retryAfter) {
+                pause(retryAfter: retryAfter)
+                break
+            } catch {
+                continue
+            }
+            guard let zone = try? NWSAlertFeed.parseZone(data) else { continue }
             known[id] = zone
             try? cache.saveZone(id, data: data)
         }
+        zonesStillLoading = NWSAlertFeed.zonesToFetch(for: parsed, cached: Set(known.keys)).count
         outlines = known
         features = scope.keeping(NWSAlertFeed.resolvingZones(parsed, outlines: known), near: point)
         // History is a record, not the display: a write that fails costs
         // the record, never the alerts on screen.
         try? history?.record(features)
+    }
+
+    /// The server asked us to slow down: its Retry-After when it gave one,
+    /// else two minutes, doubling with each slow-down in a row up to
+    /// `maxPause`.
+    private func pause(retryAfter: TimeInterval?) {
+        consecutiveThrottles += 1
+        let doubling = Self.firstPause * pow(2, Double(consecutiveThrottles - 1))
+        let until = now().addingTimeInterval(retryAfter ?? min(Self.maxPause, doubling))
+        pausedUntil = until
+        let time = until.formatted(date: .omitted, time: .shortened)
+        problem = "The National Weather Service asked AXTerm to slow down. The next try is at \(time)."
     }
 
     private func knownOutlines() -> [String: NWSAlertFeed.Zone] {
@@ -149,11 +201,15 @@ enum HazardFetchError: Error, Equatable, LocalizedError {
     case status(Int)
     /// Refused before any request: a test run reaches loopback only.
     case notAllowed(String)
+    /// 429 or 503: the server asking us to slow down, with how long it
+    /// asked us to wait when it said (`Retry-After`, in seconds).
+    case throttled(retryAfter: TimeInterval?)
 
     var errorDescription: String? {
         switch self {
         case .status(let code): return "the server answered HTTP \(code)"
         case .notAllowed(let host): return "\(host) is not reachable from a test run"
+        case .throttled: return "the server asked us to slow down"
         }
     }
 }
@@ -171,6 +227,11 @@ struct URLSessionHazardFetcher: HazardFetching {
         guard AppEnvironment.mayConnect(to: host) else { throw HazardFetchError.notAllowed(host) }
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            if http.statusCode == 429 || http.statusCode == 503 {
+                let retryAfter = (http.value(forHTTPHeaderField: "Retry-After"))
+                    .flatMap { TimeInterval($0.trimmingCharacters(in: .whitespaces)) }
+                throw HazardFetchError.throttled(retryAfter: retryAfter)
+            }
             throw HazardFetchError.status(http.statusCode)
         }
         return data
