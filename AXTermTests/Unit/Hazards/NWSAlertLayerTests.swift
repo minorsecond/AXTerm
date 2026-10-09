@@ -335,4 +335,26 @@ final class NWSAlertLayerTests: XCTestCase {
         XCTAssertEqual(layer.unplacedCount, 0)
         XCTAssertEqual(layer.zonesStillLoading, 0)
     }
+
+    /// Counties chosen: the state is fetched, and an alert naming none of
+    /// the chosen counties is dropped before its outlines are downloaded.
+    /// The Western Slope outlook covers Archuleta, not Arapahoe.
+    func testACountyScopeSkipsOutlinesForOtherCounties() async throws {
+        let fetcher = FakeFetcher()
+        let url = "https://api.weather.gov/alerts/active?area=CO"
+        fetcher.answers[url] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(fetcher)
+        let layer = layer(fetcher)
+        await layer.refresh(.counties(["08005"]), at: nil)
+        XCTAssertEqual(fetcher.asked, [url], "no outlines for another county's alert")
+        XCTAssertTrue(layer.features.isEmpty)
+
+        let archuleta = FakeFetcher()
+        archuleta.answers[url] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(archuleta)
+        try? FileManager.default.removeItem(at: directory)
+        let kept = self.layer(archuleta)
+        await kept.refresh(.counties(["08007"]), at: nil)
+        XCTAssertEqual(kept.features.count, 1)
+    }
 }

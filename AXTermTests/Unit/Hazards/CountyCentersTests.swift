@@ -52,4 +52,52 @@ final class CountyCentersTests: XCTestCase {
         XCTAssertEqual(table.reach(of: alert(counties: []), from: home, miles: 50), .unknown)
         XCTAssertEqual(table.reach(of: alert(counties: ["099999"]), from: home, miles: 50), .unknown)
     }
+
+    // MARK: - Choosing counties without typing (2026-10-09)
+
+    func testACountyHasItsNameAndState() throws {
+        let arapahoe = try XCTUnwrap(CountyCenters.bundled?.county("08005"))
+        XCTAssertEqual(arapahoe.name, "Arapahoe County")
+        XCTAssertEqual(arapahoe.state, "CO")
+        XCTAssertEqual(arapahoe.shortName, "Arapahoe")
+    }
+
+    func testTheStationsStateIsKnown() throws {
+        XCTAssertEqual(try XCTUnwrap(CountyCenters.bundled).state(at: home), "CO")
+    }
+
+    /// Nearest first by distance to the county's edge, so the county the
+    /// station is in leads: home is nearer Denver County's center than
+    /// Arapahoe's, but inside Arapahoe.
+    func testCountiesAreListedNearestFirst() throws {
+        let nearest = try XCTUnwrap(CountyCenters.bundled).nearest(to: home, limit: 5)
+        XCTAssertEqual(nearest.first?.geoid, "08005")
+        XCTAssertEqual(nearest.count, 5)
+        XCTAssertTrue(nearest.map(\.geoid).contains("08035"), "Douglas County is among the nearest")
+    }
+
+    /// Search by name, nearest first.
+    func testACountyCanBeFoundByName() throws {
+        let found = try XCTUnwrap(CountyCenters.bundled).search("douglas", near: home)
+        XCTAssertEqual(found.first?.geoid, "08035", "Colorado's Douglas County, the nearest")
+        XCTAssertGreaterThan(found.count, 5, "there are Douglas Counties in many states")
+        XCTAssertTrue(try XCTUnwrap(CountyCenters.bundled).search("", near: home).isEmpty)
+    }
+}
+
+/// State names for the States checklist.
+final class USStatesTests: XCTestCase {
+    func testEveryStateCodeHasAName() {
+        XCTAssertEqual(USStates.name("CO"), "Colorado")
+        XCTAssertEqual(USStates.name("PR"), "Puerto Rico")
+        for code in NWSAlertScope.stateBoxes.keys {
+            XCTAssertNotNil(USStates.name(code), code)
+        }
+    }
+
+    func testTheListIsAlphabeticalByName() {
+        let names = USStates.all.map(\.name)
+        XCTAssertEqual(names, names.sorted())
+        XCTAssertEqual(USStates.all.first?.code, "AL")
+    }
 }

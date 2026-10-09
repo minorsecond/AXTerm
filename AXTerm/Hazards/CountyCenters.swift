@@ -14,6 +14,30 @@ nonisolated struct CountyCenters: Sendable {
     struct County: Equatable, Sendable {
         let center: GreatCircle.Point
         let squareMiles: Double
+        /// As the Census names it, e.g. "Arapahoe County".
+        var name = ""
+        /// Two-letter state code.
+        var state = ""
+
+        /// "Arapahoe": the name without County, Parish, Borough and the like.
+        var shortName: String {
+            for suffix in [" County", " Parish", " Borough", " Census Area", " Municipality",
+                           " City and Borough", " Municipio"] where name.hasSuffix(suffix) {
+                return String(name.dropLast(suffix.count))
+            }
+            return name
+        }
+
+        /// Roughly how far from its center its edge lies.
+        var radiusMiles: Double { (squareMiles / .pi).squareRoot() }
+    }
+
+    /// A county in a list, with how far its edge is from the station.
+    struct Entry: Equatable, Sendable {
+        let geoid: String
+        let county: County
+        /// To the county's edge, roughly; zero when the station is inside.
+        let miles: Double
     }
 
     /// Whether an alert could come within a radius, judged by its counties.
@@ -37,20 +61,57 @@ nonisolated struct CountyCenters: Sendable {
 
     private final class BundleToken {}
 
-    /// "geoid,lat,lon,sqmi" rows after a header line.
+    /// "geoid,lat,lon,sqmi,state,name" rows after a header line.
     init(csv: String) {
         var table: [String: County] = [:]
         for line in csv.split(separator: "\n").dropFirst() {
-            let fields = line.split(separator: ",")
-            guard fields.count == 4, let lat = Double(fields[1]), let lon = Double(fields[2]),
+            let fields = line.split(separator: ",", omittingEmptySubsequences: false)
+            guard fields.count >= 4, let lat = Double(fields[1]), let lon = Double(fields[2]),
                   let area = Double(fields[3]) else { continue }
             table[String(fields[0])] = County(center: GreatCircle.Point(latitude: lat, longitude: lon),
-                                              squareMiles: area)
+                                              squareMiles: area,
+                                              name: fields.count > 5 ? String(fields[5]) : "",
+                                              state: fields.count > 4 ? String(fields[4]) : "")
         }
         counties = table
     }
 
     var count: Int { counties.count }
+
+    /// The state the station is in: that of the county it is nearest the
+    /// edge of.
+    func state(at point: GreatCircle.Point) -> String? {
+        nearest(to: point, limit: 1).first?.county.state
+    }
+
+    /// Counties nearest first, by distance to each county's edge, so the
+    /// county the station is in leads even when a neighbor's center is nearer.
+    func nearest(to point: GreatCircle.Point, limit: Int) -> [Entry] {
+        Array(entries(near: point).prefix(limit))
+    }
+
+    /// Counties whose name contains `text`, nearest first when there is a
+    /// position, else by name. Nothing for an empty search.
+    func search(_ text: String, near point: GreatCircle.Point?) -> [Entry] {
+        let query = text.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return [] }
+        let matches = counties.filter { $0.value.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+        guard let point else {
+            return matches.map { Entry(geoid: $0.key, county: $0.value, miles: 0) }
+                .sorted { ($0.county.name, $0.county.state) < ($1.county.name, $1.county.state) }
+        }
+        return matches.map { entry(geoid: $0.key, county: $0.value, from: point) }.sorted { $0.miles < $1.miles }
+    }
+
+    private func entries(near point: GreatCircle.Point) -> [Entry] {
+        counties.map { entry(geoid: $0.key, county: $0.value, from: point) }
+            .sorted { ($0.miles, $0.geoid) < ($1.miles, $1.geoid) }
+    }
+
+    private func entry(geoid: String, county: County, from point: GreatCircle.Point) -> Entry {
+        let centerMiles = GreatCircle.kilometres(from: point, to: county.center) * 0.621371
+        return Entry(geoid: geoid, county: county, miles: max(0, centerMiles - county.radiusMiles))
+    }
 
     func county(_ geoid: String) -> County? { counties[geoid] }
 

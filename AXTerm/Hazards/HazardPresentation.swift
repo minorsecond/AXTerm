@@ -205,6 +205,7 @@ nonisolated enum HazardText {
         case .within: return "No alerts " + scope.summary.lowercased()
         case .states(let codes): return "No alerts in " + codes.joined(separator: ", ")
         case .zones(let codes): return "No alerts in zones " + codes.joined(separator: ", ")
+        case .counties: return "No alerts in " + scope.summary(counties: CountyCenters.bundled)
         }
     }
 

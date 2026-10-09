@@ -138,7 +138,7 @@ final class NWSAlertLayer: ObservableObject {
     func refresh(_ scope: NWSAlertScope, at point: GreatCircle.Point?) async {
         // Paused at the server's request: ask for nothing until it is over.
         if let pausedUntil, now() < pausedUntil { return }
-        guard let request = NWSAlertFeed.alertsRequest(scope, at: point) else {
+        guard let request = NWSAlertFeed.alertsRequest(scope, at: point, counties: counties ?? CountyCenters.bundled) else {
             problem = "No position for this station, so no alerts can be fetched for where it is."
             return
         }
@@ -166,6 +166,11 @@ final class NWSAlertLayer: ObservableObject {
         // dropped before any of its zones' outlines is fetched.
         if case .within(let miles) = scope, let point, let counties {
             parsed = parsed.filter { counties.reach(of: $0, from: point, miles: miles) != .far }
+        }
+        // Counties are fetched as their whole state; an alert for another
+        // county is dropped before its outlines are fetched.
+        if case .counties = scope {
+            parsed = scope.keeping(parsed, near: point)
         }
         lastFetched = fetchedAt
         problem = nil

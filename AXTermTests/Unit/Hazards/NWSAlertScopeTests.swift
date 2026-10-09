@@ -133,4 +133,30 @@ final class NWSAlertScopeTests: XCTestCase {
                        "COC007 is a zone or county code. Choose Zones to use it.")
         XCTAssertEqual(NWSAlertScope.EntryProblem.unknown(["XX"]).message, "Not a code the NWS uses: XX")
     }
+
+    // MARK: - Counties
+
+    func testCountiesAreStoredAndReadPlainly() {
+        let scope = NWSAlertScope.counties(["08005", "08035"])
+        XCTAssertEqual(scope.stored, "counties:08005,08035")
+        XCTAssertEqual(NWSAlertScope(stored: scope.stored), scope)
+        XCTAssertEqual(scope.summary(counties: CountyCenters.bundled), "Arapahoe, Douglas")
+        XCTAssertFalse(scope.needsPosition)
+    }
+
+    /// Counties are fetched as their states, so zone-based alerts are not
+    /// missed, and kept by the counties each alert names.
+    func testCountiesFetchTheirStatesAndKeepAlertsNamingThem() {
+        let scope = NWSAlertScope.counties(["08005", "56021"])
+        XCTAssertEqual(NWSAlertFeed.alertsRequest(scope, at: nil, counties: CountyCenters.bundled)?.url?.absoluteString,
+                       "https://api.weather.gov/alerts/active?area=CO,WY")
+        func alert(_ id: String, _ same: [String]) -> HazardFeature {
+            var f = HazardFeature(id: id, kind: .warning, event: "Red Flag Warning", source: "NWS", fetchedAt: Date())
+            let json = try! JSONSerialization.data(withJSONObject: ["SAME": same], options: [])
+            f.properties["geocode"] = String(data: json, encoding: .utf8)
+            return f
+        }
+        let kept = scope.keeping([alert("ours", ["008005", "008039"]), alert("theirs", ["008007"])], near: nil)
+        XCTAssertEqual(kept.map(\.id), ["ours"])
+    }
 }

@@ -14,6 +14,10 @@ nonisolated enum NWSAlertScope: Equatable, Sendable {
     case states([String])
     /// NWS zone or county codes, e.g. COZ039 or COC005.
     case zones([String])
+    /// Census county codes, e.g. 08005. Fetched as their states, so an
+    /// alert issued by forecast zone is not missed, and kept when it names
+    /// one of these counties (every alert lists its counties).
+    case counties([String])
 
     // MARK: - Stored as text
 
@@ -31,6 +35,9 @@ nonisolated enum NWSAlertScope: Equatable, Sendable {
         case "states":
             let codes = Self.codes(parts.count == 2 ? parts[1] : "")
             self = codes.isEmpty ? .here : .states(codes)
+        case "counties":
+            let codes = Self.codes(parts.count == 2 ? parts[1] : "").filter { $0.count == 5 && $0.allSatisfy(\.isNumber) }
+            self = codes.isEmpty ? .here : .counties(codes)
         case "zones":
             let codes = Self.codes(parts.count == 2 ? parts[1] : "")
             self = codes.isEmpty ? .here : .zones(codes)
@@ -46,6 +53,7 @@ nonisolated enum NWSAlertScope: Equatable, Sendable {
             return miles == miles.rounded() ? "within:\(Int(miles))" : "within:\(miles)"
         case .states(let codes): return "states:" + Self.codes(codes.joined(separator: ",")).joined(separator: ",")
         case .zones(let codes): return "zones:" + Self.codes(codes.joined(separator: ",")).joined(separator: ",")
+        case .counties(let codes): return "counties:" + codes.joined(separator: ",")
         }
     }
 
@@ -63,7 +71,15 @@ nonisolated enum NWSAlertScope: Equatable, Sendable {
             return "Within \(miles == miles.rounded() ? String(Int(miles)) : String(miles)) mi"
         case .states(let codes): return codes.joined(separator: ", ")
         case .zones(let codes): return "Zones " + codes.joined(separator: ", ")
+        case .counties(let codes): return "\(codes.count) count\(codes.count == 1 ? "y" : "ies")"
         }
+    }
+
+    /// The summary with county names where the table knows them, e.g.
+    /// "Arapahoe, Douglas".
+    func summary(counties table: CountyCenters?) -> String {
+        guard case .counties(let codes) = self, let table else { return summary }
+        return codes.map { table.county($0)?.shortName ?? $0 }.joined(separator: ", ")
     }
 
     /// The radii the area control offers.
@@ -72,7 +88,7 @@ nonisolated enum NWSAlertScope: Equatable, Sendable {
     var needsPosition: Bool {
         switch self {
         case .here, .within: return true
-        case .states, .zones: return false
+        case .states, .zones, .counties: return false
         }
     }
 
@@ -112,6 +128,13 @@ nonisolated enum NWSAlertScope: Equatable, Sendable {
     /// it (an alert whose zones have not loaded is counted by `unplaced`
     /// instead); every other scope keeps what the API returned.
     func keeping(_ features: [HazardFeature], near point: GreatCircle.Point?) -> [HazardFeature] {
+        if case .counties(let chosen) = self {
+            let wanted = Set(chosen)
+            return features.filter { feature in
+                CountyCenters.sameCodes(of: feature).compactMap(CountyCenters.geoid(fromSAME:))
+                    .contains(where: wanted.contains)
+            }
+        }
         guard case .within(let radius) = self, let point else { return features }
         return features.filter { feature in
             guard let geometry = feature.geometry else { return false }
@@ -271,7 +294,23 @@ extension NWSAlertFeed {
             return zoneRequest(URL(string: "https://api.weather.gov/alerts/active?area=" + codes.joined(separator: ","))!)
         case .zones(let codes):
             return zoneRequest(URL(string: "https://api.weather.gov/alerts/active?zone=" + codes.joined(separator: ","))!)
+        case .counties:
+            return alertsRequest(scope, at: point, counties: CountyCenters.bundled)
         }
+    }
+
+    /// As above, with the county table that turns chosen counties into the
+    /// states to ask for.
+    static func alertsRequest(_ scope: NWSAlertScope, at point: GreatCircle.Point?,
+                              counties: CountyCenters?) -> URLRequest? {
+        guard case .counties(let codes) = scope else { return alertsRequest(scope, at: point) }
+        var states: [String] = []
+        for code in codes {
+            guard let state = counties?.county(code)?.state, !states.contains(state) else { continue }
+            states.append(state)
+        }
+        guard !states.isEmpty else { return nil }
+        return zoneRequest(URL(string: "https://api.weather.gov/alerts/active?area=" + states.joined(separator: ","))!)
     }
 }
 
@@ -300,7 +339,7 @@ struct NWSAlertAreaControl: View {
         case .here: return .here
         case .within: return .within
         case .states: return .states
-        case .zones: return .zones
+        case .zones, .counties: return .zones
         }
     }
 
