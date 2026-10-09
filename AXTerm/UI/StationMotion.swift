@@ -25,6 +25,20 @@ nonisolated enum StationMotion {
         return now.timeIntervalSince(lastHeard) <= freshFor
     }
 
+    /// Our own station is on the move: car mode is on, or the device's last
+    /// GPS fix, taken in the last two minutes, shows at least `movingKnots`.
+    /// A level check waits for this to clear (2026-10-09: one ran mid-drive).
+    static func isMoving(carMode: Bool, fix: StationLocation?, now: Date) -> Bool {
+        if carMode { return true }
+        guard let fix, fix.source == .gps, let speed = fix.speed,
+              now.timeIntervalSince(fix.timestamp) <= ownFixFreshFor else { return false }
+        return speed * 3600 / 1852 >= Double(movingKnots)
+    }
+
+    /// The device updates its own fix every few seconds while tracking, so
+    /// one older than this means tracking stopped.
+    static let ownFixFreshFor: TimeInterval = 2 * 60
+
     /// Drawn smaller and dimmer in car mode: not moving, and not a vehicle.
     static func isQuiet(symbol: APRSMapSymbol?, isNode: Bool, moving: Bool) -> Bool {
         if moving { return false }

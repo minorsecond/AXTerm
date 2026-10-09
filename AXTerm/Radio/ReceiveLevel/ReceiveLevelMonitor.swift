@@ -39,6 +39,9 @@ final class ReceiveLevelMonitor: ObservableObject {
         var notify: (String, RadioID) -> Void
         var log: (String, [String: String]) -> Void
         var store: ReceiveLevelStore
+        /// Whether this station is on the move (`StationMotion`). A level
+        /// check stops the TNC4's demodulator, so it waits until it stops.
+        var isMoving: () -> Bool = { false }
         var now: () -> Date = { Date() }
         var random: () -> Double = { Double.random(in: 0..<1) }
     }
@@ -408,6 +411,10 @@ final class ReceiveLevelMonitor: ObservableObject {
             }
             guard now >= due else { continue }
             guard control.mobilinkdActivity == .idle else {
+                nextWatchAt[radio] = now.addingTimeInterval(60)
+                continue
+            }
+            if deps.isMoving() {
                 nextWatchAt[radio] = now.addingTimeInterval(60)
                 continue
             }

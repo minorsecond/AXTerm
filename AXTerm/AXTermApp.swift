@@ -174,6 +174,12 @@ struct AXTermApp: App {
         }
         // After the test-mode callsign and radios are in, so the station
         // starts with the addresses it will answer on.
+        // Car mode or a GPS fix at speed: a TNC4's level check waits.
+        client.stationIsMoving = { [weak location = winlinkContext.locationService] in
+            StationMotion.isMoving(
+                carMode: AppEnvironment.defaults.bool(forKey: CarMode.storageKey),
+                fix: location?.lastLocation, now: Date())
+        }
         self.station = isUnitTests ? nil : StationServices(
             client: client, settings: settingsStore, winlinkContext: winlinkContext, bbsSettings: bbs)
         appDelegate.settings = settingsStore

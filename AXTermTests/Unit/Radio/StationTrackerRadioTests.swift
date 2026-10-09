@@ -164,4 +164,17 @@ final class StationTrackerRadioTests: XCTestCase {
                           packet: packet(from: "NOBODY", at: 0, radio: a))
         XCTAssertTrue(tracker.stations.isEmpty)
     }
+
+    /// A frame we sent is not a station we heard. A rebuild (relaunch, radio
+    /// reconnect) used to count them, and A (705)'s station list showed its
+    /// own K0EPI-2 and K0EPI-4 as heard (2026-10-09).
+    func testARebuildDoesNotCountFramesWeSent() {
+        var tracker = StationTracker()
+        let sent = Packet(timestamp: Date(timeIntervalSince1970: 10),
+                          from: AX25Address(call: "K0EPI", ssid: 2), to: AX25Address(call: "APZAXT"),
+                          frameType: .ui, control: 0x03, info: Data([0x41]), rawAx25: Data([0x01]),
+                          radioID: a, direction: .tx)
+        tracker.rebuild(from: [sent, packet(from: "K0NTS", at: 20, radio: a)])
+        XCTAssertEqual(tracker.stations.map(\.call), ["K0NTS"])
+    }
 }

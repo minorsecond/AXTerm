@@ -293,7 +293,9 @@ nonisolated struct StationTracker {
 
         var aggregates: [String: Aggregation] = [:]
 
-        for packet in packets where !packet.isOwnEcho {
+        // Neither our own echo nor a frame we sent is a station we heard; a
+        // relaunch loads our sent frames back into the log with the rest.
+        for packet in packets where !packet.isOwnEcho && packet.direction != .tx {
             guard let from = packet.from else { continue }
             let call = from.display
             var aggregate = aggregates[call, default: Aggregation()]

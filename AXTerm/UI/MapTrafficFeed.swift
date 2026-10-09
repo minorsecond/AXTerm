@@ -262,7 +262,10 @@ final class MapTrafficFeed: ObservableObject {
     }
 
     private func merge() {
-        lines = (received + sent)
+        // A frame we sent is also in the engine's log now; the recorded line
+        // is the one that knows whether the radio keyed it.
+        let sentIDs = Set(sent.map(\.id))
+        lines = (received.filter { !sentIDs.contains($0.id) } + sent)
             .sorted { $0.at > $1.at }
             .prefix(Self.bufferCapacity)
             .map { $0 }

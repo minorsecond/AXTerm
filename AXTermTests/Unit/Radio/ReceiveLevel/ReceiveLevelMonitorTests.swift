@@ -55,6 +55,7 @@ final class ReceiveLevelMonitorTests: XCTestCase {
     private var profile: RadioProfile!
     private var connected = true
     private var lastActivity: Date?
+    private var moving = false
     private var beacons = 0
     private var beaconObstacle: String?
     private var managedGain: Int??
@@ -68,6 +69,7 @@ final class ReceiveLevelMonitorTests: XCTestCase {
         profile.aprsEnabled = true
         connected = true
         lastActivity = nil
+        moving = false
         beacons = 0
         beaconObstacle = nil
         managedGain = nil
@@ -95,6 +97,7 @@ final class ReceiveLevelMonitorTests: XCTestCase {
             notify: { [unowned self] text, _ in self.notes.append(text) },
             log: { _, _ in },
             store: store,
+            isMoving: { [unowned self] in self.moving },
             now: { [unowned self] in self.now },
             random: { 0.5 }))
     }
@@ -261,6 +264,25 @@ final class ReceiveLevelMonitorTests: XCTestCase {
         now = now.addingTimeInterval(15 * 60)
         monitor.tick()
         XCTAssertEqual(control.requests.count, 2)
+    }
+
+    /// A level check stops the TNC4's demodulator for a couple of seconds.
+    /// On the APRS drive (2026-10-09) one ran mid-drive, where a frame lost
+    /// is a position or an answer gone; it waits until the station stops.
+    func testTheWatchWaitsWhileTheStationIsMoving() {
+        let monitor = makeMonitor()
+        monitor.tick()
+        now = now.addingTimeInterval(ReceiveLevelMonitor.firstWatchDelay + 60)
+        moving = true
+        monitor.tick()
+        XCTAssertTrue(control.requests.isEmpty, "not while moving")
+        now = now.addingTimeInterval(30 * 60)
+        monitor.tick()
+        XCTAssertTrue(control.requests.isEmpty, "still moving")
+        moving = false
+        now = now.addingTimeInterval(60)
+        monitor.tick()
+        XCTAssertEqual(control.requests.first, .now(for: ReceiveLevelMonitor.sampleSeconds))
     }
 
     func testTheWatchCanBeTurnedOff() {

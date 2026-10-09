@@ -1764,20 +1764,7 @@ struct ContentView: View {
             },
             onMessage: { call in aprsComposeTarget = APRSComposeTarget(call: call.uppercased()) },
             onQuery: { ask in
-                // Reach is the operator's, not a default: a direct query with
-                // no path answers "can you hear me" and nothing else, while
-                // the radio's own APRS path reaches the stations a digipeater
-                // hop away — most of the channel — but proves only
-                // reachability.
-                let path = ask.reach == .direct
-                    ? []
-                    : sessionCoordinator.aprsPath(forRadio: nil, addressee: ask.callsign)
-                _ = sessionCoordinator.sendAPRS(APRSOutbound(
-                    info: APRSMessage.directedQueryInfo(to: ask.callsign, query: ask.token),
-                    addressee: ask.callsign,
-                    path: path,
-                    radioID: nil))
-                aprsPings.record(ping: ask.callsign, query: ask.token, reach: ask.reach)
+                APRSPingWiring.sendQuery(ask, coordinator: sessionCoordinator, pings: aprsPings)
             },
             pingState: { aprsPings.outcome(for: $0) },
             // Both directions of coverage, narrowed to the radios that carry
@@ -1840,45 +1827,12 @@ struct ContentView: View {
                         info: packet.info,
                         ours: sessions.answeredAddresses.map(\.display)))
             }
-            // A ping is only half an exchange until something comes back.
-            // Two kinds of evidence, and they are not equal: a station that
-            // addresses us has proved it heard us, while one that merely
-            // transmits has proved nothing unless the timing is improbable
-            // for it — see `APRSPingTracker`.
-            aprsPings.beaconInterval = { [weak engine = client] call in
-                engine?.aprsBeaconIntervals()[call.uppercased()]
-            }
-            // Our own frames come back off the air when a digipeater repeats
-            // them, and they are the only proof of reception a silent station
-            // ever gives us. Matched on the license rather than the SSID: the
-            // digi repeats whichever of our addresses transmitted.
-            aprsPings.isOurs = { call in
-                call.uppercased().split(separator: "-").first.map(String.init) == mine
-            }
-            aprsPings.follow(client.packetPublisher)
-            // Coverage has two directions and both are measured from frames
-            // already on disk, so the rings start from the history rather
-            // than waiting for the next beacon to come back.
-            coverageEvidence.isOurs = { call in
-                call.uppercased().split(separator: "-").first.map(String.init) == mine
-            }
-            coverageEvidence.seed(client.packets)
-            coverageEvidence.follow(client.packetPublisher)
-            // History is read after launch, so the buffer here may still be
-            // empty or hold only what arrived in the last second. Seeding is
-            // idempotent and only rescans when the run has at least doubled.
-            loadedHistoryObserver = client.$packets
-                .receive(on: DispatchQueue.main)
-                .sink { [weak store = coverageEvidence] packets in
-                    store?.seed(packets)
-                }
-            aprsPings.startExpiry()
-            client.aprsMessaging?.onDirectedTraffic = { [weak pings = aprsPings] call in
-                pings?.noteDirectedReply(from: call)
-            }
-            // Our own frames never enter the packet log — see
-            // `PacketEngine.onFrameTransmitted`. Without this the strip showed
-            // a busy channel and no sign of our own beacon going out.
+            // Pings and coverage, wired as on the iPhone (`APRSPingWiring`).
+            loadedHistoryObserver = APRSPingWiring.attach(
+                pings: aprsPings, coverage: coverageEvidence, to: client,
+                myCallsign: settings.myCallsign)
+            // Recorded as it goes out, with whether the radio has keyed it.
+            // The frame also joins the packet log; the strip shows it once.
             client.onFrameTransmitted = { [weak traffic = mapTraffic] tx in
                 traffic?.record(MapTrafficFeed.Line(
                     id: tx.id, at: tx.at, from: tx.from, to: tx.to,

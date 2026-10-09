@@ -61,6 +61,11 @@ struct AXTermiOSRootView: View {
     @StateObject private var mapLayerStatus = MapLayerStatus()
     /// Live traffic for the map's strip — see `MapTrafficFeed`.
     @StateObject private var mapTraffic = MapTrafficFeed()
+    /// APRS pings from the map and the coverage evidence behind the rings,
+    /// wired as on the Mac (`APRSPingWiring`).
+    @StateObject private var aprsPings = APRSPingTracker()
+    @StateObject private var coverageEvidence = CoverageEvidenceStore()
+    @State private var pingAttachment: AnyCancellable?
     /// Downloaded terrain, owned by the shell for the same reason as on the
     /// Mac: one handle, one warm tile cache.
     @StateObject private var elevation = ElevationStorage()
@@ -382,6 +387,12 @@ struct AXTermiOSRootView: View {
         // As on the Mac: the send returns before the radio keys, so a fault
         // during the listen is what tells the probe the query never went out.
         client.onLinkError = { [weak probe] message in probe?.transmitDidFail(message) }
+        // Car mode or a GPS fix at speed: the TNC4's level check waits.
+        client.stationIsMoving = { [weak location = context.locationService] in
+            StationMotion.isMoving(
+                carMode: AppEnvironment.defaults.bool(forKey: CarMode.storageKey),
+                fix: location?.lastLocation, now: Date())
+        }
 
         // Built before the mailbox so the mailbox can read its cache.
         let lookup = CallsignLookupService(
@@ -1097,6 +1108,14 @@ struct AXTermiOSRootView: View {
             for: "winlink.p2p")
     }
 
+    /// Which traffic each radio carries, an APRS-channel radio held to APRS;
+    /// as on the Mac, so the coverage rings measure the right family.
+    private var mapRadioFamilies: [RadioID: Set<RadioTrafficFamily>] {
+        RadioTrafficClassifier.mapFamilies(
+            heard: RadioTrafficClassifier.families(from: client.stations),
+            aprsChannels: Set(settings.activeRadios.filter(\.aprsEnabled).map(\.id)))
+    }
+
     private var map: some View {
         NavigationStack {
             StationsMapView(
@@ -1120,6 +1139,17 @@ struct AXTermiOSRootView: View {
                 pathStore: client.networkPaths,
                 serviceStore: client.stationServices,
                 onOpenProfile: { profiles.openPage($0) },
+                onQuery: { ask in
+                    APRSPingWiring.sendQuery(ask, coordinator: sessionCoordinator, pings: aprsPings)
+                },
+                pingState: { aprsPings.outcome(for: $0) },
+                coverageEvidence: MapCoverageEvidence(coverageEvidence.evidence,
+                                                      families: mapRadioFamilies),
+                reachAdvice: { [weak client] call in
+                    client?.stations.first { $0.call.caseInsensitiveCompare(call) == .orderedSame }?
+                        .reachAdvice ?? .neverHeard
+                },
+                repeatsUs: { aprsPings.repeatedUs($0) },
                 layerStatus: mapLayerStatus,
                 traffic: mapTraffic,
                 trafficRadios: trafficRadios,
@@ -1138,6 +1168,11 @@ struct AXTermiOSRootView: View {
                 beaconObstacle: { sessionCoordinator.beaconObstacle(settings) })
             // As on the Mac: started with the map, not with the app.
             .task {
+                if pingAttachment == nil {
+                    pingAttachment = APRSPingWiring.attach(
+                        pings: aprsPings, coverage: coverageEvidence, to: client,
+                        myCallsign: settings.myCallsign)
+                }
                 let mine = AX25Address(call: settings.myCallsign.uppercased()).call
                 let sessions = sessionCoordinator.sessionManager
                 mapTraffic.follow(client.$packets) { packet in

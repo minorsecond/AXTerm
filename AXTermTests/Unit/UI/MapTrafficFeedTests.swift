@@ -122,6 +122,22 @@ final class MapTrafficFeedTests: XCTestCase {
                      packet("B", at: 1, radio: packetRadio)], attribution: heard)
         XCTAssertEqual(feed.lines(for: packetRadio, visible: [aprs, packetRadio]).map(\.from), ["B"])
     }
+    /// A frame we sent is recorded when it goes out and now also sits in the
+    /// engine's packet list. It is one line, the recorded one, which carries
+    /// whether the radio has keyed it.
+    func testAFrameWeSentShowsOnceEvenWhenTheLogHasItToo() async throws {
+        let feed = MapTrafficFeed()
+        let id = UUID()
+        feed.record(MapTrafficFeed.Line(id: id, at: t0, from: "K0EPI-3", to: "APZAXT", via: "",
+                                        summary: "Testing car", isOurs: true, wasTransmitted: true,
+                                        radio: nil, transmit: .pending))
+        let logged = Packet(id: id, timestamp: t0, from: AX25Address(call: "K0EPI", ssid: 3),
+                            to: AX25Address(call: "APZAXT"), frameType: .ui, control: 0x03,
+                            info: Data("Testing car".utf8), rawAx25: Data([0x01]), direction: .tx)
+        feed.absorb([logged, packet("W0NED", at: 1)], attribution: heard)
+        XCTAssertEqual(feed.lines.filter { $0.id == id }.count, 1)
+        XCTAssertEqual(feed.lines.first { $0.id == id }?.transmit, .pending)
+    }
 }
 
 /// Which radio's frames a strip shows.
@@ -201,4 +217,5 @@ final class TrafficAddressingTests: XCTestCase {
         XCTAssertFalse(TrafficAddressing.isForUs(
             destinationAnswered: false, info: info, ours: ours))
     }
+
 }

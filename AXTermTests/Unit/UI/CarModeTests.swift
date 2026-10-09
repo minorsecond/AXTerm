@@ -57,4 +57,27 @@ final class CarModeTests: XCTestCase {
                                           heardBy: ["W0NED", "BVILLE"]),
                        "Beaconed 10 s ago · heard by W0NED, BVILLE")
     }
+
+    // MARK: - The last beacon (2026-10-09)
+
+    private func sent(at offset: TimeInterval, from: AX25Address? = nil,
+                      type: FrameType = .ui) -> Packet {
+        Packet(timestamp: now.addingTimeInterval(offset), from: from ?? me,
+               to: AX25Address(call: "APZAXT"), frameType: type, direction: .tx)
+    }
+
+    /// On the APRS drive the card said "No beacon yet" all the way to the
+    /// store and back, through 28 beacons and every Beacon Now press.
+    func testTheLastBeaconIsTheNewestFrameWeSent() {
+        let packets = [sent(at: -300), sent(at: -40), heard([], at: -10)]
+        XCTAssertEqual(CarMode.lastBeacon(in: packets, ownAddresses: [me.display]),
+                       now.addingTimeInterval(-40),
+                       "a frame we heard, even under our own callsign, is not a beacon we sent")
+    }
+
+    func testOnlyOurOwnAddressesAndOnlyUIFramesCount() {
+        let packets = [sent(at: -30, from: AX25Address(call: "K0EPI", ssid: 2)),
+                       sent(at: -20, type: .s)]
+        XCTAssertNil(CarMode.lastBeacon(in: packets, ownAddresses: [me.display]))
+    }
 }

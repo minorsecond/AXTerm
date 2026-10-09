@@ -42,6 +42,15 @@ nonisolated enum CarMode {
         return names
     }
 
+    /// When this station last sent a UI frame from one of its own
+    /// addresses, from the frames it sent. Frames heard back under our own
+    /// callsign are a digipeater's repeat, not a beacon.
+    static func lastBeacon(in packets: [Packet], ownAddresses: Set<String>) -> Date? {
+        packets.filter { $0.direction == .tx && $0.frameType == .ui
+            && ownAddresses.contains($0.from?.display ?? "") }
+            .map(\.timestamp).max()
+    }
+
     /// Car mode draws stations heard in the last hour.
     static func keeps(lastHeard: Date?, now: Date) -> Bool {
         guard let lastHeard else { return false }

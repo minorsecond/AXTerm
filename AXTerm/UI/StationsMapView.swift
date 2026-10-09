@@ -1807,8 +1807,7 @@ struct StationsMapView: View {
 
     /// Your last beacon, from the frames this station sent.
     private var lastOwnBeacon: Date? {
-        recentPackets.last { $0.direction == .tx && $0.frameType == .ui
-            && ownCallsigns.contains($0.from?.display ?? "") }?.timestamp
+        CarMode.lastBeacon(in: recentPackets, ownAddresses: ownCallsigns)
     }
 
     /// The car mode card: one line about the last beacon, big enough to

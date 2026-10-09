@@ -115,14 +115,11 @@ final class PacketEngine: ObservableObject {
     /// the time the radio fails to key.
     var onLinkError: ((String) -> Void)?
 
-    /// One frame this station put on the air.
+    /// One frame this station put on the air, at hand-off.
     ///
-    /// Our own transmissions never enter `packets` — that array is what was
-    /// *heard*, and a frame we sent is only heard if something repeats it —
-    /// so anything that shows both directions of a channel has to be told
-    /// separately. Without this the map's traffic strip showed a busy channel
-    /// and no sign of the operator's own beacon, which is the one frame they
-    /// are usually watching for.
+    /// The frame also joins `packets` (as `.tx`), but this carries what the
+    /// log can't: whether the radio still has to key it. The map's traffic
+    /// strip records it from here and shows the frame once.
     var onFrameTransmitted: ((TransmittedFrame) -> Void)?
 
     /// A frame handed to the radio, reduced to what a log line needs.
@@ -288,7 +285,7 @@ final class PacketEngine: ObservableObject {
 
     /// File an object we transmitted ourselves.
     ///
-    /// Our own frames never enter the packet log, so nothing else would ever
+    /// Our own frames are not published as heard, so nothing else would ever
     /// tell the store about them: an operator would place a road closure, see
     /// the sheet dismiss, and watch nothing appear — the same silence the
     /// pending-transmission work exists to remove. It lands here under our own
@@ -785,8 +782,13 @@ final class PacketEngine: ObservableObject {
                 TxLog.debug(.transport, message, data)
                 self?.eventLogger?.log(level: .info, category: .connection, message: message, metadata: data)
             },
-            store: ReceiveLevelStore(defaults: settings.defaults)))
+            store: ReceiveLevelStore(defaults: settings.defaults),
+            isMoving: { [weak self] in self?.stationIsMoving() ?? false }))
     }
+
+    /// Whether this station is on the move, set by the app shell from car
+    /// mode and the device's GPS (`StationMotion`).
+    var stationIsMoving: () -> Bool = { false }
 
     // MARK: - USB Device Path Resolution
 
@@ -1137,9 +1139,13 @@ final class PacketEngine: ObservableObject {
     /// keeping.
     private func persistTransmittedFrame(_ ax25Data: Data, frame: OutboundFrame,
                                          link: LinkSession, port: UInt8) {
-        persistPacket(Self.transmittedPacket(
+        let packet = Self.transmittedPacket(
             ax25Data, id: frame.id, radio: frame.radio, port: port,
-            linkDescription: link.endpointDescription, sessionId: frame.sessionId, fallback: frame))
+            linkDescription: link.endpointDescription, sessionId: frame.sessionId, fallback: frame)
+        // Into the live list too, as a relaunch would load it. Not published
+        // as heard: nothing counts our own frame as a station or an answer.
+        insertPacketSorted(packet)
+        persistPacket(packet)
     }
 
     /// The packet-log row for bytes we put on the air. Decoded from the
@@ -2505,8 +2511,7 @@ final class PacketEngine: ObservableObject {
     /// a mid-session rebuild — a radio reconnect calls this too — would drag
     /// current objects backwards in time, possibly out of `live()`, and
     /// double-count their repeats. It would also wipe objects we placed
-    /// ourselves, which never enter the packet log at all
-    /// (`recordOwnAPRSObject`).
+    /// ourselves, which are filed by `recordOwnAPRSObject`.
     func seedAPRSLayersIfEmpty(from packets: [Packet]) {
         let seedObjects = aprsObjects.placed.isEmpty && aprsObjects.killed.isEmpty
         let seedAlerts = aprsAlerts.alerts.isEmpty
