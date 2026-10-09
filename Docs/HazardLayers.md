@@ -165,11 +165,37 @@ with field reports over RF alone.
 
 ---
 
-## 8. Order of work
+## 8. History
+
+The live layers hold the latest copy; history holds everything. Every
+distinct hazard fetched or received is kept, append-only, in the station's
+database:
+
+- **One row per version.** An NWS update or cancellation references the
+  message it replaces, so the chain is kept and the latest version is the
+  live one. A fire perimeter gets a new row only when its shape changes
+  (compared by a hash of its geometry). Storm reports and quakes are one row
+  each.
+- **Provenance with every row**: source, issued, expires, fetched, and the
+  relay chain for anything that arrived over the radio.
+- **What it is for:**
+  - a time slider on the map: what was in effect at 3:40 pm;
+  - an after-action export of a time window as GeoJSON or CSV, for an ARES
+    or SKYWARN debrief;
+  - spotter reports read against the warnings in effect when they were made.
+- **Size.** An NWS alert with its polygon is a few kilobytes; a busy day in
+  Colorado is well under a megabyte. Fire perimeters are larger and change
+  often, so they are kept when their shape changes rather than on every
+  fetch. Grids are kept only when saved or shared, not on every refresh.
+- **Retention** is the operator's setting, kept by default since the data is
+  small.
+
+## 9. Order of work
 
 1. Live layers: NWS warnings (polygons and zones), NIFC perimeters and
    incidents, storm reports, earthquakes; provenance, staleness, the "inside"
-   line in car mode. No keys needed.
+   line in car mode. No keys needed. History (§8) is recorded from the
+   start, so nothing fetched before the time slider exists is lost.
 2. Sharing: "Add to map" on receipt (Winlink, BBS, packet session), the BBS
    MAPS area, the size tools, KML.
 3. Grids: contours, then ASCII grids, then imagery.
@@ -180,7 +206,7 @@ with field reports over RF alone.
 Each step is built test first, and a change to what goes on the air waits for
 the operator's approval.
 
-## 9. Open questions
+## 10. Open questions
 
 - The NIFC service URLs need checking against the NIFC open data site before
   step 1; mirrors disagree.
