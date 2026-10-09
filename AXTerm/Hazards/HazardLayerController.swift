@@ -95,7 +95,8 @@ final class HazardLayerController: ObservableObject {
     func nwsCaption(now: Date = Date()) -> String? {
         guard nwsEnabled else { return nil }
         return HazardText.layerCaption(count: nws.features.count, lastFetched: nws.lastFetched,
-                                       problem: nws.problem, stale: nws.isStale, now: now)
+                                       problem: nws.problem, stale: nws.isStale, now: now,
+                                       scope: lastScope ?? .here)
     }
 
     /// The station's position as the map draws it, read from the settings

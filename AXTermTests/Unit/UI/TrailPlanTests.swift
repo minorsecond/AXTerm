@@ -28,6 +28,14 @@ final class TrailPlanTests: XCTestCase {
         XCTAssertLessThan(piece.startAlpha, 0.3)
     }
 
+    /// The oldest end stays faint but keeps its color: at 15% a vehicle's
+    /// orange read as gray on the basemap and passed for another station's
+    /// trail (Station C, 2026-10-09).
+    func testTheOldestEndKeepsEnoughColorToRecognize() throws {
+        let plan = TrailPlan.plan(points: drive, times: minutes([0, 3, 6, 9]), emphasis: .normal, baseAlpha: 1)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(plan.pieces.first).startAlpha, 0.25)
+    }
+
     /// More than ten minutes between fixes: the straight line is a guess, not
     /// the road, so it is dashed and faint between solid stretches.
     func testALongGapBetweenFixesIsDashed() {

@@ -170,13 +170,24 @@ nonisolated enum HazardText {
 
     /// The line under the layer's switch: how many alerts and how old, or
     /// that the ones shown are old because no newer copy came.
-    static func layerCaption(count: Int, lastFetched: Date?, problem: String?, stale: Bool, now: Date) -> String {
+    static func layerCaption(count: Int, lastFetched: Date?, problem: String?, stale: Bool, now: Date,
+                             scope: NWSAlertScope = .here) -> String {
         guard let lastFetched else { return problem == nil ? "Not fetched yet" : "Could not reach the NWS" }
         let alerts = count == 1 ? "1 alert" : "\(count) alerts"
         let age = age(from: lastFetched, to: now)
         if problem != nil { return "Offline · showing \(alerts) fetched \(age)" }
-        let lead = count == 0 ? "No alerts here" : alerts
+        let lead = count == 0 ? noAlerts(in: scope) : alerts
         return "\(lead) · fetched \(age)" + (stale ? ", no newer copy" : "")
+    }
+
+    /// "No alerts here" for the station's point; a wider area is named.
+    private static func noAlerts(in scope: NWSAlertScope) -> String {
+        switch scope {
+        case .here: return "No alerts here"
+        case .within: return "No alerts " + scope.summary.lowercased()
+        case .states(let codes): return "No alerts in " + codes.joined(separator: ", ")
+        case .zones(let codes): return "No alerts in zones " + codes.joined(separator: ", ")
+        }
     }
 
     private static func formatter(_ timeZone: TimeZone, _ locale: Locale) -> DateFormatter {

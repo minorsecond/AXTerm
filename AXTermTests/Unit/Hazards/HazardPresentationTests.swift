@@ -120,4 +120,18 @@ final class HazardPresentationTests: XCTestCase {
         XCTAssertEqual(HazardText.layerCaption(count: 2, lastFetched: fetched, problem: nil, stale: true, now: now),
                        "2 alerts · fetched 47 min ago, no newer copy")
     }
+
+    /// "No alerts here" is right for the station's point; for a wider area
+    /// the caption names it (Station C, 2026-10-09: within 50 miles said
+    /// "here").
+    func testNoAlertsNamesTheAreaThatWasSearched() {
+        let fetched = now.addingTimeInterval(-60)
+        func caption(_ scope: NWSAlertScope) -> String {
+            HazardText.layerCaption(count: 0, lastFetched: fetched, problem: nil, stale: false, now: now, scope: scope)
+        }
+        XCTAssertEqual(caption(.here), "No alerts here · fetched 1 min ago")
+        XCTAssertEqual(caption(.within(miles: 50)), "No alerts within 50 mi · fetched 1 min ago")
+        XCTAssertEqual(caption(.states(["CO", "WY"])), "No alerts in CO, WY · fetched 1 min ago")
+        XCTAssertEqual(caption(.zones(["COZ039"])), "No alerts in zones COZ039 · fetched 1 min ago")
+    }
 }

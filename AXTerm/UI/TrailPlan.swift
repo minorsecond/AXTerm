@@ -34,7 +34,7 @@ nonisolated enum TrailPlan {
     /// Fixes further apart than this are joined by a dashed guess.
     static let gapSeconds: TimeInterval = 10 * 60
     /// The oldest end's share of full strength.
-    static let tailFloor = 0.15
+    static let tailFloor = 0.25
     /// A dashed stretch is drawn this much fainter than the fade at that point.
     static let gapAlphaFactor = 0.6
     static let dimFactor = 0.3
