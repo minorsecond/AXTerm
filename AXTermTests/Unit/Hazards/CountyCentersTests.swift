@@ -1,0 +1,55 @@
+import XCTest
+@testable import AXTerm
+
+/// Every US county's center and size, built into the app from the Census
+/// Gazetteer (2024), so a radius can judge an NWS alert by the counties it
+/// names before downloading any outline (Docs/HazardLayers.md §2).
+final class CountyCentersTests: XCTestCase {
+    private let home = GreatCircle.Point(latitude: 39.6123, longitude: -104.7332)
+
+    func testTheBuiltInTableHasEveryCounty() throws {
+        let table = try XCTUnwrap(CountyCenters.bundled)
+        XCTAssertEqual(table.count, 3222)
+        let arapahoe = try XCTUnwrap(table.county("08005"))
+        XCTAssertEqual(arapahoe.center.latitude, 39.6446, accuracy: 1e-4)
+        XCTAssertEqual(arapahoe.center.longitude, -104.3317, accuracy: 1e-4)
+        XCTAssertEqual(arapahoe.squareMiles, 806)
+    }
+
+    /// An alert's SAME codes are a 0 and the county's Census code.
+    func testASAMECodeIsACounty() {
+        XCTAssertEqual(CountyCenters.geoid(fromSAME: "008007"), "08007")
+        XCTAssertNil(CountyCenters.geoid(fromSAME: "8007"))
+        XCTAssertNil(CountyCenters.geoid(fromSAME: "00800X"))
+    }
+
+    private func alert(counties: [String]) -> HazardFeature {
+        var feature = HazardFeature(id: "a", kind: .statement, event: "Hydrologic Outlook",
+                                    source: "NWS Grand Junction CO", fetchedAt: Date())
+        let geocode = ["SAME": counties, "UGC": []]
+        let json = try! JSONSerialization.data(withJSONObject: geocode, options: [.sortedKeys])
+        feature.properties["geocode"] = String(data: json, encoding: .utf8)
+        return feature
+    }
+
+    /// Far only when every county it names is clearly outside the radius,
+    /// allowing for each county's size: a county's edge can be much nearer
+    /// than its center.
+    func testAnAlertIsJudgedByTheCountiesItNames() throws {
+        let table = try XCTUnwrap(CountyCenters.bundled)
+        let archuleta = alert(counties: ["008007"])
+        XCTAssertEqual(table.reach(of: archuleta, from: home, miles: 50), .far)
+        XCTAssertEqual(table.reach(of: archuleta, from: home, miles: 300), .near)
+        let arapahoe = alert(counties: ["008005"])
+        XCTAssertEqual(table.reach(of: arapahoe, from: home, miles: 10), .near, "home is in Arapahoe County")
+        XCTAssertEqual(table.reach(of: alert(counties: ["008007", "008005"]), from: home, miles: 10), .near,
+                       "one near county is enough")
+    }
+
+    /// With no counties the table knows, the outline decides, as before.
+    func testNoKnownCountiesIsUnknown() throws {
+        let table = try XCTUnwrap(CountyCenters.bundled)
+        XCTAssertEqual(table.reach(of: alert(counties: []), from: home, miles: 50), .unknown)
+        XCTAssertEqual(table.reach(of: alert(counties: ["099999"]), from: home, miles: 50), .unknown)
+    }
+}

@@ -87,6 +87,9 @@ final class NWSAlertLayer: ObservableObject {
     /// At most this many new zone outlines per refresh, `zonePause` apart. A
     /// statewide storm can name a hundred zones, and asking for all of them
     /// at once is how a client gets throttled.
+    /// County centers, so a radius rules out far alerts before fetching
+    /// any outline (`CountyCenters`).
+    private let counties: CountyCenters?
     private let maxZonesPerRefresh: Int
     private let zonePause: TimeInterval
     private let sleep: (TimeInterval) async -> Void
@@ -98,9 +101,11 @@ final class NWSAlertLayer: ObservableObject {
     init(fetcher: HazardFetching, cache: HazardDiskCache, history: SQLiteHazardHistoryStore? = nil,
          now: @escaping () -> Date = Date.init,
          maxZonesPerRefresh: Int = 25, zonePause: TimeInterval = 0.2,
+         counties: CountyCenters? = nil,
          sleep: @escaping (TimeInterval) async -> Void = {
              try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
          }) {
+        self.counties = counties
         self.maxZonesPerRefresh = maxZonesPerRefresh
         self.zonePause = zonePause
         self.sleep = sleep
@@ -137,7 +142,7 @@ final class NWSAlertLayer: ObservableObject {
             problem = "No position for this station, so no alerts can be fetched for where it is."
             return
         }
-        let parsed: [HazardFeature]
+        var parsed: [HazardFeature]
         let fetchedAt = now()
         do {
             let data = try await fetcher.data(for: request)
@@ -156,6 +161,11 @@ final class NWSAlertLayer: ObservableObject {
             problem = "Could not reach the National Weather Service (\(error.localizedDescription)). "
                 + (lastFetched == nil ? "No alerts have been fetched yet." : "Showing the alerts fetched earlier.")
             return
+        }
+        // Within a radius, an alert whose counties are all far away is
+        // dropped before any of its zones' outlines is fetched.
+        if case .within(let miles) = scope, let point, let counties {
+            parsed = parsed.filter { counties.reach(of: $0, from: point, miles: miles) != .far }
         }
         lastFetched = fetchedAt
         problem = nil

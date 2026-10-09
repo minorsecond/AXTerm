@@ -315,4 +315,24 @@ final class NWSAlertLayerTests: XCTestCase {
         XCTAssertTrue(layer.requestRejected)
         XCTAssertTrue(layer.problem?.contains("did not accept") == true, layer.problem ?? "")
     }
+
+    // MARK: - Counties before outlines
+
+    /// Within 50 miles, the Western Slope outlook is ruled out by its
+    /// counties, and none of its 18 zone outlines is downloaded. Live, 200
+    /// miles cost 116 outline downloads, mostly for the Texas coast.
+    func testAFarAlertIsRuledOutByItsCountiesWithoutFetchingOutlines() async throws {
+        let fetcher = FakeFetcher()
+        let url = try XCTUnwrap(NWSAlertFeed.alertsRequest(.within(miles: 50), at: home)?.url?.absoluteString)
+        fetcher.answers[url] = .success(try fixture("nws-alerts-zones"))
+        try answerEveryZone(fetcher)
+        let layer = NWSAlertLayer(fetcher: fetcher, cache: HazardDiskCache(directory: directory),
+                                  now: { [unowned self] in self.now }, counties: CountyCenters.bundled,
+                                  sleep: { _ in })
+        await layer.refresh(.within(miles: 50), at: home)
+        XCTAssertEqual(fetcher.asked, [url], "no outlines for an alert its counties rule out")
+        XCTAssertTrue(layer.features.isEmpty)
+        XCTAssertEqual(layer.unplacedCount, 0)
+        XCTAssertEqual(layer.zonesStillLoading, 0)
+    }
 }

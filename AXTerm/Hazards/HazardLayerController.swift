@@ -73,7 +73,8 @@ final class HazardLayerController: ObservableObject {
             testInstance: AppEnvironment.isTestMode ? TestModeConfiguration.shared.instanceID : nil,
             applicationSupport: support, temporary: FileManager.default.temporaryDirectory)
         let nws = NWSAlertLayer(fetcher: URLSessionHazardFetcher(), cache: HazardDiskCache(directory: directory),
-                                history: database.map { SQLiteHazardHistoryStore(dbQueue: $0) })
+                                history: database.map { SQLiteHazardHistoryStore(dbQueue: $0) },
+                                counties: CountyCenters.bundled)
         return HazardLayerController(nws: nws)
     }
 

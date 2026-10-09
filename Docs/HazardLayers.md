@@ -55,6 +55,19 @@ Watch Duty has no public API; its data page sells team plans. Most of what it
 shows comes from NIFC perimeters and NOAA/NASA satellite hotspots, which are
 above.
 
+**County centers, built in.** `Resources/us-county-centers.csv` lists every
+US county's Census code, center and area (3,222 counties, 88 KB), reduced
+from the US Census Bureau's 2024 Gazetteer counties file, which is public
+domain. NWS alerts name their counties by SAME code, so "Within N miles"
+rules out an alert whose counties are all far away before fetching any zone
+outline (`CountyCenters`). A county counts as near when its center, less
+half again its own radius, is within the distance: a county's edge can be
+much nearer than its center, and a miss would hide a warning.
+
+**Not getting throttled.** At most 25 new zone outlines per refresh, 0.2 s
+apart. HTTP 429 or 503 pauses all fetching: the server's Retry-After when it
+gives one, else two minutes doubling to thirty, reset by a success.
+
 Keys (FIRMS, mPING, AirNow if added) go in the Keychain, like the Winlink CMS
 key. A layer that needs a key stays out of the list until one is entered.
 
