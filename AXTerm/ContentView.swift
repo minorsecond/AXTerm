@@ -360,7 +360,12 @@ struct ContentView: View {
     var body: some View {
         presentationLayer
             // The hazard layers: nothing is fetched until one is switched on.
-            .task { await hazards.run(position: { myPosition?.point }, status: mapLayerStatus) }
+            .task { [winlinkContext] in
+                await hazards.run(position: HazardLayerController.livePosition(
+                    defaults: AppEnvironment.defaults,
+                    deviceLocation: { winlinkContext.locationService.lastLocation }),
+                    status: mapLayerStatus)
+            }
             // A file that just arrived, with Open (park rehearsal 2026-10-08).
             .overlay(alignment: .top) {
                 ReceivedFileBanner()

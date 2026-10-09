@@ -469,7 +469,12 @@ struct AXTermiOSRootView: View {
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { shellWidth = $0 }
         // The hazard layers: nothing is fetched until one is switched on.
-        .task { await hazards.run(position: { myPosition?.point }, status: mapLayerStatus) }
+        .task { [context] in
+            await hazards.run(position: HazardLayerController.livePosition(
+                defaults: AppEnvironment.defaults,
+                deviceLocation: { context.locationService.lastLocation }),
+                status: mapLayerStatus)
+        }
         .animation(.default, value: client.identityCollision)
         .modifier(FirstRunSetupHost(router: SettingsRouter.shared, settings: settings,
                                     winlinkSettings: context.settings,

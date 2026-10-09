@@ -88,4 +88,16 @@ final class HazardLayerController: ObservableObject {
         return HazardText.layerCaption(count: nws.features.count, lastFetched: nws.lastFetched,
                                        problem: nws.problem, stale: nws.isStale, now: now)
     }
+
+    /// The station's position as the map draws it, read from the settings
+    /// and the device's fix each time it is called. Never through a copy of
+    /// a view: one captured when the loop started kept fetching Colorado's
+    /// alerts after the position moved to Alabama (2026-10-09).
+    static func livePosition(defaults: UserDefaults,
+                             deviceLocation: @escaping @MainActor () -> StationLocation?)
+        -> @MainActor () -> GreatCircle.Point? {
+        {
+            StationPositionResolver.ownStation(defaults: defaults, deviceLocation: deviceLocation())?.point
+        }
+    }
 }

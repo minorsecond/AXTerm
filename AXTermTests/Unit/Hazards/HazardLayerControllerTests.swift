@@ -79,6 +79,25 @@ final class HazardLayerControllerTests: XCTestCase {
         XCTAssertNil(controller.nwsCaption(now: now))
     }
 
+    // MARK: - The position it fetches for
+
+    /// The position is read from its sources each time, never through a
+    /// copy of a view. On 2026-10-09 Station C moved its exact coordinate
+    /// from Colorado to Alabama and kept fetching Colorado's alerts.
+    func testThePositionFollowsAChangeMadeAfterTheLoopStarted() throws {
+        let defaults = TestDefaults.make("hazard-position")
+        defaults.set("39.6123", forKey: StationPositionKeys.manualLatitude)
+        defaults.set("-104.7332", forKey: StationPositionKeys.manualLongitude)
+        let position = HazardLayerController.livePosition(defaults: defaults, deviceLocation: { nil })
+        XCTAssertEqual(try XCTUnwrap(position()).latitude, 39.6123, accuracy: 1e-6)
+
+        defaults.set("31.4920", forKey: StationPositionKeys.manualLatitude)
+        defaults.set("-87.4139", forKey: StationPositionKeys.manualLongitude)
+        let moved = try XCTUnwrap(position())
+        XCTAssertEqual(moved.latitude, 31.4920, accuracy: 1e-6)
+        XCTAssertEqual(moved.longitude, -87.4139, accuracy: 1e-6)
+    }
+
     // MARK: - Where the last copy is kept
 
     /// A normal install keeps it in Application Support; a test-mode
