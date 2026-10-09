@@ -1,0 +1,337 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.6eacc67e0d79b45b2e77144d32c878987a878582.004.1",
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -86.907,
+       31.831
+      ],
+      [
+       -86.906,
+       31.753
+      ],
+      [
+       -86.933,
+       31.746
+      ],
+      [
+       -86.989,
+       31.718
+      ],
+      [
+       -87.025,
+       31.713
+      ],
+      [
+       -87.051,
+       31.718
+      ],
+      [
+       -87.06,
+       31.706
+      ],
+      [
+       -87.058,
+       31.676
+      ],
+      [
+       -87.076,
+       31.668
+      ],
+      [
+       -87.09,
+       31.653
+      ],
+      [
+       -87.136,
+       31.642
+      ],
+      [
+       -87.143,
+       31.592
+      ],
+      [
+       -87.155,
+       31.575
+      ],
+      [
+       -87.167,
+       31.537
+      ],
+      [
+       -87.165,
+       31.521
+      ],
+      [
+       -87.197,
+       31.479
+      ],
+      [
+       -87.207,
+       31.458
+      ],
+      [
+       -87.23,
+       31.454
+      ],
+      [
+       -87.275,
+       31.411
+      ],
+      [
+       -87.297,
+       31.4
+      ],
+      [
+       -87.331,
+       31.357
+      ],
+      [
+       -87.346,
+       31.351
+      ],
+      [
+       -87.359,
+       31.319
+      ],
+      [
+       -87.396,
+       31.299
+      ],
+      [
+       -87.418,
+       31.28
+      ],
+      [
+       -87.427,
+       31.261
+      ],
+      [
+       -87.49,
+       31.259
+      ],
+      [
+       -87.559,
+       31.228
+      ],
+      [
+       -87.615,
+       31.244
+      ],
+      [
+       -87.661,
+       31.252
+      ],
+      [
+       -87.714,
+       31.302
+      ],
+      [
+       -87.76,
+       31.299
+      ],
+      [
+       -87.78,
+       31.307
+      ],
+      [
+       -87.786,
+       31.325
+      ],
+      [
+       -87.766,
+       31.348
+      ],
+      [
+       -87.764,
+       31.364
+      ],
+      [
+       -87.751,
+       31.359
+      ],
+      [
+       -87.751,
+       31.337
+      ],
+      [
+       -87.735,
+       31.335
+      ],
+      [
+       -87.723,
+       31.347
+      ],
+      [
+       -87.727,
+       31.373
+      ],
+      [
+       -87.706,
+       31.402
+      ],
+      [
+       -87.654,
+       31.427
+      ],
+      [
+       -87.641,
+       31.426
+      ],
+      [
+       -87.62,
+       31.41
+      ],
+      [
+       -87.606,
+       31.409
+      ],
+      [
+       -87.573,
+       31.438
+      ],
+      [
+       -87.564,
+       31.478
+      ],
+      [
+       -87.607,
+       31.501
+      ],
+      [
+       -87.622,
+       31.517
+      ],
+      [
+       -87.565,
+       31.554
+      ],
+      [
+       -87.567,
+       31.697
+      ],
+      [
+       -87.516,
+       31.698
+      ],
+      [
+       -87.518,
+       31.814
+      ],
+      [
+       -87.501,
+       31.814
+      ],
+      [
+       -87.501,
+       31.829
+      ],
+      [
+       -86.907,
+       31.831
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.6eacc67e0d79b45b2e77144d32c878987a878582.004.1",
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.6eacc67e0d79b45b2e77144d32c878987a878582.004.1",
+    "areaDesc": "Monroe",
+    "geocode": {
+     "SAME": [
+      "001099"
+     ],
+     "UGC": [
+      "ALZ055"
+     ]
+    },
+    "affectedZones": [
+     "https://api.weather.gov/zones/forecast/ALZ055"
+    ],
+    "references": [
+     {
+      "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.100fe09b628dfece1dfe138cdc7ef109458879de.003.1",
+      "identifier": "urn:oid:2.49.0.1.840.0.100fe09b628dfece1dfe138cdc7ef109458879de.003.1",
+      "sender": "w-nws.webmaster@noaa.gov",
+      "sent": "2026-10-09T06:53:00-05:00"
+     },
+     {
+      "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.b340ba04bb3ad0f1b9a59c9a4ee0df3605143384.003.1",
+      "identifier": "urn:oid:2.49.0.1.840.0.b340ba04bb3ad0f1b9a59c9a4ee0df3605143384.003.1",
+      "sender": "w-nws.webmaster@noaa.gov",
+      "sent": "2026-10-09T07:27:00-05:00"
+     },
+     {
+      "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.1c04e37e500ddc3d30642f89279da1f7e89af43b.003.1",
+      "identifier": "urn:oid:2.49.0.1.840.0.1c04e37e500ddc3d30642f89279da1f7e89af43b.003.1",
+      "sender": "w-nws.webmaster@noaa.gov",
+      "sent": "2026-10-09T10:00:00-05:00"
+     }
+    ],
+    "sent": "2026-10-09T13:02:00-05:00",
+    "effective": "2026-10-09T13:02:00-05:00",
+    "onset": "2026-10-09T13:02:00-05:00",
+    "expires": "2026-10-09T21:15:00-05:00",
+    "ends": null,
+    "status": "Actual",
+    "messageType": "Update",
+    "category": "Met",
+    "severity": "Severe",
+    "certainty": "Likely",
+    "urgency": "Immediate",
+    "event": "Tropical Storm Warning",
+    "sender": "w-nws.webmaster@noaa.gov",
+    "senderName": "NWS Mobile AL",
+    "headline": "Tropical Storm Warning issued October 9 at 1:02PM CDT by NWS Mobile AL",
+    "description": "* LOCATIONS AFFECTED\n- Homewood\n- Monroeville\n\n* WIND\n- LATEST LOCAL FORECAST: Equivalent Tropical Storm force wind\n- Peak Wind Forecast: 35-45 mph with gusts to 60 mph\n- Window for Tropical Storm force winds: early this evening\nuntil Satur",
+    "instruction": null,
+    "response": "Avoid",
+    "note": null,
+    "parameters": {
+     "AWIPSidentifier": [
+      "TCVMOB"
+     ],
+     "WMOidentifier": [
+      "WTUS84 KMOB 091802"
+     ],
+     "NWSheadline": [
+      "TROPICAL STORM WARNING REMAINS IN EFFECT"
+     ],
+     "BLOCKCHANNEL": [
+      "EAS",
+      "NWEM",
+      "CMAS"
+     ],
+     "EAS-ORG": [
+      "WXR"
+     ],
+     "VTEC": [
+      "/O.CON.KMOB.TR.W.1009.000000T0000Z-000000T0000Z/"
+     ],
+     "expiredReferences": [
+      "w-nws.webmaster@noaa.gov,urn:oid:2.49.0.1.840.0.f9a487b0925c2fd67d95cc54ca26bb90fbf4fa20.003.1,2026-10-09T04:07:00-05:00 w-nws.webmaster@noaa.gov,urn:oid:2.49.0.1.840.0.b1743c465e385deb903cb8e911d8817950e30ccc.003.1,2026-10-08T21:57:00-05:00 w-nws.webmaster@noaa.gov,urn:oid:2.49.0.1.840.0.d9e25e8f2821d012a7e3d8c35b10207042f8f33f.003.1,2026-10-08T16:04:00-05:00 w-nws.webmaster@noaa.gov,urn:oid:2.49.0.1.840.0.81d665aae579beaebd150cbc9241060829477fa6.003.1,2026-10-08T10:06:00-05:00 w-nws.webmaster@noaa.gov,urn:oid:2.49.0.1.840.0.9dea11819dc31ec960d4929e6e2e275297f8149a.003.1,2026-10-08T06:56:00-05:00"
+     ]
+    },
+    "scope": "Public",
+    "code": "IPAWSv1.0",
+    "language": "en-US",
+    "web": "http://www.weather.gov",
+    "eventCode": {
+     "SAME": [
+      "TRW"
+     ],
+     "NationalWeatherService": [
+      "TRW"
+     ]
+    }
+   }
+  }
+ ]
+}
