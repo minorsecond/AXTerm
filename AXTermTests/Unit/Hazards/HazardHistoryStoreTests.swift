@@ -82,4 +82,19 @@ final class HazardHistoryStoreTests: XCTestCase {
         let back = try XCTUnwrap(try store.versions(of: "A").first?.feature)
         XCTAssertEqual(back, original)
     }
+
+    /// A zone-based alert recorded before its zones loaded gains its shape
+    /// in place: the same alert, not a new version. Live on Station C, 24
+    /// alerts made 29 rows this way (2026-10-09).
+    func testAShapeArrivingLaterIsNotANewVersion() throws {
+        var unshaped = warning("Z", issued: 0, expires: 3600)
+        unshaped.geometry = nil
+        try store.record([unshaped])
+        try store.record([warning("Z", issued: 0, expires: 3600, fetched: 120)])
+        let rows = try store.versions(of: "Z")
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertNotNil(rows.first?.feature.geometry)
+        XCTAssertEqual(rows.first?.feature.fetchedAt, t0, "still first seen when it was first seen")
+        XCTAssertEqual(rows.first?.lastSeen, t0.addingTimeInterval(120))
+    }
 }

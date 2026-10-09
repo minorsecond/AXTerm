@@ -36,6 +36,25 @@ final class SQLiteHazardHistoryStore: @unchecked Sendable {
                         """, arguments: [seen, feature.id, hash])
                     continue
                 }
+                // The same alert first recorded before its zones' outlines
+                // loaded: its shape fills in, rather than counting as a new
+                // version. That row's hash is this feature's without a shape.
+                if feature.geometry != nil {
+                    var shapeless = feature
+                    shapeless.geometry = nil
+                    let shapelessHash = Self.contentHash(shapeless)
+                    if try Row.fetchOne(db, sql: """
+                        SELECT 1 FROM hazard_history
+                        WHERE featureID = ? AND contentHash = ? AND geometry IS NULL
+                        """, arguments: [feature.id, shapelessHash]) != nil {
+                        try db.execute(sql: """
+                            UPDATE hazard_history SET contentHash = ?, geometry = ?, lastSeen = MAX(lastSeen, ?)
+                            WHERE featureID = ? AND contentHash = ?
+                            """, arguments: [hash, feature.geometry.map(HazardGeometryCoding.encode), seen,
+                                             feature.id, shapelessHash])
+                        continue
+                    }
+                }
                 try db.execute(sql: """
                     INSERT INTO hazard_history (featureID, contentHash, kind, event, headline, severity,
                         source, issued, expires, firstSeen, lastSeen, geometry, zoneIDs, properties, replaces)

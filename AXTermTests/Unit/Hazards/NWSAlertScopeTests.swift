@@ -76,7 +76,11 @@ final class NWSAlertScopeTests: XCTestCase {
         XCTAssertEqual(north, 26.8, accuracy: 1.0)
     }
 
-    func testARadiusKeepsWhatComesWithinItAndAnythingUnshaped() {
+    /// Within a radius, an alert with no shape yet cannot be judged and is
+    /// not counted as within it: live on Station C, 200 miles reported "24
+    /// alerts", 21 of them Texas-coast products whose zones had not loaded
+    /// (2026-10-09). They are counted apart as still being placed.
+    func testARadiusKeepsWhatComesWithinItAndCountsTheUnplacedApart() {
         func feature(_ id: String, _ geometry: HazardFeature.Geometry?) -> HazardFeature {
             var f = HazardFeature(id: id, kind: .warning, event: "Red Flag Warning", source: "NWS", fetchedAt: Date())
             f.geometry = geometry
@@ -84,9 +88,10 @@ final class NWSAlertScopeTests: XCTestCase {
         }
         let features = [feature("here", square(39.55, -104.80)), feature("north", square(40.0, -104.80)),
                         feature("far", square(37.2, -108.5)), feature("unshaped", nil)]
-        XCTAssertEqual(NWSAlertScope.within(miles: 10).keeping(features, near: home).map(\.id), ["here", "unshaped"])
-        XCTAssertEqual(NWSAlertScope.within(miles: 50).keeping(features, near: home).map(\.id),
-                       ["here", "north", "unshaped"])
+        XCTAssertEqual(NWSAlertScope.within(miles: 10).keeping(features, near: home).map(\.id), ["here"])
+        XCTAssertEqual(NWSAlertScope.within(miles: 50).keeping(features, near: home).map(\.id), ["here", "north"])
+        XCTAssertEqual(NWSAlertScope.within(miles: 50).unplaced(features), 1)
+        XCTAssertEqual(NWSAlertScope.states(["CO"]).unplaced(features), 0, "states keep the unshaped in the list")
         XCTAssertEqual(NWSAlertScope.states(["CO"]).keeping(features, near: home).count, 4,
                        "states and zones keep everything the API returned")
     }
@@ -103,5 +108,29 @@ final class NWSAlertScopeTests: XCTestCase {
     /// The radii the control offers.
     func testTheOfferedRadii() {
         XCTAssertEqual(NWSAlertScope.offeredRadii, [10, 25, 50, 100, 200])
+    }
+
+    // MARK: - Typed codes are checked
+
+    /// Live on Station C, "COC007" typed under States was stored and asked
+    /// for as a state, which the NWS rejected (2026-10-09).
+    func testStateCodesAreChecked() {
+        XCTAssertEqual(NWSAlertScope.entry("co, wy", asStates: true), .success(.states(["CO", "WY"])))
+        XCTAssertEqual(NWSAlertScope.entry("COC007", asStates: true),
+                       .failure(.looksLikeZones("COC007")), "a zone typed under States says so")
+        XCTAssertEqual(NWSAlertScope.entry("CO, XX", asStates: true), .failure(.unknown(["XX"])))
+        XCTAssertEqual(NWSAlertScope.entry("  ", asStates: true), .failure(.empty))
+    }
+
+    func testZoneCodesAreChecked() {
+        XCTAssertEqual(NWSAlertScope.entry("coz039, COC005", asStates: false), .success(.zones(["COZ039", "COC005"])))
+        XCTAssertEqual(NWSAlertScope.entry("CO", asStates: false), .failure(.looksLikeStates("CO")))
+        XCTAssertEqual(NWSAlertScope.entry("COZ39", asStates: false), .failure(.unknown(["COZ39"])))
+    }
+
+    func testTheProblemReadsPlainly() {
+        XCTAssertEqual(NWSAlertScope.EntryProblem.looksLikeZones("COC007").message,
+                       "COC007 is a zone or county code. Choose Zones to use it.")
+        XCTAssertEqual(NWSAlertScope.EntryProblem.unknown(["XX"]).message, "Not a code the NWS uses: XX")
     }
 }

@@ -78,6 +78,11 @@ final class NWSAlertLayer: ObservableObject {
     @Published private(set) var pausedUntil: Date?
     /// Zone outlines still to fetch, a few each refresh (`maxZonesPerRefresh`).
     @Published private(set) var zonesStillLoading = 0
+    /// Alerts a radius cannot place yet (`NWSAlertScope.unplaced`).
+    @Published private(set) var unplacedCount = 0
+    /// The NWS refused the request (HTTP 400 range): the area asked for is
+    /// the problem, not the connection.
+    @Published private(set) var requestRejected = false
 
     /// At most this many new zone outlines per refresh, `zonePause` apart. A
     /// statewide storm can name a hundred zones, and asking for all of them
@@ -141,13 +146,20 @@ final class NWSAlertLayer: ObservableObject {
         } catch HazardFetchError.throttled(let retryAfter) {
             pause(retryAfter: retryAfter)
             return
+        } catch HazardFetchError.status(let code) where (400..<500).contains(code) {
+            requestRejected = true
+            problem = "The National Weather Service did not accept the request (HTTP \(code)). "
+                + "Check the alert area under the NWS Alerts switch."
+            return
         } catch {
+            requestRejected = false
             problem = "Could not reach the National Weather Service (\(error.localizedDescription)). "
                 + (lastFetched == nil ? "No alerts have been fetched yet." : "Showing the alerts fetched earlier.")
             return
         }
         lastFetched = fetchedAt
         problem = nil
+        requestRejected = false
         pausedUntil = nil
         consecutiveThrottles = 0
         var known = knownOutlines()
@@ -169,7 +181,9 @@ final class NWSAlertLayer: ObservableObject {
         }
         zonesStillLoading = NWSAlertFeed.zonesToFetch(for: parsed, cached: Set(known.keys)).count
         outlines = known
-        features = scope.keeping(NWSAlertFeed.resolvingZones(parsed, outlines: known), near: point)
+        let resolved = NWSAlertFeed.resolvingZones(parsed, outlines: known)
+        unplacedCount = scope.unplaced(resolved)
+        features = scope.keeping(resolved, near: point)
         // History is a record, not the display: a write that fails costs
         // the record, never the alerts on screen.
         try? history?.record(features)

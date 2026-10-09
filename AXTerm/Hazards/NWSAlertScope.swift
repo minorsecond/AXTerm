@@ -108,15 +108,68 @@ nonisolated enum NWSAlertScope: Equatable, Sendable {
         }
     }
 
-    /// What a fetch keeps: within a radius, what comes within it (and
-    /// anything with no shape yet, which cannot be judged); every other
-    /// scope keeps what the API returned.
+    /// What a fetch keeps: within a radius, what is known to come within
+    /// it (an alert whose zones have not loaded is counted by `unplaced`
+    /// instead); every other scope keeps what the API returned.
     func keeping(_ features: [HazardFeature], near point: GreatCircle.Point?) -> [HazardFeature] {
         guard case .within(let radius) = self, let point else { return features }
         return features.filter { feature in
-            guard let geometry = feature.geometry else { return true }
+            guard let geometry = feature.geometry else { return false }
             return Self.miles(from: point, to: geometry) <= radius
         }
+    }
+
+    /// Alerts a radius cannot judge yet because their zones' outlines have
+    /// not loaded; counted apart rather than as within it. Other scopes
+    /// list them, so none are apart.
+    func unplaced(_ features: [HazardFeature]) -> Int {
+        guard case .within = self else { return 0 }
+        return features.filter { $0.geometry == nil }.count
+    }
+
+    /// Why typed codes were not taken.
+    enum EntryProblem: Error, Equatable {
+        case empty
+        /// A zone or county code typed under States.
+        case looksLikeZones(String)
+        /// A state code typed under Zones.
+        case looksLikeStates(String)
+        case unknown([String])
+
+        var message: String {
+            switch self {
+            case .empty: return "Type at least one code."
+            case .looksLikeZones(let code): return "\(code) is a zone or county code. Choose Zones to use it."
+            case .looksLikeStates(let code): return "\(code) is a state code. Choose States to use it."
+            case .unknown(let codes): return "Not a code the NWS uses: " + codes.joined(separator: ", ")
+            }
+        }
+    }
+
+    /// Typed codes, checked before anything is stored or fetched. Live on
+    /// Station C, "COC007" under States was asked for as a state and the NWS
+    /// rejected it (2026-10-09).
+    static func entry(_ text: String, asStates: Bool) -> Result<NWSAlertScope, EntryProblem> {
+        let list = codes(text)
+        guard !list.isEmpty else { return .failure(.empty) }
+        if asStates {
+            if let zone = list.first(where: isZoneCode) { return .failure(.looksLikeZones(zone)) }
+            let unknown = list.filter { !isStateCode($0) }
+            return unknown.isEmpty ? .success(.states(list)) : .failure(.unknown(unknown))
+        }
+        if let state = list.first(where: isStateCode) { return .failure(.looksLikeStates(state)) }
+        let unknown = list.filter { !isZoneCode($0) }
+        return unknown.isEmpty ? .success(.zones(list)) : .failure(.unknown(unknown))
+    }
+
+    /// The states, DC, Puerto Rico and the other territories the NWS covers.
+    static func isStateCode(_ code: String) -> Bool {
+        stateBoxes[code] != nil || ["AS", "GU", "MP", "VI"].contains(code)
+    }
+
+    /// An NWS zone or county code: two letters, Z or C, three digits.
+    static func isZoneCode(_ code: String) -> Bool {
+        code.range(of: "^[A-Z]{2}[CZ][0-9]{3}$", options: .regularExpression) != nil
     }
 
     // MARK: - Geometry
@@ -227,9 +280,13 @@ import SwiftUI
 
 /// The NWS layer's area choice under its switch (`NWSAlertScope`): where the
 /// station is, within a distance of it, chosen states, or chosen zones.
+/// Typed codes are checked (`NWSAlertScope.entry`) and stored only when
+/// they are codes the NWS uses; otherwise the field says why.
 struct NWSAlertAreaControl: View {
     @AppStorage(NWSAlertScope.storageKey) private var stored = "here"
     @State private var codes = ""
+    @State private var choice: Kind?
+    @State private var entryProblem: String?
 
     private enum Kind: String, CaseIterable, Identifiable {
         case here = "Where I am", within = "Within", states = "States", zones = "Zones"
@@ -238,22 +295,27 @@ struct NWSAlertAreaControl: View {
 
     private var scope: NWSAlertScope { NWSAlertScope(stored: stored) }
 
+    private var storedKind: Kind {
+        switch scope {
+        case .here: return .here
+        case .within: return .within
+        case .states: return .states
+        case .zones: return .zones
+        }
+    }
+
     private var kind: Binding<Kind> {
-        Binding(get: {
-            switch scope {
-            case .here: return .here
-            case .within: return .within
-            case .states: return .states
-            case .zones: return .zones
-            }
-        }, set: { kind in
+        Binding(get: { choice ?? storedKind }, set: { kind in
+            choice = kind
+            entryProblem = nil
             switch kind {
             case .here: stored = NWSAlertScope.here.stored
             case .within: stored = NWSAlertScope.within(miles: 50).stored
-            case .states: stored = NWSAlertScope.states(["CO"]).stored
-            case .zones: stored = "zones:" + (codes.isEmpty ? "" : codes)
+            case .states, .zones:
+                // Stored once valid codes are typed; until then the last
+                // area stands.
+                codes = storedKind == kind ? Self.codesText(scope) : ""
             }
-            codes = Self.codesText(NWSAlertScope(stored: stored))
         })
     }
 
@@ -266,10 +328,11 @@ struct NWSAlertAreaControl: View {
             .help("Where the NWS layer fetches for. Where I am: alerts at this station's position. "
                   + "Within: every alert whose shape comes within that distance. States and Zones: "
                   + "everything the NWS has for those codes, e.g. CO, or COZ039 and COC005.")
-            switch scope {
-            case .within(let miles):
+            switch kind.wrappedValue {
+            case .within:
                 Picker("Distance", selection: Binding(
-                    get: { Int(miles) }, set: { stored = NWSAlertScope.within(miles: Double($0)).stored })) {
+                    get: { if case .within(let miles) = scope { return Int(miles) } else { return 50 } },
+                    set: { stored = NWSAlertScope.within(miles: Double($0)).stored })) {
                     ForEach(NWSAlertScope.offeredRadii, id: \.self) { Text("\($0) mi").tag($0) }
                 }
                 .pickerStyle(.menu)
@@ -277,10 +340,21 @@ struct NWSAlertAreaControl: View {
                 TextField(kind.wrappedValue == .states ? "e.g. CO, WY" : "e.g. COZ039, COC005", text: $codes)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit {
-                        let list = NWSAlertScope.codes(codes)
-                        guard !list.isEmpty else { return }
-                        stored = (kind.wrappedValue == .states ? NWSAlertScope.states(list) : .zones(list)).stored
+                        switch NWSAlertScope.entry(codes, asStates: kind.wrappedValue == .states) {
+                        case .success(let entered):
+                            stored = entered.stored
+                            codes = Self.codesText(entered)
+                            entryProblem = nil
+                        case .failure(let problem):
+                            entryProblem = problem.message
+                        }
                     }
+                if let entryProblem {
+                    Text(entryProblem)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             case .here:
                 EmptyView()
             }

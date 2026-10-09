@@ -152,4 +152,17 @@ final class HazardPresentationTests: XCTestCase {
                                                stale: false, now: now, zonesLoading: 8),
                        "1 alert · fetched 1 min ago · 8 zones still loading")
     }
+
+    func testAlertsStillBeingPlacedAreCountedApart() {
+        XCTAssertEqual(HazardText.layerCaption(count: 3, lastFetched: now.addingTimeInterval(-60), problem: nil,
+                                               stale: false, now: now, scope: .within(miles: 200),
+                                               unplaced: 21, zonesLoading: 116),
+                       "3 alerts within 200 mi · fetched 1 min ago · 21 more being placed (116 zones loading)")
+    }
+
+    func testARejectedAreaIsSaidAsSuch() {
+        XCTAssertEqual(HazardText.layerCaption(count: 8, lastFetched: now.addingTimeInterval(-60), problem: "rejected",
+                                               stale: false, now: now, rejected: true),
+                       "NWS did not accept that area · showing 8 alerts fetched 1 min ago")
+    }
 }

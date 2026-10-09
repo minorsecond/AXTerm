@@ -304,4 +304,15 @@ final class NWSAlertLayerTests: XCTestCase {
             XCTAssertEqual(layer.features.count, kept, "within \(miles) mi")
         }
     }
+
+    /// The NWS refusing a request (HTTP 400 range) is not being offline:
+    /// the caption said "Offline" when the area was the problem.
+    func testARejectedRequestIsNotOffline() async throws {
+        let fetcher = FakeFetcher()
+        fetcher.answers["https://api.weather.gov/alerts/active?area=CO"] = .failure(HazardFetchError.status(400))
+        let layer = layer(fetcher)
+        await layer.refresh(.states(["CO"]), at: nil)
+        XCTAssertTrue(layer.requestRejected)
+        XCTAssertTrue(layer.problem?.contains("did not accept") == true, layer.problem ?? "")
+    }
 }

@@ -171,18 +171,28 @@ nonisolated enum HazardText {
     /// The line under the layer's switch: how many alerts and how old, or
     /// that the ones shown are old because no newer copy came.
     static func layerCaption(count: Int, lastFetched: Date?, problem: String?, stale: Bool, now: Date,
-                             scope: NWSAlertScope = .here, pausedUntil: Date? = nil, zonesLoading: Int = 0,
+                             scope: NWSAlertScope = .here, pausedUntil: Date? = nil, rejected: Bool = false,
+                             unplaced: Int = 0,
+                             zonesLoading: Int = 0,
                              timeZone: TimeZone = .current, locale: Locale = .current) -> String {
-        let loading = zonesLoading > 0 ? " · \(zonesLoading) zones still loading" : ""
+        let loading: String
+        switch (unplaced, zonesLoading) {
+        case (0, 0): loading = ""
+        case (0, _): loading = " · \(zonesLoading) zones still loading"
+        default: loading = " · \(unplaced) more being placed (\(zonesLoading) zones loading)"
+        }
         let paused = pausedUntil.map {
             "NWS asked to slow down; next try " + formatter(timeZone, locale).string(from: $0)
         }
+        let refused = rejected ? "NWS did not accept that area" : nil
         guard let lastFetched else {
-            return paused ?? (problem == nil ? "Not fetched yet" : "Could not reach the NWS")
+            return paused ?? refused ?? (problem == nil ? "Not fetched yet" : "Could not reach the NWS")
         }
-        let alerts = count == 1 ? "1 alert" : "\(count) alerts"
+        var alerts = count == 1 ? "1 alert" : "\(count) alerts"
+        if case .within = scope, count > 0 { alerts += " " + scope.summary.lowercased() }
         let age = age(from: lastFetched, to: now)
         if let paused { return "\(paused) · showing \(alerts) fetched \(age)" + loading }
+        if let refused { return "\(refused) · showing \(alerts) fetched \(age)" }
         if problem != nil { return "Offline · showing \(alerts) fetched \(age)" + loading }
         let lead = count == 0 ? noAlerts(in: scope) : alerts
         return "\(lead) · fetched \(age)" + (stale ? ", no newer copy" : "") + loading

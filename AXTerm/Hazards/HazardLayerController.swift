@@ -98,6 +98,8 @@ final class HazardLayerController: ObservableObject {
                                        problem: nws.problem, stale: nws.isStale, now: now,
                                        scope: lastScope ?? .here,
                                        pausedUntil: nws.pausedUntil.flatMap { $0 > now ? $0 : nil },
+                                       rejected: nws.requestRejected,
+                                       unplaced: nws.unplacedCount,
                                        zonesLoading: nws.zonesStillLoading)
     }
 
