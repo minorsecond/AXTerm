@@ -88,7 +88,8 @@ struct AXTermApp: App {
             let instanceID = isUnitTests
                 ? "unit-\(ProcessInfo.processInfo.processIdentifier)"
                 : testConfig.instanceID
-            queue = try? DatabaseManager.makeEphemeralDatabaseQueue(instanceID: instanceID)
+            queue = try? DatabaseManager.makeEphemeralDatabaseQueue(
+                instanceID: instanceID, keepExisting: !isUnitTests && testConfig.keepsData)
         } else {
             queue = try? DatabaseManager.makeDatabaseQueue()
         }
@@ -156,11 +157,18 @@ struct AXTermApp: App {
         }
 
         // Auto-connect if settings say so OR if test mode requests it
-        if !isUnitTests && (settingsStore.autoConnectOnLaunch || testConfig.autoConnect) {
-            if testConfig.isTestMode, testConfig.radios.isEmpty {
-                // Test mode always uses network with explicit host/port
+        if !isUnitTests {
+            switch TestModeConfiguration.launchConnection(
+                isTestMode: testConfig.isTestMode, keepsData: testConfig.keepsData,
+                hasRigRadios: !testConfig.radios.isEmpty,
+                autoConnectSetting: settingsStore.autoConnectOnLaunch,
+                autoConnectFlag: testConfig.autoConnect) {
+            case .none:
+                break
+            case .rigEndpoint:
+                // A fresh rig instance uses the network with explicit host/port
                 self.client.connect(host: effectiveHost, port: effectivePort)
-            } else {
+            case .settings:
                 self.client.connectUsingSettings()
             }
         }

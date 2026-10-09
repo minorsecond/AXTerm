@@ -316,3 +316,11 @@ Five small files added to PARK for the park test (cheat-sheet.txt, fortune.txt, 
 | # | Where | Finding |
 |---|---|---|
 | 47 | A (705) and Warbler | The IC-705 stops answering CI-V for about 15 s every 3½ to 4¼ hours (Warbler: 2026-10-08 06:07, 10:21, 14:35, 22:29; 10-09 02:11, 06:25Z). Warbler reconnects, trying the Tailscale address 100.77.243.13 first (about 11 s) before the LAN address 192.168.3.218, and A reconnects to Warbler 4 to 10 s after. At 10-09 10:23Z A dropped the radio on its own ("has not answered 8 CI-V commands in a row") during a stall Warbler rode through. Likely the 705's Wi-Fi (power saving or DHCP renewal) or the router; not AXTerm. To do: see whether a radio drop ends A's AX.25 calls, and let A ride through a short stall (with the TNC4 robustness work, 43) |
+
+## Findings, 2026-10-09 (APRS drive)
+
+| # | Where | Finding |
+|---|---|---|
+| 48 | A (705), Map | The phone's APRS beacon as K0EPI-3, sent from the house, was missing from the map, the station list and the heard count ("Nothing heard yet"). A rule folded any sibling SSID within 50 m into A's own marker. Fixed (6e059e90, test first): our own echoes are now recognized by frame content (source, destination, control, info; via path ignored), never by position |
+| 49 | A (705), relaunch | Relaunching A onto a new build wiped its settings and database: test mode starts clean at every launch by design. Restored from a backup taken just before. New `--keep-data` flag keeps a test-mode instance's settings and database, and such an instance connects its own radios at launch instead of the rig's KISS port (localhost:8001), which had shown only the IC-2100H's Direwolf entry. A now launches with `--test-mode --instance-name "Station A" --keep-data` |
+| 50 | A (705), Map chin | The strip under the map shows raw text fragments ("ing car", "ing (home)") instead of decoded packets. It used to show decoded traffic in and out. Not fixed yet (operator: note it, fix later) |

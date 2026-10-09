@@ -39,6 +39,36 @@ nonisolated struct TestModeConfiguration {
     /// Disable database persistence in test mode
     let ephemeralDatabase: Bool
 
+    /// Keep this instance's settings and database across launches
+    /// (`--keep-data`). Test mode otherwise starts clean every launch, which
+    /// suits a rig run and erased A (705)'s radio, mailbox and Winlink setup
+    /// when it was relaunched onto a new build (2026-10-09).
+    let keepsData: Bool
+
+    static func keepsData(arguments: [String]) -> Bool {
+        arguments.contains("--keep-data")
+    }
+
+    /// What to connect at launch.
+    enum LaunchConnection: Equatable {
+        case none
+        /// The rig's KISS endpoint from `--host`/`--port`.
+        case rigEndpoint
+        /// The radios in this instance's settings.
+        case settings
+    }
+
+    /// A fresh rig instance dials the rig's endpoint. An instance that keeps
+    /// its data (`--keep-data`) has radios of its own and connects them, as a
+    /// normal install does: on 2026-10-09 A (705) relaunched with the flag
+    /// dialed localhost:8001 instead of its IC-705.
+    static func launchConnection(isTestMode: Bool, keepsData: Bool, hasRigRadios: Bool,
+                                 autoConnectSetting: Bool, autoConnectFlag: Bool) -> LaunchConnection {
+        guard autoConnectSetting || autoConnectFlag else { return .none }
+        if isTestMode, !hasRigRadios, !keepsData { return .rigEndpoint }
+        return .settings
+    }
+
     /// Shared singleton for easy access
     static let shared = TestModeConfiguration()
 
@@ -98,6 +128,7 @@ nonisolated struct TestModeConfiguration {
             self.radios = []
         }
         self.ephemeralDatabase = args.contains("--ephemeral-db")
+        self.keepsData = Self.keepsData(arguments: args)
     }
 
     /// Returns the effective port, using override if in test mode, otherwise the provided default

@@ -73,7 +73,7 @@ nonisolated enum DatabaseManager {
     /// coins a name no later run reuses. Without this sweep those files
     /// accumulate for the life of the machine and can fill the volume — which
     /// then surfaces as `SQLITE_FULL` in whichever unrelated write happens next.
-    static func sweepStaleEphemeralDatabases() {
+    static func sweepStaleEphemeralDatabases(sparing kept: URL? = nil) {
         guard let folder = try? ephemeralDatabaseFolder(),
               let contents = try? FileManager.default.contentsOfDirectory(
                   at: folder,
@@ -83,7 +83,9 @@ nonisolated enum DatabaseManager {
         else { return }
 
         let cutoff = Date().addingTimeInterval(-ephemeralRetention)
-        for url in contents where url.lastPathComponent.hasPrefix(ephemeralPrefix) {
+        let spared = kept.map { url in Set(["", "-wal", "-shm"].map { url.lastPathComponent + $0 }) } ?? []
+        for url in contents where url.lastPathComponent.hasPrefix(ephemeralPrefix)
+            && !spared.contains(url.lastPathComponent) {
             // Sidecars carry their own timestamps, so each file ages out on its
             // own evidence rather than on a guess about its database.
             let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey])
@@ -94,15 +96,18 @@ nonisolated enum DatabaseManager {
     }
 
     /// Creates a database queue for test mode with an ephemeral database.
-    /// The database is created fresh each time (previous test data is deleted).
+    /// The database is created fresh each time (previous test data is
+    /// deleted) unless `keepExisting` is set (`--keep-data`), when this
+    /// instance's database is reopened as it was left.
     @MainActor
-    static func makeEphemeralDatabaseQueue(instanceID: String) throws -> DatabaseQueue {
+    static func makeEphemeralDatabaseQueue(instanceID: String,
+                                           keepExisting: Bool = false) throws -> DatabaseQueue {
         let url = try ephemeralDatabaseURL(instanceID: instanceID)
         let urlPath = url.path
 
         // Reclaim whatever earlier runs abandoned, then start this one fresh.
-        sweepStaleEphemeralDatabases()
-        removeEphemeralDatabase(at: url)
+        sweepStaleEphemeralDatabases(sparing: keepExisting ? url : nil)
+        if !keepExisting { removeEphemeralDatabase(at: url) }
 
         print("AXTerm Test Mode: Using ephemeral database at \(urlPath)")
 

@@ -100,10 +100,17 @@ nonisolated enum AppEnvironment {
         guard isTestMode else { return .standard }
         let base = "com.rosswardrup.AXTerm.test.\(TestModeConfiguration.shared.instanceID)"
         let suite = isUnitTestHost ? unitTestHostSuite(base: base) : base
-        let defaults = UserDefaults(suiteName: suite) ?? .standard
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
+        return openSuite(named: suite,
+                         wipe: isUnitTestHost || !TestModeConfiguration.shared.keepsData)
     }()
+
+    /// A test-mode suite, emptied first unless the instance keeps its data
+    /// (`--keep-data`).
+    static func openSuite(named suite: String, wipe: Bool) -> UserDefaults {
+        let defaults = UserDefaults(suiteName: suite) ?? .standard
+        if wipe { defaults.removePersistentDomain(forName: suite) }
+        return defaults
+    }
 
     /// Where AXTerm keeps what it still owes a radio: the settings it
     /// changed for packet and must put back (`RigPrepStore`). `.standard` in
