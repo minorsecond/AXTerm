@@ -1793,12 +1793,9 @@ struct StationsMapView: View {
     private var mapToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
           if chrome.toolbar {
-            Button {
-                carMode = true
-            } label: {
-                Label("Car Mode", systemImage: "car")
+            if MapToolbarLayout.barItems(regularWidth: horizontalSizeClass == .regular).contains(.carMode) {
+                carModeButton
             }
-            .accessibilityHint("Follows you like a navigation app and shows only what helps at a glance")
 
             Button {
                 showingStationList = true
@@ -1825,6 +1822,17 @@ struct StationsMapView: View {
           }
         }
     }
+
+    #if os(iOS)
+    private var carModeButton: some View {
+        Button {
+            carMode = true
+        } label: {
+            Label("Car Mode", systemImage: "car")
+        }
+        .accessibilityHint("Follows you like a navigation app and shows only what helps at a glance")
+    }
+    #endif
 
     // MARK: - Car mode
 
@@ -2009,6 +2017,10 @@ struct StationsMapView: View {
     @ViewBuilder
     private var actionsMenu: some View {
         #if os(iOS)
+        if MapToolbarLayout.carModeInMore(regularWidth: horizontalSizeClass == .regular) {
+            carModeButton
+            Divider()
+        }
         // The Mac places by secondary-clicking a spot. A touch screen has no
         // such gesture — a long press already means something else — and this
         // view does not track the map's center, so inventing a crosshair here
