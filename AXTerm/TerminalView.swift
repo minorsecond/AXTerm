@@ -290,6 +290,30 @@ nonisolated struct NetRomRelayResponseParser {
     }
 }
 
+/// How AXDP reaches the terminal: decoded chat into the transcript, and the
+/// reassembly flag cleared when a message completes. One function, so the
+/// terminal view and the tests wire it the same way.
+@MainActor
+enum TerminalAXDPWiring {
+    static func connect(_ coordinator: SessionCoordinator, to viewModel: ObservableTerminalTxViewModel) {
+        coordinator.onAXDPChatReceived = { [weak viewModel] from, text in
+            viewModel?.appendAXDPChatToTranscript(from: from, text: text)
+        }
+        // The exact plain text of each delivery, so the terminal neither
+        // shows AXDP bytes nor drops text that shares a delivery with them.
+        viewModel.plainTextOfDelivery = { [weak coordinator] peer, data in
+            coordinator?.plainText(delivered: data, from: peer)
+        }
+        // Clear AXDP reassembly flag when a complete message is extracted.
+        // This allows subsequent plain text from this peer to be delivered.
+        coordinator.onAXDPReassemblyComplete = { [weak viewModel] from in
+            Task { @MainActor in
+                viewModel?.clearAXDPReassemblyFlag(for: from)
+            }
+        }
+    }
+}
+
 /// Observable wrapper around TerminalTxViewModel for SwiftUI binding
 @MainActor
 final class ObservableTerminalTxViewModel: ObservableObject {
@@ -705,6 +729,11 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Callback when plain-text (non-AXDP) data is received from connected session.
     /// Used to add to console when sender uses plain text instead of AXDP.
     var onPlainTextChatReceived: ((AX25Address, String, [String]) -> Void)?
+
+    /// The plain-text part of a delivery, from the coordinator's AXDP
+    /// reassembler, or nil when it has not split these bytes. When set, the
+    /// terminal shows exactly this and needs no suppression flag.
+    var plainTextOfDelivery: ((AX25Address, Data) -> Data?)?
 
     /// Marked text downloads and captures, per station. Fed every received
     /// byte below, after AXDP envelopes are taken out. See `ReceivedText.swift`.
@@ -1330,8 +1359,17 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Append payload bytes from an AX.25 I-frame into the human-readable
     /// session transcript, respecting CR/LF line boundaries and keeping
     /// messages grouped in arrival order.
-    private func appendToSessionTranscript(from session: AX25Session, data: Data) {
+    private func appendToSessionTranscript(from session: AX25Session, data delivered: Data) {
         let peerKey = session.remoteAddress.display.uppercased()
+        var data = delivered
+        // The reassembler has already split these bytes: show its text and
+        // nothing else. The flag below is the fallback for when it has not.
+        let split = plainTextOfDelivery?(session.remoteAddress, delivered)
+        if let split {
+            peersInAXDPReassembly.remove(peerKey)
+            guard !split.isEmpty else { return }
+            data = split
+        }
         let bufferLen = currentLineBuffers[peerKey]?.count ?? 0
         let lineBreaks = data.reduce(0) { count, byte in
             count + ((byte == 0x0D || byte == 0x0A) ? 1 : 0)
@@ -1346,7 +1384,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         
         // Suppress raw AXDP envelope bytes—AXDP chat is delivered via appendAXDPChatToTranscript.
         // When we see AXDP magic, mark this peer as mid-reassembly.
-        if AXDP.hasMagic(data) {
+        if split == nil, AXDP.hasMagic(data) {
             peersInAXDPReassembly.insert(peerKey)
             TxLog.debug(.axdp, "AXDP magic detected in I-frame payload (suppress raw)", [
                 "peer": peerKey,
@@ -1370,7 +1408,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         // - AXDP reassembly has timeouts that will eventually clear stale buffers
         // - The flag is cleared on disconnect
         // - Mixed AXDP/plain text mid-message is an edge case
-        if peersInAXDPReassembly.contains(peerKey) {
+        if split == nil, peersInAXDPReassembly.contains(peerKey) {
             // Suppress AXDP continuation fragment - SessionCoordinator handles reassembly
             TxLog.debug(.axdp, "Suppressing AXDP continuation fragment", [
                 "peer": peerKey,
@@ -2443,9 +2481,7 @@ struct TerminalView: View {
         // appendAXDPChatToTranscript handles adding to console via appendToSessionTranscript
         // → onPlainTextChatReceived → appendSessionChatLine. Do NOT call appendSessionChatLine
         // here directly or the message will appear twice.
-        sessionCoordinator.onAXDPChatReceived = { [weak txViewModel] from, text in
-            txViewModel?.appendAXDPChatToTranscript(from: from, text: text)
-        }
+        TerminalAXDPWiring.connect(sessionCoordinator, to: txViewModel)
 
         // Wire plain-text chat (non-AXDP) to console when sender uses plain text.
         let observe = onSessionText
@@ -2517,13 +2553,6 @@ struct TerminalView: View {
             }
         }
         
-        // Clear AXDP reassembly flag when a complete message is extracted.
-        // This allows subsequent plain text from this peer to be delivered.
-        sessionCoordinator.onAXDPReassemblyComplete = { [weak txViewModel] from in
-            Task { @MainActor in
-                txViewModel?.clearAXDPReassemblyFlag(for: from)
-            }
-        }
 
         // A digipeater repeating one of our own I-frames is evidence the frame
         // cleared that hop. It advances the delivery indicator to "relayed" —

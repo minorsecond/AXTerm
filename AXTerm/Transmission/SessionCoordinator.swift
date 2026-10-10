@@ -3856,12 +3856,27 @@ final class SessionCoordinator: ObservableObject {
 
     /// Append delivered (in-order) data to reassembly buffer and extract complete AXDP messages.
     /// Non-AXDP data (plain text I-frames) is not buffered to prevent polluting AXDP reassembly.
+    /// The plain text of the last delivery from each peer, by uppercased
+    /// callsign, recorded as the reassembler splits it. The terminal reads it
+    /// for the same bytes right after (`plainText(delivered:from:)`).
+    private var deliveredText: [String: (raw: Data, text: Data)] = [:]
+
+    /// The plain-text part of a delivery the reassembler has just split, or
+    /// nil when it has not seen these bytes. Read once.
+    func plainText(delivered data: Data, from peer: AX25Address) -> Data? {
+        let key = peer.display.uppercased()
+        guard let split = deliveredText[key], split.raw == data else { return nil }
+        deliveredText.removeValue(forKey: key)
+        return split.text
+    }
+
     private func appendToReassemblyAndExtract(from: AX25Address, path: DigiPath, data: Data) {
         let key = reassemblyKey(from: from, path: path)
         var reassembler = inboundReassemblers[key] ?? AXDPStreamReassembler()
         let heldBefore = reassembler.buffered.count
         let discardedBefore = reassembler.discardedBytes
-        let messages = reassembler.append(data)
+        let (messages, text) = reassembler.split(data)
+        deliveredText[from.display.uppercased()] = (data, text)
 
         if reassembler.buffered.isEmpty {
             inboundReassemblers.removeValue(forKey: key)

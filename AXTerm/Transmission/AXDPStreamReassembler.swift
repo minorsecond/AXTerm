@@ -33,8 +33,22 @@ nonisolated struct AXDPStreamReassembler {
     /// Takes the next bytes of the stream and returns every message they
     /// complete, in order.
     mutating func append(_ data: Data) -> [AXDP.Message] {
+        split(data).messages
+    }
+
+    /// Takes the next bytes of the stream and returns the messages they
+    /// complete and the plain text around them, each in order.
+    ///
+    /// The text is every byte that is not part of a message: what came
+    /// before a magic, and what follows a message's end. A tail that could be
+    /// the start of a magic is held back, and given up as text at the next
+    /// delivery if no magic follows. The terminal shows exactly this text, so
+    /// a line that follows an AXDP message in the same delivery is not lost
+    /// with it (home retest, 2026-10-10).
+    mutating func split(_ data: Data) -> (messages: [AXDP.Message], text: Data) {
         var buffer = AXDP.zeroBased(buffered + data)
         var messages: [AXDP.Message] = []
+        var text = Data()
 
         while !buffer.isEmpty {
             guard let start = Self.magicOffset(in: buffer) else {
@@ -42,11 +56,13 @@ nonisolated struct AXDPStreamReassembler {
                 // first bytes of a magic finishing in the next delivery.
                 let keep = Self.magicPrefixSuffixLength(of: buffer)
                 discardedBytes += buffer.count - keep
+                text.append(buffer.prefix(buffer.count - keep))
                 buffer = Data(buffer.suffix(keep))
                 break
             }
             if start > 0 {
                 discardedBytes += start
+                text.append(buffer.prefix(start))
                 buffer = Data(buffer.dropFirst(start))
             }
             switch AXDP.Message.frame(buffer) {
@@ -55,14 +71,14 @@ nonisolated struct AXDPStreamReassembler {
                 buffer = Data(buffer.dropFirst(consumed))
             case .needMore:
                 buffered = buffer
-                return messages
+                return (messages, text)
             case .invalid(let skip):
                 discardedBytes += skip
                 buffer = Data(buffer.dropFirst(skip))
             }
         }
         buffered = buffer
-        return messages
+        return (messages, text)
     }
 
     /// Where the first magic starts, if anywhere.
