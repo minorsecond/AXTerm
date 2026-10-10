@@ -1352,8 +1352,10 @@ struct ConsoleLineView: View {
     /// rather than in a browser.
     @ViewBuilder
     private func messageText(_ text: String) -> some View {
-        let links = linkRanges(in: text)
-        Text(attributed(text))
+        // One scan feeds both the underlined text and the cursor overlay.
+        let targets = linkTargets(in: text)
+        let links = targets.map(\.range)
+        Text(attributed(text, targets: targets))
             .foregroundStyle(messageColor)
             .textSelection(.enabled)
             .lineLimit(nil)
@@ -1381,20 +1383,16 @@ struct ConsoleLineView: View {
         return telemetryDefinitions[CallsignValidator.normalize(owner)]
     }
 
-    /// The runs `attributed(_:)` turned into links, in the same order.
-    private func linkRanges(in text: String) -> [Range<String.Index>] {
-        linkTargets(in: text).map(\.range)
-    }
-
     #if os(macOS)
     /// What the row draws the message in — the font the second layout has to
     /// agree with. Monospaced, so it does.
     static let messageFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     #endif
 
-    private func attributed(_ text: String) -> AttributedString {
+    private func attributed(_ text: String,
+                            targets: [(range: Range<String.Index>, url: URL)]) -> AttributedString {
         var result = AttributedString(text)
-        for (range, url) in linkTargets(in: text) {
+        for (range, url) in targets {
             guard let lower = AttributedString.Index(range.lowerBound, within: result),
                   let upper = AttributedString.Index(range.upperBound, within: result)
             else { continue }

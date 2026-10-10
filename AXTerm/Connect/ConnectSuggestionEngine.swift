@@ -396,3 +396,52 @@ nonisolated struct ConnectSuggestionEngine {
         return "\(parsed.call)-\(parsed.ssid)"
     }
 }
+
+/// The digipeater paths seen in stored traffic, per peer, for the connect
+/// bar. Rebuilt from every packet a moment after each burst; each distinct
+/// callsign is normalized and judged once per rebuild. Judging it again for
+/// each of 9,000 packets took about 350 ms on the main thread (2026-10-10).
+nonisolated enum ObservedPathIndex {
+    struct Result {
+        var paths: [ObservedPath]
+        var knownDigis: Set<String>
+    }
+
+    static func build(_ packets: [Packet], canonical: (String) -> String, isDigi: (String) -> Bool) -> Result {
+        var canonicalOf: [String: String] = [:]
+        var digiVerdict: [String: Bool] = [:]
+        func canon(_ raw: String) -> String {
+            if let known = canonicalOf[raw] { return known }
+            let value = canonical(raw)
+            canonicalOf[raw] = value
+            return value
+        }
+        func digi(_ call: String) -> Bool {
+            if let known = digiVerdict[call] { return known }
+            let value = isDigi(call)
+            digiVerdict[call] = value
+            return value
+        }
+
+        var paths: [String: ObservedPath] = [:]
+        var knownDigis = Set<String>()
+        for packet in packets {
+            let via = packet.via.map { canon($0.display) }.filter { !$0.isEmpty && digi($0) }
+            guard !via.isEmpty else { continue }
+            knownDigis.formUnion(via)
+            let signature = via.joined(separator: ",")
+            let peers = [packet.to.map { canon($0.display) } ?? "", packet.from.map { canon($0.display) } ?? ""]
+            for peer in peers where !peer.isEmpty {
+                let key = peer + "|" + signature
+                if var existing = paths[key] {
+                    existing.count += 1
+                    if packet.timestamp > existing.lastSeen { existing.lastSeen = packet.timestamp }
+                    paths[key] = existing
+                } else {
+                    paths[key] = ObservedPath(peer: peer, digis: via, lastSeen: packet.timestamp, count: 1)
+                }
+            }
+        }
+        return Result(paths: Array(paths.values), knownDigis: knownDigis)
+    }
+}

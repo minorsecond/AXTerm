@@ -1097,43 +1097,13 @@ final class ConnectBarViewModel: ObservableObject {
     }
 
     private func rebuildObservedPaths(from packets: [Packet]) {
+        let index = ObservedPathIndex.build(packets, canonical: { canonicalCallsign($0) },
+                                            isDigi: { CallsignValidator.isValidDigipeaterAddress($0) })
         var map: [ObservedPathKey: ObservedPath] = [:]
-        var knownDigiSet = Set<String>()
-
-        for packet in packets {
-            let via = packet.via
-                .map { canonicalCallsign($0.display) }
-                .filter { !$0.isEmpty && CallsignValidator.isValidDigipeaterAddress($0) }
-            guard !via.isEmpty else { continue }
-
-            for digi in via {
-                knownDigiSet.insert(digi)
-            }
-
-            let peers = [
-                packet.to.map { canonicalCallsign($0.display) } ?? "",
-                packet.from.map { canonicalCallsign($0.display) } ?? ""
-            ]
-            .filter { !$0.isEmpty }
-
-            for peer in peers {
-                let key = ObservedPathKey(peer: peer, digisSignature: via.joined(separator: ","))
-                if var existing = map[key] {
-                    existing.count += 1
-                    if packet.timestamp > existing.lastSeen {
-                        existing.lastSeen = packet.timestamp
-                    }
-                    map[key] = existing
-                } else {
-                    map[key] = ObservedPath(
-                        peer: peer,
-                        digis: via,
-                        lastSeen: packet.timestamp,
-                        count: 1
-                    )
-                }
-            }
+        for path in index.paths {
+            map[ObservedPathKey(peer: path.peer, digisSignature: path.digis.joined(separator: ","))] = path
         }
+        let knownDigiSet = index.knownDigis
 
         observedPathStore = map
         observedPaths = map.values
