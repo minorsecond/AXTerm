@@ -348,7 +348,7 @@ struct AXTermiOSRootView: View {
         // APRS messaging, wired exactly as the Mac wires it.
         if let aprs = client.aprsMessaging {
             aprs.autoReplyProvider = { APRSMessagingService.AutoReply(rawValue: settings.aprsAutoReplyRaw) ?? .full }
-            aprs.send = { [weak coordinator] out in _ = coordinator?.sendAPRS(out) }
+            aprs.transmit = { [weak coordinator] out in coordinator?.sendAPRS(out) ?? false }
             aprs.positionInfo = { [weak coordinator] in coordinator?.currentAPRSPositionInfo() }
             aprs.heardDirect = { [weak client] in
                 Array((client?.stations ?? []).filter { $0.lastVia.isEmpty }.map { $0.call }
@@ -1082,7 +1082,10 @@ struct AXTermiOSRootView: View {
         if let messaging = client.aprsMessaging {
             APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
                              myCallsign: settings.primaryCallsign,
-                             heardStations: APRSComposeModel.suggestions(from: client.stations))
+                             heardStations: APRSComposeModel.suggestions(from: client.stations),
+                             availability: APRSSendAvailability.of(settings.radios),
+                             radioName: { settings.radio($0).map(RadioDetailView.title(for:)) ?? "" },
+                             onSwitchToAPRS: { id in settings.updateRadio(id) { RadioChannel.aprs.apply(to: &$0) } })
         } else {
             Text("APRS messaging is unavailable without a database.")
                 .foregroundStyle(.secondary)
@@ -1502,7 +1505,10 @@ struct AXTermiOSRootView: View {
             APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
                              myCallsign: settings.primaryCallsign,
                              heardStations: APRSComposeModel.suggestions(from: client.stations),
-                             presentation: .pushed)
+                             presentation: .pushed,
+                             availability: APRSSendAvailability.of(settings.radios),
+                             radioName: { settings.radio($0).map(RadioDetailView.title(for:)) ?? "" },
+                             onSwitchToAPRS: { id in settings.updateRadio(id) { RadioChannel.aprs.apply(to: &$0) } })
         } else {
             Text("APRS messaging is unavailable without a database.")
                 .foregroundStyle(.secondary)

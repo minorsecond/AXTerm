@@ -251,7 +251,7 @@ final class StationServices {
         // full (auto-ACK incoming messages and answer directed queries).
         if let aprs = client.aprsMessaging {
             aprs.autoReplyProvider = { APRSMessagingService.AutoReply(rawValue: settings.aprsAutoReplyRaw) ?? .full }
-            aprs.send = { [weak coordinator] out in _ = coordinator?.sendAPRS(out) }
+            aprs.transmit = { [weak coordinator] out in coordinator?.sendAPRS(out) ?? false }
             aprs.positionInfo = { [weak coordinator] in coordinator?.currentAPRSPositionInfo() }
             aprs.heardDirect = { [weak client] in
                 Array((client?.stations ?? []).filter { $0.lastVia.isEmpty }.map { $0.call }

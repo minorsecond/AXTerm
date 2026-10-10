@@ -25,6 +25,13 @@ struct APRSMessagesView: View {
     var heardStations: [APRSComposeModel.Suggestion] = []
     /// How this view is embedded. Defaults to the split-view shell.
     var presentation: Presentation = .standalone
+    /// Whether any radio is on APRS. Without one nothing can be sent, so
+    /// the screen says so and offers to switch a radio (`APRSSendAvailability`).
+    var availability: APRSSendAvailability = .ready
+    /// A radio's name, for the Switch button.
+    var radioName: (RadioID) -> String = { $0.rawValue }
+    /// Puts a radio on the APRS channel, as Settings › Radios does.
+    var onSwitchToAPRS: ((RadioID) -> Void)?
 
     enum Presentation { case standalone, pushed }
 
@@ -181,6 +188,24 @@ struct APRSMessagesView: View {
 
     @ViewBuilder
     private var actionsSection: some View {
+        if case .noAPRSRadio(let switchable) = availability {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(availability.note ?? "", systemImage: "antenna.radiowaves.left.and.right.slash")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let onSwitchToAPRS {
+                        ForEach(switchable, id: \.self) { id in
+                            Button("Switch \(radioName(id)) to APRS") { onSwitchToAPRS(id) }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
         Section {
             // Three different jobs, and the difference between the last two
             // matters on the air: one is addressed and acknowledged, the
@@ -196,6 +221,7 @@ struct APRSMessagesView: View {
                    detail: "Ask the channel and see who answers",
                    tint: .teal) { showProbe = true }
         }
+        .disabled(!availability.canSend)
     }
 
     @ViewBuilder
@@ -396,6 +422,9 @@ struct APRSMessagesView: View {
         case .acked:
             Label("Acked", systemImage: "checkmark.circle.fill")
                 .labelStyle(.titleAndIcon).foregroundStyle(.green)
+        case .notSent:
+            Label("Not sent · no radio on APRS", systemImage: "exclamationmark.circle")
+                .labelStyle(.titleAndIcon).foregroundStyle(.orange)
         case .failed:
             Label("No ack · \(max(msg.attempts, 1)) tries", systemImage: "exclamationmark.triangle.fill")
                 .labelStyle(.titleAndIcon).foregroundStyle(.orange)
@@ -473,14 +502,16 @@ struct APRSMessagesView: View {
         let count = draft.count
         VStack(spacing: 2) {
             HStack {
-                TextField("Message to \(peer)", text: $draft, axis: .vertical)
+                TextField(availability.canSend ? "Message to \(peer)" : "No radio is set to APRS",
+                          text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...3)
-                    .onSubmit { send(to: peer) }
+                    .onSubmit { if availability.canSend { send(to: peer) } }
+                    .disabled(!availability.canSend)
                 Button { send(to: peer) } label: {
                     Image(systemName: "paperplane.fill")
                 }
-                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(!availability.canSend || draft.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             if count > 0 {
                 Text("\(count)/\(APRSMessage.maxTextLength) · unencrypted RF")

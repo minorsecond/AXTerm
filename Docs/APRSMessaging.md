@@ -250,6 +250,17 @@ unencrypted, and low-rate:
   a bulletin), and **queries** (`?APRSP` …) render as monospace system rows,
   not as a fake chat partner.
 - The compose bar shows a live `count/67 · unencrypted RF` caption.
+- **Nothing to send on, nothing offered.** APRS leaves only a radio on the APRS
+  channel. With none (`APRSSendAvailability`), New message, New bulletin, Who
+  can hear me? and the compose bar are disabled, a note says no radio is set to
+  APRS, and a **Switch … to APRS** button per enabled radio sets its Channel as
+  Settings › Radios does. Past conversations stay readable.
+- **A message that could not leave says so.** The service sends through
+  `transmit`, which reports whether the frame left. One that did not is *Not
+  sent · no radio on APRS* and is never retried, and a numbered message whose
+  radio left APRS while it waited for its ack stops at its next retry the same
+  way. Before, it read *Sent · awaiting ack* and retried silently (home retest,
+  2026-10-10, finding 14).
 
 The iOS shell runs the same engine (auto-reply, probe) through the shared
 wiring and now the shared screen — an iPad tab and an iPhone More-list row,

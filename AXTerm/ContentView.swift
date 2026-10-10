@@ -2004,7 +2004,10 @@ struct ContentView: View {
                 if let messaging = client.aprsMessaging {
                     APRSMessagesView(messaging: messaging, probe: client.aprsProbe,
                                      myCallsign: settings.primaryCallsign,
-                                     heardStations: aprsAddresseeSuggestions)
+                                     heardStations: aprsAddresseeSuggestions,
+                                     availability: APRSSendAvailability.of(settings.radios),
+                                     radioName: { settings.radio($0).map(RadioDetailView.title(for:)) ?? "" },
+                                     onSwitchToAPRS: { id in settings.updateRadio(id) { RadioChannel.aprs.apply(to: &$0) } })
                 } else {
                     Text("APRS messaging is unavailable without a database.")
                         .foregroundStyle(.secondary)

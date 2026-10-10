@@ -24,6 +24,7 @@ nonisolated struct APRSMessageRecord: Identifiable, Equatable, Sendable {
         case sent       // outgoing: transmitted, awaiting ack (if numbered)
         case acked      // outgoing: acknowledged by the addressee
         case failed     // outgoing: gave up after the retry budget
+        case notSent    // outgoing: could not leave (no radio on APRS); never retried
     }
 
     var id: String

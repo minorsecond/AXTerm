@@ -320,6 +320,42 @@ final class APRSMessagingServiceTests: XCTestCase {
         XCTAssertTrue(reach.direct)
     }
 
+    /// With no radio on APRS nothing leaves (`RadioChannel.aprsRadios`), and
+    /// the message used to be marked "Sent · awaiting ack" anyway and retried
+    /// silently (home retest, 2026-10-10). It is Not sent, and never retried.
+    func testAMessageThatCannotGoOutIsNotSentAndNeverRetried() throws {
+        let svc = try makeService()
+        var attempts = 0
+        svc.transmit = { _ in attempts += 1; return false }
+        svc.sendMessage(to: "WB5NNE", text: "RIP JOHN", from: "K0EPI-3", path: [], radioID: nil)
+        XCTAssertEqual(svc.messages.first?.state, .notSent)
+        XCTAssertNil(svc.messages.first?.nextRetryAt)
+        clock = t(31); svc.runRetries()
+        clock = t(400); svc.runRetries()
+        XCTAssertEqual(attempts, 1, "never tried again")
+    }
+
+    /// A message that went out and then cannot be retried (the radio was
+    /// switched to Packet while it waited for its ack) stops there.
+    func testARetryThatCannotGoOutStops() throws {
+        let svc = try makeService()
+        var allowed = true
+        svc.transmit = { _ in allowed }
+        svc.sendMessage(to: "W0ARP", text: "ping", from: "K0EPI-7", path: [], radioID: nil)
+        XCTAssertEqual(svc.messages.first?.state, .sent)
+        allowed = false
+        clock = t(31); svc.runRetries()
+        XCTAssertEqual(svc.messages.first?.state, .notSent)
+        XCTAssertNil(svc.messages.first?.nextRetryAt)
+    }
+
+    func testABulletinThatCannotGoOutIsNotSent() throws {
+        let svc = try makeService()
+        svc.transmit = { _ in false }
+        svc.sendBulletin(identifier: "0", text: "Net tonight", from: "K0EPI-3", path: [], radioID: nil)
+        XCTAssertEqual(svc.messages.first?.state, .notSent)
+    }
+
     func testRetryLadderResendsThenFails() async throws {
         let svc = try makeService()
         let rec = svc.sendMessage(to: "W0ARP", text: "ping", from: "K0EPI-7",

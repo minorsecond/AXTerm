@@ -56,6 +56,11 @@ final class APRSMessagingService: ObservableObject {
     private var effectiveAutoReply: AutoReply { autoReplyProvider?() ?? autoReply }
     /// Transmit a prepared frame. Set by the app layer.
     var send: ((APRSOutbound) -> Void)?
+
+    /// Transmit a prepared frame and say whether it left. Preferred over
+    /// `send` when set: a message that could not leave is marked Not sent
+    /// rather than Sent, and is not retried (home retest, 2026-10-10).
+    var transmit: ((APRSOutbound) -> Bool)?
     var now: () -> Date = Date.init
     /// Our APRS position info field for a `?APRSP` answer, or nil if unknown.
     var positionInfo: () -> String? = { nil }
@@ -447,15 +452,15 @@ final class APRSMessagingService: ObservableObject {
     func sendMessage(to peer: String, text: String, from localCall: String,
                      path: [String], radioID: String?, requestAck: Bool = true) -> APRSMessageRecord {
         let number = requestAck ? nextNumber() : nil
+        let left = emit(APRSOutbound(info: APRSMessage.messageInfo(to: peer, text: text, number: number),
+                                     addressee: peer, path: path, radioID: radioID))
         let rec = APRSMessageRecord(
             direction: .outgoing, kind: .message, localCall: localCall, peer: peer,
             text: text, number: number, radioID: radioID, path: path,
-            createdAt: now(), state: .sent, attempts: 1,
-            nextRetryAt: number != nil ? now().addingTimeInterval(retryDelays[0]) : nil,
+            createdAt: now(), state: left ? .sent : .notSent, attempts: 1,
+            nextRetryAt: left && number != nil ? now().addingTimeInterval(retryDelays[0]) : nil,
             isRead: true)
         persist(rec)
-        emit(APRSOutbound(info: APRSMessage.messageInfo(to: peer, text: text, number: number),
-                          addressee: peer, path: path, radioID: radioID))
         return rec
     }
 
@@ -477,24 +482,24 @@ final class APRSMessagingService: ObservableObject {
         }
         let slot = APRSBulletin.addressee(identifier: identifier, group: group)
         let body = text.trimmingCharacters(in: .whitespaces)
+        let left = emit(APRSOutbound(info: APRSBulletin.info(identifier: identifier, group: group, text: body),
+                                     addressee: slot, path: path, radioID: radioID))
         persist(APRSMessageRecord(
             direction: .outgoing, kind: .bulletin, localCall: localCall, peer: slot,
             text: body, radioID: radioID, path: path, createdAt: now(),
-            state: .sent, isRead: true))
-        emit(APRSOutbound(info: APRSBulletin.info(identifier: identifier, group: group, text: body),
-                          addressee: slot, path: path, radioID: radioID))
+            state: left ? .sent : .notSent, isRead: true))
         return nil
     }
 
     /// Send a directed query (e.g. `?APRSP`) to a station. Unnumbered.
     func sendQuery(_ query: String, to peer: String, from localCall: String,
                    path: [String], radioID: String?) {
+        let left = emit(APRSOutbound(info: APRSMessage.directedQueryInfo(to: peer, query: query),
+                                     addressee: peer, path: path, radioID: radioID))
         persist(APRSMessageRecord(
             direction: .outgoing, kind: .query, localCall: localCall, peer: peer,
             text: query, radioID: radioID, path: path, createdAt: now(),
-            state: .sent, isRead: true))
-        emit(APRSOutbound(info: APRSMessage.directedQueryInfo(to: peer, query: query),
-                          addressee: peer, path: path, radioID: radioID))
+            state: left ? .sent : .notSent, isRead: true))
     }
 
     /// Retransmit overdue messages and fail those past the ladder. Call on a
@@ -509,27 +514,40 @@ final class APRSMessagingService: ObservableObject {
                 persist(rec)
                 continue
             }
+            let left = emit(APRSOutbound(info: APRSMessage.messageInfo(to: rec.peer, text: rec.text, number: rec.number),
+                                         addressee: rec.peer, path: rec.path, radioID: rec.radioID))
+            guard left else {
+                // The radio left APRS while this waited for its ack.
+                rec.state = .notSent
+                rec.nextRetryAt = nil
+                persist(rec)
+                continue
+            }
             rec.attempts += 1
             rec.nextRetryAt = now().addingTimeInterval(retryDelays[min(rec.attempts - 1, retryDelays.count - 1)])
             persist(rec)
-            emit(APRSOutbound(info: APRSMessage.messageInfo(to: rec.peer, text: rec.text, number: rec.number),
-                              addressee: rec.peer, path: rec.path, radioID: rec.radioID))
         }
     }
 
     // MARK: - Helpers
 
     private func emitAck(to peer: String, number: String, ctx: InboundContext) {
-        emit(APRSOutbound(info: APRSMessage.ackInfo(to: peer, number: number),
+        _ = emit(APRSOutbound(info: APRSMessage.ackInfo(to: peer, number: number),
                           addressee: peer, path: ctx.replyPath, radioID: ctx.radioID))
     }
 
     private func emitMessage(to peer: String, text: String, ctx: InboundContext) {
-        emit(APRSOutbound(info: APRSMessage.messageInfo(to: peer, text: text, number: nil),
+        _ = emit(APRSOutbound(info: APRSMessage.messageInfo(to: peer, text: text, number: nil),
                           addressee: peer, path: ctx.replyPath, radioID: ctx.radioID))
     }
 
-    private func emit(_ out: APRSOutbound) { send?(out) }
+    /// Hands a frame to the transmit layer and says whether it left.
+    @discardableResult
+    private func emit(_ out: APRSOutbound) -> Bool {
+        if let transmit { return transmit(out) }
+        send?(out)
+        return true
+    }
 
     private func nextNumber() -> String {
         let n = seq
@@ -552,3 +570,29 @@ final class APRSMessagingService: ObservableObject {
         messages = (try? store.all()) ?? messages
     }
 }
+
+/// Whether the Messages screen may send. APRS leaves only a radio on the
+/// APRS channel (`RadioChannel.aprsRadios`); with none, the screen does not
+/// offer to send, says why, and offers to switch a radio over.
+nonisolated enum APRSSendAvailability: Equatable {
+    case ready
+    /// No enabled radio is on APRS. `switchable` are the enabled radios the
+    /// screen can offer to switch.
+    case noAPRSRadio(switchable: [RadioID])
+
+    static func of(_ radios: [RadioProfile]) -> APRSSendAvailability {
+        if !RadioChannel.aprsRadios(in: radios).isEmpty { return .ready }
+        return .noAPRSRadio(switchable: radios.filter { !$0.archived && $0.enabled }.map(\.id))
+    }
+
+    var canSend: Bool { self == .ready }
+
+    var note: String? {
+        switch self {
+        case .ready: return nil
+        case .noAPRSRadio:
+            return "No radio is set to APRS. APRS messages go out only on a radio in APRS mode."
+        }
+    }
+}
+
