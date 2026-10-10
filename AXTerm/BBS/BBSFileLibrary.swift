@@ -141,6 +141,8 @@ final class BBSFileLibrary: ObservableObject {
         }
         let areas = (try? store.fileAreas()) ?? []
         let descriptions = (try? store.fileDescriptions()) ?? [:]
+        let provenance = (try? store.fileProvenance()) ?? [:]
+        var scannedAreas: Set<String> = []
 
         var files: [BBSSharedFile] = []
         var errors: [String] = []
@@ -173,10 +175,21 @@ final class BBSFileLibrary: ObservableObject {
 
             do {
                 files.append(contentsOf: try scan(area: area, at: url,
-                                                  descriptions: descriptions))
+                                                  descriptions: descriptions, provenance: provenance))
+                scannedAreas.insert(area.name)
             } catch {
                 errors.append("\(area.name): \(error.localizedDescription)")
             }
+        }
+
+        // A record for a file that has gone from a folder that was read
+        // goes too, so a later file of that name is not credited to the
+        // earlier caller (finding 2).
+        let present = Set(files.map(\.id))
+        for key in provenance.keys where !present.contains(key) {
+            let parts = key.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2, scannedAreas.contains(parts[0]) else { continue }
+            try? store.forgetProvenance(area: parts[0], name: parts[1])
         }
 
         index = BBSFileIndex(areas: current, files: files)
@@ -192,7 +205,8 @@ final class BBSFileLibrary: ObservableObject {
     /// where they cannot see what they are typing.
     private func scan(area: BBSFileArea,
                       at url: URL,
-                      descriptions: [String: String]) throws -> [BBSSharedFile] {
+                      descriptions: [String: String],
+                      provenance: [String: BBSFileProvenance] = [:]) throws -> [BBSSharedFile] {
         let keys: [URLResourceKey] = [
             .isRegularFileKey, .isSymbolicLinkKey, .isHiddenKey,
             .fileSizeKey, .contentModificationDateKey
@@ -212,12 +226,14 @@ final class BBSFileLibrary: ObservableObject {
             guard size > 0, size <= maxFileBytes else { return nil }
 
             let name = entry.lastPathComponent
-            return BBSSharedFile(
+            var file = BBSSharedFile(
                 area: area.name,
                 name: name,
                 byteCount: size,
                 modifiedAt: values.contentModificationDate ?? .distantPast,
                 about: descriptions["\(area.name)/\(name)"] ?? "")
+            file.provenance = provenance["\(area.name)/\(name)"]
+            return file
         }
         .sorted { $0.name < $1.name }
     }
@@ -391,10 +407,22 @@ final class BBSFileLibrary: ObservableObject {
             return .refused(name: name, reason: "it is no longer in the upload folder")
         }
         let size = (try? source.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let sender = ((try? store?.uploadSenders()) ?? nil)?[name]
         let outcome = place(name, size: size, in: areaName) { destination in
             try FileManager.default.moveItem(at: source, to: destination)
         }
-        if case .refused = outcome {} else { try? store?.forgetUpload(name: name) }
+        switch outcome {
+        case .added(let final), .renamed(_, let final):
+            try? store?.forgetUpload(name: name)
+            // Who sent it stays with the file (finding 2).
+            if let sender {
+                try? store?.recordProvenance(area: BBSFileArea.normalize(areaName), name: final,
+                                             BBSFileProvenance(from: sender.caller, receivedAt: sender.receivedAt,
+                                                               movedFromInbox: true))
+            }
+        case .refused:
+            break
+        }
         rescan()
         return outcome
     }
@@ -402,14 +430,25 @@ final class BBSFileLibrary: ObservableObject {
     /// Writes a trusted caller's upload into an area that takes them, never
     /// over a file already there. The caller is the mailbox, which has
     /// checked the trust. Returns the name it went in under, or nil.
-    func saveTrustedUpload(name: String, data: Data, toArea area: String) -> String? {
+    func saveTrustedUpload(name: String, data: Data, toArea area: String,
+                           from caller: String? = nil, at date: Date = Date()) -> String? {
         let key = BBSFileArea.normalize(area)
         guard ((try? store?.fileAreas()) ?? []).first(where: { $0.name == key })?.acceptsTrustedUploads == true
         else { return nil }
-        let outcome = addFile(named: name, data: data, to: key)
+        // Written and recorded before the rescan that lists it.
+        let outcome = place(name, size: data.count, in: key) { destination in
+            try data.write(to: destination, options: .withoutOverwriting)
+        }
         switch outcome {
-        case .added(let final), .renamed(_, let final): return final
-        case .refused: return nil
+        case .added(let final), .renamed(_, let final):
+            if let caller {
+                try? store?.recordProvenance(area: key, name: final,
+                                             BBSFileProvenance(from: caller, receivedAt: date, movedFromInbox: false))
+            }
+            rescan()
+            return final
+        case .refused:
+            return nil
         }
     }
 

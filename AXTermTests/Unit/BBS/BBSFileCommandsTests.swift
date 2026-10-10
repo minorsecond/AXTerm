@@ -42,6 +42,17 @@ final class BBSFileCommandsTests: XCTestCase {
 
     // MARK: - Browsing
 
+    /// Who uploaded a file is for the operator; callers listing the area
+    /// never see it (retest 2026-10-10, finding 2).
+    func testTheListingNeverNamesWhoUploadedAFile() {
+        var sut = shell()
+        var f = file("photo.jpg", area: "PARK")
+        f.provenance = BBSFileProvenance(from: "W0ARP-1", receivedAt: t(0), movedFromInbox: true)
+        let out = sut.handle(line: "W PARK", mailbox: mailbox([f]), now: t(10)).lines.joined(separator: "\n")
+        XCTAssertTrue(out.contains("photo.jpg"), out)
+        XCTAssertFalse(out.contains("W0ARP"), out)
+    }
+
     func testNoFilesSaysSo() {
         var sut = shell()
         XCTAssertEqual(sut.handle(line: "F", mailbox: .init(), now: t(0)).lines,

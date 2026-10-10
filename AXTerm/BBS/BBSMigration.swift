@@ -119,6 +119,20 @@ extension DatabaseManager {
         }
     }
 
+    /// Who uploaded a file in a shared area, and when (migration v41, retest
+    /// finding 2): an upload moved in from the inbox, or a trusted caller's
+    /// upload straight into the area. Keyed by area and file name.
+    nonisolated static func createBBSFileProvenance(_ db: Database) throws {
+        try db.create(table: "bbs_file_provenance") { t in
+            t.column("area", .text).notNull()
+            t.column("name", .text).notNull()
+            t.column("caller", .text).notNull()
+            t.column("receivedAt", .datetime).notNull()
+            t.column("movedFromInbox", .boolean).notNull().defaults(to: false)
+            t.primaryKey(["area", "name"])
+        }
+    }
+
     /// Withdraws the address/phone/email fields (migration v22).
     ///
     /// Those three were briefly collectable and should not have been: packet

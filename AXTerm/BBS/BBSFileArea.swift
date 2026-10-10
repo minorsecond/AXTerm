@@ -54,6 +54,9 @@ nonisolated struct BBSSharedFile: Equatable, Sendable, Identifiable {
     /// The operator's one-line description. A filename alone tells a caller
     /// nothing, and on a link this slow they cannot afford to download one to
     /// find out what it is.
+    /// Who uploaded it, for a file that came from a caller; nil for the
+    /// operator's own.
+    var provenance: BBSFileProvenance?
     var about: String
 
     var id: String { "\(area)/\(name)" }
@@ -182,6 +185,23 @@ nonisolated struct BBSFileIndex: Equatable, Sendable {
             return minutes == 0 ? "\(hours)h" : "\(hours)h\(minutes)m"
         default: return ">1d"
         }
+    }
+}
+
+/// Who uploaded a file in an area, and when (retest 2026-10-10, finding 2).
+/// For the operator: callers listing the area never see it.
+nonisolated struct BBSFileProvenance: Equatable, Sendable {
+    var from: String
+    var receivedAt: Date
+    /// Moved in from the upload inbox, rather than uploaded straight into
+    /// the area by a trusted caller.
+    var movedFromInbox: Bool
+
+    /// "Uploaded by K0EPI-3, Oct 10, 2026 at 3:55 PM, moved from docs"
+    func help(inbox: String) -> String {
+        var text = "Uploaded by \(from), \(receivedAt.formatted(date: .abbreviated, time: .shortened))"
+        if movedFromInbox { text += ", moved from \(inbox)" }
+        return text
     }
 }
 

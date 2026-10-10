@@ -152,4 +152,66 @@ final class BBSUploadsTests: XCTestCase {
                                                    area: "PARK"),
                        "big.bin was not moved: it is over the 2 MB limit.")
     }
+
+    // MARK: Who sent a file in an area (retest 2026-10-10, finding 2)
+
+    /// Moving an upload into an area keeps who sent it and when, for the
+    /// operator. Move to Area used to forget both.
+    func testAMovedUploadKeepsWhoSentIt() throws {
+        library.addArea(name: "PARK", about: "", url: park)
+        library.setInbox(url: inbox)
+        library.saveUpload(name: "Photo.jpg", data: Data(count: 300), from: "K0EPI-3", at: arrived)
+        library.moveUpload(named: "Photo.jpg", toArea: "PARK")
+
+        let file = try XCTUnwrap(library.index.files(in: "PARK").first { $0.name == "Photo.jpg" })
+        XCTAssertEqual(file.provenance, BBSFileProvenance(from: "K0EPI-3", receivedAt: arrived, movedFromInbox: true))
+
+        relaunched = makeLibrary()
+        relaunched.rescan()
+        XCTAssertEqual(relaunched.index.files(in: "PARK").first?.provenance?.from, "K0EPI-3", "kept across a relaunch")
+    }
+
+    func testARenamedMoveKeepsItUnderTheNewName() throws {
+        try Data("the old one".utf8).write(to: park.appendingPathComponent("Photo.jpg"))
+        library.addArea(name: "PARK", about: "", url: park)
+        library.setInbox(url: inbox)
+        library.saveUpload(name: "Photo.jpg", data: Data(count: 300), from: "K0EPI-3", at: arrived)
+        library.moveUpload(named: "Photo.jpg", toArea: "PARK")
+
+        let files = library.index.files(in: "PARK")
+        XCTAssertNil(files.first { $0.name == "Photo.jpg" }?.provenance, "the operator's own file")
+        XCTAssertEqual(files.first { $0.name == "Photo-2.jpg" }?.provenance?.from, "K0EPI-3")
+    }
+
+    /// A trusted caller's upload straight into an area records it too.
+    func testATrustedUploadRecordsWhoSentIt() throws {
+        library.addArea(name: "PARK", about: "", url: park)
+        library.setAcceptsTrustedUploads(true, area: "PARK")
+        library.saveTrustedUpload(name: "net.txt", data: Data(count: 40), toArea: "PARK", from: "K0EPI-3", at: arrived)
+        XCTAssertEqual(library.index.files(in: "PARK").first?.provenance,
+                       BBSFileProvenance(from: "K0EPI-3", receivedAt: arrived, movedFromInbox: false))
+    }
+
+    /// A file that went away takes its record with it, so a later file of
+    /// the same name is not credited to the earlier caller.
+    func testAFileThatGoesTakesItsRecordWithIt() throws {
+        library.addArea(name: "PARK", about: "", url: park)
+        library.setInbox(url: inbox)
+        library.saveUpload(name: "Photo.jpg", data: Data(count: 300), from: "K0EPI-3", at: arrived)
+        library.moveUpload(named: "Photo.jpg", toArea: "PARK")
+        try FileManager.default.removeItem(at: park.appendingPathComponent("Photo.jpg"))
+        library.rescan()
+        try Data(count: 10).write(to: park.appendingPathComponent("Photo.jpg"))
+        library.rescan()
+        XCTAssertNil(library.index.files(in: "PARK").first?.provenance)
+    }
+
+    /// The words on the area table's From column, for its tooltip.
+    func testTheProvenanceSaysWhereItCameFrom() {
+        let moved = BBSFileProvenance(from: "K0EPI-3", receivedAt: arrived, movedFromInbox: true)
+        XCTAssertTrue(moved.help(inbox: "docs").hasPrefix("Uploaded by K0EPI-3, "))
+        XCTAssertTrue(moved.help(inbox: "docs").hasSuffix(", moved from docs"))
+        let direct = BBSFileProvenance(from: "K0EPI-3", receivedAt: arrived, movedFromInbox: false)
+        XCTAssertFalse(direct.help(inbox: "docs").contains("moved"))
+    }
 }

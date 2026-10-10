@@ -1360,7 +1360,7 @@ final class BBSService: ObservableObject {
     /// Into the area a trusted caller chose, or the inbox with who sent it.
     private func saveUpload(_ name: String, _ data: Data, area: String?) -> String? {
         guard let library else { return nil }
-        if let area { return library.saveTrustedUpload(name: name, data: data, toArea: area) }
+        if let area { return library.saveTrustedUpload(name: name, data: data, toArea: area, from: live?.callsign) }
         return library.saveUpload(name: name, data: data, from: live?.callsign)
     }
 

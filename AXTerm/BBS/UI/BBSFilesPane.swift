@@ -487,6 +487,18 @@ struct BBSFilesPane: View {
                         .help(file.modifiedAt.formatted(date: .complete, time: .shortened))
                 }
                 .width(min: 90, ideal: 100)
+                // Who uploaded it, for a file that came from a caller; never
+                // shown to callers (finding 2).
+                TableColumn("From") { file in
+                    if let provenance = file.provenance {
+                        Text(provenance.from)
+                            .font(.system(.body, design: .monospaced))
+                            .help(provenance.help(inbox: library.inboxName ?? "the inbox"))
+                    } else {
+                        Text("—").foregroundStyle(.tertiary)
+                    }
+                }
+                .width(min: 70, ideal: 90)
                 TableColumn("Description") { file in
                     Text(file.about.isEmpty ? "—" : file.about)
                         .foregroundStyle(file.about.isEmpty ? .tertiary : .primary)

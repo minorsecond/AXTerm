@@ -841,7 +841,17 @@ areas gained a Modified column at the same time. An upload on its way in
 waits at the top of Received with a progress bar until it is saved
 (`BBSFileLibrary.arriving`), and an AXDP upload shows in the live call panel
 the way a YAPP transfer does: file, caller, bytes, protocol and elapsed time
-(retest 2026-10-10, finding 1). Before this the window
+(retest 2026-10-10, finding 1).
+
+**Who uploaded a shared file.** Moving an upload into an area keeps who sent
+it and when, and a trusted caller's upload straight into an area records the
+same (`bbs_file_provenance`, migration v41, keyed by area and file name). The
+area's table has a From column, with "Uploaded by K0EPI-3, Oct 10, 2026 at
+3:55 PM, moved from docs" on hover; the operator's own files show a dash.
+Callers listing the area with `W` never see it. A record goes when its file
+goes from a folder that was read, so a later file of the same name is not
+credited to the earlier caller. Before this, Move to Area forgot both
+(retest 2026-10-10, finding 2). Before this the window
 showed only "docs · 2 files", and the iPad's photo at the home retest
 (2026-10-10, finding 8) took Finder to find. `BBSUploadsTests` covers it.
 

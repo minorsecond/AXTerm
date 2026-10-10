@@ -549,6 +549,13 @@ struct BBSFileListScreen: View {
                         .font(.caption)
                         .foregroundStyle(model.about.isEmpty ? .tertiary : .secondary)
                         .lineLimit(2)
+                    // Who uploaded it, for the operator (finding 2).
+                    if let provenance = file.provenance {
+                        Text(provenance.help(inbox: library.inboxName ?? "the inbox"))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                    }
                 }
 
                 Spacer(minLength: 8)

@@ -100,6 +100,11 @@ nonisolated protocol BBSMessageStore: Sendable {
     func recordUpload(name: String, caller: String, at date: Date) throws
     func forgetUpload(name: String) throws
 
+    /// Who uploaded each file in the shared areas, keyed `AREA/name`.
+    func fileProvenance() throws -> [String: BBSFileProvenance]
+    func recordProvenance(area: String, name: String, _ provenance: BBSFileProvenance) throws
+    func forgetProvenance(area: String, name: String) throws
+
     @discardableResult
     func beginCall(callsign: String, at date: Date, radio: RadioID) throws -> Int64
     func appendAction(callId: Int64, action: String) throws
@@ -330,6 +335,7 @@ nonisolated final class SQLiteBBSMessageStore: BBSMessageStore, @unchecked Senda
             // stale text if the operator later shares a folder of the same name.
             try db.execute(sql: "DELETE FROM bbs_file_descriptions WHERE area = ?",
                            arguments: [key])
+            try db.execute(sql: "DELETE FROM bbs_file_provenance WHERE area = ?", arguments: [key])
         }
     }
 
@@ -401,6 +407,35 @@ nonisolated final class SQLiteBBSMessageStore: BBSMessageStore, @unchecked Senda
     func forgetUpload(name: String) throws {
         try dbQueue.write { db in
             try db.execute(sql: "DELETE FROM bbs_uploads WHERE name = ?", arguments: [name])
+        }
+    }
+
+    func fileProvenance() throws -> [String: BBSFileProvenance] {
+        try dbQueue.read { db in
+            var result: [String: BBSFileProvenance] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT * FROM bbs_file_provenance") {
+                let area: String = row["area"]
+                let name: String = row["name"]
+                result["\(area)/\(name)"] = BBSFileProvenance(from: row["caller"], receivedAt: row["receivedAt"],
+                                                              movedFromInbox: row["movedFromInbox"])
+            }
+            return result
+        }
+    }
+
+    func recordProvenance(area: String, name: String, _ provenance: BBSFileProvenance) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "INSERT INTO bbs_file_provenance (area, name, caller, receivedAt, movedFromInbox) VALUES (?, ?, ?, ?, ?)"
+                   + " ON CONFLICT(area, name) DO UPDATE SET caller = excluded.caller,"
+                   + " receivedAt = excluded.receivedAt, movedFromInbox = excluded.movedFromInbox",
+                arguments: [area, name, provenance.from, provenance.receivedAt, provenance.movedFromInbox])
+        }
+    }
+
+    func forgetProvenance(area: String, name: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM bbs_file_provenance WHERE area = ? AND name = ?", arguments: [area, name])
         }
     }
 
