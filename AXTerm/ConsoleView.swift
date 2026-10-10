@@ -382,6 +382,8 @@ struct ConsoleView: View {
     /// Beacons that repeat the same station's last one word for word.
     @State private var beaconRepeats: [UUID: BeaconRepeat] = [:]
     @State private var beaconRepeatIndex = BeaconRepeatIndex()
+    /// Each row's built text and links, so scrolling does not rebuild them.
+    @State private var textCache = ConsoleTextCache()
     /// The newest line's time when the reader scrolled away from the bottom.
     /// Nil while following.
     @State private var unseenSince: Date?
@@ -448,6 +450,7 @@ struct ConsoleView: View {
         if tags != radioTags { radioTags = tags }
         let repeats = showsRawAPRS ? [:] : beaconRepeatIndex.repeats(in: groups)
         if repeats != beaconRepeats { beaconRepeats = repeats }
+        textCache.prune(keeping: Set(groups.map(\.id)))
         updateUnseen()
         // Any change to the visible line set can leave the ScrollView holding an
         // offset that no longer matches the content — most visibly when the
@@ -585,7 +588,8 @@ struct ConsoleView: View {
                                                              distanceInMiles: distanceInMiles,
                                                              showsRawAPRS: showsRawAPRS,
                                                              heardCallsigns: heardCallsigns,
-                                                             telemetryDefinitions: telemetryDefinitions)
+                                                             telemetryDefinitions: telemetryDefinitions,
+                                                             textCache: textCache)
                                             .id(group.id)
                                     }
                                 }
@@ -605,7 +609,8 @@ struct ConsoleView: View {
                                                              distanceInMiles: distanceInMiles,
                                                              showsRawAPRS: showsRawAPRS,
                                                              heardCallsigns: heardCallsigns,
-                                                             telemetryDefinitions: telemetryDefinitions)
+                                                             telemetryDefinitions: telemetryDefinitions,
+                                                             textCache: textCache)
                                         .id(group.id)
                                 }
                             }
@@ -1049,6 +1054,7 @@ struct ConsoleLineGroupView: View {
     var showsRawAPRS: Bool = false
     var heardCallsigns: Set<String> = []
     var telemetryDefinitions: [String: APRSTelemetry.Definition] = [:]
+    var textCache: ConsoleTextCache?
     @State private var isExpanded = false
 
     var body: some View {
@@ -1072,7 +1078,8 @@ struct ConsoleLineGroupView: View {
                 distanceInMiles: distanceInMiles,
                 showsRawAPRS: showsRawAPRS,
                 heardCallsigns: heardCallsigns,
-                telemetryDefinitions: telemetryDefinitions
+                telemetryDefinitions: telemetryDefinitions,
+                textCache: textCache
             )
 
             // Expanded duplicates (if any and expanded)
@@ -1204,6 +1211,8 @@ struct ConsoleLineView: View {
     /// Telemetry definitions by callsign, so a `T#` frame can be read as
     /// named channels instead of five counts and eight bits.
     var telemetryDefinitions: [String: APRSTelemetry.Definition] = [:]
+    /// Keeps this row's built text between renders. Nil builds it each time.
+    var textCache: ConsoleTextCache?
 
     private let callsignSaturation: Double = 0.35
     private let callsignBrightness: Double = 0.75
@@ -1495,10 +1504,7 @@ struct ConsoleLineView: View {
                     .foregroundStyle(.secondary)
                     .help(APRSSymbolGlyph.label(table: symbol.table, code: symbol.code))
             }
-            messageText(APRSDigestLine.text(for: digest, observer: observer,
-                                            inMiles: distanceInMiles,
-                                            definition: telemetryDefinition,
-                                            coordinates: .whenNoDistance))
+            messageText(digestText(digest))
                 .help(rawHelp)
         } else {
             messageText(line.text)
@@ -1516,10 +1522,9 @@ struct ConsoleLineView: View {
     @ViewBuilder
     private func messageText(_ text: String) -> some View {
         // One scan feeds both the underlined text and the cursor overlay.
-        let targets = linkTargets(in: text)
-        let links = targets.map(\.range)
-        let mentions = isDecodedAPRS ? ConsoleAPRSPresentation.callsignRanges(in: text, bases: mineBases) : []
-        Text(attributed(text, targets: targets, mentions: mentions))
+        let rendered = renderedMessage(text)
+        let links = rendered.links
+        Text(rendered.attributed)
             .foregroundStyle(messageColor)
             .textSelection(.enabled)
             .lineLimit(nil)
@@ -1537,6 +1542,54 @@ struct ConsoleLineView: View {
                 }
             }
             #endif
+    }
+
+    /// The decoded sentence, built once per row until something it uses
+    /// changes: where we are, the units, the sender's telemetry definition.
+    private func digestText(_ digest: APRSDigest) -> String {
+        let definition = telemetryDefinition
+        var hasher = Hasher()
+        hasher.combine(observer?.latitude)
+        hasher.combine(observer?.longitude)
+        hasher.combine(distanceInMiles)
+        hasher.combine(definition.map { String(describing: $0) })
+        let build = {
+            APRSDigestLine.text(for: digest, observer: observer, inMiles: distanceInMiles,
+                                definition: definition, coordinates: .whenNoDistance)
+        }
+        guard let textCache else { return build() }
+        return textCache.value(line: line.id, version: hasher.finalize(), build: build)
+    }
+
+    /// The message with its links and highlighted callsigns, and where the
+    /// links are for the cursor overlay.
+    struct RenderedMessage {
+        let attributed: AttributedString
+        let links: [Range<String.Index>]
+    }
+
+    private func renderedMessage(_ text: String) -> RenderedMessage {
+        let build = { () -> RenderedMessage in
+            let targets = linkTargets(in: text)
+            let mentions = isDecodedAPRS
+                ? ConsoleAPRSPresentation.callsignRanges(in: text, bases: mineBases) : []
+            return RenderedMessage(attributed: attributed(text, targets: targets, mentions: mentions),
+                                   links: targets.map(\.range))
+        }
+        guard let textCache else { return build() }
+        // Everything that can change which words are links: the text, the
+        // stations heard (the scanner's strongest evidence), the file names
+        // seen, whether taps are wanted, our own calls, and the color the
+        // message is drawn in.
+        var hasher = Hasher()
+        hasher.combine(text)
+        hasher.combine(heardCallsigns.count)
+        hasher.combine(onIdentity != nil)
+        hasher.combine(linksFileNames)
+        hasher.combine(knownFileNames.count)
+        hasher.combine(isDecodedAPRS)
+        hasher.combine(mineBases.sorted())
+        return textCache.value(line: line.id, version: hasher.finalize(), build: build)
     }
 
     /// The sending station's telemetry definition, if it has sent one.

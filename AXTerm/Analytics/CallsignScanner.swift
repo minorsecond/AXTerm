@@ -181,11 +181,12 @@ nonisolated enum CallsignScanner {
     /// `@` that makes it an address is also the one that means "addressed to"
     /// in an APRS message, so the two have to be told apart here.
     static func excludedRanges(in text: String) -> [Range<String.Index>] {
+        // Every pattern needs one of these, and most lines have none, so the
+        // regexes do not run at all on them.
+        guard text.contains("@") || text.contains("://") || text.localizedCaseInsensitiveContains("www.")
+        else { return [] }
         var ranges: [Range<String.Index>] = []
-        for pattern in [#"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#,
-                        #"[a-zA-Z][a-zA-Z0-9+.-]*://\S+"#,
-                        #"\bwww\.\S+"#] {
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+        for regex in addressPatterns {
             let full = NSRange(text.startIndex..., in: text)
             for match in regex.matches(in: text, range: full) {
                 if let r = Range(match.range, in: text) { ranges.append(r) }
@@ -193,6 +194,14 @@ nonisolated enum CallsignScanner {
         }
         return ranges
     }
+
+    /// Compiled once. They were compiled on every call, and the console calls
+    /// this for every visible row on every render.
+    private nonisolated(unsafe) static let addressPatterns: [NSRegularExpression] = [
+        #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#,
+        #"[a-zA-Z][a-zA-Z0-9+.-]*://\S+"#,
+        #"\bwww\.\S+"#,
+    ].compactMap { try? NSRegularExpression(pattern: $0) }
 
     private static func isTokenStart(_ text: String, at index: String.Index) -> Bool {
         let c = text[index]

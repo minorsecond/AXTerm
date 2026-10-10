@@ -13,16 +13,40 @@ struct ConsoleRowLayout: Layout {
     /// Between the header row and a message placed under it.
     var rowGap: CGFloat = 2
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrange(width: proposal.width, subviews: subviews).size
+    /// Arrangements by proposed width. SwiftUI asks a row for its size several
+    /// times a frame, and each answer measured the row's text again; while
+    /// scrolling that was the largest single cost in the console. Cleared
+    /// whenever the row's content changes (`updateCache`).
+    struct Cache {
+        var byWidth: [CGFloat: (size: CGSize, frames: [CGRect])] = [:]
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let arrangement = arrange(width: bounds.width, subviews: subviews)
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache = Cache()
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        cached(width: proposal.width, subviews: subviews, cache: &cache).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let arrangement = cached(width: bounds.width, subviews: subviews, cache: &cache)
         for (subview, frame) in zip(subviews, arrangement.frames) {
             subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
                           proposal: ProposedViewSize(width: frame.width, height: frame.height))
         }
+    }
+
+    private func cached(width: CGFloat?, subviews: Subviews,
+                        cache: inout Cache) -> (size: CGSize, frames: [CGRect]) {
+        // -1 stands for "no proposal": a width is never negative.
+        let key = width ?? -1
+        if let hit = cache.byWidth[key] { return hit }
+        let arrangement = arrange(width: width, subviews: subviews)
+        cache.byWidth[key] = arrangement
+        return arrangement
     }
 
     private func arrange(width proposed: CGFloat?, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {

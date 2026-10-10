@@ -44,6 +44,10 @@ struct CallsignCursorOverlay: NSViewRepresentable {
         private var text = ""
         private var ranges: [Range<String.Index>] = []
         private var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        /// The link rects for one width. AppKit asks for cursor rects again
+        /// every time the view scrolls, and laying the text out each time was
+        /// a steady cost while scrolling the console.
+        private var cachedRects: (width: CGFloat, rects: [NSRect])?
 
         /// Top-left origin, to match how the text is laid out.
         override var isFlipped: Bool { true }
@@ -57,6 +61,7 @@ struct CallsignCursorOverlay: NSViewRepresentable {
             self.text = text
             self.ranges = ranges
             self.font = font
+            cachedRects = nil
             window?.invalidateCursorRects(for: self)
         }
 
@@ -69,7 +74,14 @@ struct CallsignCursorOverlay: NSViewRepresentable {
         override func resetCursorRects() {
             super.resetCursorRects()
             guard !ranges.isEmpty else { return }
-            for rect in TextLinkGeometry.rects(for: ranges, in: text, font: font, width: bounds.width) {
+            let rects: [NSRect]
+            if let cachedRects, cachedRects.width == bounds.width {
+                rects = cachedRects.rects
+            } else {
+                rects = TextLinkGeometry.rects(for: ranges, in: text, font: font, width: bounds.width)
+                cachedRects = (bounds.width, rects)
+            }
+            for rect in rects {
                 addCursorRect(rect.intersection(bounds), cursor: .pointingHand)
             }
         }
