@@ -88,10 +88,12 @@ final class SettingsHomeTests: XCTestCase {
             (AppSettingsStore.allowedFileTransferCallsignsKey, .fileTransfer),
             (AppSettingsStore.deniedFileTransferCallsignsKey, .fileTransfer),
         ]
+        // For a packet radio: the digipeater has a home on each channel's
+        // page now (testTheDigipeaterHasAHomeOnEachChannel).
         for (setting, expected) in moved {
-            XCTAssertEqual(SettingsHome.section(of: setting), expected, setting)
+            XCTAssertEqual(SettingsHome.section(of: setting, channel: .packet), expected, setting)
         }
-        let homes = Set(moved.compactMap { SettingsHome.section(of: $0.0)?.tab })
+        let homes = Set(moved.compactMap { SettingsHome.section(of: $0.0, channel: .packet)?.tab })
         XCTAssertEqual(homes, [.packetNode], "the Transmission page's controls went to Packet Node")
         // Its beacon pointer: the beacon is a packet radio's ID beacon there.
         XCTAssertEqual(SettingsHome.section(of: "radio.beacon.enabled", channel: .packet), .packetRadios)
@@ -115,7 +117,7 @@ final class SettingsHomeTests: XCTestCase {
             XCTAssertEqual(SettingsHome.section(of: setting), .aprsRadios, setting)
         }
         for setting in ["radio.announcesNode", "radio.netRomAlias", "radio.pings",
-                        "radio.answersMailbox", "radio.digi.enabled", "radio.digi.aliases",
+                        "radio.answersMailbox",
                         "radio.beacon.text", "radio.beacon.path"] {
             XCTAssertEqual(SettingsHome.section(of: setting), .packetRadios, setting)
         }
@@ -132,7 +134,7 @@ final class SettingsHomeTests: XCTestCase {
     /// home on each service page and are kept out of the one-home list.
     func testTheBeaconSwitchAndIntervalHaveAHomePerChannel() {
         XCTAssertEqual(Set(SettingsHome.byChannel.map(\.setting)),
-                       ["radio.beacon.enabled", "radio.beacon.intervalMinutes"])
+                       Set(["radio.beacon.enabled", "radio.beacon.intervalMinutes"]).union(Self.digiSettings))
         for entry in SettingsHome.byChannel {
             XCTAssertNil(SettingsHome.section(of: entry.setting),
                          "\(entry.setting) has no single home, so it is not in entries")
@@ -167,5 +169,22 @@ final class SettingsHomeTests: XCTestCase {
         XCTAssertFalse(SettingsTab.sidebarOrder.map(\.settingsTitle).contains("Transmission"))
         XCTAssertTrue(SettingsTab.sidebarOrder.contains(.packetNode))
         XCTAssertEqual(SettingsTab.packetNode.settingsTitle, "Packet Node")
+    }
+
+    private static let digiSettings: Set<String> = [
+        "radio.digi.enabled", "radio.digi.fillIn", "radio.digi.wideAreaMaxHops",
+        "radio.digi.aliases", "radio.digi.dupeSeconds",
+    ]
+
+    /// A radio's digipeater is set where the radio works: WIDEn-N fill-in
+    /// on the APRS page for an APRS radio, by call or alias on the Packet
+    /// Node page for a packet radio. It was on Packet Node only, so an APRS
+    /// radio had nowhere to switch it on (operator, 2026-10-09).
+    func testTheDigipeaterHasAHomeOnEachChannel() {
+        for setting in Self.digiSettings {
+            XCTAssertEqual(SettingsHome.section(of: setting, channel: .aprs), .aprsRadios, setting)
+            XCTAssertEqual(SettingsHome.section(of: setting, channel: .packet), .packetRadios, setting)
+            XCTAssertNil(SettingsHome.section(of: setting), "\(setting) has a home per channel")
+        }
     }
 }

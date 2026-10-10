@@ -112,6 +112,7 @@ struct RadioAPRSSections: View {
                  + "your messages. The beacon uses the station position from General unless this "
                  + "radio has a fixed one.")
         }
+        RadioDigipeaterSection(radioID: radioID, settings: settings, channel: .aprs)
     }
 
     @ViewBuilder
@@ -297,40 +298,7 @@ struct RadioPacketSections: View {
     }
 
     private var digipeaterSection: some View {
-        Section {
-            Toggle("Digipeat on this radio", isOn: bind.digi(\.enabled))
-                .help("Retransmit frames whose via path names this station or an alias below, "
-                      + "or a WIDEn-N this digipeater honors. Off by default: it volunteers "
-                      + "your transmitter for other people's traffic.")
-            if bind.digi(\.enabled).wrappedValue {
-                Toggle("Fill-in (WIDE1-1)", isOn: bind.digi(\.fillIn))
-                    .help("Repeat the first WIDE1-1 hop, as a home fill-in digipeater does.")
-                Stepper(bind.digi(\.wideAreaMaxHops).wrappedValue == 0
-                        ? "Wide-area: off"
-                        : "Wide-area hops: \(bind.digi(\.wideAreaMaxHops).wrappedValue)",
-                        value: bind.digi(\.wideAreaMaxHops), in: 0...7)
-                    .help("The largest WIDEn-N this digipeater still repeats. 0 turns wide-area "
-                          + "repeating off; 2 is a responsible default that does not "
-                          + "regenerate WIDE7-7 floods.")
-                LabeledContent("Also answer to") {
-                    TextField("Also answer to", text: bind.digiAliases,
-                              prompt: Text("aliases (comma-separated)"))
-                        .callsignInput(bind.digiAliases)
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
-                }
-                .help("Other names this digipeater repeats for, such as a club alias. Its "
-                      + "own callsign is always included.")
-                Stepper("Dupe window: \(bind.digi(\.dupeSeconds).wrappedValue) s",
-                        value: bind.digi(\.dupeSeconds), in: 5...120, step: 5)
-                    .help("A frame heard again within this many seconds is not repeated, so "
-                          + "the digipeater never loops or echoes.")
-            }
-        } header: {
-            Text("\(title) digipeater")
-        } footer: {
-            Text("Repeats other stations' traffic on this radio's channel only.")
-        }
+        RadioDigipeaterSection(radioID: radioID, settings: settings, channel: .packet)
     }
 
     private var beaconSection: some View {
@@ -738,5 +706,61 @@ nonisolated enum RadioServiceNotes {
                 + "Node and Ping sections on this page."
         }
         return text
+    }
+}
+
+/// A radio's digipeater: on the APRS page for an APRS radio (WIDEn-N
+/// fill-in and wide-area), on the Packet Node page for a packet radio (by
+/// call or alias). One stored config per radio, shown where it works.
+struct RadioDigipeaterSection: View {
+    let radioID: RadioID
+    @ObservedObject var settings: AppSettingsStore
+    let channel: RadioChannel
+
+    private var title: String {
+        RadioDetailView.title(for: settings.radio(radioID) ?? RadioProfile(id: radioID, name: ""))
+    }
+
+    private var bind: RadioRoleBindings { RadioRoleBindings(radioID: radioID, settings: settings) }
+
+    var body: some View {
+        Section {
+            Toggle("Digipeat on this radio", isOn: bind.digi(\.enabled))
+                .help("Retransmit frames whose via path names this station or an alias below, "
+                      + "or a WIDEn-N this digipeater honors. Off by default: it volunteers "
+                      + "your transmitter for other people's traffic.")
+            if bind.digi(\.enabled).wrappedValue {
+                Toggle("Fill-in (WIDE1-1)", isOn: bind.digi(\.fillIn))
+                    .help("Repeat the first WIDE1-1 hop, as a home fill-in digipeater does.")
+                Stepper(bind.digi(\.wideAreaMaxHops).wrappedValue == 0
+                        ? "Wide-area: off"
+                        : "Wide-area hops: \(bind.digi(\.wideAreaMaxHops).wrappedValue)",
+                        value: bind.digi(\.wideAreaMaxHops), in: 0...7)
+                    .help("The largest WIDEn-N this digipeater still repeats. 0 turns wide-area "
+                          + "repeating off; 2 is a responsible default that does not "
+                          + "regenerate WIDE7-7 floods.")
+                LabeledContent("Also answer to") {
+                    TextField("Also answer to", text: bind.digiAliases,
+                              prompt: Text("aliases (comma-separated)"))
+                        .callsignInput(bind.digiAliases)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
+                }
+                .help("Other names this digipeater repeats for, such as a club alias. Its "
+                      + "own callsign is always included.")
+                Stepper("Dupe window: \(bind.digi(\.dupeSeconds).wrappedValue) s",
+                        value: bind.digi(\.dupeSeconds), in: 5...120, step: 5)
+                    .help("A frame heard again within this many seconds is not repeated, so "
+                          + "the digipeater never loops or echoes.")
+            }
+        } header: {
+            Text("\(title) \(channel == .aprs ? "APRS digipeater" : "digipeater")")
+        } footer: {
+            Text(channel == .aprs
+                 ? "Repeats other stations' APRS packets on this radio's channel. Fill-in answers WIDE1-1 "
+                   + "the way a home digipeater does; wide-area also answers WIDE2-N and up to the hops set. "
+                   + "Each packet is repeated once, whatever path it arrives by."
+                 : "Repeats other stations' traffic on this radio's channel only.")
+        }
     }
 }

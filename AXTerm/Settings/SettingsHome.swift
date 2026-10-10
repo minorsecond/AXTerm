@@ -104,6 +104,12 @@ enum SettingsHome {
     static let byChannel: [ChannelEntry] = [
         ChannelEntry(setting: "radio.beacon.enabled", aprs: .aprsRadios, packet: .packetRadios),
         ChannelEntry(setting: "radio.beacon.intervalMinutes", aprs: .aprsRadios, packet: .packetRadios),
+        // The digipeater: WIDEn-N on the APRS page, by call on Packet Node.
+        ChannelEntry(setting: "radio.digi.enabled", aprs: .aprsRadios, packet: .packetRadios),
+        ChannelEntry(setting: "radio.digi.fillIn", aprs: .aprsRadios, packet: .packetRadios),
+        ChannelEntry(setting: "radio.digi.wideAreaMaxHops", aprs: .aprsRadios, packet: .packetRadios),
+        ChannelEntry(setting: "radio.digi.aliases", aprs: .aprsRadios, packet: .packetRadios),
+        ChannelEntry(setting: "radio.digi.dupeSeconds", aprs: .aprsRadios, packet: .packetRadios),
     ]
 
     /// Where a setting is for a radio on `channel`: its one home, or the
@@ -180,11 +186,6 @@ enum SettingsHome {
         Entry(setting: "radio.netRomAlias", section: .packetRadios),
         Entry(setting: "radio.pings", section: .packetRadios),
         Entry(setting: "radio.answersMailbox", section: .packetRadios),
-        Entry(setting: "radio.digi.enabled", section: .packetRadios),
-        Entry(setting: "radio.digi.fillIn", section: .packetRadios),
-        Entry(setting: "radio.digi.wideAreaMaxHops", section: .packetRadios),
-        Entry(setting: "radio.digi.aliases", section: .packetRadios),
-        Entry(setting: "radio.digi.dupeSeconds", section: .packetRadios),
         Entry(setting: "radio.beacon.text", section: .packetRadios),
         Entry(setting: "radio.beacon.path", section: .packetRadios),
         Entry(setting: AppSettingsStore.pingEnabledKey, section: .ping),
