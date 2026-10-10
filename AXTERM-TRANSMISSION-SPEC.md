@@ -488,6 +488,10 @@ Handshake flow
 	•	its own Capabilities
 	•	and optionally a selected configuration (e.g., chosen compression algo)
 
+Answering the text probe. On a connected session the caller asks with the plain-text `AXDP?` probe, a UI frame, so software that is not AXTerm never sees binary. The answering station replies with a PING carrying its Capabilities, and the caller answers that with a PONG carrying its own: three frames, and each side knows the other's capabilities. A PING also ends the caller's own check for that station.
+
+Decision (2026-10-10, home retest finding 6): the answer to the probe was a PONG, after which the caller sent a PING of its own so the answering station learned its capabilities too, and the answering station answered that with a PONG. Four frames, and the operator saw "probe, PONG, PING" in the terminal. Both directions stay compatible. An older caller handles the PING like any PING: it stores the capabilities, counts the station confirmed, answers with a PONG and drops its check at the next pass. A newer caller still finishes the four-frame exchange with an older station that answers the probe with a PONG. `CapabilityExchangeFramesTests` covers it.
+
 Caching
 Maintain a per-peer cache keyed by:
 	•	(destination callsign+ssid, path signature, transport kind) where transport kind is:

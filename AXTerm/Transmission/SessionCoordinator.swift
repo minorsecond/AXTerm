@@ -491,7 +491,8 @@ final class SessionCoordinator: ObservableObject {
     /// Plain ASCII text probe for safe AXDP capability discovery, sent as a UI frame.
     /// UI frames are connectionless and not fed into the connected-mode application layer,
     /// so legacy BBS/nodes never see this text — no "Invalid command" and no transcript noise.
-    /// AXTerm peers detect the probe in their UI frame handler and respond with AXDP PONG.
+    /// AXTerm peers detect the probe in their UI frame handler and answer with an AXDP
+    /// PING; older ones answer with a PONG.
     static let axdpTextProbe = "AXDP?\r"
 
     /// Peers where a text-safe AXDP probe is pending (waiting for first inbound I-frame or fallback timer).
@@ -3130,7 +3131,7 @@ final class SessionCoordinator: ObservableObject {
     /// UI frames are not fed into the connected-mode application layer, so legacy
     /// BBS/nodes never see the probe text — no "Invalid command" response, no
     /// transcript noise.  AXTerm peers detect the probe in their UI frame handler
-    /// and respond with an AXDP PONG (also via UI frame).
+    /// and answer with an AXDP PING (an older AXTerm, a PONG), also via UI frame.
     private func sendTextProbe(to session: AX25Session) {
         let peerCallsign = session.remoteAddress.display.uppercased()
 
@@ -3226,8 +3227,14 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Detect inbound `AXDP?\r` text probe from a peer (received via UI frame) and
-    /// respond with AXDP PONG (also via UI frame).  The peer sent us a text probe,
-    /// which proves they understand AXDP — so responding with binary PONG is safe.
+    /// answer with a binary AXDP PING carrying our capabilities (also via UI
+    /// frame). The peer sent us a text probe, which proves it understands AXDP,
+    /// so binary is safe. It answers the PING with a PONG carrying its own, and
+    /// both stations know each other in three frames. Answering with a PONG
+    /// took four, because the prober then had to send its capabilities in a
+    /// PING of its own (home retest 2026-10-10, finding 6). A prober from
+    /// before this treats the PING the same way: it stores our capabilities,
+    /// counts us confirmed and answers with a PONG.
     /// Internal access for testability.
     func handleInboundTextProbe(from: AX25Address, to: AX25Address? = nil, path: DigiPath, payload: Data,
                                 radio: RadioID = .primary) {
@@ -3240,43 +3247,44 @@ final class SessionCoordinator: ObservableObject {
 
         let peerCallsign = from.display.uppercased()
         debugAXDP("Received text probe from peer (UI frame)", ["peer": peerCallsign])
-        TxLog.debug(.capability, "Received AXDP text probe via UI frame, responding with PONG", [
+        TxLog.debug(.capability, "Received AXDP text probe via UI frame, answering with PING", [
             "peer": peerCallsign
         ])
 
         // Mark peer as AXDP-capable (they sent a probe, so they understand AXDP)
         markImplicitlyConfirmedAXDP(for: peerCallsign)
 
-        // Respond with binary AXDP PONG via UI frame (stays out of connected-mode data flow)
+        // Answer with a binary AXDP PING via UI frame (stays out of
+        // connected-mode data flow).
         let localCaps = AXDPCapability.defaultLocal()
-        let pongMessage = AXDP.Message(
-            type: .pong,
+        let pingMessage = AXDP.Message(
+            type: .ping,
             sessionId: 0,
             messageId: 1,
             capabilities: localCaps
         )
         // From the address the probe was sent to when it is one of ours (a
         // node alias), else the radio's, and out on the radio it arrived on.
-        // A PONG to EPINDB from K0EPI-3 went unmatched and the prober asked
+        // A reply to EPINDB from K0EPI-3 went unmatched and the prober asked
         // again every 10 s (issue 89).
-        let pongFrame = OutboundFrame(
+        let pingFrame = OutboundFrame(
             radio: radio,
             destination: from,
             source: sessionManager.answeringAddress(for: to, radio: radio),
             path: path,
-            payload: pongMessage.encode(),
+            payload: pingMessage.encode(),
             frameType: "ui",
-            displayInfo: "AXDP PONG"
+            displayInfo: "AXDP PING"
         )
-        sendFrame(pongFrame)
+        sendFrame(pingFrame)
 
-        TxLog.outbound(.capability, "Sent AXDP PONG via UI frame", [
+        TxLog.outbound(.capability, "Sent AXDP PING via UI frame in answer to a text probe", [
             "dest": from.display,
             "features": localCaps.features.description
         ])
 
         onCapabilityEvent?(CapabilityDebugEvent(
-            type: .pongSent,
+            type: .pingSent,
             peer: from.display,
             capabilities: localCaps
         ))
@@ -4104,6 +4112,11 @@ final class SessionCoordinator: ObservableObject {
                 sendCapabilityPingViaUI(to: from, path: path, radio: radio)
             }
         } else if message.type == .ping {
+            // The PING has the peer's capabilities and our PONG below carries
+            // ours: a check of our own waiting on this peer is answered, and
+            // there is no PING left for us to send.
+            pendingCapabilityDiscovery.removeValue(forKey: peerCallsign)
+            awaitingCapabilityExchange.remove(peerCallsign)
             TxLog.debug(.capability, "Detected AXDP capabilities via PING", [
                 "peer": from.display,
                 "protoMax": caps.protoMax,
