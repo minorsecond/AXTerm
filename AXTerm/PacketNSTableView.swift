@@ -242,7 +242,7 @@ extension PacketNSTableView {
         private let onCopyInfo: (Packet) -> Void
         private let onCopyRawHex: (Packet) -> Void
 
-        private(set) var rows: [PacketRowViewModel] = []
+        var rows: [PacketRowViewModel] = []
         private(set) var packets: [Packet] = []
         var radioNames: [RadioID: String] = [:]
         private var isApplyingSelection = false
@@ -345,22 +345,22 @@ extension PacketNSTableView {
             guard let tableColumn, rows.indices.contains(row) else { return nil }
             let rowModel = rows[row]
             let identifier = tableColumn.identifier
+            // Reused from the table's queue and laid out by frame, never by
+            // constraint: the width changes on every frame while the sidebar
+            // animates, and a fresh cell with four constraints per field made
+            // that stutter (2026-10-10).
             if identifier.rawValue == ColumnIdentifier.type.rawValue {
-                return makeTypePillCell(for: identifier, row: rowModel)
+                let cell = (tableView.makeView(withIdentifier: identifier, owner: self) as? PacketTypeCellView)
+                    ?? PacketTypeCellView(identifier: identifier)
+                cell.pill.configure(text: rowModel.typeLabel, isLowSignal: rowModel.isLowSignal,
+                                    accessibilityLabel: rowModel.typeAccessibilityLabel)
+                cell.pill.toolTip = rowModel.typeTooltip
+                cell.needsLayout = true
+                return cell
             }
-
-            let textField = makeTextField(for: identifier, row: rowModel)
-            let cell = NSTableCellView()
-            cell.identifier = identifier
-            cell.textField = textField
-            cell.addSubview(textField)
-            textField.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                textField.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-                textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-                textField.topAnchor.constraint(equalTo: cell.topAnchor, constant: 1),
-                textField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -1)
-            ])
+            let cell = (tableView.makeView(withIdentifier: identifier, owner: self) as? PacketTextCellView)
+                ?? PacketTextCellView(identifier: identifier)
+            if let field = cell.textField { configure(field, for: identifier, row: rowModel) }
             return cell
         }
 
@@ -494,8 +494,7 @@ extension PacketNSTableView {
             scrollStateWorkItem?.cancel()
         }
 
-        private func makeTextField(for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) -> NSTextField {
-            let field = NSTextField(labelWithString: "")
+        private func configure(_ field: NSTextField, for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) {
             field.usesSingleLineMode = true
             field.lineBreakMode = .byTruncatingTail
             // Truncating a label takes more than a line-break mode. Without
@@ -506,9 +505,10 @@ extension PacketNSTableView {
             // no ellipsis to say there was more.
             field.maximumNumberOfLines = 1
             field.cell?.truncatesLastVisibleLine = true
-            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             field.backgroundColor = .clear
             field.drawsBackground = false
+            field.toolTip = nil
+            field.setAccessibilityLabel(nil)
 
             switch identifier.rawValue {
             case ColumnIdentifier.time.rawValue:
@@ -556,26 +556,9 @@ extension PacketNSTableView {
                 field.textColor = row.isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
                 field.alignment = .left
                 field.toolTip = row.infoTooltip
-                field.setContentHuggingPriority(.defaultLow, for: .horizontal)
             default:
                 field.stringValue = ""
             }
-
-            return field
-        }
-
-        private func makeTypePillCell(for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) -> NSTableCellView {
-            let cell = NSTableCellView()
-            cell.identifier = identifier
-            let pillView = TypePillView(text: row.typeLabel, isLowSignal: row.isLowSignal, accessibilityLabel: row.typeAccessibilityLabel)
-            pillView.toolTip = row.typeTooltip
-            cell.addSubview(pillView)
-            pillView.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                pillView.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
-                pillView.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
-            ])
-            return cell
         }
 
         private func applyPendingUpdate() {
@@ -732,36 +715,86 @@ extension PacketNSTableView {
     }
 }
 
-private final class TypePillView: NSView {
-    private let textField = NSTextField(labelWithString: "")
+/// A text cell laid out by frame. The field fills the cell, inset four
+/// points across and one down, and follows its width without constraints, so
+/// it truncates at the cell's edge with an ellipsis.
+final class PacketTextCellView: NSTableCellView {
+    init(identifier: NSUserInterfaceItemIdentifier) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 100, height: 24))
+        self.identifier = identifier
+        let field = NSTextField(labelWithString: "")
+        field.translatesAutoresizingMaskIntoConstraints = true
+        field.frame = bounds.insetBy(dx: 4, dy: 1)
+        field.autoresizingMask = [.width, .height]
+        addSubview(field)
+        textField = field
+    }
 
-    init(text: String, isLowSignal: Bool, accessibilityLabel: String) {
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// The frame-type column's cell: the pill, centered by frame.
+final class PacketTypeCellView: NSTableCellView {
+    let pill = PacketTypePillView()
+
+    init(identifier: NSUserInterfaceItemIdentifier) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 70, height: 24))
+        self.identifier = identifier
+        pill.translatesAutoresizingMaskIntoConstraints = true
+        addSubview(pill)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layout() {
+        super.layout()
+        let size = pill.fittingSize
+        pill.frame = NSRect(x: ((bounds.width - size.width) / 2).rounded(),
+                            y: ((bounds.height - size.height) / 2).rounded(),
+                            width: size.width, height: size.height)
+    }
+}
+
+/// The rounded frame-type label, laid out by frame.
+final class PacketTypePillView: NSView {
+    private let textField = NSTextField(labelWithString: "")
+    private static let inset = NSSize(width: 6, height: 2)
+
+    init() {
         super.init(frame: .zero)
         wantsLayer = true
-        textField.stringValue = text
         textField.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         textField.alignment = .center
-        textField.textColor = isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
-        setAccessibilityLabel(accessibilityLabel)
-        textField.setContentHuggingPriority(.required, for: .horizontal)
-        textField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        textField.translatesAutoresizingMaskIntoConstraints = true
         addSubview(textField)
-        textField.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            textField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            textField.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            textField.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
-        ])
         layer?.cornerRadius = 6
         layer?.borderWidth = 1
-        layer?.borderColor = (isLowSignal ? NSColor.quaternaryLabelColor : NSColor.tertiaryLabelColor).cgColor
         layer?.backgroundColor = NSColor.clear.cgColor
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(text: String, isLowSignal: Bool, accessibilityLabel: String) {
+        textField.stringValue = text
+        textField.textColor = isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
+        layer?.borderColor = (isLowSignal ? NSColor.quaternaryLabelColor : NSColor.tertiaryLabelColor).cgColor
+        setAccessibilityLabel(accessibilityLabel)
+        needsLayout = true
+    }
+
+    override var fittingSize: NSSize {
+        let text = textField.fittingSize
+        return NSSize(width: ceil(text.width) + Self.inset.width * 2, height: ceil(text.height) + Self.inset.height * 2)
+    }
+
+    override var intrinsicContentSize: NSSize { fittingSize }
+
+    override func layout() {
+        super.layout()
+        textField.frame = bounds.insetBy(dx: Self.inset.width, dy: Self.inset.height)
     }
 }
 
