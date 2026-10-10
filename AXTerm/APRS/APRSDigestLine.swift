@@ -15,6 +15,16 @@ import Foundation
 
 nonisolated enum APRSDigestLine {
 
+    /// When a position prints its latitude and longitude.
+    enum CoordinateStyle: Sendable {
+        /// Always, which is what anything outside the terminal wants.
+        case always
+        /// Only when there is no distance and direction to print instead.
+        /// The terminal's choice: "52.1 mi S" answers what an operator asks
+        /// of a beacon, and the coordinates are in the row's tooltip.
+        case whenNoDistance
+    }
+
     /// The decoded line. `observer` adds "how far, which way" when the station
     /// knows where it is; without it the coordinates stand alone rather than a
     /// distance being invented from a guess.
@@ -26,15 +36,16 @@ nonisolated enum APRSDigestLine {
     static func text(for digest: APRSDigest,
                      observer: GreatCircle.Point? = nil,
                      inMiles: Bool = true,
-                     definition: APRSTelemetry.Definition? = nil) -> String {
+                     definition: APRSTelemetry.Definition? = nil,
+                     coordinates: CoordinateStyle = .always) -> String {
         switch digest {
         case .position(let report):
-            return position(report, observer: observer, inMiles: inMiles)
+            return position(report, observer: observer, inMiles: inMiles, coordinates: coordinates)
         case .weather(let weather):
             let parts = weather.summaryLines(inImperial: inMiles)
             return parts.isEmpty ? "Weather report" : parts.joined(separator: " · ")
         case .object(let object):
-            return self.object(object, observer: observer, inMiles: inMiles)
+            return self.object(object, observer: observer, inMiles: inMiles, coordinates: coordinates)
         case .message(let inbound):
             return message(inbound)
         case .telemetry(let frame):
@@ -44,7 +55,7 @@ nonisolated enum APRSDigestLine {
             return readable.isEmpty ? "Status" : "Status: \(readable)"
         case .relayed(let relay, let inner):
             return relayed(relay, inner: text(for: inner, observer: observer, inMiles: inMiles,
-                                              definition: definition))
+                                              definition: definition, coordinates: coordinates))
         }
     }
 
@@ -61,12 +72,10 @@ nonisolated enum APRSDigestLine {
 
     private static func position(_ r: APRSReport,
                                  observer: GreatCircle.Point?,
-                                 inMiles: Bool) -> String {
-        var parts = [coordinates(latitude: r.latitude, longitude: r.longitude)]
-        if let away = distance(to: GreatCircle.Point(latitude: r.latitude, longitude: r.longitude),
-                               from: observer, inMiles: inMiles) {
-            parts.append(away)
-        }
+                                 inMiles: Bool,
+                                 coordinates style: CoordinateStyle) -> String {
+        var parts = place(latitude: r.latitude, longitude: r.longitude,
+                          observer: observer, inMiles: inMiles, style: style)
         if let motion = motion(courseDegrees: r.courseDegrees, speedKnots: r.speedKnots, inMiles: inMiles) {
             parts.append(motion)
         }
@@ -92,16 +101,14 @@ nonisolated enum APRSDigestLine {
 
     private static func object(_ o: APRSObjectReport,
                                observer: GreatCircle.Point?,
-                               inMiles: Bool) -> String {
+                               inMiles: Bool,
+                               coordinates style: CoordinateStyle) -> String {
         let name = o.name.trimmingCharacters(in: .whitespaces)
         // A killed object is news: it says the thing is no longer there, and a
         // line that read like any other placement would say the opposite.
         var parts = ["\(o.kind == .item ? "Item" : "Object") \(name)\(o.isLive ? "" : " (canceled)")"]
-        parts.append(coordinates(latitude: o.latitude, longitude: o.longitude))
-        if let away = distance(to: GreatCircle.Point(latitude: o.latitude, longitude: o.longitude),
-                               from: observer, inMiles: inMiles) {
-            parts.append(away)
-        }
+        parts.append(contentsOf: place(latitude: o.latitude, longitude: o.longitude,
+                                       observer: observer, inMiles: inMiles, style: style))
         if let motion = motion(courseDegrees: o.courseDegrees, speedKnots: o.speedKnots, inMiles: inMiles) {
             parts.append(motion)
         }
@@ -238,6 +245,23 @@ nonisolated enum APRSDigestLine {
     }
 
     // MARK: - Pieces
+
+    /// Where it is: the coordinates, then how far and which way, with the
+    /// coordinates left out when the style says the distance is enough.
+    private static func place(latitude: Double, longitude: Double,
+                              observer: GreatCircle.Point?, inMiles: Bool,
+                              style: CoordinateStyle) -> [String] {
+        let away = distance(to: GreatCircle.Point(latitude: latitude, longitude: longitude),
+                            from: observer, inMiles: inMiles)
+        if style == .whenNoDistance, let away { return [away] }
+        return [coordinates(latitude: latitude, longitude: longitude)] + (away.map { [$0] } ?? [])
+    }
+
+    /// The coordinates on their own, for the terminal's tooltip once the row
+    /// has left them off.
+    static func coordinates(of digest: APRSDigest) -> String? {
+        digest.coordinate.map { coordinates(latitude: $0.latitude, longitude: $0.longitude) }
+    }
 
     /// Four decimal places: about 11 m, which is finer than any APRS position
     /// and coarse enough not to imply a precision the encoding does not have.

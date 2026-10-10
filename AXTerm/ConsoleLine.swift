@@ -332,6 +332,20 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         )
     }
 
+    /// The line for a frame we sent, attributed to the radio that sent it.
+    ///
+    /// A UI frame keeps its information field so an APRS one decodes like
+    /// any frame we hear, and the terminal can draw our own beacon the way it
+    /// draws everyone else's. A connected-mode frame never does: its text is
+    /// the session's, whatever it looks like.
+    static func transmitted(_ frame: OutboundFrame, text: String,
+                            messageType: MessageType? = nil) -> ConsoleLine {
+        let isUI = frame.frameType.lowercased() == "ui" && (frame.pid ?? 0xF0) == 0xF0
+        return ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text,
+                                  via: frame.path.digis.map { $0.display }, messageType: messageType,
+                                  radioID: frame.radio, aprsInfo: isUI ? frame.payload : nil)
+    }
+
     /// Detect message type from packet text content and destination
     private static func detectMessageType(text: String, to: String) -> MessageType {
         let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()

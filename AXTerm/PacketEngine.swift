@@ -1078,17 +1078,17 @@ final class PacketEngine: ObservableObject {
         if let text = frame.displayInfo, !text.isEmpty {
             showAsData = frame.isUserPayload || (frame.frameType.lowercased() == "i" && !isProtocolDisplayInfo(text))
             if showAsData {
-                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text, via: frame.path.digis.map { $0.display })
+                let line = ConsoleLine.transmitted(frame, text: text)
                 appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
             } else {
                 // Build a richer control frame description for TX CMD lines
                 let txDesc = txControlFrameDescription(frame) ?? text
-                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: txDesc, via: frame.path.digis.map { $0.display }, messageType: .prompt)
+                let line = ConsoleLine.transmitted(frame, text: txDesc, messageType: .prompt)
                 appendConsoleLine(line, category: .packet, packetID: nil, byteCount: txDesc.utf8.count)
             }
         } else {
             let txDesc = txControlFrameDescription(frame) ?? frame.displayInfo ?? ""
-            let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: txDesc, via: frame.path.digis.map { $0.display }, messageType: .prompt)
+            let line = ConsoleLine.transmitted(frame, text: txDesc, messageType: .prompt)
             appendConsoleLine(line, category: .packet, packetID: nil, byteCount: txDesc.utf8.count)
         }
         // Announced at hand-off, not at completion: "we keyed" is what an

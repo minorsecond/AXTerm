@@ -285,6 +285,99 @@ the same three preference keys and the same unit setting the map uses, so
 position set and no fix, the coordinates stand alone; no distance is invented
 from a grid square nobody entered.
 
+## A shorter row
+
+On a busy channel every beacon spelled out the same things: the AX.25
+destination, the coordinates, a branch icon for the path, the list of digis
+that repeated it, and the radio. Lines ran off the side of the window, and the
+part an operator reads (who, how far, what they said) was the smaller share.
+`ConsoleAPRSPresentation` now decides what earns a place. Nothing is dropped:
+what the row leaves off is in its tooltip, and RAW still prints the frame as
+sent. Only decoded APRS lines follow these rules. A connected session, and any
+frame that is not APRS, is drawn as before.
+
+```
+7:09:23 AM  KB7OKL-1  ↻ W0NED · 2 hops  ⛟ 5.6 mi SSW · 25 mph at 89° · 5,819 ft
+```
+
+**No destination.** APRS puts no address there. It is the sending software's
+name (`APMI06`) or, for Mic-E, the latitude itself. A message's addressee is in
+its text already. The tooltip starts with `To S8UQVU via WA6IFI-12*,WIDE2-1`.
+
+**No coordinates when there is a distance.** "52.1 mi S" is what an operator
+asks of a beacon. With no position of our own the coordinates stay, since they
+are then the only location on the line. `APRSDigestLine.CoordinateStyle` makes
+this the terminal's choice; anything else that formats a digest still gets the
+coordinates. The tooltip carries them as `Position 38.8608, -104.8162`.
+
+**One path chip.** It replaces the branch icon and the list of digis:
+
+| Chip | Means |
+|---|---|
+| `direct` | We heard the sender's own transmitter. The tooltip lists the path it asked for. |
+| `↻ W0NED` | We heard W0NED repeat it. |
+| `↻ W0NED · 2 hops` | Two stations repeated it, W0NED last. |
+
+The station named is the last *station* that marked the path used, not the
+alias it answered to. A New-N fill-in digi turns `WIDE1-1` into `W0NED*,WIDE1*`,
+and the transmitter we heard is W0NED. Aliases (`WIDEn`, `TRACEn`, `RELAY`) are
+skipped, and so are the markers of the internet leg (`TCPIP`, `TCPXX`, `qA?`,
+`NOGATE`, `RFONLY`), which name no transmitter at all. A gateway that marks its
+own call used was still heard direct. Our own transmissions get no chip.
+
+**The radio tag only when it tells radios apart.** The tag appears when the
+console holds lines from two or more radios, not merely when two are
+configured. Each radio then gets a color, fixed by its place among all named
+radios, so a radio keeps its color while another goes quiet. The palette keeps
+clear of pink, green and indigo, which mean other things on the row.
+
+**A long message drops under the callsigns.** `ConsoleRowLayout` keeps the row
+on one line when it fits. When it would wrap, the message moves to a second row
+that starts under the first callsign and has the full width, instead of wrapping
+in a narrow column at the far side of the window.
+
+## Repeat beacons
+
+A station that sends the same beacon again gets a repeat chip (`×4`), and the text
+steps back to the secondary color so a beacon that changed stands out among
+ones that did not. "Same" is the decoded words, not the bytes: a position with
+a timestamp changes every time while saying the same thing.
+
+Copies less than 30 seconds apart are one transmission heard twice, direct and
+off a digi or off two digis, so they share a count instead of reading ×37 then
+×38. Thirty seconds is the window APRS digipeaters use to drop duplicates. A run
+is per station, and any change ends it. Messages never count as repeats (a
+message sent again is a retry worth seeing) and neither does telemetry.
+
+## Your own traffic
+
+Matched on the base callsign, like the MINE filter, so K0EPI-2 on the Mac and
+K0EPI-3 on the phone are both you.
+
+| Line | Drawn |
+|---|---|
+| A message, ack or query to you | pink row, outlined, with a filled **For you** chip |
+| Your frame heard back off a digi | pink row, **W0NED repeated you** chip |
+| Sent by you | pink row, your callsign in pink |
+| Someone's frame your digipeater repeated | faint pink row, **You relayed** chip |
+| Your callsign in someone's text | the callsign picked out in pink |
+
+A connected-mode copy of our own frame heard off a digi is still dimmed, as it
+always was. A decoded APRS echo is not: hearing your beacon come back is the
+news, and the chip says whose transmitter it was.
+
+Our transmissions now go through `ConsoleLine.transmitted`, which keeps a UI
+frame's information field and the radio that sent it, so our own beacon decodes
+like any other instead of printing as `!/:Kls4#---  A`.
+
+## New lines while you read
+
+Scrolling up to read used to leave a bare arrow at the bottom corner. It now
+counts what arrived since you left the bottom, as "12 new lines", and adds a pink
+"1 for you" when any of them is addressed to you or mentions you. The count goes
+by time rather than by row, because the console trims its oldest lines when it
+is full and the last row you saw may be gone by the time you come back.
+
 ## Tests
 
 `AXTermTests/Unit/APRS/APRSDigestTests.swift` — the Mic-E frame that could not
@@ -297,3 +390,10 @@ without hiding its messages.
 and DFS; the slot rule, with QUAIL's voltage and a moving station's course and
 speed as the two ways not to read one; and the short `/A=`. Every beacon in it
 but the two synthesized ones was heard on the operator's own channel.
+
+`AXTermTests/Unit/UI/ConsoleAPRSPresentationTests.swift`: the destination
+rule, the path chip (fill-in digis, hop counts, aliases, internet gateways, our
+own transmissions), radio tags, the row arrangement, every kind of "yours",
+repeat beacons and the duplicate window, the new-lines count, and the
+coordinates rule. `TransmittedConsoleLineTests.swift`: our own UI frames
+decode, session frames never do.

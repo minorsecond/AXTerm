@@ -375,6 +375,18 @@ struct ConsoleView: View {
     @State private var timestampRunPositions: [ConsoleLineGroup.ID: ConsoleTimestampRuler.RunPosition] = [:]
     /// The same, restarted at each day separator.
     @State private var dayTimestampRunPositions: [ConsoleLineGroup.ID: ConsoleTimestampRuler.RunPosition] = [:]
+    /// The radio tag for each radio with lines here. Empty unless two or more
+    /// radios have lines in this console: with one, the tag would repeat the
+    /// same name on every row.
+    @State private var radioTags: [RadioID: ConsoleRadioTags.Tag] = [:]
+    /// Beacons that repeat the same station's last one word for word.
+    @State private var beaconRepeats: [UUID: BeaconRepeat] = [:]
+    @State private var beaconRepeatIndex = BeaconRepeatIndex()
+    /// The newest line's time when the reader scrolled away from the bottom.
+    /// Nil while following.
+    @State private var unseenSince: Date?
+    /// What has arrived since, for the new-lines pill.
+    @State private var unseen = ConsoleUnseen.Count()
 
     /// Lines filtered by clear timestamp and message type preferences
     private var typeFilteredLines: [ConsoleLine] {
@@ -431,6 +443,12 @@ struct ConsoleView: View {
         // prints its time.
         dayTimestampRunPositions = ConsoleTimestampRuler.runPositions(
             blocks: dayGroupedLines.map(\.items), timestamp: \.primary.timestampString)
+        let tags = ConsoleRadioTags.tags(radioNames: radioNames,
+                                         heard: Set(groups.compactMap(\.primary.radioID)))
+        if tags != radioTags { radioTags = tags }
+        let repeats = showsRawAPRS ? [:] : beaconRepeatIndex.repeats(in: groups)
+        if repeats != beaconRepeats { beaconRepeats = repeats }
+        updateUnseen()
         // Any change to the visible line set can leave the ScrollView holding an
         // offset that no longer matches the content — most visibly when the
         // Session⇄Broadcast toggle swaps in a different filtered set (its peer
@@ -462,6 +480,17 @@ struct ConsoleView: View {
             guard followsNewLines else { return }
             scrollToBottomToken += 1
         }
+    }
+
+    /// Recount what arrived while the reader was scrolled up.
+    private func updateUnseen() {
+        let count = ConsoleUnseen.count(groupedLines, after: unseenSince) { line in
+            switch ConsoleMineHighlight.of(line, myCallsign: localCallsign, ownCallsigns: ownCallsigns) {
+            case .toYou, .mentionsYou: return true
+            default: return false
+            }
+        }
+        if count != unseen { unseen = count }
     }
 
     /// Auto-scroll is on and the reader is at the bottom.
@@ -550,7 +579,8 @@ struct ConsoleView: View {
                                                              linksFileNames: onFileName != nil,
                                                              knownFileNames: knownFileNames,
                                                              fileNameIndex: fileNameIndex,
-                                                             radioNames: radioNames,
+                                                             radioTags: radioTags,
+                                                             beaconRepeat: beaconRepeats[group.id],
                                                              observer: observer,
                                                              distanceInMiles: distanceInMiles,
                                                              showsRawAPRS: showsRawAPRS,
@@ -569,7 +599,8 @@ struct ConsoleView: View {
                                                              linksFileNames: onFileName != nil,
                                                              knownFileNames: knownFileNames,
                                                              fileNameIndex: fileNameIndex,
-                                                             radioNames: radioNames,
+                                                             radioTags: radioTags,
+                                                             beaconRepeat: beaconRepeats[group.id],
                                                              observer: observer,
                                                              distanceInMiles: distanceInMiles,
                                                              showsRawAPRS: showsRawAPRS,
@@ -643,6 +674,11 @@ struct ConsoleView: View {
                     .onAppear {
                         scrollToBottomToken += 1
                     }
+                    .onChange(of: isFollowing) { _, following in
+                        // Counting starts from the newest line the reader had.
+                        unseenSince = following ? nil : groupedLines.last?.primary.timestamp
+                        updateUnseen()
+                    }
                     .onChange(of: repinSignal) { _, _ in
                         // A different set of lines: start again at the newest.
                         isFollowing = true
@@ -660,6 +696,8 @@ struct ConsoleView: View {
                 // per view evaluation.
                 .onAppear { rebuildRenderedLines() }
                 .onChange(of: renderInputs) { _, _ in rebuildRenderedLines() }
+                .onChange(of: radioNames) { _, _ in rebuildRenderedLines() }
+                .onChange(of: showsRawAPRS) { _, _ in rebuildRenderedLines() }
             }
 
             // Undo clear banner
@@ -687,23 +725,18 @@ struct ConsoleView: View {
             // not created while just off screen, and the re-pin lands on the
             // last line rather than the sentinel, so the arrow stayed up at the
             // newest line (smoke run 2026-10-03-1, test 13.3).
+            //
+            // It counts what arrived while the reader was away, and says when
+            // any of it is for them (`ConsoleNewLinesPill`).
             VStack {
                 Spacer()
                 HStack {
                     Spacer()
-                    Button {
+                    ConsoleNewLinesPill(count: unseen) {
                         isFollowing = true
                         autoScroll = true
                         scrollToBottomToken += 1
-                    } label: {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .resizable()
-                            .frame(width: 32, height: 32)
-                            .foregroundStyle(.secondary, .regularMaterial)
-                            .background(Circle().fill(.background))
-                            .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
                     }
-                    .buttonStyle(.plain)
                     .padding([.bottom, .trailing], 20)
                 }
             }
@@ -1009,7 +1042,8 @@ struct ConsoleLineGroupView: View {
     var linksFileNames = false
     var knownFileNames: Set<String> = []
     var fileNameIndex: FileNameIndex?
-    var radioNames: [RadioID: String] = [:]
+    var radioTags: [RadioID: ConsoleRadioTags.Tag] = [:]
+    var beaconRepeat: BeaconRepeat?
     var observer: GreatCircle.Point?
     var distanceInMiles: Bool = true
     var showsRawAPRS: Bool = false
@@ -1032,7 +1066,8 @@ struct ConsoleLineGroupView: View {
                 linksFileNames: linksFileNames,
                 knownFileNames: knownFileNames,
                 fileNameIndex: fileNameIndex,
-                radioNames: radioNames,
+                radioTags: radioTags,
+                beaconRepeat: beaconRepeat,
                 observer: observer,
                 distanceInMiles: distanceInMiles,
                 showsRawAPRS: showsRawAPRS,
@@ -1149,9 +1184,11 @@ struct ConsoleLineView: View {
     var knownFileNames: Set<String> = []
     /// Remembers each row's names, so a redraw does not search again.
     var fileNameIndex: FileNameIndex?
-    /// Radio names by id. Empty (one radio) draws no badge, so a single-radio
-    /// station's console reads exactly as it did.
-    var radioNames: [RadioID: String] = [:]
+    /// Radio tags by id. Empty when the console holds one radio's lines, and
+    /// then no row draws a tag.
+    var radioTags: [RadioID: ConsoleRadioTags.Tag] = [:]
+    /// Set when this beacon repeats the same station's last one.
+    var beaconRepeat: BeaconRepeat?
     /// Where this station is, for "how far, which way" on a decoded position.
     /// Nil leaves the coordinates to stand on their own rather than inventing
     /// a distance from a position we do not have.
@@ -1192,6 +1229,7 @@ struct ConsoleLineView: View {
     }
 
     var body: some View {
+        let mine = mineHighlight
         HStack(alignment: .top, spacing: 6) {
             // Enhanced indicator bar with premium styling for system/error messages
             indicatorBar
@@ -1201,15 +1239,23 @@ struct ConsoleLineView: View {
             if CompactTerminalLayout.stacksMessageUnderHeader(compact: isCompactWidth) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .top, spacing: 6) {
-                        headerItems
+                        headerItems(mine)
                     }
                     // An APRS symbol stays beside its text.
                     HStack(alignment: .top, spacing: 6) {
                         messageContent
                     }
                 }
+            } else if isDecodedAPRS {
+                // A decoded line that would wrap puts its message under the
+                // callsigns instead of in a narrow ribbon at the far side.
+                ConsoleRowLayout(spacing: 6) {
+                    timestampText
+                    HStack(alignment: .top, spacing: 6) { aprsHeaderItems(mine) }
+                    HStack(alignment: .top, spacing: 6) { messageContent }
+                }
             } else {
-                headerItems
+                headerItems(mine)
                 messageContent
             }
         }
@@ -1220,10 +1266,46 @@ struct ConsoleLineView: View {
         // contents to the rounded rect, which silently truncates anything
         // that means to overhang the row; `.background(_:in:)` paints the
         // same shape without imposing a clip on the children.
-        .background(premiumBackground,
+        .background(rowFill(mine),
                     in: RoundedRectangle(cornerRadius: ConsoleTheme.rowCornerRadius,
                                          style: .continuous))
-        .opacity(isDigipeatEcho ? 0.6 : 1.0)
+        .overlay {
+            if mine == .toYou {
+                RoundedRectangle(cornerRadius: ConsoleTheme.rowCornerRadius, style: .continuous)
+                    .strokeBorder(Color.pink.opacity(0.5), lineWidth: 1)
+            }
+        }
+        // A digipeated copy of our own connected-mode frame is the digi's
+        // transmission, so it reads quieter. A decoded APRS echo says so in
+        // its chip instead and stays readable: your beacon coming back is the
+        // news.
+        .opacity(isDigipeatEcho && !isDecodedAPRS ? 0.6 : 1.0)
+    }
+
+    /// Decoded APRS, drawn by the shorter rules in `ConsoleAPRSPresentation`.
+    private var isDecodedAPRS: Bool { line.aprs != nil && !showsRawAPRS }
+
+    private var mineHighlight: ConsoleMineHighlight {
+        guard isDecodedAPRS else { return .none }
+        return ConsoleMineHighlight.of(line, myCallsign: localCallsign, ownCallsigns: ownCallsigns)
+    }
+
+    /// Our base callsigns, for picking them out inside a message.
+    private var mineBases: Set<String> {
+        Set(([localCallsign] + Array(ownCallsigns)).compactMap { address -> String? in
+            let base = address.uppercased().split(separator: "-").first.map(String.init) ?? ""
+            return base.isEmpty ? nil : base
+        })
+    }
+
+    /// Pink for your own traffic, strongest for a message addressed to you.
+    private func rowFill(_ mine: ConsoleMineHighlight) -> Color {
+        switch mine {
+        case .toYou: return Color.pink.opacity(0.14)
+        case .fromYou, .yourFrameRepeated: return Color.pink.opacity(0.07)
+        case .relayedByYou, .mentionsYou: return Color.pink.opacity(0.04)
+        case .none: return premiumBackground
+        }
     }
 
     #if os(iOS)
@@ -1235,7 +1317,17 @@ struct ConsoleLineView: View {
 
     /// Time, calls, path and badges: everything on the row before the message.
     @ViewBuilder
-    private var headerItems: some View {
+    private func headerItems(_ mine: ConsoleMineHighlight) -> some View {
+        timestampText
+        if isDecodedAPRS {
+            aprsHeaderItems(mine)
+        } else {
+            packetHeaderItems
+        }
+    }
+
+    @ViewBuilder
+    private var timestampText: some View {
         // Printed on every row, dimmed where it repeats the row above.
         //
         // Suppressing it outright left a blank, and a blank in the
@@ -1254,6 +1346,87 @@ struct ConsoleLineView: View {
             .font(.system(size: fontSize, design: .monospaced))
             .opacity(timestampRun.printsTimestamp ? 1 : ConsoleTheme.repeatedTimestampOpacity)
             .help(line.timestampString)
+    }
+
+    /// A decoded APRS line's header: who sent it, one chip for how it got
+    /// here, and badges only where they say something.
+    @ViewBuilder
+    private func aprsHeaderItems(_ mine: ConsoleMineHighlight) -> some View {
+        if let from = line.from {
+            switch mine {
+            case .fromYou, .yourFrameRepeated:
+                callsign(from, tint: .pink)
+            default:
+                callsign(from)
+            }
+        }
+
+        switch mine {
+        case .yourFrameRepeated(let digi):
+            ConsoleChip(systemImage: "checkmark.circle.fill", text: "\(digi) repeated you",
+                        tint: .pink, fontSize: fontSize)
+                .help("Your frame, heard back off \(digi)'s transmitter. "
+                      + "That digipeater heard you and passed it on.\n" + pathLines)
+        case .relayedByYou:
+            ConsoleChip(systemImage: "arrow.triangle.2.circlepath", text: "You relayed",
+                        tint: .pink, fontSize: fontSize)
+                .help("Your digipeater repeated this frame.\n" + pathLines)
+        default:
+            pathChip
+        }
+
+        if duplicateCount > 0 {
+            DuplicateCountBadge(count: duplicateCount, kind: line.kind)
+        }
+
+        if let id = line.radioID, let tag = radioTags[id] {
+            ConsoleRadioTagView(tag: tag, fontSize: fontSize)
+        }
+
+        if mine == .toYou {
+            ConsoleChip(systemImage: "envelope.fill", text: "For you", tint: .pink,
+                        fontSize: fontSize, prominent: true)
+                .help("Addressed to you")
+        }
+
+        if let beaconRepeat, let from = line.from {
+            BeaconRepeatChip(beaconRepeat: beaconRepeat, station: from, fontSize: fontSize)
+        }
+    }
+
+    /// How the frame reached us, in one chip, with the whole path on hover.
+    @ViewBuilder
+    private var pathChip: some View {
+        let sender = line.from ?? "the sender"
+        switch ConsoleAPRSPresentation.pathChip(for: line, ownCallsigns: echoCallsigns) {
+        case .none:
+            EmptyView()
+        case .direct(let requested):
+            ConsoleChip(text: "direct", tint: .green, fontSize: fontSize)
+                .help("Heard directly from \(sender)'s own transmitter."
+                      + (requested.isEmpty ? "" : "\nPath requested: \(requested.joined(separator: ","))")
+                      + (duplicateCount > 0 ? "\n" + pathLines : ""))
+        case .heardVia(let station, let hops, _):
+            ConsoleChip(systemImage: "arrow.triangle.2.circlepath",
+                        text: hops > 1 ? "\(station) \u{00B7} \(hops) hops" : station,
+                        tint: .indigo, fontSize: fontSize)
+                .help("Heard from \(station)'s transmitter, not \(sender)'s directly."
+                      + (hops > 1 ? " \(hops) stations repeated it." : "") + "\n" + pathLines)
+        }
+    }
+
+    /// Every path this frame was heard by, one per line.
+    private var pathLines: String {
+        let paths = allViaPaths.isEmpty ? (line.via.isEmpty ? [] : [line.via]) : allViaPaths
+        if paths.count == 1 { return "via " + paths[0].joined(separator: " \u{2192} ") }
+        return paths.enumerated().map { index, path in
+            "Path \(index + 1): " + path.joined(separator: " \u{2192} ")
+        }.joined(separator: "\n")
+    }
+
+    /// The header of every other line, as it has always been drawn.
+    @ViewBuilder
+    private var packetHeaderItems: some View {
 
         // Which transmitter we actually heard. Shown for *any* repeated
         // copy, not just echoes of our own frames: a station's beacon
@@ -1301,20 +1474,8 @@ struct ConsoleLineView: View {
         // radio to tell apart — `radioNames` is empty otherwise — so the
         // operator can see at a glance whether a line came from the 705 or
         // Direwolf, the same attribution the Packets Radio column shows.
-        if let id = line.radioID, let name = radioNames[id] {
-            HStack(spacing: 2) {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: fontSize - 2, weight: .semibold))
-                Text(name)
-                    .font(.system(size: fontSize - 1, weight: .medium, design: .rounded))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(.teal)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(.teal.opacity(0.12), in: Capsule())
-            .help("Heard on \(name)")
-            .accessibilityLabel("Heard on \(name)")
+        if let id = line.radioID, let tag = radioTags[id] {
+            ConsoleRadioTagView(tag: tag, fontSize: fontSize)
         }
     }
 
@@ -1336,7 +1497,8 @@ struct ConsoleLineView: View {
             }
             messageText(APRSDigestLine.text(for: digest, observer: observer,
                                             inMiles: distanceInMiles,
-                                            definition: telemetryDefinition))
+                                            definition: telemetryDefinition,
+                                            coordinates: .whenNoDistance))
                 .help(rawHelp)
         } else {
             messageText(line.text)
@@ -1356,7 +1518,8 @@ struct ConsoleLineView: View {
         // One scan feeds both the underlined text and the cursor overlay.
         let targets = linkTargets(in: text)
         let links = targets.map(\.range)
-        Text(attributed(text, targets: targets))
+        let mentions = isDecodedAPRS ? ConsoleAPRSPresentation.callsignRanges(in: text, bases: mineBases) : []
+        Text(attributed(text, targets: targets, mentions: mentions))
             .foregroundStyle(messageColor)
             .textSelection(.enabled)
             .lineLimit(nil)
@@ -1391,8 +1554,16 @@ struct ConsoleLineView: View {
     #endif
 
     private func attributed(_ text: String,
-                            targets: [(range: Range<String.Index>, url: URL)]) -> AttributedString {
+                            targets: [(range: Range<String.Index>, url: URL)],
+                            mentions: [Range<String.Index>] = []) -> AttributedString {
         var result = AttributedString(text)
+        // Your own callsigns, picked out wherever they appear in the text.
+        for range in mentions {
+            guard let lower = AttributedString.Index(range.lowerBound, within: result),
+                  let upper = AttributedString.Index(range.upperBound, within: result)
+            else { continue }
+            result[lower..<upper].backgroundColor = Color.pink.opacity(0.22)
+        }
         for (range, url) in targets {
             guard let lower = AttributedString.Index(range.lowerBound, within: result),
                   let upper = AttributedString.Index(range.upperBound, within: result)
@@ -1442,12 +1613,22 @@ struct ConsoleLineView: View {
     /// the operator came to the tooltip to see.
     private var rawHelp: String {
         guard let info = line.aprsInfo else { return line.text }
+        // What the shorter row left off: the AX.25 destination, the path and
+        // the coordinates.
+        var lead: [String] = []
+        if let to = line.to {
+            lead.append("To \(to)" + (line.via.isEmpty ? "" : " via \(line.viaDisplay)"))
+        }
+        if let digest = line.aprs, let place = APRSDigestLine.coordinates(of: digest) {
+            lead.append("Position \(place)")
+        }
         let body = info.map { byte -> String in
             (byte >= 0x20 && byte < 0x7F)
                 ? String(UnicodeScalar(byte))
                 : String(format: "<%02X>", byte)
         }.joined()
-        return "As received (\(info.count) bytes):\n\(body)"
+        let raw = "As received (\(info.count) bytes):\n\(body)"
+        return lead.isEmpty ? raw : lead.joined(separator: "\n") + "\n\n" + raw
     }
 
     /// One callsign: plain text, or a tap target when someone is listening.
@@ -1456,10 +1637,10 @@ struct ConsoleLineView: View {
     /// console layout and add padding that breaks the column alignment every
     /// line depends on. A tap gesture keeps the row exactly as it looked.
     @ViewBuilder
-    private func callsign(_ call: String) -> some View {
+    private func callsign(_ call: String, tint: Color? = nil) -> some View {
         let text = Text(call)
-            .fontWeight(.medium)
-            .foregroundStyle(callsignColor(for: call))
+            .fontWeight(tint == nil ? .medium : .semibold)
+            .foregroundStyle(tint ?? callsignColor(for: call))
 
         if let onIdentity {
             // `.onTapGesture` beside `.onLongPressGesture` is unreliable: the
@@ -1585,7 +1766,8 @@ struct ConsoleLineView: View {
         // read as a wall of alarm. The line stays neutral like a system line;
         // the muted accent bar to its left is what marks it as an error.
         case .error: return .secondary
-        case .packet: return .primary
+        // A repeat beacon steps back so what changed stands out.
+        case .packet: return beaconRepeat != nil && isDecodedAPRS ? .secondary : .primary
         }
     }
 
