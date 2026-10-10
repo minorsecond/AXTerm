@@ -50,3 +50,35 @@ struct BBSPaneRows: View {
         }
     }
 }
+
+/// An upload on its way in, at the top of Received until it is saved (retest
+/// 2026-10-10, finding 1). On both platforms.
+struct BBSArrivingUploadRow: View {
+    let arriving: BBSArrivingUpload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.down.doc")
+                    .foregroundStyle(.secondary)
+                Text(arriving.name)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text("from \(arriving.from)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ProgressView(value: Double(min(arriving.bytesDone, max(arriving.totalBytes, 1))),
+                         total: Double(max(arriving.totalBytes, 1)))
+                .progressViewStyle(.linear)
+            Text("Arriving \u{00B7} \(BBSFileIndex.size(arriving.bytesDone)) of \(BBSFileIndex.size(arriving.totalBytes))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .accessibilityElement(children: .combine)
+    }
+}

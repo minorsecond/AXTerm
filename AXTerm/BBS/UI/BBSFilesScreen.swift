@@ -623,12 +623,17 @@ struct BBSUploadsScreen: View {
 
     var body: some View {
         List {
-            if library.uploads.isEmpty {
+            if let arriving = library.arriving {
+                Section("Arriving") {
+                    BBSArrivingUploadRow(arriving: arriving)
+                }
+            }
+            if library.uploads.isEmpty && library.arriving == nil {
                 ContentUnavailableView(
                     "No Uploads", systemImage: "tray",
                     description: Text("Files callers send land in \(library.inboxName ?? "the upload folder") "
                                       + "and show here as soon as they arrive."))
-            } else {
+            } else if !library.uploads.isEmpty {
                 Section {
                     ForEach(library.uploads) { upload in
                         row(upload)

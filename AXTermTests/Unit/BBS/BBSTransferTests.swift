@@ -943,6 +943,40 @@ final class BBSTransferTests: XCTestCase {
         XCTAssertTrue(next.contains("OPS"), "the mailbox is at its prompt again")
     }
 
+    /// An AXDP upload shows in the live call panel, as a YAPP one does, and
+    /// the file waits at the top of Received while it arrives (retest
+    /// 2026-10-10, finding 1). Before, the only sign on the BBS page was a
+    /// line in the transcript.
+    func testAnAXDPUploadShowsWhileItArrives() async throws {
+        enableUploads()
+        try await connect()
+        let data = binary(1000, seed: 30)
+        _ = await offerAXDP("photo.jpg", data, session: 31)
+
+        XCTAssertEqual(service.transfer?.protocolName, "AXDP")
+        XCTAssertEqual(service.transfer?.fileName, "photo.jpg")
+        XCTAssertEqual(service.transfer?.totalBytes, 1000)
+        XCTAssertEqual(service.transfer?.direction, .upload)
+        XCTAssertEqual(library.arriving?.name, "photo.jpg")
+        XCTAssertEqual(library.arriving?.from, "W0ARP-1")
+
+        // Half the chunks.
+        for index in 0..<4 {
+            let chunk = data[(index * 128)..<((index + 1) * 128)]
+            caller.send(AXDP.Message(type: .fileChunk, sessionId: 31, messageId: UInt32(index + 2),
+                                     chunkIndex: UInt32(index), totalChunks: 8,
+                                     payload: Data(chunk), payloadCRC32: AXDP.crc32(Data(chunk))).encode())
+        }
+        await caller.pump { self.service.transfer?.bytesDone == 512 }
+        XCTAssertEqual(service.transfer?.bytesDone, 512)
+        XCTAssertEqual(library.arriving?.bytesDone, 512)
+
+        _ = await sendAXDPChunks(data, session: 31)
+        await caller.pump { self.caller.text.contains("Received photo.jpg") }
+        XCTAssertNil(service.transfer, "gone once it is saved")
+        XCTAssertNil(library.arriving)
+    }
+
     /// The same rules as a YAPP upload, read from the offer.
     func testAnAXDPUploadOverTheLimitIsDeclinedFromItsOffer() async throws {
         enableUploads()

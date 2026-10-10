@@ -837,7 +837,11 @@ upload gets shared; like adding a file, it never replaces one already there
 (`photo.jpg` goes in as `photo-2.jpg`), and the window says what happened.
 Delete asks first. On the Mac the file goes to the Trash; iOS has no Trash an
 app can use, so there it is removed, and the confirmation says so. Shared
-areas gained a Modified column at the same time. Before this the window
+areas gained a Modified column at the same time. An upload on its way in
+waits at the top of Received with a progress bar until it is saved
+(`BBSFileLibrary.arriving`), and an AXDP upload shows in the live call panel
+the way a YAPP transfer does: file, caller, bytes, protocol and elapsed time
+(retest 2026-10-10, finding 1). Before this the window
 showed only "docs · 2 files", and the iPad's photo at the home retest
 (2026-10-10, finding 8) took Finder to find. `BBSUploadsTests` covers it.
 

@@ -185,6 +185,13 @@ nonisolated struct BBSFileIndex: Equatable, Sendable {
     }
 }
 
+nonisolated struct BBSArrivingUpload: Equatable, Sendable {
+    var name: String
+    var from: String
+    var bytesDone: Int
+    var totalBytes: Int
+}
+
 /// A file in the upload inbox (`BBSFileLibrary.uploads`).
 nonisolated struct BBSUpload: Equatable, Sendable, Identifiable {
     /// Its name in the inbox.

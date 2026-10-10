@@ -531,7 +531,20 @@ struct BBSFilesPane: View {
     /// upload took Finder to find.
     @ViewBuilder
     private var uploadsTable: some View {
-        if library.uploads.isEmpty {
+        VStack(spacing: 0) {
+            if let arriving = library.arriving {
+                BBSArrivingUploadRow(arriving: arriving)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                Divider()
+            }
+            uploadsList
+        }
+    }
+
+    @ViewBuilder
+    private var uploadsList: some View {
+        if library.uploads.isEmpty && library.arriving == nil {
             VStack(spacing: 6) {
                 Image(systemName: "tray")
                     .font(.system(size: 24))
@@ -545,6 +558,8 @@ struct BBSFilesPane: View {
                     .frame(maxWidth: 280)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if library.uploads.isEmpty {
+            Spacer()
         } else {
             Table(library.uploads, selection: $uploadSelection) {
                 TableColumn("Name") { upload in

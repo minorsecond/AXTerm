@@ -67,9 +67,20 @@ final class BBSService: ObservableObject {
     /// mailbox that is quiet for a bad reason says which reason.
     @Published private(set) var lastRefusal: String?
     @Published private(set) var storeError: String?
-    /// The transfer running right now, or nil. Set for exactly as long as the
-    /// session's bytes belong to a transfer protocol.
-    @Published private(set) var transfer: TransferStatus?
+    /// The transfer running right now, or nil: a YAPP transfer, for exactly
+    /// as long as the session's bytes belong to it, or an AXDP upload while
+    /// AXTerm's receiver takes it. An upload also shows at the top of
+    /// Received while it arrives.
+    @Published private(set) var transfer: TransferStatus? {
+        didSet {
+            guard let transfer, transfer.direction == .upload, let name = transfer.fileName else {
+                if library?.arriving != nil { library?.arriving = nil }
+                return
+            }
+            library?.arriving = BBSArrivingUpload(name: name, from: transfer.caller,
+                                                  bytesDone: transfer.bytesDone, totalBytes: transfer.totalBytes)
+        }
+    }
 
     /// Beyond this the oldest lines are dropped: a caller who pastes a book
     /// should not grow the window without bound.
@@ -1429,8 +1440,12 @@ final class BBSService: ObservableObject {
             reply: { [weak self] bytes in self?.writeRaw(bytes) },
             upload: MailboxUpload(
                 save: { [weak self] _, data in self?.storeAXDPUpload(safe, data, announced: size, area: area) },
-                finished: { [weak self] status in self?.axdpUploadEnded(safe, status: status) }))
+                finished: { [weak self] status in self?.axdpUploadEnded(safe, status: status) },
+                progress: { [weak self] bytes in self?.transfer?.bytesDone = min(bytes, size) }))
         guard accepted != nil else { return }
+        // The live call panel shows it as it shows a YAPP transfer (finding 1).
+        transfer = TransferStatus(direction: .upload, caller: live?.callsign ?? "", fileName: safe,
+                                  protocolName: "AXDP", bytesDone: 0, totalBytes: size, startedAt: now())
         uploadsThisCall += 1
         note("receiving \(safe) by AXDP")
     }
@@ -1456,6 +1471,7 @@ final class BBSService: ObservableObject {
     private func axdpUploadEnded(_ name: String, status: BulkTransferStatus) {
         let confirmation = pendingAXDPConfirmation
         pendingAXDPConfirmation = nil
+        if transfer?.protocolName == "AXDP" { transfer = nil }
         Task { @MainActor [weak self] in
             guard let self, self.live != nil else { return }
             if let confirmation, status == .completed {

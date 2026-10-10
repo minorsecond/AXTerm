@@ -342,6 +342,9 @@ final class BBSFileLibrary: ObservableObject {
     /// mailbox took it (home retest finding 8). Refreshed whenever the inbox
     /// is, so an upload shows the moment it is saved.
     @Published private(set) var uploads: [BBSUpload] = []
+    /// An upload on its way in, shown at the top of Received until it is
+    /// saved (retest 2026-10-10, finding 1). The mailbox sets it.
+    @Published var arriving: BBSArrivingUpload?
 
     /// Where Delete puts a file. The Trash on the Mac, so a mistake can be
     /// undone; iOS has no Trash an app can use, so there it is removed, and

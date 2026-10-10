@@ -4581,6 +4581,7 @@ final class SessionCoordinator: ObservableObject {
         // Receive the chunk
         state.receiveChunk(index: chunkIndex, data: payload)
         inboundTransferStates[axdpSessionId] = state
+        mailboxUploads[axdpSessionId]?.progress?(state.totalBytesReceived)
 
         // CRITICAL: Check completion BEFORE UI updates to ensure we detect it even if
         // the transfer lookup fails or the transfer is in an unexpected state.
@@ -6526,4 +6527,6 @@ struct MailboxUpload {
     let save: (_ fileName: String, _ data: Data) -> String?
     /// Called once when the transfer ends, with how it ended.
     let finished: (BulkTransferStatus) -> Void
+    /// Bytes received so far, as chunks arrive.
+    var progress: ((Int) -> Void)? = nil
 }
