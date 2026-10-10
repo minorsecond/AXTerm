@@ -1030,6 +1030,14 @@ inbound loss and a go-back-N resend. Rules:
   2 s (smoke run 2026-10-03-1, test 13.4, issue 113). A hardware TNC over
   KISS reports no carrier and keeps the full T2. A frame decoded with no
   carrier seen leaves no transition, so T2 acks it as before.
+  The channel has to stay clear for 0.8 s first
+  (`AX25SessionManager.channelQuietGrace`), and a carrier starting in that
+  time cancels it, T2 holding on. Decision (2026-10-10, retest finding 4):
+  the carrier can drop between two frames of one burst when the peer's TNC
+  unkeys and keys again. A (705) acked the iPad's I(3) 0.4 to 0.7 s after it,
+  keyed over I(4), and the two stations lost I(4) and the RR to each other
+  nine times running, about 70 s. A lone typed line still gets its ack in
+  about a second.
 - In practice T2 rarely fires: RMS gateways end every burst with a P=1 frame
   (field capture 2026-08-24: 208 inbound I-frames, every burst
   poll-terminated), and the mandatory F=1 response carries the ack.

@@ -4127,14 +4127,43 @@ final class AX25SessionManager: ObservableObject {
     /// The radio's own modem heard the carrier end. T2 waits in case more
     /// of the peer's transmission follows (AX.25 2.2 §6.7.1.2); once the
     /// channel is clear nothing more of it is coming, so an ack held for it
-    /// goes out now rather than a full frame's airtime later. Only a radio
+    /// goes out then rather than a full frame's airtime later. Only a radio
     /// that reports carrier calls this (a sound modem); a TNC keeps T2
     /// (smoke run 2026-10-03-1, 13.4, issue 113).
+    ///
+    /// "Clear" has to last `channelQuietGrace` first. The carrier can drop
+    /// between two frames of one burst, when the peer's TNC unkeys and keys
+    /// again; A (705) answered the iPad's first frame in that gap, keyed over
+    /// the second, and the two stations lost a frame and an RR to each other
+    /// nine times running (retest 2026-10-10, finding 4).
     func channelCleared(on radio: RadioID) {
-        for session in sessions.values where session.radio == radio && session.t2TimerTask != nil {
-            fireT2(for: session)
+        quietGeneration[radio, default: 0] &+= 1
+        let generation = quietGeneration[radio]
+        quietTasks[radio]?.cancel()
+        quietTasks[radio] = clock.schedule(delay: Self.channelQuietGrace) { [weak self] in
+            guard let self, self.quietGeneration[radio] == generation else { return }
+            self.quietTasks[radio] = nil
+            for session in self.sessions.values where session.radio == radio && session.t2TimerTask != nil {
+                self.fireT2(for: session)
+            }
         }
     }
+
+    /// The radio's modem heard a carrier start: whoever it is, the channel is
+    /// not clear after all, so an ack waiting on a quiet channel keeps
+    /// waiting (T2 still sends it in the end).
+    func channelBusy(on radio: RadioID) {
+        quietGeneration[radio, default: 0] &+= 1
+        quietTasks[radio]?.cancel()
+        quietTasks[radio] = nil
+    }
+
+    /// How long a cleared channel must stay quiet before a held ack goes.
+    /// Longer than the gap a TNC leaves between frames it keys separately,
+    /// far shorter than T2's full frame of airtime.
+    static let channelQuietGrace: TimeInterval = 0.8
+    private var quietTasks: [RadioID: AnyCancellableTask] = [:]
+    private var quietGeneration: [RadioID: Int] = [:]
 
     private func stopT2Timer(for session: AX25Session) {
         session.t2Generation &+= 1

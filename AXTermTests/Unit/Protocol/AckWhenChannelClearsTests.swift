@@ -40,6 +40,7 @@ final class AckWhenChannelClearsTests: XCTestCase {
 
         clock.advance(by: 0.3)
         manager.channelCleared(on: modemRadio)
+        clock.advance(by: AX25SessionManager.channelQuietGrace)
 
         XCTAssertEqual(sent.filter { $0.frameType == "s" }.count, 1, "RR 1 goes out with the channel clear")
         clock.advance(by: 3)
@@ -77,5 +78,62 @@ final class AckWhenChannelClearsTests: XCTestCase {
         XCTAssertFalse(PacketEngine.channelCleared(from: quiet, to: quiet))
         XCTAssertFalse(PacketEngine.channelCleared(from: quiet, to: busy))
         XCTAssertFalse(PacketEngine.channelCleared(from: nil, to: quiet), "a first report is not a transition")
+    }
+
+    // MARK: A gap inside the peer's burst (retest 2026-10-10, finding 4)
+
+    /// The carrier can drop between two frames of one burst, when the
+    /// peer's TNC unkeys and keys again. A answered the first frame in that
+    /// gap, keyed over the second, and lost it while the iPad lost the RR:
+    /// nine times in a row, about 70 s. The ack now waits for the channel to
+    /// stay quiet a moment.
+    func testTheAckWaitsAMomentAfterTheChannelClears() {
+        let clock = AX25VirtualClock()
+        let (manager, _) = linkWithAFrameOwedAnAck(clock: clock)
+        var sent: [OutboundFrame] = []
+        manager.onSendFrame = { sent.append($0) }
+
+        manager.channelCleared(on: modemRadio)
+        clock.advance(by: AX25SessionManager.channelQuietGrace / 2)
+        XCTAssertTrue(sent.isEmpty, "not in the gap")
+        clock.advance(by: AX25SessionManager.channelQuietGrace)
+        XCTAssertEqual(sent.filter { $0.frameType == "s" }.count, 1)
+    }
+
+    func testACarrierThatComesBackKeepsTheAckHeld() {
+        let clock = AX25VirtualClock()
+        let (manager, _) = linkWithAFrameOwedAnAck(clock: clock)
+        var sent: [OutboundFrame] = []
+        manager.onSendFrame = { sent.append($0) }
+
+        manager.channelCleared(on: modemRadio)
+        clock.advance(by: 0.2)
+        manager.channelBusy(on: modemRadio)   // the peer's next frame
+        clock.advance(by: AX25SessionManager.channelQuietGrace)
+        XCTAssertTrue(sent.isEmpty, "the peer is still sending")
+
+        // The second frame arrives and its own clear sends the one RR.
+        _ = manager.handleInboundIFrame(from: peer, to: me, path: DigiPath(), radio: modemRadio,
+                                        ns: 1, nr: 0, pf: false, payload: Data("More\r".utf8))
+        manager.channelCleared(on: modemRadio)
+        clock.advance(by: AX25SessionManager.channelQuietGrace)
+        let acks = sent.filter { $0.frameType == "s" }
+        XCTAssertEqual(acks.count, 1)
+    }
+
+    /// The grace is far shorter than T2, or the early ack is pointless.
+    func testTheGraceIsShortOfT2() {
+        XCTAssertLessThan(AX25SessionManager.channelQuietGrace, 1.0)
+        XCTAssertGreaterThanOrEqual(AX25SessionManager.channelQuietGrace, 0.5)
+    }
+
+    func testOnlyACarrierThatStartsCountsAsABusyChannel() {
+        var busy = ModemTelemetry()
+        busy.dcd = true
+        var quiet = ModemTelemetry()
+        quiet.dcd = false
+        XCTAssertTrue(PacketEngine.channelBusy(from: quiet, to: busy))
+        XCTAssertFalse(PacketEngine.channelBusy(from: busy, to: busy))
+        XCTAssertFalse(PacketEngine.channelBusy(from: busy, to: quiet))
     }
 }

@@ -160,6 +160,16 @@ final class PacketEngine: ObservableObject {
         previous?.dcd == true && !current.dcd
     }
 
+    /// The radio's modem heard a carrier start. Only a radio that can tell
+    /// reports it; layer 2 keeps holding an ack it would have sent on a
+    /// quiet channel.
+    var onChannelBusy: ((RadioID) -> Void)?
+
+    /// Whether a telemetry report is a carrier starting.
+    nonisolated static func channelBusy(from previous: ModemTelemetry?, to current: ModemTelemetry) -> Bool {
+        previous?.dcd == false && current.dcd
+    }
+
     // MARK: - Debug Logging (Debug Builds Only)
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
         #if DEBUG
@@ -3445,6 +3455,9 @@ extension PacketEngine: RadioManagerDelegate {
         }
         if Self.channelCleared(from: previous, to: telemetry) {
             for radio in manager.radios(onLink: link.key) { onChannelCleared?(radio) }
+        }
+        if Self.channelBusy(from: previous, to: telemetry) {
+            for radio in manager.radios(onLink: link.key) { onChannelBusy?(radio) }
         }
         // What actually reached the air since the last report. A first report
         // carries the counters' whole history, which is not news about any
