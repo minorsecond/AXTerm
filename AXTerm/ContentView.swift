@@ -1667,7 +1667,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             banners
 
-            detailSwitch.keptAliveLayer {
+            detailSwitch.keptAliveLayer(active: selectedNav == .map) {
                 // The map lives OUTSIDE the switch: mounted on first
                 // visit or three seconds after launch (whichever comes
                 // first) and never unmounted, so tiles, Metal state and

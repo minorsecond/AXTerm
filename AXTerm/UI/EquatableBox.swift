@@ -51,4 +51,37 @@ extension View {
     func keptAliveLayer<Layer: View>(@ViewBuilder _ layer: () -> Layer) -> some View {
         overlay { layer() }
     }
+
+    /// As above, and while `active` is false the layer keeps the size it
+    /// last had rather than following this view. Hiding the sidebar animates
+    /// the page's width; the kept-alive map followed it and MapKit
+    /// re-rendered it on every frame, about 460 ms of main-thread work per
+    /// toggle on the Packets page (2026-10-10). Held still, it costs nothing
+    /// until its page opens.
+    func keptAliveLayer<Layer: View>(active: Bool, @ViewBuilder _ layer: () -> Layer) -> some View {
+        modifier(KeptAliveLayer(active: active, layer: layer()))
+    }
+}
+
+private struct KeptAliveLayer<Layer: View>: ViewModifier {
+    let active: Bool
+    let layer: Layer
+    @State private var held: CGSize?
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
+                // Follow while showing, and take a first size to hold.
+                if active || held == nil { held = size }
+            }
+            .onChange(of: active) { _, isActive in
+                if isActive { held = nil }
+            }
+            .overlay(alignment: .topLeading) {
+                // One view either way, so the layer is never rebuilt: an
+                // unset frame follows the page, a set one holds.
+                let hold = active ? nil : held
+                layer.frame(width: hold?.width, height: hold?.height, alignment: .topLeading)
+            }
+    }
 }
