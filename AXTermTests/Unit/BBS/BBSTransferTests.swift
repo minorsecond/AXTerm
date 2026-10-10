@@ -569,8 +569,8 @@ final class BBSTransferTests: XCTestCase {
     }
 
     /// Runs a YAPP upload from the caller and waits for the prompt after it.
-    private func upload(_ name: String, _ data: Data) async throws -> CallerYAPPSender {
-        await armUpload()
+    private func upload(_ name: String, _ data: Data, typingU: Bool = true) async throws -> CallerYAPPSender {
+        if typingU { await armUpload() }
 
         let sender = CallerYAPPSender()
         caller.clearReceived()
@@ -694,6 +694,53 @@ final class BBSTransferTests: XCTestCase {
         XCTAssertTrue(caller.text.contains("The upload was larger than its header said"),
                       caller.text)
         XCTAssertNil(inboxFile("liar.bin"))
+        assertIdle()
+    }
+
+    /// The park test (2026-10-10): the iPad started a YAPP upload without
+    /// typing `U`, and the mailbox read its send-init as half a command. A
+    /// send-init at the prompt can only be an upload starting, so it starts one.
+    func testAYAPPUploadWithoutUStillLands() async throws {
+        enableUploads()
+        try await connect()
+        let data = binary(700, seed: 11)
+        let sender = try await upload("no-u.bin", data, typingU: false)
+        XCTAssertEqual(sender.completed, true, sender.textString)
+        XCTAssertEqual(inboxFile("no-u.bin"), data)
+        assertIdle()
+    }
+
+    /// With uploads off the caller's software is told at once, in YAPP, and
+    /// stops, instead of waiting for an answer that never comes.
+    func testAYAPPUploadWithoutUIsRefusedInYAPPWhenUploadsAreOff() async throws {
+        try await connect()
+        let sender = CallerYAPPSender()
+        caller.clearReceived()
+        caller.onBytes = { [unowned self] bytes in
+            sender.consume(bytes)
+            self.caller.pendingSends.append(contentsOf: sender.toSend)
+            sender.toSend.removeAll()
+        }
+        try sender.driver.startSending(fileName: "off.bin", fileData: binary(50))
+        caller.pendingSends.append(contentsOf: sender.toSend)
+        sender.toSend.removeAll()
+        await caller.pump { sender.completed != nil && sender.textString.hasSuffix(">\r") }
+        caller.onBytes = nil
+        XCTAssertEqual(sender.completed, false, "refused, not left waiting")
+        XCTAssertTrue(sender.textString.contains("does not accept uploads"), sender.textString)
+        assertIdle()
+    }
+
+    /// An AXTerm caller's offer with uploads off is told that, not sent off
+    /// to try YAPP, which would be refused too (park test, 2026-10-10).
+    func testAnAXDPOfferWhileUploadsAreOffSaysUploadsAreOff() async throws {
+        try await connect()
+        caller.clearReceived()
+        caller.send(fileMeta(session: 7, name: "photo.jpg"))
+        await caller.pump { self.caller.text.hasSuffix(">\r") }
+        XCTAssertEqual(axdpReply()?.type, .nack)
+        XCTAssertTrue(caller.text.contains("does not accept uploads"), caller.text)
+        XCTAssertFalse(caller.text.contains("Type U"), caller.text)
         assertIdle()
     }
 

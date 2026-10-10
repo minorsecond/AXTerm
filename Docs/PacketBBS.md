@@ -749,11 +749,20 @@ command instead gets an answer to it. Where the refusal is already knowable
 (uploads off, no inbox, too many this call) `U` says so at once instead of
 "Ready".
 
+`U` is optional. A send-init (ENQ 01) arriving at the prompt can only be an
+upload starting, since nobody types those bytes, so it starts one. At the park
+test (2026-10-10) the iPad sent one without `U` and the mailbox read it as half
+a command. When the mailbox cannot take the upload, it answers the send-init
+with YAPP's not-ready reply and the reason, so the caller's software stops at
+once, then says the reason in words.
+
 **YAPP only.** An AXTerm caller who offers a file from their transfer window
 sends an AXDP FILE_META. The mailbox declines it with the same NACK
 `SessionCoordinator.declineIncomingTransfer` sends, so the caller's transfer
-ends as "declined" instead of waiting, and tells them to type `U` and send
-again with YAPP. This happens whether or not they typed `U` first. An AXDP
+ends as "declined" instead of waiting, and tells them to send it again with
+YAPP. This happens whether or not they typed `U` first. With uploads off it
+says that instead: pointing the caller at YAPP would only get them refused
+again. An AXDP
 chat message (what AXTerm sends for a typed line when AXDP is switched on)
 is read as the line it carries.
 

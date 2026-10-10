@@ -464,7 +464,35 @@ final class BBSService: ObservableObject {
         if awaitingUpload, startReceiving(data) { return }
         awaitingUpload = false
 
+        // A YAPP send-init at the prompt can only be an upload starting: ENQ
+        // 01 is never typed. At the park test (2026-10-10) the iPad started
+        // one without `U`, the mailbox read it as half a command, and the
+        // iPad waited until it gave up.
+        if inputBuffer.isEmpty, Self.isYAPPSendInit(data) {
+            if let reason = uploadRefusal() {
+                refuseYAPPUpload(reason)
+            } else if startReceiving(data) {
+                return
+            }
+            return
+        }
+
         receiveText(data)
+    }
+
+    /// ENQ 01, YAPP's send init. It may share an I-frame with the header.
+    private static func isYAPPSendInit(_ data: Data) -> Bool {
+        data.count >= 2 && data[data.startIndex] == YAPPControlChar.enq.rawValue
+            && data[data.startIndex + 1] == 0x01
+    }
+
+    /// Answers a send-init the mailbox cannot take with YAPP's own refusal,
+    /// so the caller's software stops at once with the reason, then says it
+    /// in words for a caller reading the screen.
+    private func refuseYAPPUpload(_ reason: String) {
+        writeRaw(YAPPEncoder.notReady(reason: reason))
+        write(["Sorry — \(reason).", BBSShell.commandPrompt])
+        note("refused an upload: \(reason)")
     }
 
     private func receiveText(_ data: Data) {
@@ -1235,9 +1263,7 @@ final class BBSService: ObservableObject {
     /// Only a send-init opens an upload. Anything else after `U` is most
     /// likely the caller typing, and falls through to the command line.
     private func startReceiving(_ data: Data) -> Bool {
-        // ENQ 01, YAPP's send init. It may share an I-frame with the header.
-        guard data.count >= 2, data[data.startIndex] == YAPPControlChar.enq.rawValue,
-              data[data.startIndex + 1] == 0x01 else { return false }
+        guard Self.isYAPPSendInit(data) else { return false }
 
         let driver = YAPPProtocol()
         let id = UUID()
@@ -1337,8 +1363,15 @@ final class BBSService: ObservableObject {
         let nack = AXDP.Message(type: .nack, sessionId: message.sessionId, messageId: 1)
         writeRaw(nack.encode())
         let name = message.fileMeta?.filename ?? "that file"
+        // With uploads off, YAPP would be refused too; say so instead of
+        // sending the caller off to try it (park test, 2026-10-10).
+        if let reason = uploadRefusal() {
+            write(["\(name) was declined: \(reason).", BBSShell.commandPrompt])
+            note("declined an AXDP upload of \(name): \(reason)")
+            return
+        }
         write(["This mailbox takes uploads by YAPP only, so \(name) was declined.",
-               "Type U, then send it again with YAPP as the protocol.",
+               "Send it again with YAPP as the protocol.",
                BBSShell.commandPrompt])
         note("declined an AXDP upload of \(name)")
     }
