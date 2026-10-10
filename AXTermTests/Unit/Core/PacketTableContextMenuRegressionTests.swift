@@ -28,44 +28,6 @@ final class PacketTableContextMenuRegressionTests: XCTestCase {
         }
     }
 
-    func testPacketTableCoordinatorDefersUpdatesWhileContextMenuTracking() {
-        let selectionBox = Box<Set<Packet.ID>>([])
-        let coordinator = PacketTableCoordinator(
-            selection: Binding(
-                get: { selectionBox.value },
-                set: { selectionBox.value = $0 }
-            ),
-            onInspectSelection: {},
-            onCopyInfo: { _ in },
-            onCopyRawHex: { _ in }
-        )
-        let tableView = NSTableView()
-        let menu = NSMenu()
-        tableView.menu = menu
-        coordinator.attach(tableView: tableView)
-
-        let initialPackets = [makePacket(index: 1)]
-        coordinator.update(
-            rows: initialPackets.map { PacketRowViewModel.fromPacket($0) },
-            packets: initialPackets,
-            selection: []
-        )
-        XCTAssertEqual(coordinator.rows.count, 1)
-
-        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
-
-        let updatedPackets = initialPackets + [makePacket(index: 2)]
-        coordinator.update(
-            rows: updatedPackets.map { PacketRowViewModel.fromPacket($0) },
-            packets: updatedPackets,
-            selection: []
-        )
-        XCTAssertEqual(coordinator.rows.count, 1, "Row update should be deferred until menu tracking ends.")
-
-        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: menu)
-        XCTAssertEqual(coordinator.rows.count, 2)
-    }
-
     func testPacketNSTableViewCoordinatorDefersApplyPendingUpdateDuringContextMenuTracking() {
         let selectionBox = Box<Set<Packet.ID>>([])
         let isAtBottomBox = Box<Bool>(true)
@@ -106,28 +68,16 @@ final class PacketTableContextMenuRegressionTests: XCTestCase {
         XCTAssertEqual(coordinator.rows.count, 1)
     }
 
-    func testPacketTableCoordinatorMenuForEventReturnsNilForOutOfBoundsRow() {
-        let selectionBox = Box<Set<Packet.ID>>([])
-        let coordinator = PacketTableCoordinator(
-            selection: Binding(
-                get: { selectionBox.value },
-                set: { selectionBox.value = $0 }
-            ),
-            onInspectSelection: {},
-            onCopyInfo: { _ in },
-            onCopyRawHex: { _ in }
-        )
+    func testPacketNSTableViewCoordinatorMenuForEventReturnsNilForOutOfBoundsRow() {
+        let coordinator = PacketNSTableView.Coordinator(
+            selection: .constant([]), isAtBottom: .constant(true), followNewest: .constant(true),
+            onInspectSelection: {}, onCopyInfo: { _ in }, onCopyRawHex: { _ in })
         let tableView = StubTableView()
-        let menu = NSMenu()
-        tableView.menu = menu
+        tableView.menu = NSMenu()
         coordinator.attach(tableView: tableView)
 
         let packets = [makePacket(index: 1)]
-        coordinator.update(
-            rows: packets.map { PacketRowViewModel.fromPacket($0) },
-            packets: packets,
-            selection: []
-        )
+        coordinator.rows = packets.map { PacketRowViewModel.fromPacket($0) }
 
         tableView.forcedRow = packets.count
         let event = NSEvent.mouseEvent(
@@ -142,8 +92,7 @@ final class PacketTableContextMenuRegressionTests: XCTestCase {
             pressure: 1
         )
         XCTAssertNotNil(event)
-        let resolvedMenu = coordinator.tableView(tableView, menuFor: event!)
-        XCTAssertNil(resolvedMenu)
+        XCTAssertNil(coordinator.tableView(tableView, menuFor: event!))
     }
 
     private func waitForMainQueue(seconds: TimeInterval) {

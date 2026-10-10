@@ -156,8 +156,7 @@ There is no remaining porting backlog.
 - `Winlink/UI/WinlinkMailView` — superseded on iOS by `WinlinkMailboxScreen`
 
 **The AppKit packet table** — iOS uses `PacketTableTouchView`
-- `PacketNSTableView`, `PacketTableCoordinator`, `PacketTableNSTableView`,
-  `RowSelectionCaptureView`
+- `PacketNSTableView`
 
 `NSTableView` is what keeps a live packet stream smooth on macOS; `List` gives
 the same virtualization on iOS for free. Wrapping the AppKit table would have
