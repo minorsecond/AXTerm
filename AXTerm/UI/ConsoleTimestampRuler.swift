@@ -61,4 +61,21 @@ nonisolated enum ConsoleTimestampRuler {
         }
         return positions
     }
+
+    /// Every block's positions in one map, each block run on its own.
+    ///
+    /// For the day-separated console, which computes this when its lines
+    /// change. Working it out per section inside the view body formatted every
+    /// row's time again on each render, including each frame of a sidebar
+    /// resize.
+    static func runPositions<Row: Identifiable>(
+        blocks: [[Row]],
+        timestamp: (Row) -> String
+    ) -> [Row.ID: RunPosition] {
+        var positions: [Row.ID: RunPosition] = [:]
+        for block in blocks {
+            positions.merge(runPositions(block, timestamp: timestamp)) { _, block in block }
+        }
+        return positions
+    }
 }

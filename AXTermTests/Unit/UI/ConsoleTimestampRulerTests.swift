@@ -76,4 +76,26 @@ final class ConsoleTimestampRulerTests: XCTestCase {
         XCTAssertEqual(positions(["11:59:59", "11:59:59"]), [.start, .end])
         XCTAssertEqual(positions(["11:59:59"]), [.alone])
     }
+
+    /// The day-separated console computes every block's runs in one call
+    /// when its lines change, so rendering only looks them up. The blocks
+    /// stay independent: the first row after a separator prints even when
+    /// the row above the separator showed the same time.
+    func testBlocksComputedTogetherStayIndependent() {
+        let first = [Row(id: 0, stamp: "11:59:59"), Row(id: 1, stamp: "11:59:59")]
+        let second = [Row(id: 2, stamp: "11:59:59"), Row(id: 3, stamp: "12:00:00")]
+        let map = ConsoleTimestampRuler.runPositions(blocks: [first, second], timestamp: \.stamp)
+        XCTAssertEqual([0, 1, 2, 3].map { map[$0] }, [.start, .end, .alone, .alone])
+    }
+
+    /// Each row's time is formatted once per call, however many rows share it.
+    func testEachRowIsFormattedOnce() {
+        let rows = (0..<5).map { Row(id: $0, stamp: "2:07:49") }
+        var calls = 0
+        _ = ConsoleTimestampRuler.runPositions(blocks: [rows, rows.map { Row(id: $0.id + 5, stamp: $0.stamp) }]) {
+            calls += 1
+            return $0.stamp
+        }
+        XCTAssertEqual(calls, 10)
+    }
 }

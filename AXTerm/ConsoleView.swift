@@ -373,6 +373,8 @@ struct ConsoleView: View {
     /// `DateFormatter` lookup per group — on every body evaluation. Same reason
     /// `groupedLines` is stored (CLAUDE.md §12).
     @State private var timestampRunPositions: [ConsoleLineGroup.ID: ConsoleTimestampRuler.RunPosition] = [:]
+    /// The same, restarted at each day separator.
+    @State private var dayTimestampRunPositions: [ConsoleLineGroup.ID: ConsoleTimestampRuler.RunPosition] = [:]
 
     /// Lines filtered by clear timestamp and message type preferences
     private var typeFilteredLines: [ConsoleLine] {
@@ -425,6 +427,10 @@ struct ConsoleView: View {
         timestampRunPositions = ConsoleTimestampRuler.runPositions(
             groups, timestamp: \.primary.timestampString)
         dayGroupedLines = DayGrouping.group(items: groups, date: { $0.primary.timestamp })
+        // A day separator starts a new block, so the row after one always
+        // prints its time.
+        dayTimestampRunPositions = ConsoleTimestampRuler.runPositions(
+            blocks: dayGroupedLines.map(\.items), timestamp: \.primary.timestampString)
         // Any change to the visible line set can leave the ScrollView holding an
         // offset that no longer matches the content — most visibly when the
         // Session⇄Broadcast toggle swaps in a different filtered set (its peer
@@ -535,15 +541,10 @@ struct ConsoleView: View {
                                     DaySeparatorView(date: section.date)
                                         .padding(.vertical, 4)
 
-                                    // Computed per section: a day separator
-                                    // starts a new block, so the row after
-                                    // one always prints its time.
-                                    let runs = ConsoleTimestampRuler.runPositions(
-                                        section.items, timestamp: \.primary.timestampString)
                                     ForEach(section.items) { group in
                                         ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
                                                              ownCallsigns: ownCallsigns,
-                                                             timestampRun: runs[group.id] ?? .alone,
+                                                             timestampRun: dayTimestampRunPositions[group.id] ?? .alone,
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu,
                                                              linksFileNames: onFileName != nil,
