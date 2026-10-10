@@ -73,15 +73,17 @@ final class ConsoleTextMeasurer {
 
     /// The size of the text laid out within `width`; unbounded when nil.
     func size(of text: NSAttributedString, width: CGFloat?) -> NSSize {
+        // An empty message is one line of the console font tall. An empty
+        // string has no attributes to ask for its font: asking for the font
+        // at index 0 threw, and A crashed on every launch (2026-10-10).
+        guard text.length > 0 else {
+            return NSSize(width: 0, height: lineHeight(for: ConsoleRowModel.messageFont))
+        }
         container.size = NSSize(width: width ?? CGFloat.greatestFiniteMagnitude,
                                 height: CGFloat.greatestFiniteMagnitude)
         storage.setAttributedString(text)
         layoutManager.ensureLayout(for: container)
         let used = layoutManager.usedRect(for: container)
-        if text.length == 0 {
-            let font = (text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont) ?? ConsoleRowModel.messageFont
-            return NSSize(width: 0, height: ceil(layoutManager.defaultLineHeight(for: font)))
-        }
         return NSSize(width: ceil(used.width), height: ceil(used.height))
     }
 }

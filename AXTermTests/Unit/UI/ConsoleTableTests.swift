@@ -66,6 +66,21 @@ final class ConsoleTableTests: XCTestCase {
         }
     }
 
+    /// An empty message is one line tall. Measuring one asked the empty
+    /// string for its font at index 0, which throws; the park test's YAPP
+    /// bytes left empty lines in A's history, and A crashed on every launch
+    /// after (2026-10-10).
+    func testAnEmptyMessageHasOneLinesHeight() {
+        let empty = NSAttributedString(string: "", attributes: [.font: ConsoleRowModel.messageFont])
+        let size = ConsoleTextMeasurer.shared.size(of: empty, width: nil)
+        XCTAssertEqual(size.width, 0)
+        XCTAssertEqual(size.height, ConsoleTextMeasurer.shared.lineHeight(for: ConsoleRowModel.messageFont))
+        XCTAssertEqual(ConsoleTextMeasurer.shared.size(of: NSAttributedString(), width: 300).height, size.height)
+
+        let row = model(ConsoleLine.packet(from: "K0EPI-3", to: "K0EPI-4", text: ""))
+        XCTAssertGreaterThan(geometry(row, width: 900).height, 0)
+    }
+
     /// The character-count width of a monospaced line matches a real layout,
     /// including the curly quotes, middle dots and degree signs decoded lines
     /// use. Text it cannot vouch for is laid out instead.
