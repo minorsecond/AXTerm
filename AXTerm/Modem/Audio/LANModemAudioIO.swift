@@ -8,14 +8,6 @@ import Foundation
 /// The session must already be logged in — `ModemRadioLink` opens CI-V
 /// first, which is the same login — so `start()` only wires the callbacks
 /// and the transmit clock.
-/// A minimal thread-safe integer, for the rate measurement.
-private final class ManagedAtomic: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
-    func add(_ n: Int) { lock.withLock { count += n } }
-    var value: Int { lock.withLock { count } }
-}
-
 nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
 
     /// Swappable while stopped: a settings change rebuilds the session.
@@ -88,16 +80,37 @@ nonisolated final class LANModemAudioIO: ModemAudioIO, @unchecked Sendable {
     /// to the nearest rate an Icom radio streams. Runs before capture is
     /// wired, so the samples counted here are only for the measurement.
     private func measureSampleRate(session: IcomLANSession, window: Double) -> Double {
-        let counter = ManagedAtomic()
-        session.onAudio = { pcm in if let pcm { counter.add(pcm.count / 2) } }
+        let lock = NSLock()
+        var arrivals: [Arrival] = []
+        session.onAudio = { pcm in
+            guard let pcm else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            lock.withLock { arrivals.append(Arrival(at: now, samples: pcm.count / 2)) }
+        }
         Thread.sleep(forTimeInterval: window)
         session.onAudio = nil
-        let perSecond = Double(counter.value) / window
+        let heard = lock.withLock { arrivals }
+        return Self.estimateRate(heard, configured: Double(session.configuration.sampleRate))
+    }
+
+    /// One audio packet heard while measuring: when, and how many samples.
+    struct Arrival: Equatable, Sendable { let at: Double; let samples: Int }
+
+    /// The radio's rate from the packets that arrived: samples over the span
+    /// they arrived in, snapped to a rate an Icom radio streams. Counting
+    /// over the whole window read audio that began part-way through as a
+    /// slower rate (48 kHz arriving for 0.15 s of 0.7 s snapped to 8 kHz),
+    /// and the decoder built for it heard nothing (2026-10-10). Too few
+    /// packets, or too short a span, to measure: the configured rate.
+    static func estimateRate(_ arrivals: [Arrival], configured: Double) -> Double {
+        guard arrivals.count >= 6, let first = arrivals.first, let last = arrivals.last else { return configured }
+        let span = last.at - first.at
+        guard span >= 0.08 else { return configured }
+        // The first packet's samples arrived before the span began.
+        let samples = arrivals.dropFirst().reduce(0) { $0 + $1.samples }
+        let perSecond = Double(samples) / span
         let candidates: [Double] = [8_000, 16_000, 24_000, 48_000]
-        let snapped = candidates.min { abs($0 - perSecond) < abs($1 - perSecond) } ?? 48_000
-        // Only trust the snap if we actually heard enough; else assume the
-        // radio's requested rate rather than a rate read from silence.
-        return perSecond > 2_000 ? snapped : Double(session.configuration.sampleRate)
+        return candidates.min { abs($0 - perSecond) < abs($1 - perSecond) } ?? configured
     }
 
     func stop() {
