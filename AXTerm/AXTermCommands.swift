@@ -80,8 +80,9 @@ nonisolated private struct SelectNavigationActionKey: FocusedValueKey {
 }
 
 struct AXTermCommands: Commands {
+    /// The engine, so Connection works whatever window has focus.
+    @ObservedObject var client: PacketEngine
     @FocusedValue(\.searchFocus) private var searchFocus
-    @FocusedValue(\.toggleConnection) private var toggleConnection
     @FocusedValue(\.inspectPacket) private var inspectPacket
     @FocusedValue(\.selectNavigation) private var selectNavigation
     @FocusedValue(\.sendFile) private var sendFile
@@ -111,10 +112,16 @@ struct AXTermCommands: Commands {
         }
 
         CommandMenu("Connection") {
-            Button("Connect/Disconnect") {
-                toggleConnection?.action()
+            let items = ConnectionMenu.items(client.radioSummaries.map { ($0.id, $0.name, $0.status) })
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                if index == 1 { Divider() }
+                if index == 0 {
+                    Button(item.title) { ConnectionMenu.perform(item.target, client: client) }
+                        .keyboardShortcut("k", modifiers: [.command])
+                } else {
+                    Button(item.title) { ConnectionMenu.perform(item.target, client: client) }
+                }
             }
-            .keyboardShortcut("k", modifiers: [.command])
         }
 
         // The standard View menu, not a second one. `CommandMenu("View")`
