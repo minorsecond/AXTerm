@@ -181,7 +181,8 @@ final class BBSService: ObservableObject {
     /// Feeds a download to the link while the link has room for it.
     private var pumpTimer: Timer?
     /// An AXDP message arriving in pieces, collected until it can be read.
-    private var axdpBuffer = Data()
+    /// The caller's AXDP, cut into messages (`receiveAXDP`).
+    private var axdpReassembler = AXDPStreamReassembler()
     /// Text written while a command is being answered, sent as one batch so
     /// a reply costs one burst of frames rather than one per line.
     private var pendingLines: [String]?
@@ -461,7 +462,8 @@ final class BBSService: ObservableObject {
         // not only after `U`: a caller who pressed Send in their transfer
         // window without typing `U` first is otherwise left waiting for an
         // acceptance that never comes.
-        if !axdpBuffer.isEmpty || (inputBuffer.isEmpty && AXDP.hasMagic(data)) {
+        if axdpReassembler.isMidMessage || !axdpReassembler.buffered.isEmpty
+            || (inputBuffer.isEmpty && AXDP.hasMagic(data)) {
             receiveAXDP(data)
             return
         }
@@ -667,7 +669,10 @@ final class BBSService: ObservableObject {
                      log: unexpected ? "transfer stopped: link dropped" : nil,
                      notifyPeer: false)
         awaitingUpload = false
-        axdpBuffer = Data()
+        axdpReassembler = AXDPStreamReassembler()
+        if let peer = live.map({ CallsignNormalizer.toAddress($0.callsign) }) {
+            coordinator.endMailboxUploads(from: peer)
+        }
         pendingLines = nil
         idleTask?.cancel()
         idleTask = nil
@@ -1326,34 +1331,24 @@ final class BBSService: ObservableObject {
 
     // MARK: - AXDP from an AXTerm caller
 
-    /// Reads an AXDP message the caller's AXTerm sent over the session.
+    /// Reads the AXDP the caller's AXTerm sent over the session.
     ///
-    /// Two kinds matter. A FILE_META is the caller's transfer window offering
-    /// a file: the mailbox takes uploads by YAPP only, so it is declined the
-    /// way AXTerm declines any offer, with a NACK the caller's software
-    /// understands, and a line saying what to do instead. A CHAT message is
-    /// a typed line from a caller with AXDP switched on, and is read as one.
+    /// A FILE_META is the caller's transfer window offering a file. The
+    /// mailbox checks it against the same rules as a YAPP upload and either
+    /// takes it, with AXTerm's own receiver (`acceptMailboxUpload`), or
+    /// declines it with the NACK the caller's software understands and a
+    /// line saying why. The chunks and requests of an upload it took go to
+    /// that receiver. A CHAT message is a typed line from a caller with AXDP
+    /// switched on, and is read as one. Until the home retest (2026-10-10,
+    /// finding 7) every offer was declined for YAPP.
     private func receiveAXDP(_ data: Data) {
-        axdpBuffer.append(data)
-        while !axdpBuffer.isEmpty {
-            guard let (message, consumed) = AXDP.Message.decode(from: axdpBuffer) else {
-                // Not readable yet. Past this size it never will be, and the
-                // command line gets the session back.
-                if axdpBuffer.count > 2048 {
-                    axdpBuffer = Data()
-                    append(.note, "dropped an AXDP message that could not be read")
-                }
-                return
-            }
-            let rest = Data(axdpBuffer.dropFirst(consumed))
-            // A remainder that is not another message is the tail of this
-            // one still arriving.
-            if !rest.isEmpty, !AXDP.hasMagic(rest), axdpBuffer.count <= 2048 { return }
-            axdpBuffer = AXDP.hasMagic(rest) ? rest : Data()
-
+        let (messages, text) = axdpReassembler.split(data)
+        for message in messages {
             switch message.type {
             case .fileMeta:
-                declineAXDPUpload(message)
+                offerAXDPUpload(message)
+            case .fileChunk, .ack, .nack:
+                if let peer = callerAddress { coordinator.receiveMailboxUploadMessage(message, from: peer) }
             case .chat:
                 if let payload = message.payload, !payload.isEmpty {
                     receiveText(payload + Data([0x0D]))
@@ -1362,26 +1357,93 @@ final class BBSService: ObservableObject {
                 append(.note, "ignored an AXDP \(message.type) message")
             }
         }
+        // Bytes around the messages are the caller typing.
+        if !text.isEmpty { receiveText(text) }
     }
 
-    private func declineAXDPUpload(_ message: AXDP.Message) {
+    private var callerAddress: AX25Address? {
+        live.map { CallsignNormalizer.toAddress($0.callsign) }
+    }
+
+    /// An AXDP offer: taken under the upload rules, or declined with why.
+    private func offerAXDPUpload(_ message: AXDP.Message) {
         awaitingUpload = false
+        let name = message.fileMeta?.filename ?? "that file"
+        guard let meta = message.fileMeta, let peer = callerAddress else {
+            declineAXDPUpload(message, name: name, reason: "the offer could not be read")
+            return
+        }
+        guard running == nil else {
+            declineAXDPUpload(message, name: name, reason: "a transfer is already running")
+            return
+        }
+        let size = Int(clamping: meta.fileSize)
+        let safe: String
+        switch uploadPolicy().decide(filename: meta.filename, size: size) {
+        case .reject(let reason):
+            declineAXDPUpload(message, name: name, reason: reason)
+            return
+        case .accept(let name):
+            safe = name
+        }
+        // The chunks could hold more than the offer says it is, and the size
+        // limit has to hold for what arrives, not for what was announced.
+        let room = Int(message.totalChunks ?? 0) * Int(meta.chunkSize)
+        guard room <= size + Int(meta.chunkSize) || message.compression != .none,
+              room <= settings.maxUploadBytes + Int(meta.chunkSize) else {
+            declineAXDPUpload(message, name: name, reason: "the offer does not add up")
+            return
+        }
+        let accepted = coordinator.acceptMailboxUpload(
+            message, from: peer,
+            reply: { [weak self] bytes in self?.writeRaw(bytes) },
+            upload: MailboxUpload(
+                save: { [weak self] _, data in self?.storeAXDPUpload(safe, data, announced: size) },
+                finished: { [weak self] status in self?.axdpUploadEnded(safe, status: status) }))
+        guard accepted != nil else { return }
+        uploadsThisCall += 1
+        note("receiving \(safe) by AXDP")
+    }
+
+    /// Saves a finished AXDP upload in the inbox, with who sent it.
+    private func storeAXDPUpload(_ name: String, _ data: Data, announced: Int) -> String? {
+        // The hash already matched the offer; this is the size limit
+        // checked against what actually arrived.
+        guard data.count <= max(announced, 0), data.count <= settings.maxUploadBytes,
+              let library, let saved = library.saveUpload(name: name, data: data, from: live?.callsign) else {
+            return nil
+        }
+        pendingAXDPConfirmation = "Received \(saved) (\(BBSFileIndex.size(data.count)))."
+        return library.uploadURL(named: saved)?.path ?? saved
+    }
+
+    /// Set when an AXDP upload is saved, said once the transfer has ended.
+    private var pendingAXDPConfirmation: String?
+
+    /// The coordinator finished an AXDP upload: tell the caller how it went,
+    /// after the protocol's own last word.
+    private func axdpUploadEnded(_ name: String, status: BulkTransferStatus) {
+        let confirmation = pendingAXDPConfirmation
+        pendingAXDPConfirmation = nil
+        Task { @MainActor [weak self] in
+            guard let self, self.live != nil else { return }
+            if let confirmation, status == .completed {
+                self.write([confirmation, BBSShell.commandPrompt])
+                self.note("received \(name) by AXDP")
+            } else {
+                self.write(["\(name) did not arrive whole, so it was not saved.", BBSShell.commandPrompt])
+                self.note("an AXDP upload of \(name) failed")
+            }
+        }
+    }
+
+    private func declineAXDPUpload(_ message: AXDP.Message, name: String, reason: String) {
         // The same NACK `SessionCoordinator.declineIncomingTransfer` sends,
         // so the caller's transfer ends as "declined" instead of waiting.
         let nack = AXDP.Message(type: .nack, sessionId: message.sessionId, messageId: 1)
         writeRaw(nack.encode())
-        let name = message.fileMeta?.filename ?? "that file"
-        // With uploads off, YAPP would be refused too; say so instead of
-        // sending the caller off to try it (park test, 2026-10-10).
-        if let reason = uploadRefusal() {
-            write(["\(name) was declined: \(reason).", BBSShell.commandPrompt])
-            note("declined an AXDP upload of \(name): \(reason)")
-            return
-        }
-        write(["This mailbox takes uploads by YAPP only, so \(name) was declined.",
-               "Send it again with YAPP as the protocol.",
-               BBSShell.commandPrompt])
-        note("declined an AXDP upload of \(name)")
+        write(["\(name) was declined: \(reason).", BBSShell.commandPrompt])
+        note("declined an AXDP upload of \(name): \(reason)")
     }
 
     // MARK: - Transcript

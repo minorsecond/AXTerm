@@ -8,7 +8,7 @@ import Foundation
 /// What Send Again asks before a file goes on the air again (home retest
 /// findings 5 and 10). Each choice is a protocol the file can go by: the
 /// transfer's own, and YAPP too for an AXDP transfer, which a mailbox that
-/// takes uploads by YAPP only declines.
+/// takes uploads by YAPP only (an AXTerm from before 2026-10-10) declines.
 nonisolated struct ResendTransferPrompt: Equatable {
     struct Option: Equatable {
         let label: String

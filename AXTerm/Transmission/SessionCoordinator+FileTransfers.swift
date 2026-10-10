@@ -574,7 +574,8 @@ extension SessionCoordinator {
     }
 
     /// Whether the row should offer Send with YAPP Instead: an AXDP offer
-    /// the far end declined, which a mailbox that takes YAPP only does.
+    /// the far end declined, which a mailbox that takes YAPP only does (an
+    /// AXTerm mailbox from before 2026-10-10).
     func offersYAPPInstead(for id: UUID) -> Bool {
         guard let transfer = transfers.first(where: { $0.id == id }), transfer.wasDeclined else { return false }
         return resendChoices(for: id).contains(.yapp)

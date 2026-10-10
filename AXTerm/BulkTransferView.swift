@@ -300,7 +300,8 @@ struct BulkTransferRow: View {
                     Text(reason)
                         .font(.caption)
                         .foregroundStyle(transfer.wasDeclined ? Color.secondary : Color.red)
-                    // A mailbox that takes uploads by YAPP only declines an
+                    // A mailbox that takes uploads by YAPP only (an AXTerm from
+                    // before 2026-10-10, or other software) declines an
                     // AXDP offer; one tap sends the same file by YAPP (home
                     // retest finding 10).
                     if offersYAPPInstead {

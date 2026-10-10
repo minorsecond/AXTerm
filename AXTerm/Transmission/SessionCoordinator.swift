@@ -384,6 +384,15 @@ final class SessionCoordinator: ObservableObject {
     /// File data cache for active transfers (keyed by transfer ID)
     var transferFileData: [UUID: Data] = [:]
 
+    /// AXDP uploads a mailbox accepted, by AXDP session ID: where the
+    /// finished file goes in place of the Transfers folder, and who to tell
+    /// how it ended (`acceptMailboxUpload`).
+    var mailboxUploads: [UInt32: MailboxUpload] = [:]
+    /// While a mailbox takes an AXDP upload from a caller, every AXDP reply
+    /// to that caller goes down the mailbox's session, which the mailbox
+    /// owns. By uppercased callsign.
+    var mailboxReplyRoutes: [String: (Data) -> Void] = [:]
+
     /// What the most recent sent files need to go again, by transfer ID,
     /// oldest first in `resendOrder` (`resend(_:using:)`).
     var resendSources: [UUID: TransferResendSource] = [:]
@@ -4165,6 +4174,11 @@ final class SessionCoordinator: ObservableObject {
     ///   It goes only over a connected session, never as a UI frame.
     func sendAXDPPayload(_ payload: Data, to destination: AX25Address, path: DigiPath, displayInfo: String?,
                          transferStream: Bool = false) -> Bool {
+        // A mailbox upload: the session is the mailbox's, so it writes.
+        if let route = mailboxReplyRoutes[destination.display.uppercased()] {
+            route(payload)
+            return true
+        }
         // Guard: don't send if packetEngine is not set (e.g., in tests)
         // CRITICAL: This prevents any frame creation or memory allocation when packetEngine is nil
         guard packetEngine != nil else {
@@ -4363,9 +4377,27 @@ final class SessionCoordinator: ObservableObject {
 
     /// Handle incoming FILE_META message - creates pending transfer request
     private func handleFileMetaMessage(_ message: AXDP.Message, from: AX25Address, path: DigiPath) {
+        guard let request = makeInboundOffer(message, from: from) else { return }
+        if sessionManager.connectedSession(withPeer: from) != nil {
+            sessionBoundTransferPeers[request.id] = from.display.uppercased()
+        }
+        pendingIncomingTransfers.append(request)
+        applyOfferPolicy(to: request)
+
+        TxLog.debug(.axdp, "Created incoming transfer request", [
+            "id": request.id.uuidString.prefix(8),
+            "from": from.display,
+            "file": request.fileName,
+            "axdpSessionId": request.axdpSessionId
+        ])
+    }
+
+    /// The receiving state and Transfers row for a FILE_META, and the offer
+    /// it makes. Nil for one without metadata, or one already seen.
+    private func makeInboundOffer(_ message: AXDP.Message, from: AX25Address) -> IncomingTransferRequest? {
         guard let fileMeta = message.fileMeta else {
             TxLog.warning(.axdp, "FILE_META missing metadata", ["from": from.display])
-            return
+            return nil
         }
 
         let axdpSessionId = message.sessionId
@@ -4376,7 +4408,7 @@ final class SessionCoordinator: ObservableObject {
                 "session": axdpSessionId,
                 "file": fileMeta.filename
             ])
-            return
+            return nil
         }
 
         // Check if whole-file compression was used
@@ -4438,7 +4470,7 @@ final class SessionCoordinator: ObservableObject {
 
         // Create pending incoming transfer request for UI accept/decline
         // CRITICAL: Store the actual AXDP session ID so ACK/NACK uses the correct value
-        let request = IncomingTransferRequest(
+        return IncomingTransferRequest(
             id: transferId,
             sourceCallsign: from.display,
             fileName: fileMeta.filename,
@@ -4446,18 +4478,65 @@ final class SessionCoordinator: ObservableObject {
             axdpSessionId: axdpSessionId,
             estimatedAirtimeSeconds: estimatedAirtime(bytes: estimatedTransmissionSize, peer: from.display)
         )
-        if sessionManager.connectedSession(withPeer: from) != nil {
-            sessionBoundTransferPeers[transferId] = from.display.uppercased()
-        }
-        pendingIncomingTransfers.append(request)
-        applyOfferPolicy(to: request)
+    }
 
-        TxLog.debug(.axdp, "Created incoming transfer request", [
-            "id": transferId.uuidString.prefix(8),
-            "from": from.display,
-            "file": fileMeta.filename,
-            "axdpSessionId": axdpSessionId
-        ])
+    // MARK: - Mailbox uploads by AXDP
+
+    /// Takes an AXDP upload for the mailbox (home retest 2026-10-10,
+    /// finding 7). The mailbox holds the caller's session, so this receiver
+    /// never sees the caller's AXDP on its own; the mailbox vets the offer
+    /// against its upload rules and hands it here, and then forwards the
+    /// transfer's chunks and requests (`receiveMailboxUploadMessage`).
+    /// The offer is accepted at once, with no prompt. Replies to the caller
+    /// go out through `reply`, the mailbox's own writer, and the finished
+    /// file goes to `upload.save` in place of the Transfers folder. The row
+    /// in Transfers shows it arriving like any other.
+    /// - Returns: the transfer's ID, or nil for an offer that cannot be read.
+    @discardableResult
+    func acceptMailboxUpload(_ message: AXDP.Message, from caller: AX25Address,
+                             reply: @escaping (Data) -> Void, upload: MailboxUpload) -> UUID? {
+        guard message.type == .fileMeta, let request = makeInboundOffer(message, from: caller) else { return nil }
+        let key = caller.display.uppercased()
+        mailboxUploads[message.sessionId] = upload
+        mailboxReplyRoutes[key] = reply
+        // A lost link fails it like any transfer riding a session.
+        sessionBoundTransferPeers[request.id] = key
+        transferLastActivity[request.id] = Date()
+        sendTransferAccept(sessionId: message.sessionId, to: caller, path: DigiPath())
+        return request.id
+    }
+
+    /// A chunk, completion request or cancel for an upload the mailbox
+    /// accepted. Anything else is not the mailbox's to pass on, and is
+    /// ignored.
+    func receiveMailboxUploadMessage(_ message: AXDP.Message, from caller: AX25Address) {
+        guard mailboxUploads[message.sessionId] != nil else { return }
+        switch message.type {
+        case .fileChunk, .ack, .nack:
+            handleAXDPMessageDecoded(from: caller, path: DigiPath(), message: message)
+        default:
+            return
+        }
+    }
+
+    /// The mailbox's call with this caller ended: nothing more of theirs
+    /// goes through it.
+    func endMailboxUploads(from caller: AX25Address) {
+        let key = caller.display.uppercased()
+        mailboxReplyRoutes.removeValue(forKey: key)
+        for (id, _) in mailboxUploads where inboundTransferStates[id].map({ $0.sourceCallsign.uppercased() == key }) ?? true {
+            mailboxUploads.removeValue(forKey: id)
+        }
+    }
+
+    /// Ends a mailbox upload: the mailbox hears how, and once the caller has
+    /// no upload left the replies stop going through the mailbox.
+    private func finishMailboxUpload(_ axdpSessionId: UInt32, caller: String, status: BulkTransferStatus) {
+        guard let upload = mailboxUploads.removeValue(forKey: axdpSessionId) else { return }
+        let key = caller.uppercased()
+        let others = mailboxUploads.keys.contains { inboundTransferStates[$0]?.sourceCallsign.uppercased() == key }
+        if !others { mailboxReplyRoutes.removeValue(forKey: key) }
+        upload.finished(status)
     }
 
     /// Handle incoming FILE_CHUNK message - accumulates data for transfer
@@ -4673,8 +4752,11 @@ final class SessionCoordinator: ObservableObject {
                     "compression": state.compressionAlgorithm == .none ? "none" : state.compressionAlgorithm.displayName
                 ])
 
-                // Save file to Downloads folder
-                if let savedPath = saveReceivedFile(fileName: state.fileName, data: fileData) {
+                // Save file to Downloads folder, or for a mailbox upload,
+                // wherever the mailbox keeps uploads.
+                let savedPath = mailboxUploads[axdpSessionId].map { $0.save(state.fileName, fileData) }
+                    ?? saveReceivedFile(fileName: state.fileName, data: fileData)
+                if let savedPath {
                     // Success - mark as completed and store path
                     transfer.markCompleted()
                     transfer.savedFilePath = savedPath
@@ -4692,7 +4774,8 @@ final class SessionCoordinator: ObservableObject {
                     TxLog.inbound(.axdp, "File transfer completed and saved", logData)
                 } else {
                     // File save failed
-                    transfer.status = .failed(reason: "The file arrived but could not be saved in \(ReceivedFileStore.folderName).")
+                    let place = mailboxUploads[axdpSessionId] != nil ? "the mailbox's upload folder" : ReceivedFileStore.folderName
+                    transfer.status = .failed(reason: "The file arrived but could not be saved in \(place).")
 
                     TxLog.error(.axdp, "Transfer completed but file save failed", error: nil, [
                         "file": state.fileName
@@ -4788,6 +4871,7 @@ final class SessionCoordinator: ObservableObject {
         transfers = updatedTransfers
 
         // Clean up state
+        finishMailboxUpload(axdpSessionId, caller: state.sourceCallsign, status: transfer.status)
         inboundTransferStates.removeValue(forKey: axdpSessionId)
         axdpToTransferId.removeValue(forKey: axdpSessionId)
 
@@ -6057,20 +6141,7 @@ final class SessionCoordinator: ObservableObject {
             let session = sessionManager.sessions.values.first { $0.remoteAddress == sourceAddress && $0.state == .connected }
             let path = session?.path ?? DigiPath()
 
-            // Send AXDP ACK to accept the transfer
-            // CRITICAL: Use the exact same AXDP session ID from FILE_META so sender can match it
-            let ackMessage = AXDP.Message(
-                type: .ack,
-                sessionId: request.axdpSessionId,
-                messageId: 1
-            )
-
-            _ = sendAXDPPayload(
-                ackMessage.encode(),
-                to: sourceAddress,
-                path: path,
-                displayInfo: "AXDP ACK (accept transfer)"
-            )
+            sendTransferAccept(sessionId: request.axdpSessionId, to: sourceAddress, path: path)
 
             TxLog.outbound(.session, "Accepted incoming transfer", [
                 "from": request.sourceCallsign,
@@ -6082,6 +6153,14 @@ final class SessionCoordinator: ObservableObject {
             // Note: The inbound transfer tracking (BulkTransfer) was already created in handleFileMetaMessage
             // No need to create another one here - it would duplicate the entry
         }
+    }
+
+    /// Sends the AXDP ACK that accepts an offer.
+    private func sendTransferAccept(sessionId: UInt32, to address: AX25Address, path: DigiPath) {
+        // CRITICAL: Use the exact same AXDP session ID from FILE_META so sender can match it
+        let ackMessage = AXDP.Message(type: .ack, sessionId: sessionId, messageId: 1)
+        _ = sendAXDPPayload(ackMessage.encode(), to: address, path: path,
+                            displayInfo: "AXDP ACK (accept transfer)")
     }
 
     /// Refuses an offer. `reason`, when given, is what the row shows; an
@@ -6417,4 +6496,14 @@ nonisolated struct CapabilityDebugEvent {
             return "TIMEOUT: \(peer)"
         }
     }
+}
+
+/// Where a mailbox's AXDP upload goes, and who hears how it ended
+/// (`SessionCoordinator.acceptMailboxUpload`).
+struct MailboxUpload {
+    /// Saves the finished, verified file. Returns its path, or nil when it
+    /// could not be saved, which fails the transfer.
+    let save: (_ fileName: String, _ data: Data) -> String?
+    /// Called once when the transfer ends, with how it ended.
+    let finished: (BulkTransferStatus) -> Void
 }

@@ -757,15 +757,34 @@ a command. When the mailbox cannot take the upload, it answers the send-init
 with YAPP's not-ready reply and the reason, so the caller's software stops at
 once, then says the reason in words.
 
-**YAPP only.** An AXTerm caller who offers a file from their transfer window
-sends an AXDP FILE_META. The mailbox declines it with the same NACK
+**YAPP or AXDP.** An AXTerm caller who offers a file from their transfer
+window sends an AXDP FILE_META, whether or not they typed `U` first. The
+mailbox checks the offer against the same rules as a YAPP upload's header
+(`BBSUploadPolicy`: switched on, an inbox, the size limit, the quota, the
+uploads this call). It also checks that the chunks the offer announces could
+not hold more than the size limit, since that has to hold for what arrives,
+not for what was announced. An offer that passes is taken with AXTerm's own
+AXDP receiver (`SessionCoordinator.acceptMailboxUpload`): accepted at once,
+with no prompt, its chunks and completion request forwarded by the mailbox,
+its replies written down the mailbox's session, and the finished file
+checked against its hash and saved in the inbox with who sent it. The
+caller then reads "Received photo.jpg (10K)." and is back at the prompt; a
+file that failed its hash is not saved, and the caller is told. The upload
+shows in the operator's Transfers list while it arrives.
+
+An offer that does not pass is declined with the NACK
 `SessionCoordinator.declineIncomingTransfer` sends, so the caller's transfer
-ends as "declined" instead of waiting, and tells them to send it again with
-YAPP. This happens whether or not they typed `U` first. With uploads off it
-says that instead: pointing the caller at YAPP would only get them refused
-again. An AXDP
+ends as "declined" instead of waiting, and a line gives the reason. An AXDP
 chat message (what AXTerm sends for a typed line when AXDP is switched on)
 is read as the line it carries.
+
+Decision (2026-10-10, home retest finding 7, approved by the operator): the
+mailbox used to decline every AXDP offer and ask for YAPP, because the
+coordinator's receiver never sees the AXDP of a session the mailbox holds.
+On the iPad that meant typing `U` in the terminal and then starting YAPP from
+Transfers. Handing the vetted offer and its messages to that receiver, with
+the mailbox as the writer, keeps one AXDP receiver in the app and lets an
+AXTerm caller upload from Transfers. Downloads still go by YAPP or as text.
 
 **Off by default, separately from downloads.** Sharing files out and accepting
 files in are different decisions with different risks, and this one writes to

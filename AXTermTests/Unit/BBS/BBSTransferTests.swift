@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 import Combine
 import GRDB
 @testable import AXTerm
@@ -810,25 +811,111 @@ final class BBSTransferTests: XCTestCase {
             in: start..<caller.received.endIndex))
     }
 
-    func testAnAXDPUploadIsDeclinedWithTheNACKAXTermUnderstands() async throws {
+    /// Every AXDP message in what the caller received, in order.
+    private func axdpReplies() -> [AXDP.Message] {
+        var reassembler = AXDPStreamReassembler()
+        return reassembler.split(caller.received).messages
+    }
+
+    /// Offers `data` by AXDP as the caller's transfer window does, and
+    /// waits for the mailbox's answer to the offer.
+    private func offerAXDP(_ name: String, _ data: Data, session: UInt32,
+                           chunkSize: Int = 128, sha: Data? = nil, totalChunks: Int? = nil) async -> AXDP.Message? {
+        let chunks = Int(ceil(Double(data.count) / Double(chunkSize)))
+        caller.clearReceived()
+        caller.send(AXDP.Message(
+            type: .fileMeta, sessionId: session, messageId: 0, totalChunks: UInt32(totalChunks ?? chunks),
+            fileMeta: AXDPFileMeta(filename: name, fileSize: UInt64(data.count),
+                                   sha256: sha ?? Data(SHA256.hash(data: data)), chunkSize: UInt16(chunkSize))
+        ).encode())
+        await caller.pump { !self.axdpReplies().isEmpty }
+        return axdpReplies().first
+    }
+
+    /// Sends the chunks and the completion request, and waits for the
+    /// mailbox's verdict on the whole file.
+    private func sendAXDPChunks(_ data: Data, session: UInt32, chunkSize: Int = 128) async -> AXDP.Message? {
+        let chunks = stride(from: 0, to: data.count, by: chunkSize).map { data[$0..<min($0 + chunkSize, data.count)] }
+        caller.clearReceived()
+        for (index, chunk) in chunks.enumerated() {
+            caller.send(AXDP.Message(type: .fileChunk, sessionId: session, messageId: UInt32(index + 2),
+                                     chunkIndex: UInt32(index), totalChunks: UInt32(chunks.count),
+                                     payload: Data(chunk), payloadCRC32: AXDP.crc32(Data(chunk))).encode())
+        }
+        caller.send(AXDP.Message(type: .ack, sessionId: session,
+                                 messageId: SessionCoordinator.completionRequestMessageId).encode())
+        await caller.pump {
+            self.axdpReplies().contains { $0.messageId == SessionCoordinator.transferCompleteMessageId }
+        }
+        return axdpReplies().first { $0.messageId == SessionCoordinator.transferCompleteMessageId }
+    }
+
+    /// An AXTerm caller uploads from Transfers by AXDP, which the mailbox
+    /// used to decline for YAPP (home retest 2026-10-10, finding 7).
+    func testAnAXDPUploadLandsInTheInbox() async throws {
         enableUploads()
         try await connect()
-        await armUpload()
+        let data = binary(1000, seed: 11)
 
-        caller.clearReceived()
-        caller.send(fileMeta(session: 0xC0FFEE, name: "photo.jpg"))
-        await caller.pump { self.caller.text.hasSuffix(">\r") }
+        let answerReply = await offerAXDP("photo.jpg", data, session: 0xC0FFEE)
 
-        let nack = try XCTUnwrap(axdpReply(), "an AXDP reply arrived")
-        XCTAssertEqual(nack.type, .nack)
-        XCTAssertEqual(nack.sessionId, 0xC0FFEE, "matched to the offer")
-        XCTAssertEqual(nack.messageId, 1, "the decline form, as declineIncomingTransfer sends")
-        XCTAssertTrue(caller.text.contains("takes uploads by YAPP only, so photo.jpg was declined"),
-                      caller.text)
-        assertIdle()
+        let answer = try XCTUnwrap(answerReply)
+        XCTAssertEqual(answer.type, .ack, "accepted")
+        XCTAssertEqual(answer.sessionId, 0xC0FFEE)
+        XCTAssertEqual(answer.messageId, 1, "the accept form, as acceptIncomingTransfer sends")
+
+        let verdictReply = await sendAXDPChunks(data, session: 0xC0FFEE)
+
+        let verdict = try XCTUnwrap(verdictReply)
+        XCTAssertEqual(verdict.type, .ack, "the whole file arrived")
+        await caller.pump { self.caller.text.contains("Received photo.jpg") }
+        XCTAssertEqual(inboxFile("photo.jpg"), data)
+        XCTAssertEqual(library.uploads.first?.from, "W0ARP-1")
+        XCTAssertTrue(caller.text.contains("Received photo.jpg"), caller.text)
 
         let next = await command("W")
         XCTAssertTrue(next.contains("OPS"), "the mailbox is at its prompt again")
+    }
+
+    /// The same rules as a YAPP upload, read from the offer.
+    func testAnAXDPUploadOverTheLimitIsDeclinedFromItsOffer() async throws {
+        enableUploads()
+        settings.maxUploadBytes = 1024
+        try await connect()
+        let answerReply = await offerAXDP("big.bin", binary(5000, seed: 2), session: 9)
+        let answer = try XCTUnwrap(answerReply)
+        XCTAssertEqual(answer.type, .nack)
+        XCTAssertEqual(answer.messageId, 1)
+        await caller.pump { self.caller.text.hasSuffix(">\r") }
+        XCTAssertTrue(caller.text.contains("big.bin was declined"), caller.text)
+        XCTAssertNil(inboxFile("big.bin"))
+    }
+
+    /// An offer whose chunks could hold more than it says it is would let a
+    /// caller past the size limit, so it is declined.
+    func testAnAXDPOfferWhoseChunksOutgrowItsSizeIsDeclined() async throws {
+        enableUploads()
+        try await connect()
+        let answerReply = await offerAXDP("small.bin", binary(300, seed: 3), session: 10,
+                                                   totalChunks: 5000)
+        let answer = try XCTUnwrap(answerReply)
+        XCTAssertEqual(answer.type, .nack)
+    }
+
+    /// A file that does not match its hash is not saved, and the caller is
+    /// told the transfer failed.
+    func testAnAXDPUploadThatFailsItsHashIsNotSaved() async throws {
+        enableUploads()
+        try await connect()
+        let data = binary(500, seed: 4)
+        let answerReply = await offerAXDP("bad.bin", data, session: 12,
+                                                   sha: Data(repeating: 0xAB, count: 32))
+        let answer = try XCTUnwrap(answerReply)
+        XCTAssertEqual(answer.type, .ack)
+        let verdictReply = await sendAXDPChunks(data, session: 12)
+        let verdict = try XCTUnwrap(verdictReply)
+        XCTAssertEqual(verdict.type, .nack)
+        XCTAssertNil(inboxFile("bad.bin"))
     }
 
     func testAnAXDPOfferWithoutUIsStillDeclinedAndMayArriveInPieces() async throws {
