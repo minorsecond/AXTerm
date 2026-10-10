@@ -32,6 +32,7 @@ struct BBSAreaListScreen: View {
     @State private var pendingURL: URL?
     @State private var newAreaName = ""
     @State private var newAreaAbout = ""
+    @State private var editingTrusted = false
 
     var body: some View {
         Group {
@@ -121,6 +122,13 @@ struct BBSAreaListScreen: View {
                             }
                         }
                     }
+                    // Hold an area to let trusted callers upload into it
+                    // (home retest finding 11).
+                    .contextMenu {
+                        Toggle("Trusted Callers Can Upload Here", isOn: Binding(
+                            get: { area.acceptsTrustedUploads },
+                            set: { library.setAcceptsTrustedUploads($0, area: area.name) }))
+                    }
                     .swipeActions(edge: .trailing) {
                         Button("Stop Sharing", systemImage: "folder.badge.minus",
                                role: .destructive) {
@@ -161,6 +169,12 @@ struct BBSAreaListScreen: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .accessibilityLabel("Folder missing")
+                }
+                if area.acceptsTrustedUploads {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Takes uploads from trusted callers")
                 }
             }
             if missing {
@@ -272,6 +286,20 @@ struct BBSAreaListScreen: View {
                 Text("\(BBSFileIndex.duration(bytes: settings.maxUploadBytes, bytesPerSecond: bytesPerSecond)) on the air at the throughput this link is managing.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                // Who may upload straight into an area that allows it; an
+                // area is switched on by holding its row.
+                Button {
+                    editingTrusted = true
+                } label: {
+                    LabeledContent("Trusted Callers") {
+                        Text(BBSTrust.summary(station: settings.callsign, list: settings.trustedCallers))
+                            .lineLimit(1)
+                    }
+                }
+                .sheet(isPresented: $editingTrusted) {
+                    BBSTrustedCallersEditor(settings: settings, station: settings.callsign)
+                }
             }
         } header: {
             Text("Uploads")

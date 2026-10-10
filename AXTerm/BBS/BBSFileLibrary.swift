@@ -69,9 +69,24 @@ final class BBSFileLibrary: ObservableObject {
     /// description, and the descriptions of the files in it.
     func relocateArea(name: String, url: URL) {
         let key = BBSFileArea.normalize(name)
-        let about = ((try? store?.fileAreas()) ?? [])
-            .first { $0.name == key }?.about ?? ""
-        addArea(name: key, about: about, url: url)
+        let existing = ((try? store?.fileAreas()) ?? []).first { $0.name == key }
+        do {
+            try store?.saveFileArea(BBSFileArea(
+                name: key, about: existing?.about ?? "", bookmark: try Self.mintBookmark(for: url),
+                acceptsTrustedUploads: existing?.acceptsTrustedUploads ?? false))
+            rescan()
+        } catch {
+            lastScanError = "Could not share \(url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
+    /// Lets trusted callers upload straight into an area, or stops them.
+    func setAcceptsTrustedUploads(_ on: Bool, area: String) {
+        let key = BBSFileArea.normalize(area)
+        guard var stored = ((try? store?.fileAreas()) ?? []).first(where: { $0.name == key }) else { return }
+        stored.acceptsTrustedUploads = on
+        try? store?.saveFileArea(stored)
+        rescan()
     }
 
     /// A bookmark for a folder the operator picked.
@@ -380,6 +395,32 @@ final class BBSFileLibrary: ObservableObject {
         rescan()
         return outcome
     }
+
+    /// Writes a trusted caller's upload into an area that takes them, never
+    /// over a file already there. The caller is the mailbox, which has
+    /// checked the trust. Returns the name it went in under, or nil.
+    func saveTrustedUpload(name: String, data: Data, toArea area: String) -> String? {
+        let key = BBSFileArea.normalize(area)
+        guard ((try? store?.fileAreas()) ?? []).first(where: { $0.name == key })?.acceptsTrustedUploads == true
+        else { return nil }
+        let outcome = addFile(named: name, data: data, to: key)
+        switch outcome {
+        case .added(let final), .renamed(_, let final): return final
+        case .refused: return nil
+        }
+    }
+
+    /// A file in an area, held open the way `uploadURL` holds the inbox,
+    /// for the Transfers row of an upload that went straight into the area.
+    func areaFileURL(area: String, named name: String) -> URL? {
+        guard let stored = index.areas.first(where: { $0.name == BBSFileArea.normalize(area) }),
+              let base = resolve(stored) else { return nil }
+        if !heldAreas.contains(base) {
+            if base.startAccessingSecurityScopedResource() { heldAreas.insert(base) }
+        }
+        return Self.inboxFile(named: name, in: base)
+    }
+    private var heldAreas: Set<URL> = []
 
     /// Deletes an upload (`trash`).
     func trashUpload(named name: String) throws {

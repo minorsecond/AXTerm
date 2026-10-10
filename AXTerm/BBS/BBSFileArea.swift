@@ -16,13 +16,18 @@ nonisolated struct BBSFileArea: Equatable, Sendable, Identifiable {
     /// Security-scoped bookmark for the folder. The app is sandboxed, so a
     /// path alone stops working at the next launch — see `BBSFileLibrary`.
     var bookmark: Data?
+    /// Whether trusted callers may upload straight into this area (home
+    /// retest finding 11). Off unless the operator switches it on: anything
+    /// in an area is served under the operator's callsign.
+    var acceptsTrustedUploads = false
 
     var id: String { name }
 
-    init(name: String, about: String = "", bookmark: Data? = nil) {
+    init(name: String, about: String = "", bookmark: Data? = nil, acceptsTrustedUploads: Bool = false) {
         self.name = BBSFileArea.normalize(name)
         self.about = about
         self.bookmark = bookmark
+        self.acceptsTrustedUploads = acceptsTrustedUploads
     }
 
     /// Area names are typed on a radio link by someone who cannot see the
@@ -195,4 +200,69 @@ nonisolated struct BBSUpload: Equatable, Sendable, Identifiable {
     /// The Files sidebar tag for the uploads list. Area names are normalized
     /// to letters, digits and dashes, so this can never be one.
     static let listTag = "\u{1}uploads"
+}
+
+/// Who may upload straight into an area that allows it (home retest
+/// finding 11).
+nonisolated enum BBSTrust {
+    /// The operator's own callsign at any SSID, or a listed callsign. A
+    /// listed callsign without an SSID covers every SSID of it; with one,
+    /// only that station.
+    static func isTrusted(_ caller: String, station: String, list: [String]) -> Bool {
+        let call = caller.uppercased().trimmingCharacters(in: .whitespaces)
+        let base = Self.base(call)
+        if !base.isEmpty, base == Self.base(station.uppercased()) { return true }
+        return list.contains { entry in
+            let listed = entry.uppercased().trimmingCharacters(in: .whitespaces)
+            return listed.contains("-") ? listed == call : listed == base
+        }
+    }
+
+    /// A list entry from what the operator typed: a callsign of letters
+    /// and digits, with an SSID from 0 to 15 or none. Nil for anything else.
+    static func entry(from text: String) -> String? {
+        let call = text.trimmingCharacters(in: .whitespaces).uppercased()
+        let parts = call.split(separator: "-", omittingEmptySubsequences: false)
+        guard (1...2).contains(parts.count), let base = parts.first,
+              (3...6).contains(base.count), base.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }),
+              base.contains(where: \.isNumber) else { return nil }
+        if parts.count == 2 {
+            guard let ssid = Int(parts[1]), (0...15).contains(ssid) else { return nil }
+        }
+        return call
+    }
+
+    /// "K0EPI (you), W0ARP": who may upload into an area that allows it.
+    static func summary(station: String, list: [String]) -> String {
+        let you = base(station.uppercased())
+        return ([you.isEmpty ? "Your own callsign" : you + " (you)"] + list).joined(separator: ", ")
+    }
+
+    private static func base(_ callsign: String) -> String {
+        String(callsign.split(separator: "-").first ?? "")
+    }
+}
+
+/// Where an upload goes when the caller named an area with `U PARK`: into
+/// the area for a trusted caller and an area that takes their uploads, the
+/// inbox for everyone else, who is told so (home retest finding 11).
+nonisolated struct BBSUploadTarget: Equatable, Sendable {
+    /// The area it goes into, or nil for the inbox.
+    let area: String?
+    /// What the caller is told before "Ready", or nil when they named no area.
+    let note: String?
+
+    static func resolve(area: String?, caller: String, station: String, trusted: [String],
+                        areas: [BBSFileArea]) -> BBSUploadTarget {
+        guard let area else { return BBSUploadTarget(area: nil, note: nil) }
+        guard let named = areas.first(where: { $0.name == area }) else {
+            return BBSUploadTarget(area: nil, note: "There is no area called \(area). Uploads go to the sysop's inbox.")
+        }
+        // Not trusted and switched off read the same: a caller has no need
+        // to learn which it was.
+        guard named.acceptsTrustedUploads, BBSTrust.isTrusted(caller, station: station, list: trusted) else {
+            return BBSUploadTarget(area: nil, note: "Uploads go to the sysop's inbox, not into \(area).")
+        }
+        return BBSUploadTarget(area: area, note: "Your upload goes straight into \(area).")
+    }
 }

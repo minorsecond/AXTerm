@@ -31,6 +31,7 @@ struct BBSFilesPane: View {
     @State private var previewURL: URL?
     /// Uploads waiting for the operator to confirm Move to Trash.
     @State private var trashing: [String] = []
+    @State private var editingTrusted = false
 
     private static let uploadsTag = BBSUpload.listTag
     private var selectedArea: String? { selection == Self.uploadsTag ? nil : selection }
@@ -90,6 +91,9 @@ struct BBSFilesPane: View {
         }
         .sheet(item: $editing) { file in
             descriptionSheet(file)
+        }
+        .sheet(isPresented: $editingTrusted) {
+            BBSTrustedCallersEditor(settings: settings, station: settings.callsign)
         }
         .sheet(isPresented: Binding(get: { pendingURL != nil },
                                     set: { if !$0 { pendingURL = nil } })) {
@@ -154,6 +158,13 @@ struct BBSFilesPane: View {
                                                 .foregroundStyle(.orange)
                                                 .accessibilityLabel("Folder missing")
                                         }
+                                        if area.acceptsTrustedUploads {
+                                            Image(systemName: "tray.and.arrow.down")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .help("Trusted callers can upload into \(area.name)")
+                                                .accessibilityLabel("Takes uploads from trusted callers")
+                                        }
                                     }
                                     if missing {
                                         // Said on the row, with the fix beside it: an
@@ -189,6 +200,10 @@ struct BBSFilesPane: View {
                                     Button("Choose Folder Again…") {
                                         picker.begin(.relocate(area: area.name))
                                     }
+                                    Divider()
+                                    Toggle("Trusted Callers Can Upload Here", isOn: Binding(
+                                        get: { area.acceptsTrustedUploads },
+                                        set: { library.setAcceptsTrustedUploads($0, area: area.name) }))
                                     Divider()
                                     Button("Stop sharing \(area.name)", role: .destructive) {
                                         library.removeArea(name: area.name)
@@ -302,6 +317,22 @@ struct BBSFilesPane: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                // Who may upload straight into an area that allows it
+                // (home retest finding 11).
+                HStack(spacing: 4) {
+                    Text("Trusted").font(.caption)
+                    Text(BBSTrust.summary(station: settings.callsign, list: settings.trustedCallers))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer()
+                    Button("Edit…") { editingTrusted = true }
+                        .controlSize(.small)
+                }
+                .help("Callers who can upload straight into an area you switch to take their uploads, "
+                      + "from that area's menu")
             }
         }
         .padding(8)

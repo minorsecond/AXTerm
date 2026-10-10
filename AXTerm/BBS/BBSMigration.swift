@@ -111,6 +111,14 @@ extension DatabaseManager {
         }
     }
 
+    /// Whether trusted callers may upload into an area (migration v40, home
+    /// retest finding 11). Off for every area that already exists.
+    nonisolated static func addBBSAreaTrustedUploads(_ db: Database) throws {
+        try db.alter(table: "bbs_file_areas") { t in
+            t.add(column: "acceptsTrustedUploads", .boolean).notNull().defaults(to: false)
+        }
+    }
+
     /// Withdraws the address/phone/email fields (migration v22).
     ///
     /// Those three were briefly collectable and should not have been: packet

@@ -105,7 +105,7 @@ nonisolated struct BBSShell {
         /// Hand the session to a transfer protocol for this file.
         case sendFile(BBSSharedFile)
         /// Arm the receiver; the transfer protocol carries the filename.
-        case beginUpload
+        case beginUpload(area: String?)
         case abortTransfer
         case learnWhitePages(callsign: String,
                              key: WhitePagesEntry.Key,
@@ -336,8 +336,11 @@ nonisolated struct BBSShell {
                 return Output(lines: ["Uploads need a direct connection: this link carries "
                                       + "typed lines only. Connect to \(direct) to send a file."])
             }
+            // `U PARK` names an area for a trusted caller's upload (home
+            // retest finding 11); the mailbox decides whether it goes there.
+            let area = BBSFileArea.normalize(rest)
             return Output(lines: ["Ready — start your upload now."],
-                          effects: [.beginUpload])
+                          effects: [.beginUpload(area: area.isEmpty ? nil : area)])
         case "A", "ABORT":
             pendingDownload = nil
             return Output(lines: ["Stopped."], effects: [.abortTransfer])
@@ -394,7 +397,7 @@ nonisolated struct BBSShell {
             "W          file areas         W <area>  what is in one",
             "WN         what is new since your last call",
             "D <name>   download (text is sent as text — no transfer needed)",
-            "U          upload a file to the sysop",
+            "U          upload a file to the sysop  U <area>  into an area, if trusted",
             "A          stop a listing or transfer",
             "I          about this station",
             "I CALL     what the directory knows about CALL",

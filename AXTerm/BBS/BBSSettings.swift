@@ -20,6 +20,7 @@ final class BBSSettings: ObservableObject {
     static let publishHeardListKey = "bbsPublishHeardList"
     static let publishWhitePagesKey = "bbsPublishWhitePages"
     static let acceptUploadsKey = "bbsAcceptUploads"
+    static let trustedCallersKey = "bbsTrustedCallers"
     static let maxUploadBytesKey = "bbsMaxUploadBytes"
     static let uploadQuotaBytesKey = "bbsUploadQuotaBytes"
 
@@ -86,6 +87,12 @@ final class BBSSettings: ObservableObject {
     /// A separate decision from sharing files out, and off by default:
     /// accepting a file writes to the operator's disk on the say-so of
     /// whoever is holding a microphone.
+    /// Callers who may upload straight into an area that allows it, beside
+    /// the operator's own callsigns, which always may (`BBSTrust`).
+    @Published var trustedCallers: [String] {
+        didSet { defaults.set(trustedCallers, forKey: Self.trustedCallersKey) }
+    }
+
     @Published var acceptUploads: Bool {
         didSet { defaults.set(acceptUploads, forKey: Self.acceptUploadsKey) }
     }
@@ -116,6 +123,7 @@ final class BBSSettings: ObservableObject {
         self.publishWhitePages =
             defaults.object(forKey: Self.publishWhitePagesKey) as? Bool ?? true
         self.acceptUploads = defaults.bool(forKey: Self.acceptUploadsKey)
+        self.trustedCallers = defaults.stringArray(forKey: Self.trustedCallersKey) ?? []
         let maxUpload = defaults.integer(forKey: Self.maxUploadBytesKey)
         self.maxUploadBytes = maxUpload > 0 ? maxUpload : 100 * 1024
         let quota = defaults.integer(forKey: Self.uploadQuotaBytesKey)

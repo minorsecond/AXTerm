@@ -599,3 +599,31 @@ extension SessionCoordinator {
         sessionManager.connectedSession(withPeer: CallsignNormalizer.toAddress(destination)) != nil
     }
 }
+
+// MARK: - Uploading into a mailbox area
+
+/// The line the Send File sheet types before a file when the operator names
+/// a mailbox area (home retest 2026-10-10, finding 11). An AXTerm mailbox
+/// that trusts the caller puts the next upload, by YAPP or AXDP, in that
+/// area; any other mailbox reads it as `U` and the file lands in its inbox.
+nonisolated enum MailboxAreaCommand {
+    static func line(for area: String) -> String? {
+        let name = BBSFileArea.normalize(area)
+        return name.isEmpty ? nil : "U \(name)\r"
+    }
+}
+
+extension SessionCoordinator {
+    /// Types `U <AREA>` down the session with `destination`, ahead of the
+    /// file. False when there is no area or no session with that station.
+    @discardableResult
+    func sendMailboxAreaCommand(_ area: String, to destination: String) -> Bool {
+        guard let line = MailboxAreaCommand.line(for: area),
+              let session = sessionManager.connectedSession(withPeer: CallsignNormalizer.toAddress(destination))
+        else { return false }
+        let frames = sessionManager.sendData(Data(line.utf8), to: session.remoteAddress, path: session.path,
+                                             radio: session.radio, pid: 0xF0, displayInfo: line)
+        for frame in frames { sendFrame(frame) }
+        return true
+    }
+}

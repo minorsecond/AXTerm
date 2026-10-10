@@ -5604,6 +5604,9 @@ struct TerminalViewModifiers: ViewModifier {
                     },
                     measuredRate: { callsign in
                         sessionCoordinator.measuredTransferRates[callsign.uppercased()]
+                    },
+                    onMailboxArea: { destination, area in
+                        sessionCoordinator.sendMailboxAreaCommand(area, to: destination)
                     }
                 )
             }

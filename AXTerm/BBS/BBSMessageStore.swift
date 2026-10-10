@@ -306,7 +306,8 @@ nonisolated final class SQLiteBBSMessageStore: BBSMessageStore, @unchecked Senda
             try Row.fetchAll(db, sql: "SELECT * FROM bbs_file_areas ORDER BY name")
                 .map { row in
                     BBSFileArea(name: row["name"], about: row["about"],
-                                bookmark: row["bookmark"])
+                                bookmark: row["bookmark"],
+                                acceptsTrustedUploads: row["acceptsTrustedUploads"] ?? false)
                 }
         }
     }
@@ -314,10 +315,10 @@ nonisolated final class SQLiteBBSMessageStore: BBSMessageStore, @unchecked Senda
     func saveFileArea(_ area: BBSFileArea) throws {
         try dbQueue.write { db in
             try db.execute(
-                sql: "INSERT INTO bbs_file_areas (name, about, bookmark) VALUES (?, ?, ?)"
+                sql: "INSERT INTO bbs_file_areas (name, about, bookmark, acceptsTrustedUploads) VALUES (?, ?, ?, ?)"
                    + " ON CONFLICT(name) DO UPDATE SET about = excluded.about,"
-                   + " bookmark = excluded.bookmark",
-                arguments: [area.name, area.about, area.bookmark])
+                   + " bookmark = excluded.bookmark, acceptsTrustedUploads = excluded.acceptsTrustedUploads",
+                arguments: [area.name, area.about, area.bookmark, area.acceptsTrustedUploads])
         }
     }
 

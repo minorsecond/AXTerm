@@ -840,6 +840,9 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 39, name: "createBBSUploads") { db in
             try createBBSUploads(db)
         }
+        registerReportedMigration(&migrator, version: 40, name: "addBBSAreaTrustedUploads") { db in
+            try addBBSAreaTrustedUploads(db)
+        }
         return migrator
     }()
 

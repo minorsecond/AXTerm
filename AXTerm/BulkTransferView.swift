@@ -975,6 +975,9 @@ struct SendFileSheet: View {
     var requestCapabilityCheck: ((String) -> Void)?
     /// The rate of the last transfer with a station, for the airtime.
     var measuredRate: ((String) -> Double?)?
+    /// Types `U <AREA>` to the station before the file (destination, area),
+    /// for an upload into a mailbox area. Nil hides the field.
+    var onMailboxArea: ((String, String) -> Void)?
 
     @State private var selectedSessionIndex: Int = 0
     /// The picked file's bytes, when it is a photo (`PhotoSendPanel`).
@@ -985,6 +988,8 @@ struct SendFileSheet: View {
     @State private var compressionMode: CompressionMode = .useGlobal
     @State private var selectedAlgorithm: AXDPCompression.Algorithm = .lz4
     @State private var selectedProtocol: TransferProtocolType = .axdp
+    /// A mailbox area to upload into; empty for the mailbox's inbox.
+    @State private var mailboxArea = ""
 
     enum CompressionMode: String, CaseIterable {
         case useGlobal = "Global"
@@ -1078,6 +1083,23 @@ struct SendFileSheet: View {
                     }
                 }
 
+                // An AXTerm mailbox puts a trusted caller's upload straight
+                // into an area (home retest finding 11).
+                if onMailboxArea != nil {
+                    Section {
+                        TextField("Area", text: $mailboxArea, prompt: Text("Inbox"))
+                            .autocorrectionDisabled()
+                            #if os(iOS)
+                            .textInputAutocapitalization(.characters)
+                            #endif
+                    } header: {
+                        Text("Mailbox Area")
+                    } footer: {
+                        Text("Sending to a mailbox? Name an area and an AXTerm mailbox that trusts you puts "
+                             + "the file there. Otherwise it goes to the mailbox's inbox.")
+                    }
+                }
+
             }
             .formStyle(.grouped)
 
@@ -1103,6 +1125,9 @@ struct SendFileSheet: View {
                                 sendError = error.localizedDescription
                                 return
                             }
+                        }
+                        if !mailboxArea.trimmingCharacters(in: .whitespaces).isEmpty {
+                            onMailboxArea?(session.remoteAddress.display, mailboxArea)
                         }
                         onSend(session.remoteAddress.display, session.path.display, selectedProtocol,
                                compressionSettings, replacement)

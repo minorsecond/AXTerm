@@ -142,6 +142,9 @@ final class BBSService: ObservableObject {
     private var idleTask: Task<Void, Never>?
     /// Armed by `U`, until the caller's first recognizable protocol frame.
     private var awaitingUpload = false
+    /// The area `U PARK` chose for the next upload, by YAPP or AXDP, or nil
+    /// for the inbox. Holds for that one upload (`BBSUploadTarget`).
+    private var uploadArea: String?
     private var uploadsThisCall = 0
     /// When this caller was last here, fixed for the duration of the call.
     private var callerLastVisit: Date?
@@ -171,6 +174,8 @@ final class BBSService: ObservableObject {
         /// the acknowledgment of end of transmission, whose YAPP driver read
         /// it as a protocol error (2026-10-01).
         var storedConfirmation: String?
+        /// The area a trusted caller's upload goes into, or nil for the inbox.
+        var area: String?
         var framing = YAPPFrameAssembler()
         /// Text the caller typed during the transfer, kept only to spot `A`.
         var typed = Data()
@@ -473,6 +478,7 @@ final class BBSService: ObservableObject {
         // as a command rather than swallowing it.
         if awaitingUpload, startReceiving(data) { return }
         awaitingUpload = false
+        uploadArea = nil
 
         // A YAPP send-init at the prompt can only be an upload starting: ENQ
         // 01 is never typed. At the park test (2026-10-10) the iPad started
@@ -538,9 +544,17 @@ final class BBSService: ObservableObject {
 
         // Where the refusal is already knowable, say it instead of "Ready",
         // rather than telling the caller to start and then that they cannot.
-        if output.effects.contains(.beginUpload), let reason = uploadRefusal() {
+        if output.effects.contains(where: { if case .beginUpload = $0 { return true }; return false }),
+           let reason = uploadRefusal() {
             output.lines = ["Sorry — \(reason)."]
-            output.effects.removeAll { $0 == .beginUpload }
+            output.effects.removeAll { if case .beginUpload = $0 { return true }; return false }
+        }
+        for case .beginUpload(let area) in output.effects {
+            let target = BBSUploadTarget.resolve(
+                area: area, caller: live?.callsign ?? "", station: stationCallsign(),
+                trusted: settings.trustedCallers, areas: library?.index.areas ?? [])
+            uploadArea = target.area
+            if let note = target.note { output.lines.insert(note, at: 0) }
         }
 
         // What the shell said goes first, so "Sending x" arrives before x
@@ -1284,6 +1298,8 @@ final class BBSService: ObservableObject {
         driver.delegate = bridge
         running = RunningTransfer(id: id, driver: driver, bridge: bridge,
                                   direction: .upload, what: "the upload", logName: "")
+        running?.area = uploadArea
+        uploadArea = nil
         transfer = TransferStatus(direction: .upload, caller: live?.callsign ?? "",
                                   fileName: nil, protocolName: "YAPP",
                                   bytesDone: 0, totalBytes: 0, startedAt: now())
@@ -1315,18 +1331,30 @@ final class BBSService: ObservableObject {
 
     private func storeUpload(id: UUID, _ data: Data, _ metadata: TransferFileMetadata) {
         guard running?.id == id else { return }
+        let area = running?.area
         guard let safe = BBSUploadPolicy.sanitize(metadata.fileName),
-              let saved = library?.saveUpload(name: safe, data: data, from: live?.callsign) else {
+              let saved = saveUpload(safe, data, area: area) else {
             write(["That file could not be saved."])
             note("an upload could not be saved")
             return
         }
         running?.stored = true
-        running?.storedConfirmation = "Received \(saved) (\(BBSFileIndex.size(data.count)))."
+        running?.storedConfirmation = Self.receivedLine(saved, bytes: data.count, area: area)
         uploadsThisCall += 1
         // Named in the call log because an unattended station accepting files
         // is exactly the thing the operator wants to read about afterwards.
         note("uploaded \(saved)")
+    }
+
+    /// Into the area a trusted caller chose, or the inbox with who sent it.
+    private func saveUpload(_ name: String, _ data: Data, area: String?) -> String? {
+        guard let library else { return nil }
+        if let area { return library.saveTrustedUpload(name: name, data: data, toArea: area) }
+        return library.saveUpload(name: name, data: data, from: live?.callsign)
+    }
+
+    private static func receivedLine(_ name: String, bytes: Int, area: String?) -> String {
+        "Received \(name) (\(BBSFileIndex.size(bytes)))\(area.map { " into \($0)" } ?? "")."
     }
 
     // MARK: - AXDP from an AXTerm caller
@@ -1368,6 +1396,8 @@ final class BBSService: ObservableObject {
     /// An AXDP offer: taken under the upload rules, or declined with why.
     private func offerAXDPUpload(_ message: AXDP.Message) {
         awaitingUpload = false
+        let area = uploadArea
+        uploadArea = nil
         let name = message.fileMeta?.filename ?? "that file"
         guard let meta = message.fileMeta, let peer = callerAddress else {
             declineAXDPUpload(message, name: name, reason: "the offer could not be read")
@@ -1398,7 +1428,7 @@ final class BBSService: ObservableObject {
             message, from: peer,
             reply: { [weak self] bytes in self?.writeRaw(bytes) },
             upload: MailboxUpload(
-                save: { [weak self] _, data in self?.storeAXDPUpload(safe, data, announced: size) },
+                save: { [weak self] _, data in self?.storeAXDPUpload(safe, data, announced: size, area: area) },
                 finished: { [weak self] status in self?.axdpUploadEnded(safe, status: status) }))
         guard accepted != nil else { return }
         uploadsThisCall += 1
@@ -1406,15 +1436,16 @@ final class BBSService: ObservableObject {
     }
 
     /// Saves a finished AXDP upload in the inbox, with who sent it.
-    private func storeAXDPUpload(_ name: String, _ data: Data, announced: Int) -> String? {
+    private func storeAXDPUpload(_ name: String, _ data: Data, announced: Int, area: String?) -> String? {
         // The hash already matched the offer; this is the size limit
         // checked against what actually arrived.
         guard data.count <= max(announced, 0), data.count <= settings.maxUploadBytes,
-              let library, let saved = library.saveUpload(name: name, data: data, from: live?.callsign) else {
+              let library, let saved = saveUpload(name, data, area: area) else {
             return nil
         }
-        pendingAXDPConfirmation = "Received \(saved) (\(BBSFileIndex.size(data.count)))."
-        return library.uploadURL(named: saved)?.path ?? saved
+        pendingAXDPConfirmation = Self.receivedLine(saved, bytes: data.count, area: area)
+        let url = area.map { library.areaFileURL(area: $0, named: saved) } ?? library.uploadURL(named: saved)
+        return url?.path ?? saved
     }
 
     /// Set when an AXDP upload is saved, said once the transfer has ended.

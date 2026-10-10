@@ -592,9 +592,9 @@ final class BBSTransferTests: XCTestCase {
 
     /// Types `U` and waits for the go-ahead, which ends without a prompt:
     /// the caller is not at one while the mailbox waits for their upload.
-    private func armUpload() async {
+    private func armUpload(_ command: String = "U") async {
         caller.clearReceived()
-        caller.type("U")
+        caller.type(command)
         await caller.pump { self.caller.text.hasSuffix("upload now.\r") }
         XCTAssertTrue(caller.text.hasSuffix("Ready — start your upload now.\r"), caller.text)
     }
@@ -646,6 +646,72 @@ final class BBSTransferTests: XCTestCase {
         let listed = try XCTUnwrap(library.uploads.first { $0.name == "from-w0arp.bin" })
         XCTAssertEqual(listed.from, "W0ARP-1")
         XCTAssertEqual(listed.byteCount, 300)
+    }
+
+    // MARK: - Trusted callers into an area (home retest finding 11)
+
+    private func trustCallerIntoOPS() {
+        settings.trustedCallers = ["W0ARP"]
+        library.setAcceptsTrustedUploads(true, area: "OPS")
+    }
+
+    private func areaFile(_ name: String) -> Data? {
+        try? Data(contentsOf: area.appendingPathComponent(name))
+    }
+
+    func testATrustedCallerUploadsStraightIntoAnArea() async throws {
+        enableUploads()
+        trustCallerIntoOPS()
+        try await connect()
+        await armUpload("U OPS")
+        XCTAssertTrue(caller.text.contains("Your upload goes straight into OPS."), caller.text)
+
+        let data = binary(300, seed: 21)
+        let sender = try await upload("net.bin", data, typingU: false)
+        XCTAssertTrue(sender.textString.contains("Received net.bin (300B) into OPS."), sender.textString)
+        XCTAssertEqual(areaFile("net.bin"), data)
+        XCTAssertNil(inboxFile("net.bin"))
+        XCTAssertTrue(library.index.files(in: "OPS").contains { $0.name == "net.bin" }, "callers can list it")
+    }
+
+    func testAnUntrustedCallerNamingAnAreaLandsInTheInbox() async throws {
+        enableUploads()
+        library.setAcceptsTrustedUploads(true, area: "OPS")
+        try await connect()
+        await armUpload("U OPS")
+        XCTAssertTrue(caller.text.contains("Uploads go to the sysop's inbox, not into OPS."), caller.text)
+
+        let data = binary(300, seed: 22)
+        _ = try await upload("net.bin", data, typingU: false)
+        XCTAssertEqual(inboxFile("net.bin"), data)
+        XCTAssertNil(areaFile("net.bin"))
+    }
+
+    /// The area named with `U` holds for an upload from Transfers too.
+    func testATrustedAXDPUploadAfterUAreaGoesIntoTheArea() async throws {
+        enableUploads()
+        trustCallerIntoOPS()
+        try await connect()
+        await armUpload("U OPS")
+        let data = binary(400, seed: 23)
+        _ = await offerAXDP("roster.bin", data, session: 77)
+        _ = await sendAXDPChunks(data, session: 77)
+        await caller.pump { self.caller.text.contains("Received roster.bin") }
+        XCTAssertEqual(areaFile("roster.bin"), data)
+        XCTAssertTrue(caller.text.contains("into OPS"), caller.text)
+    }
+
+    /// The next upload after one into an area goes to the inbox again unless
+    /// the area is named again.
+    func testTheAreaHoldsForOneUpload() async throws {
+        enableUploads()
+        trustCallerIntoOPS()
+        try await connect()
+        await armUpload("U OPS")
+        _ = try await upload("first.bin", binary(100, seed: 24), typingU: false)
+        _ = try await upload("second.bin", binary(100, seed: 25), typingU: true)
+        XCTAssertNotNil(areaFile("first.bin"))
+        XCTAssertNotNil(inboxFile("second.bin"))
     }
 
     /// The confirmation waits until YAPP is done. On 2026-10-01 the mailbox

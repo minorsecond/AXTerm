@@ -290,7 +290,16 @@ final class BBSFileCommandsTests: XCTestCase {
     func testUploadArmsTheReceiver() {
         var sut = shell()
         let out = sut.handle(line: "U", mailbox: .init(), now: t(0))
-        XCTAssertEqual(out.effects, [.beginUpload])
+        XCTAssertEqual(out.effects, [.beginUpload(area: nil)])
+    }
+
+    /// `U PARK` names the area a trusted caller wants the upload in (home
+    /// retest finding 11); the mailbox decides whether it goes there.
+    func testUploadCanNameAnArea() {
+        var sut = shell()
+        let out = sut.handle(line: "u park", mailbox: .init(), now: t(0))
+        XCTAssertEqual(out.effects, [.beginUpload(area: "PARK")])
+        XCTAssertEqual(out.lines, ["Ready — start your upload now."])
     }
 
     /// `A` is FBB's abort, and a caller who has started something they did not

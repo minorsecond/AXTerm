@@ -786,6 +786,31 @@ Transfers. Handing the vetted offer and its messages to that receiver, with
 the mailbox as the writer, keeps one AXDP receiver in the app and lets an
 AXTerm caller upload from Transfers. Downloads still go by YAPP or as text.
 
+**Trusted callers may upload into an area.** The operator keeps a list of
+trusted callers (`BBSSettings.trustedCallers`); their own callsign, at any
+SSID, is always trusted (`BBSTrust`). A listed callsign without an SSID
+covers every SSID of it. Each area has a switch, Trusted Callers Can Upload
+Here, off by default (`BBSFileArea.acceptsTrustedUploads`, migration v40),
+in the area's menu on the Mac and when holding its row on iOS. A caller names
+the area before the upload with `U PARK`; it holds for the next upload by
+YAPP or AXDP, and only that one. A trusted caller and an area that takes
+uploads gets "Your upload goes straight into PARK." and the file goes in,
+never replacing one already there; the confirmation reads "Received
+photo.jpg (10K) into PARK." Anyone else is told "Uploads go to the sysop's
+inbox, not into PARK." in the same words whether they are not trusted or the
+area does not take uploads, and lands in the inbox as usual
+(`BBSUploadTarget`). The size limit applies either way.
+
+An AXTerm caller can name the area in the Send File sheet's Mailbox Area
+field, which types `U PARK` down the session just before the file. Any
+other mailbox reads that as `U`, so the file lands in its inbox.
+
+Decision (2026-10-10, home retest finding 11, approved by the operator):
+uploads stayed in the inbox by default, because anything in an area is
+served unattended under the operator's callsign. Trust and the per-area
+switch together keep that true for everyone but callers the operator chose,
+into areas the operator opened to them.
+
 **Off by default, separately from downloads.** Sharing files out and accepting
 files in are different decisions with different risks, and this one writes to
 the operator's disk on the say-so of whoever is holding a microphone.
