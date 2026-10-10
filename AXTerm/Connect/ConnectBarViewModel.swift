@@ -1096,9 +1096,29 @@ final class ConnectBarViewModel: ObservableObject {
         return candidate.origin < existing.origin
     }
 
+    /// Which rebuild is newest. A slower, older one that finishes late is
+    /// dropped rather than overwriting fresher paths.
+    private var observedPathsGeneration = 0
+
+    /// Walks every stored packet, so it runs off the main thread: on a busy
+    /// APRS channel the walk was a visible stall in the terminal's scrolling
+    /// every few seconds (2026-10-10). The result is applied back on the main
+    /// actor, followed by the suggestions that read it.
     private func rebuildObservedPaths(from packets: [Packet]) {
-        let index = ObservedPathIndex.build(packets, canonical: { canonicalCallsign($0) },
-                                            isDigi: { CallsignValidator.isValidDigipeaterAddress($0) })
+        observedPathsGeneration += 1
+        let generation = observedPathsGeneration
+        Task.detached(priority: .utility) { [weak self] in
+            let index = ObservedPathIndex.build(packets, canonical: { Self.canonical($0) },
+                                                isDigi: { CallsignValidator.isValidDigipeaterAddress($0) })
+            await MainActor.run { [weak self] in
+                guard let self, generation == self.observedPathsGeneration else { return }
+                self.applyObservedPaths(index)
+                self.scheduleSuggestionsRefresh()
+            }
+        }
+    }
+
+    private func applyObservedPaths(_ index: ObservedPathIndex.Result) {
         var map: [ObservedPathKey: ObservedPath] = [:]
         for path in index.paths {
             map[ObservedPathKey(peer: path.peer, digisSignature: path.digis.joined(separator: ","))] = path
@@ -1155,6 +1175,10 @@ final class ConnectBarViewModel: ObservableObject {
     }
 
     private func canonicalCallsign(_ raw: String) -> String {
+        Self.canonical(raw)
+    }
+
+    nonisolated private static func canonical(_ raw: String) -> String {
         let normalized = CallsignValidator.normalize(raw)
         guard !normalized.isEmpty else { return "" }
         let parsed = CallsignNormalizer.parse(normalized)

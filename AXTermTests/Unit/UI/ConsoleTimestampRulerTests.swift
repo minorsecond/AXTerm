@@ -98,4 +98,23 @@ final class ConsoleTimestampRulerTests: XCTestCase {
         }
         XCTAssertEqual(calls, 10)
     }
+
+    /// The console groups by the whole second rather than by formatting every
+    /// row's time on each rebuild. The time is printed to the second, so two
+    /// rows share a key exactly when they print the same time.
+    func testTheSecondKeyMatchesThePrintedTime() {
+        let base = Date(timeIntervalSince1970: 1_791_600_000)
+        let pairs: [(TimeInterval, TimeInterval)] = [(0.1, 0.9), (0.9, 1.1), (5.0, 5.999), (59.5, 60.2)]
+        for (a, b) in pairs {
+            let first = base.addingTimeInterval(a), second = base.addingTimeInterval(b)
+            XCTAssertEqual(ConsoleTimestampRuler.secondKey(first) == ConsoleTimestampRuler.secondKey(second),
+                           TimeDisplay.timeString(first) == TimeDisplay.timeString(second), "\(a) vs \(b)")
+        }
+    }
+
+    func testRunsWorkOnAnyComparableKey() {
+        let rows = [Row(id: 0, stamp: ""), Row(id: 1, stamp: ""), Row(id: 2, stamp: "")]
+        let map = ConsoleTimestampRuler.runPositions(rows) { $0.id < 2 ? 7 : 8 }
+        XCTAssertEqual([0, 1, 2].map { map[$0] }, [.start, .end, .alone])
+    }
 }

@@ -417,6 +417,27 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertEqual(vm.recommendedDigiPaths.first?.digis, ["DRL"])
     }
 
+    /// The observed paths are worked out away from the main thread, where
+    /// walking every stored packet stalled scrolling the terminal
+    /// (2026-10-10). They still arrive, and the newest packets win when two
+    /// rebuilds overlap.
+    func testObservedDigisArriveAndTheNewestRebuildWins() async {
+        let vm = makeViewModel()
+        func packets(via digi: String) -> [Packet] {
+            (0..<200).map { i in
+                Packet(timestamp: Date(timeIntervalSince1970: Double(i)),
+                       from: AX25Address(call: "N0AMY"), to: AX25Address(call: "APRS"),
+                       via: [AX25Address(call: digi, repeated: true)], info: Data("x".utf8))
+            }
+        }
+        vm.updateRuntimeData(stations: [], neighbors: [], routes: [],
+                             packets: packets(via: "W0NED"), favorites: [])
+        vm.updateRuntimeData(stations: [], neighbors: [], routes: [],
+                             packets: packets(via: "K5RHD"), favorites: [])
+        await waitForSuggestions()
+        XCTAssertEqual(vm.knownDigiPresets, ["K5RHD"])
+    }
+
     func testTacticalAliasValidAsAX25Destination() {
         let vm = makeViewModel()
         vm.setMode(.ax25, for: .terminal)

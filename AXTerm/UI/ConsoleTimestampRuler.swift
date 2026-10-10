@@ -13,10 +13,11 @@ import Foundation
 /// part of the answer — the rows underneath are drawn as hanging from the
 /// time above them rather than as rows whose time failed to appear.
 ///
-/// Keyed on the rendered string rather than the interval between rows. Two
-/// frames 0.8 s apart can land either side of a second boundary or inside
+/// Keyed on the second the time falls in, never the interval between rows.
+/// Two frames 0.8 s apart can land either side of a second boundary or inside
 /// one, and the question here is only "does this row say something the row
-/// above it did not".
+/// above it did not". The time prints to the second, so the same second is
+/// the same printed time.
 nonisolated enum ConsoleTimestampRuler {
 
     /// Where a row sits among the rows sharing its displayed time.
@@ -40,9 +41,9 @@ nonisolated enum ConsoleTimestampRuler {
     ///
     /// Call once per contiguous block that is drawn together. A day separator
     /// starts a new block, so the first row after one always prints.
-    static func runPositions<Row: Identifiable>(
+    static func runPositions<Row: Identifiable, Key: Equatable>(
         _ rows: [Row],
-        timestamp: (Row) -> String
+        timestamp: (Row) -> Key
     ) -> [Row.ID: RunPosition] {
         var positions: [Row.ID: RunPosition] = [:]
         let stamps = rows.map(timestamp)
@@ -62,15 +63,24 @@ nonisolated enum ConsoleTimestampRuler {
         return positions
     }
 
+    /// The whole second a row's time falls in, which is what its printed
+    /// time shows. The console keys runs by this rather than by formatting
+    /// every row's time on each rebuild: on a busy channel that was a date
+    /// format per row per new line, twice over, and a steady cost while
+    /// scrolling (2026-10-10).
+    static func secondKey(_ date: Date) -> Int {
+        Int(date.timeIntervalSince1970.rounded(.down))
+    }
+
     /// Every block's positions in one map, each block run on its own.
     ///
     /// For the day-separated console, which computes this when its lines
     /// change. Working it out per section inside the view body formatted every
     /// row's time again on each render, including each frame of a sidebar
     /// resize.
-    static func runPositions<Row: Identifiable>(
+    static func runPositions<Row: Identifiable, Key: Equatable>(
         blocks: [[Row]],
-        timestamp: (Row) -> String
+        timestamp: (Row) -> Key
     ) -> [Row.ID: RunPosition] {
         var positions: [Row.ID: RunPosition] = [:]
         for block in blocks {

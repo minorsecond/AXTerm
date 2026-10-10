@@ -439,12 +439,12 @@ struct ConsoleView: View {
         let groups = ConsoleLineGrouper.group(visible)
         groupedLines = groups
         timestampRunPositions = ConsoleTimestampRuler.runPositions(
-            groups, timestamp: \.primary.timestampString)
+            groups) { ConsoleTimestampRuler.secondKey($0.primary.timestamp) }
         dayGroupedLines = DayGrouping.group(items: groups, date: { $0.primary.timestamp })
         // A day separator starts a new block, so the row after one always
         // prints its time.
         dayTimestampRunPositions = ConsoleTimestampRuler.runPositions(
-            blocks: dayGroupedLines.map(\.items), timestamp: \.primary.timestampString)
+            blocks: dayGroupedLines.map(\.items)) { ConsoleTimestampRuler.secondKey($0.primary.timestamp) }
         let tags = ConsoleRadioTags.tags(radioNames: radioNames,
                                          heard: Set(groups.compactMap(\.primary.radioID)))
         if tags != radioTags { radioTags = tags }
