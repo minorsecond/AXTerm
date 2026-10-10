@@ -199,4 +199,40 @@ final class HazardLayerControllerTests: XCTestCase {
                                                            temporary: temporary).path,
                        "/Temp/AXTerm-Test/hazards-Station_A")
     }
+
+    /// Views redraw when the drawn alerts change, not on every step of a
+    /// fetch. The controller forwarded each of the layer's changes, so
+    /// "Loading outlines 3 of 18" re-rendered the whole app 18 times and
+    /// iOS lagged while alerts loaded (operator, 2026-10-09).
+    func testViewsRedrawWhenTheAlertsChangeNotOnEveryStep() async throws {
+        let fetcher = CountingFetcher()
+        let zones = try XCTUnwrap(Bundle(for: HazardLayerControllerTests.self)
+            .url(forResource: "nws-alerts-zones", withExtension: "json"))
+        let zone = try XCTUnwrap(Bundle(for: HazardLayerControllerTests.self)
+            .url(forResource: "nws-zone-COC007", withExtension: "json"))
+        let alertsData = try Data(contentsOf: zones)
+        let zoneData = try Data(contentsOf: zone)
+        let byURL = ZoneAwareFetcher(alerts: alertsData, zone: zoneData)
+        let layer = NWSAlertLayer(fetcher: byURL, cache: HazardDiskCache(directory: directory),
+                                  now: { [unowned self] in self.now }, sleep: { _ in })
+        let controller = HazardLayerController(nws: layer, now: { [unowned self] in self.now })
+        _ = fetcher
+        var redraws = 0
+        let watching = controller.objectWillChange.sink { redraws += 1 }
+        await controller.tick(nwsEnabled: true, scope: .zones(["COC007"]), position: nil)
+        watching.cancel()
+        XCTAssertEqual(controller.drawnFeatures.count, 1)
+        XCTAssertLessThanOrEqual(redraws, 4, "18 outlines loaded; views redrew \(redraws) times")
+    }
+
+    /// Answers the alerts request with the zone fixture's alert and every
+    /// zone request with one outline.
+    private final class ZoneAwareFetcher: HazardFetching, @unchecked Sendable {
+        let alerts: Data
+        let zone: Data
+        init(alerts: Data, zone: Data) { self.alerts = alerts; self.zone = zone }
+        func data(for request: URLRequest) async throws -> Data {
+            request.url?.absoluteString.contains("/alerts/") == true ? alerts : zone
+        }
+    }
 }

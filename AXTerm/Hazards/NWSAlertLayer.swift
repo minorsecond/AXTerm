@@ -145,10 +145,12 @@ final class NWSAlertLayer: ObservableObject {
     }
 
     /// The last good copy from disk, at the time it was fetched.
-    func loadCached() {
+    func loadCached() async {
         guard let saved = cache.loadAlerts(),
-              let parsed = try? NWSAlertFeed.parse(saved.data, fetchedAt: saved.fetchedAt) else { return }
-        features = NWSAlertFeed.resolvingZones(parsed, outlines: knownOutlines())
+              let parsed = try? await Self.offMain({ try NWSAlertFeed.parse(saved.data, fetchedAt: saved.fetchedAt) })
+        else { return }
+        let outlines = await knownOutlines()
+        features = (try? await Self.offMain { NWSAlertFeed.resolvingZones(parsed, outlines: outlines) }) ?? []
         lastFetched = saved.fetchedAt
     }
 
@@ -179,7 +181,7 @@ final class NWSAlertLayer: ObservableObject {
             fetchedAt = now()
             do {
                 let data = try await fetcher.data(for: request)
-                parsed = try NWSAlertFeed.parse(data, fetchedAt: fetchedAt)
+                parsed = try await Self.offMain { try NWSAlertFeed.parse(data, fetchedAt: fetchedAt) }
                 try? cache.saveAlerts(data, fetchedAt: fetchedAt)
                 recent = Recent(url: url.absoluteString, states: wanted, parsed: parsed, fetchedAt: fetchedAt)
             } catch HazardFetchError.throttled(let retryAfter) {
@@ -212,7 +214,7 @@ final class NWSAlertLayer: ObservableObject {
         requestRejected = false
         pausedUntil = nil
         consecutiveThrottles = 0
-        var known = knownOutlines()
+        var known = await knownOutlines()
         let zoneURLs = Array(NWSAlertFeed.zonesToFetch(for: parsed, cached: Set(known.keys)).prefix(maxZonesPerRefresh))
         for (done, url) in zoneURLs.enumerated() {
             activity = .loadingOutlines(done: done, total: zoneURLs.count)
@@ -227,13 +229,14 @@ final class NWSAlertLayer: ObservableObject {
             } catch {
                 continue
             }
-            guard let zone = try? NWSAlertFeed.parseZone(data) else { continue }
+            guard let zone = try? await Self.offMain({ try NWSAlertFeed.parseZone(data) }) else { continue }
             known[id] = zone
             try? cache.saveZone(id, data: data)
         }
         zonesStillLoading = NWSAlertFeed.zonesToFetch(for: parsed, cached: Set(known.keys)).count
         outlines = known
-        let resolved = NWSAlertFeed.resolvingZones(parsed, outlines: known)
+        let resolving = parsed, outlines = known
+        let resolved = (try? await Self.offMain { NWSAlertFeed.resolvingZones(resolving, outlines: outlines) }) ?? []
         unplacedCount = scope.unplaced(resolved)
         features = scope.keeping(resolved, near: point)
         // History is a record, not the display: a write that fails costs
@@ -267,6 +270,12 @@ final class NWSAlertLayer: ObservableObject {
         return Set(ugc.map { String($0.prefix(2)) })
     }
 
+    /// Parsing and shaping away from the main thread, so the interface keeps
+    /// moving while alerts and outlines load (it lagged on iOS).
+    private nonisolated static func offMain<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await Task.detached(priority: .userInitiated) { try work() }.value
+    }
+
     /// The server asked us to slow down: its Retry-After when it gave one,
     /// else two minutes, doubling with each slow-down in a row up to
     /// `maxPause`.
@@ -279,9 +288,11 @@ final class NWSAlertLayer: ObservableObject {
         problem = "The National Weather Service asked AXTerm to slow down. The next try is at \(time)."
     }
 
-    private func knownOutlines() -> [String: NWSAlertFeed.Zone] {
+    private func knownOutlines() async -> [String: NWSAlertFeed.Zone] {
         if let outlines { return outlines }
-        let loaded = cache.zoneOutlines()
+        // Off the main thread: a cache of 191 zones is a lot of JSON.
+        let cache = self.cache
+        let loaded = (try? await Self.offMain { cache.zoneOutlines() }) ?? [:]
         outlines = loaded
         return loaded
     }

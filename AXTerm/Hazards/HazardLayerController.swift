@@ -22,8 +22,14 @@ final class HazardLayerController: ObservableObject {
     init(nws: NWSAlertLayer, now: @escaping () -> Date = Date.init) {
         self.nws = nws
         self.now = now
-        // The map redraws when the layer's alerts change.
-        cancellable = nws.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+        // Views redraw when what they draw changes: the alerts, or the fetch
+        // time that decides whether they are stale. Not on every step of a
+        // fetch: forwarding all of the layer's changes re-rendered the whole
+        // app once per outline loaded, and iOS lagged. Progress reaches the
+        // caption through `watch(status:)`.
+        cancellable = nws.$features.dropFirst().map { _ in () }
+            .merge(with: nws.$lastFetched.dropFirst().map { _ in () })
+            .sink { [weak self] in self?.objectWillChange.send() }
     }
 
     /// What the map draws: the layer's alerts while it is on, nothing off.
@@ -37,7 +43,7 @@ final class HazardLayerController: ObservableObject {
         if enabled != nwsEnabled {
             nwsEnabled = enabled
             // Back on: show the saved copy, at its real age, until a fetch.
-            if enabled, nws.features.isEmpty { nws.loadCached() }
+            if enabled, nws.features.isEmpty { await nws.loadCached() }
         }
         guard HazardRefreshPolicy.shouldRefresh(enabled: enabled, position: position,
                                                 lastAttempt: lastAttempt, lastPoint: lastPoint, now: now(),

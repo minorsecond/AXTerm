@@ -29,8 +29,12 @@ nonisolated enum NWSAlertFeed {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let properties = root["properties"] as? [String: Any],
               let id = properties["id"] as? String else { throw ParseError.notGeoJSON }
-        return Zone(id: id, name: properties["name"] as? String ?? id,
-                    geometry: geometry(from: root["geometry"]))
+        // Thinned as read: coastal outlines run to 8,000 points (HazardSimplify).
+        var shape = geometry(from: root["geometry"])
+        if case .polygons(let polygons) = shape {
+            shape = .polygons(polygons.map { $0.map { HazardSimplify.ring($0, tolerance: HazardSimplify.drawingTolerance) } })
+        }
+        return Zone(id: id, name: properties["name"] as? String ?? id, geometry: shape)
     }
 
     /// Warning, watch or advisory by the event's last word; everything else

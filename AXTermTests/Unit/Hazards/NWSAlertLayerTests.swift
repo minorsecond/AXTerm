@@ -109,7 +109,7 @@ final class NWSAlertLayerTests: XCTestCase {
 
         now = now.addingTimeInterval(3600)
         let relaunched = layer(FakeFetcher())
-        relaunched.loadCached()
+        await relaunched.loadCached()
         XCTAssertEqual(relaunched.features.map(\.event), ["Tropical Storm Warning"])
         XCTAssertEqual(relaunched.lastFetched, fetched)
         XCTAssertEqual(relaunched.features.first?.fetchedAt, fetched)
