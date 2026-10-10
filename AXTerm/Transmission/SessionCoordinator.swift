@@ -519,6 +519,11 @@ final class SessionCoordinator: ObservableObject {
     /// Callback when AXDP chat message is received. Parameters: (from address, decoded text).
     /// Used to deliver chat to the terminal transcript regardless of AXDP badge state.
     var onAXDPChatReceived: ((AX25Address, String) -> Void)?
+    /// A chat message from a peer is partway in, or no longer (nil): it
+    /// completed, or the link ended. For the terminal's status row.
+    var onAXDPIncomingProgress: ((AX25Address, AXDPPartialMessage?) -> Void)?
+    /// The link ended with a chat message from this peer partway in.
+    var onAXDPMessageStoppedPartway: ((AX25Address, AXDPPartialMessage) -> Void)?
 
     /// Callback when AXDP reassembly completes (a full message was extracted). Parameter: peer address.
     /// Used to clear the peersInAXDPReassembly flag in TerminalView so subsequent plain text
@@ -2947,6 +2952,9 @@ final class SessionCoordinator: ObservableObject {
                 // Clear reassembly buffer for this peer to prevent stale data corruption.
                 // This is critical for multi-fragment AXDP messages - if partial data remains
                 // and the peer reconnects, the old fragments could corrupt the new message.
+                if let partial = self.incomingChats[session.remoteAddress.display.uppercased()] {
+                    self.onAXDPMessageStoppedPartway?(session.remoteAddress, partial)
+                }
                 self.clearAllReassemblyBuffers(for: session.remoteAddress)
 
                 // RETAIN the per-route adaptive cache across session teardown:
@@ -3861,6 +3869,17 @@ final class SessionCoordinator: ObservableObject {
     /// for the same bytes right after (`plainText(delivered:from:)`).
     private var deliveredText: [String: (raw: Data, text: Data)] = [:]
 
+    /// Chat messages partway in, by uppercased callsign.
+    private var incomingChats: [String: AXDPPartialMessage] = [:]
+
+    private func reportIncomingChat(from peer: AX25Address, _ partial: AXDPPartialMessage?) {
+        let key = peer.display.uppercased()
+        let chat = partial?.type == .chat ? partial : nil
+        guard incomingChats[key] != chat else { return }
+        incomingChats[key] = chat
+        onAXDPIncomingProgress?(peer, chat)
+    }
+
     /// The plain-text part of a delivery the reassembler has just split, or
     /// nil when it has not seen these bytes. Read once.
     func plainText(delivered data: Data, from peer: AX25Address) -> Data? {
@@ -3883,6 +3902,7 @@ final class SessionCoordinator: ObservableObject {
         } else {
             inboundReassemblers[key] = reassembler
         }
+        reportIncomingChat(from: from, reassembler.partial)
 
         // Plain text with no AXDP in it: nothing to report.
         guard !messages.isEmpty || !reassembler.buffered.isEmpty || heldBefore > 0 else { return }
@@ -3935,6 +3955,7 @@ final class SessionCoordinator: ObservableObject {
     /// Clear all reassembly buffers associated with a peer (any path).
     /// This is a more aggressive clear that handles cases where the path might differ.
     func clearAllReassemblyBuffers(for peer: AX25Address) {
+        reportIncomingChat(from: peer, nil)
         let peerPrefix = "\(peer.display)-"
         let keysToRemove = inboundReassemblers.keys.filter { $0.hasPrefix(peerPrefix) }
         for key in keysToRemove {

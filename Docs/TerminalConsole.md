@@ -94,6 +94,22 @@ Three details are specific to the table:
   during a live scroll, or with the content and the view the same size.
   AppKit moving the view while rows change size does not count.
 
+## The status row
+
+Under the last line the console keeps one status row for the session on
+screen (`InlineSendStatus`). A line going out shows dimmed until it is on the
+air, then "Sending… 2 of 5 acknowledged", then "Delivered".
+
+A long AXDP message coming in shows "Receiving a message from K0EPI-2… 1.2 of
+3.4 KB" until it completes and its text replaces the row. AXDP gives a message
+its length in the header, so the size is known from the first frame
+(`AXDPStreamReassembler.partial`). Only chat messages show; a file has its own
+progress in Transfers. A message going out takes the row first. If the link
+ends with a message partway in, the console says how far it got. Before this,
+a large block of text from A (705) appeared on the iPad only when the last
+frame arrived, with nothing to show it was coming (home retest, 2026-10-10).
+`AXDPIncomingProgressTests` covers it.
+
 ## Clicks
 
 `ConsoleNSTableView` sends a click on the message to its text view (selection,

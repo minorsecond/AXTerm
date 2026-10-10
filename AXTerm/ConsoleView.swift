@@ -1974,6 +1974,8 @@ struct InlineSendStatusRow: View {
                  systemImage: "paperplane")
         case .delivered:
             note("Delivered", systemImage: "checkmark")
+        case .receiving(let from, let amount):
+            note("Receiving a message from \(from)\u{2026} \(amount)", systemImage: "arrow.down.circle")
         }
     }
 

@@ -118,18 +118,26 @@ nonisolated enum InlineSendStatus: Equatable {
     /// On the air; the line is in the history above.
     case sending(acknowledged: Int, of: Int)
     case delivered
+    /// A message from the far end is arriving (`AXDPPartialMessage`).
+    case receiving(from: String, amount: String)
 
     /// - Parameters:
     ///   - deliveredAtLineCount: the history's line count when the last
     ///     connected send was fully acknowledged, if it was.
     ///   - lineCount: the history's line count now.
+    ///   - incoming: a message from the far end partway in, shown when
+    ///     nothing is going out.
     static func make(progress: OutboundMessageProgress?, deliveredAtLineCount: Int?,
-                     lineCount: Int) -> InlineSendStatus? {
+                     lineCount: Int,
+                     incoming: (from: String, message: AXDPPartialMessage)? = nil) -> InlineSendStatus? {
+        // A message going out holds the row; one coming in comes next.
         if let progress, !(progress.hasAcks && progress.isComplete) {
             if progress.bytesSent < progress.totalBytes { return .waiting(text: progress.text) }
             // A broadcast on the air has no acknowledgments to wait for.
-            return progress.hasAcks ? .sending(acknowledged: progress.chunksAcked, of: progress.totalChunks) : nil
+            if progress.hasAcks { return .sending(acknowledged: progress.chunksAcked, of: progress.totalChunks) }
         }
+        if let incoming { return .receiving(from: incoming.from, amount: incoming.message.amount) }
+        if let progress, !(progress.hasAcks && progress.isComplete) { return nil }
         if let deliveredAtLineCount, deliveredAtLineCount == lineCount { return .delivered }
         return nil
     }

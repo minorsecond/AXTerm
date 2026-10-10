@@ -299,6 +299,10 @@ enum TerminalAXDPWiring {
         coordinator.onAXDPChatReceived = { [weak viewModel] from, text in
             viewModel?.appendAXDPChatToTranscript(from: from, text: text)
         }
+        // A long message shows it is arriving (home retest, finding 4).
+        coordinator.onAXDPIncomingProgress = { [weak viewModel] from, partial in
+            viewModel?.setIncomingMessage(partial, from: from)
+        }
         // The exact plain text of each delivery, so the terminal neither
         // shows AXDP bytes nor drops text that shares a delivery with them.
         viewModel.plainTextOfDelivery = { [weak coordinator] peer, data in
@@ -1867,6 +1871,24 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         )
     }
 
+    /// Chat messages partway in, by uppercased callsign, for the status row.
+    @Published private(set) var incomingMessages: [String: AXDPPartialMessage] = [:]
+
+    func incomingMessage(from peer: AX25Address) -> AXDPPartialMessage? {
+        incomingMessages[peer.display.uppercased()]
+    }
+
+    /// The message arriving on the session on screen, if one is.
+    var currentIncomingMessage: (from: String, message: AXDPPartialMessage)? {
+        guard let session = currentSession, let partial = incomingMessage(from: session.remoteAddress) else { return nil }
+        return (conversationPeer(for: session).display, partial)
+    }
+
+    func setIncomingMessage(_ partial: AXDPPartialMessage?, from peer: AX25Address) {
+        let key = peer.display.uppercased()
+        if incomingMessages[key] != partial { incomingMessages[key] = partial }
+    }
+
     /// The far end's line so far, for the raw field.
     func partialLine(for peer: AX25Address?) -> String {
         guard let peer else { return "" }
@@ -2538,6 +2560,10 @@ struct TerminalView: View {
             } else {
                 TxLog.error(.session, "onPlainTextChatReceived: client is nil!", ["from": from.display])
             }
+        }
+
+        sessionCoordinator.onAXDPMessageStoppedPartway = { [weak client] from, partial in
+            client?.appendSystemNotification(partial.stoppedNotice(from: from.display))
         }
 
         sessionCoordinator.onPeerAxdpEnabled = { [weak txViewModel] from in
@@ -3347,7 +3373,8 @@ struct TerminalView: View {
                 trailingSendStatus: InlineSendStatus.make(
                     progress: txViewModel.currentOutboundProgress,
                     deliveredAtLineCount: deliveredAtLineCount,
-                    lineCount: lines.count),
+                    lineCount: lines.count,
+                    incoming: txViewModel.currentIncomingMessage),
                 // Empty with one radio, so the badge appears only when there is
                 // more than one radio to tell apart.
                 radioNames: client.radioNames,

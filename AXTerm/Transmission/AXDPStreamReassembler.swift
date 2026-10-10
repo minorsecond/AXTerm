@@ -30,6 +30,24 @@ nonisolated struct AXDPStreamReassembler {
     /// Whether a message has started and its end is still to come.
     var isMidMessage: Bool { AXDP.hasMagic(buffered) }
 
+    /// The message under way: how long it is, from its header, how much of
+    /// it has arrived, and its type once the first TLV is in. Nil when no
+    /// message has started or its header is still incomplete.
+    var partial: AXDPPartialMessage? {
+        let data = AXDP.zeroBased(buffered)
+        guard AXDP.hasMagic(data), data.count >= AXDP.headerLength else { return nil }
+        let total = Int(AXDP.decodeUInt16(data.subdata(in: AXDP.magic.count..<AXDP.headerLength)))
+        guard total >= AXDP.minMessageLength else { return nil }
+        // The encoder writes the type first: tag, a length of 1, the type.
+        let tlv = AXDP.headerLength
+        var type: AXDP.MessageType?
+        if data.count >= tlv + 4, data[tlv] == AXDP.TLVType.messageType.rawValue,
+           AXDP.decodeUInt16(data.subdata(in: (tlv + 1)..<(tlv + 3))) == 1 {
+            type = AXDP.MessageType(rawValue: data[tlv + 3])
+        }
+        return AXDPPartialMessage(type: type, received: data.count, total: total)
+    }
+
     /// Takes the next bytes of the stream and returns every message they
     /// complete, in order.
     mutating func append(_ data: Data) -> [AXDP.Message] {
@@ -95,5 +113,23 @@ nonisolated struct AXDPStreamReassembler {
             return length
         }
         return 0
+    }
+}
+
+/// An AXDP message partway in (`AXDPStreamReassembler.partial`).
+nonisolated struct AXDPPartialMessage: Equatable {
+    let type: AXDP.MessageType?
+    let received: Int
+    let total: Int
+
+    /// "1.2 of 3.4 KB", or "300 of 900 bytes" for a short message.
+    var amount: String {
+        guard total >= 1000 else { return "\(received) of \(total) bytes" }
+        return String(format: "%.1f of %.1f KB", Double(received) / 1000, Double(total) / 1000)
+    }
+
+    /// The line for a message the link cut off.
+    func stoppedNotice(from peer: String) -> String {
+        "The message from \(peer) stopped after \(amount), when the connection ended."
     }
 }
