@@ -796,7 +796,7 @@ private struct ProtocolInfoCallout: View {
         Text(description)
             .font(.footnote)
             .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(1...4)
         .padding(7)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -1002,7 +1002,9 @@ private struct ConnectBarRadioRow: View {
                     Text(viewModel.autoRadioHelp)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        // Bounded: unbounded text sets the window's minimum
+                        // height at the narrowest width (ComposeNoticeBanner).
+                        .lineLimit(1...3)
                 }
             }
         }
@@ -1505,24 +1507,13 @@ struct TerminalComposeView: View {
 
             if let notice = PacketChannelGate.notice(block: channelBlock, mode: connectionMode,
                                                      sessionState: sessionState) {
-                HStack(spacing: 8) {
-                    Image(systemName: "antenna.radiowaves.left.and.right.slash")
-                        .foregroundStyle(.orange)
-                    Text(notice.text)
-                        .font(.system(size: 11, weight: .medium))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 4)
-                    Button("Switch to Packet") {
-                        connectBarViewModel.switchRadioToPacket(notice.radio)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                    .help("Sets this radio's Channel to Packet, as in Settings › Radios. "
-                          + "Its beacon becomes an ID beacon and its packet services come back.")
+                ComposeNoticeBanner(
+                    text: notice.text, systemImage: "antenna.radiowaves.left.and.right.slash",
+                    tint: .orange, actionTitle: "Switch to Packet",
+                    actionHelp: "Sets this radio's Channel to Packet, as in Settings › Radios. "
+                        + "Its beacon becomes an ID beacon and its packet services come back.") {
+                    connectBarViewModel.switchRadioToPacket(notice.radio)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.orange.opacity(0.12))
             }
 
             VStack(alignment: .leading, spacing: 6) {

@@ -1667,8 +1667,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             banners
 
-            ZStack {
-                detailSwitch
+            detailSwitch.keptAliveLayer {
                 // The map lives OUTSIDE the switch: mounted on first
                 // visit or three seconds after launch (whichever comes
                 // first) and never unmounted, so tiles, Metal state and

@@ -40,3 +40,15 @@ extension View {
             .clipped()
     }
 }
+
+extension View {
+    /// A layer kept mounted over this view, sized to it and never sizing it.
+    ///
+    /// The map is kept alive behind every page. In a ZStack its minimum
+    /// height was the page's, and a wrapped line of text inside it could
+    /// make the window taller than the screen. An overlay takes this view's
+    /// size and has no say in it.
+    func keptAliveLayer<Layer: View>(@ViewBuilder _ layer: () -> Layer) -> some View {
+        overlay { layer() }
+    }
+}
