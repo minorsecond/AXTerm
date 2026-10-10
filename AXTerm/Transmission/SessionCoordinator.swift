@@ -2477,7 +2477,13 @@ final class SessionCoordinator: ObservableObject {
     /// when one did, so a one-radio station's messages do not change.
     func radioSuffix(_ radios: [RadioID]) -> String {
         guard let appSettings, appSettings.hasMultipleRadios, !radios.isEmpty else { return "" }
-        let names = radios.compactMap { appSettings.radio($0)?.name }
+        return Self.radioSuffix(for: radios.compactMap { appSettings.radio($0) })
+    }
+
+    /// The phrase itself. An unnamed radio goes by its default name, as it
+    /// does everywhere else in the app.
+    nonisolated static func radioSuffix(for radios: [RadioProfile]) -> String {
+        let names = radios.map { $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name }
         return names.isEmpty ? "" : " on \(names.joined(separator: ", "))"
     }
 
