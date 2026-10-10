@@ -42,6 +42,24 @@ When the link comes up AXTerm:
 On disconnect it puts back every setting it changed and waits 1.2 s before
 dropping the link. Quitting AXTerm allows for this too.
 
+### When the TNC4 doesn't answer
+
+A TNC4 takes one Bluetooth connection at a time, and while another device
+holds it, it isn't connectable at all. CoreBluetooth's connect never times out,
+so it would wait for as long as that lasts. At the home retest (2026-10-10) the
+iPad sat on "connecting" with no explanation while the iPhone held the TNC4,
+and the iPhone's own reconnect, pending for over an hour, took the TNC4 back
+five seconds after the iPad let it go.
+
+`BLEConnectPolicy` bounds both cases:
+
+- A connect, or the scan that finds the TNC4 and then connects, gets 20 s.
+- A connect the operator started stops at the first miss and says the TNC4
+  isn't answering and may be connected to another device, such as an iPhone
+  or iPad.
+- After a drop, AXTerm reconnects with a backoff of 1, 2, 4… up to 30 s, for
+  5 minutes. Then it stops and says so. Connecting again by hand starts fresh.
+
 ## Per-radio settings
 
 A TNC4 often moves between radios, and settings that suit one radio's audio are

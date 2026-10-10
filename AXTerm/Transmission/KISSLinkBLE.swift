@@ -304,6 +304,11 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     private var reconnectTimer: DispatchSourceTimer?
     private var reconnectAttempt = 0
+    /// When automatic reconnecting began after a drop; nil for a connect the
+    /// operator started. Bounds reconnecting (`BLEConnectPolicy`).
+    private var reconnectingSince: Date?
+    /// Cancels a connect the TNC4 has not answered (`BLEConnectPolicy`).
+    private var connectWatchdog: DispatchSourceTimer?
     private static let maxReconnectDelay: TimeInterval = 30
     private static let baseReconnectDelay: TimeInterval = 1
 
@@ -444,6 +449,9 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     func open() {
         bleQueue.async { [weak self] in
+            // The operator asked: a fresh connect, not a reconnect.
+            self?.reconnectingSince = nil
+            self?.reconnectAttempt = 0
             self?.openInternal()
         }
     }
@@ -673,6 +681,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     private func teardown(reason: String, finalState: KISSLinkState = .disconnected) {
         cancelReconnectTimer()
+        cancelConnectWatchdog()
         cancelBatteryPolling()
         cancelStartupRecoveryWatchdog()
         connectionOpenedAt = nil
@@ -725,12 +734,17 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     private func scheduleReconnectIfEnabled() {
         guard config.autoReconnect else { return }
+        if reconnectingSince == nil { reconnectingSince = Date() }
 
         reconnectAttempt += 1
         let delay = min(
             Self.baseReconnectDelay * pow(2, Double(reconnectAttempt - 1)),
             Self.maxReconnectDelay
         )
+        scheduleReconnect(after: delay)
+    }
+
+    private func scheduleReconnect(after delay: TimeInterval) {
 
         KISSLinkLog.reconnect(endpointDescription, attempt: reconnectAttempt)
 
@@ -746,6 +760,55 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         lock.unlock()
 
         timer.resume()
+    }
+
+    // MARK: - Private: Connect watchdog
+
+    /// Starts the clock on a connect. CoreBluetooth would wait for ever.
+    private func armConnectWatchdog() {
+        cancelConnectWatchdog()
+        let timer = DispatchSource.makeTimerSource(queue: bleQueue)
+        timer.schedule(deadline: .now() + BLEConnectPolicy.connectTimeout)
+        timer.setEventHandler { [weak self, weak timer] in
+            guard let self, let timer else { return }
+            self.lock.lock()
+            let current = self.connectWatchdog === timer
+            self.lock.unlock()
+            if current { self.connectWentUnanswered() }
+        }
+        lock.lock()
+        connectWatchdog = timer
+        lock.unlock()
+        timer.resume()
+    }
+
+    private func cancelConnectWatchdog() {
+        lock.lock()
+        let timer = connectWatchdog
+        connectWatchdog = nil
+        lock.unlock()
+        timer?.cancel()
+    }
+
+    /// The TNC4 did not accept the connection in time: cancel it, then stop
+    /// with a reason or try again, as `BLEConnectPolicy` says.
+    private func connectWentUnanswered() {
+        lock.lock()
+        connectWatchdog = nil
+        lock.unlock()
+        let decision = BLEConnectPolicy.afterUnansweredConnect(
+            reconnectingSince: reconnectingSince, attempt: reconnectAttempt + 1, now: Date())
+        teardown(reason: "TNC4 did not answer the connect", finalState: .failed)
+        switch decision {
+        case .giveUp(let message):
+            reconnectingSince = nil
+            reconnectAttempt = 0
+            notifyError(message)
+        case .retry(let delay):
+            reconnectAttempt += 1
+            KISSLinkLog.reconnect(endpointDescription, attempt: reconnectAttempt)
+            scheduleReconnect(after: delay)
+        }
     }
 
     private func cancelReconnectTimer() {
@@ -785,6 +848,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     }
 
     private func finishConnect() {
+        reconnectingSince = nil
         setState(.connected)
         KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready")
 
@@ -1072,6 +1136,8 @@ extension KISSLinkBLE: CBCentralManagerDelegate {
                         options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
                     )
                 }
+                // Finding it and connecting share one clock.
+                armConnectWatchdog()
             } else {
                 setState(.failed)
                 notifyError("Invalid peripheral UUID: \(config.peripheralUUID)")
@@ -1108,6 +1174,7 @@ extension KISSLinkBLE: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        cancelConnectWatchdog()
         // Log both write-type MTUs for diagnostics.
         // NOTE: MTU exchange may not have completed yet at this point; writeBLE() queries
         // maximumWriteValueLength() at write time to always get the current negotiated value.
@@ -1120,6 +1187,7 @@ extension KISSLinkBLE: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        cancelConnectWatchdog()
         let message = error?.localizedDescription ?? "Unknown error"
         setState(.failed)
         notifyError("Failed to connect to BLE peripheral: \(message)")
@@ -1137,6 +1205,7 @@ extension KISSLinkBLE: CBCentralManagerDelegate {
                 self.lock.unlock()
                 peripheral.delegate = self
                 central.connect(peripheral, options: nil)
+                self.armConnectWatchdog()
             }
             return
         }
@@ -1419,3 +1488,45 @@ extension KISSLinkBLE: MobilinkdControlling {
     }
     func cancelInputSampling() { bleQueue.async { [weak self] in self?.mobilinkd.cancelSampling() } }
 }
+
+/// How long a TNC4 connect may wait, and when reconnecting stops.
+///
+/// CoreBluetooth's connect never times out: a TNC4 held by another device is
+/// simply not connectable, and the connect waits for as long as that lasts.
+/// At the home retest (2026-10-10) the iPad sat on "connecting" with no
+/// explanation, and the iPhone's reconnect, pending since 17:20:52Z, took the
+/// TNC4 at 18:39:20Z, five seconds after the iPad let it go.
+nonisolated enum BLEConnectPolicy {
+    enum Decision: Equatable {
+        case retry(after: TimeInterval)
+        case giveUp(String)
+    }
+
+    /// A connect not answered in this long is canceled.
+    static let connectTimeout: TimeInterval = 20
+    /// After a drop, reconnecting stops this long after it started.
+    static let reconnectWindow: TimeInterval = 5 * 60
+    static let baseRetryDelay: TimeInterval = 1
+    static let maxRetryDelay: TimeInterval = 30
+
+    static let notAnswering = "The TNC4 isn't answering. It may be connected to another device, "
+        + "such as your iPhone or iPad, or it may be switched off or out of range. "
+        + "Connect again when it's free."
+    static let stoppedReconnecting = "Stopped trying to reconnect to the TNC4 after 5 minutes. "
+        + "It may be connected to another device, or switched off or out of range. "
+        + "Connect again when it's free."
+
+    /// What to do when a connect went unanswered. `reconnectingSince` is
+    /// when automatic reconnecting began after a drop; nil for a connect the
+    /// operator started, which stops at once and says why.
+    static func afterUnansweredConnect(reconnectingSince: Date?, attempt: Int, now: Date) -> Decision {
+        guard let since = reconnectingSince else { return .giveUp(notAnswering) }
+        guard now.timeIntervalSince(since) <= reconnectWindow else { return .giveUp(stoppedReconnecting) }
+        return .retry(after: retryDelay(attempt: attempt))
+    }
+
+    static func retryDelay(attempt: Int) -> TimeInterval {
+        min(baseRetryDelay * pow(2, Double(max(attempt, 1) - 1)), maxRetryDelay)
+    }
+}
+
