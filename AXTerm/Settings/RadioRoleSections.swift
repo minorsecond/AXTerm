@@ -346,14 +346,19 @@ struct RadioPacketSections: View {
                 // Not a fault, just nothing to send yet: say so plainly and
                 // offer words built from the station.
                 let suggestion = idBeaconSuggestion
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // A real button at the row's trailing edge, so it reads as
+                // an action and not as more of the note (HIG: an inline
+                // action in a settings row is a bordered control).
+                HStack(alignment: .center, spacing: 12) {
                     Text("Nothing is sent until there is text, for example \u{201C}\(suggestion)\u{201D}.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
                     Button("Use This") { bind.beacon(\.text).wrappedValue = suggestion }
-                        .buttonStyle(.borderless)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
+                        .help("Fill in \u{201C}\(suggestion)\u{201D} as the ID beacon text")
                 }
             } else if case let .failure(problem) = BeaconPlan.plan(
                 text: bind.beacon(\.text).wrappedValue,
