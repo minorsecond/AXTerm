@@ -299,6 +299,9 @@ struct ConsoleView: View {
     var onFileName: ((String) -> Void)?
     /// A message going out, drawn as the last row of the history (finding 39).
     var trailingSendStatus: InlineSendStatus?
+    /// The message going out, dimmed on its own line where it is not
+    /// acknowledged yet (retest 2026-10-10, finding 9).
+    var outgoing: ConsoleOutgoingProgress?
     /// Radio names by id, for the per-line radio badge. Empty with one radio,
     /// so the badge appears only when there is more than one radio to tell
     /// apart — the same rule the Packets table's Radio column follows.
@@ -711,7 +714,8 @@ struct ConsoleView: View {
             linksCallsigns: onIdentity != nil, linksFileNames: onFileName != nil,
             knownFileNames: knownFileNames, radioTags: radioTags, observer: observer,
             distanceInMiles: distanceInMiles, showsRawAPRS: showsRawAPRS,
-            heardCallsigns: heardCallsigns, telemetryDefinitions: telemetryDefinitions)
+            heardCallsigns: heardCallsigns, telemetryDefinitions: telemetryDefinitions,
+            outgoing: outgoing)
     }
 
     #if os(macOS)
@@ -757,6 +761,7 @@ struct ConsoleView: View {
                                                      showsRawAPRS: showsRawAPRS,
                                                      heardCallsigns: heardCallsigns,
                                                      telemetryDefinitions: telemetryDefinitions,
+                                                     dimFrom: outgoing?.lineID == group.primary.id ? outgoing?.dimFrom : nil,
                                                      textCache: textCache)
                                     .id(group.id)
                             }
@@ -778,6 +783,7 @@ struct ConsoleView: View {
                                                      showsRawAPRS: showsRawAPRS,
                                                      heardCallsigns: heardCallsigns,
                                                      telemetryDefinitions: telemetryDefinitions,
+                                                     dimFrom: outgoing?.lineID == group.primary.id ? outgoing?.dimFrom : nil,
                                                      textCache: textCache)
                                 .id(group.id)
                         }
@@ -1146,6 +1152,9 @@ struct ConsoleLineGroupView: View {
     var showsRawAPRS: Bool = false
     var heardCallsigns: Set<String> = []
     var telemetryDefinitions: [String: APRSTelemetry.Definition] = [:]
+    /// Where this line's text dims: the message we are sending, from where
+    /// it is not acknowledged yet (`ConsoleOutgoingProgress`).
+    var dimFrom: Int?
     var textCache: ConsoleTextCache?
     @State private var isExpanded = false
 
@@ -1171,6 +1180,7 @@ struct ConsoleLineGroupView: View {
                 showsRawAPRS: showsRawAPRS,
                 heardCallsigns: heardCallsigns,
                 telemetryDefinitions: telemetryDefinitions,
+                dimFrom: dimFrom,
                 textCache: textCache
             )
 
@@ -1303,6 +1313,9 @@ struct ConsoleLineView: View {
     /// Telemetry definitions by callsign, so a `T#` frame can be read as
     /// named channels instead of five counts and eight bits.
     var telemetryDefinitions: [String: APRSTelemetry.Definition] = [:]
+    /// Where this line's text dims: the message we are sending, from where
+    /// it is not acknowledged yet (`ConsoleOutgoingProgress`).
+    var dimFrom: Int?
     /// Keeps this row's built text between renders. Nil builds it each time.
     var textCache: ConsoleTextCache?
 
@@ -1633,8 +1646,14 @@ struct ConsoleLineView: View {
         let build = { () -> RenderedMessage in
             let targets = facts.linkTargets(in: text, fileNameIndex: fileNameIndex)
             let mentions = facts.mentions(in: text)
-            return RenderedMessage(attributed: attributed(text, targets: targets, mentions: mentions),
-                                   links: targets.map(\.range))
+            var styled = attributed(text, targets: targets, mentions: mentions)
+            if let dimFrom, dimFrom < text.utf16.count {
+                let start = String.Index(utf16Offset: dimFrom, in: text)
+                if let lower = AttributedString.Index(start, within: styled) {
+                    styled[lower..<styled.endIndex].foregroundColor = .secondary
+                }
+            }
+            return RenderedMessage(attributed: styled, links: targets.map(\.range))
         }
         guard let textCache else { return build() }
         // Everything that can change which words are links: the text, the
@@ -1649,6 +1668,7 @@ struct ConsoleLineView: View {
         hasher.combine(knownFileNames.count)
         hasher.combine(isDecodedAPRS)
         hasher.combine(mineBases.sorted())
+        hasher.combine(dimFrom)
         return textCache.value(line: line.id, version: hasher.finalize(), build: build)
     }
 
@@ -1957,6 +1977,10 @@ struct InlineSendStatusRow: View {
     let status: InlineSendStatus
     var fontSize: Double = 11
 
+    /// Bytes above which a message going out gets a progress bar: more than
+    /// two frames at the largest paclen.
+    static let progressBarThreshold = 512
+
     var body: some View {
         switch status {
         case .waiting(let text):
@@ -1969,9 +1993,23 @@ struct InlineSendStatusRow: View {
             }
             .padding(.vertical, 2)
             .accessibilityElement(children: .combine)
-        case .sending(let acknowledged, let total):
-            note(total > 1 ? "Sending\u{2026} \(acknowledged) of \(total) acknowledged" : "Sending\u{2026}",
-                 systemImage: "paperplane")
+        case .sending(let acked, let total, let axdpPeer):
+            // A long message shows how far it has got (finding 9); a short
+            // one, a frame or two, just says it is going.
+            if total > Self.progressBarThreshold {
+                VStack(alignment: .leading, spacing: 3) {
+                    ProgressView(value: Double(min(acked, total)), total: Double(max(total, 1)))
+                        .progressViewStyle(.linear)
+                        .frame(maxWidth: 280)
+                        .accessibilityLabel("Delivered")
+                    note([InlineSendStatus.deliveredAmount(acked: acked, total: total),
+                          axdpPeer.map(InlineSendStatus.axdpNote(peer:))].compactMap { $0 }.joined(separator: " \u{00B7} "),
+                         systemImage: "paperplane")
+                }
+                .padding(.vertical, 2)
+            } else {
+                note("Sending\u{2026}", systemImage: "paperplane")
+            }
         case .delivered:
             note("Delivered", systemImage: "checkmark")
         case .receiving(let from, let amount):

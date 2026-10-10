@@ -108,7 +108,7 @@ final class PacketEngine: ObservableObject {
 
     /// Called when an I-frame (AXDP/user payload) is successfully transmitted.
     /// Parameter: payload byte count. Used for sender progress highlighting.
-    var onUserFrameTransmitted: ((Int) -> Void)?
+    var onUserFrameTransmitted: ((OutboundFrame) -> Void)?
     /// A link reported a fault. Set by the app layer for anything that has to
     /// know a transmission may not have reached the air — the APRS
     /// reachability probe, whose queued send has already returned success by
@@ -1152,7 +1152,7 @@ final class PacketEngine: ObservableObject {
                                        radios: [frame.radio])
                     // Notify for sender progress highlighting (I-frames with AXDP PID)
                     if frame.frameType.lowercased() == "i", frame.pid == 0xF0 {
-                        self.onUserFrameTransmitted?(frame.payload.count)
+                        self.onUserFrameTransmitted?(frame)
                     }
                     completion?(.success(()))
                 }

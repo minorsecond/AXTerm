@@ -211,6 +211,12 @@ struct ConsoleRowModel {
             .font: messageFont,
             .foregroundColor: secondary ? NSColor.secondaryLabelColor : NSColor.labelColor,
         ])
+        // The message we are sending: dimmed where it is not acknowledged yet.
+        if let outgoing = env.outgoing, outgoing.lineID == line.id, outgoing.dimFrom < attributed.length {
+            attributed.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor,
+                                    range: NSRange(location: outgoing.dimFrom,
+                                                   length: attributed.length - outgoing.dimFrom))
+        }
         // Links and highlights change no sizes, so a model built only to
         // measure a row leaves them out (`decorated: false`).
         if decorated {

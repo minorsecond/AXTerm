@@ -97,8 +97,19 @@ Three details are specific to the table:
 ## The status row
 
 Under the last line the console keeps one status row for the session on
-screen (`InlineSendStatus`). A line going out shows dimmed until it is on the
-air, then "Sending… 2 of 5 acknowledged", then "Delivered".
+screen (`InlineSendStatus`). A line going out shows dimmed until its first
+frame reaches the radio, then "Sending…", then "Delivered". A message over
+512 bytes gets a progress bar with "Delivered 9.7 of 26.8 KB"; for an AXDP
+message it adds that the other station sees it when it has all arrived.
+The counts are the session's own: bytes sent for the first time, and the
+bytes of each frame the peer acknowledges, so retransmissions, other traffic
+and a paclen that changes midway leave them right. The message's own line in
+the history is drawn in full color as far as it is acknowledged and dimmed
+after that (`ConsoleOutgoingProgress`); an AXDP message stays evenly dimmed
+until it is all acknowledged, since the other station cannot read it before.
+Until the retest of 2026-10-10 (findings 8 and 9) a long message read
+"Waiting to send…" until its last frame had gone, and the counts came from
+paclen arithmetic.
 
 A long AXDP message coming in shows "Receiving a message from K0EPI-2… 1.2 of
 3.4 KB" until it completes and its text replaces the row. AXDP gives a message

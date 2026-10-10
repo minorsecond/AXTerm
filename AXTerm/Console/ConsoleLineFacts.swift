@@ -22,6 +22,8 @@ struct ConsoleRowEnvironment {
     var showsRawAPRS = false
     var heardCallsigns: Set<String> = []
     var telemetryDefinitions: [String: APRSTelemetry.Definition] = [:]
+    /// The message going out, dimmed where it is not acknowledged yet.
+    var outgoing: ConsoleOutgoingProgress?
 
     /// The addresses whose digipeated copies are our own echo.
     var echoCallsigns: Set<String> {
@@ -48,6 +50,7 @@ struct ConsoleRowEnvironment {
     /// here redraws the rows on screen and leaves every height alone.
     var decorationVersion: Int {
         var hasher = Hasher()
+        hasher.combine(outgoing)
         hasher.combine(linksCallsigns)
         hasher.combine(linksFileNames)
         hasher.combine(knownFileNames.count)
@@ -291,5 +294,43 @@ struct ConsoleLineFacts {
     /// The hue a callsign is drawn in, so the same station keeps one color.
     static func callsignHue(_ callsign: String) -> Double {
         Double(abs(callsign.hashValue) % 256) / 255.0
+    }
+}
+
+/// How much of the message we are sending has been acknowledged, drawn on
+/// its own line in the history (retest 2026-10-10, finding 9): the
+/// acknowledged part in full color, the rest dimmed from `dimFrom`, a UTF-16
+/// offset into the line's text.
+nonisolated struct ConsoleOutgoingProgress: Equatable, Hashable {
+    let lineID: UUID
+    let dimFrom: Int
+
+    /// Where the dimmed part starts, or nil when nothing is left to dim.
+    /// Plain text dims what is not acknowledged yet, cut between
+    /// characters. An AXDP message dims the whole line: the other station
+    /// sees it only when it has all arrived.
+    static func dimFrom(text: String, ackedBytes: Int, viaAXDP: Bool) -> Int? {
+        if viaAXDP { return 0 }
+        guard ackedBytes < text.utf8.count else { return nil }
+        var bytes = 0
+        var offset = 0
+        for character in text {
+            let size = character.utf8.count
+            if bytes + size > ackedBytes { break }
+            bytes += size
+            offset += character.utf16.count
+        }
+        return offset
+    }
+
+    /// The line of the message: the newest one we sent to `to` with its
+    /// text.
+    static func lineID(in lines: [ConsoleLine], text: String, from: Set<String>, to: String) -> UUID? {
+        let senders = Set(from.map { $0.uppercased() })
+        return lines.last { line in
+            line.text == text
+                && senders.contains((line.from ?? "").uppercased())
+                && (line.to ?? "").uppercased() == to.uppercased()
+        }?.id
     }
 }

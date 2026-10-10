@@ -579,6 +579,11 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// RR(N(R)) means "I expect N(R) next" = receiver has received 0..<N(R) (when N(R)>0)
     /// or all frames (when N(R)==0). Remove exactly those keys from sendBuffer so the
     /// sender clears acks correctly and stops retransmitting (fixes freeze and dupes).
+    /// Information bytes of the frames the peer has acknowledged, counted
+    /// frame by frame, for the sender's progress on a long message (retest
+    /// 2026-10-10, finding 8).
+    private(set) var bytesAcknowledged = 0
+
     func acknowledgeUpTo(from va: Int, to nr: Int) {
         let modulo = stateMachine.config.modulo
         var current = va
@@ -586,7 +591,8 @@ nonisolated final class AX25Session: @unchecked Sendable {
         
         // Loop from va up to (but not including) nr, acknowledging each frame
         while current != nr {
-            if sendBuffer.removeValue(forKey: current) != nil {
+            if let frame = sendBuffer.removeValue(forKey: current) {
+                bytesAcknowledged += frame.payload.count
                 removedAny = true
                 noteTurnaroundAcknowledged(ns: current)
             }

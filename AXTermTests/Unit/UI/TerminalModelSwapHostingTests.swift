@@ -111,19 +111,25 @@ final class TerminalModelSwapHostingTests: XCTestCase {
         station.holder.model = model
         spin(0.5)
 
+        let manager = station.coordinator.sessionManager
+        let peer = AX25Address(call: "K0EPI", ssid: 3)
+        let session = manager.session(for: peer)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
+
         model.destinationCall.wrappedValue = "K0EPI-3"
         model.startOutboundProgress(text: "A to B test 1", totalBytes: 14, destination: "K0EPI-3",
                                     hasAcks: true, startingVs: 0, paclen: 128)
         XCTAssertEqual(model.currentOutboundProgress?.deliveryPhase, .queued)
 
         // The I-frame reaches the TNC.
-        station.client.onUserFrameTransmitted?(14)
+        let frames = manager.sendData(Data("A to B test 1\r".utf8), to: peer)
+        station.client.onUserFrameTransmitted?(try! XCTUnwrap(frames.first))
         XCTAssertEqual(model.currentOutboundProgress?.bytesSent, 14,
                        "the frame went out but the message still reads Queued")
 
         // The peer's RR acks it.
-        let session = station.coordinator.sessionManager.session(for: AX25Address(call: "K0EPI", ssid: 3))
-        station.coordinator.sessionManager.onOutboundAckReceived?(session, 1)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
         settle { model.currentOutboundProgress?.deliveryPhase == .delivered }
         XCTAssertEqual(model.currentOutboundProgress?.deliveryPhase, .delivered,
                        "the link-layer ack never reached the model on screen")

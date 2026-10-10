@@ -57,6 +57,25 @@ nonisolated struct OutboundMessageProgress: Identifiable, Equatable {
     /// When the most recent digipeat echo was heard.
     var lastRelayAt: Date?
 
+    /// A frame of it has gone to the radio. Until then it is waiting.
+    var onAir = false
+    /// Sent as one AXDP message, which the other station sees only when it
+    /// has all arrived.
+    var viaAXDP = false
+    /// The session's counts when the message started (`apply`).
+    var sentBase = 0
+    var ackedBase = 0
+
+    /// Brings the counts up to date from the session's own: bytes sent for
+    /// the first time, and bytes of acknowledged frames, since the message
+    /// started. Retransmissions, other traffic on the link and a paclen that
+    /// changes midway leave them right, which counting frames by paclen did
+    /// not (retest 2026-10-10, finding 8).
+    mutating func apply(sessionBytesSent: Int, sessionBytesAcked: Int) {
+        bytesSent = min(totalBytes, max(bytesSent, sessionBytesSent - sentBase))
+        bytesAcked = min(totalBytes, max(bytesAcked, sessionBytesAcked - ackedBase))
+    }
+
     var isComplete: Bool {
         if hasAcks {
             return bytesAcked >= totalBytes
@@ -116,7 +135,7 @@ nonisolated enum InlineSendStatus: Equatable {
     /// Not on the air yet: the line itself, dimmed.
     case waiting(text: String)
     /// On the air; the line is in the history above.
-    case sending(acknowledged: Int, of: Int)
+    case sending(acked: Int, total: Int, axdpPeer: String?)
     case delivered
     /// A message from the far end is arriving (`AXDPPartialMessage`).
     case receiving(from: String, amount: String)
@@ -136,14 +155,30 @@ nonisolated enum InlineSendStatus: Equatable {
                      download: TextDownloadProgress? = nil) -> InlineSendStatus? {
         // A message going out holds the row; one coming in comes next.
         if let progress, !(progress.hasAcks && progress.isComplete) {
-            if progress.bytesSent < progress.totalBytes { return .waiting(text: progress.text) }
+            // Waiting means nothing of it is on the air yet; a long message
+            // used to read "Waiting to send…" until its last frame had gone.
+            if !progress.onAir { return .waiting(text: progress.text) }
             // A broadcast on the air has no acknowledgments to wait for.
-            if progress.hasAcks { return .sending(acknowledged: progress.chunksAcked, of: progress.totalChunks) }
+            if progress.hasAcks {
+                return .sending(acked: progress.bytesAcked, total: progress.totalBytes,
+                                axdpPeer: progress.viaAXDP ? progress.destination : nil)
+            }
         }
         if let incoming { return .receiving(from: incoming.from, amount: incoming.message.amount) }
         if let download { return .receivingFile(name: download.name, percent: download.percent) }
         if let progress, !(progress.hasAcks && progress.isComplete) { return nil }
         if let deliveredAtLineCount, deliveredAtLineCount == lineCount { return .delivered }
         return nil
+    }
+
+    /// "Delivered 9.7 of 26.8 KB" beside the progress bar.
+    static func deliveredAmount(acked: Int, total: Int) -> String {
+        "Delivered " + AXDPPartialMessage(type: nil, received: acked, total: total).amount
+    }
+
+    /// An AXDP message shows on the other station only when it is whole, so
+    /// the bar says so rather than suggesting they are reading along.
+    static func axdpNote(peer: String) -> String {
+        "\(peer) sees it when it has all arrived"
     }
 }

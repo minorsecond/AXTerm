@@ -1113,7 +1113,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     ///   - hasAcks: True for connected-mode (AXDP), false for datagram
     ///   - startingVs: The V(S) sequence number when transmission starts (for modulo-8 ack tracking)
     ///   - paclen: Packet length for fragmentation
-    func startOutboundProgress(text: String, totalBytes: Int, destination: String, hasAcks: Bool, startingVs: Int, paclen: Int) {
+    func startOutboundProgress(text: String, totalBytes: Int, destination: String, hasAcks: Bool, startingVs: Int, paclen: Int,
+                               viaAXDP: Bool = false) {
         // Every connected send passes through here, which makes it the one
         // place that knows a message just went out.
         if hasAcks { noteMessageSent(text, to: destination) }
@@ -1136,6 +1137,37 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             lastKnownVa: startingVs,  // Initially, no frames are acked, so va == startingVs
             chunksAcked: 0
         )
+        currentOutboundProgress?.viaAXDP = viaAXDP
+        // Counted from the session's own totals from here on (finding 8).
+        if hasAcks, let session = outboundSession {
+            currentOutboundProgress?.sentBase = session.statistics.bytesSent
+            currentOutboundProgress?.ackedBase = session.bytesAcknowledged
+        }
+        objectWillChange.send()
+    }
+
+    /// The session the current message rides: the one to whoever carries
+    /// its frames (`OutboundMessageProgress.ackPeer`).
+    private var outboundSession: AX25Session? {
+        let peer = currentOutboundProgress?.ackPeer ?? (wireDestination.call.isEmpty
+            ? viewModel.destinationCall : wireDestination.call)
+        guard !peer.isEmpty else { return nil }
+        return sessionManager.sessions.values.first {
+            $0.remoteAddress.display.uppercased() == peer.uppercased()
+                && [.connected, .connecting].contains($0.state)
+        }
+    }
+
+    /// One of our I-frames went to the radio. A frame to the message's link
+    /// puts the message on the air, and its counts come from the session.
+    func outboundFrameReachedRadio(_ frame: OutboundFrame) {
+        guard var prog = currentOutboundProgress, prog.hasAcks,
+              frame.destination.display.uppercased() == prog.ackPeer.uppercased() else { return }
+        prog.onAir = true
+        if let session = outboundSession {
+            prog.apply(sessionBytesSent: session.statistics.bytesSent, sessionBytesAcked: session.bytesAcknowledged)
+        }
+        currentOutboundProgress = prog
         objectWillChange.send()
     }
 
@@ -1158,6 +1190,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Update bytes-sent count when a chunk is transmitted
     func updateOutboundBytesSent(additionalBytes: Int) {
         guard var prog = currentOutboundProgress else { return }
+        prog.onAir = true
         prog.bytesSent = min(prog.bytesSent + additionalBytes, prog.totalBytes)
         currentOutboundProgress = prog
         if prog.isComplete {
@@ -1172,35 +1205,16 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         guard var prog = currentOutboundProgress, prog.hasAcks,
               session.remoteAddress.display.uppercased() == prog.ackPeer.uppercased()
         else { return }
-        
-        // Calculate delta using modulo-8 arithmetic
-        // va is the N(R) from RR, meaning all frames with N(S) < N(R) are acknowledged
-        let modulus = 8
-        let delta = (va - prog.lastKnownVa + modulus) % modulus
-        
-        // Only update if there's forward progress (delta > 0 and we haven't acked everything yet)
-        if delta > 0 && prog.chunksAcked < prog.totalChunks {
-            prog.lastKnownVa = va
-            prog.chunksAcked = min(prog.chunksAcked + delta, prog.totalChunks)
-            
-            // Calculate bytesAcked from chunksAcked
-            var bytes: Int = 0
-            for i in 0..<prog.chunksAcked {
-                if i < prog.totalChunks - 1 {
-                    bytes += prog.paclen
-                } else {
-                    // Last chunk may be smaller
-                    bytes += prog.totalBytes - (prog.totalChunks - 1) * prog.paclen
-                }
-            }
-            prog.bytesAcked = min(bytes, prog.totalBytes)
-            currentOutboundProgress = prog
-            
-            if prog.isComplete {
-                clearOutboundProgressAfterDelay()
-            }
-            objectWillChange.send()
+        // The session counts acknowledged frames' bytes itself, so a paclen
+        // that changed midway cannot throw this off (finding 8).
+        let before = prog.bytesAcked
+        prog.apply(sessionBytesSent: session.statistics.bytesSent, sessionBytesAcked: session.bytesAcknowledged)
+        guard prog.bytesAcked != before else { return }
+        currentOutboundProgress = prog
+        if prog.isComplete {
+            clearOutboundProgressAfterDelay()
         }
+        objectWillChange.send()
     }
 
     /// Clear progress after a short delay when complete (so user sees final state)
@@ -2511,8 +2525,8 @@ struct TerminalView: View {
         txViewModel.receivedTextSink = sessionCoordinator
 
         // Wire sender progress: I-frames transmitted (incl. from drain) update bytesSent
-        client.onUserFrameTransmitted = { [weak txViewModel] bytes in
-            txViewModel?.updateOutboundBytesSent(additionalBytes: bytes)
+        client.onUserFrameTransmitted = { [weak txViewModel] frame in
+            txViewModel?.outboundFrameReachedRadio(frame)
         }
 
         // Wire AXDP chat received to terminal transcript (regardless of AXDP badge state).
@@ -3392,6 +3406,7 @@ struct TerminalView: View {
                     lineCount: lines.count,
                     incoming: txViewModel.currentIncomingMessage,
                     download: txViewModel.currentIncomingDownload),
+                outgoing: consoleOutgoing(in: lines),
                 // Empty with one radio, so the badge appears only when there is
                 // more than one radio to tell apart.
                 radioNames: client.radioNames,
@@ -3885,7 +3900,8 @@ struct TerminalView: View {
             destination: txViewModel.viewModel.destinationCall,
             hasAcks: true,
             startingVs: sessionInfo?.vs ?? 0,
-            paclen: sessionInfo?.paclen ?? AX25Constants.defaultPacketLength
+            paclen: sessionInfo?.paclen ?? AX25Constants.defaultPacketLength,
+            viaAXDP: useAXDP
         )
 
         // Get frames from session manager (may include SABM if not connected)
@@ -5370,6 +5386,20 @@ struct TerminalView: View {
         connectBarViewModel.applySuggestedTo(record.destination)
         connectBarViewModel.viaDigipeaters = record.via
         syncLegacyFieldsFromConnectBar()
+    }
+
+    /// The message going out, for its own line in the history: dimmed where
+    /// it is not acknowledged yet (retest 2026-10-10, finding 9).
+    private func consoleOutgoing(in lines: [ConsoleLine]) -> ConsoleOutgoingProgress? {
+        guard let progress = txViewModel.currentOutboundProgress, progress.hasAcks, progress.onAir,
+              !progress.isComplete,
+              let dimFrom = ConsoleOutgoingProgress.dimFrom(text: progress.text, ackedBytes: progress.bytesAcked,
+                                                            viaAXDP: progress.viaAXDP),
+              let id = ConsoleOutgoingProgress.lineID(in: lines, text: progress.text,
+                                                      from: settings.onAirCallsigns.union([settings.myCallsign]),
+                                                      to: progress.ackPeer)
+        else { return nil }
+        return ConsoleOutgoingProgress(lineID: id, dimFrom: dimFrom)
     }
 
     // MARK: - Transfers View
