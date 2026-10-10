@@ -383,6 +383,8 @@ struct ContentView: View {
             detailView
         }
         .accessibilityIdentifier("mainWindowRoot")
+        // Never taller or wider than its screen (MainWindowFit).
+        .background(MainWindowFitter())
     }
 
     /// The station's own lifecycle (the mailbox attach, its addresses,
