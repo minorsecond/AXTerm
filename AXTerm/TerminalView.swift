@@ -872,6 +872,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             guard let self else { return }
             self.capturingPeerKeys = self.textRecorder.capturingKeys
         }
+        textRecorder.onDownloadProgress = { [weak self] key, progress in
+            self?.incomingDownloads[key] = progress
+        }
     }
 
     private func createSessionNotification(for session: AX25Session, oldState: AX25SessionState, newState: AX25SessionState) -> SessionNotification? {
@@ -1500,13 +1503,14 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
         // Marked text downloads and captures read the same bytes, with their
         // own line assembly: the loop below drops blank lines, and a file
-        // needs them.
-        textRecorder.received(data, key: peerKey, label: conversationPeer(for: session).display)
+        // needs them. A marked download goes to Transfers, so the loop gets
+        // everything but that.
+        let shown = textRecorder.received(data, key: peerKey, label: conversationPeer(for: session).display)
 
         // Get or create the per-peer buffer
         var peerBuffer = currentLineBuffers[peerKey] ?? Data()
         
-        for byte in data {
+        for byte in shown {
             if byte == 0x0D || byte == 0x0A {
                 // End-of-line: flush current buffer if it has any content.
                 if !peerBuffer.isEmpty {
@@ -1876,6 +1880,18 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     func incomingMessage(from peer: AX25Address) -> AXDPPartialMessage? {
         incomingMessages[peer.display.uppercased()]
+    }
+
+    /// Marked text downloads under way, by uppercased callsign.
+    @Published private(set) var incomingDownloads: [String: TextDownloadProgress] = [:]
+
+    func incomingDownload(from peer: AX25Address) -> TextDownloadProgress? {
+        incomingDownloads[peer.display.uppercased()]
+    }
+
+    /// The download arriving on the session on screen, if one is.
+    var currentIncomingDownload: TextDownloadProgress? {
+        currentSession.flatMap { incomingDownload(from: $0.remoteAddress) }
     }
 
     /// The message arriving on the session on screen, if one is.
@@ -3374,7 +3390,8 @@ struct TerminalView: View {
                     progress: txViewModel.currentOutboundProgress,
                     deliveredAtLineCount: deliveredAtLineCount,
                     lineCount: lines.count,
-                    incoming: txViewModel.currentIncomingMessage),
+                    incoming: txViewModel.currentIncomingMessage,
+                    download: txViewModel.currentIncomingDownload),
                 // Empty with one radio, so the badge appears only when there is
                 // more than one radio to tell apart.
                 radioNames: client.radioNames,

@@ -175,16 +175,81 @@ final class TextDownloadCaptureTests: XCTestCase {
                        "the row's Quick Look, Show in Finder and Open act on this path")
     }
 
-    func testTheLinesStillReachTheTranscript() async throws {
+    /// The file goes to Transfers, not down the terminal: the status row
+    /// shows it arriving and the saved notice ends it (home retest finding
+    /// 12). Text around it still shows. Until then every line of the file
+    /// scrolled through the terminal as well.
+    func testTheFileStaysOutOfTheTranscript() async throws {
         try Data("Net at 1900\n".utf8).write(to: area.appendingPathComponent("n.txt"))
         library.rescan()
         try await connectToMailbox()
         var shown: [String] = []
         terminal.onPlainTextChatReceived = { _, line, _ in shown.append(line) }
         await command("D n.txt")
-        XCTAssertTrue(shown.contains("--- BEGIN n.txt (12 bytes) ---"), "\(shown)")
-        XCTAssertTrue(shown.contains("Net at 1900"), "\(shown)")
-        XCTAssertTrue(shown.contains("--- END n.txt ---"), "\(shown)")
+        XCTAssertFalse(shown.contains("--- BEGIN n.txt (12 bytes) ---"), "\(shown)")
+        XCTAssertFalse(shown.contains("Net at 1900"), "\(shown)")
+        XCTAssertFalse(shown.contains("--- END n.txt ---"), "\(shown)")
+        XCTAssertEqual(saved("n.txt"), Data("Net at 1900\n".utf8))
+    }
+
+    func testTextAroundTheFileStillShows() {
+        var shown: [String] = []
+        terminal.onPlainTextChatReceived = { _, line, _ in shown.append(line) }
+        let marked = TextDownloadMarkers.markedLines(name: "n.txt", data: Data("Net at 1900\n".utf8))
+        deliver("Sending n.txt\r" + marked.joined(separator: "\r") + "\rPARK de K0EPI-2>\r")
+        XCTAssertEqual(shown, ["Sending n.txt", "PARK de K0EPI-2>"])
+    }
+
+    /// A BEGIN line cut across two frames is held back until it is whole,
+    /// so none of it reaches the terminal.
+    func testABeginLineSplitAcrossFramesIsHeldBack() {
+        var shown: [String] = []
+        terminal.onPlainTextChatReceived = { _, line, _ in shown.append(line) }
+        deliver("--- BEG")
+        deliver("IN n.txt (12 bytes) ---\r\nNet at 1900\r\n--- END n.txt ---\r\nafter\r\n")
+        XCTAssertEqual(shown, ["after"])
+        XCTAssertEqual(saved("n.txt"), Data("Net at 1900\n".utf8))
+    }
+
+    /// A line past the announced count is not the file's, so it shows.
+    func testALinePastTheCountStillShows() {
+        var shown: [String] = []
+        terminal.onPlainTextChatReceived = { _, line, _ in shown.append(line) }
+        deliver("--- BEGIN n.txt (5 bytes) ---\rthis line is far longer than five bytes\r")
+        XCTAssertEqual(shown, ["this line is far longer than five bytes"])
+    }
+
+    /// While the file arrives, the terminal knows how far it has got and
+    /// Transfers has a row for it; the finished file completes that row.
+    func testADownloadShowsProgressAndOneTransfersRow() throws {
+        let source = netScript()
+        let marked = TextDownloadMarkers.markedLines(name: "t3k_text.txt", data: source)
+        let half = marked.count / 2
+        deliver(marked.prefix(half).joined(separator: "\r") + "\r")
+
+        let progress = try XCTUnwrap(terminal.incomingDownload(from: mailboxAddress))
+        XCTAssertEqual(progress.name, "t3k_text.txt")
+        XCTAssertEqual(progress.total, source.count)
+        XCTAssertGreaterThan(progress.received, 0)
+        XCTAssertLessThan(progress.received, source.count)
+        let row = try XCTUnwrap(coordinatorA.transfers.first)
+        XCTAssertEqual(coordinatorA.transfers.count, 1)
+        XCTAssertEqual(row.fileName, "t3k_text.txt")
+        XCTAssertEqual(row.status, .sending)
+        XCTAssertEqual(row.bytesSent, progress.received)
+
+        deliver(marked.dropFirst(half).joined(separator: "\r") + "\r")
+        XCTAssertNil(terminal.incomingDownload(from: mailboxAddress))
+        XCTAssertEqual(coordinatorA.transfers.count, 1, "the same row, finished")
+        XCTAssertEqual(coordinatorA.transfers.first?.status, .completed)
+        XCTAssertEqual(coordinatorA.transfers.first?.savedFilePath,
+                       folderA.appendingPathComponent("t3k_text.txt").path)
+    }
+
+    func testTheStatusRowForADownload() {
+        XCTAssertEqual(InlineSendStatus.make(progress: nil, deliveredAtLineCount: nil, lineCount: 1,
+                                             download: TextDownloadProgress(name: "n.txt", received: 400, total: 1000)),
+                       .receivingFile(name: "n.txt", percent: 40))
     }
 
     func testASecondCopyIsSavedBesideTheFirst() async throws {

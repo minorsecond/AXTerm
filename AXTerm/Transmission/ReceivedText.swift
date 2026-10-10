@@ -203,6 +203,11 @@ nonisolated struct TextDownloadReceiver: Sendable {
 
     var isReceiving: Bool { active != nil }
 
+    /// How far the file under way has got.
+    var progress: TextDownloadProgress? {
+        active.map { TextDownloadProgress(name: $0.begin.name, received: $0.collected, total: $0.begin.byteCount) }
+    }
+
     mutating func receive(line: Data) -> Result? {
         guard var current = active else {
             if let text = String(data: line, encoding: .utf8),
@@ -274,6 +279,15 @@ nonisolated struct TextDownloadReceiver: Sendable {
     }
 }
 
+/// A marked download partway in, for the terminal's status row.
+nonisolated struct TextDownloadProgress: Equatable, Sendable {
+    let name: String
+    let received: Int
+    let total: Int
+
+    var percent: Int { total > 0 ? min(100, received * 100 / total) : 0 }
+}
+
 // MARK: - Capture
 
 /// Everything one station sent while the operator's Capture switch was on.
@@ -327,6 +341,9 @@ nonisolated struct ReceivedText: Equatable, Sendable {
     /// Why a download is incomplete; nil when it arrived whole, and always
     /// nil for a capture.
     let problem: String?
+    /// The Transfers row opened when the download began, which the saved
+    /// file completes. Nil for a capture.
+    var transferID: UUID? = nil
 
     /// "t3k_text (incomplete).txt": the name an incomplete download is saved
     /// under, so it cannot be mistaken for the whole file in Finder or Files.
@@ -350,6 +367,19 @@ nonisolated struct ReceivedTextReport: Equatable, Sendable {
 protocol ReceivedTextSink: AnyObject {
     @discardableResult
     func saveReceivedText(_ text: ReceivedText) -> ReceivedTextReport
+    /// A marked download began. Returns the Transfers row that shows it
+    /// arriving, if the sink keeps one.
+    func receivedTextStarted(name: String, peer: String, announcedBytes: Int) -> UUID?
+    /// More of the download behind that row has arrived.
+    func receivedTextProgress(_ transferID: UUID, bytes: Int)
+    /// The download behind that row ended with nothing worth saving.
+    func receivedTextAbandoned(_ transferID: UUID)
+}
+
+extension ReceivedTextSink {
+    func receivedTextStarted(name: String, peer: String, announcedBytes: Int) -> UUID? { nil }
+    func receivedTextProgress(_ transferID: UUID, bytes: Int) {}
+    func receivedTextAbandoned(_ transferID: UUID) {}
 }
 
 // MARK: - Following every station's lines
@@ -365,6 +395,23 @@ final class ReceivedTextRecorder {
     weak var sink: ReceivedTextSink?
     /// Called whenever a capture starts or stops.
     var onCaptureChange: (() -> Void)?
+    /// A station's marked download moved on, or ended (nil). By uppercased
+    /// callsign.
+    var onDownloadProgress: ((String, TextDownloadProgress?) -> Void)?
+
+    /// What the terminal is shown of each station's line in progress:
+    /// bytes held back while the line could still be a BEGIN line or is part
+    /// of a file, and whether the line is already being shown.
+    private struct ShownLine {
+        var held = Data()
+        var showing = false
+        /// The last line was held back, so the LF after its CR is too.
+        var lastHidden = false
+    }
+    private var shownLines: [String: ShownLine] = [:]
+    /// The Transfers row for each station's download under way.
+    private var downloadRows: [String: UUID] = [:]
+    private static let beginPrefix = Data("--- BEGIN ".utf8)
 
     private var splitters: [String: ReceivedLineSplitter] = [:]
     private var downloads: [String: TextDownloadReceiver] = [:]
@@ -376,13 +423,70 @@ final class ReceivedTextRecorder {
     private static func key(_ peer: String) -> String { peer.uppercased() }
 
     /// Bytes from a station's session, in the order they were delivered.
-    func received(_ bytes: Data, key peer: String, label: String) {
+    /// Returns the bytes for the terminal to show: everything except a
+    /// marked download, which goes to Transfers instead (home retest,
+    /// finding 12). Its BEGIN line, its lines and its END line are held
+    /// back; a line the file turns out not to own is shown after all.
+    @discardableResult
+    func received(_ bytes: Data, key peer: String, label: String) -> Data {
         let key = Self.key(peer)
         labels[key] = label
         var splitter = splitters[key] ?? ReceivedLineSplitter()
-        let lines = splitter.push(bytes)
+        var line = shownLines[key] ?? ShownLine()
+        var shown = Data()
+        let progressBefore = downloads[key]?.progress
+
+        for byte in bytes {
+            let completed = splitter.push(Data([byte]))
+            if let text = completed.first {
+                let wasReceiving = downloads[key] != nil
+                let result = take(text, key: key)
+                let hidden: Bool
+                if wasReceiving {
+                    // A file line, or its END line; a line past the count
+                    // (an incomplete result) is not the file's.
+                    hidden = result == nil || result?.problem == nil
+                } else {
+                    hidden = downloads[key] != nil   // it was a BEGIN line
+                }
+                if !hidden {
+                    if !line.showing { shown.append(line.held) }
+                    shown.append(byte)
+                }
+                line = ShownLine(lastHidden: hidden)
+            } else if byte == 0x0A {
+                // The LF of a CR LF pair goes with its line.
+                if !line.lastHidden { shown.append(byte) }
+                line.lastHidden = false
+            } else if line.showing {
+                shown.append(byte)
+            } else {
+                line.held.append(byte)
+                if downloads[key] == nil, !Self.couldBeBegin(line.held) {
+                    shown.append(line.held)
+                    line.held = Data()
+                    line.showing = true
+                }
+            }
+        }
         splitters[key] = splitter
-        for line in lines { take(line, key: key) }
+        shownLines[key] = line
+
+        let progress = downloads[key]?.progress
+        if progress != progressBefore {
+            if let progress, let row = downloadRows[key] {
+                sink?.receivedTextProgress(row, bytes: progress.received)
+            }
+            onDownloadProgress?(key, progress)
+        }
+        return shown
+    }
+
+    /// Whether a line that starts this way may yet be a BEGIN line.
+    private static func couldBeBegin(_ start: Data) -> Bool {
+        start.count <= beginPrefix.count
+            ? beginPrefix.starts(with: start)
+            : start.starts(with: beginPrefix)
     }
 
     /// A chat message that arrived whole (AXDP). It goes to a capture only:
@@ -405,9 +509,12 @@ final class ReceivedTextRecorder {
         if var splitter = splitters.removeValue(forKey: key), let rest = splitter.flush() {
             take(rest, key: key)
         }
-        if var receiver = downloads.removeValue(forKey: key), let result = receiver.linkClosed() {
-            deliver(result, key: key)
+        shownLines.removeValue(forKey: key)
+        if var receiver = downloads.removeValue(forKey: key) {
+            onDownloadProgress?(key, nil)
+            if let result = receiver.linkClosed() { deliver(result, key: key) }
         }
+        downloadRows.removeValue(forKey: key)
         if captures[key] != nil { stopCapture(key: key) }
     }
 
@@ -451,17 +558,26 @@ final class ReceivedTextRecorder {
 
     // MARK: Private
 
-    private func take(_ line: Data, key: String) {
+    @discardableResult
+    private func take(_ line: Data, key: String) -> TextDownloadReceiver.Result? {
         captures[key]?.append(line: line)
         var receiver = downloads[key] ?? TextDownloadReceiver()
+        let wasReceiving = receiver.isReceiving
         let result = receiver.receive(line: line)
         downloads[key] = receiver.isReceiving ? receiver : nil
+        if !wasReceiving, let begun = receiver.progress {
+            downloadRows[key] = sink?.receivedTextStarted(
+                name: begun.name, peer: labels[key] ?? key, announcedBytes: begun.total)
+        }
         if let result { deliver(result, key: key) }
+        return result
     }
 
     private func deliver(_ result: TextDownloadReceiver.Result, key: String) {
+        let row = downloadRows.removeValue(forKey: key)
         // A BEGIN followed by nothing at all leaves nothing worth a file.
         guard !result.data.isEmpty || result.problem == nil else {
+            if let row { sink?.receivedTextAbandoned(row) }
             TxLog.debug(.session, "Marked text download ended before any of it arrived", [
                 "peer": key, "name": result.name
             ])
@@ -472,6 +588,7 @@ final class ReceivedTextRecorder {
             peer: labels[key] ?? key,
             name: result.name,
             data: result.data,
-            problem: result.problem))
+            problem: result.problem,
+            transferID: row))
     }
 }

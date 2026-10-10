@@ -1976,6 +1976,8 @@ struct InlineSendStatusRow: View {
             note("Delivered", systemImage: "checkmark")
         case .receiving(let from, let amount):
             note("Receiving a message from \(from)\u{2026} \(amount)", systemImage: "arrow.down.circle")
+        case .receivingFile(let name, let percent):
+            note("Receiving \(name)\u{2026} \(percent)%", systemImage: "arrow.down.doc")
         }
     }
 

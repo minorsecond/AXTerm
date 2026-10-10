@@ -678,7 +678,8 @@ t3k_text.txt is text — sending it as text (1m).
 
 Any terminal shows them as two more lines. An AXTerm caller uses them to
 save the file in AXTerm Transfers with a row in its Transfers list
-(`Docs/PacketFileTransfer.md`, "Text from a session"), and to check that
+(`Docs/PacketFileTransfer.md`, "Text from a session"), to show its progress
+there instead of the file scrolling through the terminal, and to check that
 nothing went missing. `TextDownloadMarkers` builds and parses both lines;
 the same function serves a direct call and a NET/ROM caller.
 

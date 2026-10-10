@@ -152,6 +152,16 @@ under the name from the BEGIN line, sanitized and never overwriting
 inbound and completed, with Quick Look, Show in Finder and Open, and the
 console says where the file went.
 
+The file arrives like any other transfer. Its Transfers row opens at the
+BEGIN line, with the announced size, and fills in as lines come. The
+terminal's status row says "Receiving t3k_text.txt… 40%", and the BEGIN
+line, the file and the END line stay out of the terminal; the line that
+says where the file was saved ends it. Text before and after the file still
+shows, and so does a line past the count, which is not the file's. A line
+that starts like a BEGIN line is held back until it is whole, so a BEGIN
+line cut across two frames does not show either. Until the home retest
+(2026-10-10, finding 12) the whole file scrolled through the terminal too.
+
 When the file does not all arrive, AXTerm saves what did arrive under a
 name that says so, `t3k_text (incomplete).txt`, and marks the row failed
 with the reason, keeping the file's actions. On a 1200 baud link the part

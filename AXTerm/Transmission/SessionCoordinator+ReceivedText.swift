@@ -26,17 +26,16 @@ extension SessionCoordinator: ReceivedTextSink {
         let savedName = path.map { URL(fileURLWithPath: $0).lastPathComponent }
             ?? ReceivedFileStore.sanitize(fileName)
 
-        var transfer = BulkTransfer(
-            id: UUID(),
-            fileName: savedName,
-            fileSize: text.data.count,
-            destination: text.peer,
-            chunkSize: 128,
-            direction: .inbound,
-            transferProtocol: .text,
-            compressionSettings: .disabled)
-        transfer.setTransmissionSize(text.data.count)
-        transfer.markStarted()
+        // A download already has its row, opened when it began; a capture
+        // gets one now.
+        let opened = text.transferID.flatMap { id in transfers.firstIndex { $0.id == id } }
+        var transfer = opened.map { transfers[$0] } ?? Self.textTransfer(
+            name: savedName, peer: text.peer, bytes: text.data.count)
+        if opened != nil, transfer.fileName != savedName {
+            // Saved under another name: a second copy, or marked incomplete.
+            transfer = Self.textTransfer(name: savedName, peer: text.peer, bytes: text.data.count,
+                                         id: transfer.id, startedAt: transfer.startedAt)
+        }
         transfer.savedFilePath = path
         transfer.bytesSent = text.data.count
         if path == nil {
@@ -46,7 +45,11 @@ extension SessionCoordinator: ReceivedTextSink {
         } else {
             transfer.markCompleted()
         }
-        transfers.append(transfer)
+        if let opened {
+            transfers[opened] = transfer
+        } else {
+            transfers.append(transfer)
+        }
 
         let notice = Self.receivedTextNotice(text, savedName: path == nil ? nil : savedName)
         packetEngine?.appendSystemNotification(notice)
@@ -60,6 +63,44 @@ extension SessionCoordinator: ReceivedTextSink {
         return ReceivedTextReport(notice: notice,
                                   savedURL: path.map { URL(fileURLWithPath: $0) },
                                   transferID: transfer.id)
+    }
+
+    /// A Transfers row for text that arrives as lines, running until the
+    /// file is saved.
+    private static func textTransfer(name: String, peer: String, bytes: Int,
+                                     id: UUID = UUID(), startedAt: Date? = nil) -> BulkTransfer {
+        var transfer = BulkTransfer(
+            id: id,
+            fileName: name,
+            fileSize: bytes,
+            destination: peer,
+            chunkSize: 128,
+            direction: .inbound,
+            transferProtocol: .text,
+            compressionSettings: .disabled)
+        transfer.setTransmissionSize(bytes)
+        transfer.markStarted()
+        if let startedAt { transfer.startedAt = startedAt }
+        transfer.status = .sending
+        return transfer
+    }
+
+    /// A marked download began: its row shows it arriving (home retest,
+    /// finding 12), with the size its BEGIN line announced.
+    func receivedTextStarted(name: String, peer: String, announcedBytes: Int) -> UUID? {
+        let transfer = Self.textTransfer(name: ReceivedFileStore.sanitize(name), peer: peer, bytes: announcedBytes)
+        transfers.append(transfer)
+        return transfer.id
+    }
+
+    func receivedTextProgress(_ transferID: UUID, bytes: Int) {
+        guard let index = transfers.firstIndex(where: { $0.id == transferID }) else { return }
+        transfers[index].bytesSent = min(bytes, transfers[index].fileSize)
+    }
+
+    /// Nothing of it arrived, so there is no file to show; the row goes.
+    func receivedTextAbandoned(_ transferID: UUID) {
+        transfers.removeAll { $0.id == transferID }
     }
 
     /// The console line for a saved download or capture.

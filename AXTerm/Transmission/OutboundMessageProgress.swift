@@ -120,6 +120,8 @@ nonisolated enum InlineSendStatus: Equatable {
     case delivered
     /// A message from the far end is arriving (`AXDPPartialMessage`).
     case receiving(from: String, amount: String)
+    /// A mailbox's marked text download is arriving (`TextDownloadProgress`).
+    case receivingFile(name: String, percent: Int)
 
     /// - Parameters:
     ///   - deliveredAtLineCount: the history's line count when the last
@@ -127,9 +129,11 @@ nonisolated enum InlineSendStatus: Equatable {
     ///   - lineCount: the history's line count now.
     ///   - incoming: a message from the far end partway in, shown when
     ///     nothing is going out.
+    ///   - download: a marked text download partway in, shown after both.
     static func make(progress: OutboundMessageProgress?, deliveredAtLineCount: Int?,
                      lineCount: Int,
-                     incoming: (from: String, message: AXDPPartialMessage)? = nil) -> InlineSendStatus? {
+                     incoming: (from: String, message: AXDPPartialMessage)? = nil,
+                     download: TextDownloadProgress? = nil) -> InlineSendStatus? {
         // A message going out holds the row; one coming in comes next.
         if let progress, !(progress.hasAcks && progress.isComplete) {
             if progress.bytesSent < progress.totalBytes { return .waiting(text: progress.text) }
@@ -137,6 +141,7 @@ nonisolated enum InlineSendStatus: Equatable {
             if progress.hasAcks { return .sending(acknowledged: progress.chunksAcked, of: progress.totalChunks) }
         }
         if let incoming { return .receiving(from: incoming.from, amount: incoming.message.amount) }
+        if let download { return .receivingFile(name: download.name, percent: download.percent) }
         if let progress, !(progress.hasAcks && progress.isComplete) { return nil }
         if let deliveredAtLineCount, deliveredAtLineCount == lineCount { return .delivered }
         return nil
