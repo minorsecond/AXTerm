@@ -27,7 +27,8 @@ selected cleanly, the mailbox refused uploads correctly with uploads off and
 took a YAPP upload without `U` with them on, and the photo to K0EPI-2 and the
 text download from PARK both completed. The iPad turned up the failures: it
 drops a line of text that follows an AXDP message (B1), and it reports an
-APRS message it never sent as sent (E3). Fourteen findings, none fixed yet.
+APRS message it never sent as sent (E3). Fourteen findings, all fixed the
+same day with tests (see Fixes); none of the fixes has been on the air yet.
 
 ## Results
 
@@ -129,3 +130,22 @@ APRS message it never sent as sent (E3). Fourteen findings, none fixed yet.
     radio switched to Packet while it waits for its ack is marked Not sent,
     with the reason, instead of retrying silently.
 
+## Fixes
+
+Each was fixed test first, with the full macOS suite and the iOS build
+passing before the commit. Not yet installed on A (705) or the iPad.
+
+| Finding | Commit | What changed |
+|---|---|---|
+| 1 | `e59dbbd6` | The reassembler hands the terminal the plain text of each delivery, so a line after an AXDP message shows |
+| 2, 3 | `ff92ef73` | A TNC4 connect gets 20 s; a connect the operator started stops and says the TNC4 may be held by another device; reconnects back off up to 30 s and stop after 5 minutes |
+| 4 | `c57aba5d` | "Receiving a message from K0EPI-2… 1.2 of 3.4 KB" in the terminal's status row; a message the link cut off says so |
+| 5, 10 | `ca237580` | Send Again on finished outbound rows, confirmed first; Send with YAPP Instead on a declined AXDP row |
+| 6 | `c862fc54` | The answer to the text probe is a PING, so the exchange is probe, PING, PONG |
+| 7 | `ae0fb2aa` | The mailbox takes AXDP uploads under its upload rules, with AXTerm's own receiver |
+| 8 | `01b3b917` | The BBS window lists uploads with Received and From, and opens, moves and deletes them; areas gain Modified (migration v39) |
+| 9 | `a2b649e2` | The BBS header asks whether any enabled radio answers mailbox calls |
+| 11 | `0cc74e25` | Trusted callers and a per-area switch; `U PARK` and the Send File sheet's Mailbox Area (migration v40) |
+| 12 | `f6272739` | A mailbox text download opens a Transfers row and shows "Receiving cheat-sheet.txt… 40%" instead of the file |
+| 13 | `12044222` | Use This is a bordered small button at the trailing edge |
+| 14 | `0d3cb727` | Messages is disabled with no radio on APRS, with Switch to APRS; a message that cannot leave is marked Not sent |
