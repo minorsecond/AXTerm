@@ -94,10 +94,10 @@ never on a node/BBS frequency. So the flood (and an APRS message with no route
 of its own) goes out only radios that carry APRS: `SessionCoordinator.connectedAPRSRadios()`
 = the enabled, connected radios where `RadioProfile.handlesAPRS` is true.
 `handlesAPRS` is `aprsEnabled`, which the radio's **Channel** control sets
-(APRS or Packet, on the radio's page under Settings › Radios). A single-radio
-station has no other channel to confuse it with, so its one radio always
-counts, whatever its channel (`RadioChannel.aprsRadios`). When no APRS radio is
-connected, the probe doesn't pretend to listen: it reports *"Couldn't transmit
+(APRS or Packet, on the radio's page under Settings › Radios). That holds for
+a single-radio station too: its one radio carries APRS only while it is on
+APRS (`RadioChannel.aprsRadios`; it used to count whatever its channel, until
+the operator's ruling of 2026-10-10). When no APRS radio is connected, the probe doesn't pretend to listen: it reports *"Couldn't transmit
 — no connected radio has APRS turned on."*
 
 Because a general query solicits everyone in earshot, it can't be *aimed* at a

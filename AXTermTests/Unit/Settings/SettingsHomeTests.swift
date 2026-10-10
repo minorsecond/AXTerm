@@ -52,12 +52,11 @@ final class SettingsHomeTests: XCTestCase {
             // Link Layer
             (AppSettingsStore.ax25T1TimeoutSecondsKey, .linkLayer),
             (AppSettingsStore.ax25NegotiateV22Key, .linkLayer),
-            // Digipeater (single radio) and the pointer to the radios (several)
+            // Digipeater (single radio) and the pointer to the radios (several).
+            // Fill-in, wide-area and the dupe window are APRS rules and live
+            // on the APRS page only (operator, 2026-10-10).
             ("radio.digi.enabled", .packetRadios),
-            ("radio.digi.fillIn", .packetRadios),
-            ("radio.digi.wideAreaMaxHops", .packetRadios),
             ("radio.digi.aliases", .packetRadios),
-            ("radio.digi.dupeSeconds", .packetRadios),
             // Ping
             (AppSettingsStore.pingEnabledKey, .ping),
             ("radio.pings", .packetRadios),
@@ -171,20 +170,29 @@ final class SettingsHomeTests: XCTestCase {
         XCTAssertEqual(SettingsTab.packetNode.settingsTitle, "Packet Node")
     }
 
-    private static let digiSettings: Set<String> = [
-        "radio.digi.enabled", "radio.digi.fillIn", "radio.digi.wideAreaMaxHops",
-        "radio.digi.aliases", "radio.digi.dupeSeconds",
+    private static let digiSettings: Set<String> = ["radio.digi.enabled", "radio.digi.aliases"]
+    private static let aprsDigiSettings: Set<String> = [
+        "radio.digi.fillIn", "radio.digi.wideAreaMaxHops", "radio.digi.dupeSeconds",
     ]
 
-    /// A radio's digipeater is set where the radio works: WIDEn-N fill-in
-    /// on the APRS page for an APRS radio, by call or alias on the Packet
-    /// Node page for a packet radio. It was on Packet Node only, so an APRS
-    /// radio had nowhere to switch it on (operator, 2026-10-09).
+    /// A radio's digipeater is set where the radio works. Its switch and
+    /// aliases are on each channel's page. It was on Packet Node only, so an
+    /// APRS radio had nowhere to switch it on (operator, 2026-10-09).
     func testTheDigipeaterHasAHomeOnEachChannel() {
         for setting in Self.digiSettings {
             XCTAssertEqual(SettingsHome.section(of: setting, channel: .aprs), .aprsRadios, setting)
             XCTAssertEqual(SettingsHome.section(of: setting, channel: .packet), .packetRadios, setting)
             XCTAssertNil(SettingsHome.section(of: setting), "\(setting) has a home per channel")
+        }
+    }
+
+    /// Fill-in, wide-area and the dupe window are APRS rules: their one home
+    /// is the APRS page. On Packet Node they showed as though a packet node
+    /// answered WIDE1-1 (operator, 2026-10-10).
+    func testTheAPRSDigipeaterRulesLiveOnTheAPRSPageOnly() {
+        for setting in Self.aprsDigiSettings {
+            XCTAssertEqual(SettingsHome.section(of: setting), .aprsRadios, setting)
+            XCTAssertNotEqual(SettingsHome.section(of: setting, channel: .packet), .packetRadios, setting)
         }
     }
 }

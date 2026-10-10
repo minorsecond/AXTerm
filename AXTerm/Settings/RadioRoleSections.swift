@@ -323,6 +323,15 @@ struct RadioPacketSections: View {
         }
     }
 
+    /// An ID beacon built from this station: the radio's call, the node
+    /// alias and the mailbox, when they are on.
+    private var idBeaconSuggestion: String {
+        IDBeaconSuggestion.text(callsign: settings.onAirCallsign(for: radioID),
+                                nodeAlias: profile.announcesNode ? settings.netRomNodeAlias : "",
+                                mailbox: profile.answersMailbox && settings.defaults.bool(forKey: BBSSettings.onAirKey)
+                                    ? settings.defaults.string(forKey: BBSSettings.callsignKey) : nil)
+    }
+
     @ViewBuilder
     private var idBeaconRows: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -333,7 +342,20 @@ struct RadioPacketSections: View {
                  + "\(BeaconPlan.maxTextBytes) bytes \u{b7} sent to BEACON")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            if case let .failure(problem) = BeaconPlan.plan(
+            if bind.beacon(\.text).wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Not a fault, just nothing to send yet: say so plainly and
+                // offer words built from the station.
+                let suggestion = idBeaconSuggestion
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Nothing is sent until there is text, for example \u{201C}\(suggestion)\u{201D}.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Use This") { bind.beacon(\.text).wrappedValue = suggestion }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                }
+            } else if case let .failure(problem) = BeaconPlan.plan(
                 text: bind.beacon(\.text).wrappedValue,
                 path: bind.beacon(\.path).wrappedValue) {
                 Text(problem.operatorText)
@@ -723,15 +745,26 @@ struct RadioDigipeaterSection: View {
 
     private var bind: RadioRoleBindings { RadioRoleBindings(radioID: radioID, settings: settings) }
 
+    /// Only the rows that act on this channel (`DigipeaterRows`).
+    private func shows(_ row: DigipeaterRows.Row) -> Bool {
+        DigipeaterRows.rows(for: channel).contains(row)
+    }
+
     var body: some View {
         Section {
             Toggle("Digipeat on this radio", isOn: bind.digi(\.enabled))
-                .help("Retransmit frames whose via path names this station or an alias below, "
-                      + "or a WIDEn-N this digipeater honors. Off by default: it volunteers "
-                      + "your transmitter for other people's traffic.")
-            if bind.digi(\.enabled).wrappedValue {
+                .help(channel == .aprs
+                      ? "Retransmit frames whose via path names this station or an alias below, "
+                        + "or a WIDEn-N this digipeater honors. Off by default: it volunteers "
+                        + "your transmitter for other people's traffic."
+                      : "Retransmit frames sent by way of this station's callsign or an alias "
+                        + "below. Off by default: it volunteers your transmitter for other "
+                        + "people's traffic.")
+            if bind.digi(\.enabled).wrappedValue, shows(.fillIn) {
                 Toggle("Fill-in (WIDE1-1)", isOn: bind.digi(\.fillIn))
                     .help("Repeat the first WIDE1-1 hop, as a home fill-in digipeater does.")
+            }
+            if bind.digi(\.enabled).wrappedValue, shows(.wideArea) {
                 Stepper(bind.digi(\.wideAreaMaxHops).wrappedValue == 0
                         ? "Wide-area: off"
                         : "Wide-area hops: \(bind.digi(\.wideAreaMaxHops).wrappedValue)",
@@ -739,6 +772,8 @@ struct RadioDigipeaterSection: View {
                     .help("The largest WIDEn-N this digipeater still repeats. 0 turns wide-area "
                           + "repeating off; 2 is a responsible default that does not "
                           + "regenerate WIDE7-7 floods.")
+            }
+            if bind.digi(\.enabled).wrappedValue, shows(.aliases) {
                 LabeledContent("Also answer to") {
                     TextField("Also answer to", text: bind.digiAliases,
                               prompt: Text("aliases (comma-separated)"))
@@ -748,6 +783,8 @@ struct RadioDigipeaterSection: View {
                 }
                 .help("Other names this digipeater repeats for, such as a club alias. Its "
                       + "own callsign is always included.")
+            }
+            if bind.digi(\.enabled).wrappedValue, shows(.dupeWindow) {
                 Stepper("Dupe window: \(bind.digi(\.dupeSeconds).wrappedValue) s",
                         value: bind.digi(\.dupeSeconds), in: 5...120, step: 5)
                     .help("A frame heard again within this many seconds is not repeated, so "
@@ -760,7 +797,9 @@ struct RadioDigipeaterSection: View {
                  ? "Repeats other stations' APRS packets on this radio's channel. Fill-in answers WIDE1-1 "
                    + "the way a home digipeater does; wide-area also answers WIDE2-N and up to the hops set. "
                    + "Each packet is repeated once, whatever path it arrives by."
-                 : "Repeats other stations' traffic on this radio's channel only.")
+                 : "Repeats frames other stations send by way of this radio's callsign or an alias, "
+                   + "on this radio's channel only. WIDE1-1 fill-in and wide-area are APRS settings, "
+                   + "on the APRS page when the radio is on APRS.")
         }
     }
 }

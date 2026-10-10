@@ -200,6 +200,27 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     /// services where it left them.
     var runsPacketServices: Bool { !aprsEnabled }
 
+    /// The digipeater as it acts on this radio's channel.
+    ///
+    /// On Packet it repeats by call or alias only. Fill-in, wide-area and the
+    /// dupe window are APRS rules, and a dupe window would drop a connected
+    /// station's retry of a frame its peer did not acknowledge. The stored
+    /// values stay, for when the radio goes back to APRS (operator,
+    /// 2026-10-10).
+    var effectiveDigi: DigiConfig {
+        guard !aprsEnabled else { return digi }
+        var packet = digi
+        packet.fillIn = false
+        packet.wideAreaMaxHops = 0
+        packet.dupeSeconds = 0
+        return packet
+    }
+
+    /// Whether the beacon goes out: switched on, and the kind this radio's
+    /// channel sends. A position report on Packet or an ID beacon on APRS
+    /// is a setting left over from the other channel, and stays quiet.
+    var sendsBeacon: Bool { beacon.enabled && RadioChannel.beaconMatchesChannel(self) }
+
     /// The ping prober may probe from this radio.
     var mayPing: Bool { pings && runsPacketServices }
 

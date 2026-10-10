@@ -39,3 +39,16 @@ nonisolated struct DigiConfig: Codable, Equatable, Sendable {
         dupeSeconds = try c.decodeIfPresent(Int.self, forKey: .dupeSeconds) ?? 30
     }
 }
+
+/// What a radio's digipeater section shows on each channel's page. Packet
+/// shows only what acts there (`RadioProfile.effectiveDigi`).
+nonisolated enum DigipeaterRows {
+    enum Row: Equatable, Sendable { case enabled, fillIn, wideArea, aliases, dupeWindow }
+
+    static func rows(for channel: RadioChannel) -> [Row] {
+        switch channel {
+        case .aprs: return [.enabled, .fillIn, .wideArea, .aliases, .dupeWindow]
+        case .packet: return [.enabled, .aliases]
+        }
+    }
+}

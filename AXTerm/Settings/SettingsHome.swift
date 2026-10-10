@@ -104,12 +104,11 @@ enum SettingsHome {
     static let byChannel: [ChannelEntry] = [
         ChannelEntry(setting: "radio.beacon.enabled", aprs: .aprsRadios, packet: .packetRadios),
         ChannelEntry(setting: "radio.beacon.intervalMinutes", aprs: .aprsRadios, packet: .packetRadios),
-        // The digipeater: WIDEn-N on the APRS page, by call on Packet Node.
+        // The digipeater's switch and aliases act on both channels. Fill-in,
+        // wide-area and the dupe window are APRS rules, in `entries` with the
+        // APRS page as their one home.
         ChannelEntry(setting: "radio.digi.enabled", aprs: .aprsRadios, packet: .packetRadios),
-        ChannelEntry(setting: "radio.digi.fillIn", aprs: .aprsRadios, packet: .packetRadios),
-        ChannelEntry(setting: "radio.digi.wideAreaMaxHops", aprs: .aprsRadios, packet: .packetRadios),
         ChannelEntry(setting: "radio.digi.aliases", aprs: .aprsRadios, packet: .packetRadios),
-        ChannelEntry(setting: "radio.digi.dupeSeconds", aprs: .aprsRadios, packet: .packetRadios),
     ]
 
     /// Where a setting is for a radio on `channel`: its one home, or the
@@ -218,6 +217,9 @@ enum SettingsHome {
         Entry(setting: AppSettingsStore.aprsAutoReplyKey, section: .aprsMessaging),
         // Each APRS radio's own section.
         Entry(setting: "radio.aprsPath", section: .aprsRadios),
+        Entry(setting: "radio.digi.fillIn", section: .aprsRadios),
+        Entry(setting: "radio.digi.wideAreaMaxHops", section: .aprsRadios),
+        Entry(setting: "radio.digi.dupeSeconds", section: .aprsRadios),
         Entry(setting: "radio.beacon.aprs.symbol", section: .aprsRadios),
         Entry(setting: "radio.beacon.aprs.comment", section: .aprsRadios),
         Entry(setting: "radio.beacon.aprs.useGPS", section: .aprsRadios),

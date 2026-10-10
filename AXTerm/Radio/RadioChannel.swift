@@ -77,17 +77,16 @@ nonisolated enum RadioChannel: String, CaseIterable, Identifiable, Sendable {
         radio.beacon.kind == of(radio).beaconKind
     }
 
-    /// The radios APRS messages and the reachability query may go out on.
+    /// The radios APRS messages, objects and the reachability query may go
+    /// out on: the enabled ones on an APRS channel.
     ///
-    /// With several radios, the enabled ones on an APRS channel. With one,
-    /// that radio whatever its channel: a single-radio station has no other
-    /// channel to send an APRS message on, and it always behaved this way.
-    /// `SessionCoordinator.connectedAPRSRadios` and the APRS page's "Runs on"
-    /// line both read this, so they cannot disagree.
+    /// A lone radio used to carry APRS messages whatever its channel. On
+    /// Packet nothing APRS goes out now; switch the radio to APRS to send
+    /// one (operator, 2026-10-10). `SessionCoordinator.connectedAPRSRadios`
+    /// and the APRS page's "Runs on" line both read this, so they cannot
+    /// disagree.
     static func aprsRadios(in radios: [RadioProfile]) -> [RadioProfile] {
-        let active = radios.filter { !$0.archived }
-        let enabled = active.filter(\.enabled)
-        return active.count > 1 ? enabled.filter(\.handlesAPRS) : enabled
+        radios.filter { !$0.archived && $0.enabled && $0.handlesAPRS }
     }
 }
 

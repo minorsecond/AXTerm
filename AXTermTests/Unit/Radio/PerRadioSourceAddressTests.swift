@@ -118,9 +118,15 @@ final class PerRadioSourceAddressTests: XCTestCase {
     }
 
     func testAnAPRSMessageLeavesUnderItsRadiosCallsign() async {
-        let (engine, coordinator, _) = makeStation()
+        let (engine, coordinator, settings) = makeStation()
         defer { withExtendedLifetime((engine, coordinator)) {} }
+        // APRS leaves only a radio on the APRS channel (operator, 2026-10-10).
+        settings.updateRadio(uhf) { RadioChannel.aprs.apply(to: &$0) }
         await connect(engine)
+
+        XCTAssertFalse(coordinator.sendAPRS(APRSOutbound(info: ":PEER-1   :hello{1", addressee: "PEER-1",
+                                                         path: [], radioID: primary.rawValue)),
+                       "not on the radio that is on Packet")
 
         XCTAssertEqual(coordinator.aprsCallsign(forRadio: uhf.rawValue, addressee: "PEER-1"), "K0EPI-7")
         _ = coordinator.sendAPRS(APRSOutbound(info: ":PEER-1   :hello{1", addressee: "PEER-1",

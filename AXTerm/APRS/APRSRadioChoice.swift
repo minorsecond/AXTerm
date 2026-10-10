@@ -13,6 +13,15 @@ import Foundation
 /// heard there within the past hour (`src/messages.c`).
 nonisolated enum APRSRadioChoice {
 
+    /// The radio an ack or a query answer leaves on: the one that heard the
+    /// message, when it is on APRS. A message heard on a packet channel gets
+    /// no automatic reply there (operator, 2026-10-10).
+    static func replyRadio(named raw: String?, aprsRadios: [RadioID]) -> RadioID? {
+        guard let raw else { return nil }
+        let radio = RadioID(rawValue: raw)
+        return aprsRadios.contains(radio) ? radio : nil
+    }
+
     /// How stale a hearing may be and still name the channel a station is on.
     /// An hour, matching Xastir's `heard_via_tnc_in_past_hour`: long enough to
     /// cover a beacon interval and a quiet spell, short enough that a station

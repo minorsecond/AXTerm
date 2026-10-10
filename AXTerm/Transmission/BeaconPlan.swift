@@ -116,3 +116,16 @@ nonisolated enum BeaconPlan {
         return true
     }
 }
+
+/// Words for an empty ID beacon, built from what the station is: its call,
+/// its node alias and its mailbox.
+nonisolated enum IDBeaconSuggestion {
+    static func text(callsign: String, nodeAlias: String, mailbox: String?) -> String {
+        var parts = [callsign]
+        let alias = nodeAlias.trimmingCharacters(in: .whitespaces)
+        if !alias.isEmpty { parts.append("node \(alias)") }
+        if let mailbox, !mailbox.trimmingCharacters(in: .whitespaces).isEmpty { parts.append("mailbox \(mailbox)") }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+}
+

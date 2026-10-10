@@ -1608,23 +1608,29 @@ final class PacketEngine: ObservableObject {
     /// has switched digipeating on. One bit changes; see AX25Digipeater.
     private func digipeatIfAsked(_ raw: Data, radio: RadioID) {
         // Per radio: a radio repeats only when its own digipeater is on, and
-        // only on its own channel. Explicit call/alias plus the APRS New-N
-        // paradigm (fill-in WIDE1-1, wide-area WIDEn-N within the hop cap).
-        guard let profile = settings.radio(radio), profile.digi.enabled else { return }
+        // only on its own channel. By call or alias on either channel; on APRS
+        // also the New-N paradigm (fill-in WIDE1-1, wide-area WIDEn-N within
+        // the hop cap). `effectiveDigi` leaves the APRS rules out on Packet.
+        guard let profile = settings.radio(radio) else { return }
+        let digi = profile.effectiveDigi
+        guard digi.enabled else { return }
         let myCall = CallsignNormalizer.toAddress(profile.resolvedCallsign(station: settings.myCallsign))
         guard let repeated = AX25Digipeater.repeatFrame(
-            raw, myCall: myCall, aliases: profile.digi.aliases,
-            fillIn: profile.digi.fillIn, wideAreaMaxHops: profile.digi.wideAreaMaxHops)
+            raw, myCall: myCall, aliases: digi.aliases,
+            fillIn: digi.fillIn, wideAreaMaxHops: digi.wideAreaMaxHops)
         else { return }
 
         // The packet, not its path: the same beacon heard direct and again
-        // through another digi differs only in the path.
-        let key = (AX25Digipeater.dupeKey(raw) ?? raw).hashValue
-        let now = Date()
-        let window = TimeInterval(max(1, profile.digi.dupeSeconds))
-        recentDigipeats = recentDigipeats.filter { now.timeIntervalSince($0.value) < window }
-        guard recentDigipeats[key] == nil else { return }
-        recentDigipeats[key] = now
+        // through another digi differs only in the path. APRS only: on Packet
+        // a frame heard again is a retry that has to get through.
+        if digi.dupeSeconds > 0 {
+            let key = (AX25Digipeater.dupeKey(raw) ?? raw).hashValue
+            let now = Date()
+            let window = TimeInterval(digi.dupeSeconds)
+            recentDigipeats = recentDigipeats.filter { now.timeIntervalSince($0.value) < window }
+            guard recentDigipeats[key] == nil else { return }
+            recentDigipeats[key] = now
+        }
 
         // Back out the radio that heard it: a repeat belongs to the channel
         // the original was on.

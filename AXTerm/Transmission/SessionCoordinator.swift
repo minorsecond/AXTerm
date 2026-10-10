@@ -2014,6 +2014,13 @@ final class SessionCoordinator: ObservableObject {
         guard let radio = settings.radio(radioID) else { return "This radio is gone." }
         guard radio.enabled else { return "This radio is switched off." }
         guard radio.beacon.enabled else { return "The beacon is switched off for this radio." }
+        guard radio.sendsBeacon else {
+            return RadioChannel.of(radio) == .packet
+                ? "This radio's beacon is a position report, and the radio is on Packet. "
+                    + "Switch it to an ID beacon under Settings › Packet Node."
+                : "This radio's beacon is an ID beacon, and the radio is on APRS. "
+                    + "Switch it to a position beacon under Settings › APRS."
+        }
         let path = radio.beacon.kind == .aprsPosition
             ? radio.effectiveAPRSPath : radio.beacon.path
         if case let .failure(problem) = BeaconPlan.planPath(path) {
@@ -2088,10 +2095,11 @@ final class SessionCoordinator: ObservableObject {
                         comment: String, settings: AppSettingsStore,
                         now: Date = Date(),
                         repeatingIfKilled: Bool = true) -> String? {
-        let radios = settings.activeRadios.filter { $0.enabled }
+        // An object is APRS: it goes out only on a radio on an APRS channel.
+        let radios = RadioChannel.aprsRadios(in: settings.activeRadios)
         guard let radio = radios.first(where: { $0.beacon.kind == .aprsPosition })
                 ?? radios.first else {
-            let why = "no radio is enabled"
+            let why = "no radio is on the APRS channel"
             packetEngine?.appendSystemNotification("Object not sent: \(why).")
             return why
         }
@@ -2214,6 +2222,8 @@ final class SessionCoordinator: ObservableObject {
     /// is off or its plan does not validate. (APRS-position beacons are wired
     /// in the APRS phase; text is the only kind today.)
     private func buildBeaconFrame(for radio: RadioProfile) -> (OutboundFrame, String)? {
+        // A beacon set up for the other channel is never sent.
+        guard RadioChannel.beaconMatchesChannel(radio) else { return nil }
         switch radio.beacon.kind {
         case .aprsPosition:
             return buildAPRSBeaconFrame(for: radio)
@@ -2298,8 +2308,9 @@ final class SessionCoordinator: ObservableObject {
     /// Transmit a prepared APRS message-class frame — an auto-ACK, a query
     /// answer, or an operator's message — reusing the beacon's UI-frame path.
     /// The radio is the one the exchange named (an ack goes out the radio that
-    /// heard the message); failing that, the first connected radio, else the
-    /// primary. Returns whether the frame was accepted by the link.
+    /// heard the message) when it is on APRS, else the APRS radio chosen by
+    /// `aprsRadio`. Only ever a radio on APRS: with none up, nothing is sent.
+    /// Returns whether the frame was accepted by the link.
     @discardableResult
     func sendAPRS(_ out: APRSOutbound) -> Bool {
         guard let rid = aprsRadio(forRadio: out.radioID, addressee: out.addressee)
@@ -2332,8 +2343,8 @@ final class SessionCoordinator: ObservableObject {
     /// first: the path a frame should carry belongs to the radio that sends
     /// it, and until this has run there is no radio to ask.
     func aprsRadio(forRadio raw: String?, addressee: String = "") -> RadioID? {
-        if let raw { return RadioID(rawValue: raw) }
         let connectedAPRS = connectedAPRSRadios()
+        if raw != nil { return APRSRadioChoice.replyRadio(named: raw, aprsRadios: connectedAPRS) }
         // The radio that last heard them, when it heard them recently enough
         // to still be the channel they are on. Two radios are two channels; a
         // station worked on 144.390 is not reachable by transmitting on the
@@ -2347,10 +2358,8 @@ final class SessionCoordinator: ObservableObject {
             return heard
         }
         // A new message with no route of its own belongs on an APRS radio,
-        // not just whatever connected first.
-        if let aprs = connectedAPRS.first { return aprs }
-        if let connected = serviceRadios({ _ in true }).first { return connected }
-        return packetEngine?.radioManager.primaryRadioID
+        // and only there: a packet channel never carries APRS.
+        return connectedAPRS.first
     }
 
     /// The digipeater path an APRS transmission should ask for, from the radio
@@ -2410,9 +2419,8 @@ final class SessionCoordinator: ObservableObject {
         let isConnected: (RadioID) -> Bool = { [weak self] in
             self?.packetEngine?.radioManager.state(of: $0) == .connected
         }
-        // With one radio there is no other channel to confuse it with, so the
-        // lone radio carries APRS messages whatever its channel. With several,
-        // only the ones on an APRS channel. See `RadioChannel.aprsRadios`.
+        // Only radios on an APRS channel, however many there are. See
+        // `RadioChannel.aprsRadios`.
         return RadioChannel.aprsRadios(in: appSettings.radios).map(\.id).filter(isConnected)
     }
 

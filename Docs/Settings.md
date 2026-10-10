@@ -161,9 +161,33 @@ Radios.
 On the **Packet Node** page, right after NET/ROM Node, three sections per radio
 on a packet channel: its **services** (announce the NET/ROM node, with this
 radio's alias when each radio is its own node; ping stations; answer mailbox
-calls), its **digipeater** (on, fill-in, wide-area hops 0 to 7, aliases, dupe
-window) and its **ID beacon** (text, via path, interval, Send one now). With no
-packet radio, one note says so.
+calls), its **digipeater** (on, and aliases; it repeats by call or alias
+only) and its **ID beacon** (text, via path, interval, Send one now). An empty
+ID beacon says nothing is sent yet and offers text built from the station
+(`IDBeaconSuggestion`). With no packet radio, one note says so.
+
+The APRS page's digipeater section adds the APRS rules: fill-in (`WIDE1-1`),
+wide-area hops 0 to 7, and the dupe window (`DigipeaterRows`).
+
+### Nothing APRS on a packet channel
+
+The mirror of the rule below, operator ruling 2026-10-10. Settings are stored
+per radio and kept across a switch, so each rule is applied by the radio's
+current channel, never by whether its switch happens to be on:
+
+- The digipeater repeats by call or alias only (`RadioProfile.effectiveDigi`).
+  Fill-in, wide-area and the dupe window do nothing on Packet, and the dupe
+  window would drop a connected station's retry of an unacknowledged frame.
+- No APRS message, ack, query answer, `?APRS?` flood or object goes out on a
+  packet radio, even when it is the only radio (`RadioChannel.aprsRadios`,
+  `APRSRadioChoice.replyRadio`). A message heard on a packet channel is shown
+  but gets no automatic ack there.
+- A beacon set up for the other channel is not sent (`RadioProfile.sendsBeacon`):
+  no position report on Packet, no ID beacon to `BEACON` on APRS. The page and
+  the Send button say why.
+
+The stored values are not cleared, so a radio switched back finds its APRS
+settings where it left them.
 
 ### Nothing connected-mode on an APRS channel
 
@@ -194,10 +218,9 @@ for every packet radio under Packet Node, and
 switched off on the only radio means no pinging. The node announcement and the
 mailbox already read the switch with one radio.
 
-APRS messages and the "who can hear me" query go out on the radios whose
-channel is APRS when there are several, and on the one radio when there is
-only one, whatever its channel, as before (`RadioChannel.aprsRadios`, read by
-both `SessionCoordinator.connectedAPRSRadios` and the APRS page).
+APRS messages and the "who can hear me" query go out only on radios whose
+channel is APRS, however many radios there are (`RadioChannel.aprsRadios`,
+read by both `SessionCoordinator.connectedAPRSRadios` and the APRS page).
 
 ### Position beacon and the station position
 

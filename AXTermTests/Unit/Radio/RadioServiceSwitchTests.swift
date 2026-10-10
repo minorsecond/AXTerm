@@ -64,8 +64,11 @@ final class RadioServiceSwitchTests: XCTestCase {
         let base = RadioProfile(id: RadioID(rawValue: "a"), name: "Base")
         var v8 = RadioProfile(id: RadioID(rawValue: "b"), name: "IC-V8")
         v8.aprsEnabled = true
-        XCTAssertEqual(RadioChannel.aprsRadios(in: [base]).map(\.id), [base.id])
-        XCTAssertEqual(ServiceRadios.aprs([base]), ["Base"])
+        // A lone radio on Packet carries no APRS; it used to carry it
+        // whatever its channel (operator ruling, 2026-10-10).
+        XCTAssertTrue(RadioChannel.aprsRadios(in: [base]).isEmpty)
+        XCTAssertTrue(ServiceRadios.aprs([base]).isEmpty)
+        XCTAssertEqual(RadioChannel.aprsRadios(in: [v8]).map(\.id), [v8.id])
         XCTAssertEqual(RadioChannel.aprsRadios(in: [base, v8]).map(\.id), [v8.id])
         XCTAssertEqual(ServiceRadios.aprs([base, v8]), ["IC-V8"])
     }
