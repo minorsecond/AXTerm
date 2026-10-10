@@ -389,6 +389,11 @@ struct ConsoleView: View {
     @State private var unseenSince: Date?
     /// What has arrived since, for the new-lines pill.
     @State private var unseen = ConsoleUnseen.Count()
+    #if os(macOS)
+    /// The rows the AppKit table shows, rebuilt with the grouping.
+    @State private var lineItems: [ConsoleTableItem] = []
+    @State private var lineItemsRevision = 0
+    #endif
 
     /// Lines filtered by clear timestamp and message type preferences
     private var typeFilteredLines: [ConsoleLine] {
@@ -452,6 +457,26 @@ struct ConsoleView: View {
         if repeats != beaconRepeats { beaconRepeats = repeats }
         textCache.prune(keeping: Set(groups.map(\.id)))
         updateUnseen()
+        #if os(macOS)
+        var items: [ConsoleTableItem] = []
+        items.reserveCapacity(groups.count + 8)
+        if showDaySeparators {
+            for section in dayGroupedLines {
+                items.append(.day(section.date))
+                for group in section.items {
+                    items.append(.line(group, run: dayTimestampRunPositions[group.id] ?? .alone,
+                                       beaconRepeat: repeats[group.id]))
+                }
+            }
+        } else {
+            for group in groups {
+                items.append(.line(group, run: timestampRunPositions[group.id] ?? .alone,
+                                   beaconRepeat: repeats[group.id]))
+            }
+        }
+        lineItems = items
+        lineItemsRevision &+= 1
+        #endif
         // Any change to the visible line set can leave the ScrollView holding an
         // offset that no longer matches the content — most visibly when the
         // Session⇄Broadcast toggle swaps in a different filtered set (its peer
@@ -565,131 +590,7 @@ struct ConsoleView: View {
 
                 Divider()
 
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: ConsoleTheme.rowSpacing) {
-                            if showDaySeparators {
-                                ForEach(dayGroupedLines) { section in
-                                    DaySeparatorView(date: section.date)
-                                        .padding(.vertical, 4)
-
-                                    ForEach(section.items) { group in
-                                        ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
-                                                             ownCallsigns: ownCallsigns,
-                                                             timestampRun: dayTimestampRunPositions[group.id] ?? .alone,
-                                                             onIdentity: onIdentity,
-                                                             onIdentityMenu: onIdentityMenu,
-                                                             linksFileNames: onFileName != nil,
-                                                             knownFileNames: knownFileNames,
-                                                             fileNameIndex: fileNameIndex,
-                                                             radioTags: radioTags,
-                                                             beaconRepeat: beaconRepeats[group.id],
-                                                             observer: observer,
-                                                             distanceInMiles: distanceInMiles,
-                                                             showsRawAPRS: showsRawAPRS,
-                                                             heardCallsigns: heardCallsigns,
-                                                             telemetryDefinitions: telemetryDefinitions,
-                                                             textCache: textCache)
-                                            .id(group.id)
-                                    }
-                                }
-                            } else {
-                                ForEach(groupedLines) { group in
-                                    ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
-                                                             ownCallsigns: ownCallsigns,
-                                                             timestampRun: timestampRunPositions[group.id] ?? .alone,
-                                                             onIdentity: onIdentity,
-                                                             onIdentityMenu: onIdentityMenu,
-                                                             linksFileNames: onFileName != nil,
-                                                             knownFileNames: knownFileNames,
-                                                             fileNameIndex: fileNameIndex,
-                                                             radioTags: radioTags,
-                                                             beaconRepeat: beaconRepeats[group.id],
-                                                             observer: observer,
-                                                             distanceInMiles: distanceInMiles,
-                                                             showsRawAPRS: showsRawAPRS,
-                                                             heardCallsigns: heardCallsigns,
-                                                             telemetryDefinitions: telemetryDefinitions,
-                                                             textCache: textCache)
-                                        .id(group.id)
-                                }
-                            }
-                            if let trailingSendStatus {
-                                InlineSendStatusRow(status: trailingSendStatus, fontSize: fontSize)
-                                    .id("sendStatus")
-                            }
-                            Color.clear
-                                .frame(height: Self.bottomMarkerHeight)
-                                .id("bottom")
-                        }
-                        .padding(Self.contentPadding)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    // Open at the bottom and sit short content there. Size
-                    // changes are left to the follow logic below: anchoring
-                    // them to the bottom too moved the lines under a reader
-                    // each time one arrived or a row was measured.
-                    .defaultScrollAnchor(.bottom, for: .initialOffset)
-                    .defaultScrollAnchor(.bottom, for: .alignment)
-                    .onScrollPhaseChange { _, phase in
-                        userIsScrolling = phase == .interacting || phase == .decelerating
-                    }
-                    .onScrollGeometryChange(for: PacketListFollow.Geometry.self) { geometry in
-                        PacketListFollow.Geometry(contentHeight: geometry.contentSize.height,
-                                                  visibleMinY: geometry.visibleRect.minY,
-                                                  visibleHeight: geometry.visibleRect.height,
-                                                  visibleWidth: geometry.visibleRect.width,
-                                                  trailingSpace: Self.trailingSpace)
-                    } action: { old, new in
-                        let decision = PacketListFollow.decide(from: old, to: new, isFollowing: isFollowing,
-                                                               userIsScrolling: userIsScrolling)
-                        if isFollowing != decision.isFollowing { isFollowing = decision.isFollowing }
-                        if decision.scrollToNewest { scheduleRepin() }
-                    }
-                    .onChange(of: groupedLines.count) { _, _ in
-                        guard followsNewLines else { return }
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                    .onChange(of: trailingSendStatus) { _, _ in
-                        guard followsNewLines else { return }
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                    .onChange(of: scrollToBottomToken) { _, _ in
-                        // Pin to the last real line, not the phantom "bottom"
-                        // sentinel below the padding — anchoring to the sentinel is
-                        // what an overshoot lands past. No animation: this fires
-                        // after a settle (`scheduleRepin`) or on appear, where a
-                        // slide would just look like the overshoot we're correcting.
-                        if trailingSendStatus != nil {
-                            proxy.scrollTo("sendStatus", anchor: .bottom)
-                        } else if let lastId = groupedLines.last?.id {
-                            proxy.scrollTo(lastId, anchor: .bottom)
-                        } else {
-                            proxy.scrollTo("bottom", anchor: .bottom)
-                        }
-                    }
-                    .onChange(of: autoScroll) { _, newValue in
-                        if newValue {
-                            isFollowing = true
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo("bottom", anchor: .bottom)
-                            }
-                        }
-                    }
-                    .onAppear {
-                        scrollToBottomToken += 1
-                    }
-                    .onChange(of: isFollowing) { _, following in
-                        // Counting starts from the newest line the reader had.
-                        unseenSince = following ? nil : groupedLines.last?.primary.timestamp
-                        updateUnseen()
-                    }
-                    .onChange(of: repinSignal) { _, _ in
-                        // A different set of lines: start again at the newest.
-                        isFollowing = true
-                        scheduleRepin()
-                    }
-                }
+                transcript
                 #if os(iOS)
                 // Scrolling the transcript takes the keyboard away, which
                 // could not be hidden at all (park rehearsal 2026-10-08).
@@ -703,6 +604,7 @@ struct ConsoleView: View {
                 .onChange(of: renderInputs) { _, _ in rebuildRenderedLines() }
                 .onChange(of: radioNames) { _, _ in rebuildRenderedLines() }
                 .onChange(of: showsRawAPRS) { _, _ in rebuildRenderedLines() }
+                .onChange(of: showDaySeparators) { _, _ in rebuildRenderedLines() }
             }
 
             // Undo clear banner
@@ -766,6 +668,196 @@ struct ConsoleView: View {
             onIdentity(call)
             return .handled
         })
+    }
+
+    /// The scrolling list of lines. The Mac draws it with an AppKit table
+    /// that reuses its rows (`ConsoleTableView`): built from SwiftUI views, a
+    /// row was made from scratch each time it scrolled into view, and
+    /// scrolling stuttered (2026-10-10). iPhone and iPad keep the SwiftUI
+    /// list.
+    @ViewBuilder
+    private var transcript: some View {
+        #if os(macOS)
+        ConsoleTableView(
+            items: tableItems, environment: rowEnvironment, fileNameIndex: fileNameIndex,
+            actions: ConsoleTableActions(onIdentity: onIdentity, onIdentityMenu: onIdentityMenu,
+                                         onFileName: onFileName),
+            revision: tableRevision,
+            isFollowing: $isFollowing, autoScroll: autoScroll, scrollToBottomToken: scrollToBottomToken)
+            .onChange(of: isFollowing) { _, following in
+                // Counting starts from the newest line the reader had.
+                unseenSince = following ? nil : groupedLines.last?.primary.timestamp
+                updateUnseen()
+            }
+            .onChange(of: autoScroll) { _, on in
+                guard on else { return }
+                isFollowing = true
+                scrollToBottomToken += 1
+            }
+            .onChange(of: repinSignal) { _, _ in
+                // A different set of lines: start again at the newest.
+                isFollowing = true
+                scrollToBottomToken += 1
+            }
+        #else
+        swiftUITranscript
+        #endif
+    }
+
+    /// Everything a row's look depends on beyond the row itself.
+    private var rowEnvironment: ConsoleRowEnvironment {
+        ConsoleRowEnvironment(
+            fontSize: fontSize, localCallsign: localCallsign, ownCallsigns: ownCallsigns,
+            linksCallsigns: onIdentity != nil, linksFileNames: onFileName != nil,
+            knownFileNames: knownFileNames, radioTags: radioTags, observer: observer,
+            distanceInMiles: distanceInMiles, showsRawAPRS: showsRawAPRS,
+            heardCallsigns: heardCallsigns, telemetryDefinitions: telemetryDefinitions)
+    }
+
+    #if os(macOS)
+    /// The table's rows, with the message going out last.
+    private var tableItems: [ConsoleTableItem] {
+        guard let trailingSendStatus else { return lineItems }
+        return lineItems + [.sendStatus(trailingSendStatus)]
+    }
+
+    /// Changes whenever `tableItems` does.
+    private var tableRevision: Int {
+        var hasher = Hasher()
+        hasher.combine(lineItemsRevision)
+        hasher.combine(trailingSendStatus.map { String(describing: $0) })
+        return hasher.finalize()
+    }
+    #endif
+
+    /// The SwiftUI list, for iPhone and iPad.
+    @ViewBuilder
+    private var swiftUITranscript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: ConsoleTheme.rowSpacing) {
+                    if showDaySeparators {
+                        ForEach(dayGroupedLines) { section in
+                            DaySeparatorView(date: section.date)
+                                .padding(.vertical, 4)
+
+                            ForEach(section.items) { group in
+                                ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                                     ownCallsigns: ownCallsigns,
+                                                     timestampRun: dayTimestampRunPositions[group.id] ?? .alone,
+                                                     onIdentity: onIdentity,
+                                                     onIdentityMenu: onIdentityMenu,
+                                                     linksFileNames: onFileName != nil,
+                                                     knownFileNames: knownFileNames,
+                                                     fileNameIndex: fileNameIndex,
+                                                     radioTags: radioTags,
+                                                     beaconRepeat: beaconRepeats[group.id],
+                                                     observer: observer,
+                                                     distanceInMiles: distanceInMiles,
+                                                     showsRawAPRS: showsRawAPRS,
+                                                     heardCallsigns: heardCallsigns,
+                                                     telemetryDefinitions: telemetryDefinitions,
+                                                     textCache: textCache)
+                                    .id(group.id)
+                            }
+                        }
+                    } else {
+                        ForEach(groupedLines) { group in
+                            ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                                     ownCallsigns: ownCallsigns,
+                                                     timestampRun: timestampRunPositions[group.id] ?? .alone,
+                                                     onIdentity: onIdentity,
+                                                     onIdentityMenu: onIdentityMenu,
+                                                     linksFileNames: onFileName != nil,
+                                                     knownFileNames: knownFileNames,
+                                                     fileNameIndex: fileNameIndex,
+                                                     radioTags: radioTags,
+                                                     beaconRepeat: beaconRepeats[group.id],
+                                                     observer: observer,
+                                                     distanceInMiles: distanceInMiles,
+                                                     showsRawAPRS: showsRawAPRS,
+                                                     heardCallsigns: heardCallsigns,
+                                                     telemetryDefinitions: telemetryDefinitions,
+                                                     textCache: textCache)
+                                .id(group.id)
+                        }
+                    }
+                    if let trailingSendStatus {
+                        InlineSendStatusRow(status: trailingSendStatus, fontSize: fontSize)
+                            .id("sendStatus")
+                    }
+                    Color.clear
+                        .frame(height: Self.bottomMarkerHeight)
+                        .id("bottom")
+                }
+                .padding(Self.contentPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            // Open at the bottom and sit short content there. Size
+            // changes are left to the follow logic below: anchoring
+            // them to the bottom too moved the lines under a reader
+            // each time one arrived or a row was measured.
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.bottom, for: .alignment)
+            .onScrollPhaseChange { _, phase in
+                userIsScrolling = phase == .interacting || phase == .decelerating
+            }
+            .onScrollGeometryChange(for: PacketListFollow.Geometry.self) { geometry in
+                PacketListFollow.Geometry(contentHeight: geometry.contentSize.height,
+                                          visibleMinY: geometry.visibleRect.minY,
+                                          visibleHeight: geometry.visibleRect.height,
+                                          visibleWidth: geometry.visibleRect.width,
+                                          trailingSpace: Self.trailingSpace)
+            } action: { old, new in
+                let decision = PacketListFollow.decide(from: old, to: new, isFollowing: isFollowing,
+                                                       userIsScrolling: userIsScrolling)
+                if isFollowing != decision.isFollowing { isFollowing = decision.isFollowing }
+                if decision.scrollToNewest { scheduleRepin() }
+            }
+            .onChange(of: groupedLines.count) { _, _ in
+                guard followsNewLines else { return }
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+            .onChange(of: trailingSendStatus) { _, _ in
+                guard followsNewLines else { return }
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+            .onChange(of: scrollToBottomToken) { _, _ in
+                // Pin to the last real line, not the phantom "bottom"
+                // sentinel below the padding — anchoring to the sentinel is
+                // what an overshoot lands past. No animation: this fires
+                // after a settle (`scheduleRepin`) or on appear, where a
+                // slide would just look like the overshoot we're correcting.
+                if trailingSendStatus != nil {
+                    proxy.scrollTo("sendStatus", anchor: .bottom)
+                } else if let lastId = groupedLines.last?.id {
+                    proxy.scrollTo(lastId, anchor: .bottom)
+                } else {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
+            .onChange(of: autoScroll) { _, newValue in
+                if newValue {
+                    isFollowing = true
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+            }
+            .onAppear {
+                scrollToBottomToken += 1
+            }
+            .onChange(of: isFollowing) { _, following in
+                // Counting starts from the newest line the reader had.
+                unseenSince = following ? nil : groupedLines.last?.primary.timestamp
+                updateUnseen()
+            }
+            .onChange(of: repinSignal) { _, _ in
+                // A different set of lines: start again at the newest.
+                isFollowing = true
+                scheduleRepin()
+            }
+        }
     }
 
     /// Names with spaces seen in listings in this console, so a later line
@@ -1217,24 +1309,27 @@ struct ConsoleLineView: View {
     private let callsignSaturation: Double = 0.35
     private let callsignBrightness: Double = 0.75
 
-    /// A digipeated copy of our own frame — shown dimmed with a repeat marker
-    /// so it reads as the digi's transmission, not new traffic.
-    private var isDigipeatEcho: Bool {
-        line.isDigipeatEcho(localCallsigns: echoCallsigns)
+    /// What this row says, shared with the Mac's AppKit console.
+    private var environment: ConsoleRowEnvironment {
+        ConsoleRowEnvironment(
+            fontSize: fontSize, localCallsign: localCallsign, ownCallsigns: ownCallsigns,
+            linksCallsigns: onIdentity != nil, linksFileNames: linksFileNames,
+            knownFileNames: knownFileNames, radioTags: radioTags, observer: observer,
+            distanceInMiles: distanceInMiles, showsRawAPRS: showsRawAPRS,
+            heardCallsigns: heardCallsigns, telemetryDefinitions: telemetryDefinitions)
     }
 
+    private var facts: ConsoleLineFacts {
+        ConsoleLineFacts(line: line, environment: environment,
+                         allViaPaths: allViaPaths, duplicateCount: duplicateCount)
+    }
+
+    /// A digipeated copy of our own frame — shown dimmed with a repeat marker
+    /// so it reads as the digi's transmission, not new traffic.
+    private var isDigipeatEcho: Bool { facts.isDigipeatEcho }
+
     private func repeatHelp(_ attribution: ConsoleLine.RepeatAttribution) -> String {
-        let digis = attribution.digis.joined(separator: ", ")
-        switch attribution {
-        case .ourFrameEchoed:
-            return "Our own frame, repeated back by \(digis)."
-        case .heardVia:
-            // The distinction that matters: this copy came off the digi's
-            // transmitter, so it says nothing about whether the originating
-            // station is audible here.
-            return "Heard as \(digis)'s retransmission, not from "
-                 + "\(line.from ?? "the sender") directly."
-        }
+        facts.repeatHelp(attribution)
     }
 
     var body: some View {
@@ -1294,18 +1389,10 @@ struct ConsoleLineView: View {
     /// Decoded APRS, drawn by the shorter rules in `ConsoleAPRSPresentation`.
     private var isDecodedAPRS: Bool { line.aprs != nil && !showsRawAPRS }
 
-    private var mineHighlight: ConsoleMineHighlight {
-        guard isDecodedAPRS else { return .none }
-        return ConsoleMineHighlight.of(line, myCallsign: localCallsign, ownCallsigns: ownCallsigns)
-    }
+    private var mineHighlight: ConsoleMineHighlight { facts.mine }
 
     /// Our base callsigns, for picking them out inside a message.
-    private var mineBases: Set<String> {
-        Set(([localCallsign] + Array(ownCallsigns)).compactMap { address -> String? in
-            let base = address.uppercased().split(separator: "-").first.map(String.init) ?? ""
-            return base.isEmpty ? nil : base
-        })
-    }
+    private var mineBases: Set<String> { environment.mineBases }
 
     /// Pink for your own traffic, strongest for a message addressed to you.
     private func rowFill(_ mine: ConsoleMineHighlight) -> Color {
@@ -1406,32 +1493,15 @@ struct ConsoleLineView: View {
     /// How the frame reached us, in one chip, with the whole path on hover.
     @ViewBuilder
     private var pathChip: some View {
-        let sender = line.from ?? "the sender"
-        switch ConsoleAPRSPresentation.pathChip(for: line, ownCallsigns: echoCallsigns) {
-        case .none:
-            EmptyView()
-        case .direct(let requested):
-            ConsoleChip(text: "direct", tint: .green, fontSize: fontSize)
-                .help("Heard directly from \(sender)'s own transmitter."
-                      + (requested.isEmpty ? "" : "\nPath requested: \(requested.joined(separator: ","))")
-                      + (duplicateCount > 0 ? "\n" + pathLines : ""))
-        case .heardVia(let station, let hops, _):
-            ConsoleChip(systemImage: "arrow.triangle.2.circlepath",
-                        text: hops > 1 ? "\(station) \u{00B7} \(hops) hops" : station,
-                        tint: .indigo, fontSize: fontSize)
-                .help("Heard from \(station)'s transmitter, not \(sender)'s directly."
-                      + (hops > 1 ? " \(hops) stations repeated it." : "") + "\n" + pathLines)
+        if let chip = facts.pathChipText {
+            ConsoleChip(systemImage: chip.heardVia ? "arrow.triangle.2.circlepath" : nil,
+                        text: chip.text, tint: chip.heardVia ? .indigo : .green, fontSize: fontSize)
+                .help(chip.help)
         }
     }
 
     /// Every path this frame was heard by, one per line.
-    private var pathLines: String {
-        let paths = allViaPaths.isEmpty ? (line.via.isEmpty ? [] : [line.via]) : allViaPaths
-        if paths.count == 1 { return "via " + paths[0].joined(separator: " \u{2192} ") }
-        return paths.enumerated().map { index, path in
-            "Path \(index + 1): " + path.joined(separator: " \u{2192} ")
-        }.joined(separator: "\n")
-    }
+    private var pathLines: String { facts.pathLines }
 
     /// The header of every other line, as it has always been drawn.
     @ViewBuilder
@@ -1547,18 +1617,9 @@ struct ConsoleLineView: View {
     /// The decoded sentence, built once per row until something it uses
     /// changes: where we are, the units, the sender's telemetry definition.
     private func digestText(_ digest: APRSDigest) -> String {
-        let definition = telemetryDefinition
-        var hasher = Hasher()
-        hasher.combine(observer?.latitude)
-        hasher.combine(observer?.longitude)
-        hasher.combine(distanceInMiles)
-        hasher.combine(definition.map { String(describing: $0) })
-        let build = {
-            APRSDigestLine.text(for: digest, observer: observer, inMiles: distanceInMiles,
-                                definition: definition, coordinates: .whenNoDistance)
-        }
-        guard let textCache else { return build() }
-        return textCache.value(line: line.id, version: hasher.finalize(), build: build)
+        let facts = self.facts
+        guard let textCache else { return facts.messageText }
+        return textCache.value(line: line.id, version: facts.messageTextVersion) { facts.messageText }
     }
 
     /// The message with its links and highlighted callsigns, and where the
@@ -1570,9 +1631,8 @@ struct ConsoleLineView: View {
 
     private func renderedMessage(_ text: String) -> RenderedMessage {
         let build = { () -> RenderedMessage in
-            let targets = linkTargets(in: text)
-            let mentions = isDecodedAPRS
-                ? ConsoleAPRSPresentation.callsignRanges(in: text, bases: mineBases) : []
+            let targets = facts.linkTargets(in: text, fileNameIndex: fileNameIndex)
+            let mentions = facts.mentions(in: text)
             return RenderedMessage(attributed: attributed(text, targets: targets, mentions: mentions),
                                    links: targets.map(\.range))
         }
@@ -1590,14 +1650,6 @@ struct ConsoleLineView: View {
         hasher.combine(isDecodedAPRS)
         hasher.combine(mineBases.sorted())
         return textCache.value(line: line.id, version: hasher.finalize(), build: build)
-    }
-
-    /// The sending station's telemetry definition, if it has sent one.
-    private var telemetryDefinition: APRSTelemetry.Definition? {
-        guard let from = line.from else { return nil }
-        // A relayed frame's telemetry is its source's, not the gateway's.
-        let owner = line.aprs?.originator(heardFrom: from) ?? from
-        return telemetryDefinitions[CallsignValidator.normalize(owner)]
     }
 
     #if os(macOS)
@@ -1630,59 +1682,9 @@ struct ConsoleLineView: View {
         return result
     }
 
-    /// Everything in the line worth making clickable: web and email addresses,
-    /// which go to the system, and callsigns, which stay in the app.
-    ///
-    /// Web addresses first and unconditionally — they are worth a link whether
-    /// or not anything is listening for a callsign tap. The callsign scanner
-    /// already refuses to look inside them, so the two cannot overlap.
-    private func linkTargets(in text: String) -> [(range: Range<String.Index>, url: URL)] {
-        var targets = CallsignScanner.webLinks(in: text)
-        if onIdentity != nil {
-            for hit in CallsignScanner.links(in: text, heard: heardCallsigns) {
-                guard let url = ConsoleCallsignLink.url(for: hit.callsign) else { continue }
-                targets.append((hit.range, url))
-            }
-        }
-        // Only in what another station sent: our own `D` line needs no link.
-        if linksFileNames, line.kind == .packet, let from = line.from,
-           !echoCallsigns.contains(from.uppercased()) {
-            let hits = fileNameIndex?.names(in: text, known: knownFileNames)
-                ?? FileNameScanner.names(in: text, known: knownFileNames)
-            for hit in hits
-            where !targets.contains(where: { $0.range.overlaps(hit.range) }) {
-                guard let url = ConsoleFileLink.url(for: hit.name) else { continue }
-                targets.append((hit.range, url))
-            }
-        }
-        return targets
-    }
-
-    /// What arrived, byte for byte, for the decoded line's tooltip.
-    ///
-    /// Printable characters as themselves and everything else as hex, because
-    /// the bytes that matter most in a Mic-E frame are the ones that are not
-    /// text — rendering them as replacement characters would hide exactly what
-    /// the operator came to the tooltip to see.
-    private var rawHelp: String {
-        guard let info = line.aprsInfo else { return line.text }
-        // What the shorter row left off: the AX.25 destination, the path and
-        // the coordinates.
-        var lead: [String] = []
-        if let to = line.to {
-            lead.append("To \(to)" + (line.via.isEmpty ? "" : " via \(line.viaDisplay)"))
-        }
-        if let digest = line.aprs, let place = APRSDigestLine.coordinates(of: digest) {
-            lead.append("Position \(place)")
-        }
-        let body = info.map { byte -> String in
-            (byte >= 0x20 && byte < 0x7F)
-                ? String(UnicodeScalar(byte))
-                : String(format: "<%02X>", byte)
-        }.joined()
-        let raw = "As received (\(info.count) bytes):\n\(body)"
-        return lead.isEmpty ? raw : lead.joined(separator: "\n") + "\n\n" + raw
-    }
+    /// What arrived, byte for byte, for the decoded line's tooltip
+    /// (`ConsoleLineFacts.rawHelp`).
+    private var rawHelp: String { facts.rawHelp }
 
     /// One callsign: plain text, or a tap target when someone is listening.
     ///
@@ -1779,32 +1781,7 @@ struct ConsoleLineView: View {
     }
 
     /// Tooltip describing the message category
-    private var categoryTooltip: String {
-        switch line.kind {
-        case .error:
-            return "Error: An error or warning message"
-        case .system:
-            return "System: Connection status or application notification"
-        case .packet:
-            guard let messageType = line.messageType else {
-                return "Other: Unclassified packet"
-            }
-            switch messageType {
-            case .id:
-                return "ID: Station identification broadcast"
-            case .beacon:
-                return "Beacon: Periodic status broadcast"
-            case .mail:
-                return "Mail: Message notification"
-            case .data:
-                return "Data: Content being transferred"
-            case .prompt:
-                return "Command: Session control or prompt"
-            case .message:
-                return "Other: Unclassified packet"
-            }
-        }
-    }
+    private var categoryTooltip: String { facts.categoryTooltip }
 
     // Note: rowBackground is now handled by premiumBackground
     // This property is kept for backward compatibility but should not be used

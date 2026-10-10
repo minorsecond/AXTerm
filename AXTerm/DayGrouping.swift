@@ -66,14 +66,17 @@ struct DaySeparatorView: View {
         .accessibilityAddTraits(.isHeader)
     }
 
-    private var label: String {
+    private var label: String { Self.label(for: date, calendar: calendar) }
+
+    /// "Today", "Yesterday" or the date. Shared with the Mac's AppKit console.
+    static func label(for date: Date, calendar: Calendar = .current) -> String {
         if calendar.isDateInToday(date) {
             return "Today"
         }
         if calendar.isDateInYesterday(date) {
             return "Yesterday"
         }
-        return Self.dateFormatter.string(from: date)
+        return dateFormatter.string(from: date)
     }
 
     private static let dateFormatter: DateFormatter = {

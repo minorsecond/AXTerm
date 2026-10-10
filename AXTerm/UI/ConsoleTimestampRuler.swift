@@ -21,7 +21,7 @@ import Foundation
 nonisolated enum ConsoleTimestampRuler {
 
     /// Where a row sits among the rows sharing its displayed time.
-    enum RunPosition: Equatable, Sendable {
+    enum RunPosition: Hashable, Sendable {
         /// The only row at this time. Prints it, and hangs nothing below.
         case alone
         /// Prints the time, and rows below inherit it.
