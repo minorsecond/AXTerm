@@ -31,6 +31,10 @@ struct BBSFilesPane: View {
     @State private var previewURL: URL?
     /// Uploads waiting for the operator to confirm Move to Trash.
     @State private var trashing: [String] = []
+    /// The shared file list's selection, and shared files waiting for the
+    /// operator to confirm Move to Trash (finding 3).
+    @State private var fileSelection = Set<BBSSharedFile.ID>()
+    @State private var trashingShared: [BBSSharedFile] = []
     @State private var editingTrusted = false
 
     private static let uploadsTag = BBSUpload.listTag
@@ -458,7 +462,7 @@ struct BBSFilesPane: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            Table(files) {
+            Table(files, selection: $fileSelection) {
                 TableColumn("Name") { file in
                     HStack(spacing: 5) {
                         Image(systemName: file.isText ? "doc.text" : "doc")
@@ -499,22 +503,74 @@ struct BBSFilesPane: View {
                     }
                 }
                 .width(min: 70, ideal: 90)
+                // No tap gesture here: it took the click, and rows could not
+                // be selected (retest 2026-10-10, finding 3). Double-click or
+                // the menu edits the description.
                 TableColumn("Description") { file in
                     Text(file.about.isEmpty ? "—" : file.about)
                         .foregroundStyle(file.about.isEmpty ? .tertiary : .primary)
-                        .onTapGesture {
-                            draftAbout = file.about
-                            editing = file
-                        }
                 }
             }
-            .contextMenu(forSelectionType: BBSSharedFile.ID.self) { _ in } primaryAction: { ids in
+            .contextMenu(forSelectionType: BBSSharedFile.ID.self) { ids in
+                sharedFileMenu(for: files.filter { ids.contains($0.id) })
+            } primaryAction: { ids in
                 guard let id = ids.first,
                       let file = files.first(where: { $0.id == id }) else { return }
                 draftAbout = file.about
                 editing = file
             }
+            .quickLookPreview($previewURL)
+            .confirmationDialog(sharedTrashTitle,
+                                isPresented: Binding(get: { !trashingShared.isEmpty },
+                                                     set: { if !$0 { trashingShared = [] } })) {
+                Button("Move to Trash", role: .destructive) {
+                    let doomed = trashingShared
+                    trashingShared = []
+                    trashSharedFiles(doomed)
+                }
+                Button("Cancel", role: .cancel) { trashingShared = [] }
+            } message: {
+                Text("Callers will no longer see \(trashingShared.count == 1 ? "it" : "them") in "
+                     + "\(trashingShared.first?.area ?? "the area"). You can put "
+                     + "\(trashingShared.count == 1 ? "it" : "them") back from the Trash in Finder.")
+            }
         }
+    }
+
+    // MARK: - Shared file actions (finding 3)
+
+    private var sharedTrashTitle: String {
+        trashingShared.count == 1 ? "Move \(trashingShared[0].name) to the Trash?"
+            : "Move \(trashingShared.count) files to the Trash?"
+    }
+
+    @ViewBuilder
+    private func sharedFileMenu(for chosen: [BBSSharedFile]) -> some View {
+        if !chosen.isEmpty {
+            Button("Open") { chosen.compactMap(library.sharedFileURL).forEach { NSWorkspace.shared.open($0) } }
+            Button("Quick Look") { previewURL = chosen.first.flatMap(library.sharedFileURL) }
+            Button("Show in Finder") {
+                let urls = chosen.compactMap(library.sharedFileURL)
+                if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+            }
+            if chosen.count == 1, let file = chosen.first {
+                Button("Edit Description\u{2026}") {
+                    draftAbout = file.about
+                    editing = file
+                }
+            }
+            Divider()
+            Button("Move to Trash\u{2026}", role: .destructive) { trashingShared = chosen }
+        }
+    }
+
+    private func trashSharedFiles(_ doomed: [BBSSharedFile]) {
+        var failed: [String] = []
+        for file in doomed {
+            do { try library.trashSharedFile(file) } catch { failed.append(error.localizedDescription) }
+        }
+        fileSelection = []
+        addMessage = failed.isEmpty ? nil : failed.joined(separator: " ")
     }
 
     // MARK: - Uploads

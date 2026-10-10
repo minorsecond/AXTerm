@@ -851,7 +851,16 @@ area's table has a From column, with "Uploaded by K0EPI-3, Oct 10, 2026 at
 Callers listing the area with `W` never see it. A record goes when its file
 goes from a folder that was read, so a later file of the same name is not
 credited to the earlier caller. Before this, Move to Area forgot both
-(retest 2026-10-10, finding 2). Before this the window
+(retest 2026-10-10, finding 2).
+
+**Shared files from the window.** A shared area's file list selects like any
+list, several rows at once, with a menu: Open, Quick Look, Show in Finder,
+Edit Description… and Move to Trash…, which asks first and says callers will
+no longer see the file. Double-click still edits the description. On iOS the
+same menu comes from holding a row, and a swipe deletes after asking. A
+deleted file's description and upload record go with it. Before, the
+description cell took every click and no row could be selected (retest
+2026-10-10, finding 3). Before this the window
 showed only "docs · 2 files", and the iPad's photo at the home retest
 (2026-10-10, finding 8) took Finder to find. `BBSUploadsTests` covers it.
 

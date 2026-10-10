@@ -375,9 +375,11 @@ final class BBSFileLibrary: ObservableObject {
 
     nonisolated enum UploadError: LocalizedError, Equatable {
         case notInInbox(String)
+        case notShared(String)
         var errorDescription: String? {
             switch self {
             case .notInInbox(let name): return "\(name) is no longer in the upload folder."
+            case .notShared(let name): return "\(name) is no longer in its area."
             }
         }
     }
@@ -463,6 +465,35 @@ final class BBSFileLibrary: ObservableObject {
         return Self.inboxFile(named: name, in: base)
     }
     private var heldAreas: Set<URL> = []
+
+    // MARK: - Shared files from the window (retest 2026-10-10, finding 3)
+
+    /// A shared file, held open for Quick Look, Open and Show in Finder. Only
+    /// a file the index lists, so nothing outside the area is reachable.
+    func sharedFileURL(_ file: BBSSharedFile) -> URL? {
+        guard let base = listedAreaFolder(for: file) else { return nil }
+        if !heldAreas.contains(base), base.startAccessingSecurityScopedResource() { heldAreas.insert(base) }
+        return Self.inboxFile(named: file.name, in: base)
+    }
+
+    /// Deletes a shared file (`trash`), with its description and the record
+    /// of who uploaded it.
+    func trashSharedFile(_ file: BBSSharedFile) throws {
+        guard let base = listedAreaFolder(for: file) else { throw UploadError.notShared(file.name) }
+        let scoped = base.startAccessingSecurityScopedResource()
+        defer { if scoped { base.stopAccessingSecurityScopedResource() } }
+        guard let url = Self.inboxFile(named: file.name, in: base) else { throw UploadError.notShared(file.name) }
+        try trash(url)
+        try? store?.setFileDescription(area: file.area, name: file.name, about: "")
+        try? store?.forgetProvenance(area: file.area, name: file.name)
+        rescan()
+    }
+
+    private func listedAreaFolder(for file: BBSSharedFile) -> URL? {
+        guard index.files(in: file.area).contains(where: { $0.name == file.name }),
+              let area = index.areas.first(where: { $0.name == file.area }) else { return nil }
+        return resolve(area)
+    }
 
     /// Deletes an upload (`trash`).
     func trashUpload(named name: String) throws {

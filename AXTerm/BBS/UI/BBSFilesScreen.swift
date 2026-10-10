@@ -376,6 +376,8 @@ struct BBSFileListScreen: View {
 
     @State private var editing: BBSSharedFile?
     @State private var draftAbout = ""
+    @State private var previewURL: URL?
+    @State private var deletingFile: BBSSharedFile?
     /// This screen's one importer: files to add, or the area's folder chosen
     /// again when it has gone missing.
     @State private var picker = BBSFilePicker()
@@ -422,8 +424,28 @@ struct BBSFileListScreen: View {
             } else {
                 List(files) { file in
                     row(file)
+                        // Hold a file for what can be done with it (finding 3).
+                        .contextMenu { fileMenu(file) }
+                        .swipeActions(edge: .trailing) {
+                            Button("Delete", systemImage: "trash", role: .destructive) { deletingFile = file }
+                        }
                 }
                 .listStyle(.plain)
+                .quickLookPreview($previewURL)
+                .confirmationDialog(deletingFile.map { "Delete \($0.name)?" } ?? "",
+                                    isPresented: Binding(get: { deletingFile != nil },
+                                                         set: { if !$0 { deletingFile = nil } }),
+                                    titleVisibility: .visible) {
+                    Button("Delete", role: .destructive) {
+                        if let file = deletingFile {
+                            do { try library.trashSharedFile(file) } catch { addMessage = error.localizedDescription }
+                        }
+                        deletingFile = nil
+                    }
+                    Button("Cancel", role: .cancel) { deletingFile = nil }
+                } message: {
+                    Text("Callers will no longer see it, and it is removed from this device.")
+                }
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -583,6 +605,20 @@ struct BBSFileListScreen: View {
             draftAbout = file.about
             editing = file
         }
+    }
+
+    @ViewBuilder
+    private func fileMenu(_ file: BBSSharedFile) -> some View {
+        Button("Quick Look", systemImage: "eye") { previewURL = library.sharedFileURL(file) }
+        if let url = library.sharedFileURL(file) {
+            ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
+        }
+        Button("Edit Description", systemImage: "pencil") {
+            draftAbout = file.about
+            editing = file
+        }
+        Divider()
+        Button("Delete", systemImage: "trash", role: .destructive) { deletingFile = file }
     }
 
     private func descriptionSheet(_ file: BBSSharedFile) -> some View {

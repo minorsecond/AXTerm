@@ -214,4 +214,39 @@ final class BBSUploadsTests: XCTestCase {
         let direct = BBSFileProvenance(from: "K0EPI-3", receivedAt: arrived, movedFromInbox: false)
         XCTAssertFalse(direct.help(inbox: "docs").contains("moved"))
     }
+
+    // MARK: Shared files from the window (retest 2026-10-10, finding 3)
+
+    /// Move to Trash on a shared file: gone from the area, and its
+    /// description and sender go with it.
+    func testTrashingASharedFileTakesItsRecordsWithIt() throws {
+        try Data(count: 20).write(to: park.appendingPathComponent("net.txt"))
+        library.addArea(name: "PARK", about: "", url: park)
+        library.setDescription(area: "PARK", name: "net.txt", about: "Tuesday net")
+        let file = try XCTUnwrap(library.index.files(in: "PARK").first)
+
+        try library.trashSharedFile(file)
+        XCTAssertEqual(trashed, ["net.txt"])
+        XCTAssertTrue(library.index.files(in: "PARK").isEmpty)
+
+        try Data(count: 20).write(to: park.appendingPathComponent("net.txt"))
+        library.rescan()
+        XCTAssertEqual(library.index.files(in: "PARK").first?.about, "", "the old description is not reused")
+    }
+
+    /// Only a file the index lists can be opened or deleted from here.
+    func testAFileNotInTheAreaIsRefused() throws {
+        library.addArea(name: "PARK", about: "", url: park)
+        let ghost = BBSSharedFile(area: "PARK", name: "../secret.txt", byteCount: 5, modifiedAt: Date(), about: "")
+        XCTAssertThrowsError(try library.trashSharedFile(ghost))
+        XCTAssertNil(library.sharedFileURL(ghost))
+        XCTAssertTrue(trashed.isEmpty)
+    }
+
+    func testASharedFileOpensFromItsArea() throws {
+        try Data(count: 20).write(to: park.appendingPathComponent("net.txt"))
+        library.addArea(name: "PARK", about: "", url: park)
+        let file = try XCTUnwrap(library.index.files(in: "PARK").first)
+        XCTAssertEqual(library.sharedFileURL(file)?.lastPathComponent, "net.txt")
+    }
 }
