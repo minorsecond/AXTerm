@@ -528,7 +528,9 @@ Downgrade behavior
 Compression is only used when:
 	•	Peer support is confirmed via capabilities
 	•	You are sending a payload type that benefits (file chunks, some structured payloads)
-	•	You do not exceed CPU/latency budgets (interactive chat should default to none)
+	•	You do not exceed CPU/latency budgets
+
+Decision (2026-10-10, retest finding 11): chat is compressed too. A 26.8 KB message went uncompressed and took about 14 minutes at the link's 32 B/s, where deflate makes it 9.4 KB. A chat message goes with deflate when the peer lists it, else LZ4, else plain, and plain whenever compressing would not make it smaller (`AXDPChatEncoder`), so a short line costs nothing extra. Our capabilities list deflate and LZ4 and a decompressed limit of 256 KB per message (`AXDPCompression.absoluteMaxDecompressedLen`), up from 8 KB, which no long message fitted. A peer whose capabilities are not known gets plain text.
 
 Compression algorithm IDs (examples)
 	•	0 = none

@@ -3866,17 +3866,18 @@ struct TerminalView: View {
 
         let payload: Data
         if useAXDP {
-            let message = AXDP.Message(
-                type: .chat,
-                sessionId: 0,
-                messageId: UInt32.random(in: 1...UInt32.max),
-                payload: Data(text.utf8)
-            )
-            payload = message.encode()
+            // Compressed when the other station can read it (retest
+            // 2026-10-10, finding 11).
+            let destination = CallsignNormalizer.toAddress(txViewModel.viewModel.destinationCall)
+            let peerCaps = client.capabilityStore.capabilities(for: destination.call, ssid: destination.ssid)
+            let messageId = UInt32.random(in: 1...UInt32.max)
+            payload = AXDPChatEncoder.encode(text: text, messageId: messageId, peer: peerCaps)
             TxLog.debug(.axdp, "AXDP payload encoded for connected send", [
                 "destination": txViewModel.viewModel.destinationCall,
-                "messageId": message.messageId,
+                "messageId": messageId,
+                "textLen": text.utf8.count,
                 "payloadLen": payload.count,
+                "compression": String(describing: AXDPChatEncoder.algorithm(for: peerCaps)),
                 "hasMagic": AXDP.hasMagic(payload)
             ])
         } else {

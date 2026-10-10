@@ -289,7 +289,7 @@ final class TransmissionEdgeCaseTests: XCTestCase {
 
     func testCompressionAbsoluteMaxHardLimit() {
         // Verify absolute max cannot be exceeded even if maxLength is larger
-        XCTAssertEqual(AXDPCompression.absoluteMaxDecompressedLen, 8192)
+        XCTAssertEqual(AXDPCompression.absoluteMaxDecompressedLen, 262_144)
 
         let result = AXDPCompression.decompress(
             Data([0x01]),

@@ -426,9 +426,9 @@ final class WholeFileCompressionTests: XCTestCase {
     }
 
     func testLargerFileCompressionRoundTrip() {
-        // Test compressing and decompressing a file larger than the per-message limit (8KB)
+        // Test compressing and decompressing a file larger than the per-message limit (256 KB)
         // but within the file transfer limit
-        let largeFileContent = String(repeating: "This is test content for a larger file transfer. ", count: 500)
+        let largeFileContent = String(repeating: "This is test content for a larger file transfer. ", count: 6_000)
         let originalData = Data(largeFileContent.utf8)
 
         // Verify the test data is larger than per-message limit
@@ -458,7 +458,7 @@ final class WholeFileCompressionTests: XCTestCase {
 
     func testLargerFileFailsWithPerMessageLimit() {
         // Verify that larger files fail with per-message limit (validates the original bug)
-        let largeFileContent = String(repeating: "This is test content for a larger file transfer. ", count: 500)
+        let largeFileContent = String(repeating: "This is test content for a larger file transfer. ", count: 6_000)
         let originalData = Data(largeFileContent.utf8)
 
         // Verify the test data exceeds per-message limit

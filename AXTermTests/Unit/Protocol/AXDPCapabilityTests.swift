@@ -286,8 +286,9 @@ final class AXDPCapabilityTests: XCTestCase {
     // MARK: - Compression Guard Tests (Anti-Zip-Bomb)
 
     func testMaxDecompressedLenHardLimit() {
-        // Hard limit is 8192 per spec
-        XCTAssertEqual(AXDPCompression.absoluteMaxDecompressedLen, 8192)
+        // 256 KB since 2026-10-10 (retest finding 11): room for a long chat
+        // message, still a cap against a payload built to expand without end.
+        XCTAssertEqual(AXDPCompression.absoluteMaxDecompressedLen, 262_144)
     }
 
     func testDecompressionRejectsExceedingOriginalLength() {

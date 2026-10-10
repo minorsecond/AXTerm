@@ -64,8 +64,8 @@ nonisolated struct AXDPCapability: Sendable, Equatable {
             protoMin: 1,
             protoMax: AXDP.version,
             features: [.sack, .resume, .compression],
-            compressionAlgos: [.lz4],
-            maxDecompressedLen: 4096,
+            compressionAlgos: [.deflate, .lz4],
+            maxDecompressedLen: AXDPCompression.absoluteMaxDecompressedLen,
             maxChunkLen: 128
         )
     }
@@ -488,9 +488,12 @@ nonisolated enum AXDPCompression {
         case deflate = 3
     }
 
-    /// Absolute maximum decompressed length for individual message payloads (per spec)
-    /// Note: This is for per-message compression, NOT whole-file transfers
-    static let absoluteMaxDecompressedLen: UInt32 = 8192
+    /// The most one message's payload may expand to. Room for a long chat
+    /// message: a 65,535-byte AXDP message of compressed text holds a few
+    /// times its size, and the 26.8 KB constitution needed more than the old
+    /// 8 KB (retest 2026-10-10, finding 11). Still a cap, against a payload
+    /// built to expand without end. Not for whole-file transfers.
+    static let absoluteMaxDecompressedLen: UInt32 = 262_144
 
     /// Maximum decompressed length for whole-file transfers (100 MB)
     /// File transfers use whole-file compression which can produce much larger outputs
@@ -775,5 +778,26 @@ nonisolated struct AXDPFileMeta: Sendable, Equatable {
                (UInt64(data[5]) << 16) |
                (UInt64(data[6]) << 8) |
                UInt64(data[7])
+    }
+}
+
+/// An AXDP chat message as it goes on the air: compressed when the other
+/// station can read it and it comes out smaller (retest 2026-10-10, finding
+/// 11). The encoder already sends the payload as it is when compressing would
+/// not shrink it.
+nonisolated enum AXDPChatEncoder {
+    /// Deflate when the peer has it, which shrinks text furthest; at 1200
+    /// baud size is all that matters. LZ4 otherwise. None when the peer does
+    /// not claim compression or its capabilities are not known.
+    static func algorithm(for peer: AXDPCapability?) -> AXDPCompression.Algorithm {
+        guard let peer, peer.features.contains(.compression) else { return .none }
+        if peer.compressionAlgos.contains(.deflate) { return .deflate }
+        if peer.compressionAlgos.contains(.lz4) { return .lz4 }
+        return .none
+    }
+
+    static func encode(text: String, messageId: UInt32, peer: AXDPCapability?) -> Data {
+        AXDP.Message(type: .chat, sessionId: 0, messageId: messageId, payload: Data(text.utf8),
+                     compression: algorithm(for: peer)).encode()
     }
 }
