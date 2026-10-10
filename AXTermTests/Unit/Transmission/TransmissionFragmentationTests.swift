@@ -205,8 +205,7 @@ final class TransmissionFragmentationTests: XCTestCase {
         XCTAssertEqual(iFrames.count, expectedSent)
 
         // Total chunks queued + sent = expectedChunks
-        let queued = session.pendingDataQueue.count
-        XCTAssertEqual(iFrames.count + queued, expectedChunks)
+        XCTAssertEqual(iFrames.count + session.pendingFrameCount, expectedChunks)
     }
 
     /// Short message (<= paclen) produces single chunk
@@ -257,7 +256,7 @@ final class TransmissionFragmentationTests: XCTestCase {
         let windowSize = session.stateMachine.config.windowSize
         let expectedSent = min(expectedChunks, windowSize)
         XCTAssertGreaterThanOrEqual(iFrames.count, expectedSent)
-        XCTAssertEqual(iFrames.count + session.pendingDataQueue.count, expectedChunks)
+        XCTAssertEqual(iFrames.count + session.pendingFrameCount, expectedChunks)
     }
 
     // MARK: - Reassembly Tests

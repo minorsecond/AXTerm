@@ -320,34 +320,53 @@ final class InSessionLinkManagerTests: XCTestCase {
 
     // MARK: Paclen and segmentation
 
-    /// Data already cut into frames keeps its size; only data segmented after
-    /// the change uses the new paclen.
-    func testNewPaclenAppliesOnlyToDataSegmentedAfterIt() {
+    /// Queued data has no sequence numbers yet, so it is cut when it goes
+    /// out, at the paclen in force then. The 26.8 KB message of the retest
+    /// (2026-10-10, finding 13) was cut into 210 frames of 128 bytes when it
+    /// was sent, and the session's later paclen of 256 never reached it.
+    func testQueuedDataIsCutAtThePaclenInForceWhenItGoesOut() {
         manager.defaultConfig = growable(window: 1, paclen: 128)
         let session = connected()
 
         let first = send(bytes: 300)
         XCTAssertEqual(first.map(\.payload.count), [128])
-        XCTAssertEqual(session.pendingDataQueue.map(\.data.count), [128, 44])
 
         manager.updateLinkTargets(for: session, window: 1, paclen: 256, reason: "test")
         XCTAssertEqual(session.livePaclen, 256)
-        XCTAssertEqual(session.pendingDataQueue.map(\.data.count), [128, 44],
-                       "queued data is not re-cut")
         XCTAssertEqual(session.sendBuffer.values.map(\.payload.count), [128],
                        "the frame in flight is not re-cut")
-
         _ = send(bytes: 300)
-        XCTAssertEqual(session.pendingDataQueue.map(\.data.count), [128, 44, 256, 44])
 
-        // Drain everything one frame at a time and check the order on the air.
         var onAir = first.map(\.payload.count)
         for _ in 0..<4 {
             drained = []
             manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
             onAir += drained.filter { $0.frameType == "i" }.map(\.payload.count)
         }
-        XCTAssertEqual(onAir, [128, 128, 44, 256, 44])
+        XCTAssertEqual(onAir, [128, 172, 256, 44], "the order of the bytes is unchanged")
+    }
+
+    /// A long message follows the session's paclen up and down as it goes.
+    func testALongMessageFollowsPaclenWhileItGoesOut() {
+        manager.defaultConfig = growable(window: 1, paclen: 128)
+        let session = connected()
+        let message = Data((0..<1000).map { UInt8($0 % 251) })
+        var onAir = manager.sendData(message, to: peer, path: DigiPath(), radio: .primary)
+
+        func next() {
+            drained = []
+            manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
+            onAir += drained.filter { $0.frameType == "i" }
+        }
+        next()
+        manager.updateLinkTargets(for: session, window: 1, paclen: 256, reason: "clean streak")
+        next(); next()
+        manager.updateLinkTargets(for: session, window: 1, paclen: 64, reason: "loss")
+        while onAir.reduce(0, { $0 + $1.payload.count }) < message.count { next() }
+
+        XCTAssertEqual(onAir.prefix(4).map(\.payload.count), [128, 128, 256, 256])
+        XCTAssertTrue(onAir.dropFirst(4).allSatisfy { $0.payload.count <= 64 })
+        XCTAssertEqual(onAir.reduce(Data()) { $0 + $1.payload }, message, "every byte, in order")
     }
 
     /// A retransmission resends the frame as it was built.
@@ -372,6 +391,56 @@ final class InSessionLinkManagerTests: XCTestCase {
         let frames = manager.sendData(Data(repeating: 0x01, count: 100), to: peer,
                                       path: DigiPath(), radio: .primary, pid: 0xCF)
         XCTAssertEqual(frames.map(\.payload.count), [100])
+    }
+
+    // MARK: Growth that starts mid-session (retest 2026-10-10, finding 13)
+
+    /// A session made before its peer confirmed AXDP is fixed: every session
+    /// the iPad opened began before the capability exchange that confirmed
+    /// it, so the 26.8 KB message ran at K 1 while the route's controller
+    /// had reached K 4. Once the peer confirms, the session may grow.
+    func testAFixedSessionMayGrowOnceAllowed() {
+        manager.defaultConfig = AX25SessionConfig(windowSize: 1, paclen: 128,
+                                                  rtoMin: 1.0, rtoMax: 16.0, initialRto: 2.0)
+        let session = connected()
+        XCTAssertFalse(session.stateMachine.config.adaptsInSession, "precondition")
+
+        manager.allowInSessionGrowth(for: session, maxWindow: 4, maxPaclen: 256)
+        XCTAssertTrue(session.stateMachine.config.adaptsInSession)
+        XCTAssertEqual(session.stateMachine.config.windowCeiling, 4)
+        XCTAssertEqual(session.stateMachine.config.paclenCeiling, 256)
+
+        manager.updateLinkTargets(for: session, window: 4, paclen: 256, reason: "test")
+        XCTAssertEqual(session.liveWindowSize, 4)
+        XCTAssertEqual(session.livePaclen, 256)
+
+        manager.updateLinkTargets(for: session, window: 1, paclen: 32, reason: "loss")
+        XCTAssertEqual(session.liveWindowSize, 1)
+        XCTAssertEqual(session.livePaclen, 128, "never below what it ran when it was fixed")
+    }
+
+    /// Growth allowed later never exceeds what the peer advertised in XID.
+    func testLateGrowthStaysWithinThePeersXID() {
+        manager.negotiateV22 = true
+        manager.defaultConfig = AX25SessionConfig(windowSize: 1, paclen: 128,
+                                                  rtoMin: 1.0, rtoMax: 16.0, initialRto: 2.0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        _ = manager.handleInboundXID(from: peer, path: DigiPath(), radio: .primary,
+                                     info: xidResponse(n1: 192, k: 3), isCommand: false, pf: true)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
+
+        manager.allowInSessionGrowth(for: session, maxWindow: 4, maxPaclen: 256)
+        XCTAssertEqual(session.stateMachine.config.windowCeiling, 3)
+        XCTAssertEqual(session.stateMachine.config.paclenCeiling, 192)
+    }
+
+    /// A session that already grows keeps its own ceilings.
+    func testAllowingGrowthTwiceChangesNothing() {
+        let session = connected()
+        manager.allowInSessionGrowth(for: session, maxWindow: 2, maxPaclen: 64)
+        XCTAssertEqual(session.stateMachine.config.windowCeiling, 4)
+        XCTAssertEqual(session.stateMachine.config.paclenCeiling, 256)
     }
 
     // MARK: XID ceiling
@@ -875,5 +944,32 @@ final class ConfirmedLinkMemoryTests: XCTestCase {
         XCTAssertTrue(text.contains("up to 192"), text)
         XCTAssertTrue(text.contains("K3"), "names the raise that is waiting: \(text)")
         XCTAssertTrue(text.contains("Stable link"), text)
+    }
+}
+
+// MARK: - Growth once the peer confirms AXDP
+
+@MainActor
+final class LateGrowthCoordinatorTests: XCTestCase {
+
+    /// The iPad calls A, and only afterwards does the capability exchange
+    /// confirm it runs AXTerm. A's session to it then starts growing.
+    func testAnAnsweredSessionGrowsOnceThePeerConfirmsAXDP() throws {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.inSessionLinkGrowth = true
+        coordinator.localCallsign = "K0EPI-2"
+        coordinator.syncSessionManagerConfigFromAdaptive()
+        let caller = AX25Address(call: "K0EPI", ssid: 3)
+        _ = coordinator.sessionManager.handleInboundSABM(from: caller, to: AX25Address(call: "K0EPI", ssid: 2),
+                                                         path: DigiPath(), radio: .primary)
+        let session = try XCTUnwrap(coordinator.sessionManager.existingSession(for: caller, path: DigiPath(),
+                                                                               radio: .primary))
+        XCTAssertFalse(session.stateMachine.config.adaptsInSession, "precondition: not known to run AXTerm yet")
+
+        coordinator.markImplicitlyConfirmedAXDP(for: "K0EPI-3")
+        XCTAssertTrue(session.stateMachine.config.adaptsInSession)
+        XCTAssertGreaterThan(session.stateMachine.config.windowCeiling, session.liveWindowSize)
     }
 }

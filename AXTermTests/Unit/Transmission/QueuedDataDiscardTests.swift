@@ -28,11 +28,11 @@ final class QueuedDataDiscardTests: XCTestCase {
 
         let sent = manager.sendData(Data(repeating: 0x41, count: 96), to: peer)
         XCTAssertEqual(sent.count, 1, "the window holds one frame")
-        XCTAssertEqual(session.pendingDataQueue.count, 2)
+        XCTAssertEqual(session.pendingFrameCount, 2)
         let vs = session.vs, va = session.va
         let t1 = session.t1StartedAt
 
-        XCTAssertEqual(manager.discardQueuedData(for: session.key), 2)
+        XCTAssertEqual(manager.discardQueuedData(for: session.key), 1, "the 64 bytes behind the window, held whole")
         XCTAssertTrue(session.pendingDataQueue.isEmpty)
         XCTAssertEqual(session.sendBuffer.count, 1, "the numbered frame is still owed to the peer")
         XCTAssertEqual(session.vs, vs)

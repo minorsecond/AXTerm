@@ -5419,6 +5419,23 @@ final class SessionCoordinator: ObservableObject {
                 "peer": callsign,
                 "reason": "Received AXDP message from peer"
             ])
+            allowGrowthToward(call)
+        }
+    }
+
+    /// The peer now counts as AXTerm, so a session to it that began fixed,
+    /// before the capability exchange, may grow as one made now would
+    /// (retest 2026-10-10, finding 13).
+    private func allowGrowthToward(_ call: String) {
+        let peer = CallsignNormalizer.toAddress(call)
+        for session in sessionManager.sessions.values
+        where CallsignNormalizer.addressesMatch(session.remoteAddress, peer)
+            && !session.stateMachine.config.adaptsInSession {
+            guard let fresh = sessionManager.getConfigForDestination?(
+                session.remoteAddress.display, session.path.display, session.radio),
+                  fresh.adaptsInSession else { continue }
+            sessionManager.allowInSessionGrowth(for: session, maxWindow: fresh.maxWindowSize,
+                                                maxPaclen: fresh.maxPaclen)
         }
     }
     

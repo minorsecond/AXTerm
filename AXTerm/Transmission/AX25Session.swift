@@ -262,6 +262,21 @@ nonisolated struct AX25SessionConfig: Sendable {
             startSource: startSource, keyUpSeconds: seconds.ours, peerKeyUpSeconds: seconds.peer)
     }
 
+    /// This config with room to grow: ceilings no lower than where it runs
+    /// now, and floors at where it runs now, so growth never takes it below
+    /// the fixed values it started with (§7.8.1).
+    func allowingGrowth(maxWindow: Int?, maxPaclen: Int?, floorWindow: Int, floorPaclen: Int) -> AX25SessionConfig {
+        AX25SessionConfig(
+            windowSize: windowSize, paclen: paclen, maxReceiveBufferSize: maxReceiveBufferSize,
+            maxRetries: maxRetries, extended: extended, srejEnabled: srejEnabled,
+            rtoMin: rtoMin, rtoMax: rtoMax, initialRto: initialRto, t2AckDelay: t2AckDelay,
+            adaptiveTimeout: adaptiveTimeout, learnedPathRto: learnedPathRto,
+            maxWindowSize: maxWindow.map { max($0, floorWindow) },
+            maxPaclen: maxPaclen.map { max($0, floorPaclen) },
+            minWindowSize: floorWindow, minPaclen: floorPaclen,
+            startSource: startSource, keyUpSeconds: keyUpSeconds, peerKeyUpSeconds: peerKeyUpSeconds)
+    }
+
     /// This config with the outcome of an XID exchange applied (§6.3.2):
     /// SREJ if the response selected it, and the peer's advertised receive
     /// limits taken as ceilings — N1 and k are notifications of what the
@@ -730,7 +745,18 @@ nonisolated struct AX25StateMachine: Sendable {
     /// Session configuration, fixed at connection start. K and paclen move
     /// during the session only below the ceilings recorded here, and that
     /// live state belongs to `AX25Session`, never to this config (§7.8.1).
-    let config: AX25SessionConfig
+    /// The one later change is `allowGrowth`, for a peer that confirms it
+    /// runs AXTerm after the session began.
+    private(set) var config: AX25SessionConfig
+
+    /// Gives a fixed session room to grow (retest 2026-10-10, finding 13).
+    /// Only the growth ceilings and floors change; nothing that counts
+    /// frames does, and a ceiling only ever rises from the fixed value.
+    mutating func allowGrowth(maxWindow: Int?, maxPaclen: Int?, floorWindow: Int, floorPaclen: Int) {
+        guard !config.adaptsInSession else { return }
+        config = config.allowingGrowth(maxWindow: maxWindow, maxPaclen: maxPaclen,
+                                       floorWindow: floorWindow, floorPaclen: floorPaclen)
+    }
 
     /// Sequence number state
     var sequenceState: AX25SequenceState

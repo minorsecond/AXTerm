@@ -42,7 +42,7 @@ final class AX25LinkResetTests: XCTestCase {
         // Two frames on the air (K=2), three more queued behind them.
         _ = manager.sendData(Data(repeating: 0x41, count: 64 * 5), to: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.outstandingCount, 2)
-        XCTAssertEqual(session.pendingDataQueue.count, 3)
+        XCTAssertEqual(session.pendingFrameCount, 3)
 
         let ua = manager.handleInboundSABM(from: peer, to: local, path: DigiPath(), radio: .primary)
 

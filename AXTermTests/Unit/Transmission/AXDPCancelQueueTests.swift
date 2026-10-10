@@ -53,7 +53,7 @@ final class AXDPCancelQueueTests: XCTestCase {
         let (station, session) = try station()
         defer { station.tearDown() }
         let id = transferWithAChunkQueued(on: station, session: session)
-        XCTAssertGreaterThan(session.pendingDataQueue.count, 1, "the chunk waits whole behind the full window")
+        XCTAssertGreaterThan(session.pendingFrameCount, 1, "the chunk waits whole behind the full window")
 
         station.coordinator.cancelTransfer(id)
 
@@ -95,7 +95,7 @@ final class AXDPCancelQueueTests: XCTestCase {
         let (station, session) = try station()
         defer { station.tearDown() }
         let id = transferWithAChunkQueued(on: station, session: session)
-        XCTAssertGreaterThan(session.pendingDataQueue.count, 1)
+        XCTAssertGreaterThan(session.pendingFrameCount, 1)
 
         let nack = AXDP.Message(type: .nack, sessionId: 7, messageId: 1)
         station.coordinator.handleNackMessage(nack, from: peer)
@@ -110,7 +110,7 @@ final class AXDPCancelQueueTests: XCTestCase {
         defer { station.tearDown() }
         let c = station.coordinator
         let id = transferWithAChunkQueued(on: station, session: session)
-        XCTAssertGreaterThan(session.pendingDataQueue.count, 1)
+        XCTAssertGreaterThan(session.pendingFrameCount, 1)
 
         c.pauseTransfer(id)
 
@@ -124,11 +124,11 @@ final class AXDPCancelQueueTests: XCTestCase {
         // The chunk loop turn scheduled before the pause carries on now the
         // status is Sending again; it runs on the next tick.
         let deadline = Date().addingTimeInterval(2)
-        while session.pendingDataQueue.count <= 1, Date() < deadline {
+        while session.pendingFrameCount <= 1, Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.02))
         }
-        XCTAssertGreaterThan(session.pendingDataQueue.count, 1, "resume hands the same chunk over again")
-        // Queued as 64-byte segments; the first carries the chunk's label.
+        XCTAssertGreaterThan(session.pendingFrameCount, 1, "resume hands the same chunk over again")
+        // Queued whole, cut when it goes out; it carries the chunk's label.
         XCTAssertEqual(session.pendingDataQueue.first?.displayInfo, "AXDP CHUNK 1/4")
     }
 }

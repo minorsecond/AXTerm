@@ -937,6 +937,35 @@ final class AX25SessionManager: ObservableObject {
     /// listens so the status bar shows what the session sends with now.
     var onLiveLinkChanged: ((AX25Session) -> Void)?
 
+    /// Lets a session made fixed start growing: its peer has confirmed
+    /// since that it runs AXTerm, whose receiver holds its delayed ack until
+    /// a burst pauses (§7.8.1). Every session the iPad opened began before
+    /// the capability exchange that confirmed it, so none ever grew, and a
+    /// 26.8 KB message ran at K 1 while the route's controller had reached
+    /// K 4 (retest 2026-10-10, finding 13).
+    ///
+    /// The ceilings never exceed what the peer advertised in XID, and the
+    /// floors are where the session runs now. A session that already grows
+    /// keeps its own ceilings.
+    func allowInSessionGrowth(for session: AX25Session, maxWindow: Int?, maxPaclen: Int?) {
+        guard !session.stateMachine.config.adaptsInSession,
+              session.state == .connected || session.state == .connecting else { return }
+        var window = maxWindow
+        var paclen = maxPaclen
+        if case .supported(let params) = peerXIDStatus[session.remoteAddress.display] {
+            window = window.map { min($0, params.windowSizeRx ?? $0) }
+            paclen = paclen.map { min($0, params.iFieldLengthRx ?? $0) }
+        }
+        session.stateMachine.allowGrowth(maxWindow: window, maxPaclen: paclen,
+                                         floorWindow: session.liveWindowSize, floorPaclen: session.livePaclen)
+        TxLog.debug(.adaptive, "Session may grow: peer confirmed AXTerm", [
+            "peer": session.remoteAddress.display,
+            "windowCeiling": session.stateMachine.config.windowCeiling,
+            "paclenCeiling": session.stateMachine.config.paclenCeiling
+        ])
+        onLiveLinkChanged?(session)
+    }
+
     /// The link controller's latest choice of K and paclen for a session.
     ///
     /// What the session then runs is the smallest choice among the open
@@ -2187,6 +2216,25 @@ final class AX25SessionManager: ObservableObject {
     // MARK: - Data Transmission
 
     /// Fragment payload into paclen-sized chunks for transmission
+    /// Data for the queue. It has no sequence number yet, so it is queued
+    /// whole and cut when it goes out, at the paclen in force then: a long
+    /// message follows the session's paclen up and down while it is sent
+    /// (retest 2026-10-10, finding 13). A NET/ROM datagram is one I-frame
+    /// and keeps the size it was given.
+    private static func queued(_ data: Data, chunks: [Data], pid: UInt8,
+                               displayInfo: String?) -> [(data: Data, pid: UInt8, displayInfo: String?)] {
+        if pid == NetRomWire.pid {
+            return chunks.enumerated().map { (data: $0.element, pid: pid, displayInfo: $0.offset == 0 ? displayInfo : nil) }
+        }
+        return data.isEmpty ? [] : [(data: data, pid: pid, displayInfo: displayInfo)]
+    }
+
+    private static func rejoined(_ items: [(data: Data, pid: UInt8, displayInfo: String?)])
+        -> [(data: Data, pid: UInt8, displayInfo: String?)] {
+        guard let first = items.first else { return [] }
+        return [(data: items.reduce(Data()) { $0 + $1.data }, pid: first.pid, displayInfo: first.displayInfo)]
+    }
+
     private func fragment(_ data: Data, paclen: Int) -> [Data] {
         guard paclen > 0, !data.isEmpty else { return [] }
         if data.count <= paclen { return [data] }
@@ -2239,10 +2287,8 @@ final class AX25SessionManager: ObservableObject {
             // out (smoke run 2026-10-03-1, 7.2: a lost NET/ROM CONREQ).
             let connecting = self.session(for: destination, path: path, radio: radio)
             if pid == NetRomWire.pid { connecting.carriesNetRom = true }
-            for (i, chunk) in chunks.enumerated() {
-                let info = (i == 0) ? displayInfo : nil
-                connecting.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
-            }
+            connecting.pendingDataQueue.append(contentsOf: Self.queued(data, chunks: chunks, pid: pid,
+                                                                       displayInfo: displayInfo))
             TxLog.debug(.session, "Queued data pending connection", [
                 "peer": destination.display,
                 "size": data.count,
@@ -2251,11 +2297,9 @@ final class AX25SessionManager: ObservableObject {
             ])
 
         case .connecting:
-            // Already connecting, queue each chunk
-            for (i, chunk) in chunks.enumerated() {
-                let info = (i == 0) ? displayInfo : nil
-                session.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
-            }
+            // Already connecting: queue it
+            session.pendingDataQueue.append(contentsOf: Self.queued(data, chunks: chunks, pid: pid,
+                                                                    displayInfo: displayInfo))
             TxLog.debug(.session, "Queued data, connection in progress", [
                 "peer": destination.display,
                 "size": data.count,
@@ -2265,10 +2309,8 @@ final class AX25SessionManager: ObservableObject {
 
         case .connected:
             guard !session.hasReceiveSequenceGap else {
-                for (i, chunk) in chunks.enumerated() {
-                    let info = (i == 0) ? displayInfo : nil
-                    session.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
-                }
+                session.pendingDataQueue.append(contentsOf: Self.queued(data, chunks: chunks, pid: pid,
+                                                                        displayInfo: displayInfo))
                 TxLog.debug(.session, "Queued data while receive sequence gap is unresolved", [
                     "peer": destination.display,
                     "size": data.count,
@@ -2286,10 +2328,8 @@ final class AX25SessionManager: ObservableObject {
             // Append and drain instead, so the oldest data claims the free window
             // slots; drained frames go out via onSendFrame.
             guard session.pendingDataQueue.isEmpty else {
-                for (i, chunk) in chunks.enumerated() {
-                    let info = (i == 0) ? displayInfo : nil
-                    session.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
-                }
+                session.pendingDataQueue.append(contentsOf: Self.queued(data, chunks: chunks, pid: pid,
+                                                                        displayInfo: displayInfo))
                 drainPendingDataQueue(for: session)
                 checkInvariants(session: session)
                 return frames
@@ -2361,7 +2401,9 @@ final class AX25SessionManager: ObservableObject {
             // (guard above), and any chunks another path queues concurrently are
             // older than these. insert(at: 0) here reversed message order across
             // successive sendData calls once the window filled.
-            session.pendingDataQueue.append(contentsOf: remaining)
+            // What did not fit goes back together, to be cut when it goes
+            // out (`drainPendingDataQueue`).
+            session.pendingDataQueue.append(contentsOf: pid == NetRomWire.pid ? remaining : Self.rejoined(remaining))
             if !remaining.isEmpty {
                 axDebugPrint("[DEBUG:AX25:SEND] queued remaining | count=\(remaining.count) queueDepth=\(session.pendingDataQueue.count)")
                 TxLog.debug(.session, "Window filled, queued remaining chunks", [
@@ -4267,18 +4309,21 @@ final class AX25SessionManager: ObservableObject {
         let sendWindow = effectiveSendWindow(for: session)
         let availableSlots = max(0, sendWindow - currentOutstanding)
 
+        // One frame per free slot, each cut from the front of the queue at
+        // the paclen in force now (§7.8.1; retest 2026-10-10, finding 13).
+        // A NET/ROM datagram goes whole.
         var drained: [(data: Data, pid: UInt8, displayInfo: String?)] = []
-        var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []
-        var slotsConsumed = 0
-        for item in session.pendingDataQueue {
-            if slotsConsumed < availableSlots {
-                drained.append(item)
-                slotsConsumed += 1
-            } else {
-                remaining.append(item)
+        while drained.count < availableSlots, !session.pendingDataQueue.isEmpty {
+            var item = session.pendingDataQueue.removeFirst()
+            let paclen = max(1, session.livePaclen)
+            if item.pid != NetRomWire.pid, item.data.count > paclen {
+                session.pendingDataQueue.insert((data: Data(item.data.dropFirst(paclen)), pid: item.pid,
+                                                 displayInfo: nil), at: 0)
+                item = (data: Data(item.data.prefix(paclen)), pid: item.pid, displayInfo: item.displayInfo)
             }
+            drained.append(item)
         }
-        session.pendingDataQueue = remaining
+        let remaining = session.pendingDataQueue
 
         var wasIdle = session.outstandingCount == 0
         for item in drained {
