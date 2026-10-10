@@ -157,4 +157,42 @@ final class AX25DigipeaterTests: XCTestCase {
         expected[raw.startIndex + 20] |= 0x80   // DWARC's SSID byte gains the H bit
         XCTAssertEqual(out, expected)
     }
+
+    // MARK: - The hop cap counts hops asked for, not hops left
+
+    /// A WIDE7-7 flood two hops from spent is still a flood: the cap reads
+    /// the n of WIDEn (hops asked for), the way UIDIGI and Direwolf do.
+    /// It read the hops left, so WIDE7-2 went out under a cap of 2.
+    func testAFloodPartlySpentIsStillAFlood() {
+        XCTAssertNil(newN(frame(from: "W0ARP", to: "APRS", vias: [("WIDE7", 2, false)]), maxHops: 2))
+        XCTAssertNil(newN(frame(from: "W0ARP", to: "APRS", vias: [("WIDE3", 1, false)]), maxHops: 2))
+        XCTAssertNotNil(newN(frame(from: "W0ARP", to: "APRS", vias: [("WIDE2", 1, false)]), maxHops: 2))
+    }
+
+    /// More hops left than were asked for (WIDE2-5) is not a path any
+    /// station sends; it is not repeated.
+    func testAMalformedHopCountIsRefused() {
+        XCTAssertNil(newN(frame(from: "W0ARP", to: "APRS", vias: [("WIDE2", 5, false)]), maxHops: 7))
+        XCTAssertNil(newN(frame(from: "W0ARP", to: "APRS", vias: [("WIDE1", 2, false)])))
+    }
+
+    // MARK: - Duplicates are the same packet, whatever path it took
+
+    /// A beacon heard direct and again through another fill-in digi is one
+    /// packet. The engine's dupe check keyed on the whole frame, path and
+    /// all, so the second copy went out too. The key is source,
+    /// destination, control, PID and info, as UIDIGI and Direwolf use.
+    func testTheDupeKeyIgnoresThePath() {
+        let direct = frame(from: "W0ARP", to: "APRS", vias: [("WIDE1", 1, false), ("WIDE2", 1, false)])
+        let viaOther = frame(from: "W0ARP", to: "APRS",
+                             vias: [("N0SZ", 3, true), ("WIDE1", 0, true), ("WIDE2", 1, false)])
+        XCTAssertNotNil(AX25Digipeater.dupeKey(direct))
+        XCTAssertEqual(AX25Digipeater.dupeKey(direct), AX25Digipeater.dupeKey(viaOther))
+
+        var other = direct
+        other[other.count - 1] = UInt8(ascii: "X")   // different info
+        XCTAssertNotEqual(AX25Digipeater.dupeKey(direct), AX25Digipeater.dupeKey(other))
+        let otherSource = frame(from: "W0ARQ", to: "APRS", vias: [("WIDE1", 1, false)])
+        XCTAssertNotEqual(AX25Digipeater.dupeKey(direct), AX25Digipeater.dupeKey(otherSource))
+    }
 }

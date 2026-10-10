@@ -76,9 +76,12 @@ nonisolated enum AX25Digipeater {
               let (call, ssid) = decodeCallAndSSID(raw, at: hop),
               let n = widenDigit(call) else { return nil }
         let remaining = ssid
-        guard remaining >= 1 else { return nil }
+        // More hops left than were asked for (WIDE2-5) is no real path.
+        guard remaining >= 1, remaining <= n else { return nil }
+        // The cap reads the hops asked for, n, not the hops left: a WIDE7-7
+        // flood two hops from spent is still a flood.
         if n == 1 { guard fillIn else { return nil } }
-        else { guard wideAreaMaxHops > 0, remaining <= wideAreaMaxHops else { return nil } }
+        else { guard wideAreaMaxHops > 0, n <= wideAreaMaxHops else { return nil } }
 
         let newN = remaining - 1
         let origExt = raw[hop + 6] & 0x01
@@ -96,6 +99,27 @@ nonisolated enum AX25Digipeater {
         out.append(newWideSSID)
         out.append(raw[(hop + 7)...])
         return out
+    }
+
+    /// What makes two copies the same packet: destination, source,
+    /// control, PID and info, with the path left out and the address flag
+    /// bits cleared. A beacon heard direct and again through another digi
+    /// has a different path but is one packet.
+    static func dupeKey(_ raw: Data) -> Data? {
+        guard raw.count >= 16, isWellFormed(raw) else { return nil }
+        let start = raw.startIndex
+        var key = Data()
+        for base in [start, start + 7] {
+            key.append(raw[base..<(base + 6)])
+            key.append(raw[base + 6] & 0x1E)            // SSID only
+        }
+        // Past the last address (its extension bit set) to control onward.
+        var offset = start + 7
+        while offset + 7 <= raw.endIndex, raw[offset + 6] & 0x01 == 0 { offset += 7 }
+        let body = offset + 7
+        guard body <= raw.endIndex else { return nil }
+        key.append(raw[body...])
+        return key
     }
 
     /// `n` from a `WIDEn` callsign (1–7), or nil.

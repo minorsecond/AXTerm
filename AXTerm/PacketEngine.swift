@@ -1574,9 +1574,10 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Digipeating
 
-    /// Recently repeated frames, so two paths delivering the same
-    /// original do not become two transmissions. Keyed by frame hash;
-    /// eight seconds outlives any sane duplicate delivery.
+    /// Recently repeated packets, so two paths delivering the same
+    /// original do not become two transmissions. Keyed on the packet with
+    /// its path left out (`AX25Digipeater.dupeKey`), for the radio's
+    /// dupe window.
     private var recentDigipeats: [Int: Date] = [:]
 
     /// Repeats a frame addressed via this station, when the operator
@@ -1592,7 +1593,9 @@ final class PacketEngine: ObservableObject {
             fillIn: profile.digi.fillIn, wideAreaMaxHops: profile.digi.wideAreaMaxHops)
         else { return }
 
-        let key = raw.hashValue
+        // The packet, not its path: the same beacon heard direct and again
+        // through another digi differs only in the path.
+        let key = (AX25Digipeater.dupeKey(raw) ?? raw).hashValue
         let now = Date()
         let window = TimeInterval(max(1, profile.digi.dupeSeconds))
         recentDigipeats = recentDigipeats.filter { now.timeIntervalSince($0.value) < window }
