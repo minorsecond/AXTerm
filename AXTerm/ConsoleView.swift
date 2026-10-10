@@ -824,9 +824,16 @@ struct ConsoleView: View {
                 guard followsNewLines else { return }
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
-            .onChange(of: trailingSendStatus) { _, _ in
-                guard followsNewLines else { return }
-                proxy.scrollTo("bottom", anchor: .bottom)
+            .onChange(of: trailingSendStatus) { old, new in
+                // Only a new kind of row moves the history, and then to the
+                // row itself, not the marker below the padding (findings 7
+                // and 10).
+                guard followsNewLines, InlineSendStatus.needsScroll(from: old, to: new) else { return }
+                if new != nil {
+                    proxy.scrollTo("sendStatus", anchor: .bottom)
+                } else if let lastId = groupedLines.last?.id {
+                    proxy.scrollTo(lastId, anchor: .bottom)
+                }
             }
             .onChange(of: scrollToBottomToken) { _, _ in
                 // Pin to the last real line, not the phantom "bottom"
@@ -1977,9 +1984,7 @@ struct InlineSendStatusRow: View {
     let status: InlineSendStatus
     var fontSize: Double = 11
 
-    /// Bytes above which a message going out gets a progress bar: more than
-    /// two frames at the largest paclen.
-    static let progressBarThreshold = 512
+    static let progressBarThreshold = InlineSendStatus.progressBarBytes
 
     var body: some View {
         switch status {

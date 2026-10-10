@@ -181,4 +181,28 @@ nonisolated enum InlineSendStatus: Equatable {
     static func axdpNote(peer: String) -> String {
         "\(peer) sees it when it has all arrived"
     }
+
+    /// Whether the history should follow a change to this row: when it
+    /// appears, goes or becomes a different kind of row. A count changing
+    /// inside it is not one; on the iPad every delivery of a long message,
+    /// and every acknowledgment of a line going out, scrolled to the marker
+    /// below the padding and then back (retest 2026-10-10, findings 7 and 10).
+    static func needsScroll(from old: InlineSendStatus?, to new: InlineSendStatus?) -> Bool {
+        old?.kind != new?.kind
+    }
+
+    /// The row's shape, whatever its counts say.
+    private var kind: Int {
+        switch self {
+        case .waiting: return 0
+        case .sending(_, let total, _): return total > InlineSendStatus.progressBarBytes ? 2 : 1
+        case .delivered: return 3
+        case .receiving: return 4
+        case .receivingFile: return 5
+        }
+    }
+
+    /// Bytes above which a message going out gets a progress bar: more than
+    /// two frames at the largest paclen.
+    static let progressBarBytes = 512
 }

@@ -121,6 +121,13 @@ a large block of text from A (705) appeared on the iPad only when the last
 frame arrived, with nothing to show it was coming (home retest, 2026-10-10).
 `AXDPIncomingProgressTests` covers it.
 
+The history follows the status row only when the row appears, goes or turns
+into a different kind of row (`InlineSendStatus.needsScroll`), and then to the
+row itself. A count changing inside it moves nothing. On the iPad every
+delivery of a long message and every acknowledgment of a line going out
+scrolled to the marker below the padding and back, so the history jumped up
+and down (retest 2026-10-10, findings 7 and 10).
+
 ## Clicks
 
 `ConsoleNSTableView` sends a click on the message to its text view (selection,

@@ -95,4 +95,26 @@ final class InlineSendStatusTests: XCTestCase {
         XCTAssertEqual(p.bytesAcked, 300)
         XCTAssertTrue(p.isComplete)
     }
+
+    // MARK: Scrolling (retest 2026-10-10, findings 7 and 10)
+
+    /// The history follows the status row when it appears, goes or changes
+    /// kind. A count changing inside it is not a reason to scroll: on the
+    /// iPad every delivery of a long message, and every acknowledgment of a
+    /// line going out, scrolled to the marker below the padding and back.
+    func testOnlyANewKindOfRowScrolls() {
+        let receiving1 = InlineSendStatus.receiving(from: "K0EPI-2", amount: "1.0 of 3.0 KB")
+        let receiving2 = InlineSendStatus.receiving(from: "K0EPI-2", amount: "1.2 of 3.0 KB")
+        let sending1 = InlineSendStatus.sending(acked: 128, total: 26_816, axdpPeer: nil)
+        let sending2 = InlineSendStatus.sending(acked: 256, total: 26_816, axdpPeer: nil)
+
+        XCTAssertTrue(InlineSendStatus.needsScroll(from: nil, to: receiving1))
+        XCTAssertFalse(InlineSendStatus.needsScroll(from: receiving1, to: receiving2))
+        XCTAssertFalse(InlineSendStatus.needsScroll(from: sending1, to: sending2))
+        XCTAssertFalse(InlineSendStatus.needsScroll(from: .receivingFile(name: "a", percent: 10),
+                                                    to: .receivingFile(name: "a", percent: 40)))
+        XCTAssertTrue(InlineSendStatus.needsScroll(from: .waiting(text: "hi"), to: sending1))
+        XCTAssertTrue(InlineSendStatus.needsScroll(from: sending2, to: .delivered))
+        XCTAssertTrue(InlineSendStatus.needsScroll(from: .delivered, to: nil))
+    }
 }
