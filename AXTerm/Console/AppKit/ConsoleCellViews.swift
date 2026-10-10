@@ -27,8 +27,13 @@ enum ConsoleSymbolCache {
     }
 }
 
-/// The message: real selectable text, with links that stay in the app.
-final class ConsoleMessageTextView: NSTextView {
+/// Text for selecting: put over one row when someone clicks into its
+/// message (`ConsoleNSTableView.beginSelection`), and taken away again.
+///
+/// Rows never hold one. Changing a text view's text tells accessibility
+/// clients its selection moved, and a client that then asks the table for its
+/// rows while the table is building one makes NSTableView throw (2026-10-10).
+final class ConsoleSelectionTextView: NSTextView {
     convenience init() {
         let storage = NSTextStorage()
         let layout = NSLayoutManager()
@@ -53,23 +58,87 @@ final class ConsoleMessageTextView: NSTextView {
         ]
     }
 
-    /// A selection belongs to the row being read; moving on clears it, so the
-    /// console does not collect gray highlights in rows read earlier.
+    /// Called when focus moves on, so the table can take the overlay away.
+    var onResign: (() -> Void)?
+
+    /// A selection belongs to the row being read; moving on ends it.
     override func resignFirstResponder() -> Bool {
-        setSelectedRange(NSRange(location: 0, length: 0))
-        return super.resignFirstResponder()
+        let resigned = super.resignFirstResponder()
+        if resigned { onResign?() }
+        return resigned
     }
 
-    /// Let the row handle a click it owns: the text view covers only the
-    /// message, and everything else is the row's.
     override var acceptsFirstResponder: Bool { true }
+}
+
+/// Lays out and draws a row's message, configured exactly as the
+/// measurer is (`ConsoleTextMeasurer`), so the text fills the height measured
+/// for it. Belongs to no view, so setting its text tells nobody anything.
+@MainActor
+final class ConsoleMessageText {
+    let storage = NSTextStorage()
+    let layoutManager = NSLayoutManager()
+    let container = NSTextContainer(size: NSSize(width: 100, height: CGFloat.greatestFiniteMagnitude))
+
+    init() {
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+    }
+
+    func set(_ text: NSAttributedString, width: CGFloat) {
+        storage.setAttributedString(text)
+        setWidth(width)
+    }
+
+    func setWidth(_ width: CGFloat) {
+        let size = NSSize(width: max(width, 1), height: CGFloat.greatestFiniteMagnitude)
+        if container.size != size { container.size = size }
+    }
+
+    func draw(at origin: CGPoint) {
+        let glyphs = layoutManager.glyphRange(for: container)
+        layoutManager.drawBackground(forGlyphRange: glyphs, at: origin)
+        layoutManager.drawGlyphs(forGlyphRange: glyphs, at: origin)
+    }
+
+    /// Where each link sits, relative to the text's origin.
+    func linkRects() -> [(rect: NSRect, url: URL)] {
+        var result: [(NSRect, URL)] = []
+        let full = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.link, in: full) { value, range, _ in
+            guard let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:)) else { return }
+            let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            layoutManager.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                                  in: container) { rect, _ in
+                result.append((rect, url))
+            }
+        }
+        return result
+    }
+
+    /// The link under a point relative to the text's origin.
+    func link(at point: NSPoint) -> URL? {
+        linkRects().first { $0.rect.contains(point) }?.url
+    }
+
+    /// The text with its links drawn as links: underlined, in the link color.
+    static func styled(_ message: NSAttributedString) -> NSAttributedString {
+        let out = NSMutableAttributedString(attributedString: message)
+        out.enumerateAttribute(.link, in: NSRange(location: 0, length: out.length)) { value, range, _ in
+            guard value != nil else { return }
+            out.addAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue,
+                               .foregroundColor: NSColor.linkColor], range: range)
+        }
+        return out
+    }
 }
 
 /// One console line, drawn directly rather than built from views.
 ///
 /// Rows are reused as the table scrolls; configuring one swaps its model and
-/// redraws. The time, callsigns and chips are drawn; the message is a text
-/// view so it can be selected and its links clicked.
+/// redraws. Everything is drawn, the message included; selecting text puts a
+/// text view over the row for as long as it is wanted.
 final class ConsoleLineCellView: NSTableCellView, NSTextViewDelegate {
     static let identifier = NSUserInterfaceItemIdentifier("ConsoleLineCell")
     /// Room each side, as the SwiftUI console's content padding gave.
@@ -80,13 +149,18 @@ final class ConsoleLineCellView: NSTableCellView, NSTextViewDelegate {
     private var measurements: ConsoleRowMeasurements?
     private var geometry: ConsoleRowGeometry?
     private var actions = ConsoleTableActions()
-    let messageView = ConsoleMessageTextView()
+    private let text = ConsoleMessageText()
+    /// The message as drawn, links styled; what a selection overlay shows.
+    private(set) var displayedMessage = NSAttributedString()
+    /// While a selection overlay covers this row's message, the row leaves
+    /// the message to it.
+    var hidesMessage = false {
+        didSet { if hidesMessage != oldValue { needsDisplay = true } }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         identifier = Self.identifier
-        messageView.delegate = self
-        addSubview(messageView)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -100,9 +174,9 @@ final class ConsoleLineCellView: NSTableCellView, NSTextViewDelegate {
         self.measurements = measurements
         self.geometry = geometry
         self.actions = actions
-        messageView.textStorage?.setAttributedString(model.message)
-        messageView.toolTip = model.messageHelp
-        messageView.alphaValue = model.alpha
+        hidesMessage = false
+        displayedMessage = ConsoleMessageText.styled(model.message)
+        text.set(displayedMessage, width: geometry.messageRect.width)
         setAccessibilityLabel(model.accessibilityLabel)
         setAccessibilityCustomActions(model.header.compactMap { item in
             guard let call = item.callsign, let onIdentity = actions.onIdentity else { return nil }
@@ -118,6 +192,7 @@ final class ConsoleLineCellView: NSTableCellView, NSTextViewDelegate {
     func update(geometry: ConsoleRowGeometry) {
         guard geometry != self.geometry else { return }
         self.geometry = geometry
+        text.setWidth(geometry.messageRect.width)
         needsLayout = true
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
@@ -126,10 +201,42 @@ final class ConsoleLineCellView: NSTableCellView, NSTextViewDelegate {
 
     private var origin: CGPoint { CGPoint(x: Self.horizontalInset, y: 0) }
 
-    override func layout() {
-        super.layout()
-        guard let geometry else { return }
-        messageView.frame = geometry.messageRect.offsetBy(dx: origin.x, dy: origin.y)
+    /// Where the message sits in this view.
+    var messageFrame: NSRect {
+        geometry.map { $0.messageRect.offsetBy(dx: origin.x, dy: origin.y) } ?? .zero
+    }
+
+    /// Where each link sits in this view.
+    var linkRects: [NSRect] {
+        let frame = messageFrame
+        return text.linkRects().map { $0.rect.offsetBy(dx: frame.minX, dy: frame.minY) }
+    }
+
+    /// The link under a point in this view.
+    func link(at point: NSPoint) -> URL? {
+        let frame = messageFrame
+        guard frame.contains(point) else { return nil }
+        return text.link(at: NSPoint(x: point.x - frame.minX, y: point.y - frame.minY))
+    }
+
+    /// Follows the link under a point, if there is one.
+    func open(at point: NSPoint) -> Bool {
+        guard let url = link(at: point) else { return false }
+        if !follow(url) { NSWorkspace.shared.open(url) }
+        return true
+    }
+
+    /// Handles an in-app link; false for an ordinary one the system opens.
+    private func follow(_ url: URL) -> Bool {
+        if let name = ConsoleFileLink.name(from: url), let onFileName = actions.onFileName {
+            onFileName(name)
+            return true
+        }
+        if let call = ConsoleCallsignLink.callsign(from: url) {
+            actions.onIdentity?(call)
+            return true
+        }
+        return false
     }
 
     // MARK: Drawing
@@ -188,6 +295,10 @@ final class ConsoleLineCellView: NSTableCellView, NSTextViewDelegate {
             image.draw(in: CGRect(x: r.minX + (r.width - size.width) / 2, y: r.minY + (r.height - size.height) / 2,
                                   width: size.width, height: size.height),
                        from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+
+        if !hidesMessage {
+            text.draw(at: geometry.messageRect.origin.applying(.init(translationX: o.x, y: o.y)))
         }
 
         var y = geometry.expansionTop
@@ -293,7 +404,10 @@ final class ConsoleLineCellView: NSTableCellView, NSTextViewDelegate {
 
     override func resetCursorRects() {
         super.resetCursorRects()
-        guard let model, let geometry, actions.onIdentity != nil else { return }
+        guard let model, let geometry else { return }
+        addCursorRect(messageFrame, cursor: .iBeam)
+        for rect in linkRects { addCursorRect(rect, cursor: .pointingHand) }
+        guard actions.onIdentity != nil else { return }
         for (item, rect) in zip(model.header, geometry.headerRects) where item.callsign != nil {
             addCursorRect(rect.offsetBy(dx: origin.x, dy: origin.y), cursor: .pointingHand)
         }
@@ -312,23 +426,19 @@ final class ConsoleLineCellView: NSTableCellView, NSTextViewDelegate {
         if let symbol = model.symbol, let rect = geometry.symbolRect {
             addToolTip(rect.offsetBy(dx: o.x, dy: o.y), owner: symbol.help as NSString, userData: nil)
         }
+        if let help = model.messageHelp {
+            addToolTip(messageFrame, owner: help as NSString, userData: nil)
+        }
     }
 
     // MARK: Links
 
+    /// A link clicked in the selection overlay over this row.
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
         guard let url else { return false }
-        if let name = ConsoleFileLink.name(from: url), let onFileName = actions.onFileName {
-            onFileName(name)
-            return true
-        }
-        if let call = ConsoleCallsignLink.callsign(from: url) {
-            actions.onIdentity?(call)
-            return true
-        }
-        // Anything else is an ordinary link: the system opens it.
-        return false
+        // Anything not ours is an ordinary link: the system opens it.
+        return follow(url)
     }
 }
 

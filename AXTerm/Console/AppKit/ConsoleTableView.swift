@@ -74,6 +74,47 @@ enum ConsoleTableItem {
 /// The table itself: it lets a click reach the row's own handling, and the
 /// message's text view, instead of turning it into a row selection.
 final class ConsoleNSTableView: NSTableView {
+    /// The text view over the row being selected in, if any. A subview of the
+    /// table rather than of the row's cell, so it stays over the right row
+    /// when cells are reused as the table scrolls.
+    private(set) weak var selectionOverlay: ConsoleSelectionTextView?
+    private var selectionRow: Int?
+
+    /// Puts a selectable copy of a row's message over it. Only ever from a
+    /// click, never while the table is building rows (`ConsoleSelectionTextView`).
+    @discardableResult
+    func beginSelection(inRow row: Int) -> NSTextView? {
+        endSelection()
+        guard let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? ConsoleLineCellView else { return nil }
+        let overlay = ConsoleSelectionTextView()
+        overlay.textStorage?.setAttributedString(cell.displayedMessage)
+        overlay.frame = cell.convert(cell.messageFrame, to: self)
+        overlay.delegate = cell
+        overlay.onResign = { [weak self, weak overlay] in
+            // After focus has finished moving, not during it.
+            DispatchQueue.main.async {
+                guard let self, let overlay, self.selectionOverlay === overlay else { return }
+                self.endSelection()
+            }
+        }
+        addSubview(overlay, positioned: .above, relativeTo: nil)
+        cell.hidesMessage = true
+        selectionOverlay = overlay
+        selectionRow = row
+        return overlay
+    }
+
+    /// Takes the overlay away and gives the row its message back.
+    func endSelection() {
+        if let row = selectionRow, row < numberOfRows,
+           let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? ConsoleLineCellView {
+            cell.hidesMessage = false
+        }
+        selectionOverlay?.removeFromSuperview()
+        selectionOverlay = nil
+        selectionRow = nil
+    }
+
     override func validateProposedFirstResponder(_ responder: NSResponder, for event: NSEvent?) -> Bool {
         true
     }
@@ -83,14 +124,19 @@ final class ConsoleNSTableView: NSTableView {
         let row = self.row(at: point)
         if row >= 0, let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? ConsoleLineCellView {
             let inCell = cell.convert(event.locationInWindow, from: nil)
-            if cell.messageView.frame.contains(inCell) {
-                window?.makeFirstResponder(cell.messageView)
-                cell.messageView.mouseDown(with: event)
+            if cell.open(at: inCell) {
+                return
+            }
+            if cell.messageFrame.contains(inCell), let overlay = beginSelection(inRow: row) {
+                window?.makeFirstResponder(overlay)
+                overlay.mouseDown(with: event)
             } else {
+                endSelection()
                 cell.mouseDown(with: event)
             }
             return
         }
+        endSelection()
         super.mouseDown(with: event)
     }
 
@@ -100,7 +146,8 @@ final class ConsoleNSTableView: NSTableView {
         guard row >= 0, let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? ConsoleLineCellView
         else { return nil }
         let inCell = cell.convert(event.locationInWindow, from: nil)
-        if cell.messageView.frame.contains(inCell), let menu = cell.messageView.menu(for: event) {
+        if let overlay = selectionOverlay, selectionRow == row, cell.messageFrame.contains(inCell),
+           let menu = overlay.menu(for: event) {
             if let rowMenu = cell.menu(for: event), let copyLine = rowMenu.items.first {
                 rowMenu.removeItem(copyLine)
                 menu.insertItem(copyLine, at: 0)
@@ -288,6 +335,9 @@ struct ConsoleTableView: NSViewRepresentable {
             if lastWidth == 0 { lastWidth = contentWidth }
 
             let anchor = sticks ? nil : visibleAnchor()
+            // A selection is over one row's text as it was; rows are about to
+            // change, so it goes first.
+            (table as? ConsoleNSTableView)?.endSelection()
             // Rows changing under the view move it; that is not the reader.
             isProgrammaticScroll = true
             if layoutChanged || table.numberOfRows == 0 {
@@ -365,6 +415,7 @@ struct ConsoleTableView: NSViewRepresentable {
 
         private func toggleExpanded(_ id: UUID) {
             guard let table, let index = items.firstIndex(where: { $0.id == .line(id) }) else { return }
+            (table as? ConsoleNSTableView)?.endSelection()
             if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.15
@@ -613,6 +664,7 @@ struct ConsoleTableView: NSViewRepresentable {
             let width = contentWidth
             guard width != lastWidth, !items.isEmpty else { return }
             lastWidth = width
+            (table as? ConsoleNSTableView)?.endSelection()
             let sticks = isFollowing && autoScroll
             let anchor = sticks ? nil : (readerAnchor ?? visibleAnchor())
             isProgrammaticScroll = true

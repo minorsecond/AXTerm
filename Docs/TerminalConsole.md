@@ -15,8 +15,24 @@ helped, but most of the cost was SwiftUI laying out and drawing the row views
 themselves.
 
 The table keeps a screenful of row views and swaps what they show. A row draws
-its time, callsigns and chips directly. Its message is a real `NSTextView`, so
-text can be selected and links clicked as before.
+everything directly, its message included, with its own TextKit layout
+(`ConsoleMessageText`). Links are found under the pointer by that layout, and
+get the pointing-hand cursor.
+
+To select text, a click into a message puts one `ConsoleSelectionTextView` over
+that row (`ConsoleNSTableView.beginSelection`), and the row stops drawing its
+own copy. The overlay is a subview of the table, not of the row's cell, so a
+cell reused by scrolling never carries it to the wrong row. It goes away when
+focus moves on, or before the table changes its rows or its width.
+
+Rows hold no text view on purpose. The first build gave every row one and set
+its text when the table built the row. Changing a text view's text moves its
+selection, AppKit tells accessibility clients (Magnet, AltTab, a screen reader)
+that it moved, and a client that then asks the table for its rows, while the
+table is still building this one, makes NSTableView throw. A (705) quit that
+way during the park test (2026-10-10). `ConsoleRowTextTests` checks that no row
+holds a text view, that drawn links still open, and that the overlay comes and
+goes as it should.
 
 `ConsoleScrollBenchmark` hosts the console over 1,000 APRS lines and times a
 scroll step. The SwiftUI list took about 5.5 to 6 ms a step; the table takes
