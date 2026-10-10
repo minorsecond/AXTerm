@@ -17,9 +17,15 @@ struct BulkTransferRow: View {
     let onPause: () -> Void
     let onResume: () -> Void
     let onCancel: () -> Void
+    /// The protocols Send Again offers; empty hides it.
+    var resendChoices: [TransferProtocolType] = []
+    /// A declined AXDP offer: the row offers YAPP in one tap.
+    var offersYAPPInstead = false
+    var onResend: (TransferProtocolType) -> Void = { _ in }
 
     @State private var showDetails = false
     @State private var confirmingCancel = false
+    @State private var confirmingResend = false
 
     var body: some View {
         // A running transfer is redrawn every second, so a receiver that
@@ -118,6 +124,28 @@ struct BulkTransferRow: View {
             }
             .buttonStyle(.borderless)
             .help("Resume transfer")
+        }
+
+        if !resendChoices.isEmpty {
+            Button {
+                confirmingResend = true
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    #if os(iOS)
+                    .iconHitTarget(44)
+                    #endif
+            }
+            .buttonStyle(.borderless)
+            .help("Send this file again")
+            .accessibilityLabel("Send Again")
+            .confirmationDialog(resendPrompt.title, isPresented: $confirmingResend, titleVisibility: .visible) {
+                ForEach(resendPrompt.options, id: \.label) { option in
+                    Button(option.label) { onResend(option.transferProtocol) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(resendPrompt.message)
+            }
         }
 
         if transfer.canCancel {
@@ -272,6 +300,15 @@ struct BulkTransferRow: View {
                     Text(reason)
                         .font(.caption)
                         .foregroundStyle(transfer.wasDeclined ? Color.secondary : Color.red)
+                    // A mailbox that takes uploads by YAPP only declines an
+                    // AXDP offer; one tap sends the same file by YAPP (home
+                    // retest finding 10).
+                    if offersYAPPInstead {
+                        Spacer(minLength: 8)
+                        Button("Send with YAPP Instead") { onResend(.yapp) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
                 }
             }
         }
@@ -279,6 +316,10 @@ struct BulkTransferRow: View {
         .padding(.horizontal, 12)
         .background(backgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var resendPrompt: ResendTransferPrompt {
+        ResendTransferPrompt(fileName: transfer.fileName, destination: transfer.destination, choices: resendChoices)
     }
 
     /// Whether the row offers the saved file: a completed one, or a failed
@@ -697,6 +738,10 @@ struct BulkTransferListView: View {
     let onAddFile: () -> Void
     var onAcceptIncoming: ((UUID) -> Void)?
     var onDeclineIncoming: ((UUID) -> Void)?
+    /// Send Again (`SessionCoordinator.resendChoices`, `resend`).
+    var resendChoices: (UUID) -> [TransferProtocolType] = { _ in [] }
+    var offersYAPPInstead: (UUID) -> Bool = { _ in false }
+    var onResend: ((UUID, TransferProtocolType) -> Void)?
     @AppStorage("transfers.sort") private var sort = ListSort.natural(TransferSortKey.date)
 
     /// Offers waiting for this operator, shown with Accept and Decline so
@@ -812,7 +857,10 @@ struct BulkTransferListView: View {
                                         transfer: transfer,
                                         onPause: { },
                                         onResume: { },
-                                        onCancel: { }
+                                        onCancel: { },
+                                        resendChoices: resendChoices(transfer.id),
+                                        offersYAPPInstead: offersYAPPInstead(transfer.id),
+                                        onResend: { onResend?(transfer.id, $0) }
                                     )
                                     .id(Self.rowIdentity(for: transfer))
                                 }

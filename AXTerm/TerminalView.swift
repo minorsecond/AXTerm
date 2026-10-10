@@ -5399,6 +5399,11 @@ struct TerminalView: View {
             },
             onDeclineIncoming: { id in
                 sessionCoordinator.declineIncomingTransfer(id)
+            },
+            resendChoices: { sessionCoordinator.resendChoices(for: $0) },
+            offersYAPPInstead: { sessionCoordinator.offersYAPPInstead(for: $0) },
+            onResend: { id, transferProtocol in
+                if let error = sessionCoordinator.resend(id, using: transferProtocol) { transferError = error }
             }
         )
     }

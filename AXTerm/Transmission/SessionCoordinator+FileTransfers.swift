@@ -533,3 +533,68 @@ extension SessionCoordinator {
         }
     }
 }
+
+// MARK: - Sending a file again
+
+/// What a sent file needs to go again: its bytes as read when it was sent,
+/// so a file moved or edited since cannot change what "again" means.
+nonisolated struct TransferResendSource: Sendable {
+    let fileName: String
+    let data: Data
+    let path: DigiPath
+    let compressionSettings: TransferCompressionSettings
+}
+
+extension SessionCoordinator {
+    /// How many sent files are held for Send Again. Each is a file the
+    /// operator sent over packet, so a few of them are small.
+    static let resendLimit = 10
+
+    func rememberForResend(_ id: UUID, _ source: TransferResendSource) {
+        resendSources[id] = source
+        resendOrder.append(id)
+        while resendOrder.count > Self.resendLimit {
+            resendSources.removeValue(forKey: resendOrder.removeFirst())
+        }
+    }
+
+    /// The protocols a finished outbound transfer can go again by: its own,
+    /// and YAPP as well for an AXDP transfer while the link is up (home
+    /// retest findings 5 and 10). Empty while it runs, for a received file,
+    /// or when its bytes are no longer held.
+    func resendChoices(for id: UUID) -> [TransferProtocolType] {
+        guard let transfer = transfers.first(where: { $0.id == id }),
+              transfer.direction == .outbound, transfer.status.isTerminal,
+              resendSources[id] != nil else { return [] }
+        var choices = [transfer.transferProtocol]
+        if transfer.transferProtocol == .axdp, isConnected(to: transfer.destination) {
+            choices.append(.yapp)
+        }
+        return choices
+    }
+
+    /// Whether the row should offer Send with YAPP Instead: an AXDP offer
+    /// the far end declined, which a mailbox that takes YAPP only does.
+    func offersYAPPInstead(for id: UUID) -> Bool {
+        guard let transfer = transfers.first(where: { $0.id == id }), transfer.wasDeclined else { return false }
+        return resendChoices(for: id).contains(.yapp)
+    }
+
+    /// Sends a finished transfer's file again, to the same station by the
+    /// same path, as a new transfer. By its own protocol unless another is
+    /// given. Returns why it cannot start, or nil.
+    @discardableResult
+    func resend(_ id: UUID, using transferProtocol: TransferProtocolType? = nil) -> String? {
+        guard let transfer = transfers.first(where: { $0.id == id }), transfer.direction == .outbound,
+              let source = resendSources[id] else {
+            return "That file is no longer held. Choose it again to send it."
+        }
+        return startTransfer(to: transfer.destination, fileName: source.fileName, data: source.data,
+                             path: source.path, transferProtocol: transferProtocol ?? transfer.transferProtocol,
+                             compressionSettings: source.compressionSettings)
+    }
+
+    private func isConnected(to destination: String) -> Bool {
+        sessionManager.connectedSession(withPeer: CallsignNormalizer.toAddress(destination)) != nil
+    }
+}

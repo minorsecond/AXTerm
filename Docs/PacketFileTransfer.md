@@ -233,6 +233,22 @@ since that text arrives on an AX.25 session.
   stations. A CN sent then left the sender showing Canceled while the
   receiver had the file (smoke run 2026-10-03-1, issue 60).
 
+## Sending a file again
+
+A finished transfer the operator sent (completed, canceled, failed or
+declined) has a Send Again button. It asks first, since the file goes on the
+air again, and starts a new transfer of the same bytes to the same station by
+the same path; the old row stays as it was. The coordinator keeps the bytes of
+the last ten files sent (`SessionCoordinator.resendSources`), read when each
+was first sent, so a file moved or edited since does not change what goes.
+After a relaunch, or for an older file, the file has to be chosen again.
+
+For an AXDP transfer the question also offers YAPP while the link is up. A
+mailbox that takes uploads by YAPP only declines an AXDP offer, so a declined
+AXDP row shows Send with YAPP Instead beside the reason, which sends the same
+file by YAPP in one tap. Both came from the home retest (2026-10-10, findings
+5 and 10). `TransferResendTests` and `ResendTransferPromptTests` cover them.
+
 ## When a transfer goes quiet or the link drops
 
 A transfer riding a connected session fails the moment that session closes

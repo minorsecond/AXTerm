@@ -384,6 +384,11 @@ final class SessionCoordinator: ObservableObject {
     /// File data cache for active transfers (keyed by transfer ID)
     var transferFileData: [UUID: Data] = [:]
 
+    /// What the most recent sent files need to go again, by transfer ID,
+    /// oldest first in `resendOrder` (`resend(_:using:)`).
+    var resendSources: [UUID: TransferResendSource] = [:]
+    var resendOrder: [UUID] = []
+
     /// Session IDs for AXDP transfers (keyed by transfer ID)
     var transferSessionIds: [UUID: UInt32] = [:]
 
@@ -5632,6 +5637,24 @@ final class SessionCoordinator: ObservableObject {
         path: DigiPath = DigiPath(),
         transferProtocol: TransferProtocolType = .axdp,
         compressionSettings: TransferCompressionSettings = .useGlobal
+    ) -> String? {
+        let known = Set(transfers.map(\.id))
+        let error = beginTransfer(to: destination, fileName: fileName, data: originalFileData, path: path,
+                                  transferProtocol: transferProtocol, compressionSettings: compressionSettings)
+        if error == nil, let started = transfers.last(where: { $0.direction == .outbound && !known.contains($0.id) }) {
+            rememberForResend(started.id, TransferResendSource(
+                fileName: fileName, data: originalFileData, path: path, compressionSettings: compressionSettings))
+        }
+        return error
+    }
+
+    private func beginTransfer(
+        to destination: String,
+        fileName: String,
+        data originalFileData: Data,
+        path: DigiPath,
+        transferProtocol: TransferProtocolType,
+        compressionSettings: TransferCompressionSettings
     ) -> String? {
         if let error = validateProtocolRequirements(for: destination, protocol: transferProtocol) {
             return error
