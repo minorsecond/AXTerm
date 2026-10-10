@@ -66,6 +66,20 @@ final class BBSTransferTests: XCTestCase {
     /// Builds the mailbox, connects the caller, and skips the first-call
     /// interview the way an uninterested caller would, with `A`.
     private func connect(stallTimeout: TimeInterval = 180) async throws {
+        buildService(stallTimeout: stallTimeout)
+        caller.onBytes = nil
+        caller.clearReceived()
+        caller.connect()
+        let greeted = await caller.pump { self.caller.text.contains("not met you before") }
+        XCTAssertTrue(greeted, "the mailbox answered: \(caller.text)")
+        caller.type("A")
+        let prompted = await caller.pump { self.caller.text.hasSuffix(">\r") }
+        XCTAssertTrue(prompted, "at the prompt: \(caller.text)")
+        caller.clearReceived()
+    }
+
+    /// Builds the mailbox and the caller without calling.
+    private func buildService(stallTimeout: TimeInterval = 180) {
         if service == nil {
             let simulated = BBSSimulatedCaller(manager: coordinator.sessionManager,
                                                address: callerAddress,
@@ -95,15 +109,6 @@ final class BBSTransferTests: XCTestCase {
                 now: { [unowned self] in Date().addingTimeInterval(self.clockOffset) })
             service.attach()
         }
-        caller.onBytes = nil
-        caller.clearReceived()
-        caller.connect()
-        let greeted = await caller.pump { self.caller.text.contains("not met you before") }
-        XCTAssertTrue(greeted, "the mailbox answered: \(caller.text)")
-        caller.type("A")
-        let prompted = await caller.pump { self.caller.text.hasSuffix(">\r") }
-        XCTAssertTrue(prompted, "at the prompt: \(caller.text)")
-        caller.clearReceived()
     }
 
     /// Types a command and waits for the prompt after its answer.
@@ -277,6 +282,31 @@ final class BBSTransferTests: XCTestCase {
         try await connect()
         XCTAssertNotNil(service.live)
         XCTAssertNil(service.currentRefusal(), "busy, not off the air")
+    }
+
+    /// The header asked whether the mailbox would answer on the first radio
+    /// slot. On A that is a switched-off radio with the mailbox off, so it
+    /// said "Off air · Switched on, but not answering" while the mailbox
+    /// answered on the IC-705 (home retest, 2026-10-10). The question is
+    /// whether any enabled radio answers.
+    func testTheMailboxIsOnAirWhenAnyEnabledRadioAnswers() {
+        let station = AppSettingsStore(defaults: TestDefaults.make("bbs-refusal-any-radio"))
+        let primary = station.radios[0].id
+        station.updateRadio(primary) { $0.enabled = false; $0.answersMailbox = false }
+        let radio705 = station.addRadio().id
+        station.updateRadio(radio705) { $0.enabled = true; $0.answersMailbox = true; RadioChannel.packet.apply(to: &$0) }
+        coordinator.appSettings = station
+        buildService()
+        XCTAssertNil(service.currentRefusal())
+    }
+
+    func testTheMailboxRefusesWhenNoEnabledRadioAnswers() {
+        let station = AppSettingsStore(defaults: TestDefaults.make("bbs-refusal-no-radio"))
+        let primary = station.radios[0].id
+        station.updateRadio(primary) { $0.enabled = true; $0.answersMailbox = false }
+        coordinator.appSettings = station
+        buildService()
+        XCTAssertNotNil(service.currentRefusal())
     }
 
     /// A finished download records its rate, so the next listing for that

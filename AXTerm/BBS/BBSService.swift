@@ -325,7 +325,15 @@ final class BBSService: ObservableObject {
         // Asked as if no one were calling: a mailbox serving a caller is
         // busy, not off the air (park rehearsal 2026-10-08, the header said
         // "Off air" all through a call).
-        let decision = listener(servingCaller: false).decide(called: answeringCallsign, isInitiator: false)
+        var listener = listener(servingCaller: false)
+        // Asked of every enabled radio, not the first slot: on a station whose
+        // first radio is switched off, that slot said "not answering" while
+        // the mailbox answered on another radio (home retest, 2026-10-10).
+        // The same rule the page's "Runs on" line reads.
+        if let radios = coordinator.appSettings?.radios {
+            listener.servesThisRadio = !ServiceRadios.mailbox(radios).isEmpty
+        }
+        let decision = listener.decide(called: answeringCallsign, isInitiator: false)
         return decision.isAnswer ? nil : decision.explanation
     }
 
