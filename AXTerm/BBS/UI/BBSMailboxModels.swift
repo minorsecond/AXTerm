@@ -522,6 +522,31 @@ nonisolated enum BBSAddFilesSummary {
     }
 }
 
+/// What the operator is told after moving uploads into an area. As for
+/// added files, a renamed or refused file is said by name.
+nonisolated enum BBSUploadMoveReport {
+    static func message(_ outcomes: [BBSFileLibrary.AddOutcome], area: String) -> String? {
+        var moved: [String] = []
+        var lines: [String] = []
+        for outcome in outcomes {
+            switch outcome {
+            case .added(let name):
+                moved.append(name)
+            case .renamed(let from, let to):
+                lines.append("Moved \(from) to \(area) as \(to), because \(area) already has a file called \(from).")
+            case .refused(let name, let reason):
+                lines.append("\(name) was not moved: \(reason).")
+            }
+        }
+        if moved.count == 1 {
+            lines.insert("Moved \(moved[0]) to \(area). Callers can list it now.", at: 0)
+        } else if moved.count > 1 {
+            lines.insert("Moved \(moved.count) files to \(area). Callers can list them now.", at: 0)
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+}
+
 // MARK: - Transfers
 
 /// The transfer running on the live call, as the operator's panel shows it.

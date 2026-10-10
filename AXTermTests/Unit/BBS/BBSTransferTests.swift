@@ -637,6 +637,16 @@ final class BBSTransferTests: XCTestCase {
                      "uploads are never served")
     }
 
+    /// The BBS window lists who sent each upload (home retest, finding 8).
+    func testAnUploadRecordsWhoSentIt() async throws {
+        enableUploads()
+        try await connect()
+        _ = try await upload("from-w0arp.bin", binary(300, seed: 3))
+        let listed = try XCTUnwrap(library.uploads.first { $0.name == "from-w0arp.bin" })
+        XCTAssertEqual(listed.from, "W0ARP-1")
+        XCTAssertEqual(listed.byteCount, 300)
+    }
+
     /// The confirmation waits until YAPP is done. On 2026-10-01 the mailbox
     /// wrote "Received ..." the moment it acknowledged end of file, while
     /// the caller's AXTerm was waiting for the acknowledgment of end of

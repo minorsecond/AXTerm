@@ -777,6 +777,26 @@ to every other caller the moment the transfer finished — using the operator's
 station to distribute something nobody had looked at. They sit in the inbox
 until the operator moves them.
 
+**The window lists them.** The Files sidebar has a Received row under the
+shared areas, with the inbox's name and how many uploads wait in it. It opens
+a list of the uploads, newest first, with each file's size, when it arrived
+and who sent it (`BBSFileLibrary.uploads`). The list changes the moment the
+mailbox saves a file. The mailbox records the caller and the time in
+`bbs_uploads` (migration v39), keyed by the file's name in the inbox; a file
+put in the folder some other way has no sender and shows its own date. A
+record whose file has gone is dropped at the next refresh, so a later file of
+the same name is never credited to the earlier caller.
+
+From the list the operator can open a file, Quick Look it, show it in Finder
+(Share on iOS), move it into an area, or delete it. Move to Area is how an
+upload gets shared; like adding a file, it never replaces one already there
+(`photo.jpg` goes in as `photo-2.jpg`), and the window says what happened.
+Delete asks first. On the Mac the file goes to the Trash; iOS has no Trash an
+app can use, so there it is removed, and the confirmation says so. Shared
+areas gained a Modified column at the same time. Before this the window
+showed only "docs · 2 files", and the iPad's photo at the home retest
+(2026-10-10, finding 8) took Finder to find. `BBSUploadsTests` covers it.
+
 `BBSUploadPolicy` decides, from the transfer's header, before a byte is
 written:
 

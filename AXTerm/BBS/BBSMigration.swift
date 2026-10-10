@@ -96,6 +96,21 @@ extension DatabaseManager {
         }
     }
 
+    /// Who sent each upload, and when (migration v39).
+    ///
+    /// The file itself is the record of what arrived; this adds what the
+    /// folder cannot hold, so the BBS window can list uploads by sender
+    /// (home retest finding 8). Keyed by the file's name in the inbox, which
+    /// is unique there. A file with no row was put in the folder some other
+    /// way.
+    nonisolated static func createBBSUploads(_ db: Database) throws {
+        try db.create(table: "bbs_uploads") { t in
+            t.primaryKey("name", .text)
+            t.column("caller", .text).notNull()
+            t.column("receivedAt", .datetime).notNull()
+        }
+    }
+
     /// Withdraws the address/phone/email fields (migration v22).
     ///
     /// Those three were briefly collectable and should not have been: packet

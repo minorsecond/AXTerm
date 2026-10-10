@@ -1311,7 +1311,7 @@ final class BBSService: ObservableObject {
     private func storeUpload(id: UUID, _ data: Data, _ metadata: TransferFileMetadata) {
         guard running?.id == id else { return }
         guard let safe = BBSUploadPolicy.sanitize(metadata.fileName),
-              let saved = library?.saveUpload(name: safe, data: data) else {
+              let saved = library?.saveUpload(name: safe, data: data, from: live?.callsign) else {
             write(["That file could not be saved."])
             note("an upload could not be saved")
             return

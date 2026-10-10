@@ -179,3 +179,20 @@ nonisolated struct BBSFileIndex: Equatable, Sendable {
         }
     }
 }
+
+/// A file in the upload inbox (`BBSFileLibrary.uploads`).
+nonisolated struct BBSUpload: Equatable, Sendable, Identifiable {
+    /// Its name in the inbox.
+    var name: String
+    var byteCount: Int
+    /// When the mailbox took it, or for a file put in the folder some other
+    /// way, the file's own date.
+    var receivedAt: Date
+    /// The caller who sent it; nil for a file that did not come from one.
+    var from: String?
+    var id: String { name }
+
+    /// The Files sidebar tag for the uploads list. Area names are normalized
+    /// to letters, digits and dashes, so this can never be one.
+    static let listTag = "\u{1}uploads"
+}

@@ -263,6 +263,7 @@ final class BBSFileLibrary: ObservableObject {
             inboxName = nil
             inboxBytes = 0
             inboxCount = 0
+            uploads = []
             inboxUnreachable = chosen
             return
         }
@@ -272,19 +273,36 @@ final class BBSFileLibrary: ObservableObject {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey, .creationDateKey,
+                                         .contentModificationDateKey]
         let entries = (try? FileManager.default.contentsOfDirectory(
-            at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+            at: url, includingPropertiesForKeys: Array(keys),
             options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants])) ?? []
+        let senders = (try? store?.uploadSenders()) ?? [:]
         var bytes = 0
-        var count = 0
+        var listed: [BBSUpload] = []
         for entry in entries {
-            guard let values = try? entry.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+            guard let values = try? entry.resourceValues(forKeys: keys),
                   values.isRegularFile == true else { continue }
-            bytes += values.fileSize ?? 0
-            count += 1
+            let size = values.fileSize ?? 0
+            bytes += size
+            let name = entry.lastPathComponent
+            let sender = senders[name]
+            listed.append(BBSUpload(
+                name: name, byteCount: size,
+                receivedAt: sender?.receivedAt ?? values.creationDate ?? values.contentModificationDate ?? Date(),
+                from: sender?.caller))
+        }
+        // A sender recorded for a file that has since gone (moved or
+        // deleted in Finder) must not be credited with a later file of the
+        // same name.
+        let present = Set(listed.map(\.name))
+        for name in senders.keys where !present.contains(name) {
+            try? store?.forgetUpload(name: name)
         }
         inboxBytes = bytes
-        inboxCount = count
+        inboxCount = listed.count
+        uploads = listed.sorted { ($0.receivedAt, $1.name) > ($1.receivedAt, $0.name) }
     }
 
     private func inboxURL() -> URL? {
@@ -303,11 +321,94 @@ final class BBSFileLibrary: ObservableObject {
         return url
     }
 
-    /// Writes an accepted upload, never over something already there.
+    // MARK: - Uploads
+
+    /// What is in the inbox, newest first, with who sent each file when the
+    /// mailbox took it (home retest finding 8). Refreshed whenever the inbox
+    /// is, so an upload shows the moment it is saved.
+    @Published private(set) var uploads: [BBSUpload] = []
+
+    /// Where Delete puts a file. The Trash on the Mac, so a mistake can be
+    /// undone; iOS has no Trash an app can use, so there it is removed, and
+    /// the confirmation says so.
+    var trash: (URL) throws -> Void = { url in
+        #if os(macOS)
+        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        #else
+        try FileManager.default.removeItem(at: url)
+        #endif
+    }
+
+    nonisolated enum UploadError: LocalizedError, Equatable {
+        case notInInbox(String)
+        var errorDescription: String? {
+            switch self {
+            case .notInInbox(let name): return "\(name) is no longer in the upload folder."
+            }
+        }
+    }
+
+    /// An upload's file, held open for Quick Look, Open and Show in Finder.
+    /// The inbox's security scope stays held from then on: a preview reads
+    /// the file after this returns.
+    func uploadURL(named name: String) -> URL? {
+        guard let base = inboxURL() else { return nil }
+        if heldInbox != base {
+            heldInbox?.stopAccessingSecurityScopedResource()
+            heldInbox = base.startAccessingSecurityScopedResource() ? base : nil
+        }
+        return Self.inboxFile(named: name, in: base)
+    }
+    private var heldInbox: URL?
+
+    /// Moves an upload into an area, which shares it. Like a file the
+    /// operator adds, it never replaces one already there.
+    func moveUpload(named name: String, toArea areaName: String) -> AddOutcome {
+        guard let base = inboxURL() else {
+            return .refused(name: name, reason: "the upload folder cannot be reached")
+        }
+        let scoped = base.startAccessingSecurityScopedResource()
+        defer { if scoped { base.stopAccessingSecurityScopedResource() } }
+        guard let source = Self.inboxFile(named: name, in: base) else {
+            return .refused(name: name, reason: "it is no longer in the upload folder")
+        }
+        let size = (try? source.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let outcome = place(name, size: size, in: areaName) { destination in
+            try FileManager.default.moveItem(at: source, to: destination)
+        }
+        if case .refused = outcome {} else { try? store?.forgetUpload(name: name) }
+        rescan()
+        return outcome
+    }
+
+    /// Deletes an upload (`trash`).
+    func trashUpload(named name: String) throws {
+        guard let base = inboxURL() else { throw UploadError.notInInbox(name) }
+        let scoped = base.startAccessingSecurityScopedResource()
+        defer { if scoped { base.stopAccessingSecurityScopedResource() } }
+        guard let url = Self.inboxFile(named: name, in: base) else { throw UploadError.notInInbox(name) }
+        try trash(url)
+        try? store?.forgetUpload(name: name)
+        refreshInbox()
+    }
+
+    /// The file of that name directly in the inbox, or nil. A name with a
+    /// path in it never reaches outside the folder.
+    private static func inboxFile(named name: String, in base: URL) -> URL? {
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.hasPrefix(".") else { return nil }
+        let url = base.appendingPathComponent(name)
+        guard url.deletingLastPathComponent().standardizedFileURL == base.standardizedFileURL,
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return nil }
+        return url
+    }
+
+    /// Writes an accepted upload, never over something already there, and
+    /// records who sent it.
     ///
     /// - Parameter name: already through `BBSUploadPolicy.sanitize`.
     /// - Returns: the name it ended up with, or nil if it could not be written.
-    func saveUpload(name: String, data: Data) -> String? {
+    @discardableResult
+    func saveUpload(name: String, data: Data, from caller: String? = nil, at date: Date = Date()) -> String? {
         guard let base = inboxURL() else { return nil }
         let scoped = base.startAccessingSecurityScopedResource()
         defer { if scoped { base.stopAccessingSecurityScopedResource() } }
@@ -321,6 +422,7 @@ final class BBSFileLibrary: ObservableObject {
         guard url.deletingLastPathComponent().standardizedFileURL
                 == base.standardizedFileURL else { return nil }
         guard (try? data.write(to: url, options: .withoutOverwriting)) != nil else { return nil }
+        if let caller { try? store?.recordUpload(name: final, caller: caller, at: date) }
 
         refreshInbox()
         return final

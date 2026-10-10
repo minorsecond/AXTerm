@@ -6,6 +6,7 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import QuickLook
 
 // The Mac pane. The iOS screens are BBSAreaListScreen and BBSFileListScreen;
 // what both decide lives in BBSMailboxModels and BBSFilePicking.
@@ -23,7 +24,17 @@ struct BBSFilesPane: View {
     /// Same figure the shell quotes callers, so the two never disagree.
     let bytesPerSecond: Double
 
-    @State private var selectedArea: String?
+    /// The sidebar's selection: an area's name, or `uploadsTag`.
+    @State private var selection: String?
+    /// The uploads table's selection, by file name.
+    @State private var uploadSelection = Set<BBSUpload.ID>()
+    @State private var previewURL: URL?
+    /// Uploads waiting for the operator to confirm Move to Trash.
+    @State private var trashing: [String] = []
+
+    private static let uploadsTag = BBSUpload.listTag
+    private var selectedArea: String? { selection == Self.uploadsTag ? nil : selection }
+    private var showingUploads: Bool { selection == Self.uploadsTag }
     @State private var editing: BBSSharedFile?
     @State private var draftAbout = ""
     /// What the one importer is choosing, or nil when it is closed. See
@@ -110,7 +121,7 @@ struct BBSFilesPane: View {
 
     private var areaList: some View {
         VStack(spacing: 0) {
-            if library.index.areas.isEmpty {
+            if library.index.areas.isEmpty && !library.hasInbox {
                 VStack(spacing: 8) {
                     Image(systemName: "folder.badge.questionmark")
                         .font(.system(size: 22))
@@ -125,59 +136,70 @@ struct BBSFilesPane: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(library.index.areas, selection: $selectedArea) { area in
-                    let model = BBSAreaRowModel.make(
-                        area, files: library.index.files(in: area.name))
-                    let missing = library.unreachableAreas.contains(area.name)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Text(model.name)
-                                .font(.system(.callout, design: .monospaced))
-                                .fontWeight(.medium)
-                            if missing {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                                    .accessibilityLabel("Folder missing")
+                List(selection: $selection) {
+                    if !library.index.areas.isEmpty {
+                        Section("Shared") {
+                            ForEach(library.index.areas) { area in
+                                let model = BBSAreaRowModel.make(
+                                    area, files: library.index.files(in: area.name))
+                                let missing = library.unreachableAreas.contains(area.name)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 4) {
+                                        Text(model.name)
+                                            .font(.system(.callout, design: .monospaced))
+                                            .fontWeight(.medium)
+                                        if missing {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .font(.caption)
+                                                .foregroundStyle(.orange)
+                                                .accessibilityLabel("Folder missing")
+                                        }
+                                    }
+                                    if missing {
+                                        // Said on the row, with the fix beside it: an
+                                        // area that serves nothing because its folder
+                                        // moved looks exactly like an empty one otherwise.
+                                        Text("Folder can no longer be found")
+                                            .font(.caption)
+                                            .foregroundStyle(.orange)
+                                        Button("Choose Folder Again…") {
+                                            picker.begin(.relocate(area: area.name))
+                                        }
+                                        .controlSize(.small)
+                                    } else {
+                                        Text(model.subtitle)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    if !model.about.isEmpty {
+                                        Text(model.about).font(.caption).foregroundStyle(.tertiary)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                                .tag(area.name)
+                                .contextMenu {
+                                    if !missing {
+                                        Button("Add Files to \(area.name)…") {
+                                            picker.begin(.addFiles(area: area.name))
+                                        }
+                                        Button("Add Photos to \(area.name)…") {
+                                            photoArea = area.name
+                                        }
+                                    }
+                                    Button("Choose Folder Again…") {
+                                        picker.begin(.relocate(area: area.name))
+                                    }
+                                    Divider()
+                                    Button("Stop sharing \(area.name)", role: .destructive) {
+                                        library.removeArea(name: area.name)
+                                    }
+                                }
                             }
-                        }
-                        if missing {
-                            // Said on the row, with the fix beside it: an
-                            // area that serves nothing because its folder
-                            // moved looks exactly like an empty one otherwise.
-                            Text("Folder can no longer be found")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                            Button("Choose Folder Again…") {
-                                picker.begin(.relocate(area: area.name))
-                            }
-                            .controlSize(.small)
-                        } else {
-                            Text(model.subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        if !model.about.isEmpty {
-                            Text(model.about).font(.caption).foregroundStyle(.tertiary)
                         }
                     }
-                    .padding(.vertical, 2)
-                    .tag(area.name)
-                    .contextMenu {
-                        if !missing {
-                            Button("Add Files to \(area.name)…") {
-                                picker.begin(.addFiles(area: area.name))
-                            }
-                            Button("Add Photos to \(area.name)…") {
-                                photoArea = area.name
-                            }
-                        }
-                        Button("Choose Folder Again…") {
-                            picker.begin(.relocate(area: area.name))
-                        }
-                        Divider()
-                        Button("Stop sharing \(area.name)", role: .destructive) {
-                            library.removeArea(name: area.name)
+                    if library.hasInbox {
+                        Section("Received") {
+                            uploadsRow.tag(Self.uploadsTag)
                         }
                     }
                 }
@@ -296,9 +318,15 @@ struct BBSFilesPane: View {
 
     private var fileList: some View {
         VStack(spacing: 0) {
-            fileTable
-            Divider()
-            fileFooter
+            if showingUploads {
+                uploadsTable
+                Divider()
+                uploadsFooter
+            } else {
+                fileTable
+                Divider()
+                fileFooter
+            }
         }
         // Drop files from Finder onto the list to share them in the selected
         // area. Copied, so the originals stay where they were.
@@ -422,6 +450,12 @@ struct BBSFilesPane: View {
                         .foregroundStyle(model.isLongTransfer ? Color.orange : Color.primary)
                 }
                 .width(70)
+                TableColumn("Modified") { file in
+                    Text(file.modifiedAt, format: .dateTime.year().month(.abbreviated).day())
+                        .monospacedDigit()
+                        .help(file.modifiedAt.formatted(date: .complete, time: .shortened))
+                }
+                .width(min: 90, ideal: 100)
                 TableColumn("Description") { file in
                     Text(file.about.isEmpty ? "—" : file.about)
                         .foregroundStyle(file.about.isEmpty ? .tertiary : .primary)
@@ -438,6 +472,171 @@ struct BBSFilesPane: View {
                 editing = file
             }
         }
+    }
+
+    // MARK: - Uploads
+
+    /// The Received row: where uploads land, and how many are waiting.
+    private var uploadsRow: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label {
+                Text(library.inboxName ?? "Uploads")
+                    .font(.system(.callout, design: .monospaced))
+                    .fontWeight(.medium)
+            } icon: {
+                Image(systemName: "tray.and.arrow.down")
+            }
+            Text(library.inboxCount == 0 ? "No uploads"
+                 : "\(library.inboxCount) \(library.inboxCount == 1 ? "upload" : "uploads") · not shared")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+        .badge(library.inboxCount)
+    }
+
+    /// What callers sent, newest first, with who sent it (home retest
+    /// finding 8). Before this the window showed only a count, and an
+    /// upload took Finder to find.
+    @ViewBuilder
+    private var uploadsTable: some View {
+        if library.uploads.isEmpty {
+            VStack(spacing: 6) {
+                Image(systemName: "tray")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.tertiary)
+                Text("No uploads").foregroundStyle(.secondary)
+                Text("Files callers send land in \(library.inboxName ?? "the upload folder"). "
+                     + "They show here as soon as they arrive.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            Table(library.uploads, selection: $uploadSelection) {
+                TableColumn("Name") { upload in
+                    HStack(spacing: 5) {
+                        Image(systemName: "doc")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                        Text(upload.name).font(.system(.body, design: .monospaced))
+                    }
+                }
+                TableColumn("Size") { upload in
+                    Text(BBSFileIndex.size(upload.byteCount)).monospacedDigit()
+                }
+                .width(60)
+                TableColumn("Received") { upload in
+                    Text(upload.receivedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
+                        .monospacedDigit()
+                        .help(upload.receivedAt.formatted(date: .complete, time: .standard))
+                }
+                .width(min: 110, ideal: 130)
+                TableColumn("From") { upload in
+                    if let from = upload.from {
+                        Text(from).font(.system(.body, design: .monospaced))
+                    } else {
+                        Text("—")
+                            .foregroundStyle(.tertiary)
+                            .help("Put in the folder some other way, not sent by a caller")
+                    }
+                }
+                .width(min: 70, ideal: 90)
+            }
+            .contextMenu(forSelectionType: BBSUpload.ID.self) { names in
+                uploadMenu(for: names)
+            } primaryAction: { names in
+                names.forEach(openUpload)
+            }
+            .quickLookPreview($previewURL)
+            .confirmationDialog(trashTitle, isPresented: Binding(get: { !trashing.isEmpty },
+                                                                 set: { if !$0 { trashing = [] } })) {
+                Button("Move to Trash", role: .destructive) {
+                    let names = trashing
+                    trashing = []
+                    trashUploads(names)
+                }
+                Button("Cancel", role: .cancel) { trashing = [] }
+            } message: {
+                Text("Callers never saw \(trashing.count == 1 ? "it" : "them"). "
+                     + "You can put \(trashing.count == 1 ? "it" : "them") back from the Trash in Finder.")
+            }
+        }
+    }
+
+    private var trashTitle: String {
+        trashing.count == 1 ? "Move \(trashing[0]) to the Trash?" : "Move \(trashing.count) uploads to the Trash?"
+    }
+
+    @ViewBuilder
+    private func uploadMenu(for names: Set<BBSUpload.ID>) -> some View {
+        let sorted = names.sorted()
+        if !sorted.isEmpty {
+            Button("Open") { sorted.forEach(openUpload) }
+            Button("Quick Look") { previewURL = sorted.first.flatMap(library.uploadURL(named:)) }
+            Button("Show in Finder") {
+                let urls = sorted.compactMap(library.uploadURL(named:))
+                if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+            }
+            Divider()
+            Menu("Move to Area") {
+                ForEach(library.index.areas.filter { !library.unreachableAreas.contains($0.name) }) { area in
+                    Button(area.name) { moveUploads(sorted, to: area.name) }
+                }
+            }
+            .disabled(library.index.areas.isEmpty)
+            Divider()
+            Button("Move to Trash…", role: .destructive) { trashing = sorted }
+        }
+    }
+
+    private func openUpload(_ name: String) {
+        if let url = library.uploadURL(named: name) { NSWorkspace.shared.open(url) }
+    }
+
+    private func moveUploads(_ names: [String], to area: String) {
+        let outcomes = names.map { library.moveUpload(named: $0, toArea: area) }
+        uploadSelection = []
+        addMessage = BBSUploadMoveReport.message(outcomes, area: area)
+    }
+
+    private func trashUploads(_ names: [String]) {
+        var failed: [String] = []
+        for name in names {
+            do { try library.trashUpload(named: name) } catch { failed.append(error.localizedDescription) }
+        }
+        uploadSelection = []
+        addMessage = failed.isEmpty ? nil : failed.joined(separator: " ")
+    }
+
+    private var uploadsFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let addMessage {
+                HStack(alignment: .top, spacing: 6) {
+                    Text(addMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        self.addMessage = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Dismiss")
+                }
+            }
+            // One literal, so the Markdown renders (smoke run issue 68).
+            Text("Uploads are **not** shared. Move one into an area to offer it to callers.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Sheets

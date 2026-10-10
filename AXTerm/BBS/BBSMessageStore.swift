@@ -95,6 +95,11 @@ nonisolated protocol BBSMessageStore: Sendable {
     func uploadInbox() throws -> Data?
     func setUploadInbox(_ bookmark: Data?) throws
 
+    /// Who sent each file in the inbox, by its name there.
+    func uploadSenders() throws -> [String: (caller: String, receivedAt: Date)]
+    func recordUpload(name: String, caller: String, at date: Date) throws
+    func forgetUpload(name: String) throws
+
     @discardableResult
     func beginCall(callsign: String, at date: Date, radio: RadioID) throws -> Int64
     func appendAction(callId: Int64, action: String) throws
@@ -370,6 +375,31 @@ nonisolated final class SQLiteBBSMessageStore: BBSMessageStore, @unchecked Senda
     func uploadInbox() throws -> Data? {
         try dbQueue.read { db in
             try Data.fetchOne(db, sql: "SELECT bookmark FROM bbs_upload_inbox WHERE id = 1")
+        }
+    }
+
+    func uploadSenders() throws -> [String: (caller: String, receivedAt: Date)] {
+        try dbQueue.read { db in
+            var senders: [String: (caller: String, receivedAt: Date)] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT name, caller, receivedAt FROM bbs_uploads") {
+                senders[row["name"]] = (row["caller"], row["receivedAt"])
+            }
+            return senders
+        }
+    }
+
+    func recordUpload(name: String, caller: String, at date: Date) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "INSERT INTO bbs_uploads (name, caller, receivedAt) VALUES (?, ?, ?)"
+                   + " ON CONFLICT(name) DO UPDATE SET caller = excluded.caller, receivedAt = excluded.receivedAt",
+                arguments: [name, caller, date])
+        }
+    }
+
+    func forgetUpload(name: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM bbs_uploads WHERE name = ?", arguments: [name])
         }
     }
 

@@ -432,9 +432,13 @@ struct BBSScreen: View {
                 onRemoved: { directorySelection = nil },
                 onOpenProfile: onOpenProfile)
         case .files:
-            BBSFileListScreen(library: library,
-                              area: areaSelection,
-                              bytesPerSecond: service.linkThroughput)
+            if areaSelection == BBSUpload.listTag {
+                BBSUploadsScreen(library: library)
+            } else {
+                BBSFileListScreen(library: library,
+                                  area: areaSelection,
+                                  bytesPerSecond: service.linkThroughput)
+            }
         }
     }
 

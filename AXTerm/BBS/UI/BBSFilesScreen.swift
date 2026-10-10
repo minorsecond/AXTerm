@@ -9,6 +9,7 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import QuickLook
 
 /// Shared areas, and the upload switch beside the folder it fills.
 ///
@@ -80,6 +81,7 @@ struct BBSAreaListScreen: View {
     @ViewBuilder
     private var sections: some View {
         areasSection
+        if library.hasInbox { receivedSection }
         uploadsSection
         if let error = library.lastScanError {
             Section {
@@ -182,6 +184,41 @@ struct BBSAreaListScreen: View {
     // MARK: - Uploads
 
     @ViewBuilder
+    /// The files callers sent, one tap from the areas (home retest finding
+    /// 8). Before this the inbox was only a count.
+    private var receivedSection: some View {
+        Section {
+            Group {
+                if presentation.ownsNavigation {
+                    receivedRow.tag(BBSUpload.listTag)
+                } else {
+                    NavigationLink {
+                        BBSUploadsScreen(library: library)
+                    } label: {
+                        receivedRow
+                    }
+                }
+            }
+        } header: {
+            Text("Received")
+        }
+    }
+
+    private var receivedRow: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(library.inboxName ?? "Uploads").font(.system(.body, design: .monospaced))
+                Text(library.inboxCount == 0 ? "No uploads"
+                     : "\(library.inboxCount) \(library.inboxCount == 1 ? "upload" : "uploads") · not shared")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "tray.and.arrow.down")
+        }
+        .badge(library.inboxCount)
+    }
+
     private var uploadsSection: some View {
         Section {
             Toggle("Let callers send me files", isOn: $settings.acceptUploads)
@@ -542,4 +579,128 @@ struct BBSFileListScreen: View {
         }
     }
 }
+// MARK: - Uploads
+
+/// What callers sent, newest first, with who sent each file and when.
+/// Tap for Quick Look; hold for Share, Move to Area and Delete.
+struct BBSUploadsScreen: View {
+    @ObservedObject var library: BBSFileLibrary
+
+    @State private var previewURL: URL?
+    /// The upload waiting for an area to move into.
+    @State private var moving: String?
+    /// The upload waiting for the operator to confirm Delete.
+    @State private var deleting: String?
+    @State private var message: String?
+
+    var body: some View {
+        List {
+            if library.uploads.isEmpty {
+                ContentUnavailableView(
+                    "No Uploads", systemImage: "tray",
+                    description: Text("Files callers send land in \(library.inboxName ?? "the upload folder") "
+                                      + "and show here as soon as they arrive."))
+            } else {
+                Section {
+                    ForEach(library.uploads) { upload in
+                        row(upload)
+                            .contentShape(Rectangle())
+                            .onTapGesture { previewURL = library.uploadURL(named: upload.name) }
+                            .contextMenu { menu(for: upload) }
+                            .swipeActions(edge: .trailing) {
+                                Button("Delete", systemImage: "trash", role: .destructive) {
+                                    deleting = upload.name
+                                }
+                                Button("Move", systemImage: "folder") { moving = upload.name }
+                                    .disabled(library.index.areas.isEmpty)
+                            }
+                    }
+                } footer: {
+                    // One literal, so the Markdown renders (smoke run issue 68).
+                    Text("Uploads are **not** shared. Move one into an area to offer it to callers.")
+                }
+            }
+            if let message {
+                Section {
+                    Text(message).font(.callout).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(library.inboxName ?? "Uploads")
+        .navigationBarTitleDisplayMode(.inline)
+        .quickLookPreview($previewURL)
+        .confirmationDialog(moving.map { "Move \($0) to which area?" } ?? "",
+                            isPresented: Binding(get: { moving != nil }, set: { if !$0 { moving = nil } }),
+                            titleVisibility: .visible) {
+            ForEach(library.index.areas.filter { !library.unreachableAreas.contains($0.name) }) { area in
+                Button(area.name) {
+                    if let name = moving { move(name, to: area.name) }
+                    moving = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { moving = nil }
+        }
+        .confirmationDialog(deleting.map { "Delete \($0)?" } ?? "",
+                            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                if let name = deleting { delete(name) }
+                deleting = nil
+            }
+            Button("Cancel", role: .cancel) { deleting = nil }
+        } message: {
+            Text("It is removed from this device and can't be put back. Callers never saw it.")
+        }
+    }
+
+    private func row(_ upload: BBSUpload) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(upload.name).font(.system(.body, design: .monospaced))
+            HStack(spacing: 4) {
+                Text(BBSFileIndex.size(upload.byteCount))
+                Text("·")
+                Text(upload.from ?? "not from a caller")
+                Text("·")
+                Text(upload.receivedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func menu(for upload: BBSUpload) -> some View {
+        Button("Quick Look", systemImage: "eye") { previewURL = library.uploadURL(named: upload.name) }
+        if let url = library.uploadURL(named: upload.name) {
+            ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
+        }
+        Menu {
+            ForEach(library.index.areas.filter { !library.unreachableAreas.contains($0.name) }) { area in
+                Button(area.name) { move(upload.name, to: area.name) }
+            }
+        } label: {
+            Label("Move to Area", systemImage: "folder")
+        }
+        .disabled(library.index.areas.isEmpty)
+        Divider()
+        Button("Delete", systemImage: "trash", role: .destructive) { deleting = upload.name }
+    }
+
+    private func move(_ name: String, to area: String) {
+        message = BBSUploadMoveReport.message([library.moveUpload(named: name, toArea: area)], area: area)
+    }
+
+    private func delete(_ name: String) {
+        do {
+            try library.trashUpload(named: name)
+            message = nil
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+}
+
 #endif

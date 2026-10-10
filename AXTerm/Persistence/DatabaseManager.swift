@@ -837,6 +837,9 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 38, name: "createHazardHistory") { db in
             try createHazardHistory(db)
         }
+        registerReportedMigration(&migrator, version: 39, name: "createBBSUploads") { db in
+            try createBBSUploads(db)
+        }
         return migrator
     }()
 
