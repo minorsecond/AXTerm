@@ -179,6 +179,35 @@ final class ModemEngineTests: XCTestCase {
         XCTAssertEqual(ptt.events.first, true, "keys once the channel really is clear")
     }
 
+    /// A channel busy longer than the old 10 s limit: the frame is held, not
+    /// dropped, and goes out once the channel clears. Nothing is reported as
+    /// a fault while it waits.
+    func testALongBusyChannelHoldsTheFrameUntilItClears() throws {
+        let (engine, io, ptt) = makeEngine()
+        var faults: [String] = []
+        engine.onFault = { message, _ in faults.append(message) }
+        try engine.start()
+        // A full second of somebody else's traffic, back to back.
+        let theirs = AFSKModulator.synthesize(frames: (0..<6).map { frame("busy \($0)") }, sampleRate: 48_000,
+                                              txDelayMs: 300, txTailMs: 100)
+        io.feed(Array(theirs[..<12_000]))
+        try engine.enqueue(frame("ours"))
+        var index = 12_000
+        while index < theirs.count {
+            let end = min(index + 480, theirs.count)
+            io.feed(Array(theirs[index..<end]))
+            XCTAssertFalse(ptt.isKeyed, "never keys over a carrier")
+            index = end
+        }
+        XCTAssertGreaterThan(Double(theirs.count) / 48_000, 1.0)
+        XCTAssertEqual(engine.telemetrySnapshot().framesDropped, 0, "held, not dropped")
+        XCTAssertTrue(faults.isEmpty, "waiting is not a fault: \(faults)")
+        io.pump(blocks: 120)
+        XCTAssertEqual(ptt.events.first, true, "keys once the channel clears")
+        io.pump(blocks: 200)
+        XCTAssertEqual(engine.telemetrySnapshot().framesSent, 1)
+    }
+
     func testPTTRefusalDropsTheFramesAndReportsOnce() throws {
         let ptt = RecordingPTTController()
         ptt.refuseKeyDown = TestError(text: "radio not answering")

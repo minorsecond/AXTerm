@@ -6,22 +6,19 @@ nonisolated struct ChannelAccessParameters: Equatable, Sendable {
     var persist: UInt8
     var dwaitSamples: Int
     var fullDuplex: Bool
-    var maxWaitSamples: Int
 
     init(sampleRate: Double, configuration c: SoftModemConfiguration) {
         slotTimeSamples = max(1, Int(Double(c.slotTimeMs) / 1000 * sampleRate))
         persist = c.persist
         dwaitSamples = Int(Double(c.dwaitMs) / 1000 * sampleRate)
         fullDuplex = c.fullDuplex
-        maxWaitSamples = Int(c.maxChannelWaitSeconds * sampleRate)
     }
 
-    init(slotTimeSamples: Int, persist: UInt8, dwaitSamples: Int = 0, fullDuplex: Bool = false, maxWaitSamples: Int) {
+    init(slotTimeSamples: Int, persist: UInt8, dwaitSamples: Int = 0, fullDuplex: Bool = false) {
         self.slotTimeSamples = max(1, slotTimeSamples)
         self.persist = persist
         self.dwaitSamples = dwaitSamples
         self.fullDuplex = fullDuplex
-        self.maxWaitSamples = maxWaitSamples
     }
 }
 
@@ -29,14 +26,14 @@ nonisolated enum ChannelAccessDecision: Equatable, Sendable {
     case idle
     case waiting(nextCheck: Int64)
     case transmit
-    case gaveUp
 }
 
 /// p-persistence CSMA, clocked in samples.
 ///
-/// While the channel is busy, wait. Once it clears, wait DWAIT, then at every
-/// SLOTTIME boundary draw a byte and transmit if it is ≤ PERSIST (63 ≈ one
-/// chance in four per slot). Everything is measured in samples of the input
+/// While the channel is busy, wait, however long that takes: the frame is
+/// held, never dropped, as every KISS TNC does. Once it clears, wait DWAIT,
+/// then at every SLOTTIME boundary draw a byte and transmit if it is
+/// ≤ PERSIST (63 ≈ one chance in four per slot). Everything is measured in samples of the input
 /// clock and the randomness is injected, so a test replays a decision trace
 /// exactly.
 nonisolated struct ChannelAccess<RNG: RandomNumberGenerator> {
@@ -71,14 +68,10 @@ nonisolated struct ChannelAccess<RNG: RandomNumberGenerator> {
 
     /// Decide at `now`, given the carrier-detect state.
     mutating func evaluate(now: Int64, dcd: Bool) -> Decision {
-        guard let requestedAt else { return .idle }
+        guard requestedAt != nil else { return .idle }
         if parameters.fullDuplex {
             cancel()
             return .transmit
-        }
-        if now - requestedAt > Int64(parameters.maxWaitSamples) {
-            cancel()
-            return .gaveUp
         }
         if dcd {
             clearSince = nil

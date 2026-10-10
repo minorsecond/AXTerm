@@ -9,8 +9,8 @@ import Foundation
 ///
 /// **What noise can fake.** Two earlier inputs both turned out to be things
 /// noise produces freely, and using them meant an idle channel read as busy —
-/// so every transmission waited out `maxChannelWaitSeconds` and was dropped,
-/// reported as "channel busy" on a channel nobody was using:
+/// so every transmission waited out the channel-wait limit (since removed)
+/// and was dropped, reported as "channel busy" on a channel nobody was using:
 ///
 /// - *HDLC activity.* A flag is six ones between zeros, which random bits
 ///   deliver several times a second; the decoder then latches `synchronised`

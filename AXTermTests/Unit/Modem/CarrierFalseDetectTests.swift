@@ -8,8 +8,8 @@ import XCTest
 /// for packet: the modem, not the radio, decides what is a signal. That means
 /// the demodulator is fed band noise continuously and carrier detect has to
 /// tell noise from a transmission on its own. If it cannot, every transmission
-/// waits out `maxChannelWaitSeconds` and is dropped — "channel busy" on a
-/// channel nobody is using.
+/// waits for a clear channel that never comes: "channel busy" on a channel
+/// nobody is using.
 ///
 /// Measured, not argued: the audio here contains no signal at all, so any
 /// carrier is by construction false.

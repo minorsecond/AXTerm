@@ -7,8 +7,8 @@ final class ChannelAccessTests: XCTestCase {
     private typealias Access = ChannelAccess<SplitMix64>
 
     private func parameters(persist: UInt8 = 63, slot: Int = 4800, dwait: Int = 0,
-                            fullDuplex: Bool = false, maxWait: Int = 480_000) -> Access.Parameters {
-        .init(slotTimeSamples: slot, persist: persist, dwaitSamples: dwait, fullDuplex: fullDuplex, maxWaitSamples: maxWait)
+                            fullDuplex: Bool = false) -> Access.Parameters {
+        .init(slotTimeSamples: slot, persist: persist, dwaitSamples: dwait, fullDuplex: fullDuplex)
     }
 
     /// Run until a terminal decision; returns the trace and the sample it ended at.
@@ -20,7 +20,7 @@ final class ChannelAccessTests: XCTestCase {
             let d = access.evaluate(now: now, dcd: dcd(now))
             trace.append(d)
             switch d {
-            case .transmit, .gaveUp, .idle: return (trace, now)
+            case .transmit, .idle: return (trace, now)
             case .waiting(let next): now = max(now + 1, next)
             }
         }
@@ -97,14 +97,18 @@ final class ChannelAccessTests: XCTestCase {
         XCTAssertEqual(access.evaluate(now: 2400, dcd: false), .waiting(nextCheck: 4800), "between slots, nothing is rolled")
     }
 
-    func testGivesUpAfterMaxWait() {
-        var access = Access(parameters: parameters(persist: 255, maxWait: 48_000), rng: SplitMix64(seed: 7))
+    /// p-persistence has no give-up: a busy channel holds the frame for as
+    /// long as it is busy, and it goes in the first slot that wins once the
+    /// channel clears. The modem used to drop it after 10 s, a rule no TNC
+    /// follows, and beacons were lost on a busy APRS channel (2026-10-10).
+    func testABusyChannelIsWaitedOutHoweverLong() {
+        var access = Access(parameters: parameters(persist: 255), rng: SplitMix64(seed: 7))
         access.requestChannel(now: 0)
-        for now in stride(from: Int64(0), through: 48_000, by: 480) {
-            XCTAssertNotEqual(access.evaluate(now: now, dcd: true), .gaveUp, "at \(now)")
+        for now in stride(from: Int64(0), through: 480_000, by: 480) {
+            XCTAssertEqual(access.evaluate(now: now, dcd: true), .waiting(nextCheck: now + 1), "at \(now)")
         }
-        XCTAssertEqual(access.evaluate(now: 48_001, dcd: true), .gaveUp)
-        XCTAssertFalse(access.isRequesting)
+        XCTAssertTrue(access.isRequesting, "still holding the frame after ten times the old limit")
+        XCTAssertEqual(access.evaluate(now: 480_480, dcd: false), .transmit, "and sends it once the channel clears")
     }
 
     func testFullDuplexTransmitsAtOnceEvenWhenBusy() {
@@ -117,11 +121,9 @@ final class ChannelAccessTests: XCTestCase {
         var config = SoftModemConfiguration()
         config.slotTimeMs = 100
         config.dwaitMs = 20
-        config.maxChannelWaitSeconds = 5
         let p = Access.Parameters(sampleRate: 48_000, configuration: config)
         XCTAssertEqual(p.slotTimeSamples, 4800)
         XCTAssertEqual(p.dwaitSamples, 960)
-        XCTAssertEqual(p.maxWaitSamples, 240_000)
         XCTAssertEqual(p.persist, 63)
     }
 }

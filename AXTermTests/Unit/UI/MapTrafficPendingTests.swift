@@ -5,8 +5,7 @@ import XCTest
 ///
 /// A frame is handed to the radio the instant the operator clicks; it reaches
 /// the air when the channel is clear and the transmitter keys, which on a busy
-/// channel is seconds later — and sometimes never, because the modem gives up
-/// after `maxChannelWaitSeconds` and discards what it was holding. A line that
+/// channel is seconds later, and never when the radio refuses to key. A line that
 /// appeared immediately either way left the operator unable to tell "my query
 /// went unanswered" from "my query never went out".
 @MainActor

@@ -89,7 +89,11 @@ flags; `AFSKModulator` is continuous-phase with fractional samples per bit.
 The engine's TX state machine is clocked in input samples, not wall time:
 `idle → waitingForChannel → keying → transmitting → cooldown`. Channel
 access is p-persistence CSMA (PERSIST/SLOTTIME) against a carrier detect
-derived from the demodulator, not the radio's squelch (see below). **No
+derived from the demodulator, not the radio's squelch (see below). A busy
+channel is waited out however long it stays busy: queued frames are held,
+never dropped, as every KISS TNC does. Until 2026-10-10 the modem gave up
+after 10 s and discarded what it held, which lost beacons on a busy APRS
+channel. **No
 audio plays until the PTT controller confirms**; the transmitter unkeys
 when the device has consumed every rendered sample plus the latency
 margin (no margin when Warbler stands in for the radio, see
@@ -115,9 +119,9 @@ produces freely:
 
 Measured on audio containing no signal at all (`CarrierFalseDetectTests`),
 the channel read busy for **90%** of the time with one slicer and **99.7%**
-with the comb. The consequence was that every transmission waited out
-`maxChannelWaitSeconds` and was dropped, reported to the operator as "channel
-busy" on a channel nobody was using.
+with the comb. The consequence was that every transmission waited out the
+modem's channel-wait limit (since removed) and was dropped, reported to the
+operator as "channel busy" on a channel nobody was using.
 
 What noise cannot fake is the demodulator's own decision variable, which was
 already being computed and thrown away: `(mark − space) / (mark + space)`

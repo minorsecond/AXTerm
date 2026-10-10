@@ -85,8 +85,7 @@ final class MapTrafficFeed: ObservableObject {
     /// "Sent" is two events, and the strip used to show only the first. A
     /// frame is handed to the radio immediately; it goes on the air when the
     /// channel is clear and the transmitter keys, which on a busy channel is
-    /// seconds later and sometimes never — the modem gives up after
-    /// `maxChannelWaitSeconds` and discards what it was holding. An operator
+    /// seconds later, and never when the radio refuses to key. An operator
     /// watching a query go out has no way to tell those apart from a line
     /// that appears the instant they click.
     ///

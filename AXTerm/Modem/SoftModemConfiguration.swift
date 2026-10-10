@@ -37,7 +37,6 @@ nonisolated struct SoftModemConfiguration: Equatable, Sendable {
 
     // Limits.
     var maxQueuedFrames = 32
-    var maxChannelWaitSeconds: Double = 10
     var pttWatchdogSeconds: Double = 30
 
     init() {}

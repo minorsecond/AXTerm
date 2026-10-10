@@ -87,7 +87,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     /// `NoiseQuietingDetector`. Rebuilt with the sample rate.
     private var quieting = NoiseQuietingDetector(sampleRate: 48_000)
     private var carriersHeard: UInt64 = 0
-    private var access = ChannelAccess(parameters: .init(slotTimeSamples: 4800, persist: 63, maxWaitSamples: 480_000),
+    private var access = ChannelAccess(parameters: .init(slotTimeSamples: 4800, persist: 63),
                                        rng: SystemRandomNumberGenerator())
     private var encoder: HDLCEncoder?
     private var modulator: AFSKModulator?
@@ -356,12 +356,9 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
             switch access.evaluate(now: rxClock, dcd: carrier.isDetected) {
             case .transmit:
                 startKeying()
-            case .gaveUp:
-                let dropped = pending.withLock { let n = $0.count; $0.removeAll(); return n }
-                framesDropped += UInt64(dropped)
-                fail("Channel busy for \(Int(active.maxChannelWaitSeconds)) s; \(dropped) frame(s) dropped", fatal: false)
-                txState = .idle
             case .idle, .waiting:
+                // A busy channel is waited out, however long: the frames are
+                // held, never dropped (p-persistence has no give-up).
                 break
             }
 
