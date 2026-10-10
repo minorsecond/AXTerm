@@ -177,4 +177,18 @@ nonisolated enum ReceiveHealth {
                     Int(latest.at.timeIntervalSince(baseline.at) / 60))
         }
     }
+
+    /// How long after one reconnect for deafness before another may follow.
+    static let reconnectCooldown: TimeInterval = 30 * 60
+
+    /// Whether to reconnect a radio that has gone quiet. On 2026-10-09 the
+    /// IC-705 came back up against a relay that had not yet reached the
+    /// radio, decoded nothing for 38 minutes, and a reconnect fixed it.
+    /// Silence only, sound-modem links only (a Bluetooth TNC4 is not cycled
+    /// behind the operator's back), and once per `reconnectCooldown`.
+    static func reconnectIsDue(_ verdict: Verdict?, soundModem: Bool, lastReconnectAt: Date?, now: Date) -> Bool {
+        guard soundModem, case .quiet = verdict else { return false }
+        guard let last = lastReconnectAt else { return true }
+        return now.timeIntervalSince(last) >= reconnectCooldown
+    }
 }

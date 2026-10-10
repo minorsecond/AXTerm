@@ -79,4 +79,31 @@ final class ReceiveHealthTests: XCTestCase {
         XCTAssertTrue(ReceiveHealth.message(.nothingHeardAfterTransmitting(frames: 4, minutes: 9))
             .hasPrefix("Sent 4 frames in 9 min and heard nothing back."))
     }
+
+    // MARK: - Acting on deafness
+
+    /// A sound-modem radio gone quiet is reconnected, once: on 2026-10-09 the
+    /// IC-705 came back up against a relay that had not yet reached the radio,
+    /// decoded nothing for 38 minutes, and a reconnect is what fixed it.
+    func testAQuietSoundModemIsReconnectedOnceInAWhile() {
+        let now = Date(timeIntervalSince1970: 1_791_600_000)
+        let quiet = ReceiveHealth.Verdict.quiet(minutes: 21)
+        XCTAssertTrue(ReceiveHealth.reconnectIsDue(quiet, soundModem: true, lastReconnectAt: nil, now: now))
+        XCTAssertFalse(ReceiveHealth.reconnectIsDue(quiet, soundModem: true,
+                                                    lastReconnectAt: now.addingTimeInterval(-10 * 60), now: now),
+                       "not again within half an hour")
+        XCTAssertTrue(ReceiveHealth.reconnectIsDue(quiet, soundModem: true,
+                                                   lastReconnectAt: now.addingTimeInterval(-31 * 60), now: now))
+    }
+
+    /// Only silence calls for it, and only on a sound modem: a TNC4 over
+    /// Bluetooth is not cycled behind the operator's back (finding 43), and a
+    /// radio hearing carriers it cannot decode needs its levels, not a new link.
+    func testOnlySilenceOnASoundModemCallsForAReconnect() {
+        let now = Date(timeIntervalSince1970: 1_791_600_000)
+        XCTAssertFalse(ReceiveHealth.reconnectIsDue(.quiet(minutes: 25), soundModem: false, lastReconnectAt: nil, now: now))
+        XCTAssertFalse(ReceiveHealth.reconnectIsDue(.hearsButDecodesLittle(carriers: 40, decoded: 1, minutes: 10, radioSays: nil),
+                                                    soundModem: true, lastReconnectAt: nil, now: now))
+        XCTAssertFalse(ReceiveHealth.reconnectIsDue(nil, soundModem: true, lastReconnectAt: nil, now: now))
+    }
 }

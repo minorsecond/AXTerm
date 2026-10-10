@@ -731,10 +731,34 @@ final class PacketEngine: ObservableObject {
     private func startBatteryWatch() {
         guard batteryTimer == nil else { return }
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tickBatteryWatch() }
+            MainActor.assumeIsolated {
+                self?.tickBatteryWatch()
+                self?.tickReceiveHealth()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         batteryTimer = timer
+    }
+
+    private var deafReconnectAt: [RadioID: Date] = [:]
+
+    /// Reconnects a sound-modem radio that has gone deaf (ReceiveHealth): the
+    /// warning alone left the IC-705 decoding nothing for 38 minutes.
+    func tickReceiveHealth(now: Date = Date()) {
+        for radio in radioSummaries where radio.status == .connected {
+            let soundModem = radioManager.profile(radio.id)?.kind == .modem
+            let verdict = receiveHealth(for: radio.id, now: now)
+            guard ReceiveHealth.reconnectIsDue(verdict, soundModem: soundModem,
+                                               lastReconnectAt: deafReconnectAt[radio.id], now: now),
+                  let verdict else { continue }
+            deafReconnectAt[radio.id] = now
+            let name = radioManager.profile(radio.id).map { RadioDetailView.title(for: $0) } ?? "The radio"
+            let text = "\(name): \(ReceiveHealth.message(verdict)) Reconnecting it."
+            addSystemLine(text, category: .connection, radios: [radio.id])
+            eventLogger?.log(level: .error, category: .connection, message: text, metadata: nil)
+            radioManager.close(radio.id)
+            radioManager.open(radio.id)
+        }
     }
 
     func tickBatteryWatch(now: Date = Date()) {
