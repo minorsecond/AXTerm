@@ -995,6 +995,10 @@ struct SendFileSheet: View {
     /// The areas the destination says take our uploads; nil until it has
     /// answered, or when it is not an AXTerm mailbox.
     @State private var uploadAreas: [String]?
+    /// The picked file as a .zip, for a station without AXTerm (finding 12),
+    /// and whether to send that instead.
+    @State private var zipped: (name: String, data: Data, original: Int)?
+    @State private var sendsZip = false
 
     enum CompressionMode: String, CaseIterable {
         case useGlobal = "Global"
@@ -1093,6 +1097,21 @@ struct SendFileSheet: View {
                 // says take our uploads are offered, and only when it is a
                 // confirmed AXTerm station: typing an area name sent `U` and
                 // a word to whatever was at the other end (finding 5).
+                // AX.25 has no compression other software reads, but every
+                // desktop and phone opens a zip (finding 12).
+                if offersZip, let zipped {
+                    Section {
+                        Toggle("Send as a .zip file", isOn: $sendsZip)
+                    } header: {
+                        Text("Compression")
+                    } footer: {
+                        Text("\(ByteCountFormatter.string(fromByteCount: Int64(zipped.data.count), countStyle: .file)) "
+                             + "on the air instead of "
+                             + "\(ByteCountFormatter.string(fromByteCount: Int64(zipped.original), countStyle: .file)). "
+                             + "The other station opens it like any download; it needs no AXTerm.")
+                    }
+                }
+
                 if onMailboxArea != nil, let uploadAreas, !uploadAreas.isEmpty {
                     Section {
                         Picker("Area", selection: $mailboxArea) {
@@ -1110,6 +1129,7 @@ struct SendFileSheet: View {
             }
             .formStyle(.grouped)
             .task(id: selectedCallsign) { await askForUploadAreas() }
+            .task(id: selectedFileURL) { await prepareZip() }
 
             Divider()
 
@@ -1129,6 +1149,14 @@ struct SendFileSheet: View {
                             do {
                                 replacement = try OutgoingFileStaging.stage(data: preparedPhoto.data,
                                                                             name: preparedPhoto.name)
+                            } catch {
+                                sendError = error.localizedDescription
+                                return
+                            }
+                        } else if sendsZip, offersZip, let zipped {
+                            // The zip goes in place of the file (finding 12).
+                            do {
+                                replacement = try OutgoingFileStaging.stage(data: zipped.data, name: zipped.name)
                             } catch {
                                 sendError = error.localizedDescription
                                 return
@@ -1391,6 +1419,29 @@ struct SendFileSheet: View {
             }
         }
         .font(.caption)
+    }
+
+    /// Whether to offer the .zip: by YAPP, to a station not confirmed as
+    /// AXTerm, for a file the zip makes at least a tenth smaller.
+    private var offersZip: Bool {
+        guard let zipped, let call = selectedCallsign else { return false }
+        return ZipArchive.isOffered(protocol: selectedProtocol,
+                                    peerIsAXTerm: checkCapability?(call) == .confirmed,
+                                    fileShrinks: zipped.data.count * 10 < zipped.original * 9)
+    }
+
+    /// The picked file zipped, worked out once per file off the main actor.
+    private func prepareZip() async {
+        zipped = nil
+        sendsZip = false
+        guard let url = selectedFileURL else { return }
+        let result = await Task.detached(priority: .userInitiated) { () -> (String, Data, Int)? in
+            guard let data = try? Data(contentsOf: url), !data.isEmpty, data.count <= 5_000_000 else { return nil }
+            let name = url.lastPathComponent
+            return (ZipArchive.archiveName(for: name), ZipArchive.single(name: name, data: data, modified: Date()),
+                    data.count)
+        }.value
+        if let result { zipped = (name: result.0, data: result.1, original: result.2) }
     }
 
     /// Asks the destination which mailbox areas take our uploads, when it

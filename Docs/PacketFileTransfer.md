@@ -233,6 +233,19 @@ since that text arrives on an AX.25 session.
   stations. A CN sent then left the sender showing Canceled while the
   receiver had the file (smoke run 2026-10-03-1, issue 60).
 
+## Zip for a station without AXTerm
+
+AXDP compresses a file on its way to another AXTerm station. Nothing else on
+AX.25 decodes compression in a session, so a file sent by YAPP used to go as
+it was. When the Send File sheet is sending by YAPP to a station not
+confirmed as AXTerm, and the file zips at least a tenth smaller, it offers
+**Send as a .zip file**, with the two sizes beside it. The zip goes in place
+of the file, named for it (`constitution.zip`), and the other station opens it
+like any download. `ZipArchive` writes a one-file archive: deflate when that
+is smaller, stored otherwise, the name in UTF-8. `ZipArchiveTests` reads its
+archives back, and `unzip` and macOS's own extractor open them. Retest
+2026-10-10, finding 12: the 26.8 KB constitution zips to about 9 KB.
+
 ## Sending a file again
 
 A finished transfer the operator sent (completed, canceled, failed or
