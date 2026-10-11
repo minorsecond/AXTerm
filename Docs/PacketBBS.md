@@ -962,9 +962,18 @@ in the Keychain (`OwnerCodeSecretStore`). The command and code go out in plain
 text, which hides nothing, so each code is accepted once (`OwnerCode.Checker`);
 three wrong codes stop sign-in for 15 minutes, and every attempt, right or
 wrong, goes in the call log. To anyone else, and with the switch off or no
-secret made, `OWNER` and `ST` are unknown commands like any other. Signing in
-from another AXTerm with a key pair instead of a code is planned
-(Docs/RemoteAccessPlan.md).
+secret made, `OWNER` and `ST` are unknown commands like any other.
+
+From another AXTerm the sign-in uses a key pair instead of a code
+(`OwnerKey`). Each device has a P-256 signing key, in the Secure Enclave where
+it has one (`OwnerDeviceKey`); the mailbox settings show the device's public
+key to copy, and the home mailbox lists the devices allowed to sign in. Sign
+In as Owner in the terminal, offered in a session with a station on the
+operator's own callsign, sends `OWNER KEY`; the mailbox answers
+`Owner challenge: <32 hex digits>`, and the terminal answers by itself with
+`OWNER SIG <signature>` over "AXTerm owner sign-in", the mailbox's callsign and
+the challenge (`OwnerSignInResponder`). A challenge is used once, right or
+wrong, and a signature is no good for another challenge or station.
 
 ### Over a NET/ROM circuit
 

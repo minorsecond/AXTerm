@@ -222,6 +222,15 @@ final class BBSService: ObservableObject {
         return { [weak self] code, at in self?.checkOwnerCode(code, at: at) ?? .wrong }
     }
 
+    /// The devices this caller may sign in with by key, or nil when they
+    /// cannot be the owner or none is paired.
+    func ownerKeys(for caller: String) -> [OwnerKey.PairedDevice]? {
+        guard settings.ownerCommandsEnabled,
+              BBSShell.isOwnerCallsign(caller, station: answeringCallsign),
+              !settings.ownerDevices.isEmpty else { return nil }
+        return settings.ownerDevices
+    }
+
     private func checkOwnerCode(_ code: String, at date: Date) -> OwnerCode.Verdict {
         guard let secret = ownerSecret() else { return .wrong }
         if ownerChecker?.secret != secret { ownerChecker = OwnerCode.Checker(secret: secret) }
@@ -476,7 +485,8 @@ final class BBSService: ObservableObject {
             publishesHeardList: settings.publishHeardList,
             publishesWhitePages: settings.publishWhitePages,
             bytesPerSecond: bytesPerSecond(for: caller),
-            checkOwnerCode: ownerCodeCheck(for: caller))
+            checkOwnerCode: ownerCodeCheck(for: caller),
+            ownerKeys: ownerKeys(for: caller))
 
         let callId = (store.flatMap { try? $0.beginCall(callsign: caller, at: at, radio: session.radio) }) ?? -1
         live = LiveCall(callsign: caller, startedAt: at, callId: callId)
@@ -1688,7 +1698,8 @@ extension BBSService {
                 publishesWhitePages: service.settings.publishWhitePages,
                 bytesPerSecond: service.bytesPerSecond(for: caller),
                 linesOnlyDirectCall: service.answeringCallsign,
-                checkOwnerCode: service.ownerCodeCheck(for: caller))
+                checkOwnerCode: service.ownerCodeCheck(for: caller),
+                ownerKeys: service.ownerKeys(for: caller))
         }
 
         @MainActor

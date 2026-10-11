@@ -457,6 +457,9 @@ final class ReceivedTextRecorder {
     /// A station's marked download moved on, or ended (nil). By uppercased
     /// callsign.
     var onDownloadProgress: ((String, TextDownloadProgress?) -> Void)?
+    /// Every whole line a station sends, by uppercased callsign: for the
+    /// owner sign-in, which answers the mailbox's challenge line.
+    var onLine: ((String, Data) -> Void)?
 
     /// What the terminal is shown of each station's line in progress:
     /// bytes held back while the line could still be a BEGIN line or is part
@@ -619,6 +622,7 @@ final class ReceivedTextRecorder {
 
     @discardableResult
     private func take(_ line: Data, key: String) -> TextDownloadReceiver.Result? {
+        onLine?(key, line)
         captures[key]?.append(line: line)
         var receiver = downloads[key] ?? TextDownloadReceiver()
         let wasReceiving = receiver.isReceiving

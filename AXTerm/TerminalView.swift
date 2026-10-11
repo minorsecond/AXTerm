@@ -875,6 +875,43 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         textRecorder.onDownloadProgress = { [weak self] key, progress in
             self?.incomingDownloads[key] = progress
         }
+        textRecorder.onLine = { [weak self] key, line in
+            self?.answerOwnerChallenge(line, from: key)
+        }
+    }
+
+    // MARK: - Owner sign-in (Docs/RemoteAccessPlan.md, "Signing in")
+
+    /// Sends frames the model makes on its own, such as the answer to the
+    /// mailbox's owner challenge. The view points it at the client.
+    var sendFrames: (([OutboundFrame]) -> Void)?
+    private var ownerSignIn = OwnerSignInResponder()
+
+    /// The session is with a station on the operator's own callsign: a
+    /// mailbox at home it may sign in to as the owner.
+    var canSignInAsOwner: Bool {
+        guard let session = currentSession, session.state == .connected else { return false }
+        return BBSShell.isOwnerCallsign(session.remoteAddress.display, station: session.localAddress.display)
+    }
+
+    /// Asks the mailbox for a challenge; the answer goes out by itself.
+    func signInAsOwner() {
+        guard canSignInAsOwner, let session = currentSession else { return }
+        ownerSignIn.begin(peer: session.remoteAddress.display)
+        sendFrames?(sessionManager.sendData(Data("OWNER KEY\r".utf8), to: session.remoteAddress,
+                                            path: session.path, radio: session.radio, displayInfo: "OWNER KEY"))
+    }
+
+    private func answerOwnerChallenge(_ line: Data, from key: String) {
+        guard let text = String(data: line, encoding: .utf8),
+              let reply = ownerSignIn.reply(toLine: text, from: key, sign: { challenge, station in
+                  OwnerDeviceKey().sign(challenge: challenge, station: station)
+              }),
+              let session = sessionManager.sessions.values.first(where: {
+                  $0.state == .connected && $0.remoteAddress.display.uppercased() == key
+              }) else { return }
+        sendFrames?(sessionManager.sendData(Data((reply + "\r").utf8), to: session.remoteAddress,
+                                            path: session.path, radio: session.radio, displayInfo: "OWNER SIG"))
     }
 
     private func createSessionNotification(for session: AX25Session, oldState: AX25SessionState, newState: AX25SessionState) -> SessionNotification? {
@@ -2524,6 +2561,11 @@ struct TerminalView: View {
         // other received files.
         txViewModel.receivedTextSink = sessionCoordinator
 
+        // Frames the model makes on its own: the owner sign-in's answer.
+        txViewModel.sendFrames = { [client] frames in
+            for frame in frames { client.send(frame: frame) { _ in } }
+        }
+
         // Wire sender progress: I-frames transmitted (incl. from drain) update bytesSent
         client.onUserFrameTransmitted = { [weak txViewModel] frame in
             txViewModel?.outboundFrameReachedRadio(frame)
@@ -3170,6 +3212,7 @@ struct TerminalView: View {
                 onToggleCapture: {
                     toggleCapture()
                 },
+                onSignInAsOwner: txViewModel.canSignInAsOwner ? { txViewModel.signInAsOwner() } : nil,
                 inputMode: Binding(
                     get: { txViewModel.rawInput.mode },
                     set: { setInputMode($0) }),

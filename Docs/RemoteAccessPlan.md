@@ -132,9 +132,9 @@ needs reading before release.
 - Binary as text: `DB` sends any file up to 64 KB as base64 in the marked
   download form, and AXTerm rebuilds it. 7PLUS waits until its format can be
   read from its documentation rather than written from memory.
-- Still to do: key-pair sign-in from AXTerm, pushing a file on from home,
-  7PLUS, the digi path test, AXDP through a node relay, incoming NET/ROM
-  circuits with AXDP over them.
+- Key-pair sign-in from another AXTerm: done.
+- Still to do: pushing a file on from home, 7PLUS, the digi path test, AXDP
+  through a node relay, incoming NET/ROM circuits with AXDP over them.
 
 ## Order
 

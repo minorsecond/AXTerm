@@ -204,8 +204,18 @@ nonisolated struct BBSShell {
     /// owner commands are on and the caller is the operator's callsign.
     /// Without it OWNER and ST are unknown commands.
     private let checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)?
-    /// Signed in with a right code, until the call ends.
+    /// The devices that may sign in with a key (`OwnerKey`); nil unless
+    /// owner commands are on, the caller is the operator's callsign and a
+    /// device is paired.
+    private let ownerKeys: [OwnerKey.PairedDevice]?
+    private let makeChallenge: () -> String
+    /// The challenge `OWNER KEY` sent, until a signature uses it up.
+    private var ownerChallenge: String?
+    /// Signed in with a right code or key, until the call ends.
     private(set) var isOwner = false
+
+    /// OWNER and ST exist for this caller.
+    private var offersOwnerCommands: Bool { checkOwnerCode != nil || ownerKeys != nil }
 
     private(set) var state: State = .command
     /// The file id `D` has quoted a time for and is waiting to be asked about
@@ -228,7 +238,9 @@ nonisolated struct BBSShell {
          longTransferSeconds: Double = 300,
          linesOnlyDirectCall: String? = nil,
          pageRows: Int = 24,
-         checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)? = nil) {
+         checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)? = nil,
+         ownerKeys: [OwnerKey.PairedDevice]? = nil,
+         makeChallenge: @escaping () -> String = OwnerKey.newChallenge) {
         self.caller = caller
         self.sysop = sysop
         self.banner = banner
@@ -245,6 +257,8 @@ nonisolated struct BBSShell {
         self.linesOnlyDirectCall = linesOnlyDirectCall
         self.pageRows = max(0, pageRows)
         self.checkOwnerCode = checkOwnerCode
+        self.ownerKeys = ownerKeys
+        self.makeChallenge = makeChallenge
     }
 
     /// The operator's own callsign at any SSID: the only caller who may
@@ -392,9 +406,9 @@ nonisolated struct BBSShell {
             return Output(lines: [Self.version])
         case "OP":
             return setPageLength(argument)
-        case "OWNER" where checkOwnerCode != nil:
-            return signIn(argument, now: now)
-        case "ST" where checkOwnerCode != nil:
+        case "OWNER" where offersOwnerCommands:
+            return signIn(rest, now: now)
+        case "ST" where offersOwnerCommands:
             guard isOwner else {
                 return Output(lines: ["Sign in first: OWNER and the six-digit code from your authenticator app."])
             }
@@ -507,9 +521,33 @@ nonisolated struct BBSShell {
 
     // MARK: - Owner
 
-    private mutating func signIn(_ code: String?, now: Date) -> Output {
-        guard let checkOwnerCode, let code else {
-            return Output(lines: ["OWNER takes the six-digit code from your authenticator app."])
+    private mutating func signIn(_ rest: String, now: Date) -> Output {
+        let parts = rest.split(separator: " ", maxSplits: 1).map(String.init)
+        let word = parts.first?.uppercased()
+        if word == "KEY", ownerKeys != nil {
+            let challenge = makeChallenge()
+            ownerChallenge = challenge
+            return Output(lines: [OwnerKey.challengePrefix + challenge])
+        }
+        if word == "SIG", let ownerKeys {
+            guard let challenge = ownerChallenge else {
+                return Output(lines: ["Ask for a challenge first: OWNER KEY."])
+            }
+            // Used up either way, so a wrong signature cannot be tried again.
+            ownerChallenge = nil
+            let signature = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+            guard OwnerKey.verify(signature: signature, challenge: challenge, station: sysop, paired: ownerKeys) else {
+                return Output(lines: ["That signature is not from a paired device."],
+                              effects: [.ownerSignIn(accepted: false)])
+            }
+            isOwner = true
+            return Output(lines: ["Signed in as the owner until you disconnect. ST shows the station."],
+                          effects: [.ownerSignIn(accepted: true)])
+        }
+        guard let checkOwnerCode, let code = parts.first else {
+            return Output(lines: [checkOwnerCode == nil
+                ? "OWNER KEY starts a sign-in from a paired AXTerm."
+                : "OWNER takes the six-digit code from your authenticator app."])
         }
         switch checkOwnerCode(code, now) {
         case .accepted:
@@ -528,7 +566,7 @@ nonisolated struct BBSShell {
     }
 
     private func help() -> [String] {
-        helpLines + (checkOwnerCode == nil ? [] : [
+        helpLines + (!offersOwnerCommands ? [] : [
             "",
             "OWNER code sign in as the owner with your authenticator code",
             "ST         the station's state (owner)"

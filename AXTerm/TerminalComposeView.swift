@@ -1456,6 +1456,10 @@ struct TerminalComposeView: View {
     var isCapturing: Bool = false
     /// Turns Capture on or off for the session on screen. Nil hides the button.
     var onToggleCapture: (() -> Void)?
+    /// Signs in to the mailbox at home as the owner with this device's key
+    /// (Docs/RemoteAccessPlan.md). Nil hides it: the session is not with a
+    /// station on the operator's own callsign.
+    var onSignInAsOwner: (() -> Void)?
     /// Line or Raw (Docs/TerminalInputModes.md).
     var inputMode: Binding<TerminalInputMode> = .constant(.line)
     /// The far end's line so far, shown in the raw field.
@@ -1678,6 +1682,19 @@ struct TerminalComposeView: View {
                               : "Capture everything this station sends to a text file in \(ReceivedFileStore.folderName). Your own lines are not included.")
                         .accessibilityLabel(isCapturing ? "Stop Capture" : "Capture")
                         .accessibilityIdentifier("terminalCaptureToggle")
+                    }
+
+                    if !composeRows.accessoriesInMenu, let onSignInAsOwner {
+                        Button {
+                            onSignInAsOwner()
+                        } label: {
+                            Image(systemName: "key")
+                                .foregroundStyle(Color.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Sign in to your mailbox as the owner with this device's key. The mailbox must "
+                              + "have this device paired and owner sign-in on.")
+                        .accessibilityLabel("Sign In as Owner")
                     }
 
                     if !composeText.isEmpty && !isRawMode {
@@ -2124,6 +2141,7 @@ struct TerminalComposeView: View {
             || (onSendControl != nil && connectionMode == .connected)
             || (onInsertPosition != nil && !isRawMode)
             || (onToggleCapture != nil && (isCapturing || sessionIsUp))
+            || onSignInAsOwner != nil
     }
 
     /// Line/Raw, control keys, position and capture in one button, for a
@@ -2158,6 +2176,9 @@ struct TerminalComposeView: View {
             if let onToggleCapture, isCapturing || sessionIsUp {
                 Button(isCapturing ? "Stop Capture" : "Capture",
                        systemImage: isCapturing ? "stop.circle" : "record.circle") { onToggleCapture() }
+            }
+            if let onSignInAsOwner {
+                Button("Sign In as Owner", systemImage: "key") { onSignInAsOwner() }
             }
         } label: {
             Image(systemName: isCapturing ? "record.circle.fill" : "plus.circle")
