@@ -524,6 +524,16 @@ struct ConsoleView: View {
         if count != unseen { unseen = count }
     }
 
+    /// Scrolls to the newest row: the status row, else the last line.
+    private func scrollToNewest(_ proxy: ScrollViewProxy) {
+        switch ConsoleScrollTarget.newest(hasSendStatus: trailingSendStatus != nil,
+                                          lastLineID: groupedLines.last?.id) {
+        case .sendStatus: proxy.scrollTo("sendStatus", anchor: .bottom)
+        case .line(let id): proxy.scrollTo(id, anchor: .bottom)
+        case .bottom: proxy.scrollTo("bottom", anchor: .bottom)
+        }
+    }
+
     /// Auto-scroll is on and the reader is at the bottom.
     private var followsNewLines: Bool {
         AutoScrollDecision.shouldAutoScroll(isUserAtTarget: isFollowing, followNewest: autoScroll,
@@ -821,8 +831,11 @@ struct ConsoleView: View {
                 if decision.scrollToNewest { scheduleRepin() }
             }
             .onChange(of: groupedLines.count) { _, _ in
+                // The same place the repin goes. The marker below the padding
+                // overshoots, and the repin then moved back: a jump per line
+                // (retest 2026-10-11, finding 2).
                 guard followsNewLines else { return }
-                proxy.scrollTo("bottom", anchor: .bottom)
+                scrollToNewest(proxy)
             }
             .onChange(of: trailingSendStatus) { old, new in
                 // Only a new kind of row moves the history, and then to the
@@ -841,13 +854,7 @@ struct ConsoleView: View {
                 // what an overshoot lands past. No animation: this fires
                 // after a settle (`scheduleRepin`) or on appear, where a
                 // slide would just look like the overshoot we're correcting.
-                if trailingSendStatus != nil {
-                    proxy.scrollTo("sendStatus", anchor: .bottom)
-                } else if let lastId = groupedLines.last?.id {
-                    proxy.scrollTo(lastId, anchor: .bottom)
-                } else {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
+                scrollToNewest(proxy)
             }
             .onChange(of: autoScroll) { _, newValue in
                 if newValue {
@@ -1084,6 +1091,21 @@ nonisolated enum ConsoleLineGrouper {
 // MARK: - Console Line Group
 
 /// Groups a primary console line with its duplicates (received via different paths)
+/// Where the history goes to show the newest: the status row under the
+/// lines, else the last line, and the marker below the padding only when
+/// there is nothing else. Scrolling to the marker overshoots.
+nonisolated enum ConsoleScrollTarget: Equatable {
+    case sendStatus
+    case line(UUID)
+    case bottom
+
+    static func newest(hasSendStatus: Bool, lastLineID: UUID?) -> ConsoleScrollTarget {
+        if hasSendStatus { return .sendStatus }
+        if let lastLineID { return .line(lastLineID) }
+        return .bottom
+    }
+}
+
 nonisolated struct ConsoleLineGroup: Identifiable {
     let id: UUID
     let primary: ConsoleLine

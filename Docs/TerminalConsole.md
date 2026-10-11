@@ -128,6 +128,11 @@ delivery of a long message and every acknowledgment of a line going out
 scrolled to the marker below the padding and back, so the history jumped up
 and down (retest 2026-10-10, findings 7 and 10).
 
+A new line goes to the same place the repin does (`ConsoleScrollTarget`): the
+status row, else the last line, and the marker below the padding only when the
+history is empty. Each plain-text line of a long message used to scroll to the
+marker, overshoot, and come back with the repin (retest 2026-10-11, finding 2).
+
 ## Clicks
 
 `ConsoleNSTableView` sends a click on the message to its text view (selection,
