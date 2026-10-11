@@ -74,6 +74,8 @@ nonisolated enum AXDP {
         case pong             = 7
         case peerAxdpEnabled  = 8  // Sent when user enables AXDP toggle; prompts peer to enable
         case peerAxdpDisabled = 9  // Sent when user disables AXDP toggle; informs peer
+        case uploadAreasRequest = 10
+        case uploadAreasReply = 11
     }
 
     // MARK: - TLV Structure

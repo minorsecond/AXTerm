@@ -5638,6 +5638,9 @@ struct TerminalViewModifiers: ViewModifier {
                     },
                     onMailboxArea: { destination, area in
                         sessionCoordinator.sendMailboxAreaCommand(area, to: destination)
+                    },
+                    requestUploadAreas: { destination in
+                        await sessionCoordinator.requestUploadAreas(from: destination)
                     }
                 )
             }

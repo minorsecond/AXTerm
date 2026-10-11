@@ -392,6 +392,8 @@ final class SessionCoordinator: ObservableObject {
     /// to that caller goes down the mailbox's session, which the mailbox
     /// owns. By uppercased callsign.
     var mailboxReplyRoutes: [String: (Data) -> Void] = [:]
+    /// Questions to mailboxes about upload areas, waiting for their answer.
+    var pendingAreaQueries: [UInt32: CheckedContinuation<[String]?, Never>] = [:]
 
     /// What the most recent sent files need to go again, by transfer ID,
     /// oldest first in `resendOrder` (`resend(_:using:)`).
@@ -4056,6 +4058,17 @@ final class SessionCoordinator: ObservableObject {
         case .peerAxdpDisabled:
             handlePeerAxdpDisabled(from: from)
 
+        case .uploadAreasReply:
+            pendingAreaQueries.removeValue(forKey: message.messageId)?
+                .resume(returning: AXDPUploadAreas.names(in: message))
+
+        case .uploadAreasRequest:
+            // A session the mailbox holds never reaches here; this one is a
+            // terminal's, which takes no uploads into areas. Said at once,
+            // so the asker's sheet is not left waiting.
+            sendInSession(AXDPUploadAreas.reply(to: message.messageId, names: []).encode(), to: from,
+                          displayInfo: "AXDP upload areas")
+
         @unknown default:
             TxLog.debug(.axdp, "Unhandled AXDP message type", [
                 "type": String(describing: message.type),
@@ -4499,6 +4512,34 @@ final class SessionCoordinator: ObservableObject {
             axdpSessionId: axdpSessionId,
             estimatedAirtimeSeconds: estimatedAirtime(bytes: estimatedTransmissionSize, peer: from.display)
         )
+    }
+
+    // MARK: - Asking a mailbox which areas take our uploads (finding 5)
+
+    /// Asks the mailbox at the other end of a session which of its areas
+    /// take this station's uploads. Nil when there is no session or no
+    /// answer in time; the Send File sheet then shows no area picker.
+    func requestUploadAreas(from destination: String, timeout: TimeInterval = 20) async -> [String]? {
+        let peer = CallsignNormalizer.toAddress(destination)
+        guard sessionManager.connectedSession(withPeer: peer) != nil else { return nil }
+        let messageId = UInt32.random(in: 1...UInt32.max)
+        return await withCheckedContinuation { continuation in
+            pendingAreaQueries[messageId] = continuation
+            sendInSession(AXDPUploadAreas.request(messageId: messageId).encode(), to: peer,
+                          displayInfo: "AXDP upload areas?")
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))
+                self?.pendingAreaQueries.removeValue(forKey: messageId)?.resume(returning: nil)
+            }
+        }
+    }
+
+    /// An AXDP message down a connected session, through the session layer.
+    private func sendInSession(_ payload: Data, to peer: AX25Address, displayInfo: String) {
+        guard let session = sessionManager.connectedSession(withPeer: peer) else { return }
+        let frames = sessionManager.sendData(payload, to: session.remoteAddress, path: session.path,
+                                             radio: session.radio, pid: 0xF0, displayInfo: displayInfo)
+        for frame in frames { sendFrame(frame) }
     }
 
     // MARK: - Mailbox uploads by AXDP

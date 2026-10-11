@@ -863,3 +863,24 @@ nonisolated final class AXDPPeerMemory: @unchecked Sendable {
         defaults?.set(snapshot, forKey: Self.key)
     }
 }
+
+/// Which mailbox areas take a caller's uploads (retest 2026-10-10, finding
+/// 5). The caller's Send File sheet asks with an UPLOAD_AREAS_REQUEST and
+/// offers the names the mailbox's UPLOAD_AREAS_REPLY lists, in place of a
+/// text field. The reply carries the names, one per line, in its payload,
+/// and answers the request's message ID. An empty list means none.
+nonisolated enum AXDPUploadAreas {
+    static func request(messageId: UInt32) -> AXDP.Message {
+        AXDP.Message(type: .uploadAreasRequest, sessionId: 0, messageId: messageId)
+    }
+
+    static func reply(to messageId: UInt32, names: [String]) -> AXDP.Message {
+        AXDP.Message(type: .uploadAreasReply, sessionId: 0, messageId: messageId,
+                     payload: names.isEmpty ? nil : Data(names.joined(separator: "\n").utf8))
+    }
+
+    static func names(in message: AXDP.Message) -> [String] {
+        guard let payload = message.payload, !payload.isEmpty else { return [] }
+        return String(decoding: payload, as: UTF8.self).split(separator: "\n").map(String.init)
+    }
+}

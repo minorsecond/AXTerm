@@ -801,9 +801,13 @@ inbox, not into PARK." in the same words whether they are not trusted or the
 area does not take uploads, and lands in the inbox as usual
 (`BBSUploadTarget`). The size limit applies either way.
 
-An AXTerm caller can name the area in the Send File sheet's Mailbox Area
-field, which types `U PARK` down the session just before the file. Any
-other mailbox reads that as `U`, so the file lands in its inbox.
+An AXTerm caller picks the area in the Send File sheet. For a confirmed
+AXTerm station the sheet asks which areas take this caller's uploads
+(UPLOAD_AREAS_REQUEST, `AXTERM-TRANSMISSION-SPEC.md` §6) and offers Inbox and
+those, and nothing at all for any other station; the choice types `U PARK`
+down the session just before the file. It was a text field at first, which
+sent `U` and a word to whatever was at the other end (retest 2026-10-10,
+finding 5).
 
 Decision (2026-10-10, home retest finding 11, approved by the operator):
 uploads stayed in the inbox by default, because anything in an area is

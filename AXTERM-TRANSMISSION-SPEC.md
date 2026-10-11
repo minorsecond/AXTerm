@@ -382,7 +382,9 @@ The receiver reads a message by its length and nothing else. It is whole when it
 Decision (2026-10-03): the length was added before any release, so there is no older envelope to accept. Without it, a receiver took a message as ended at the next magic or where the frame ended, and a frame that ended on a TLV boundary inside a message looked whole; the data after it was lost until a frame happened to start with a magic. Smoke run 2026-10-03-1 found it when packing file chunks across frames.
 
 Core TLVs:
-- `0x01` MessageType (UInt8): CHAT=1, FILE_META=2, FILE_CHUNK=3, ACK=4, NACK=5, PING=6, PONG=7
+- `0x01` MessageType (UInt8): CHAT=1, FILE_META=2, FILE_CHUNK=3, ACK=4, NACK=5, PING=6, PONG=7, PEER_AXDP_ENABLED=8, PEER_AXDP_DISABLED=9, UPLOAD_AREAS_REQUEST=10, UPLOAD_AREAS_REPLY=11
+
+Upload areas (decision 2026-10-10, retest finding 5). A caller's Send File sheet asks an AXTerm mailbox which areas take its uploads with UPLOAD_AREAS_REQUEST (no payload) in the session. The mailbox answers UPLOAD_AREAS_REPLY with the same MessageId and the area names, one per line, in Payload: only the areas that take trusted callers' uploads, and only when the caller is trusted and uploads are on; otherwise no payload. A station that is not a mailbox (a terminal) answers at once with no payload. The sheet then offers Inbox and those names in place of a text field, and the choice still travels as `U AREA` before the file. No answer within 20 s shows no picker.
 - `0x02` SessionId (UInt32)
 - `0x03` MessageId (UInt32)  // per-session monotonically increasing
 - `0x04` ChunkIndex (UInt32)

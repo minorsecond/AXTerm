@@ -648,6 +648,33 @@ final class BBSTransferTests: XCTestCase {
         XCTAssertEqual(listed.byteCount, 300)
     }
 
+    // MARK: - Which areas take my uploads (retest 2026-10-10, finding 5)
+
+    /// An AXTerm caller's Send File sheet asks which areas take its uploads,
+    /// and offers those in place of a text field.
+    func testTheMailboxSaysWhichAreasTakeThisCallersUploads() async throws {
+        enableUploads()
+        trustCallerIntoOPS()
+        try await connect()
+        caller.clearReceived()
+        caller.send(AXDP.Message(type: .uploadAreasRequest, sessionId: 0, messageId: 41).encode())
+        await caller.pump { !self.axdpReplies().isEmpty }
+        let reply = try XCTUnwrap(axdpReplies().first)
+        XCTAssertEqual(reply.type, .uploadAreasReply)
+        XCTAssertEqual(reply.messageId, 41, "matched to the request")
+        XCTAssertEqual(AXDPUploadAreas.names(in: reply), ["OPS"])
+    }
+
+    func testAnUntrustedCallerHearsNoAreas() async throws {
+        enableUploads()
+        library.setAcceptsTrustedUploads(true, area: "OPS")
+        try await connect()
+        caller.clearReceived()
+        caller.send(AXDP.Message(type: .uploadAreasRequest, sessionId: 0, messageId: 42).encode())
+        await caller.pump { !self.axdpReplies().isEmpty }
+        XCTAssertEqual(axdpReplies().first.map(AXDPUploadAreas.names(in:)), [])
+    }
+
     // MARK: - Trusted callers into an area (home retest finding 11)
 
     private func trustCallerIntoOPS() {

@@ -976,8 +976,10 @@ struct SendFileSheet: View {
     /// The rate of the last transfer with a station, for the airtime.
     var measuredRate: ((String) -> Double?)?
     /// Types `U <AREA>` to the station before the file (destination, area),
-    /// for an upload into a mailbox area. Nil hides the field.
+    /// for an upload into a mailbox area.
     var onMailboxArea: ((String, String) -> Void)?
+    /// Asks an AXTerm mailbox which areas take our uploads (finding 5).
+    var requestUploadAreas: ((String) async -> [String]?)?
 
     @State private var selectedSessionIndex: Int = 0
     /// The picked file's bytes, when it is a photo (`PhotoSendPanel`).
@@ -990,6 +992,9 @@ struct SendFileSheet: View {
     @State private var selectedProtocol: TransferProtocolType = .axdp
     /// A mailbox area to upload into; empty for the mailbox's inbox.
     @State private var mailboxArea = ""
+    /// The areas the destination says take our uploads; nil until it has
+    /// answered, or when it is not an AXTerm mailbox.
+    @State private var uploadAreas: [String]?
 
     enum CompressionMode: String, CaseIterable {
         case useGlobal = "Global"
@@ -1084,24 +1089,27 @@ struct SendFileSheet: View {
                 }
 
                 // An AXTerm mailbox puts a trusted caller's upload straight
-                // into an area (home retest finding 11).
-                if onMailboxArea != nil {
+                // into an area (home retest finding 11). Only the areas it
+                // says take our uploads are offered, and only when it is a
+                // confirmed AXTerm station: typing an area name sent `U` and
+                // a word to whatever was at the other end (finding 5).
+                if onMailboxArea != nil, let uploadAreas, !uploadAreas.isEmpty {
                     Section {
-                        TextField("Area", text: $mailboxArea, prompt: Text("Inbox"))
-                            .autocorrectionDisabled()
-                            #if os(iOS)
-                            .textInputAutocapitalization(.characters)
-                            #endif
+                        Picker("Area", selection: $mailboxArea) {
+                            Text("Inbox").tag("")
+                            ForEach(uploadAreas, id: \.self) { Text($0).tag($0) }
+                        }
                     } header: {
                         Text("Mailbox Area")
                     } footer: {
-                        Text("Sending to a mailbox? Name an area and an AXTerm mailbox that trusts you puts "
-                             + "the file there. Otherwise it goes to the mailbox's inbox.")
+                        Text("This mailbox lets you upload straight into these areas. The inbox is for "
+                             + "the operator to look at first.")
                     }
                 }
 
             }
             .formStyle(.grouped)
+            .task(id: selectedCallsign) { await askForUploadAreas() }
 
             Divider()
 
@@ -1383,6 +1391,17 @@ struct SendFileSheet: View {
             }
         }
         .font(.caption)
+    }
+
+    /// Asks the destination which mailbox areas take our uploads, when it
+    /// is a confirmed AXTerm station (finding 5).
+    private func askForUploadAreas() async {
+        uploadAreas = nil
+        mailboxArea = ""
+        guard let call = selectedCallsign, !call.isEmpty, let requestUploadAreas,
+              checkCapability?(call) == .confirmed else { return }
+        let answer = await requestUploadAreas(call)
+        if call == selectedCallsign { uploadAreas = answer }
     }
 
     // Legacy wrapper for compatibility

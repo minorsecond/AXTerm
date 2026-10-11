@@ -1388,6 +1388,8 @@ final class BBSService: ObservableObject {
                 offerAXDPUpload(message)
             case .fileChunk, .ack, .nack:
                 if let peer = callerAddress { coordinator.receiveMailboxUploadMessage(message, from: peer) }
+            case .uploadAreasRequest:
+                answerUploadAreas(message)
             case .chat:
                 if let payload = message.payload, !payload.isEmpty {
                     receiveText(payload + Data([0x0D]))
@@ -1398,6 +1400,19 @@ final class BBSService: ObservableObject {
         }
         // Bytes around the messages are the caller typing.
         if !text.isEmpty { receiveText(text) }
+    }
+
+    /// The areas this caller may upload straight into, for its Send File
+    /// sheet (finding 5): those that take trusted callers' uploads, if the
+    /// caller is trusted. An empty answer for anyone else.
+    private func answerUploadAreas(_ request: AXDP.Message) {
+        let caller = live?.callsign ?? ""
+        let areas = library?.index.areas ?? []
+        let names = areas.map(\.name).filter { name in
+            BBSUploadTarget.resolve(area: name, caller: caller, station: stationCallsign(),
+                                    trusted: settings.trustedCallers, areas: areas).area != nil
+        }
+        writeRaw(AXDPUploadAreas.reply(to: request.messageId, names: settings.acceptUploads ? names : []).encode())
     }
 
     private var callerAddress: AX25Address? {
