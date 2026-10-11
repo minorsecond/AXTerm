@@ -132,7 +132,9 @@ final class ConsoleNSTableView: NSTableView {
                 overlay.mouseDown(with: event)
             } else {
                 endSelection()
-                cell.mouseDown(with: event)
+                // The row's own handling only: its mouseDown would pass an
+                // unhandled click back up to this table.
+                cell.handleClick(event)
             }
             return
         }

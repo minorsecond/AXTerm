@@ -370,16 +370,27 @@ final class ConsoleLineCellView: NSTableCellView, NSTextViewDelegate {
         return nil
     }
 
-    override func mouseDown(with event: NSEvent) {
+    /// What a click on this row does: open a callsign in the header, or
+    /// fold a long line open. False when the row has nothing to do with it.
+    @discardableResult
+    func handleClick(_ event: NSEvent) -> Bool {
         let point = convert(event.locationInWindow, from: nil)
         if let call = headerItem(at: point)?.callsign, let onIdentity = actions.onIdentity {
             onIdentity(call)
-            return
+            return true
         }
         if model?.isExpandable == true, let lineID {
             actions.toggleExpanded(lineID)
-            return
+            return true
         }
+        return false
+    }
+
+    /// A click the row does not handle goes on to the table, which handles
+    /// it without handing it back: the two used to pass it between them
+    /// until the stack ran out (remote access test, 2026-10-11).
+    override func mouseDown(with event: NSEvent) {
+        if handleClick(event) { return }
         super.mouseDown(with: event)
     }
 

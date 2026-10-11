@@ -128,5 +128,22 @@ final class ConsoleRowTextTests: XCTestCase {
         XCTAssertNil(overlay.superview, "removed before rows were rebuilt")
         XCTAssertTrue(visibleCells.allSatisfy { textViews(in: $0).isEmpty })
     }
+
+    /// A click on a row away from its message and its callsign, where the
+    /// row has nothing to do with it. The row passed it on to the table and
+    /// the table handed it back to the row, about ten thousand times over,
+    /// until A (705) ran out of stack (remote access test, 2026-10-11).
+    func testAClickOnARowsEmptySpaceIsHarmless() throws {
+        let cell = try XCTUnwrap(visibleCells.last)
+        let inCell = NSPoint(x: 1, y: cell.bounds.midY)
+        XCTAssertFalse(cell.messageFrame.contains(inCell), "away from the message")
+        let inWindow = cell.convert(inCell, to: nil)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: inWindow, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        cell.mouseDown(with: event)
+        table.mouseDown(with: event)
+        XCTAssertTrue(feed.opened.isEmpty)
+    }
 }
 #endif
