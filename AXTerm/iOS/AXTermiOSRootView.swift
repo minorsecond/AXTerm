@@ -337,6 +337,8 @@ struct AXTermiOSRootView: View {
         coordinator.applyLocalCallsign(settings.primaryCallsign)
         // Also restores the NET/ROM node policy; see `appSettings`.
         coordinator.appSettings = settings
+        // Which stations run AXTerm, kept across launches (finding 6).
+        coordinator.peerMemory = AXDPPeerMemory(defaults: settings.defaults)
         // As on the Mac: a position beacon that follows the station reads the
         // position the map draws. Missing here, such a beacon never went out.
         coordinator.aprsLocationProvider = StationPositionResolver.beaconProvider(

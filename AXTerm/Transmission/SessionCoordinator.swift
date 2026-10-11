@@ -487,6 +487,10 @@ final class SessionCoordinator: ObservableObject {
         let kind: CapabilityProbeKind
     }
 
+    /// Which stations run AXTerm and which did not answer, across launches
+    /// when the app gives it storage (finding 6).
+    var peerMemory = AXDPPeerMemory()
+
     /// Capability checks waiting for a PONG, by callsign. Each is asked again
     /// on the schedule in `AXDPCapabilityProbe` and dropped when it gives up.
     private var pendingCapabilityDiscovery: [String: PendingCapabilityCheck] = [:]
@@ -2728,7 +2732,7 @@ final class SessionCoordinator: ObservableObject {
             // Send our text probe (UI frame) after receiving first inbound I-frame (if pending).
             // Note: inbound text probes arrive via UI frames, not I-frames, so detection
             // is handled in handleUFrame's .UI case instead of here.
-            self?.sendTextProbeIfNeeded(for: session)
+            self?.sendTextProbeIfNeeded(for: session, firstData: data)
         }
 
         // A YAPP download starting on a terminal session: the BBS sends SI as
@@ -3130,9 +3134,16 @@ final class SessionCoordinator: ObservableObject {
     /// Send the text-safe AXDP probe if this peer has one pending.
     /// Called when we receive the first inbound I-frame, indicating the peer's
     /// application layer has initialized.
-    private func sendTextProbeIfNeeded(for session: AX25Session) {
+    ///
+    /// Only to a station that says it runs AXTerm, or one remembered as
+    /// AXTerm (`AXDPProbePolicy`, finding 6).
+    private func sendTextProbeIfNeeded(for session: AX25Session, firstData: Data) {
         let peer = session.remoteAddress.display.uppercased()
         guard pendingTextProbe.remove(peer) != nil else { return }
+        guard AXDPProbePolicy.probesAfterFirstData(firstData, remembered: peerMemory.verdict(for: peer)) else {
+            debugAXDP("No probe: the station does not say it runs AXTerm", ["peer": peer])
+            return
+        }
         sendTextProbe(to: session)
     }
 
@@ -3318,6 +3329,9 @@ final class SessionCoordinator: ObservableObject {
             try? await Task.sleep(nanoseconds: nanos)
             guard self.pendingTextProbe.remove(peer) != nil else { return }
             guard session.state == .connected else { return }
+            // A station that has said nothing is probed only if it is known
+            // to run AXTerm (finding 6).
+            guard AXDPProbePolicy.probesWithoutData(remembered: self.peerMemory.verdict(for: peer)) else { return }
             self.debugAXDP("Text probe fallback timer fired", [
                 "peer": session.remoteAddress.display
             ])
@@ -4270,6 +4284,7 @@ final class SessionCoordinator: ObservableObject {
     // MARK: - AXDP Not Supported Cache
 
     private func isAXDPNotSupported(for callsign: String) -> Bool {
+        if peerMemory.verdict(for: callsign) == .notAXDP { return true }
         guard let markedAt = axdpNotSupported[callsign.uppercased()] else { return false }
         if Date().timeIntervalSince(markedAt) > axdpNotSupportedTTL {
             axdpNotSupported.removeValue(forKey: callsign.uppercased())
@@ -4280,11 +4295,14 @@ final class SessionCoordinator: ObservableObject {
 
     private func markAXDPNotSupported(for callsign: String) {
         axdpNotSupported[callsign.uppercased()] = Date()
+        peerMemory.record(.notAXDP, for: callsign)
         TxLog.debug(.capability, "Marked AXDP not supported", ["peer": callsign])
     }
 
     private func clearAXDPNotSupported(for callsign: String) {
         axdpNotSupported.removeValue(forKey: callsign.uppercased())
+        // Called when the station proves it speaks AXDP.
+        if peerMemory.verdict(for: callsign) == .notAXDP { peerMemory.record(.axterm, for: callsign) }
     }
 
     // MARK: - Capability Check Retries
@@ -5414,6 +5432,7 @@ final class SessionCoordinator: ObservableObject {
         if !implicitlyConfirmedAXDP.contains(call) {
             implicitlyConfirmedAXDP.insert(call)
             clearAXDPNotSupported(for: call)
+            peerMemory.record(.axterm, for: call)
             // The Send File sheet and the session badge read this.
             objectWillChange.send()
             TxLog.debug(.capability, "Implicitly confirmed AXDP capability", [

@@ -37,25 +37,17 @@ final class AXDPCapabilityProbeScheduleTests: XCTestCase {
         XCTAssertEqual(AXDPCapabilityProbe.interval(rto: 600), AXDPCapabilityProbe.maximumInterval)
     }
 
-    func testAsksThreeTimesThenGivesUp() {
+    /// One probe and no retries since 2026-10-10 (retest finding 6): about
+    /// one station in a thousand runs AXTerm, and a probe goes only to one
+    /// that says it does.
+    func testAsksOnceThenGivesUp() {
         let start = Date(timeIntervalSinceReferenceDate: 1_000)
-        var probe = AXDPCapabilityProbe(sentAt: start, rto: nil)
+        let probe = AXDPCapabilityProbe(sentAt: start, rto: nil)
         let interval = probe.interval
-        XCTAssertEqual(AXDPCapabilityProbe.maxAttempts, 3)
+        XCTAssertEqual(AXDPCapabilityProbe.maxAttempts, 1)
         XCTAssertEqual(probe.attempts, 1)
-
         XCTAssertEqual(probe.step(at: start.addingTimeInterval(interval - 0.1)), .wait)
-        XCTAssertEqual(probe.step(at: start.addingTimeInterval(interval)), .resend)
-        probe.noteResent(at: start.addingTimeInterval(interval))
-        XCTAssertEqual(probe.attempts, 2)
-
-        XCTAssertEqual(probe.step(at: start.addingTimeInterval(2 * interval - 0.1)), .wait)
-        XCTAssertEqual(probe.step(at: start.addingTimeInterval(2 * interval)), .resend)
-        probe.noteResent(at: start.addingTimeInterval(2 * interval))
-        XCTAssertEqual(probe.attempts, 3)
-
-        XCTAssertEqual(probe.step(at: start.addingTimeInterval(3 * interval - 0.1)), .wait)
-        XCTAssertEqual(probe.step(at: start.addingTimeInterval(3 * interval)), .giveUp)
+        XCTAssertEqual(probe.step(at: start.addingTimeInterval(interval)), .giveUp)
     }
 
     func testAProbeLeftPastTheWholeScheduleGivesUp() {
@@ -63,7 +55,7 @@ final class AXDPCapabilityProbeScheduleTests: XCTestCase {
         let probe = AXDPCapabilityProbe(sentAt: start, rto: nil)
         let total = AXDPCapabilityProbe.totalWait(rto: nil)
         XCTAssertEqual(probe.giveUpAt, start.addingTimeInterval(total))
-        XCTAssertEqual(probe.step(at: start.addingTimeInterval(total - 0.1)), .resend)
+        XCTAssertEqual(probe.step(at: start.addingTimeInterval(total - 0.1)), .wait)
         XCTAssertEqual(probe.step(at: start.addingTimeInterval(total)), .giveUp)
     }
 
@@ -111,7 +103,8 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
         _ = session.stateMachine.handle(event: .connectRequest)
         _ = session.stateMachine.handle(event: .receivedUA)
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
-        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Hello\r".data(using: .ascii)!)
+        // A greeting that says AXTerm: only such a station is probed (finding 6).
+        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Hello from AXTerm\r".data(using: .ascii)!)
         return session
     }
 
@@ -119,41 +112,24 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
         AXDP.Message(type: .pong, sessionId: 0, messageId: 1, capabilities: AXDPCapability.defaultLocal())
     }
 
-    func testALostPongIsAskedAgainOnTheRetrySchedule() {
+    /// One probe, no retries since 2026-10-10 (finding 6): a lost PONG is
+    /// not asked again, and the station counts as not answering.
+    func testALostPongIsNotAskedAgain() {
         let start = Date()
         let session = connectAsInitiatorAndProbe()
         let interval = AXDPCapabilityProbe.interval(rto: session.timers.rto)
-        XCTAssertEqual(sends.count, 1, "the first probe")
+        XCTAssertEqual(sends.count, 1, "the probe")
 
         coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(interval / 2))
-        XCTAssertEqual(sends.count, 1, "nothing is resent before the interval is up")
-
-        coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(interval + 0.5))
-        XCTAssertEqual(sends.count, 2, "no PONG: ask again")
-        XCTAssertEqual(coordinator.capabilityStatus(for: peer.display, now: start.addingTimeInterval(interval + 1)),
+        XCTAssertEqual(coordinator.capabilityStatus(for: peer.display, now: start.addingTimeInterval(interval / 2)),
                        .pending)
-
-        coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(2 * interval + 1))
-        XCTAssertEqual(sends.count, 3, "and once more")
-    }
-
-    func testAfterTheLastAttemptTheCheckGivesUpAsNoAnswer() {
-        let start = Date()
-        let session = connectAsInitiatorAndProbe()
-        let interval = AXDPCapabilityProbe.interval(rto: session.timers.rto)
-
         coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(interval + 0.5))
-        coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(2 * interval + 1))
-        coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(3 * interval + 2))
-
-        XCTAssertEqual(sends.count, 3, "three attempts and no more")
+        XCTAssertEqual(sends.count, 1, "no second probe")
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .notSupported)
-        XCTAssertFalse(coordinator.isCapabilityDiscoveryPending(for: peer.display))
-        XCTAssertEqual(coordinator.availableProtocols(for: peer.display), [.yapp],
-                       "YAPP is still offered")
+        XCTAssertEqual(coordinator.availableProtocols(for: peer.display), [.yapp], "YAPP is still offered")
 
         coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(10 * interval))
-        XCTAssertEqual(sends.count, 3, "nothing more after giving up")
+        XCTAssertEqual(sends.count, 1, "nothing more after giving up")
     }
 
     /// The status the sheet shows stops saying pending once the schedule has
@@ -172,9 +148,6 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
         let start = Date()
         let session = connectAsInitiatorAndProbe()
         let interval = AXDPCapabilityProbe.interval(rto: session.timers.rto)
-
-        coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(interval + 0.5))
-        XCTAssertEqual(sends.count, 2)
 
         coordinator.handleCapabilityMessage(pong(), from: peer, path: DigiPath())
         let afterPong = sends.count   // includes our own PING, the other half of the exchange
@@ -206,8 +179,6 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
         let session = connectAsInitiatorAndProbe()
         let interval = AXDPCapabilityProbe.interval(rto: session.timers.rto)
         coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(interval + 0.5))
-        coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(2 * interval + 1))
-        coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(3 * interval + 2))
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .notSupported)
 
         coordinator.handleCapabilityMessage(pong(), from: peer, path: DigiPath())
@@ -227,10 +198,8 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
     }
 
-    /// A binary PING sent inside the session travels in I-frames, which the link
-    /// layer retransmits, but its PONG always comes back as a UI frame. That PONG
-    /// can be lost too, so this check is retried the same way.
-    func testASessionPingIsRetriedToo() {
+    /// A binary PING inside the session is one attempt too (finding 6).
+    func testASessionPingIsNotRetried() {
         let start = Date()
         let session = coordinator.sessionManager.session(for: peer)
         _ = session.stateMachine.handle(event: .connectRequest)
@@ -240,7 +209,7 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
         coordinator.sendCapabilityPing(to: session)
         XCTAssertEqual(sends.count, 1)
         coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(interval + 0.5))
-        XCTAssertEqual(sends.count, 2)
+        XCTAssertEqual(sends.count, 1)
     }
 
     // MARK: Opening the Send File sheet

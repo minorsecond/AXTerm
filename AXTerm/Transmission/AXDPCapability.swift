@@ -304,7 +304,7 @@ nonisolated struct AXDPCapabilityCache: Sendable {
 /// a floor, then stops.
 nonisolated struct AXDPCapabilityProbe: Sendable, Equatable {
     /// Attempts in all, counting the first.
-    static let maxAttempts = 3
+    static let maxAttempts = 1
 
     /// Never ask again sooner than this. A probe and its PONG each need the
     /// channel and a turnaround on a half-duplex radio; at 1200 baud with
@@ -799,5 +799,67 @@ nonisolated enum AXDPChatEncoder {
     static func encode(text: String, messageId: UInt32, peer: AXDPCapability?) -> Data {
         AXDP.Message(type: .chat, sessionId: 0, messageId: messageId, payload: Data(text.utf8),
                      compression: algorithm(for: peer)).encode()
+    }
+}
+
+/// Where the automatic AXDP probe goes (retest 2026-10-10, finding 6).
+/// About one station in a thousand runs AXTerm, so a probe goes only to a
+/// station that says it does, in its greeting, or one remembered as AXTerm,
+/// and never to one that did not answer within the last day.
+nonisolated enum AXDPProbePolicy {
+    /// After the station's first data on a link we opened.
+    static func probesAfterFirstData(_ data: Data, remembered: AXDPPeerMemory.Verdict?) -> Bool {
+        switch remembered {
+        case .axterm: return true
+        case .notAXDP: return false
+        case nil: return String(decoding: data, as: UTF8.self).localizedCaseInsensitiveContains("AXTerm")
+        }
+    }
+
+    /// From the fallback timer, for a station that has sent nothing.
+    static func probesWithoutData(remembered: AXDPPeerMemory.Verdict?) -> Bool {
+        remembered == .axterm
+    }
+}
+
+/// What AXTerm knows about other stations' AXDP, across launches (retest
+/// 2026-10-10, finding 6): one heard speaking AXDP is AXTerm for a month,
+/// one that did not answer a probe is left alone for a day, since its
+/// software can change. Without defaults it lasts as long as the process,
+/// which is what tests want.
+nonisolated final class AXDPPeerMemory: @unchecked Sendable {
+    enum Verdict: String { case axterm, notAXDP }
+
+    static let notAXDPLifetime: TimeInterval = 86_400
+    static let axtermLifetime: TimeInterval = 30 * 86_400
+    private static let key = "axdpPeerMemory"
+
+    private let defaults: UserDefaults?
+    private let lock = NSLock()
+    private var entries: [String: (verdict: Verdict, at: Date)] = [:]
+
+    init(defaults: UserDefaults? = nil) {
+        self.defaults = defaults
+        let stored = defaults?.dictionary(forKey: Self.key) as? [String: [String: Any]] ?? [:]
+        for (call, value) in stored {
+            guard let raw = value["v"] as? String, let verdict = Verdict(rawValue: raw),
+                  let seconds = value["t"] as? Double else { continue }
+            entries[call] = (verdict, Date(timeIntervalSince1970: seconds))
+        }
+    }
+
+    func verdict(for callsign: String, now: Date = Date()) -> Verdict? {
+        lock.lock(); defer { lock.unlock() }
+        guard let entry = entries[callsign.uppercased()] else { return nil }
+        let lifetime = entry.verdict == .axterm ? Self.axtermLifetime : Self.notAXDPLifetime
+        return now.timeIntervalSince(entry.at) <= lifetime ? entry.verdict : nil
+    }
+
+    func record(_ verdict: Verdict, for callsign: String, at date: Date = Date()) {
+        lock.lock()
+        entries[callsign.uppercased()] = (verdict, date)
+        let snapshot = entries.mapValues { ["v": $0.verdict.rawValue, "t": $0.at.timeIntervalSince1970] as [String: Any] }
+        lock.unlock()
+        defaults?.set(snapshot, forKey: Self.key)
     }
 }

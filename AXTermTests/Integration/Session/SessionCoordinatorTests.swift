@@ -959,8 +959,9 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown,
             "No probe sent yet — must wait for first inbound data")
 
-        // First inbound I-frame triggers text probe
-        let welcomeData = "Welcome to PEER BBS\r".data(using: .ascii)!
+        // First inbound I-frame triggers text probe: the station says it
+        // runs AXTerm (since 2026-10-10, finding 6, only such a station).
+        let welcomeData = "Welcome to PEER, running AXTerm\r".data(using: .ascii)!
         coordinator.sessionManager.onDataDeliveredForReassembly?(session, welcomeData)
 
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .pending,
@@ -984,7 +985,7 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
 
         // First I-frame triggers probe
-        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome\r".data(using: .ascii)!)
+        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome to AXTerm\r".data(using: .ascii)!)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .pending)
 
         // Second I-frame should not re-trigger
@@ -1074,7 +1075,7 @@ final class SessionCoordinatorTests: XCTestCase {
 
         // Connect and trigger text probe via first inbound I-frame
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
-        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome\r".data(using: .ascii)!)
+        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome to AXTerm\r".data(using: .ascii)!)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .pending,
             "Text probe should be sent, discovery pending")
 
@@ -1121,6 +1122,8 @@ final class SessionCoordinatorTests: XCTestCase {
         _ = session.stateMachine.handle(event: .connectRequest)
         _ = session.stateMachine.handle(event: .receivedUA)
 
+        // The fallback probes only a station remembered as AXTerm (finding 6).
+        coordinator.peerMemory.record(.axterm, for: peer.display)
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
 
@@ -1203,7 +1206,7 @@ final class SessionCoordinatorTests: XCTestCase {
 
         // First connection: probe sent, times out → marked not-supported
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
-        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome\r".data(using: .ascii)!)
+        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome to AXTerm\r".data(using: .ascii)!)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .pending)
 
         // Simulate disconnect — but DON'T call invalidateCapability so the not-supported
@@ -1308,7 +1311,7 @@ final class SessionCoordinatorTests: XCTestCase {
 
         // Establish capabilities via text probe → PONG
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
-        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome\r".data(using: .ascii)!)
+        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome to AXTerm\r".data(using: .ascii)!)
 
         let peerCaps = AXDPCapability.defaultLocal()
         let pongMessage = AXDP.Message(type: .pong, sessionId: 0, messageId: 1, capabilities: peerCaps)
@@ -1346,7 +1349,7 @@ final class SessionCoordinatorTests: XCTestCase {
 
         // Establish capabilities
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
-        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome\r".data(using: .ascii)!)
+        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome to AXTerm\r".data(using: .ascii)!)
         let peerCaps = AXDPCapability.defaultLocal()
         let pongMessage = AXDP.Message(type: .pong, sessionId: 0, messageId: 1, capabilities: peerCaps)
         coordinator.handleCapabilityMessage(pongMessage, from: peer, path: DigiPath())

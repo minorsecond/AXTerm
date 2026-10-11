@@ -238,6 +238,8 @@ final class StationServices {
         }
         // Also restores the NET/ROM node policy; see `appSettings`.
         coordinator.appSettings = settings
+        // Which stations run AXTerm, kept across launches (finding 6).
+        coordinator.peerMemory = AXDPPeerMemory(defaults: settings.defaults)
         // An APRS position beacon that follows the station reads the station
         // position at send time, from the same resolver the map uses.
         coordinator.aprsLocationProvider = StationPositionResolver.beaconProvider(

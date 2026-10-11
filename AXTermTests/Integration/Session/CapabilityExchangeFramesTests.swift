@@ -75,7 +75,7 @@ final class CapabilityExchangeFramesTests: XCTestCase {
         _ = session.stateMachine.handle(event: .connectRequest)
         _ = session.stateMachine.handle(event: .receivedUA)
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
-        coordinator.sessionManager.onDataDeliveredForReassembly?(session, Data("Welcome\r".utf8))
+        coordinator.sessionManager.onDataDeliveredForReassembly?(session, Data("Welcome to AXTerm\r".utf8))
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .pending)
 
         var events: [CapabilityDebugEventType] = []
@@ -101,6 +101,9 @@ final class CapabilityExchangeFramesTests: XCTestCase {
             station.coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = true
         }
         caller.coordinator.testTextProbeFallbackDelay = 0.1
+        // The answering station sends no greeting, so the caller probes it
+        // only because it remembers it as AXTerm (finding 6).
+        caller.coordinator.peerMemory.record(.axterm, for: "K0BBB-2")
         answerer.coordinator.testTextProbeFallbackDelay = 60
         var frames: [String] = []
         for station in [caller!, answerer!] {

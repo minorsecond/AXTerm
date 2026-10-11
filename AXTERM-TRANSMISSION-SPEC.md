@@ -508,6 +508,9 @@ Cache fields:
 	•	maxDecompressedLen
 
 When to negotiate
+
+Decision (2026-10-10, retest finding 6): about one station in a thousand runs AXTerm, so the automatic probe goes only where it can be answered. On a link we opened, the text probe goes after the station's first data only if that data says "AXTerm" (the mailbox greeting does) or the station is remembered as AXTerm; the 15 s fallback for a station that sends nothing probes only a remembered AXTerm station. A check is one attempt with no retries (`AXDPCapabilityProbe.maxAttempts`). What is learned is kept across launches (`AXDPPeerMemory`): a station heard speaking AXDP is AXTerm for 30 days, one that did not answer is left alone for a day. Opening the Send File sheet with AXDP still asks a station nobody has. AXTerm is unreleased, so this replaced the old rules outright.
+
 	•	On first contact with a peer (no cache)
 	•	When cache is stale (e.g., >24h)
 	•	When a transfer starts and you want compression or SACK but don’t know peer support
