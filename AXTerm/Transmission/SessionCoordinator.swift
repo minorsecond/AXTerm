@@ -2727,6 +2727,18 @@ final class SessionCoordinator: ObservableObject {
         // Wire up AXDP reassembly - must use in-order delivered data only.
         // Out-of-window or buffered frames are discarded/buffered by AX.25; appending them
         // would corrupt reassembly (chunks arrive out of order over KISS relay).
+        // The XID marker's verdict (constitution retest 2026-10-11): an
+        // answer means AXTerm, anything else means not, and a "no" never
+        // overwrites a station already known as AXTerm.
+        sessionManager.onXIDShowedAXTerm = { [weak self] peer, isAXTerm in
+            guard let self else { return }
+            if isAXTerm {
+                if self.peerMemory.verdict(for: peer) != .axterm { self.peerMemory.record(.axterm, for: peer) }
+            } else if self.peerMemory.verdict(for: peer) == nil {
+                self.peerMemory.record(.notAXDP, for: peer)
+            }
+        }
+
         sessionManager.onDataDeliveredForReassembly = { [weak self] session, data in
             axDebugPrint("[DEBUG:DELIVERY] Data delivered for reassembly | from=\(session.remoteAddress.display) size=\(data.count) hex=\(data.prefix(16).map { String(format: "%02X", $0) }.joined())")
             self?.appendToReassemblyAndExtract(from: session.remoteAddress, path: session.path, data: data)

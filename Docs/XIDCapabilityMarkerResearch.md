@@ -230,3 +230,23 @@ None of these needs a radio. Use an audio loopback device (BlackHole on macOS, s
 5. Linux kernel stack (an older kernel or the mod-orphan modules) with `kissattach` on a pty to a loopback modem: expect DM, then a normal connect.
 6. QtSoundModem in AGW mode on loopback with a registered call: expect FRMR, then a normal connect.
 7. Two AXTerm instances (Station B as the signed test copy) on loopback: both learn the other runs AXTerm from the XID exchange alone, with no `AXDP?` probe sent.
+
+## Results so far (2026-10-11)
+
+The marker is built and off by default (`AX25SessionManager.sendsAXTermXIDMarker`):
+PI 0xC8, PL 4, value `41 58 01 51` for the question and `41 58 01 52` for the
+answer, last in group 0x80. `XIDAXTermMarkerTests` covers the encoding, the
+echo case, FRMR and DM, silence, answering a caller's question, and the
+switch.
+
+Dire Wolf 1.8.1 (Homebrew) was run twice on this Mac with no sound card or PTT,
+fed AXTerm's XID command over KISS, once without the marker and once with it.
+Dire Wolf's own decode of the frame, which uses the same `xid.c` parser as its
+receiver, read the same both times: "Half-Duplex REJ SREJ modulo-8
+I-Field-Length-Rx=256 Window-Size-Rx=4", with no error or length warning.
+
+The live connect between two Dire Wolf copies did not run. The macOS build uses
+PortAudio, and its `stdout` audio output wrote nothing, so the copies never
+heard each other. A virtual audio device (BlackHole) would let it run; that and
+the LinBPQ, kernel and QtSoundModem tests are still to do before the marker is
+switched on.

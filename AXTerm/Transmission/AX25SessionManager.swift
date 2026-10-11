@@ -1141,6 +1141,21 @@ final class AX25SessionManager: ObservableObject {
     /// belong to the station, not to any particular path or session.
     private(set) var peerXIDStatus: [String: PeerXIDStatus] = [:]
 
+    /// Puts AXTerm's marker in our XID commands and answers it in our XID
+    /// responses (operator, 2026-10-11). Off until the loopback tests
+    /// against Dire Wolf and the other stacks in
+    /// `Docs/XIDCapabilityMarkerResearch.md` have passed.
+    var sendsAXTermXIDMarker = false
+
+    /// What an XID exchange showed about the peer: true when it answered
+    /// our question or asked its own, false when it answered our question
+    /// with anything else (an XID without the answer, an echo, FRMR, DM).
+    /// Silence says nothing.
+    var onXIDShowedAXTerm: ((String, Bool) -> Void)?
+
+    /// Peers our XID asked, until they answer or time out.
+    private var askedAXTermInXID: Set<String> = []
+
     /// Answered XID verdicts, persisted — see XIDAnswerMemory. The
     /// in-memory cache above answers "this launch"; this answers "ever".
     var xidMemory = XIDAnswerMemory()
@@ -1991,11 +2006,16 @@ final class AX25SessionManager: ObservableObject {
     /// that treats silence as "pre-2.2". Returns the XID frame.
     private func beginXIDNegotiation(session: AX25Session) -> OutboundFrame {
         let peerKey = session.remoteAddress.display
+        var parameters = localXIDParameters(config: session.stateMachine.config)
+        if sendsAXTermXIDMarker {
+            parameters.axtermMarker = .question
+            askedAXTermInXID.insert(peerKey)
+        }
         let frame = AX25FrameBuilder.buildXID(
             from: session.localAddress,
             to: session.remoteAddress,
             via: session.path,
-            parameters: localXIDParameters(config: session.stateMachine.config),
+            parameters: parameters,
             isCommand: true,
             pf: true
         ).onRadio(session.radio)
@@ -2006,6 +2026,7 @@ final class AX25SessionManager: ObservableObject {
             guard let self else { return }
             guard self.pendingXID[peerKey] != nil else { return }
             TxLog.debug(.session, "XID timeout — peer treated as pre-2.2", ["peer": peerKey])
+            self.askedAXTermInXID.remove(peerKey)
             self.xidGaveUp[peerKey] = sessionKey
             self.resolveXID(peer: peerKey, status: .unsupported)
         }
@@ -2157,6 +2178,10 @@ final class AX25SessionManager: ObservableObject {
             if let parsed {
                 peerXIDStatus[peerKey] = .supported(parsed)
             }
+            if sendsAXTermXIDMarker, parsed?.axtermMarker == .question {
+                ours.axtermMarker = .answer
+                onXIDShowedAXTerm?(peerKey, true)
+            }
             debugTrace("RX XID command", ["peer": peerKey, "srej": ours.supportsSREJ ? 1 : 0])
             // Answered from the address the XID was sent to when that is
             // one of ours (a mailbox on its own SSID), as the SABM after it
@@ -2175,6 +2200,9 @@ final class AX25SessionManager: ObservableObject {
         }
 
         debugTrace("RX XID response", ["peer": peerKey, "parsed": parsed != nil ? 1 : 0])
+        if askedAXTermInXID.remove(peerKey) != nil {
+            onXIDShowedAXTerm?(peerKey, parsed?.axtermMarker == .answer)
+        }
         if let parsed {
             xidMemory.remember(peerKey, unsupported: false)
             resolveXID(peer: peerKey, status: .supported(parsed))
@@ -2189,6 +2217,7 @@ final class AX25SessionManager: ObservableObject {
     @discardableResult
     func handleInboundFRMRDuringNegotiation(from source: AX25Address, radio: RadioID) -> Bool {
         guard pendingXID[source.display] != nil else { return consumeLateXIDAnswer(from: source) }
+        if askedAXTermInXID.remove(source.display) != nil { onXIDShowedAXTerm?(source.display, false) }
         xidMemory.remember(source.display, unsupported: true)
         resolveXID(peer: source.display, status: .unsupported)
         return true
@@ -2214,6 +2243,7 @@ final class AX25SessionManager: ObservableObject {
     func handleInboundDMDuringNegotiation(from source: AX25Address, radio: RadioID) -> Bool {
         guard pendingXID[source.display] != nil else { return consumeLateXIDAnswer(from: source) }
         TxLog.debug(.session, "XID answered with DM — peer treated as pre-2.2", ["peer": source.display])
+        if askedAXTermInXID.remove(source.display) != nil { onXIDShowedAXTerm?(source.display, false) }
         xidMemory.remember(source.display, unsupported: true)
         resolveXID(peer: source.display, status: .unsupported)
         return true

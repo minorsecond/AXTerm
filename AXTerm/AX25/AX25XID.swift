@@ -35,6 +35,26 @@ nonisolated struct AX25XIDParameters: Equatable, Sendable {
     var windowSizeRx: Int?
     var ackTimerMs: Int?
     var retries: Int?
+    /// AXTerm's marker: the question in an XID command, the answer in a
+    /// response to a command that asked. Nothing but AXTerm sends either.
+    var axtermMarker: AXTermMarker?
+
+    /// The marker's value: "AX", a version, and a role byte that differs
+    /// between question and answer. BPQ builds its XID response by editing
+    /// the command it received, so the question can come back unchanged
+    /// from a station that is not AXTerm (`Docs/XIDCapabilityMarkerResearch.md`).
+    enum AXTermMarker: Equatable, Sendable {
+        case question
+        case answer
+
+        var value: [UInt8] { [0x41, 0x58, 0x01, self == .question ? 0x51 : 0x52] }
+    }
+
+    /// The marker's parameter identifier. Above the spec's 2 to 10, clear
+    /// of BPQ's compression (16, 17) and the values named in Dire Wolf
+    /// (65 to 67). Provisional until checked against the ISO/IEC 13239
+    /// parameter table.
+    static let axtermMarkerPI: UInt8 = 0xC8
 
     // MARK: - Field constants (Direwolf xid.c names)
 
@@ -105,6 +125,11 @@ nonisolated struct AX25XIDParameters: Equatable, Sendable {
         if let n2 = retries {
             body.append(contentsOf: [UInt8(PI.retries), 1, UInt8(clamping: n2)])
         }
+        // Last, with exactly four bytes: Dire Wolf stops reading a group at
+        // a parameter longer than four, and the order stays ascending.
+        if let axtermMarker {
+            body.append(contentsOf: [Self.axtermMarkerPI, 4] + axtermMarker.value)
+        }
 
         var out = Data([Self.formatIndicator, Self.groupIdentifier,
                         UInt8(body.count >> 8), UInt8(body.count & 0xFF)])
@@ -152,6 +177,9 @@ nonisolated struct AX25XIDParameters: Equatable, Sendable {
                 params.ackTimerMs = Int(value)
             case PI.retries:
                 params.retries = Int(value)
+            case Int(axtermMarkerPI) where pl == 4:
+                let bytes = Array(b[(index - pl)..<index])
+                params.axtermMarker = [AXTermMarker.question, .answer].first { $0.value == bytes }
             default:
                 break  // Unknown parameter — skip, never fail.
             }

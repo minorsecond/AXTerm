@@ -172,6 +172,20 @@ final class AXDPProbeTargetingTests: XCTestCase {
         XCTAssertNil(coordinator.peerMemory.verdict(for: peer.display), "the old answer is gone")
     }
 
+    /// What the XID exchange showed goes into the peer memory: an answer
+    /// to the marker is AXTerm, anything else is not, and a "no" never
+    /// overwrites a station already known as AXTerm.
+    func testTheXIDMarkerFillsTheMemory() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.peerMemory = AXDPPeerMemory(defaults: TestDefaults.make("AXDPXIDMarker"))
+        coordinator.sessionManager.onXIDShowedAXTerm?("K0EPI-3", true)
+        coordinator.sessionManager.onXIDShowedAXTerm?("N0NODE-7", false)
+        coordinator.sessionManager.onXIDShowedAXTerm?("K0EPI-3", false)
+        XCTAssertEqual(coordinator.peerMemory.verdict(for: "K0EPI-3"), .axterm)
+        XCTAssertEqual(coordinator.peerMemory.verdict(for: "N0NODE-7"), .notAXDP)
+    }
+
     /// AXDP heard from a station marks it as AXTerm for next time.
     func testAXDPHeardIsRemembered() {
         let coordinator = SessionCoordinator()
