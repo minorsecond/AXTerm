@@ -211,10 +211,17 @@ nonisolated struct BBSShell {
     /// device is paired.
     var ownerKeys: [OwnerKey.PairedDevice]?
     private let makeChallenge: () -> String
-    /// The challenge `OWNER KEY` sent, until a signature uses it up.
-    private var ownerChallenge: String?
+    /// The challenge outstanding, until a signature uses it up or it runs
+    /// out (`OwnerKey.challengeLifetime`).
+    private var ownerChallenge: (value: String, issued: Date)?
     /// Signed in with a right code or key, until the call ends.
     private(set) var isOwner = false
+    /// Signed in with a key: from then on each owner command must carry its
+    /// own signature, so anyone putting frames into the session under the
+    /// operator's callsign cannot use the sign-in.
+    private var ownerByKey = false
+    /// A signed owner command is running.
+    private var runningSignedCommand = false
 
     /// OWNER and ST exist for this caller.
     private var offersOwnerCommands: Bool { checkOwnerCode != nil || ownerKeys != nil }
@@ -401,6 +408,10 @@ nonisolated struct BBSShell {
             ? nil
             : String(rest.split(separator: " ")[0])
 
+        if ownerByKey, !runningSignedCommand, OwnerKey.signedCommands.contains(verb) {
+            return Output(lines: ["Owner commands from a paired device must be signed; AXTerm does it for you."])
+        }
+
         switch verb {
         case "H", "?", "HELP":
             return Output(lines: help())
@@ -409,7 +420,7 @@ nonisolated struct BBSShell {
         case "OP":
             return setPageLength(argument)
         case "OWNER" where offersOwnerCommands:
-            return signIn(rest, now: now)
+            return signIn(rest, mailbox: mailbox, now: now)
         case "ST" where offersOwnerCommands:
             guard isOwner else {
                 return Output(lines: ["Sign in first: OWNER and the six-digit code from your authenticator app."])
@@ -523,31 +534,17 @@ nonisolated struct BBSShell {
 
     // MARK: - Owner
 
-    private mutating func signIn(_ rest: String, now: Date) -> Output {
+    private mutating func signIn(_ rest: String, mailbox: Mailbox, now: Date) -> Output {
         let parts = rest.split(separator: " ", maxSplits: 1).map(String.init)
         let word = parts.first?.uppercased()
         if word == "KEY" {
             guard ownerKeys != nil else {
                 return Output(lines: ["No device is paired with this mailbox. Pair one in its owner settings at home."])
             }
-            let challenge = makeChallenge()
-            ownerChallenge = challenge
-            return Output(lines: [OwnerKey.challengePrefix + challenge])
+            return Output(lines: [newOwnerChallenge(now)])
         }
         if word == "SIG", let ownerKeys {
-            guard let challenge = ownerChallenge else {
-                return Output(lines: ["Ask for a challenge first: OWNER KEY."])
-            }
-            // Used up either way, so a wrong signature cannot be tried again.
-            ownerChallenge = nil
-            let signature = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
-            guard OwnerKey.verify(signature: signature, challenge: challenge, station: sysop, paired: ownerKeys) else {
-                return Output(lines: ["That signature is not from a paired device."],
-                              effects: [.ownerSignIn(accepted: false)])
-            }
-            isOwner = true
-            return Output(lines: ["Signed in as the owner until you disconnect. ST shows the station."],
-                          effects: [.ownerSignIn(accepted: true)])
+            return signedCommand(parts.count > 1 ? parts[1] : "", paired: ownerKeys, mailbox: mailbox, now: now)
         }
         guard let checkOwnerCode, let code = parts.first else {
             return Output(lines: [checkOwnerCode == nil
@@ -568,6 +565,51 @@ nonisolated struct BBSShell {
             return Output(lines: ["Too many wrong codes. Try again in 15 minutes."],
                           effects: [.ownerSignIn(accepted: false)])
         }
+    }
+
+    private mutating func newOwnerChallenge(_ now: Date) -> String {
+        let challenge = makeChallenge()
+        ownerChallenge = (challenge, now)
+        return OwnerKey.challengePrefix + challenge
+    }
+
+    /// `OWNER SIG <signature> [command]`. With no command it signs in; with
+    /// one it runs that command as the owner. Either way the challenge is
+    /// spent, and once signed in by key every answer brings the next one.
+    private mutating func signedCommand(_ text: String, paired: [OwnerKey.PairedDevice],
+                                        mailbox: Mailbox, now: Date) -> Output {
+        guard let outstanding = ownerChallenge else {
+            return Output(lines: ["Ask for a challenge first: OWNER KEY."])
+        }
+        ownerChallenge = nil
+        guard now.timeIntervalSince(outstanding.issued) <= OwnerKey.challengeLifetime else {
+            return Output(lines: ["That challenge has run out. Ask for a new one: OWNER KEY."])
+        }
+        let pieces = text.trimmingCharacters(in: .whitespaces)
+            .split(separator: " ", maxSplits: 1).map(String.init)
+        let signature = pieces.first ?? ""
+        let command = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
+        guard OwnerKey.verify(signature: signature, challenge: outstanding.value, station: sysop,
+                              caller: caller, command: command, paired: paired) else {
+            var lines = ["That signature is not from a paired device."]
+            if ownerByKey { lines.append(newOwnerChallenge(now)) }
+            return Output(lines: lines, effects: [.ownerSignIn(accepted: false)])
+        }
+        let signingIn = !ownerByKey
+        isOwner = true
+        ownerByKey = true
+        guard !command.isEmpty else {
+            return Output(lines: ["Signed in as the owner until you disconnect. Each owner command is signed.",
+                                  newOwnerChallenge(now)],
+                          effects: [.ownerSignIn(accepted: true)])
+        }
+        runningSignedCommand = true
+        var output = runCommand(command, mailbox: mailbox, now: now)
+        runningSignedCommand = false
+        // First, so a long answer's pages cannot hold it back.
+        output.lines.insert(newOwnerChallenge(now), at: 0)
+        if signingIn { output.effects.insert(.ownerSignIn(accepted: true), at: 0) }
+        return output
     }
 
     private func help() -> [String] {

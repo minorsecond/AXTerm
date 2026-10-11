@@ -2,15 +2,16 @@ import CryptoKit
 import Foundation
 import Security
 
-/// Signing in as the owner from another AXTerm with a key pair
+/// Owner commands from another AXTerm, signed with a key pair
 /// (Docs/RemoteAccessPlan.md, "Signing in").
 ///
 /// Each of the operator's devices has a P-256 signing key; the mailbox keeps
 /// the public keys of the devices paired with it. The mailbox sends a fresh
-/// challenge, and the device signs "AXTerm owner sign-in", the mailbox's
-/// callsign and the challenge. A recorded signature is no good for another
-/// challenge or another station. The challenge and signature go out as
-/// plain text beside the commands, which stay readable: proof, not a cipher.
+/// challenge, used once, and the device signs it together with the
+/// mailbox's callsign, its own callsign and the command (empty to sign in).
+/// A recorded signature is no good for another challenge, station, caller
+/// or command. The challenge and signature go out as plain text beside the
+/// commands, which stay readable: proof, not a cipher.
 nonisolated enum OwnerKey {
 
     /// A device allowed to sign in, by the name the operator gave it.
@@ -21,9 +22,15 @@ nonisolated enum OwnerKey {
         var id: String { publicKey }
     }
 
+    /// The owner commands. Signed in by key, each must carry a signature.
+    static let signedCommands: Set<String> = ["ST"]
+
+    /// How long a challenge may wait for its signature.
+    static let challengeLifetime: TimeInterval = 5 * 60
+
     /// What is signed.
-    static func message(challenge: String, station: String) -> Data {
-        Data("AXTerm owner sign-in\n\(station.uppercased())\n\(challenge)".utf8)
+    static func message(challenge: String, station: String, caller: String, command: String) -> Data {
+        Data("AXTerm owner command 2\n\(station.uppercased())\n\(caller.uppercased())\n\(challenge)\n\(command)".utf8)
     }
 
     static func encode(_ key: P256.Signing.PublicKey) -> String {
@@ -37,7 +44,7 @@ nonisolated enum OwnerKey {
         return try? P256.Signing.PublicKey(x963Representation: data)
     }
 
-    /// Sixteen random bytes as hex.
+    /// Sixteen random bytes as hex: 128 bits, as strong as P-256 itself.
     static func newChallenge() -> String {
         var bytes = [UInt8](repeating: 0, count: 16)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
@@ -45,15 +52,17 @@ nonisolated enum OwnerKey {
     }
 
     /// The signature, base64 of its 64-byte raw form.
-    static func sign(challenge: String, station: String, with key: P256.Signing.PrivateKey) throws -> String {
-        try key.signature(for: message(challenge: challenge, station: station)).rawRepresentation
-            .base64EncodedString()
+    static func sign(challenge: String, station: String, caller: String, command: String,
+                     with key: P256.Signing.PrivateKey) throws -> String {
+        try key.signature(for: message(challenge: challenge, station: station, caller: caller, command: command))
+            .rawRepresentation.base64EncodedString()
     }
 
-    static func verify(signature: String, challenge: String, station: String, paired: [PairedDevice]) -> Bool {
+    static func verify(signature: String, challenge: String, station: String, caller: String, command: String,
+                       paired: [PairedDevice]) -> Bool {
         guard let raw = Data(base64Encoded: signature),
               let ecdsa = try? P256.Signing.ECDSASignature(rawRepresentation: raw) else { return false }
-        let signed = message(challenge: challenge, station: station)
+        let signed = message(challenge: challenge, station: station, caller: caller, command: command)
         return paired.contains { device in
             decode(device.publicKey)?.isValidSignature(ecdsa, for: signed) ?? false
         }
@@ -123,30 +132,63 @@ nonisolated struct OwnerDeviceKey: Sendable {
         stored().map { OwnerKey.encode($0.publicKey) }
     }
 
-    /// The answer to a mailbox's challenge.
-    func sign(challenge: String, station: String) -> String? {
-        try? stored()?.signature(for: OwnerKey.message(challenge: challenge, station: station))
+    /// A signature over a command (empty to sign in) for a mailbox's challenge.
+    func sign(challenge: String, station: String, caller: String, command: String) -> String? {
+        try? stored()?.signature(for: OwnerKey.message(challenge: challenge, station: station, caller: caller,
+                                                       command: command))
             .rawRepresentation.base64EncodedString()
     }
 }
 
-/// The terminal's side of a key sign-in: after Sign In as Owner sends
-/// `OWNER KEY`, the mailbox's challenge line is answered with
-/// `OWNER SIG <signature>`, once, and only from the station asked.
+/// The terminal's side of owner commands by key. Sign In as Owner sends
+/// `OWNER KEY`; the mailbox's challenge is answered with a signature over no
+/// command, once, and only for the station asked. From then on each reply
+/// brings the next challenge, and an owner command the operator types goes
+/// out as `OWNER SIG <signature> <command>` with it.
 nonisolated struct OwnerSignInResponder: Sendable {
+    typealias Sign = (_ challenge: String, _ station: String, _ caller: String, _ command: String) -> String?
+
     private var pending: Set<String> = []
+    private var signedIn: Set<String> = []
+    /// The last challenge from each signed-in mailbox, until a command uses it.
+    private var current: [String: String] = [:]
 
     mutating func begin(peer: String) {
         pending.insert(peer.uppercased())
     }
 
-    /// The line to send back, or nil when this line needs no answer.
-    mutating func reply(toLine line: String, from peer: String,
-                        sign: (_ challenge: String, _ station: String) -> String?) -> String? {
+    /// The session ended: nothing more is signed for it.
+    mutating func end(peer: String) {
         let key = peer.uppercased()
-        guard pending.contains(key), let challenge = OwnerKey.challenge(inLine: line) else { return nil }
         pending.remove(key)
-        guard let signature = sign(challenge, key) else { return nil }
+        signedIn.remove(key)
+        current[key] = nil
+    }
+
+    /// The line to send back, or nil when this line needs no answer.
+    mutating func reply(toLine line: String, from peer: String, caller: String, sign: Sign) -> String? {
+        let key = peer.uppercased()
+        guard let challenge = OwnerKey.challenge(inLine: line) else { return nil }
+        guard pending.contains(key) else {
+            if signedIn.contains(key) { current[key] = challenge }
+            return nil
+        }
+        pending.remove(key)
+        guard let signature = sign(challenge, key, caller.uppercased(), "") else { return nil }
+        signedIn.insert(key)
         return "OWNER SIG \(signature)"
+    }
+
+    /// The line as it should go out: signed when it is an owner command to
+    /// a mailbox signed in to, nil to send it as typed.
+    mutating func signed(line: String, to peer: String, caller: String, sign: Sign) -> String? {
+        let key = peer.uppercased()
+        let command = line.trimmingCharacters(in: .whitespaces)
+        guard let verb = command.split(separator: " ").first.map({ $0.uppercased() }),
+              OwnerKey.signedCommands.contains(verb),
+              let challenge = current[key] else { return nil }
+        current[key] = nil
+        guard let signature = sign(challenge, key, caller.uppercased(), command) else { return nil }
+        return "OWNER SIG \(signature) \(command)"
     }
 }

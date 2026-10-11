@@ -925,14 +925,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     private func answerOwnerChallenge(_ line: Data, from key: String) {
         guard let text = String(data: line, encoding: .utf8),
-              let reply = ownerSignIn.reply(toLine: text, from: key, sign: { challenge, station in
-                  OwnerDeviceKey().sign(challenge: challenge, station: station)
-              }),
               let session = sessionManager.sessions.values.first(where: {
                   $0.state == .connected && $0.remoteAddress.display.uppercased() == key
-              }) else { return }
+              }),
+              let reply = ownerSignIn.reply(toLine: text, from: key, caller: session.localAddress.display,
+                                            sign: OwnerDeviceKey().sign) else { return }
         sendFrames?(sessionManager.sendData(Data((reply + "\r").utf8), to: session.remoteAddress,
                                             path: session.path, radio: session.radio, displayInfo: "OWNER SIG"))
+    }
+
+    /// A typed line as it goes out: an owner command to a mailbox signed in
+    /// to by key carries its signature (Docs/RemoteAccessPlan.md).
+    func ownerSigned(_ line: String) -> String {
+        guard let session = currentSession, session.state == .connected else { return line }
+        return ownerSignIn.signed(line: line, to: session.remoteAddress.display, caller: session.localAddress.display,
+                                  sign: OwnerDeviceKey().sign) ?? line
     }
 
     private func createSessionNotification(for session: AX25Session, oldState: AX25SessionState, newState: AX25SessionState) -> SessionNotification? {
@@ -1048,6 +1055,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                 if (newState == .disconnected || newState == .error),
                    oldState != .disconnected, oldState != .error {
                     self?.textRecorder.linkClosed(key: session.remoteAddress.display)
+                    self?.ownerSignIn.end(peer: session.remoteAddress.display)
                 }
 
                 // Show notification for significant state changes
@@ -3863,15 +3871,16 @@ struct TerminalView: View {
         }
 
         // Build payload
-        let text = txViewModel.viewModel.composeText
-        DownloadCommandMemory.shared.learn(typed: text, to: txViewModel.viewModel.destinationCall)
+        let typed = txViewModel.viewModel.composeText
+        DownloadCommandMemory.shared.learn(typed: typed, to: txViewModel.viewModel.destinationCall)
         let inboundRecord = txViewModel.currentSession.flatMap {
             sessionCoordinator.inboundRecordID(for: $0.remoteAddress)
         }
-        if let id = inboundRecord ?? activeSessionRecordID, !text.isEmpty {
-            sessionRecorder?.recorded(line: "> \(text)", for: id,
-                                      sent: true, bytes: text.utf8.count)
+        if let id = inboundRecord ?? activeSessionRecordID, !typed.isEmpty {
+            sessionRecorder?.recorded(line: "> \(typed)", for: id,
+                                      sent: true, bytes: typed.utf8.count)
         }
+        let text = txViewModel.ownerSigned(typed)
         // A blank line is a bare CR, never an AXDP message.
         let useAXDP = txViewModel.viewModel.useAXDP && !text.isEmpty
         
