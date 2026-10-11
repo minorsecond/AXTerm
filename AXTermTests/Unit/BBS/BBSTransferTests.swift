@@ -675,6 +675,21 @@ final class BBSTransferTests: XCTestCase {
         XCTAssertEqual(axdpReplies().first.map(AXDPUploadAreas.names(in:)), [])
     }
 
+    /// Constitution retest 2026-10-11, finding 5: an AXTerm caller asks
+    /// the mailbox about AXDP inside the session, and the PONG comes back
+    /// the same way, where AX.25 resends it if it is lost.
+    func testTheMailboxAnswersACapabilityPingInTheSession() async throws {
+        try await connect()
+        caller.clearReceived()
+        caller.send(AXDP.Message(type: .ping, sessionId: 0, messageId: 43,
+                                 capabilities: AXDPCapability.defaultLocal()).encode())
+        await caller.pump { !self.axdpReplies().isEmpty }
+        let reply = try XCTUnwrap(axdpReplies().first)
+        XCTAssertEqual(reply.type, .pong)
+        XCTAssertEqual(reply.messageId, 43)
+        XCTAssertNotNil(reply.capabilities)
+    }
+
     // MARK: - Trusted callers into an area (home retest finding 11)
 
     private func trustCallerIntoOPS() {

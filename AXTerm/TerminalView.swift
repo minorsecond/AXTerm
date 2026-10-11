@@ -5633,6 +5633,9 @@ struct TerminalViewModifiers: ViewModifier {
                     requestCapabilityCheck: { callsign in
                         sessionCoordinator.requestCapabilityCheck(for: callsign)
                     },
+                    checkCapabilityAgain: { callsign in
+                        sessionCoordinator.checkAXDPAgain(for: callsign)
+                    },
                     measuredRate: { callsign in
                         sessionCoordinator.measuredTransferRates[callsign.uppercased()]
                     },

@@ -942,12 +942,11 @@ struct SendFileCapabilityBadgeText {
             help = "Station supports AXDP file transfers"
         case .pending:
             label = "Checking\u{2026}"
-            help = "Asking \(callsign) whether it speaks AXDP, up to \(AXDPCapabilityProbe.maxAttempts) times. "
-                + "YAPP can be used while it waits."
+            help = "Asking \(callsign) whether it speaks AXDP. YAPP can be used while it waits."
         case .notSupported:
             label = "No answer"
-            help = "\(callsign) did not answer the AXDP check after \(AXDPCapabilityProbe.maxAttempts) tries. "
-                + "Send by YAPP, which most packet software understands."
+            help = "\(callsign) did not answer the AXDP check. Send by YAPP, which most packet software "
+                + "understands, or click Check Again to ask once more."
         case .unknown:
             label = "Unknown"
             help = "AXDP capability not yet checked"
@@ -973,6 +972,8 @@ struct SendFileSheet: View {
 
     /// Optional closure to start an AXDP check for a station nobody has asked yet
     var requestCapabilityCheck: ((String) -> Void)?
+    /// Asks a station that gave no answer once more (Check Again).
+    var checkCapabilityAgain: ((String) -> Void)?
     /// The rate of the last transfer with a station, for the airtime.
     var measuredRate: ((String) -> Double?)?
     /// Types `U <AREA>` to the station before the file (destination, area),
@@ -1611,17 +1612,24 @@ struct SendFileSheet: View {
                 .help(text.help)
 
             case .notSupported:
-                HStack(spacing: 2) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.orange)
-                    Text(text.label)
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
+                HStack(spacing: 6) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.orange)
+                        Text(text.label)
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.1))
+                    .clipShape(Capsule())
+                    if let checkCapabilityAgain {
+                        Button("Check Again") { checkCapabilityAgain(callsign) }
+                            .font(.caption2)
+                            .buttonStyle(.borderless)
+                    }
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.orange.opacity(0.1))
-                .clipShape(Capsule())
                 .help(text.help)
 
             case .unknown:

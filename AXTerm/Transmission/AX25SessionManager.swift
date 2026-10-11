@@ -4172,6 +4172,16 @@ final class AX25SessionManager: ObservableObject {
         }
     }
 
+    /// Send the acknowledgment T2 is holding for `session` now, if it is
+    /// holding one. For a frame AXTerm is about to send that cannot carry
+    /// N(R) itself, a UI probe: the two go in one transmission instead of the
+    /// RR keying up later, on top of the answer (constitution retest
+    /// 2026-10-11, finding 5).
+    func sendHeldAck(for session: AX25Session) {
+        guard session.t2TimerTask != nil else { return }
+        fireT2(for: session)
+    }
+
     /// The radio's own modem heard the carrier end. T2 waits in case more
     /// of the peer's transmission follows (AX.25 2.2 §6.7.1.2); once the
     /// channel is clear nothing more of it is coming, so an ack held for it

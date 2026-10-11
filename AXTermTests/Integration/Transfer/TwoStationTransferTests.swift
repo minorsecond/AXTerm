@@ -26,6 +26,8 @@ final class CrossKISSLink: KISSLink {
     weak var peer: CrossKISSLink?
     /// Radio silence: frames sent while this is set never arrive.
     var silenced = false
+    /// The next frame whose bytes contain this is lost, once: a collision.
+    var losesNextFrameContaining: Data?
     private(set) var framesSent = 0
 
     var endpointDescription: String { "in-memory" }
@@ -44,6 +46,10 @@ final class CrossKISSLink: KISSLink {
         framesSent += 1
         completion(nil)
         guard !silenced else { return }
+        if let marker = losesNextFrameContaining, data.range(of: marker) != nil {
+            losesNextFrameContaining = nil
+            return
+        }
         DispatchQueue.main.async { [weak peer] in
             guard let peer, !peer.silenced else { return }
             peer.delegate?.linkDidReceive(data)

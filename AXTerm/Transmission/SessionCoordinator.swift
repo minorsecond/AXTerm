@@ -2918,31 +2918,31 @@ final class SessionCoordinator: ObservableObject {
                     self.announceConnection(peer, false)
                 }
 
-                if isInitiator && axdpEnabled && autoNegotiate {
-                    if self.isAXDPNotSupported(for: peer) {
-                        // Known non-AXDP peer — skip entirely
-                        self.debugAXDP("Session connected, skipping probe (peer marked not-supported)", [
+                if axdpEnabled && autoNegotiate {
+                    if let known = self.peerMemory.capabilities(for: peer) {
+                        // Remembered with its capabilities: confirmed now,
+                        // with nothing sent (constitution retest
+                        // 2026-10-11, finding 1).
+                        self.packetEngine?.capabilityStore.store(known, for: session.remoteAddress.call,
+                                                                 ssid: session.remoteAddress.ssid)
+                        self.markImplicitlyConfirmedAXDP(for: peer)
+                        self.debugAXDP("Session connected, AXTerm remembered with capabilities", [
                             "peer": session.remoteAddress.display
                         ])
                     } else {
-                        // Schedule text-safe probe after first inbound I-frame (or fallback timer).
-                        // Text probes are plain ASCII — harmless to legacy nodes (treated as unknown command).
-                        // Note: invalidateCapability clears confirmed state on disconnect, so peers
-                        // are always re-probed on reconnect. This is intentional — the peer may have
-                        // changed software between sessions.
+                        // Either side checks once, after the station's first
+                        // data or when the fallback runs out; the policy
+                        // decides how (`AXDPProbePolicy`).
                         self.pendingTextProbe.insert(peer)
                         self.scheduleTextProbeFallback(for: session)
-                        self.debugAXDP("Session connected, scheduling text probe", [
-                            "peer": session.remoteAddress.display
-                        ])
-                        TxLog.debug(.capability, "Session connected (initiator), will send text probe", [
-                            "peer": session.remoteAddress.display
+                        self.debugAXDP("Session connected, capability check scheduled", [
+                            "peer": session.remoteAddress.display,
+                            "isInitiator": isInitiator
                         ])
                     }
                 } else {
-                    self.debugAXDP("Session connected, no probe (responder or AXDP disabled)", [
+                    self.debugAXDP("Session connected, no capability check (AXDP or negotiation off)", [
                         "peer": session.remoteAddress.display,
-                        "isInitiator": isInitiator,
                         "axdpEnabled": axdpEnabled
                     ])
                 }
@@ -3066,10 +3066,10 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Send an AXDP PING to a connected session to discover capabilities
-    func sendCapabilityPing(to session: AX25Session) {
+    func sendCapabilityPing(to session: AX25Session, overridingRememberedNo: Bool = false) {
         let peerCallsign = session.remoteAddress.display.uppercased()
 
-        if isAXDPNotSupported(for: peerCallsign) {
+        if !overridingRememberedNo && isAXDPNotSupported(for: peerCallsign) {
             TxLog.debug(.capability, "Skipping PING - peer previously marked not supported", [
                 "peer": peerCallsign
             ])
@@ -3101,9 +3101,9 @@ final class SessionCoordinator: ObservableObject {
 
         let payload = pingMessage.encode()
 
-        // Track that we're waiting for a response. The PING rides the
-        // session's I-frames, but the PONG comes back as a UI frame that
-        // nothing retransmits, so this check is retried like the text probe.
+        // The PING and the PONG both ride the session's I-frames, which
+        // AX.25 resends, so the check waits long enough for that recovery
+        // rather than asking again itself.
         startCapabilityCheck(
             for: peerCallsign,
             kind: .ping(destination: session.remoteAddress, path: session.path, payload: payload),
@@ -3139,14 +3139,25 @@ final class SessionCoordinator: ObservableObject {
     ///
     /// Only to a station that says it runs AXTerm, or one remembered as
     /// AXTerm (`AXDPProbePolicy`, finding 6).
-    private func sendTextProbeIfNeeded(for session: AX25Session, firstData: Data) {
+    /// The one capability check for a session, after the station's first
+    /// data (or nil, when the fallback ran out first).
+    private func sendTextProbeIfNeeded(for session: AX25Session, firstData: Data?) {
         let peer = session.remoteAddress.display.uppercased()
         guard pendingTextProbe.remove(peer) != nil else { return }
-        guard AXDPProbePolicy.probesAfterFirstData(firstData, remembered: peerMemory.verdict(for: peer)) else {
-            debugAXDP("No probe: the station does not say it runs AXTerm", ["peer": peer])
-            return
+        switch AXDPProbePolicy.check(afterData: firstData, remembered: peerMemory.verdict(for: peer)) {
+        case .none:
+            debugAXDP("No capability check: remembered as not AXTerm", ["peer": peer])
+        case .inSession:
+            guard axdpAllowed(on: session.radio), !sessionManager.hasDeliveryClaim(for: session.key) else { return }
+            sendCapabilityPing(to: session, overridingRememberedNo: true)
+        case .probe:
+            // On the next turn, once this frame's handling has armed the
+            // acknowledgment it owes, so that goes out with the probe.
+            Task { @MainActor [weak self] in
+                guard let self, session.state == .connected else { return }
+                self.sendTextProbe(to: session)
+            }
         }
-        sendTextProbe(to: session)
     }
 
     /// Send the plain-text `AXDP?\r` probe as a **UI frame** (connectionless).
@@ -3185,6 +3196,11 @@ final class SessionCoordinator: ObservableObject {
     /// every retry come through here.
     private func transmitTextProbe(to session: AX25Session) {
         guard let probeData = Self.axdpTextProbe.data(using: .ascii) else { return }
+
+        // The acknowledgment the session is holding goes first, in the same
+        // transmission. Sent on its timer it went out on top of the answer
+        // (constitution retest 2026-10-11, finding 5).
+        sessionManager.sendHeldAck(for: session)
 
         // Send as UI frame — outside the connected-mode data flow. From the
         // session's own address, on the session's radio.
@@ -3329,15 +3345,15 @@ final class SessionCoordinator: ObservableObject {
         Task { @MainActor in
             let nanos = UInt64(fallbackDelay * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanos)
-            guard self.pendingTextProbe.remove(peer) != nil else { return }
-            guard session.state == .connected else { return }
-            // A station that has said nothing is probed only if it is known
-            // to run AXTerm (finding 6).
-            guard AXDPProbePolicy.probesWithoutData(remembered: self.peerMemory.verdict(for: peer)) else { return }
-            self.debugAXDP("Text probe fallback timer fired", [
+            guard self.pendingTextProbe.contains(peer) else { return }
+            guard session.state == .connected else {
+                self.pendingTextProbe.remove(peer)
+                return
+            }
+            self.debugAXDP("Capability check fallback timer fired", [
                 "peer": session.remoteAddress.display
             ])
-            self.sendTextProbe(to: session)
+            self.sendTextProbeIfNeeded(for: session, firstData: nil)
         }
     }
 
@@ -3401,10 +3417,11 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Send an AXDP PONG response to a received PING, always via UI frame.
-    /// Keeps all capability negotiation out of the connected-mode I-frame stream.
+    /// Send an AXDP PONG in answer to a PING, the way the PING came: inside
+    /// the session (or through the mailbox's `reply`) or in a UI frame.
     private func sendCapabilityPong(to address: AX25Address, path: DigiPath, sessionId: UInt32, messageId: UInt32,
-                                    radio: RadioID? = nil) {
+                                    radio: RadioID? = nil, viaSession: Bool = false,
+                                    reply: ((Data) -> Void)? = nil) {
         let localCaps = AXDPCapability.defaultLocal()
         let pongMessage = AXDP.Message(
             type: .pong,
@@ -3412,8 +3429,20 @@ final class SessionCoordinator: ObservableObject {
             messageId: messageId,
             capabilities: localCaps
         )
+        let pongEvent = CapabilityDebugEvent(type: .pongSent, peer: address.display, capabilities: localCaps)
 
-        // Always respond via UI frame — capability exchange stays outside connected-mode data flow
+        if let reply {
+            reply(pongMessage.encode())
+            TxLog.outbound(.capability, "Sent AXDP PONG in the mailbox session", ["dest": address.display])
+            onCapabilityEvent?(pongEvent)
+            return
+        }
+        if viaSession, sendAXDPPayload(pongMessage.encode(), to: address, path: path, displayInfo: "AXDP PONG") {
+            TxLog.outbound(.capability, "Sent AXDP PONG via session", ["dest": address.display])
+            onCapabilityEvent?(pongEvent)
+            return
+        }
+
         let origin = uiOrigin(to: address, radio: radio)
         let frame = OutboundFrame(
             radio: origin.radio,
@@ -3696,6 +3725,12 @@ final class SessionCoordinator: ObservableObject {
         }
 
         let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
+        // Heard running AXTerm, whoever the frame was for (finding 1).
+        // Written once, not on every frame of a transfer.
+        if let station = AXTermSign.station(in: packet), !sessionManager.answers(from),
+           peerMemory.verdict(for: station) != .axterm {
+            peerMemory.record(.axterm, for: station)
+        }
         // Only process packets addressed to us — the station callsign, or any
         // address a service has registered (see `AX25SessionManager.answers`).
         guard sessionManager.answers(to) else {
@@ -3970,7 +4005,7 @@ final class SessionCoordinator: ObservableObject {
             // This allows TerminalView to clear the peersInAXDPReassembly flag,
             // so subsequent plain text from this peer will be delivered.
             onAXDPReassemblyComplete?(from)
-            handleAXDPMessageDecoded(from: from, path: path, message: message)
+            handleAXDPMessageDecoded(from: from, path: path, message: message, viaSession: true)
         }
     }
 
@@ -4019,8 +4054,10 @@ final class SessionCoordinator: ObservableObject {
     #endif
 
     /// Handle a fully decoded AXDP message (used after reassembly or single-frame).
+    /// `viaSession`: it came in the connected session's I-frames, not a UI
+    /// frame.
     private func handleAXDPMessageDecoded(from: AX25Address, path: DigiPath, message: AXDP.Message,
-                                          radio: RadioID? = nil) {
+                                          radio: RadioID? = nil, viaSession: Bool = false) {
         debugAXDP("RX", [
             "type": String(describing: message.type),
             "from": from.display,
@@ -4035,7 +4072,7 @@ final class SessionCoordinator: ObservableObject {
 
         switch message.type {
         case .ping, .pong:
-            handleCapabilityMessage(message, from: from, path: path, radio: radio)
+            handleCapabilityMessage(message, from: from, path: path, radio: radio, viaSession: viaSession)
 
         case .fileMeta:
             handleFileMetaMessage(message, from: from, path: path)
@@ -4115,8 +4152,12 @@ final class SessionCoordinator: ObservableObject {
 
     /// Handle PING/PONG capability messages
     /// This method is internal to allow testing
+    /// A PING that came inside the session (`viaSession`, or through a
+    /// mailbox's `reply`) is answered the same way, where AX.25 resends a
+    /// lost PONG; one that came in a UI frame is answered in one.
     func handleCapabilityMessage(_ message: AXDP.Message, from: AX25Address, path: DigiPath,
-                                 radio: RadioID? = nil) {
+                                 radio: RadioID? = nil, viaSession: Bool = false,
+                                 reply: ((Data) -> Void)? = nil) {
         guard let caps = message.capabilities else { return }
 
         let peerCallsign = from.display.uppercased()
@@ -4124,6 +4165,8 @@ final class SessionCoordinator: ObservableObject {
 
         // Receiving a valid PING/PONG proves the peer supports AXDP
         markImplicitlyConfirmedAXDP(for: peerCallsign)
+        // Kept with the verdict, so the next connection starts confirmed.
+        peerMemory.record(.axterm, for: peerCallsign, capabilities: caps)
 
         // Store capabilities in the capability store
         packetEngine?.capabilityStore.store(caps, for: from.call, ssid: from.ssid)
@@ -4177,9 +4220,19 @@ final class SessionCoordinator: ObservableObject {
                 path: path,
                 sessionId: message.sessionId,
                 messageId: message.messageId,
-                radio: radio
+                radio: radio,
+                viaSession: viaSession,
+                reply: reply
             )
         }
+    }
+
+    /// A PING the mailbox read in its caller's session. The PONG goes back
+    /// the same way, written by the mailbox.
+    func receiveMailboxCapabilityPing(_ message: AXDP.Message, from caller: AX25Address,
+                                      reply: @escaping (Data) -> Void) {
+        guard message.type == .ping else { return }
+        handleCapabilityMessage(message, from: caller, path: DigiPath(), reply: reply)
     }
 
     // MARK: - AXDP Send Helper
@@ -4322,7 +4375,9 @@ final class SessionCoordinator: ObservableObject {
 
     /// Record a capability check that is going out now and start its timer.
     private func startCapabilityCheck(for callsign: String, kind: CapabilityProbeKind, rto: TimeInterval?) {
-        let probe = AXDPCapabilityProbe(sentAt: Date(), rto: rto)
+        let inSession: Bool
+        if case .ping = kind { inSession = true } else { inSession = false }
+        let probe = AXDPCapabilityProbe(sentAt: Date(), rto: rto, inSession: inSession)
         pendingCapabilityDiscovery[callsign.uppercased()] = PendingCapabilityCheck(probe: probe, kind: kind)
         scheduleCapabilityProbeTimer(after: probe.interval)
     }
@@ -4404,7 +4459,35 @@ final class SessionCoordinator: ObservableObject {
         let address = AX25Address(call: parsed.call, ssid: parsed.ssid)
         guard let session = sessionManager.connectedSession(withPeer: address) else { return }
         let peer = session.remoteAddress.display.uppercased()
-        guard !pendingTextProbe.contains(peer), capabilityStatus(for: peer) == .unknown else { return }
+        guard capabilityStatus(for: peer) == .unknown else { return }
+        // The check scheduled at connect, if it has not run yet, runs now:
+        // the operator is waiting on the answer.
+        pendingTextProbe.remove(peer)
+        switch AXDPProbePolicy.check(afterData: nil, remembered: peerMemory.verdict(for: peer)) {
+        case .none:
+            return
+        case .inSession:
+            guard axdpAllowed(on: session.radio), !sessionManager.hasDeliveryClaim(for: session.key) else { return }
+            sendCapabilityPing(to: session)
+        case .probe:
+            sendTextProbe(to: session)
+        }
+        objectWillChange.send()
+    }
+
+    /// The operator's Check Again on a "No answer" badge: forgets what is
+    /// remembered about the station and sends the probe once more
+    /// (constitution retest 2026-10-11, finding 1).
+    func checkAXDPAgain(for callsign: String) {
+        guard globalAdaptiveSettings.axdpExtensionsEnabled else { return }
+        let parsed = CallsignNormalizer.parse(callsign)
+        let address = AX25Address(call: parsed.call, ssid: parsed.ssid)
+        guard let session = sessionManager.connectedSession(withPeer: address) else { return }
+        let peer = session.remoteAddress.display.uppercased()
+        axdpNotSupported.removeValue(forKey: peer)
+        pendingCapabilityDiscovery.removeValue(forKey: peer)
+        pendingTextProbe.remove(peer)
+        peerMemory.forget(peer)
         sendTextProbe(to: session)
         objectWillChange.send()
     }

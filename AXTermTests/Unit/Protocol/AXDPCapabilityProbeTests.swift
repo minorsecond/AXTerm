@@ -103,7 +103,8 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
         _ = session.stateMachine.handle(event: .connectRequest)
         _ = session.stateMachine.handle(event: .receivedUA)
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
-        // A greeting that says AXTerm: only such a station is probed (finding 6).
+        // A greeting that says AXTerm: the check goes inside the session, as
+        // one PING that AX.25 resends and this does not (findings 5 and 6).
         coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Hello from AXTerm\r".data(using: .ascii)!)
         return session
     }
@@ -117,7 +118,7 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
     func testALostPongIsNotAskedAgain() {
         let start = Date()
         let session = connectAsInitiatorAndProbe()
-        let interval = AXDPCapabilityProbe.interval(rto: session.timers.rto)
+        let interval = AXDPCapabilityProbe.inSessionWait(rto: session.timers.rto)
         XCTAssertEqual(sends.count, 1, "the probe")
 
         coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(interval / 2))
@@ -137,7 +138,7 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
     func testStatusStopsBeingPendingWhenTheScheduleRunsOut() {
         let start = Date()
         let session = connectAsInitiatorAndProbe()
-        let bound = AXDPCapabilityProbe.totalWait(rto: session.timers.rto)
+        let bound = AXDPCapabilityProbe.inSessionWait(rto: session.timers.rto)
 
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display, now: start.addingTimeInterval(1)), .pending)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display, now: start.addingTimeInterval(bound + 1)),
@@ -147,7 +148,7 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
     func testAPongStopsFurtherAttempts() {
         let start = Date()
         let session = connectAsInitiatorAndProbe()
-        let interval = AXDPCapabilityProbe.interval(rto: session.timers.rto)
+        let interval = AXDPCapabilityProbe.inSessionWait(rto: session.timers.rto)
 
         coordinator.handleCapabilityMessage(pong(), from: peer, path: DigiPath())
         let afterPong = sends.count   // includes our own PING, the other half of the exchange
@@ -177,7 +178,7 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
     func testAPongAfterGivingUpStillConfirmsAXDP() {
         let start = Date()
         let session = connectAsInitiatorAndProbe()
-        let interval = AXDPCapabilityProbe.interval(rto: session.timers.rto)
+        let interval = AXDPCapabilityProbe.inSessionWait(rto: session.timers.rto)
         coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(interval + 0.5))
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .notSupported)
 
@@ -190,7 +191,7 @@ final class AXDPCapabilityProbeRetryTests: XCTestCase {
     func testDisconnectEndsTheRetries() {
         let start = Date()
         let session = connectAsInitiatorAndProbe()
-        let interval = AXDPCapabilityProbe.interval(rto: session.timers.rto)
+        let interval = AXDPCapabilityProbe.inSessionWait(rto: session.timers.rto)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connected, .disconnected)
         coordinator.runCapabilityProbeTimers(now: start.addingTimeInterval(interval + 0.5))
@@ -264,6 +265,15 @@ final class SendFileCapabilityBadgeTextTests: XCTestCase {
         XCTAssertEqual(text.label, "No answer")
         XCTAssertTrue(text.help.contains("K0EPI-3 did not answer the AXDP check"), text.help)
         XCTAssertTrue(text.help.contains("YAPP"), text.help)
+    }
+
+    /// One probe, so no count of tries; and the way to ask again
+    /// (constitution retest 2026-10-11, finding 1).
+    func testNoAnswerOffersToCheckAgain() {
+        let text = SendFileCapabilityBadgeText(status: .notSupported, callsign: "K0EPI-4")
+        XCTAssertFalse(text.help.contains("tries"), text.help)
+        XCTAssertTrue(text.help.contains("Check Again"), text.help)
+        XCTAssertFalse(SendFileCapabilityBadgeText(status: .pending, callsign: "K0EPI-4").help.contains("times"))
     }
 
     func testConfirmedSaysAXDP() {

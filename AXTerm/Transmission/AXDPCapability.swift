@@ -325,8 +325,11 @@ nonisolated struct AXDPCapabilityProbe: Sendable, Equatable {
     private(set) var attempts: Int
     private(set) var lastSentAt: Date
 
-    init(sentAt: Date, rto: TimeInterval?) {
-        self.interval = Self.interval(rto: rto)
+    /// `inSession`: the check rides the session's I-frames, which AX.25
+    /// resends on T1, so it waits through that recovery: four RTOs, between
+    /// `minimumInSessionWait` and `maximumInSessionWait`.
+    init(sentAt: Date, rto: TimeInterval?, inSession: Bool = false) {
+        self.interval = inSession ? Self.inSessionWait(rto: rto) : Self.interval(rto: rto)
         self.attempts = 1
         self.lastSentAt = sentAt
     }
@@ -336,6 +339,14 @@ nonisolated struct AXDPCapabilityProbe: Sendable, Equatable {
     static func interval(rto: TimeInterval?) -> TimeInterval {
         guard let rto, rto.isFinite, rto > 0 else { return minimumInterval }
         return min(maximumInterval, max(minimumInterval, rto))
+    }
+
+    static let minimumInSessionWait: TimeInterval = 30
+    static let maximumInSessionWait: TimeInterval = 120
+
+    static func inSessionWait(rto: TimeInterval?) -> TimeInterval {
+        guard let rto, rto.isFinite, rto > 0 else { return minimumInSessionWait }
+        return min(maximumInSessionWait, max(minimumInSessionWait, 4 * rto))
     }
 
     /// How long a check lasts from the first send when nothing answers.
@@ -802,41 +813,77 @@ nonisolated enum AXDPChatEncoder {
     }
 }
 
-/// Where the automatic AXDP probe goes (retest 2026-10-10, finding 6).
-/// About one station in a thousand runs AXTerm, so a probe goes only to a
-/// station that says it does, in its greeting, or one remembered as AXTerm,
-/// and never to one that did not answer within the last day.
+/// How AXTerm finds out whether a connected station runs AXTerm, once the
+/// station has sent its first data or the fallback timer has run out.
+///
+/// About one station in a thousand runs AXTerm (retest 2026-10-10, finding
+/// 6), so the check costs next to nothing and its answer is kept. A station
+/// that shows an AXTerm sign is asked inside the connection with an AXDP
+/// PING: AX.25 resends a lost I-frame, and each one carries the
+/// acknowledgment, so there is no separate RR to collide with the answer
+/// (constitution retest 2026-10-11, finding 5: the iPad's one UI probe to
+/// K0EPI-4 was answered on top of its own RR, and nothing resends a UI
+/// frame). Any other station gets one six-byte UI probe, which only AXTerm
+/// reads (finding 1). A sign outranks a remembered "no".
 nonisolated enum AXDPProbePolicy {
-    /// After the station's first data on a link we opened.
-    static func probesAfterFirstData(_ data: Data, remembered: AXDPPeerMemory.Verdict?) -> Bool {
-        switch remembered {
-        case .axterm: return true
-        case .notAXDP: return false
-        case nil: return String(decoding: data, as: UTF8.self).localizedCaseInsensitiveContains("AXTerm")
-        }
+    enum Check: Equatable, Sendable {
+        /// Known not to run AXTerm: nothing.
+        case none
+        /// An AXDP PING inside the connection.
+        case inSession
+        /// One `AXDP?` UI probe.
+        case probe
     }
 
-    /// From the fallback timer, for a station that has sent nothing.
-    static func probesWithoutData(remembered: AXDPPeerMemory.Verdict?) -> Bool {
-        remembered == .axterm
+    /// `afterData` is the station's first data, or nil when the fallback
+    /// timer ran out first.
+    static func check(afterData data: Data?, remembered: AXDPPeerMemory.Verdict?) -> Check {
+        let saysAXTerm = data.map { String(decoding: $0, as: UTF8.self).localizedCaseInsensitiveContains("AXTerm") }
+            ?? false
+        if saysAXTerm || remembered == .axterm { return .inSession }
+        if remembered == .notAXDP { return .none }
+        return .probe
     }
 }
 
-/// What AXTerm knows about other stations' AXDP, across launches (retest
-/// 2026-10-10, finding 6): one heard speaking AXDP is AXTerm for a month,
-/// one that did not answer a probe is left alone for a day, since its
-/// software can change. Without defaults it lasts as long as the process,
-/// which is what tests want.
+/// A station that shows it runs AXTerm in a frame heard on the channel, to
+/// anyone: an APRS beacon to AXTerm's tocall, or AXDP. Kept in the peer
+/// memory, so its next connection is checked inside the session with
+/// nothing extra sent (constitution retest 2026-10-11, finding 1).
+nonisolated enum AXTermSign {
+    static func station(in packet: Packet) -> String? {
+        guard let from = packet.from, let to = packet.to else { return nil }
+        switch packet.frameType {
+        case .ui:
+            if to.call.uppercased() == APRSBeacon.tocall && to.ssid == 0 { return from.display }
+            return AXDP.hasMagic(packet.info) ? from.display : nil
+        case .i:
+            return AXDP.hasMagic(packet.info) ? from.display : nil
+        default:
+            return nil
+        }
+    }
+}
+
+/// What AXTerm knows about other stations' AXDP, across launches. Either
+/// answer is kept a month (finding 1), an AXTerm station's capabilities with
+/// it so it starts confirmed next time with nothing sent. Without defaults it
+/// lasts as long as the process, which is what tests want.
 nonisolated final class AXDPPeerMemory: @unchecked Sendable {
     enum Verdict: String { case axterm, notAXDP }
 
-    static let notAXDPLifetime: TimeInterval = 86_400
-    static let axtermLifetime: TimeInterval = 30 * 86_400
+    static let lifetime: TimeInterval = 30 * 86_400
     private static let key = "axdpPeerMemory"
+
+    private struct Entry {
+        var verdict: Verdict
+        var at: Date
+        var capabilities: AXDPCapability?
+    }
 
     private let defaults: UserDefaults?
     private let lock = NSLock()
-    private var entries: [String: (verdict: Verdict, at: Date)] = [:]
+    private var entries: [String: Entry] = [:]
 
     init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
@@ -844,23 +891,57 @@ nonisolated final class AXDPPeerMemory: @unchecked Sendable {
         for (call, value) in stored {
             guard let raw = value["v"] as? String, let verdict = Verdict(rawValue: raw),
                   let seconds = value["t"] as? Double else { continue }
-            entries[call] = (verdict, Date(timeIntervalSince1970: seconds))
+            entries[call] = Entry(verdict: verdict, at: Date(timeIntervalSince1970: seconds),
+                                  capabilities: (value["c"] as? Data).flatMap(AXDPCapability.decode(from:)))
         }
     }
 
     func verdict(for callsign: String, now: Date = Date()) -> Verdict? {
         lock.lock(); defer { lock.unlock() }
-        guard let entry = entries[callsign.uppercased()] else { return nil }
-        let lifetime = entry.verdict == .axterm ? Self.axtermLifetime : Self.notAXDPLifetime
-        return now.timeIntervalSince(entry.at) <= lifetime ? entry.verdict : nil
+        return current(callsign, now: now)?.verdict
     }
 
-    func record(_ verdict: Verdict, for callsign: String, at date: Date = Date()) {
+    /// The capabilities an AXTerm station last sent, while its verdict lasts.
+    func capabilities(for callsign: String, now: Date = Date()) -> AXDPCapability? {
+        lock.lock(); defer { lock.unlock() }
+        guard let entry = current(callsign, now: now), entry.verdict == .axterm else { return nil }
+        return entry.capabilities
+    }
+
+    /// Records a verdict. AXTerm without capabilities (a passive sign) keeps
+    /// the ones already known; "not AXDP" drops them.
+    func record(_ verdict: Verdict, for callsign: String, capabilities: AXDPCapability? = nil,
+                at date: Date = Date()) {
         lock.lock()
-        entries[callsign.uppercased()] = (verdict, date)
-        let snapshot = entries.mapValues { ["v": $0.verdict.rawValue, "t": $0.at.timeIntervalSince1970] as [String: Any] }
+        let key = callsign.uppercased()
+        let kept = verdict == .axterm && entries[key]?.verdict == .axterm ? entries[key]?.capabilities : nil
+        entries[key] = Entry(verdict: verdict, at: date, capabilities: capabilities ?? kept)
+        let snapshot = entries.mapValues { entry -> [String: Any] in
+            var stored: [String: Any] = ["v": entry.verdict.rawValue, "t": entry.at.timeIntervalSince1970]
+            if let capabilities = entry.capabilities { stored["c"] = capabilities.encode() }
+            return stored
+        }
         lock.unlock()
         defaults?.set(snapshot, forKey: Self.key)
+    }
+
+    /// Forgets what is known about a station, for the operator's Check Again.
+    func forget(_ callsign: String) {
+        lock.lock()
+        entries.removeValue(forKey: callsign.uppercased())
+        let snapshot = entries.mapValues { entry -> [String: Any] in
+            var stored: [String: Any] = ["v": entry.verdict.rawValue, "t": entry.at.timeIntervalSince1970]
+            if let capabilities = entry.capabilities { stored["c"] = capabilities.encode() }
+            return stored
+        }
+        lock.unlock()
+        defaults?.set(snapshot, forKey: Self.key)
+    }
+
+    private func current(_ callsign: String, now: Date) -> Entry? {
+        guard let entry = entries[callsign.uppercased()],
+              now.timeIntervalSince(entry.at) <= Self.lifetime else { return nil }
+        return entry
     }
 }
 

@@ -1060,7 +1060,7 @@ final class SessionCoordinatorTests: XCTestCase {
 
     /// After text probe → PONG, the initiator sends a binary PING (with capabilities)
     /// so the peer also learns the initiator's features (bidirectional exchange).
-    func testBidirectionalCapabilityExchange() {
+    func testBidirectionalCapabilityExchange() async throws {
         let coordinator = SessionCoordinator()
         defer { SessionCoordinator.shared = nil }
 
@@ -1073,9 +1073,12 @@ final class SessionCoordinatorTests: XCTestCase {
         _ = session.stateMachine.handle(event: .connectRequest)
         _ = session.stateMachine.handle(event: .receivedUA)
 
-        // Connect and trigger text probe via first inbound I-frame
+        // Connect and trigger text probe via first inbound I-frame. A
+        // greeting with no AXTerm sign gets the UI probe, on the next turn
+        // (with one, the check is a PING inside the session).
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
-        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome to AXTerm\r".data(using: .ascii)!)
+        coordinator.sessionManager.onDataDeliveredForReassembly?(session, "Welcome\r".data(using: .ascii)!)
+        try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .pending,
             "Text probe should be sent, discovery pending")
 

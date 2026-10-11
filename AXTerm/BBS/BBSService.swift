@@ -1390,6 +1390,14 @@ final class BBSService: ObservableObject {
                 if let peer = callerAddress { coordinator.receiveMailboxUploadMessage(message, from: peer) }
             case .uploadAreasRequest:
                 answerUploadAreas(message)
+            case .ping:
+                // The caller's capability check, asked inside the session
+                // (constitution retest 2026-10-11, finding 5).
+                if let peer = callerAddress {
+                    coordinator.receiveMailboxCapabilityPing(message, from: peer) { [weak self] in
+                        self?.writeRaw($0)
+                    }
+                }
             case .chat:
                 if let payload = message.payload, !payload.isEmpty {
                     receiveText(payload + Data([0x0D]))

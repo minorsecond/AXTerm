@@ -101,9 +101,11 @@ final class CapabilityExchangeFramesTests: XCTestCase {
             station.coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = true
         }
         caller.coordinator.testTextProbeFallbackDelay = 0.1
-        // The answering station sends no greeting, so the caller probes it
-        // only because it remembers it as AXTerm (finding 6).
-        caller.coordinator.peerMemory.record(.axterm, for: "K0BBB-2")
+        // The answering station sends no greeting and is not remembered, so
+        // the caller sends the UI probe when the fallback runs out. A station
+        // with an AXTerm sign is asked inside the connection instead
+        // (InSessionCapabilityCheckTests).
+        caller.coordinator.peerMemory = AXDPPeerMemory(defaults: TestDefaults.make("ThreeFrames-caller"))
         answerer.coordinator.testTextProbeFallbackDelay = 60
         var frames: [String] = []
         for station in [caller!, answerer!] {
