@@ -929,17 +929,16 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                   $0.state == .connected && $0.remoteAddress.display.uppercased() == key
               }),
               let reply = ownerSignIn.reply(toLine: text, from: key, caller: session.localAddress.display,
-                                            sign: OwnerDeviceKey().sign) else { return }
+                                            derive: OwnerDeviceKey().sessionKey) else { return }
         sendFrames?(sessionManager.sendData(Data((reply + "\r").utf8), to: session.remoteAddress,
                                             path: session.path, radio: session.radio, displayInfo: "OWNER SIG"))
     }
 
     /// A typed line as it goes out: an owner command to a mailbox signed in
-    /// to by key carries its signature (Docs/RemoteAccessPlan.md).
+    /// to by key carries its check (Docs/RemoteAccessPlan.md).
     func ownerSigned(_ line: String) -> String {
         guard let session = currentSession, session.state == .connected else { return line }
-        return ownerSignIn.signed(line: line, to: session.remoteAddress.display, caller: session.localAddress.display,
-                                  sign: OwnerDeviceKey().sign) ?? line
+        return ownerSignIn.signed(line: line, to: session.remoteAddress.display) ?? line
     }
 
     private func createSessionNotification(for session: AX25Session, oldState: AX25SessionState, newState: AX25SessionState) -> SessionNotification? {

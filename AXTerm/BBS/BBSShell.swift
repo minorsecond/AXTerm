@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 /// The command shell a caller talks to once they have connected.
 ///
@@ -210,14 +211,18 @@ nonisolated struct BBSShell {
     /// owner commands are on, the caller is the operator's callsign and a
     /// device is paired.
     var ownerKeys: [OwnerKey.PairedDevice]?
-    private let makeChallenge: () -> String
-    /// The challenge outstanding, until a signature uses it up or it runs
-    /// out (`OwnerKey.challengeLifetime`).
-    private var ownerChallenge: (value: String, issued: Date)?
+    private let makeOneTimeKey: () -> P256.KeyAgreement.PrivateKey
+    /// The one-time key of the challenge outstanding, until a sign-in uses
+    /// it up or it runs out (`OwnerKey.challengeLifetime`).
+    private var ownerChallenge: (key: P256.KeyAgreement.PrivateKey, issued: Date)?
+    /// The session key of a key sign-in, and the counter the next owner
+    /// command's check covers.
+    private var ownerSession: (key: SymmetricKey, counter: UInt64)?
+    private var wrongChecks = 0
     /// Signed in with a right code or key, until the call ends.
     private(set) var isOwner = false
     /// Signed in with a key: from then on each owner command must carry its
-    /// own signature, so anyone putting frames into the session under the
+    /// own check, so anyone putting frames into the session under the
     /// operator's callsign cannot use the sign-in.
     private var ownerByKey = false
     /// A signed owner command is running.
@@ -249,7 +254,7 @@ nonisolated struct BBSShell {
          pageRows: Int = 24,
          checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)? = nil,
          ownerKeys: [OwnerKey.PairedDevice]? = nil,
-         makeChallenge: @escaping () -> String = OwnerKey.newChallenge) {
+         makeOneTimeKey: @escaping () -> P256.KeyAgreement.PrivateKey = { P256.KeyAgreement.PrivateKey() }) {
         self.caller = caller
         self.sysop = sysop
         self.banner = banner
@@ -267,7 +272,7 @@ nonisolated struct BBSShell {
         self.pageRows = max(0, pageRows)
         self.checkOwnerCode = checkOwnerCode
         self.ownerKeys = ownerKeys
-        self.makeChallenge = makeChallenge
+        self.makeOneTimeKey = makeOneTimeKey
     }
 
     /// The operator's own callsign at any SSID: the only caller who may
@@ -408,8 +413,11 @@ nonisolated struct BBSShell {
             ? nil
             : String(rest.split(separator: " ")[0])
 
+        if ownerByKey, verb.hasPrefix("!") {
+            return checkedCommand(trimmed, mailbox: mailbox, now: now)
+        }
         if ownerByKey, !runningSignedCommand, OwnerKey.signedCommands.contains(verb) {
-            return Output(lines: ["Owner commands from a paired device must be signed; AXTerm does it for you."])
+            return Output(lines: ["Owner commands from a paired device carry a check; AXTerm adds it for you."])
         }
 
         switch verb {
@@ -541,10 +549,12 @@ nonisolated struct BBSShell {
             guard ownerKeys != nil else {
                 return Output(lines: ["No device is paired with this mailbox. Pair one in its owner settings at home."])
             }
-            return Output(lines: [newOwnerChallenge(now)])
+            let oneTime = makeOneTimeKey()
+            ownerChallenge = (oneTime, now)
+            return Output(lines: [OwnerKey.challengePrefix + OwnerKey.encode(oneTime.publicKey)])
         }
-        if word == "SIG", let ownerKeys {
-            return signedCommand(parts.count > 1 ? parts[1] : "", paired: ownerKeys, mailbox: mailbox, now: now)
+        if word == "MAC", let ownerKeys {
+            return keySignIn(parts.count > 1 ? parts[1] : "", paired: ownerKeys, now: now)
         }
         guard let checkOwnerCode, let code = parts.first else {
             return Output(lines: [checkOwnerCode == nil
@@ -567,17 +577,9 @@ nonisolated struct BBSShell {
         }
     }
 
-    private mutating func newOwnerChallenge(_ now: Date) -> String {
-        let challenge = makeChallenge()
-        ownerChallenge = (challenge, now)
-        return OwnerKey.challengePrefix + challenge
-    }
-
-    /// `OWNER SIG <signature> [command]`. With no command it signs in; with
-    /// one it runs that command as the owner. Either way the challenge is
-    /// spent, and once signed in by key every answer brings the next one.
-    private mutating func signedCommand(_ text: String, paired: [OwnerKey.PairedDevice],
-                                        mailbox: Mailbox, now: Date) -> Output {
+    /// `OWNER MAC <check>`: the device's answer to the challenge, made with
+    /// the session key only a paired device can derive.
+    private mutating func keySignIn(_ given: String, paired: [OwnerKey.PairedDevice], now: Date) -> Output {
         guard let outstanding = ownerChallenge else {
             return Output(lines: ["Ask for a challenge first: OWNER KEY."])
         }
@@ -585,31 +587,45 @@ nonisolated struct BBSShell {
         guard now.timeIntervalSince(outstanding.issued) <= OwnerKey.challengeLifetime else {
             return Output(lines: ["That challenge has run out. Ask for a new one: OWNER KEY."])
         }
-        let pieces = text.trimmingCharacters(in: .whitespaces)
-            .split(separator: " ", maxSplits: 1).map(String.init)
-        let signature = pieces.first ?? ""
-        let command = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
-        guard OwnerKey.verify(signature: signature, challenge: outstanding.value, station: sysop,
-                              caller: caller, command: command, paired: paired) else {
-            var lines = ["That signature is not from a paired device."]
-            if ownerByKey { lines.append(newOwnerChallenge(now)) }
-            return Output(lines: lines, effects: [.ownerSignIn(accepted: false)])
-        }
-        let signingIn = !ownerByKey
-        isOwner = true
-        ownerByKey = true
-        guard !command.isEmpty else {
-            return Output(lines: ["Signed in as the owner until you disconnect. Each owner command is signed.",
-                                  newOwnerChallenge(now)],
+        let answer = given.trimmingCharacters(in: .whitespaces)
+        for device in paired {
+            guard let key = OwnerKey.sessionKey(mine: outstanding.key, theirs: device.publicKey,
+                                                station: sysop, caller: caller),
+                  OwnerKey.matches(answer, OwnerKey.check(key: key, counter: 0, command: "",
+                                                          length: OwnerKey.signInCheckBytes)) else { continue }
+            ownerSession = (key, 1)
+            wrongChecks = 0
+            isOwner = true
+            ownerByKey = true
+            return Output(lines: ["Signed in as the owner until you disconnect. Owner commands carry a check."],
                           effects: [.ownerSignIn(accepted: true)])
         }
+        return Output(lines: ["That sign-in is not from a paired device."], effects: [.ownerSignIn(accepted: false)])
+    }
+
+    /// `!<check> <command>`: an owner command with its check. A wrong one is
+    /// logged, and the third ends the sign-in.
+    private mutating func checkedCommand(_ line: String, mailbox: Mailbox, now: Date) -> Output {
+        let pieces = line.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
+        let given = pieces.first ?? ""
+        let command = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
+        guard var session = ownerSession,
+              OwnerKey.matches(given, OwnerKey.check(key: session.key, counter: session.counter, command: command,
+                                                     length: OwnerKey.commandCheckBytes)) else {
+            wrongChecks += 1
+            guard wrongChecks >= OwnerKey.wrongChecksAllowed else {
+                return Output(lines: ["That check is not right."], effects: [.ownerSignIn(accepted: false)])
+            }
+            ownerSession = nil
+            ownerByKey = false
+            isOwner = false
+            return Output(lines: [OwnerKey.signedOutLine], effects: [.ownerSignIn(accepted: false)])
+        }
+        session.counter += 1
+        ownerSession = session
         runningSignedCommand = true
-        var output = runCommand(command, mailbox: mailbox, now: now)
-        runningSignedCommand = false
-        // First, so a long answer's pages cannot hold it back.
-        output.lines.insert(newOwnerChallenge(now), at: 0)
-        if signingIn { output.effects.insert(.ownerSignIn(accepted: true), at: 0) }
-        return output
+        defer { runningSignedCommand = false }
+        return runCommand(command, mailbox: mailbox, now: now)
     }
 
     private func help() -> [String] {

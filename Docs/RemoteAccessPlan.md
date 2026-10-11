@@ -97,9 +97,18 @@ a sign-in for owner commands.
 - From AXTerm: a key pair per device. The private key stays on the device (on
   iPhone and iPad, in the Secure Enclave, which holds P-256 keys); the home
   station keeps the public keys of the devices paired with it, in person, by
-  QR code. Home sends a fresh challenge, and the device signs the challenge,
-  home's callsign and the command text together. A recorded signature cannot
-  be replayed or attached to another command. AXTerm does this without the
+  copy and paste. `OWNER KEY` gets a one-time public key from home, and both
+  ends derive the same session key from it (ECDH, then HKDF over both
+  callsigns) without the key going on the air. The device proves it holds
+  its key with one full 128-bit check (`OWNER MAC`, 22 characters). After
+  that each owner command carries a 32-bit check over a counter both ends
+  keep and the command's text, `!a8F3kQ ST`: 8 characters, where a signature
+  took about 150. A command heard on the air cannot be sent again (the
+  counter has moved on) or moved to another command, and three wrong checks
+  end the sign-in, so a forger gets three tries at 1 in 4.3 billion. LTE and
+  5G guard their control messages the same way, with a 32-bit check and a
+  counter. Someone sending wrong checks can only make the operator sign in
+  again, and never lock the key out. AXTerm adds the checks without the
   operator typing anything.
 - From a plain terminal: a six-digit time-based one-time code (TOTP, RFC 6238)
   from an authenticator app on the operator's phone, typed with the command.
@@ -110,10 +119,14 @@ a sign-in for owner commands.
   logged and shown at home, and owner commands off until the operator turns
   them on.
 
-What owner commands may do: mailbox-style traffic (messages, files, status).
-Nothing that changes how the station transmits (frequency, power, beacons,
-modes). That would be telecommand of the station, which Part 97.213 puts on an
-auxiliary-station control link with its own frequency limits.
+What owner commands may do: mailbox-style traffic (messages, files, status)
+now. Changing how the station transmits (frequency, power, beacons, modes) is
+telecommand of the station. 97.213 allows it over a radio control link that is
+an auxiliary station (97.201: 2 m and up, outside 144.0-144.5 and 145.8-146.0
+MHz, so 145.650 qualifies) or over a wireline link, which includes the
+internet. The station must stop transmitting within 3 minutes if the control
+link fails, must be protected against unauthorized transmissions, and must
+have the license and a contact label posted at the station.
 
 Rules, as understood (not legal advice): 97.113(a)(4) prohibits messages
 encoded to obscure their meaning. A signature or one-time code hides nothing:
@@ -132,7 +145,8 @@ needs reading before release.
 - Binary as text: `DB` sends any file up to 64 KB as base64 in the marked
   download form, and AXTerm rebuilds it. 7PLUS waits until its format can be
   read from its documentation rather than written from memory.
-- Key-pair sign-in from another AXTerm: done.
+- Key-pair sign-in from another AXTerm: done. Each owner command carries a
+  32-bit check under a session key from ECDH (8 characters per command).
 - AXDP through a node relay: done. Conversations are routed by the far
   station, PING and PONG name their sender, and completion requests back
   off (AXTERM-TRANSMISSION-SPEC.md, "AXDP through a node relay").

@@ -2,14 +2,15 @@
 //  OwnerKeyTests.swift
 //  AXTermTests
 //
-//  Owner commands from another AXTerm, signed with a key pair
-//  (Docs/RemoteAccessPlan.md, "Signing in"). The device keeps its private
-//  key; home keeps the public keys of the devices paired with it. Every
-//  owner command is signed together with its text, home's callsign, the
-//  caller's callsign and a challenge home sent and uses once, so a recorded
-//  signature cannot be replayed, moved to another station or caller, or
-//  attached to another command. Everything on the air stays readable: the
-//  challenge and signature are extra characters, not a cipher.
+//  Owner commands from another AXTerm (Docs/RemoteAccessPlan.md, "Signing
+//  in"). The device keeps a P-256 key-agreement key; home keeps the public
+//  keys of the devices paired with it. OWNER KEY gets a one-time public key
+//  from home, both ends derive the same session key from it (ECDH), and the
+//  device proves it holds its key with one full 128-bit check. After that
+//  each owner command carries a 32-bit check over a counter both ends keep
+//  and the command's text: 8 characters on the air, where a signature took
+//  150. Three wrong checks end the sign-in, so a forger gets three tries at
+//  1 in 4.3 billion. Everything stays readable: the checks hide nothing.
 //
 
 import CryptoKit
@@ -21,55 +22,49 @@ final class OwnerKeyTests: XCTestCase {
     private let station = "K0EPI-4"
     private let caller = "K0EPI-3"
 
-    private func sign(_ challenge: String, _ command: String, station: String? = nil, caller: String? = nil,
-                      with key: P256.Signing.PrivateKey) throws -> String {
-        try OwnerKey.sign(challenge: challenge, station: station ?? self.station, caller: caller ?? self.caller,
-                          command: command, with: key)
+    /// Home, with the one-time key, and the device, with its own, arrive at
+    /// the same session key without it going on the air.
+    func testBothEndsDeriveTheSameSessionKey() throws {
+        let device = P256.KeyAgreement.PrivateKey()
+        let oneTime = P256.KeyAgreement.PrivateKey()
+        let home = try XCTUnwrap(OwnerKey.sessionKey(mine: oneTime, theirs: OwnerKey.encode(device.publicKey),
+                                                     station: station, caller: caller))
+        let away = try XCTUnwrap(OwnerKey.sessionKey(mine: device, theirs: OwnerKey.encode(oneTime.publicKey),
+                                                     station: station, caller: caller))
+        XCTAssertEqual(OwnerKey.check(key: home, counter: 0, command: "", length: 16),
+                       OwnerKey.check(key: away, counter: 0, command: "", length: 16))
     }
 
-    private func verify(_ signature: String, _ challenge: String, _ command: String,
-                        paired: [OwnerKey.PairedDevice]) -> Bool {
-        OwnerKey.verify(signature: signature, challenge: challenge, station: station, caller: caller,
-                        command: command, paired: paired)
+    /// The session key belongs to one station and one caller.
+    func testTheSessionKeyIsBoundToBothCallsigns() throws {
+        let device = P256.KeyAgreement.PrivateKey()
+        let oneTime = P256.KeyAgreement.PrivateKey()
+        let devicePublic = OwnerKey.encode(device.publicKey)
+        let base = try XCTUnwrap(OwnerKey.sessionKey(mine: oneTime, theirs: devicePublic, station: station, caller: caller))
+        let otherStation = try XCTUnwrap(OwnerKey.sessionKey(mine: oneTime, theirs: devicePublic,
+                                                             station: "K0EPI-7", caller: caller))
+        let otherCaller = try XCTUnwrap(OwnerKey.sessionKey(mine: oneTime, theirs: devicePublic,
+                                                            station: station, caller: "K0EPI-9"))
+        let mark = { (key: SymmetricKey) in OwnerKey.check(key: key, counter: 0, command: "", length: 16) }
+        XCTAssertNotEqual(mark(base), mark(otherStation))
+        XCTAssertNotEqual(mark(base), mark(otherCaller))
     }
 
-    func testASignatureFromAPairedDeviceIsAccepted() throws {
-        let device = P256.Signing.PrivateKey()
-        let paired = [OwnerKey.PairedDevice(name: "iPad", publicKey: OwnerKey.encode(device.publicKey))]
-        let signature = try sign("4F2A9C11E07B3D55", "ST", with: device)
-        XCTAssertTrue(verify(signature, "4F2A9C11E07B3D55", "ST", paired: paired))
-    }
-
-    func testAnUnpairedDeviceIsRefused() throws {
-        let paired = [OwnerKey.PairedDevice(name: "iPad",
-                                            publicKey: OwnerKey.encode(P256.Signing.PrivateKey().publicKey))]
-        let signature = try sign("AA", "ST", with: P256.Signing.PrivateKey())
-        XCTAssertFalse(verify(signature, "AA", "ST", paired: paired))
-    }
-
-    /// A recorded signature is no good for another challenge, station,
-    /// caller or command.
-    func testASignatureIsTiedToEverythingItCovers() throws {
-        let device = P256.Signing.PrivateKey()
-        let paired = [OwnerKey.PairedDevice(name: "iPad", publicKey: OwnerKey.encode(device.publicKey))]
-        XCTAssertFalse(verify(try sign("AA", "ST", with: device), "BB", "ST", paired: paired), "challenge")
-        XCTAssertFalse(verify(try sign("AA", "ST", station: "K0EPI-7", with: device), "AA", "ST", paired: paired),
-                       "station")
-        XCTAssertFalse(verify(try sign("AA", "ST", caller: "K0EPI-9", with: device), "AA", "ST", paired: paired),
-                       "caller")
-        XCTAssertFalse(verify(try sign("AA", "ST", with: device), "AA", "K 3", paired: paired), "command")
+    /// A command's check is 6 characters, the sign-in's 22, and each
+    /// depends on the counter and the command.
+    func testChecksAreShortAndCoverCounterAndCommand() {
+        let key = SymmetricKey(size: .bits256)
+        let st0 = OwnerKey.check(key: key, counter: 0, command: "ST", length: 4)
+        XCTAssertEqual(st0.count, 6)
+        XCTAssertEqual(OwnerKey.check(key: key, counter: 0, command: "", length: 16).count, 22)
+        XCTAssertNotEqual(st0, OwnerKey.check(key: key, counter: 1, command: "ST", length: 4))
+        XCTAssertNotEqual(st0, OwnerKey.check(key: key, counter: 0, command: "L", length: 4))
     }
 
     func testGarbageIsRefused() {
-        XCTAssertFalse(verify("not base64!", "AA", "", paired: []))
         XCTAssertNil(OwnerKey.decode("nope"))
-    }
-
-    /// 128 random bits: as strong as P-256 itself, and 32 characters.
-    func testAChallengeIsFreshEachTime() {
-        let a = OwnerKey.newChallenge(), b = OwnerKey.newChallenge()
-        XCTAssertEqual(a.count, 32)
-        XCTAssertNotEqual(a, b)
+        XCTAssertNil(OwnerKey.sessionKey(mine: P256.KeyAgreement.PrivateKey(), theirs: "nope",
+                                         station: station, caller: caller))
     }
 
     func testTheChallengeLineParses() {
@@ -83,130 +78,145 @@ final class OwnerKeyTests: XCTestCase {
 final class BBSShellOwnerKeyTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
-    private let device = P256.Signing.PrivateKey()
-    private var challenges = ["C1", "C2", "C3", "C4", "C5"]
+    private let device = P256.KeyAgreement.PrivateKey()
 
     private func shell(caller: String = "K0EPI-3", paired: Bool = true,
                        checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)? = nil) -> BBSShell {
         let devices = paired ? [OwnerKey.PairedDevice(name: "iPad", publicKey: OwnerKey.encode(device.publicKey))] : []
         return BBSShell(caller: caller, sysop: "K0EPI-4", pageRows: 0,
                         checkOwnerCode: checkOwnerCode,
-                        ownerKeys: devices.isEmpty ? nil : devices,
-                        makeChallenge: { [unowned self] in self.challenges.removeFirst() })
+                        ownerKeys: devices.isEmpty ? nil : devices)
     }
 
-    private func signed(_ command: String, _ challenge: String, caller: String = "K0EPI-3") throws -> String {
-        let signature = try OwnerKey.sign(challenge: challenge, station: "K0EPI-4", caller: caller,
-                                          command: command, with: device)
-        return command.isEmpty ? "OWNER SIG \(signature)" : "OWNER SIG \(signature) \(command)"
+    /// What the device does with the challenge line: the session key, and
+    /// the sign-in line.
+    private func answer(_ challengeLine: String, caller: String = "K0EPI-3") throws -> (SymmetricKey, String) {
+        let oneTime = try XCTUnwrap(OwnerKey.challenge(inLine: challengeLine))
+        let key = try XCTUnwrap(OwnerKey.sessionKey(mine: device, theirs: oneTime, station: "K0EPI-4", caller: caller))
+        return (key, "OWNER MAC " + OwnerKey.check(key: key, counter: 0, command: "", length: 16))
     }
 
-    /// OWNER KEY, then a signature over no command: signed in, with the
-    /// challenge for the next command in the same reply.
-    func testTheKeyHandshakeSignsIn() throws {
-        var sut = shell()
-        let box = BBSShell.Mailbox()
-        XCTAssertEqual(sut.handle(line: "OWNER KEY", mailbox: box, now: now).lines, ["Owner challenge: C1"])
-        let out = sut.handle(line: try signed("", "C1"), mailbox: box, now: now)
-        XCTAssertTrue(sut.isOwner)
-        XCTAssertEqual(out.effects, [.ownerSignIn(accepted: true)])
-        XCTAssertEqual(out.lines.last, "Owner challenge: C2")
+    private func command(_ text: String, _ counter: UInt64, _ key: SymmetricKey) -> String {
+        "!" + OwnerKey.check(key: key, counter: counter, command: text, length: 4) + " " + text
     }
 
-    /// After a key sign-in every owner command is signed, and each answer
-    /// brings the next challenge, so signing costs no extra turn.
-    func testEachOwnerCommandIsSignedAndBringsTheNextChallenge() throws {
-        var sut = shell()
+    /// Signs in and returns the session key.
+    private func signIn(_ sut: inout BBSShell, box: BBSShell.Mailbox) throws -> SymmetricKey {
+        let challenge = try XCTUnwrap(sut.handle(line: "OWNER KEY", mailbox: box, now: now).lines.first)
+        let (key, line) = try answer(challenge)
+        _ = sut.handle(line: line, mailbox: box, now: now)
+        return key
+    }
+
+    private var box: BBSShell.Mailbox {
         var box = BBSShell.Mailbox()
         box.ownerStatus = ["Mail for you: 2 unread"]
-        _ = sut.handle(line: "OWNER KEY", mailbox: box, now: now)
-        _ = sut.handle(line: try signed("", "C1"), mailbox: box, now: now)
-        let first = sut.handle(line: try signed("ST", "C2"), mailbox: box, now: now)
-        // The next challenge first, so a long answer's pages cannot hold it back.
-        XCTAssertEqual(first.lines, ["Owner challenge: C3", "Mail for you: 2 unread"])
-        let second = sut.handle(line: try signed("ST", "C3"), mailbox: box, now: now)
-        XCTAssertEqual(second.lines, ["Owner challenge: C4", "Mail for you: 2 unread"])
+        return box
+    }
+
+    func testTheKeyExchangeSignsIn() throws {
+        var sut = shell()
+        let challenge = try XCTUnwrap(sut.handle(line: "OWNER KEY", mailbox: box, now: now).lines.first)
+        XCTAssertTrue(challenge.hasPrefix(OwnerKey.challengePrefix))
+        let out = sut.handle(line: try answer(challenge).1, mailbox: box, now: now)
+        XCTAssertTrue(sut.isOwner)
+        XCTAssertEqual(out.effects, [.ownerSignIn(accepted: true)])
+        XCTAssertEqual(out.lines, ["Signed in as the owner until you disconnect. Owner commands carry a check."])
+    }
+
+    /// Each owner command carries 8 characters: "!", the 6-character
+    /// check and a space.
+    func testEachOwnerCommandCarriesAShortCheck() throws {
+        var sut = shell()
+        let key = try signIn(&sut, box: box)
+        let first = command("ST", 1, key)
+        XCTAssertEqual(first.count, "ST".count + 8)
+        XCTAssertEqual(sut.handle(line: first, mailbox: box, now: now).lines, ["Mail for you: 2 unread"])
+        XCTAssertEqual(sut.handle(line: command("ST", 2, key), mailbox: box, now: now).lines,
+                       ["Mail for you: 2 unread"])
+    }
+
+    /// A command heard on the air cannot be sent again: the counter has
+    /// moved on.
+    func testACommandCannotBeReplayed() throws {
+        var sut = shell()
+        let key = try signIn(&sut, box: box)
+        let line = command("ST", 1, key)
+        _ = sut.handle(line: line, mailbox: box, now: now)
+        let again = sut.handle(line: line, mailbox: box, now: now)
+        XCTAssertEqual(again.lines, ["That check is not right."])
+        XCTAssertEqual(again.effects, [.ownerSignIn(accepted: false)])
+    }
+
+    /// A check is for the command it was made over.
+    func testACheckCannotCarryAnotherCommand() throws {
+        var sut = shell()
+        let key = try signIn(&sut, box: box)
+        let moved = command("H", 1, key).replacingOccurrences(of: " H", with: " ST")
+        XCTAssertEqual(sut.handle(line: moved, mailbox: box, now: now).lines, ["That check is not right."])
+    }
+
+    /// Three wrong checks end the sign-in: a forger gets three tries, and
+    /// the operator signs in again with a fresh exchange.
+    func testThreeWrongChecksEndTheSignIn() throws {
+        var sut = shell()
+        let key = try signIn(&sut, box: box)
+        _ = sut.handle(line: "!AAAAAA ST", mailbox: box, now: now)
+        _ = sut.handle(line: "!AAAAAB ST", mailbox: box, now: now)
+        let third = sut.handle(line: "!AAAAAC ST", mailbox: box, now: now)
+        XCTAssertEqual(third.lines, ["Too many wrong checks. Sign in again: OWNER KEY."])
+        XCTAssertFalse(sut.isOwner)
+        XCTAssertFalse(sut.handle(line: command("ST", 1, key), mailbox: box, now: now).lines
+            .contains("Mail for you: 2 unread"))
     }
 
     /// Someone can put frames into the session under the operator's
-    /// callsign. Signed in by key, an owner command without a signature is
+    /// callsign. Signed in by key, an owner command without its check is
     /// refused, so the sign-in cannot be borrowed.
-    func testAnUnsignedOwnerCommandAfterAKeySignInIsRefused() throws {
+    func testAnOwnerCommandWithoutItsCheckIsRefused() throws {
         var sut = shell()
-        var box = BBSShell.Mailbox()
-        box.ownerStatus = ["Mail for you: 2 unread"]
-        _ = sut.handle(line: "OWNER KEY", mailbox: box, now: now)
-        _ = sut.handle(line: try signed("", "C1"), mailbox: box, now: now)
-        let out = sut.handle(line: "ST", mailbox: box, now: now)
-        XCTAssertFalse(out.lines.contains("Mail for you: 2 unread"))
-        XCTAssertEqual(out.lines.first, "Owner commands from a paired device must be signed; AXTerm does it for you.")
+        _ = try signIn(&sut, box: box)
+        XCTAssertEqual(sut.handle(line: "ST", mailbox: box, now: now).lines,
+                       ["Owner commands from a paired device carry a check; AXTerm adds it for you."])
     }
 
-    /// A signature heard on the air cannot be sent again: its challenge is
-    /// spent.
-    func testASignedCommandCannotBeReplayed() throws {
-        var sut = shell()
-        var box = BBSShell.Mailbox()
-        box.ownerStatus = ["Mail for you: 2 unread"]
-        _ = sut.handle(line: "OWNER KEY", mailbox: box, now: now)
-        _ = sut.handle(line: try signed("", "C1"), mailbox: box, now: now)
-        let line = try signed("ST", "C2")
-        _ = sut.handle(line: line, mailbox: box, now: now)
-        let again = sut.handle(line: line, mailbox: box, now: now)
-        XCTAssertFalse(again.lines.contains("Mail for you: 2 unread"))
-        XCTAssertEqual(again.lines.first, "That signature is not from a paired device.")
-        XCTAssertEqual(again.lines.last, "Owner challenge: C4", "a fresh challenge, so the operator can go on")
-    }
-
-    /// A signature is for the command it was made over.
-    func testASignatureCannotCarryAnotherCommand() throws {
-        var sut = shell()
-        var box = BBSShell.Mailbox()
-        box.ownerStatus = ["Mail for you: 2 unread"]
-        _ = sut.handle(line: "OWNER KEY", mailbox: box, now: now)
-        _ = sut.handle(line: try signed("", "C1"), mailbox: box, now: now)
-        let forged = try signed("H", "C2").replacingOccurrences(of: " H", with: " ST")
-        let out = sut.handle(line: forged, mailbox: box, now: now)
-        XCTAssertFalse(out.lines.contains("Mail for you: 2 unread"))
-        XCTAssertEqual(out.lines.first, "That signature is not from a paired device.")
-    }
-
-    /// The caller's callsign is signed too.
-    func testASignatureMadeForAnotherCallerIsRefused() throws {
+    /// The caller's callsign is in the session key.
+    func testASignInMadeForAnotherCallerIsRefused() throws {
         var sut = shell(caller: "K0EPI-3")
-        let box = BBSShell.Mailbox()
-        _ = sut.handle(line: "OWNER KEY", mailbox: box, now: now)
-        _ = sut.handle(line: try signed("", "C1", caller: "K0EPI-7"), mailbox: box, now: now)
+        let challenge = try XCTUnwrap(sut.handle(line: "OWNER KEY", mailbox: box, now: now).lines.first)
+        let out = sut.handle(line: try answer(challenge, caller: "K0EPI-7").1, mailbox: box, now: now)
         XCTAssertFalse(sut.isOwner)
+        XCTAssertEqual(out.lines, ["That sign-in is not from a paired device."])
+        XCTAssertEqual(out.effects, [.ownerSignIn(accepted: false)])
+    }
+
+    /// Each sign-in needs its own challenge: an answer heard on the air
+    /// cannot sign in again.
+    func testASignInCannotBeReplayed() throws {
+        var sut = shell()
+        let challenge = try XCTUnwrap(sut.handle(line: "OWNER KEY", mailbox: box, now: now).lines.first)
+        let line = try answer(challenge).1
+        var other = shell()
+        _ = other.handle(line: "OWNER KEY", mailbox: box, now: now)
+        _ = other.handle(line: line, mailbox: box, now: now)
+        XCTAssertFalse(other.isOwner)
     }
 
     /// A challenge is good for five minutes.
     func testAChallengeExpires() throws {
         var sut = shell()
-        let box = BBSShell.Mailbox()
-        _ = sut.handle(line: "OWNER KEY", mailbox: box, now: now)
-        let out = sut.handle(line: try signed("", "C1"), mailbox: box,
+        let challenge = try XCTUnwrap(sut.handle(line: "OWNER KEY", mailbox: box, now: now).lines.first)
+        let out = sut.handle(line: try answer(challenge).1, mailbox: box,
                              now: now.addingTimeInterval(OwnerKey.challengeLifetime + 1))
         XCTAssertFalse(sut.isOwner)
         XCTAssertEqual(out.lines, ["That challenge has run out. Ask for a new one: OWNER KEY."])
     }
 
-    /// A SIG with no challenge outstanding needs one first.
-    func testASignatureNeedsAChallengeFirst() throws {
+    func testASignInNeedsAChallengeFirst() {
         var sut = shell()
-        let out = sut.handle(line: try signed("", "C1"), mailbox: BBSShell.Mailbox(), now: now)
+        let out = sut.handle(line: "OWNER MAC AAAAAAAAAAAAAAAAAAAAAA", mailbox: box, now: now)
         XCTAssertFalse(sut.isOwner)
         XCTAssertEqual(out.lines, ["Ask for a challenge first: OWNER KEY."])
-    }
-
-    func testABadSignatureIsLogged() {
-        var sut = shell()
-        let box = BBSShell.Mailbox()
-        _ = sut.handle(line: "OWNER KEY", mailbox: box, now: now)
-        let out = sut.handle(line: "OWNER SIG AAAA", mailbox: box, now: now)
-        XCTAssertFalse(sut.isOwner)
-        XCTAssertEqual(out.lines.first, "That signature is not from a paired device.")
-        XCTAssertEqual(out.effects, [.ownerSignIn(accepted: false)])
     }
 
     /// Anyone can send wrong codes as the owner's callsign and lock codes
@@ -214,20 +224,16 @@ final class BBSShellOwnerKeyTests: XCTestCase {
     /// code lockout does not stop it: the owner can always get in.
     func testAKeySignsInWhileCodesAreLockedOut() throws {
         var sut = shell(checkOwnerCode: { _, _ in .lockedOut })
-        let box = BBSShell.Mailbox()
         XCTAssertEqual(sut.handle(line: "OWNER 123456", mailbox: box, now: now).lines,
                        ["Too many wrong codes. Try again in 15 minutes."])
-        _ = sut.handle(line: "OWNER KEY", mailbox: box, now: now)
-        _ = sut.handle(line: try signed("", "C1"), mailbox: box, now: now)
+        _ = try signIn(&sut, box: box)
         XCTAssertTrue(sut.isOwner)
     }
 
     /// Signed in with a code, from a plain terminal, owner commands that
     /// only read are typed as they are.
-    func testACodeSignInRunsReadingCommandsUnsigned() {
+    func testACodeSignInRunsReadingCommandsUnchecked() {
         var sut = shell(paired: false, checkOwnerCode: { _, _ in .accepted })
-        var box = BBSShell.Mailbox()
-        box.ownerStatus = ["Mail for you: 2 unread"]
         _ = sut.handle(line: "OWNER 123456", mailbox: box, now: now)
         XCTAssertEqual(sut.handle(line: "ST", mailbox: box, now: now).lines, ["Mail for you: 2 unread"])
     }
@@ -254,86 +260,91 @@ final class BBSShellOwnerKeyTests: XCTestCase {
 }
 
 /// The terminal's side: after Sign In as Owner sends OWNER KEY, the
-/// mailbox's challenge is answered with a signature over no command; after
-/// that, each owner command the operator types is signed with the latest
-/// challenge before it goes out. The operator types ST and nothing else.
+/// mailbox's challenge is answered with the sign-in check; after that, each
+/// owner command the operator types gets its check before it goes out. The
+/// operator types ST and nothing else.
 final class OwnerSignInResponderTests: XCTestCase {
 
-    private func sign(_ challenge: String, _ station: String, _ caller: String, _ command: String) -> String? {
-        "SIG(\(challenge),\(station),\(caller),\(command))"
+    private let key = SymmetricKey(size: .bits256)
+    private var derive: OwnerSignInResponder.Derive { { [key] _, _, _ in key } }
+
+    private func signedIn() -> OwnerSignInResponder {
+        var responder = OwnerSignInResponder()
+        responder.begin(peer: "K0EPI-4")
+        _ = responder.reply(toLine: "Owner challenge: X", from: "K0EPI-4", caller: "K0EPI-3", derive: derive)
+        return responder
     }
 
     func testTheChallengeIsAnsweredOnce() {
         var responder = OwnerSignInResponder()
         responder.begin(peer: "k0epi-4")
-        XCTAssertEqual(responder.reply(toLine: "Owner challenge: 4F2A", from: "K0EPI-4", caller: "K0EPI-3", sign: sign),
-                       "OWNER SIG SIG(4F2A,K0EPI-4,K0EPI-3,)")
-        XCTAssertNil(responder.reply(toLine: "Owner challenge: 4F2A", from: "K0EPI-4", caller: "K0EPI-3", sign: sign))
+        XCTAssertEqual(responder.reply(toLine: "Owner challenge: X", from: "K0EPI-4", caller: "K0EPI-3", derive: derive),
+                       "OWNER MAC " + OwnerKey.check(key: key, counter: 0, command: "", length: 16))
+        XCTAssertNil(responder.reply(toLine: "Owner challenge: X", from: "K0EPI-4", caller: "K0EPI-3", derive: derive))
     }
 
     /// A challenge nobody asked for, or from another station, is not answered.
     func testOnlyWhatWasAskedIsAnswered() {
         var responder = OwnerSignInResponder()
-        XCTAssertNil(responder.reply(toLine: "Owner challenge: 4F2A", from: "K0EPI-4", caller: "K0EPI-3", sign: sign))
+        XCTAssertNil(responder.reply(toLine: "Owner challenge: X", from: "K0EPI-4", caller: "K0EPI-3", derive: derive))
         responder.begin(peer: "K0EPI-4")
-        XCTAssertNil(responder.reply(toLine: "Owner challenge: 4F2A", from: "W0ARP-1", caller: "K0EPI-3", sign: sign))
-        XCTAssertNil(responder.reply(toLine: "Welcome", from: "K0EPI-4", caller: "K0EPI-3", sign: sign))
-        XCTAssertNotNil(responder.reply(toLine: "Owner challenge: 4F2A", from: "K0EPI-4", caller: "K0EPI-3", sign: sign))
+        XCTAssertNil(responder.reply(toLine: "Owner challenge: X", from: "W0ARP-1", caller: "K0EPI-3", derive: derive))
+        XCTAssertNil(responder.reply(toLine: "Welcome", from: "K0EPI-4", caller: "K0EPI-3", derive: derive))
+        XCTAssertNotNil(responder.reply(toLine: "Owner challenge: X", from: "K0EPI-4", caller: "K0EPI-3", derive: derive))
     }
 
-    /// After the sign-in, an owner command typed by the operator goes out
-    /// signed with the challenge the last reply brought, once.
-    func testAnOwnerCommandIsSignedWithTheLatestChallenge() {
-        var responder = OwnerSignInResponder()
-        responder.begin(peer: "K0EPI-4")
-        _ = responder.reply(toLine: "Owner challenge: C1", from: "K0EPI-4", caller: "K0EPI-3", sign: sign)
-        _ = responder.reply(toLine: "Owner challenge: C2", from: "K0EPI-4", caller: "K0EPI-3", sign: sign)
-        XCTAssertEqual(responder.signed(line: "st", to: "K0EPI-4", caller: "K0EPI-3", sign: sign),
-                       "OWNER SIG SIG(C2,K0EPI-4,K0EPI-3,st) st")
-        XCTAssertNil(responder.signed(line: "ST", to: "K0EPI-4", caller: "K0EPI-3", sign: sign),
-                     "C2 is spent until the next reply brings C3")
+    /// Owner commands get their check, the counter moving on each time.
+    func testOwnerCommandsGetTheirCheck() {
+        var responder = signedIn()
+        XCTAssertEqual(responder.signed(line: "st", to: "K0EPI-4"),
+                       "!" + OwnerKey.check(key: key, counter: 1, command: "st", length: 4) + " st")
+        XCTAssertEqual(responder.signed(line: "ST", to: "K0EPI-4"),
+                       "!" + OwnerKey.check(key: key, counter: 2, command: "ST", length: 4) + " ST")
     }
 
-    /// Everything else goes as typed, and nothing is signed for a station
+    /// Everything else goes as typed, and nothing is checked for a station
     /// never signed in to.
     func testOtherLinesGoAsTyped() {
-        var responder = OwnerSignInResponder()
-        XCTAssertNil(responder.signed(line: "ST", to: "K0EPI-4", caller: "K0EPI-3", sign: sign))
-        responder.begin(peer: "K0EPI-4")
-        _ = responder.reply(toLine: "Owner challenge: C1", from: "K0EPI-4", caller: "K0EPI-3", sign: sign)
-        _ = responder.reply(toLine: "Owner challenge: C2", from: "K0EPI-4", caller: "K0EPI-3", sign: sign)
-        XCTAssertNil(responder.signed(line: "L", to: "K0EPI-4", caller: "K0EPI-3", sign: sign))
-        XCTAssertNil(responder.signed(line: "ST", to: "W0ARP-1", caller: "K0EPI-3", sign: sign))
+        var fresh = OwnerSignInResponder()
+        XCTAssertNil(fresh.signed(line: "ST", to: "K0EPI-4"))
+        var responder = signedIn()
+        XCTAssertNil(responder.signed(line: "L", to: "K0EPI-4"))
+        XCTAssertNil(responder.signed(line: "ST", to: "W0ARP-1"))
     }
 
     /// The disconnect forgets the sign-in.
     func testEndingTheSessionForgetsIt() {
-        var responder = OwnerSignInResponder()
-        responder.begin(peer: "K0EPI-4")
-        _ = responder.reply(toLine: "Owner challenge: C1", from: "K0EPI-4", caller: "K0EPI-3", sign: sign)
-        _ = responder.reply(toLine: "Owner challenge: C2", from: "K0EPI-4", caller: "K0EPI-3", sign: sign)
+        var responder = signedIn()
         responder.end(peer: "K0EPI-4")
-        XCTAssertNil(responder.signed(line: "ST", to: "K0EPI-4", caller: "K0EPI-3", sign: sign))
+        XCTAssertNil(responder.signed(line: "ST", to: "K0EPI-4"))
     }
 
-    /// The mailbox's own replies to real signatures, end to end.
-    func testRealSignaturesSignInAndRunACommand() throws {
-        let device = P256.Signing.PrivateKey()
+    /// Home tells the device the sign-in is over: it stops adding checks.
+    func testASignOutFromHomeIsHeard() {
+        var responder = signedIn()
+        _ = responder.reply(toLine: "Too many wrong checks. Sign in again: OWNER KEY.", from: "K0EPI-4",
+                            caller: "K0EPI-3", derive: derive)
+        XCTAssertNil(responder.signed(line: "ST", to: "K0EPI-4"))
+    }
+
+    /// The real thing end to end: a device key, the mailbox, and a command.
+    func testTheRealExchangeSignsInAndRunsACommand() throws {
+        let device = P256.KeyAgreement.PrivateKey()
         var shell = BBSShell(caller: "K0EPI-3", sysop: "K0EPI-4", pageRows: 0,
                              ownerKeys: [OwnerKey.PairedDevice(name: "iPad", publicKey: OwnerKey.encode(device.publicKey))])
         var box = BBSShell.Mailbox()
         box.ownerStatus = ["Mail for you: 2 unread"]
         var responder = OwnerSignInResponder()
-        let realSign: (String, String, String, String) -> String? = { challenge, station, caller, command in
-            try? OwnerKey.sign(challenge: challenge, station: station, caller: caller, command: command, with: device)
+        let realDerive: OwnerSignInResponder.Derive = { oneTime, station, caller in
+            OwnerKey.sessionKey(mine: device, theirs: oneTime, station: station, caller: caller)
         }
         responder.begin(peer: "K0EPI-4")
-        var lines = shell.handle(line: "OWNER KEY", mailbox: box, now: Date()).lines
-        let signIn = try XCTUnwrap(responder.reply(toLine: lines[0], from: "K0EPI-4", caller: "K0EPI-3", sign: realSign))
-        lines = shell.handle(line: signIn, mailbox: box, now: Date()).lines
+        let challenge = shell.handle(line: "OWNER KEY", mailbox: box, now: Date()).lines[0]
+        let signIn = try XCTUnwrap(responder.reply(toLine: challenge, from: "K0EPI-4", caller: "K0EPI-3",
+                                                   derive: realDerive))
+        _ = shell.handle(line: signIn, mailbox: box, now: Date())
         XCTAssertTrue(shell.isOwner)
-        for line in lines { _ = responder.reply(toLine: line, from: "K0EPI-4", caller: "K0EPI-3", sign: realSign) }
-        let st = try XCTUnwrap(responder.signed(line: "ST", to: "K0EPI-4", caller: "K0EPI-3", sign: realSign))
-        XCTAssertTrue(shell.handle(line: st, mailbox: box, now: Date()).lines.contains("Mail for you: 2 unread"))
+        let st = try XCTUnwrap(responder.signed(line: "ST", to: "K0EPI-4"))
+        XCTAssertEqual(shell.handle(line: st, mailbox: box, now: Date()).lines, ["Mail for you: 2 unread"])
     }
 }
