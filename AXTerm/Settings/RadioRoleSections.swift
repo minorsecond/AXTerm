@@ -259,46 +259,17 @@ struct RadioPacketSections: View {
 
     private var bind: RadioRoleBindings { RadioRoleBindings(radioID: radioID, settings: settings) }
 
+    /// Which radios carry the node, ping and the mailbox is chosen in each
+    /// service's card on the page (park rehearsal 2026-10-08, finding 46);
+    /// a radio's own sections are what only it can say.
     var body: some View {
-        servicesSection
         digipeaterSection
         beaconSection
     }
 
-    private var servicesSection: some View {
-        Section {
-            Toggle("Announce the NET/ROM node", isOn: bind.service(\.announcesNode))
-                .help("Carry the node's NODES broadcast on this radio, under this radio's "
-                      + "callsign, when the node announces itself (NET/ROM Node, above).")
-            if settings.netRomNodeIdentity == .perRadio,
-               bind.service(\.announcesNode).wrappedValue {
-                LabeledContent("Node alias on this radio") {
-                    TextField("Node alias on this radio", text: bind.netRomAlias,
-                              prompt: Text(settings.netRomNodeAlias.isEmpty ? "e.g. UHFNOD" : settings.netRomNodeAlias))
-                        .callsignInput(bind.netRomAlias)
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
-                }
-                .help("The six-character name this radio's node announces under, because "
-                      + "each radio is its own node (Node identity, above). "
-                      + "Empty uses the station alias, which two nodes cannot share.")
-            }
-            Toggle("Ping stations", isOn: bind.service(\.pings))
-                .help("Ask stations this radio heard whether they can hear it back. A radio "
-                      + "switched off here asks nobody. Pacing is the station's (Ping, below).")
-            Toggle("Answer mailbox calls", isOn: bind.service(\.answersMailbox))
-                .help("Let the mailbox answer calls that arrive on this radio. Whether the "
-                      + "mailbox is on the air at all is set under BBS.")
-        } header: {
-            Text(RadioRoleSections.header(for: profile, callsign: settings.onAirCallsign(for: radioID)))
-                .id(RadioRoleSections.anchor(radioID, on: .packet))
-        } footer: {
-            Text(RadioServiceNotes.packetFooter(radio: profile, settings: settings))
-        }
-    }
-
     private var digipeaterSection: some View {
-        RadioDigipeaterSection(radioID: radioID, settings: settings, channel: .packet)
+        RadioDigipeaterSection(radioID: radioID, settings: settings, channel: .packet,
+                               anchor: RadioRoleSections.anchor(radioID, on: .packet))
     }
 
     private var beaconSection: some View {
@@ -712,30 +683,6 @@ nonisolated enum BeaconNowFeedback {
     }
 }
 
-/// The lines under a radio's packet services, saying what the station-wide
-/// switches mean for them. Pure, so the wording can be tested.
-nonisolated enum RadioServiceNotes {
-    @MainActor
-    static func packetFooter(radio: RadioProfile, settings: AppSettingsStore) -> String {
-        packetFooter(radio: radio,
-                     advertises: settings.netRomAdvertiseSelf,
-                     pingEnabled: settings.pingEnabled)
-    }
-
-    static func packetFooter(radio: RadioProfile, advertises: Bool, pingEnabled: Bool) -> String {
-        var off: [String] = []
-        if radio.announcesNode, !advertises { off.append("the node does not announce itself") }
-        if radio.pings, !pingEnabled { off.append("automatic ping is off") }
-        var text = "These say which services use this radio."
-        if !off.isEmpty {
-            text += " For the station as a whole, " + off.joined(separator: " and ")
-                + ", so switching them on here does nothing until that changes in the NET/ROM "
-                + "Node and Ping sections on this page."
-        }
-        return text
-    }
-}
-
 /// A radio's digipeater: on the APRS page for an APRS radio (WIDEn-N
 /// fill-in and wide-area), on the Packet Node page for a packet radio (by
 /// call or alias). One stored config per radio, shown where it works.
@@ -743,6 +690,8 @@ struct RadioDigipeaterSection: View {
     let radioID: RadioID
     @ObservedObject var settings: AppSettingsStore
     let channel: RadioChannel
+    /// Where a link to this radio's sections scrolls, when this is the first.
+    var anchor: String? = nil
 
     private var title: String {
         RadioDetailView.title(for: settings.radio(radioID) ?? RadioProfile(id: radioID, name: ""))
@@ -797,6 +746,7 @@ struct RadioDigipeaterSection: View {
             }
         } header: {
             Text("\(title) \(channel == .aprs ? "APRS digipeater" : "digipeater")")
+                .id(anchor ?? "")
         } footer: {
             Text(channel == .aprs
                  ? "Repeats other stations' APRS packets on this radio's channel. Fill-in answers WIDE1-1 "

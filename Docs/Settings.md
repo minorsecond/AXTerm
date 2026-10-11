@@ -48,17 +48,18 @@ macOS, top to bottom:
 
 - **Station**: General, Notifications
 - **Radios**: Radios
-- **Services**: APRS, Packet Node, BBS, Winlink
+- **Services**: APRS, Packet Node, File Transfers, BBS, Winlink
 - **Maintenance**: Advanced, Link Debug
 
 The iOS More list mirrors it: General under Station; Radios; APRS, Packet Node,
-Mailbox and Winlink under Services; then the device's own settings and
+File Transfers, Mailbox and Winlink under Services; then the device's own settings and
 Diagnostics. iOS has no Notifications, Advanced or Link Debug page; links to
 those open Diagnostics or General (`SettingsDestination.init(_:)`).
 
 There is no Transmission page. All of its controls are on Packet Node now: the
-station-wide ones in their own sections, the per-radio ones (digipeater, ping,
-the node announcement) in each packet radio's sections.
+station-wide ones in their own sections, the radios that carry each service in
+that service's card, and the digipeater and ID beacon in each packet radio's
+sections.
 
 ## General
 
@@ -158,11 +159,10 @@ comment, position, ambiguity, compressed, a preview of the info field,
 interval, Send one now). With no APRS radio, a note says so, with a button to
 Radios.
 
-On the **Packet Node** page, right after NET/ROM Node, three sections per radio
-on a packet channel: its **services** (announce the NET/ROM node, with this
-radio's alias when each radio is its own node; ping stations; answer mailbox
-calls), its **digipeater** (on, and aliases; it repeats by call or alias
-only) and its **ID beacon** (text, via path, interval, Send one now). An empty
+On the **Packet Node** page, after Ping, two sections per packet radio that is
+switched on: its **digipeater** (on, and aliases; it repeats by call or alias
+only) and its **ID beacon** (text, via path, interval, Send one now). A radio
+that is switched off folds to one line, with Show Their Settings. An empty
 ID beacon says nothing is sent yet and offers text built from the station
 (`IDBeaconSuggestion`). With no packet radio, one note says so.
 
@@ -240,23 +240,36 @@ A position beacon with no position settings stored follows the station.
 
 Top to bottom:
 
+Redesigned 2026-10-11 (park rehearsal 2026-10-08, finding 46: each service was
+set in two places that both had to be on, and every radio, the unused Direwolf
+entry included, repeated every section). One card per service, with the radios
+that carry it chosen in the card. Top to bottom:
+
+- **On the air now**: one line per service on the air with the radios that
+  carry it, and the services that are off in one line (`PacketNodeSummary`).
 - **NET/ROM Node**: run the node, auto-routing chain length, node alias,
-  announce this station, node identity (with several radios), announce
-  interval, transit routing. A "Runs on" line names the radios that carry the
-  NODES broadcast.
-- Each packet radio's sections (above).
-- **Ping**: on/off, the hours, the hourly ceiling, spacing and per-station
-  cooldowns, "also stations others are calling", the last eight probes and Ping
-  Activity. A "Runs on" line names the radios that ping.
-- **Link Layer**: T1, AX.25 2.2 negotiation, PACLEN, K and N2.
-- **Adaptive Transmission**: on/off, status, and clearing what was learned. Its
-  own copy of PACLEN, K and N2 went; they are the Link Layer's.
-- **AXDP Protocol** and **File Transfers**.
+  announce this station, node identity (with several radios), a "Carried on"
+  row of switches for the radios that carry the NODES broadcast (with each
+  radio's alias when each radio is its own node), announce interval, transit
+  routing.
+- **Mailbox**: "Carried on" for the radios it answers on, and Mailbox
+  Settings. Whether it is on the air is the mailbox page's switch.
+- **Ping**: on/off, "Carried on", the hours, the hourly ceiling, spacing and
+  per-station cooldowns, "also stations others are calling", the last eight
+  probes and Ping Activity.
+- Each packet radio's digipeater and ID beacon (above), switched-off radios
+  folded.
+- Under Advanced: **Link Layer** (T1, AX.25 2.2 negotiation, PACLEN, K and
+  N2), **Adaptive Transmission** and **AXDP Protocol**.
+
+"Carried on" lists only radios that are switched on (`CarriedOnRow`). File
+Transfers (auto-accept, auto-deny, the largest file accepted) is a page of its
+own.
 
 The APRS page has **Messaging** (a "Runs on" line and auto-reply), then each
 APRS radio's section. BBS (Mailbox on iOS) has a "Runs on" line for the radios
-the mailbox answers on. None of the "Runs on" lines is a control: the switches
-are in each radio's section.
+the mailbox answers on. Those "Runs on" lines are not controls; the switches
+are in the Packet Node page's cards.
 
 ## Deep links
 
@@ -288,7 +301,7 @@ takes the radio only for a link to Radios and leaves the rest to the page.
 | Link Layer's "Open Radio Settings…" | the first radio's page, Connection |
 | Packet Node's APRS note | Radios, the radio's Channel |
 | A radio page's "Open in APRS" | APRS, that radio's section |
-| A radio page's "Open in Packet Node" | Packet Node, that radio's services |
+| A radio page's "Open in Packet Node" | Packet Node, that radio's digipeater and ID beacon |
 | The APRS page's "Radios…" (no APRS radio) | Radios |
 | Compose banner, no callsign | first-run setup |
 

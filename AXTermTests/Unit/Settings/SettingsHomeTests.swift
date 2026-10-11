@@ -59,7 +59,7 @@ final class SettingsHomeTests: XCTestCase {
             ("radio.digi.aliases", .packetRadios),
             // Ping
             (AppSettingsStore.pingEnabledKey, .ping),
-            ("radio.pings", .packetRadios),
+            ("radio.pings", .ping),
             (AppSettingsStore.pingWindowStartKey, .ping),
             (AppSettingsStore.pingWindowEndKey, .ping),
             (AppSettingsStore.pingMaxPerHourKey, .ping),
@@ -73,8 +73,10 @@ final class SettingsHomeTests: XCTestCase {
             (AppSettingsStore.netRomNodeAliasKey, .netRomNode),
             (AppSettingsStore.netRomAdvertiseKey, .netRomNode),
             (AppSettingsStore.netRomNodeIdentityKey, .netRomNode),
-            ("radio.netRomAlias", .packetRadios),
-            ("radio.announcesNode", .packetRadios),
+            // Packet Node redesign (finding 46): the radios that carry the
+            // node are chosen in the node's own card.
+            ("radio.netRomAlias", .netRomNode),
+            ("radio.announcesNode", .netRomNode),
             (AppSettingsStore.netRomBroadcastMinutesKey, .netRomNode),
             (AppSettingsStore.netRomForwardingKey, .netRomNode),
             // AXDP
@@ -83,9 +85,6 @@ final class SettingsHomeTests: XCTestCase {
             (AppSettingsStore.axdpCompressionEnabledKey, .axdpProtocol),
             (AppSettingsStore.axdpCompressionAlgorithmKey, .axdpProtocol),
             (AppSettingsStore.axdpShowDecodeDetailsKey, .axdpProtocol),
-            // File transfers
-            (AppSettingsStore.allowedFileTransferCallsignsKey, .fileTransfer),
-            (AppSettingsStore.deniedFileTransferCallsignsKey, .fileTransfer),
         ]
         // For a packet radio: the digipeater has a home on each channel's
         // page now (testTheDigipeaterHasAHomeOnEachChannel).
@@ -94,6 +93,11 @@ final class SettingsHomeTests: XCTestCase {
         }
         let homes = Set(moved.compactMap { SettingsHome.section(of: $0.0, channel: .packet)?.tab })
         XCTAssertEqual(homes, [.packetNode], "the Transmission page's controls went to Packet Node")
+        // File transfers have a page of their own since the redesign.
+        for setting in [AppSettingsStore.allowedFileTransferCallsignsKey,
+                        AppSettingsStore.deniedFileTransferCallsignsKey] {
+            XCTAssertEqual(SettingsHome.section(of: setting), .fileTransfer)
+        }
         // Its beacon pointer: the beacon is a packet radio's ID beacon there.
         XCTAssertEqual(SettingsHome.section(of: "radio.beacon.enabled", channel: .packet), .packetRadios)
     }
@@ -115,10 +119,14 @@ final class SettingsHomeTests: XCTestCase {
                         "radio.beacon.aprs.ambiguityDigits", "radio.beacon.aprs.compressed"] {
             XCTAssertEqual(SettingsHome.section(of: setting), .aprsRadios, setting)
         }
-        for setting in ["radio.announcesNode", "radio.netRomAlias", "radio.pings",
-                        "radio.answersMailbox",
-                        "radio.beacon.text", "radio.beacon.path"] {
+        // A packet radio's own sections hold its ID beacon; which radios
+        // carry the node, ping and the mailbox is chosen in each service's
+        // card (finding 46).
+        for setting in ["radio.beacon.text", "radio.beacon.path"] {
             XCTAssertEqual(SettingsHome.section(of: setting), .packetRadios, setting)
+        }
+        for setting in ["radio.announcesNode", "radio.netRomAlias", "radio.pings", "radio.answersMailbox"] {
+            XCTAssertEqual(SettingsHome.section(of: setting)?.tab, .packetNode, setting)
         }
 
         let onRadioPage = SettingsHome.settings(on: .radios)
@@ -194,5 +202,22 @@ final class SettingsHomeTests: XCTestCase {
             XCTAssertEqual(SettingsHome.section(of: setting), .aprsRadios, setting)
             XCTAssertNotEqual(SettingsHome.section(of: setting, channel: .packet), .packetRadios, setting)
         }
+    }
+
+    // MARK: - Packet Node redesign (park rehearsal 2026-10-08, finding 46)
+
+    /// One card per service, with the radios that carry it chosen in the
+    /// card: ping in Ping, the mailbox in its own card.
+    func testEachServicesRadiosAreChosenInItsCard() {
+        XCTAssertEqual(SettingsHome.section(of: "radio.pings"), .ping)
+        XCTAssertEqual(SettingsHome.section(of: "radio.answersMailbox"), .packetMailbox)
+        XCTAssertEqual(SettingsSection.packetMailbox.tab, .packetNode)
+    }
+
+    func testFileTransfersHaveTheirOwnPage() {
+        XCTAssertEqual(SettingsSection.fileTransfer.tab, .fileTransfers)
+        XCTAssertEqual(SettingsTab.fileTransfers.settingsTitle, "File Transfers")
+        let order = SettingsTab.sidebarOrder
+        XCTAssertEqual(order.firstIndex(of: .fileTransfers), order.firstIndex(of: .packetNode).map { $0 + 1 })
     }
 }

@@ -59,6 +59,7 @@ struct SettingsView: View {
                 Section("Services") {
                     sidebarRow(.aprs)
                     sidebarRow(.packetNode)
+                    sidebarRow(.fileTransfers)
                     #if os(macOS)
                     sidebarRow(.bbs)
                     #endif
@@ -118,7 +119,9 @@ struct SettingsView: View {
         case .radios:
             RadiosSettingsView(settings: settings, client: client)
         case .packetNode:
-            PacketNodeSettingsView(settings: settings, client: client)
+            PacketNodeSettingsView(settings: settings, client: client, mailboxOnAir: bbsSettings.onAir)
+        case .fileTransfers:
+            FileTransferSettingsView(settings: settings)
         case .winlink:
             WinlinkSettingsTab(settings: winlinkSettings, profile: stationProfile,
                                stationCallsign: settings.primaryCallsign,
@@ -175,6 +178,7 @@ extension SettingsTab {
         case .radios: return "Radios"
         case .aprs: return "APRS"
         case .packetNode: return "Packet Node"
+        case .fileTransfers: return "File Transfers"
         case .bbs: return "BBS"
         case .winlink: return "Winlink"
         case .advanced: return "Advanced"
@@ -189,6 +193,7 @@ extension SettingsTab {
         case .radios: return "radio"
         case .aprs: return "mappin.and.ellipse"
         case .packetNode: return "point.3.connected.trianglepath.dotted"
+        case .fileTransfers: return "arrow.up.arrow.down.circle.fill"
         case .bbs: return "tray.full.fill"
         case .winlink: return "envelope.fill"
         case .advanced: return "wrench.and.screwdriver.fill"
@@ -203,6 +208,7 @@ extension SettingsTab {
         case .radios: return .blue
         case .aprs: return .green
         case .packetNode: return .orange
+        case .fileTransfers: return .cyan
         case .bbs: return .indigo
         case .winlink: return .teal
         case .advanced: return .brown
@@ -214,9 +220,11 @@ extension SettingsTab {
     /// Mac's; the mailbox settings on iOS have their own screen.
     static var sidebarOrder: [SettingsTab] {
         #if os(macOS)
-        return [.general, .notifications, .radios, .aprs, .packetNode, .bbs, .winlink, .advanced, .linkDebug]
+        return [.general, .notifications, .radios, .aprs, .packetNode, .fileTransfers, .bbs, .winlink,
+                .advanced, .linkDebug]
         #else
-        return [.general, .notifications, .radios, .aprs, .packetNode, .winlink, .advanced, .linkDebug]
+        return [.general, .notifications, .radios, .aprs, .packetNode, .fileTransfers, .winlink, .advanced,
+                .linkDebug]
         #endif
     }
 }

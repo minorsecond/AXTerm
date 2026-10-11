@@ -231,7 +231,7 @@ struct AXTermiOSRootView: View {
     /// router speaks in `SettingsTab`, so the mapping lives here rather than
     /// asking every caller to know which shell it is talking to.
     fileprivate enum SettingsDestination: Hashable {
-        case general, winlink, radios, packetNode, diagnostics, mailbox, aprsSettings
+        case general, winlink, radios, packetNode, fileTransfers, diagnostics, mailbox, aprsSettings
         /// One radio's form, pushed over the radios list.
         case radio(RadioID)
         /// The mailbox itself, pushed — the phone's home for it.
@@ -245,6 +245,7 @@ struct AXTermiOSRootView: View {
             case .winlink: self = .winlink
             case .radios: self = .radios
             case .packetNode: self = .packetNode
+            case .fileTransfers: self = .fileTransfers
             case .notifications, .linkDebug: self = .diagnostics
             case .bbs: self = .mailbox
             case .aprs: self = .aprsSettings
@@ -1367,6 +1368,10 @@ struct AXTermiOSRootView: View {
                         Label("Packet Node", systemImage: SettingsTab.packetNode.settingsIcon)
                     }
                     .accessibilityHint("The NET/ROM node, ping, the AX.25 link layer and AXDP")
+                    NavigationLink(value: SettingsDestination.fileTransfers) {
+                        Label("File Transfers", systemImage: SettingsTab.fileTransfers.settingsIcon)
+                    }
+                    .accessibilityHint("Which stations' files are accepted or refused without asking")
                     // "BBS Settings", because the mailbox itself is the BBS
                     // row at the top of this list on a phone (issue 107).
                     NavigationLink(value: SettingsDestination.mailbox) {
@@ -1482,9 +1487,14 @@ struct AXTermiOSRootView: View {
                 .navigationTitle("APRS")
                 .navigationBarTitleDisplayMode(.inline)
         case .packetNode:
-            PacketNodeSettingsView(settings: settings, client: client)
+            PacketNodeSettingsView(settings: settings, client: client, mailboxOnAir: bbsSettings.onAir)
                 .environmentObject(SettingsRouter.shared)
                 .navigationTitle("Packet Node")
+                .navigationBarTitleDisplayMode(.inline)
+        case .fileTransfers:
+            FileTransferSettingsView(settings: settings)
+                .environmentObject(SettingsRouter.shared)
+                .navigationTitle("File Transfers")
                 .navigationBarTitleDisplayMode(.inline)
         case .diagnostics:
             DiagnosticsView(settings: settings, eventStore: nil)

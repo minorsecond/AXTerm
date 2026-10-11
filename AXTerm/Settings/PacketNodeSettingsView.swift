@@ -15,34 +15,29 @@ struct PacketNodeSettingsView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var client: PacketEngine
     @EnvironmentObject var router: SettingsRouter
+    /// Whether the mailbox is on the air (its own page's switch), for the
+    /// summary at the top; nil leaves it out.
+    var mailboxOnAir: Bool? = nil
+    /// The switched-off radios' sections, shown on request.
+    @State private var showsFoldedRadios = false
     /// Folded under Advanced: the link layer and protocol tuning.
     @AppStorage("settings.packetNode.showsAdvanced") private var showsAdvanced = false
     static let foldedSections: Set<SettingsSection> = [.linkLayer, .adaptiveTransmission, .axdpProtocol]
     @Environment(\.openWindow) private var openWindow
     
     @State private var txAdaptiveSettings = TxAdaptiveSettings()
-    
-    // File transfer list logic
-    @State private var newAllowCallsign = ""
-    @State private var newDenyCallsign = ""
+    /// Reset Station Parameters asks for a callsign.
     @State private var prompt: TextEntryPrompt?
-
-    /// Offer size caps to choose from. The stored value is added when it is
-    /// not one of these, so a cap set some other way still shows as chosen.
-    private var transferCapChoices: [Int] {
-        let base = [65_536, 262_144, 524_288, 1_048_576, 5_242_880, 0]
-        let current = settings.maxIncomingTransferBytes
-        return base.contains(current) ? base : (base.dropLast() + [current, 0]).sorted { a, b in
-            a == 0 ? false : (b == 0 ? true : a < b)
-        }
-    }
+    
 
     var body: some View {
-        SettingsForm(landing: [.netRomNode, .ping, .linkLayer, .adaptiveTransmission,
-                               .axdpProtocol, .fileTransfer],
+        SettingsForm(landing: [.netRomNode, .packetMailbox, .ping, .linkLayer, .adaptiveTransmission,
+                               .axdpProtocol],
                      radios: RadioLanding(section: .packetRadios) { radio in
                          RadioRoleSections.landing(for: radio, among: packetRadios, on: .packet)
                      }) {
+            summarySection
+
             PreferencesSection("NET/ROM Node", id: .netRomNode) {
                 if settings.allRadiosOnAPRS { aprsLockNote }
                 Toggle("Run the node: answer callers with the node shell",
@@ -103,13 +98,21 @@ struct PacketNodeSettingsView: View {
                           + "into its own routing table.")
 
                 NetRomNodeIdentityRows(settings: settings, onChange: applyNetRomSettings)
+                // Each radio's own alias when each radio is its own node. Its
+                // L2 alias is registered whether or not the node announces.
+                if settings.netRomNodeIdentity == .perRadio {
+                    ForEach(packetRadios.filter(\.announcesNode)) { radio in
+                        perRadioAliasRow(radio)
+                    }
+                }
 
                 if settings.netRomAdvertiseSelf {
-                    RunsOnRow(names: ServiceRadios.names(settings.activeRadios) { $0.mayAnnounceNode },
-                              none: "No radio announces the node. Switch it on for a packet radio below.")
+                    CarriedOnRow(settings: settings, radios: liveRadios, service: \.announcesNode,
+                                 none: "No radio announces the node. Pick one here.")
                         .help("The radios that carry the NODES broadcast. Each radio's frame "
                               + "leaves under that radio's own callsign; several take turns two "
                               + "seconds apart.")
+
                     durationRow(
                         "Announce every",
                         value: $settings.netRomBroadcastMinutes,
@@ -146,7 +149,14 @@ struct PacketNodeSettingsView: View {
                 }
             }
 
-            packetRadioSections
+            PreferencesSection("Mailbox", id: .packetMailbox) {
+                CarriedOnRow(settings: settings, radios: liveRadios, service: \.answersMailbox,
+                             none: "The mailbox answers on no radio. Pick one here.")
+                    .help("The radios the mailbox answers calls on. Whether it is on the air at "
+                          + "all, and everything else about it, is in the mailbox settings.")
+                Button("Mailbox Settings\u{2026}") { router.navigate(to: .bbs) }
+                    .buttonStyle(.borderless)
+            }
 
             PreferencesSection("Ping", id: .ping) {
                 Text("Asks stations whether they can hear this one, using a frame "
@@ -163,11 +173,11 @@ struct PacketNodeSettingsView: View {
                 if settings.allRadiosOnAPRS { aprsLockNote }
 
                 if settings.pingEnabled {
-                    RunsOnRow(names: ServiceRadios.names(settings.activeRadios) { $0.mayPing },
-                              none: "No radio pings. Switch Ping stations on for a packet radio above.")
-                        .help("A station is pinged on the radio that heard it. A radio with Ping "
-                              + "stations off asks nobody, and stations heard only there are left "
-                              + "alone. The hourly budget is the station's.")
+                    CarriedOnRow(settings: settings, radios: liveRadios, service: \.pings,
+                                 none: "No radio pings. Pick one here.")
+                        .help("A station is pinged on the radio that heard it. A radio left out "
+                              + "here asks nobody, and stations heard only there are left alone. "
+                              + "The hourly budget is the station's.")
                     LabeledContent("Only between") {
                         HStack(spacing: 6) {
                             Picker("", selection: $settings.pingWindowStartHour) {
@@ -261,6 +271,8 @@ struct PacketNodeSettingsView: View {
                               + "it took.")
                 }
             }
+
+            packetRadioSections
 
             SettingsAdvancedToggle(isShown: $showsAdvanced,
                                    summary: "Link layer, adaptive transmission and AXDP.")
@@ -363,47 +375,6 @@ struct PacketNodeSettingsView: View {
                 }
             }
 
-            PreferencesSection("File Transfers", id: .fileTransfer) {
-                Text("Control which stations can send you files without prompting.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 4)
-                
-                // Keep the existing custom list components for now, but wrapped natively
-                // Or standardized?
-                // Let's use the fileTransferList helper function, but styling might need tweak.
-                // We'll reimplement it inline for cleaner code or use helper.
-                
-                VStack(alignment: .leading, spacing: 16) {
-                    fileTransferList(
-                        title: "Auto-Accept",
-                        items: settings.allowedFileTransferCallsigns,
-                        icon: "checkmark.circle.fill",
-                        color: .green,
-                        onAdd: addToAllowList,
-                        onRemove: { settings.removeCallsignFromFileTransferAllowlist($0) }
-                    )
-                    
-                    fileTransferList(
-                        title: "Auto-Deny",
-                        items: settings.deniedFileTransferCallsigns,
-                        icon: "xmark.circle.fill",
-                        color: .red,
-                        onAdd: addToDenyList,
-                        onRemove: { settings.removeCallsignFromFileTransferDenylist($0) }
-                    )
-
-                    Picker("Largest file accepted", selection: $settings.maxIncomingTransferBytes) {
-                        ForEach(transferCapChoices, id: \.self) { bytes in
-                            Text(bytes == 0 ? "No limit" : ByteCount.string(bytes)).tag(bytes)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .help("Offers larger than this are declined without asking, even from stations on the "
-                          + "auto-accept list. A received file is held in memory until it is complete, and a "
-                          + "megabyte takes more than two hours of a 1200 baud channel.")
-                }
-            }
         }
         .settingsPagePadding()
         .opensAdvanced($showsAdvanced, for: Self.foldedSections, router: router)
@@ -425,6 +396,45 @@ struct PacketNodeSettingsView: View {
         RadioRoleSections.radios(on: .packet, in: settings.activeRadios)
     }
 
+    /// The packet radios that are switched on: the ones a service can run on.
+    private var liveRadios: [RadioProfile] {
+        PacketNodeSummary.shown(packetRadios)
+    }
+
+    /// What is on the air now, at the top of the page.
+    private var summarySection: some View {
+        let summary = PacketNodeSummary(radios: packetRadios, nodeRuns: settings.netRomAcceptInbound,
+                                        announces: settings.netRomAdvertiseSelf,
+                                        alias: settings.netRomNodeAlias, pings: settings.pingEnabled,
+                                        mailboxOnAir: mailboxOnAir)
+        return Section {
+            ForEach(summary.on, id: \.self) { line in
+                Label(line, systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.primary)
+            }
+            if let off = summary.off {
+                Label(off, systemImage: "circle")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("On the air now")
+        }
+    }
+
+    private func perRadioAliasRow(_ radio: RadioProfile) -> some View {
+        let bind = RadioRoleBindings(radioID: radio.id, settings: settings)
+        return LabeledContent("Node alias on \(RadioDetailView.title(for: radio))") {
+            TextField("Node alias on \(RadioDetailView.title(for: radio))", text: bind.netRomAlias,
+                      prompt: Text(settings.netRomNodeAlias.isEmpty ? "e.g. UHFNOD" : settings.netRomNodeAlias))
+                .callsignInput(bind.netRomAlias)
+                .labelsHidden()
+                .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
+        }
+        .help("The six-character name this radio's node announces under, because each radio is "
+              + "its own node (Node identity, above). Empty uses the station alias, which two "
+              + "nodes cannot share.")
+    }
+
     /// Each packet radio's services, digipeater and ID beacon, in list order.
     @ViewBuilder
     private var packetRadioSections: some View {
@@ -438,8 +448,29 @@ struct PacketNodeSettingsView: View {
             }
             .id(SettingsSection.packetRadios)
         } else {
-            ForEach(packetRadios) { radio in
+            ForEach(liveRadios) { radio in
                 RadioPacketSections(radioID: radio.id, settings: settings, client: client)
+            }
+            let folded = PacketNodeSummary.folded(packetRadios)
+            if !folded.isEmpty {
+                Section {
+                    ForEach(folded) { radio in
+                        HStack {
+                            Text("\(RadioDetailView.title(for: radio)) is switched off and carries nothing.")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                    }
+                    Button(showsFoldedRadios ? "Hide Their Settings" : "Show Their Settings") {
+                        showsFoldedRadios.toggle()
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if showsFoldedRadios {
+                    ForEach(folded) { radio in
+                        RadioPacketSections(radioID: radio.id, settings: settings, client: client)
+                    }
+                }
             }
         }
     }
@@ -636,77 +667,5 @@ struct PacketNodeSettingsView: View {
                 }
             }
         }
-    }
-    
-    @ViewBuilder
-    private func fileTransferList(
-        title: String,
-        items: [String],
-        icon: String,
-        color: Color,
-        onAdd: @escaping () -> Void,
-        onRemove: @escaping (String) -> Void
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button(action: onAdd) {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding(.bottom, 4)
-            
-            List {
-                ForEach(items, id: \.self) { callsign in
-                    HStack {
-                        Image(systemName: icon)
-                            .foregroundStyle(color)
-                            .font(.caption)
-                        Text(callsign).monospaced()
-                        Spacer()
-                        Button { onRemove(callsign) } label: {
-                            Image(systemName: "minus.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                }
-                
-                if items.isEmpty {
-                    Text("No stations")
-                        .foregroundStyle(.tertiary)
-                        .italic()
-                }
-            }
-            .frame(height: 100)
-            .border(Color.gray.opacity(0.2))
-        }
-    }
-    
-    // Actions for add
-    private func addToAllowList() {
-        prompt = TextEntryPrompt(
-            id: "allowFile",
-            title: "Add to Auto-Accept",
-            message: "Files from this callsign will be accepted and written to disk with no further prompt. Anyone can transmit any callsign, so this is trust in the operator, not proof of identity.",
-            placeholder: "N0CALL-7",
-            uppercases: true) { call in
-                settings.allowCallsignForFileTransfer(call)
-            }
-    }
-
-    private func addToDenyList() {
-        prompt = TextEntryPrompt(
-            id: "denyFile",
-            title: "Add to Auto-Deny",
-            message: "Files offered by this callsign will be refused without asking.",
-            placeholder: "N0CALL-7",
-            uppercases: true) { call in
-                settings.denyCallsignForFileTransfer(call)
-            }
     }
 }

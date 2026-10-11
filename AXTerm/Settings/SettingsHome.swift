@@ -35,8 +35,10 @@ nonisolated enum SettingsSection: String, Hashable, Sendable, CaseIterable {
 
     // Packet Node
     case netRomNode
-    /// One set of sections per packet radio: its services, digipeater and
-    /// ID beacon. A link that names a radio lands on that radio's sections.
+    /// The mailbox's card: the radios it answers on.
+    case packetMailbox
+    /// One set of sections per packet radio: its digipeater and ID beacon.
+    /// A link that names a radio lands on that radio's sections.
     case packetRadios
     case ping
     case linkLayer
@@ -57,9 +59,11 @@ nonisolated enum SettingsSection: String, Hashable, Sendable, CaseIterable {
             return .general
         case .radioConnection, .radioReceiveAudio, .radioIdentity, .radioChannel, .radioTiming:
             return .radios
-        case .netRomNode, .packetRadios, .ping, .linkLayer, .adaptiveTransmission, .axdpProtocol,
-             .fileTransfer:
+        case .netRomNode, .packetMailbox, .packetRadios, .ping, .linkLayer, .adaptiveTransmission,
+             .axdpProtocol:
             return .packetNode
+        case .fileTransfer:
+            return .fileTransfers
         case .aprsMessaging, .aprsRadios:
             return .aprs
         }
@@ -180,11 +184,12 @@ enum SettingsHome {
         Entry(setting: AppSettingsStore.netRomBroadcastMinutesKey, section: .netRomNode),
         Entry(setting: AppSettingsStore.netRomForwardingKey, section: .netRomNode),
         Entry(setting: AppSettingsStore.autoRouteMaxChainLengthKey, section: .netRomNode),
+        // Which radios carry each service: chosen in the service's card.
+        Entry(setting: "radio.announcesNode", section: .netRomNode),
+        Entry(setting: "radio.netRomAlias", section: .netRomNode),
+        Entry(setting: "radio.pings", section: .ping),
+        Entry(setting: "radio.answersMailbox", section: .packetMailbox),
         // Each packet radio's own sections.
-        Entry(setting: "radio.announcesNode", section: .packetRadios),
-        Entry(setting: "radio.netRomAlias", section: .packetRadios),
-        Entry(setting: "radio.pings", section: .packetRadios),
-        Entry(setting: "radio.answersMailbox", section: .packetRadios),
         Entry(setting: "radio.beacon.text", section: .packetRadios),
         Entry(setting: "radio.beacon.path", section: .packetRadios),
         Entry(setting: AppSettingsStore.pingEnabledKey, section: .ping),

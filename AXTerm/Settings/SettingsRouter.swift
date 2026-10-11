@@ -109,6 +109,7 @@ nonisolated enum SettingsTab: Hashable, Sendable, CaseIterable {
     case radios
     case aprs
     case packetNode
+    case fileTransfers
     case bbs
     case winlink
     case advanced

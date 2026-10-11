@@ -2,9 +2,9 @@ import SwiftUI
 
 /// Which radios a station-wide service runs on, for the service pages.
 ///
-/// The switches themselves are in each radio's section (`RadioRoleSections`).
-/// A "Runs on" line only says where the service ends up running, so the one
-/// fact has one control.
+/// On the Packet Node page the switches are in each service's card
+/// (`CarriedOnRow`). Elsewhere a "Runs on" line only says where the service
+/// ends up running, so the one fact has one control.
 nonisolated enum ServiceRadios {
 
     /// The names of the enabled radios `runs` accepts, in list order.
@@ -81,6 +81,40 @@ struct NetRomNodeIdentityRows: View {
                  : settings.netRomNodeIdentity.explanation)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// "Carried on: IC-705  ID-50" with a switch per radio: where a service
+/// runs, chosen in the service's own card on the Packet Node page (park
+/// rehearsal 2026-10-08, finding 46). One radio needs no choice and shows
+/// as text.
+struct CarriedOnRow: View {
+    @ObservedObject var settings: AppSettingsStore
+    /// The radios that can carry it: packet radios that are switched on.
+    let radios: [RadioProfile]
+    let service: WritableKeyPath<RadioProfile, Bool>
+    /// What to say when none carries it.
+    let none: String
+
+    var body: some View {
+        LabeledContent("Carried on") {
+            HStack(spacing: 6) {
+                if radios.isEmpty {
+                    Text("No radio is switched on").foregroundStyle(.secondary)
+                }
+                ForEach(radios) { radio in
+                    Toggle(RadioDetailView.title(for: radio),
+                           isOn: RadioRoleBindings(radioID: radio.id, settings: settings).service(service))
+                        .toggleStyle(.button)
+                }
+            }
+        }
+        if !radios.isEmpty, !radios.contains(where: { settings.radio($0.id)?[keyPath: service] ?? false }) {
+            Text(none)
+                .font(.caption)
+                .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
