@@ -249,28 +249,20 @@ nonisolated struct RigctlTCPTransport: RigctlTransport {
     }
 
     private static func ready(_ connection: NWConnection, within limit: Duration) async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    let once = OnceFlag()
-                    connection.stateUpdateHandler = { state in
-                        switch state {
-                        case .ready: if once.claim() { continuation.resume() }
-                        case .failed(let error), .waiting(let error): if once.claim() { continuation.resume(throwing: error) }
-                        case .cancelled: if once.claim() { continuation.resume(throwing: CancellationError()) }
-                        default: break
-                        }
-                    }
-                    connection.start(queue: .global())
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let once = OnceFlag()
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready: if once.claim() { continuation.resume() }
+                case .failed(let error), .waiting(let error): if once.claim() { continuation.resume(throwing: error) }
+                case .cancelled: if once.claim() { continuation.resume(throwing: CancellationError()) }
+                default: break
                 }
             }
-            group.addTask {
-                try await Task.sleep(for: limit)
-                connection.cancel()
-                throw URLError(.timedOut)
+            connection.start(queue: .global())
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds(limit)) {
+                if once.claim() { continuation.resume(throwing: URLError(.timedOut)) }
             }
-            try await group.next()
-            group.cancelAll()
         }
     }
 
@@ -282,25 +274,27 @@ nonisolated struct RigctlTCPTransport: RigctlTransport {
         }
     }
 
-    /// The next bytes, or nil when nothing came within the limit.
+    /// The next bytes, or nil when nothing came within the limit. A receive
+    /// still waiting when the limit passes is left to the connection's
+    /// cancel, which the caller does on the way out; whichever comes first
+    /// answers, once.
     private static func receive(on connection: NWConnection, within limit: Duration) async throws -> Data? {
-        try await withThrowingTaskGroup(of: Data?.self) { group in
-            group.addTask {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, Error>) in
-                    connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
-                        if let error { continuation.resume(throwing: error) }
-                        else { continuation.resume(returning: data ?? (isComplete ? Data() : nil)) }
-                    }
-                }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, Error>) in
+            let once = OnceFlag()
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
+                guard once.claim() else { return }
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume(returning: data ?? (isComplete ? Data() : nil)) }
             }
-            group.addTask {
-                try await Task.sleep(for: limit)
-                return nil
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds(limit)) {
+                if once.claim() { continuation.resume(returning: nil) }
             }
-            let first = try await group.next() ?? nil
-            group.cancelAll()
-            return first
         }
+    }
+
+    private static func seconds(_ duration: Duration) -> Double {
+        let parts = duration.components
+        return Double(parts.seconds) + Double(parts.attoseconds) / 1e18
     }
 }
 
