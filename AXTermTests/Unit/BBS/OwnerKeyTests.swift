@@ -107,6 +107,23 @@ final class BBSShellOwnerKeyTests: XCTestCase {
         XCTAssertEqual(out.effects, [.ownerSignIn(accepted: false)])
     }
 
+    /// Anyone can send wrong codes as the owner's callsign and lock codes
+    /// out for 15 minutes. A paired device's key cannot be guessed, so the
+    /// code lockout does not stop it: the owner can always get in.
+    func testAKeySignsInWhileCodesAreLockedOut() throws {
+        var sut = BBSShell(caller: "K0EPI-3", sysop: "K0EPI-4", pageRows: 0,
+                           checkOwnerCode: { _, _ in .lockedOut },
+                           ownerKeys: [OwnerKey.PairedDevice(name: "iPad", publicKey: OwnerKey.encode(device.publicKey))],
+                           makeChallenge: { "4F2A9C11E07B3D55" })
+        let box = BBSShell.Mailbox()
+        XCTAssertEqual(sut.handle(line: "OWNER 123456", mailbox: box, now: now).lines,
+                       ["Too many wrong codes. Try again in 15 minutes."])
+        _ = sut.handle(line: "OWNER KEY", mailbox: box, now: now)
+        let signature = try OwnerKey.sign(challenge: "4F2A9C11E07B3D55", station: "K0EPI-4", with: device)
+        _ = sut.handle(line: "OWNER SIG \(signature)", mailbox: box, now: now)
+        XCTAssertTrue(sut.isOwner)
+    }
+
     /// Without paired devices, OWNER KEY is unknown like any command.
     func testNoPairedDevicesMeansUnknown() {
         var sut = shell(paired: false)
