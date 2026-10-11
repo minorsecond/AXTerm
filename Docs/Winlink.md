@@ -176,10 +176,16 @@ A phone photo is 2 to 5 MB, so attached as taken it can never be sent.
 what goes in, and `ImageShrinker` (`AXTerm/Platform/`, ImageIO only, shared
 with anything else that needs it) does the work off the main actor:
 
-- A photo that would push the message over 120 KB is shrunk by default to
-  `min(48 KB, room left)`: JPEG, long edge from 1280 px down in steps of
-  0.8, quality 0.75 → 0.6 → 0.45 at each size and down to 0.25 only at the
-  320 px floor. The orientation is baked into the pixels. The chip reads
+- A photo that would push the message over 120 KB is shrunk by default,
+  with `min(25 KB, room left)` as the cap. `ImageShrinker` aims for the
+  fewest bytes that still look right: JPEG at a 1024 px long edge, at the
+  lowest quality setting whose result keeps a structural similarity (SSIM,
+  `StructuralSimilarity`) of 0.95 to the scaled original, found by binary
+  search. Only when that does not fit the cap does the picture get smaller:
+  down the ladder in steps of 0.8 to the 320 px floor, taking the highest
+  quality that fits at each step and keeping the step that looks best when
+  scaled back up to 1024 px. Metadata is dropped and colors go out as sRGB.
+  The orientation is baked into the pixels. The chip reads
   "Shrunk to 38 KB from 3.1 MB"; "Send Original" puts the exact file back
   and "Shrink to Fit" shrinks it again, both in place.
 - A photo that fits is left alone, except that its GPS position is removed

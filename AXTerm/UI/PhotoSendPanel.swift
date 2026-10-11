@@ -44,11 +44,11 @@ struct PhotoSendPanel: View {
             .pickerStyle(.segmented)
             if offersHEIC, size != .original {
                 Picker("Format", selection: $format) {
-                    Text("JPEG").tag(ImageShrinker.Format.jpeg)
-                    Text("HEIC, smaller").tag(ImageShrinker.Format.heic)
+                    ForEach(ImageShrinker.Format.allCases, id: \.self) { Text(formatLabel($0)).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .help("HEIC looks the same in less airtime. The other station is AXTerm, which opens it.")
+                .help("Both are made to look the same; the sizes say which costs less airtime for this photo. "
+                      + "The other station is AXTerm, which opens HEIC.")
             }
             Toggle("Keep the photo's location", isOn: $keepsLocation)
                 .help("Off, the GPS position is taken out. Anyone listening can read what you send, and a photo taken at home says where home is.")
@@ -64,15 +64,28 @@ struct PhotoSendPanel: View {
         .task(id: Key(size: size, format: format, keepsLocation: keepsLocation)) {
             isWorking = true
             let (data, name, size, format, keepsLocation) = (original, name, size, format, keepsLocation)
+            let comparesFormats = offersHEIC
             let result = await Task.detached {
                 PhotoSendChoice.prepare(original: data, name: name, size: size, format: format,
-                                        keepsLocation: keepsLocation)
+                                        keepsLocation: keepsLocation, comparesFormats: comparesFormats)
             }.value
             guard !Task.isCancelled else { return }
             prepared = result
             preview = await Task.detached { PhotoPreview.image(from: result.data, longEdge: 900) }.value
             isWorking = false
         }
+    }
+
+    /// "HEIC · 11 KB" once both sizes are known for the current photo.
+    private func formatLabel(_ candidate: ImageShrinker.Format) -> String {
+        guard let prepared, !isWorking else { return candidate.title }
+        if prepared.format == candidate {
+            return "\(candidate.title) · \(ByteCount.string(prepared.data.count))"
+        }
+        if let other = prepared.alternative, other.format == candidate {
+            return "\(candidate.title) · \(ByteCount.string(other.byteCount))"
+        }
+        return candidate.title
     }
 
     @ViewBuilder
@@ -114,6 +127,11 @@ struct PhotoSendPanel: View {
                 Text("\(ByteCount.string(Int64(prepared.data.count))) · \(prepared.pixelWidth) × \(prepared.pixelHeight) px"
                      + (prepared.isOriginal ? "" : " · was \(ByteCount.string(Int64(original.count)))"))
                     .font(.callout.monospacedDigit())
+                if let comparison = prepared.formatComparison {
+                    Text(comparison)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
                 if let hint = AirtimeHint.make(bytes: prepared.data.count,
                                                measuredBytesPerSecond: measuredBytesPerSecond, peer: peer) {
                     Text(hint.text.prefix(1).uppercased() + hint.text.dropFirst())

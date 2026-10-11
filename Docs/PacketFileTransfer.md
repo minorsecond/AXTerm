@@ -246,6 +246,27 @@ is smaller, stored otherwise, the name in UTF-8. `ZipArchiveTests` reads its
 archives back, and `unzip` and macOS's own extractor open them. Retest
 2026-10-10, finding 12: the 26.8 KB constitution zips to about 9 KB.
 
+## Photos
+
+A picked photo gets a size: Small (800 px long edge, at most 12 KB), Medium
+(1024 px, 25 KB), Large (1280 px, 48 KB) or Original. `ImageShrinker`
+encodes it at the size's resolution with the fewest bytes that still look
+right: a binary search on the encoder's quality setting for the lowest one
+whose result keeps a structural similarity (SSIM, `StructuralSimilarity`,
+the 2004 paper's 11 × 11 Gaussian window on luma) of 0.95 to the original
+scaled to that size. The byte figure is a cap. When the look does not fit
+it, the picture steps down in size, taking the highest quality that fits
+at each step, and keeps the step that looks best when scaled back up to
+the size's resolution. Metadata is dropped (the GPS position too, unless
+the toggle keeps it) and colors go out as sRGB.
+
+To another AXTerm the sheet also offers HEIC. Both formats are aimed at the
+same look, the picker shows each one's size for this photo ("HEIC · 11 KB"),
+and the line under the preview compares them: "11 KB as HEIC (JPEG would be
+21 KB)", with JPEG's pixel size when the cap made it smaller. Constitution
+retest 2026-10-11, finding 4: the old search filled the budget with the
+largest picture that fit, so "HEIC, smaller" came out bigger than JPEG.
+
 ## Sending a file again
 
 A finished transfer the operator sent (completed, canceled, failed or

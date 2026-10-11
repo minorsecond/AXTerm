@@ -13,10 +13,34 @@ nonisolated enum PhotoSendChoice {
         var isOriginal: Bool
         /// Why the chosen size could not be used, when it could not.
         var note: String?
+        /// What it was encoded as; nil when the bytes are the original's.
+        var format: ImageShrinker.Format?
+        /// The same photo in the other format, for comparison.
+        var alternative: Alternative?
+
+        /// "11 KB as HEIC (JPEG would be 21 KB)", with the other format's
+        /// pixel size when the budget made it smaller.
+        var formatComparison: String? {
+            guard let format, let alternative else { return nil }
+            let smaller = (alternative.pixelWidth, alternative.pixelHeight) != (pixelWidth, pixelHeight)
+                ? " at \(alternative.pixelWidth) × \(alternative.pixelHeight) px" : ""
+            return "\(ByteCount.string(data.count)) as \(format.title) "
+                + "(\(alternative.format.title) would be \(ByteCount.string(alternative.byteCount))\(smaller))"
+        }
     }
 
+    struct Alternative: Equatable, Sendable {
+        var format: ImageShrinker.Format
+        var byteCount: Int
+        var pixelWidth: Int
+        var pixelHeight: Int
+    }
+
+    /// `comparesFormats` also encodes the photo in the other format, at the
+    /// same size and look, for the preview's comparison.
     static func prepare(original: Data, name: String, size: PhotoSendSize, format: ImageShrinker.Format,
-                        keepsLocation: Bool, byteBudgetOverride: Int? = nil) -> Prepared {
+                        keepsLocation: Bool, byteBudgetOverride: Int? = nil,
+                        comparesFormats: Bool = false) -> Prepared {
         let pixels = ImageShrinker.pixelSize(of: original) ?? (0, 0)
         let asItIs = Prepared(data: original, name: name, pixelWidth: pixels.width, pixelHeight: pixels.height,
                               isOriginal: true, note: nil)
@@ -24,8 +48,20 @@ nonisolated enum PhotoSendChoice {
         if let byteBudgetOverride { options.byteBudget = byteBudgetOverride }
         switch ImageShrinker.shrink(original, name: name, options: options) {
         case .success(.shrunk(let shrunk)):
+            var alternative: Alternative?
+            if comparesFormats {
+                var other = options
+                other.format = format == .jpeg ? .heic : .jpeg
+                if case .success(.shrunk(let otherShrunk)) = ImageShrinker.shrink(original, name: name,
+                                                                                 options: other) {
+                    alternative = Alternative(format: other.format, byteCount: otherShrunk.data.count,
+                                              pixelWidth: otherShrunk.pixelWidth,
+                                              pixelHeight: otherShrunk.pixelHeight)
+                }
+            }
             return Prepared(data: shrunk.data, name: shrunk.name, pixelWidth: shrunk.pixelWidth,
-                            pixelHeight: shrunk.pixelHeight, isOriginal: false, note: nil)
+                            pixelHeight: shrunk.pixelHeight, isOriginal: false, note: nil,
+                            format: format, alternative: alternative)
         case .success(.locationRemoved(let data)):
             return Prepared(data: data, name: name, pixelWidth: pixels.width, pixelHeight: pixels.height,
                             isOriginal: false, note: nil)

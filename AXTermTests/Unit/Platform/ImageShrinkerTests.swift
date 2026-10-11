@@ -3,8 +3,9 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import AXTerm
 
-/// The photo shrinker: a phone photo in, a JPEG that fits a byte budget out,
-/// or a clear failure. Never a silent drop, never garbage.
+/// The photo shrinker: a phone photo in, the fewest bytes that still look
+/// right within a byte budget out, or a clear failure. Never a silent drop,
+/// never garbage.
 final class ImageShrinkerTests: XCTestCase {
 
     /// A "phone photo": big enough that no budget here fits it as taken.
@@ -53,6 +54,73 @@ final class ImageShrinkerTests: XCTestCase {
                                           options: .init(byteBudget: 400 * 1024, maxLongEdge: 1024))
         let shrunk = try shrunk(result)
         XCTAssertLessThanOrEqual(max(shrunk.pixelWidth, shrunk.pixelHeight), 1024)
+    }
+
+    // MARK: - The look and the bytes (2026-10-11)
+
+    /// The size option sets the resolution, and the result looks right at it.
+    func testAtTheChosenSizeTheResultLooksRight() throws {
+        let shrunk = try shrunk(ImageShrinker.shrink(Self.photo, name: "a.jpg",
+                                                     options: .init(byteBudget: 400 * 1024, maxLongEdge: 1024)))
+        XCTAssertEqual(max(shrunk.pixelWidth, shrunk.pixelHeight), 1024)
+        XCTAssertGreaterThanOrEqual(shrunk.similarity, ImageShrinker.targetSimilarity)
+        // Measured here too, against the original scaled to the same size.
+        let reference = try XCTUnwrap(StructuralSimilarity.Luma(
+            XCTUnwrap(PhotoPreview.image(from: Self.photo, longEdge: 1024))))
+        let measured = try XCTUnwrap(StructuralSimilarity.index(of: shrunk.data, against: reference))
+        XCTAssertGreaterThanOrEqual(measured, ImageShrinker.targetSimilarity - 0.005)
+    }
+
+    /// The cheapest encoding that looks right: a little rougher and it no
+    /// longer does, and it is well under a generous budget.
+    func testItSpendsNoMoreBytesThanTheLookNeeds() throws {
+        let budget = 400 * 1024
+        let shrunk = try shrunk(ImageShrinker.shrink(Self.photo, name: "a.jpg",
+                                                     options: .init(byteBudget: budget, maxLongEdge: 1024)))
+        XCTAssertLessThan(shrunk.data.count, budget / 2)
+        let image = try XCTUnwrap(PhotoPreview.image(from: Self.photo, longEdge: 1024))
+        let reference = try XCTUnwrap(StructuralSimilarity.Luma(image))
+        let rougher = try XCTUnwrap(SyntheticPhoto.encode(image, type: .jpeg, quality: shrunk.quality - 0.05))
+        let rougherScore = try XCTUnwrap(StructuralSimilarity.index(of: rougher, against: reference))
+        XCTAssertLessThan(rougherScore, ImageShrinker.targetSimilarity)
+    }
+
+    /// Operator, 2026-10-11: "HEIC, smaller" came out at 22 KB where JPEG
+    /// was 20 KB. Aiming both at the same look, HEIC needs fewer bytes.
+    func testHEICLooksTheSameInFewerBytes() throws {
+        guard SyntheticPhoto.data(width: 64, height: 64, type: .heic) != nil else {
+            throw XCTSkip("this machine cannot encode HEIC")
+        }
+        let jpeg = try shrunk(ImageShrinker.shrink(Self.photo, name: "a.jpg",
+                                                   options: .init(byteBudget: 400 * 1024, maxLongEdge: 1024)))
+        let heic = try shrunk(ImageShrinker.shrink(Self.photo, name: "a.jpg",
+                                                   options: .init(byteBudget: 400 * 1024, maxLongEdge: 1024,
+                                                                  format: .heic)))
+        XCTAssertEqual(SyntheticPhoto.typeIdentifier(of: heic.data), UTType.heic.identifier)
+        XCTAssertEqual(heic.pixelWidth, jpeg.pixelWidth)
+        XCTAssertGreaterThanOrEqual(heic.similarity, ImageShrinker.targetSimilarity)
+        XCTAssertGreaterThanOrEqual(jpeg.similarity, ImageShrinker.targetSimilarity)
+        XCTAssertLessThan(heic.data.count, jpeg.data.count)
+    }
+
+    /// When the look does not fit the budget, the picture gets smaller, and
+    /// the size chosen looks at least as good, viewed at the chosen size, as
+    /// the best that fits at the full size.
+    func testATightBudgetMakesThePictureSmaller() throws {
+        let budget = 12 * 1024
+        let shrunk = try shrunk(ImageShrinker.shrink(Self.photo, name: "a.jpg",
+                                                     options: .init(byteBudget: budget, maxLongEdge: 1024)))
+        XCTAssertLessThanOrEqual(shrunk.data.count, budget)
+        XCTAssertLessThan(max(shrunk.pixelWidth, shrunk.pixelHeight), 1024)
+        XCTAssertLessThan(shrunk.similarity, ImageShrinker.targetSimilarity, "else it would not have shrunk")
+
+        let image = try XCTUnwrap(PhotoPreview.image(from: Self.photo, longEdge: 1024))
+        let reference = try XCTUnwrap(StructuralSimilarity.Luma(image))
+        if let fullSize = SyntheticPhoto.encode(image, type: .jpeg, quality: ImageShrinker.qualityRange.lowerBound),
+           fullSize.count <= budget {
+            let fullSizeScore = try XCTUnwrap(StructuralSimilarity.index(of: fullSize, against: reference))
+            XCTAssertGreaterThanOrEqual(shrunk.similarity, fullSizeScore)
+        }
     }
 
     // MARK: - Shape
