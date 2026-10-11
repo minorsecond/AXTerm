@@ -699,6 +699,27 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Published destination of the currently active manual relay, or nil when no relay is established.
     @Published private(set) var manualRelayDestination: String?
 
+    /// The far station the node on this session bridges to now, and that
+    /// node: an established automatic relay, else one the operator made by
+    /// typing C at the node. The session coordinator routes AXDP for the far
+    /// station down the node's link (Docs/RemoteAccessPlan.md, part 1).
+    var bridgedFarEnd: (far: String, nextHop: String)? {
+        if case let .established(destination, nextHop)? = netRomRelayPhase { return (destination, nextHop) }
+        if let manual = manualRelayDestination, let session = currentSession, session.state == .connected {
+            return (manual, session.remoteAddress.display)
+        }
+        return nil
+    }
+
+    /// The station AXDP on this session is for: the far end of a relay
+    /// through a node, else the destination.
+    var axdpPeer: String { bridgedFarEnd?.far ?? viewModel.destinationCall }
+
+    /// `bridgedFarEnd` as one value the view can watch.
+    var bridgedFarEndKey: String? {
+        bridgedFarEnd.map { "\($0.far.uppercased())|\($0.nextHop.uppercased())" }
+    }
+
     /// Clear manual relay state (call on L2 session disconnect).
     fileprivate func clearManualRelay() {
         manualRelayDetector.clear()
@@ -2434,6 +2455,9 @@ struct TerminalView: View {
             .onChange(of: txViewModel.manualRelayDestination) { _, newDest in
                 updateActiveSessionRelayDestination(newDest)
             }
+            .onChange(of: txViewModel.bridgedFarEndKey) { old, new in
+                syncRelayRoute(from: old, to: new)
+            }
             .onDisappear {
                 stopAutoConnectAttempts()
             }
@@ -3150,8 +3174,8 @@ struct TerminalView: View {
                 queueDepth: txViewModel.queueDepth,
                 isConnected: client.status == .connected,
                 sessionState: displayedSessionState,
-                destinationCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
-                capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall),
+                destinationCapability: client.capabilityStore.capabilities(for: txViewModel.axdpPeer),
+                capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.axdpPeer),
                 connectBarViewModel: connectBarViewModel,
                 relayDestination: txViewModel.relayConversation?.destination,
                 channelBlock: connectChannelFailure(),
@@ -3853,7 +3877,7 @@ struct TerminalView: View {
         
         // If AXDP is requested, verify capability is confirmed
         if useAXDP {
-            let capabilityStatus = sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall)
+            let capabilityStatus = sessionCoordinator.capabilityStatus(for: txViewModel.axdpPeer)
             TxLog.debug(.axdp, "AXDP send decision", [
                 "destination": txViewModel.viewModel.destinationCall,
                 "useAXDP": useAXDP,
@@ -3911,7 +3935,7 @@ struct TerminalView: View {
         if useAXDP {
             // Compressed when the other station can read it (retest
             // 2026-10-10, finding 11).
-            let destination = CallsignNormalizer.toAddress(txViewModel.viewModel.destinationCall)
+            let destination = CallsignNormalizer.toAddress(txViewModel.axdpPeer)
             let peerCaps = client.capabilityStore.capabilities(for: destination.call, ssid: destination.ssid)
             let messageId = UInt32.random(in: 1...UInt32.max)
             payload = AXDPChatEncoder.encode(text: text, messageId: messageId, peer: peerCaps)
@@ -5409,6 +5433,24 @@ struct TerminalView: View {
         if let outcome = TerminalSession.Outcome(statusText: state) {
             sessionRecorder?.ended(id: activeSessionRecordID, outcome: outcome)
         }
+    }
+
+    /// Tells the session coordinator a relay through a node began or ended,
+    /// so AXDP to the far station goes down the node's link and AXDP from
+    /// it is the far station's.
+    private func syncRelayRoute(from old: String?, to new: String?) {
+        func parts(_ key: String?) -> (far: AX25Address, nextHop: AX25Address)? {
+            guard let key else { return nil }
+            let split = key.split(separator: "|").map(String.init)
+            guard split.count == 2 else { return nil }
+            return (CallsignNormalizer.toAddress(split[0]), CallsignNormalizer.toAddress(split[1]))
+        }
+        if let ended = parts(old), parts(new)?.far != ended.far {
+            sessionCoordinator.endRelay(to: ended.far)
+        }
+        guard let begun = parts(new),
+              let session = sessionCoordinator.sessionManager.connectedSession(withPeer: begun.nextHop) else { return }
+        sessionCoordinator.registerRelay(to: begun.far, via: session)
     }
 
     private func updateActiveSessionRelayDestination(_ destination: String?) {

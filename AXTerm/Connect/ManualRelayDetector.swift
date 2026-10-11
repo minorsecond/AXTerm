@@ -95,12 +95,15 @@ nonisolated struct ManualRelayDetector {
         try! NSRegularExpression(pattern: #"^[Cc]\s+([A-Za-z0-9]{1,6}(?:-(?:[0-9]|1[0-5]))?)$"#)
     }()
 
+    /// The node reached the station: Kantronics' "###LINK MADE", or the
+    /// "Connected to" BPQ and AXTerm's own node say (the same wording the
+    /// automatic relay reads, `NetRomRelayResponseParser`).
     static func isLinkMade(_ text: String) -> Bool {
-        text.uppercased().contains("###LINK MADE")
+        text.uppercased().contains("###LINK MADE") || NetRomRelayResponseParser.isSuccess(text)
     }
 
     static func isLinkFailed(_ text: String) -> Bool {
-        text.uppercased().contains("###LINK FAILED")
+        text.uppercased().contains("###LINK FAILED") || NetRomRelayResponseParser.isFailure(text)
     }
 
     /// True when the node is showing its command prompt.
@@ -119,6 +122,8 @@ nonisolated struct ManualRelayDetector {
         let upper = text.uppercased()
         return upper.contains("ENTER COMMAND")
             || upper.contains("ENTER CMD")
-            || upper.contains("###DISCONNECTED FROM")
+            || upper.contains("DISCONNECTED FROM")      // ###DISCONNECTED FROM, BPQ and AXTerm's node
+            || upper.contains("RETURNED TO NODE")       // BPQ
+            || upper.contains("BACK AT THE NODE")       // AXTerm's node
     }
 }

@@ -133,8 +133,12 @@ needs reading before release.
   download form, and AXTerm rebuilds it. 7PLUS waits until its format can be
   read from its documentation rather than written from memory.
 - Key-pair sign-in from another AXTerm: done.
-- Still to do: pushing a file on from home, 7PLUS, the digi path test, AXDP
-  through a node relay, incoming NET/ROM circuits with AXDP over them.
+- AXDP through a node relay: done. Conversations are routed by the far
+  station, PING and PONG name their sender, and completion requests back
+  off (AXTERM-TRANSMISSION-SPEC.md, "AXDP through a node relay").
+- Still to do: incoming NET/ROM circuits with AXDP over them, the digi path
+  test on the air, 7PLUS (needs its source), pushing a file on from home (an
+  open question).
 
 ## Order
 

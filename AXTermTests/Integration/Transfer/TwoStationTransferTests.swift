@@ -24,6 +24,9 @@ final class CrossKISSLink: KISSLink {
     private(set) var state: KISSLinkState = .disconnected
     weak var delegate: KISSLinkDelegate?
     weak var peer: CrossKISSLink?
+    /// The other stations on a shared simplex channel: each hears every
+    /// frame, as on the air (`TransferStation.join`).
+    var neighbors: [WeakCrossKISSLink] = []
     /// Radio silence: frames sent while this is set never arrive.
     var silenced = false
     /// The next frame whose bytes contain this is lost, once: a collision.
@@ -54,7 +57,19 @@ final class CrossKISSLink: KISSLink {
             guard let peer, !peer.silenced else { return }
             peer.delegate?.linkDidReceive(data)
         }
+        for neighbor in neighbors {
+            DispatchQueue.main.async {
+                guard let link = neighbor.link, !link.silenced else { return }
+                link.delegate?.linkDidReceive(data)
+            }
+        }
     }
+}
+
+@MainActor
+final class WeakCrossKISSLink {
+    weak var link: CrossKISSLink?
+    init(_ link: CrossKISSLink) { self.link = link }
 }
 
 /// Collects transfer notifications instead of posting them.
@@ -127,6 +142,13 @@ final class TransferStation {
 
     func connectLink(to other: TransferStation) {
         link.peer = other.link
+        engine.connectUsingSettings()
+    }
+
+    /// Puts this station on one simplex channel with `others`: every frame
+    /// any of them sends reaches all the rest.
+    func join(_ others: [TransferStation]) {
+        link.neighbors = others.filter { $0 !== self }.map { WeakCrossKISSLink($0.link) }
         engine.connectUsingSettings()
     }
 

@@ -26,6 +26,10 @@ nonisolated struct AXDPCapability: Sendable, Equatable {
         case compressionAlgos   = 0x04
         case maxDecompressedLen = 0x05
         case maxChunkLen        = 0x06
+        /// The sender's own callsign. Through a node the station at the
+        /// other end of the radio link is the node, not the sender
+        /// (constitution retest 2026-10-11; Docs/RemoteAccessPlan.md).
+        case station            = 0x07
     }
 
     /// Feature flags bitset
@@ -57,6 +61,10 @@ nonisolated struct AXDPCapability: Sendable, Equatable {
 
     /// Preferred maximum chunk length
     var maxChunkLen: UInt16
+
+    /// Who sent these, by callsign, when the sender says. Identity, not a
+    /// capability: kept out of what is stored for a peer.
+    var station: String? = nil
 
     /// Default local capabilities
     static func defaultLocal() -> AXDPCapability {
@@ -109,6 +117,13 @@ nonisolated struct AXDPCapability: Sendable, Equatable {
         data.append(contentsOf: AXDP.encodeUInt16(2))
         data.append(contentsOf: AXDP.encodeUInt16(maxChunkLen))
 
+        if let station, !station.isEmpty {
+            let bytes = Data(station.uppercased().utf8)
+            data.append(SubTLVType.station.rawValue)
+            data.append(contentsOf: AXDP.encodeUInt16(UInt16(bytes.count)))
+            data.append(bytes)
+        }
+
         return data
     }
 
@@ -122,6 +137,7 @@ nonisolated struct AXDPCapability: Sendable, Equatable {
         var compressionAlgos: [AXDPCompression.Algorithm] = []
         var maxDecompressedLen: UInt32 = 4096
         var maxChunkLen: UInt16 = 128
+        var station: String?
 
         var offset = 0
         while offset + 3 <= data.count {
@@ -159,6 +175,10 @@ nonisolated struct AXDPCapability: Sendable, Equatable {
                     maxChunkLen = AXDP.decodeUInt16(value)
                 }
 
+            case SubTLVType.station.rawValue:
+                let text = String(decoding: value, as: UTF8.self).trimmingCharacters(in: .whitespaces)
+                if !text.isEmpty, text.count <= 10 { station = text.uppercased() }
+
             default:
                 // Unknown sub-TLV - skip safely
                 break
@@ -173,7 +193,8 @@ nonisolated struct AXDPCapability: Sendable, Equatable {
             features: features,
             compressionAlgos: compressionAlgos,
             maxDecompressedLen: maxDecompressedLen,
-            maxChunkLen: maxChunkLen
+            maxChunkLen: maxChunkLen,
+            station: station
         )
     }
 
@@ -847,17 +868,19 @@ nonisolated enum AXDPProbePolicy {
 }
 
 /// A station that shows it runs AXTerm in a frame heard on the channel, to
-/// anyone: an APRS beacon to AXTerm's tocall, or AXDP. Kept in the peer
-/// memory, so its next connection is checked inside the session with
-/// nothing extra sent (constitution retest 2026-10-11, finding 1).
+/// anyone: an APRS beacon to AXTerm's tocall, or AXDP in a UI frame. Kept in
+/// the peer memory, so its next connection is checked inside the session
+/// with nothing extra sent (constitution retest 2026-10-11, finding 1).
+/// AXDP in an I-frame is not a sign: a node bridging two AXTerm stations
+/// carries their AXDP in its own I-frames without speaking it, and a node
+/// taken for AXTerm would be sent AXDP at its prompt. Only AXTerm sends AXDP
+/// in a UI frame, and a node cannot carry one.
 nonisolated enum AXTermSign {
     static func station(in packet: Packet) -> String? {
         guard let from = packet.from, let to = packet.to else { return nil }
         switch packet.frameType {
         case .ui:
             if to.call.uppercased() == APRSBeacon.tocall && to.ssid == 0 { return from.display }
-            return AXDP.hasMagic(packet.info) ? from.display : nil
-        case .i:
             return AXDP.hasMagic(packet.info) ? from.display : nil
         default:
             return nil

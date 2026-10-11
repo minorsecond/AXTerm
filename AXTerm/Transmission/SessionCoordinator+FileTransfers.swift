@@ -53,7 +53,7 @@ extension SessionCoordinator {
     func dropChunkQueuedWhole(for id: UUID) -> Int? {
         guard let chunk = axdpChunkQueuedWhole.removeValue(forKey: id),
               let route = transferRoutes[id],
-              let session = sessionManager.connectedSession(withPeer: route.destination) else { return nil }
+              let session = link(toPeer: route.destination) else { return nil }
         _ = sessionManager.discardQueuedData(for: session.key)
         return chunk
     }
@@ -133,7 +133,7 @@ extension SessionCoordinator {
             }
         }
         guard let (sessionId, peer) = nack else { return }
-        let path = sessionManager.connectedSession(withPeer: peer)?.path
+        let path = link(toPeer: peer)?.path
             ?? transferRoutes[id]?.path ?? DigiPath()
         let message = AXDP.Message(type: .nack, sessionId: sessionId, messageId: 1)
         _ = sendAXDPPayload(message.encode(), to: peer, path: path, displayInfo: "AXDP NACK (cancel transfer)")
@@ -331,7 +331,7 @@ extension SessionCoordinator {
     /// Sends a file by YAPP over the connected session with `destination`.
     func startYAPPTransfer(to destination: String, fileName: String, data: Data, path: DigiPath) -> String? {
         let address = CallsignNormalizer.toAddress(destination)
-        guard let session = sessionManager.connectedSession(withPeer: address) else {
+        guard let session = link(toPeer: address) else {
             return "Cannot send file: YAPP requires a connected session. Connect to \(destination) first."
         }
         // YAPP takes the session's whole byte stream, which would starve an
@@ -350,7 +350,8 @@ extension SessionCoordinator {
             id: UUID(),
             fileName: fileName,
             fileSize: data.count,
-            destination: session.remoteAddress.display,
+            // Through a node, the station it goes to is the far one.
+            destination: isRelayed(address) ? address.display : session.remoteAddress.display,
             chunkSize: runner.yapp.blockSize,
             direction: .outbound,
             transferProtocol: .yapp,
@@ -596,7 +597,7 @@ extension SessionCoordinator {
     }
 
     private func isConnected(to destination: String) -> Bool {
-        sessionManager.connectedSession(withPeer: CallsignNormalizer.toAddress(destination)) != nil
+        link(toPeer: CallsignNormalizer.toAddress(destination)) != nil
     }
 }
 
@@ -619,7 +620,7 @@ extension SessionCoordinator {
     @discardableResult
     func sendMailboxAreaCommand(_ area: String, to destination: String) -> Bool {
         guard let line = MailboxAreaCommand.line(for: area),
-              let session = sessionManager.connectedSession(withPeer: CallsignNormalizer.toAddress(destination))
+              let session = link(toPeer: CallsignNormalizer.toAddress(destination))
         else { return false }
         let frames = sessionManager.sendData(Data(line.utf8), to: session.remoteAddress, path: session.path,
                                              radio: session.radio, pid: 0xF0, displayInfo: line)

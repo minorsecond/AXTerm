@@ -53,14 +53,24 @@ final class AXDPProbePolicyTests: XCTestCase {
         XCTAssertNil(AXTermSign.station(in: direwolf))
     }
 
-    func testAXDPHeardOnTheChannelIsASign() {
-        let chat = AXDP.Message(type: .chat, sessionId: 0, messageId: 1, payload: Data("hi".utf8)).encode()
+    func testAXDPHeardInAUIFrameIsASign() {
+        let ping = AXDP.Message(type: .ping, sessionId: 0, messageId: 1,
+                                capabilities: AXDPCapability.defaultLocal()).encode()
         let heard = Packet(from: AX25Address(call: "N0XYZ", ssid: 1), to: AX25Address(call: "N0ABC", ssid: 2),
-                           frameType: .i, pid: 0xF0, info: chat)
+                           frameType: .ui, pid: 0xF0, info: ping)
         XCTAssertEqual(AXTermSign.station(in: heard), "N0XYZ-1")
         let text = Packet(from: AX25Address(call: "N0XYZ", ssid: 1), to: AX25Address(call: "N0ABC", ssid: 2),
-                          frameType: .i, pid: 0xF0, info: Data("hello\r".utf8))
+                          frameType: .ui, pid: 0xF0, info: Data("hello\r".utf8))
         XCTAssertNil(AXTermSign.station(in: text))
+    }
+
+    /// A node bridging two AXTerm stations carries their AXDP in its own
+    /// I-frames; that does not make the node AXTerm (RelayAXDPTests).
+    func testAXDPInAnIFrameIsNotASign() {
+        let chat = AXDP.Message(type: .chat, sessionId: 0, messageId: 1, payload: Data("hi".utf8)).encode()
+        let carried = Packet(from: AX25Address(call: "K0NOD", ssid: 1), to: AX25Address(call: "N0ABC", ssid: 2),
+                             frameType: .i, pid: 0xF0, info: chat)
+        XCTAssertNil(AXTermSign.station(in: carried))
     }
 
     func testOneProbeNoRetries() {

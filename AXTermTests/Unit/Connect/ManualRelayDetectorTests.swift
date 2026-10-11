@@ -269,4 +269,47 @@ final class ManualRelayDetectorTests: XCTestCase {
             XCTAssertNil(result, "parseConnectCommand('\(input)') should return nil")
         }
     }
+
+    // MARK: - What nodes actually say (Docs/RemoteAccessPlan.md, part 1)
+
+    /// BPQ and AXTerm's own node say "Connected to"; only Kantronics says
+    /// "###LINK MADE". A relay the detector never confirmed carried no AXDP.
+    func testBPQAndAXTermConnectWordingEstablishesTheRelay() {
+        for reply in ["EPINOD:K0EPI-7} Connected to K0EPI-2", "*** Connected to K0EPI-2"] {
+            var detector = ManualRelayDetector()
+            detector.processOutgoing("C K0EPI-2")
+            detector.processIncoming(reply)
+            XCTAssertEqual(detector.activeRelayDestination, "K0EPI-2", reply)
+        }
+    }
+
+    func testBPQFailureWordingEndsThePendingRelay() {
+        var detector = ManualRelayDetector()
+        detector.processOutgoing("C K0EPI-2")
+        detector.processIncoming("EPINOD:K0EPI-7} Failure with K0EPI-2")
+        XCTAssertEqual(detector.state, .idle)
+    }
+
+    /// Back at the node, in each node's words.
+    func testBeingPutBackAtTheNodeEndsTheRelay() {
+        for notice in ["*** Disconnected from K0EPI-2 \u{2014} back at the node.",
+                       "Returned to Node EPINOD:K0EPI-7",
+                       "EPINOD:K0EPI-7} Disconnected from K0EPI-2"] {
+            var detector = ManualRelayDetector()
+            detector.processOutgoing("C K0EPI-2")
+            detector.processIncoming("*** Connected to K0EPI-2")
+            detector.processIncoming(notice)
+            XCTAssertEqual(detector.state, .idle, notice)
+        }
+    }
+
+    /// A word like "connected" in the far station's own text, once the relay
+    /// is up, changes nothing.
+    func testTheFarStationsTextDoesNotReArmIt() {
+        var detector = ManualRelayDetector()
+        detector.processOutgoing("C K0EPI-2")
+        detector.processIncoming("*** Connected to K0EPI-2")
+        detector.processIncoming("AXTerm personal mailbox - K0EPI-2 connected to you")
+        XCTAssertEqual(detector.activeRelayDestination, "K0EPI-2")
+    }
 }

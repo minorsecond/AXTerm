@@ -392,6 +392,94 @@ final class SessionCoordinator: ObservableObject {
     /// to that caller goes down the mailbox's session, which the mailbox
     /// owns. By uppercased callsign.
     var mailboxReplyRoutes: [String: (Data) -> Void] = [:]
+
+    // MARK: Conversations and the links that carry them
+
+    /// Far stations reached through a node that bridges our link to them, by
+    /// uppercased callsign: the key of the session to the node. Who we talk
+    /// to and the radio link the bytes travel on are not the same station
+    /// through a node (Docs/RemoteAccessPlan.md, part 1).
+    private(set) var relayRoutes: [String: SessionKey] = [:]
+    /// When each transfer waiting for the receiver's confirmation may ask
+    /// again (`CompletionRequestPacing`).
+    var completionRequestPacing: [UUID: CompletionRequestPacing] = [:]
+    private var relayFarEnds: [SessionKey: AX25Address] = [:]
+
+    /// The node on `session` now bridges it to `farEnd`: a relay through a
+    /// node prompt (`C <call>`), or one the far station's own AXDP named.
+    /// A station with an AXTerm sign is then asked about AXDP inside the
+    /// link; one without is sent nothing, since AXDP on a plain terminal is
+    /// junk on someone's screen.
+    func registerRelay(to farEnd: AX25Address, via session: AX25Session, checksCapabilities: Bool = true) {
+        let far = farEnd.display.uppercased()
+        guard far != session.remoteAddress.display.uppercased() else { return }
+        if let previous = relayFarEnds[session.key] { relayRoutes.removeValue(forKey: previous.display.uppercased()) }
+        relayRoutes[far] = session.key
+        relayFarEnds[session.key] = farEnd
+        TxLog.debug(.session, "Relay registered", ["far": far, "via": session.remoteAddress.display])
+        if checksCapabilities { startRelayCapabilityCheck(farEnd: farEnd, via: session) }
+        objectWillChange.send()
+    }
+
+    /// The relay to `farEnd` ended: the node's link went down, or the node
+    /// put the caller back at its prompt.
+    func endRelay(to farEnd: AX25Address) {
+        let far = farEnd.display.uppercased()
+        guard let key = relayRoutes.removeValue(forKey: far) else { return }
+        relayFarEnds.removeValue(forKey: key)
+        invalidateCapability(for: far)
+        objectWillChange.send()
+    }
+
+    /// The far station a node on this link bridges to, if any.
+    func relayFarEnd(of session: AX25Session) -> AX25Address? {
+        relayFarEnds[session.key]
+    }
+
+    /// The connected link a conversation with `peer` travels on: its own
+    /// session, or the session to the node that bridges to it.
+    func link(toPeer peer: AX25Address) -> AX25Session? {
+        if let direct = sessionManager.connectedSession(withPeer: peer) { return direct }
+        guard let key = relayRoutes[peer.display.uppercased()],
+              let session = sessionManager.sessions[key], session.state == .connected else { return nil }
+        return session
+    }
+
+    /// Whether `peer` is reached through a node, so a UI frame cannot reach it.
+    func isRelayed(_ peer: AX25Address) -> Bool {
+        sessionManager.connectedSession(withPeer: peer) == nil && relayRoutes[peer.display.uppercased()] != nil
+    }
+
+    /// The links' sessions going down end the relays they carried.
+    private func endRelays(carriedBy session: AX25Session) {
+        guard let farEnd = relayFarEnds[session.key] else { return }
+        failTransfersOnLinkLoss(peer: farEnd, timedOut: false)
+        endRelay(to: farEnd)
+    }
+
+    /// The first question to a relayed station: inside the link, and only to
+    /// one with an AXTerm sign. Remembered capabilities confirm it at once.
+    private func startRelayCapabilityCheck(farEnd: AX25Address, via session: AX25Session) {
+        guard globalAdaptiveSettings.axdpExtensionsEnabled,
+              globalAdaptiveSettings.autoNegotiateCapabilities else { return }
+        let far = farEnd.display.uppercased()
+        if let known = peerMemory.capabilities(for: far) {
+            packetEngine?.capabilityStore.store(known, for: farEnd.call, ssid: farEnd.ssid)
+            markImplicitlyConfirmedAXDP(for: far)
+            return
+        }
+        guard peerMemory.verdict(for: far) == .axterm else { return }
+        sendCapabilityPing(to: session, peer: farEnd, overridingRememberedNo: true)
+    }
+
+    /// Our capabilities, naming the address we use on `session`, so the far
+    /// end of a relay learns who is really there.
+    func localCapabilities(as address: AX25Address?) -> AXDPCapability {
+        var caps = AXDPCapability.defaultLocal()
+        caps.station = address?.display
+        return caps
+    }
+
     /// Questions to mailboxes about upload areas, waiting for their answer.
     var pendingAreaQueries: [UInt32: CheckedContinuation<[String]?, Never>] = [:]
 
@@ -2741,7 +2829,10 @@ final class SessionCoordinator: ObservableObject {
 
         sessionManager.onDataDeliveredForReassembly = { [weak self] session, data in
             axDebugPrint("[DEBUG:DELIVERY] Data delivered for reassembly | from=\(session.remoteAddress.display) size=\(data.count) hex=\(data.prefix(16).map { String(format: "%02X", $0) }.joined())")
-            self?.appendToReassemblyAndExtract(from: session.remoteAddress, path: session.path, data: data)
+            // Through a node, the bytes are the far station's.
+            let from = self?.relayFarEnd(of: session) ?? session.remoteAddress
+            self?.appendToReassemblyAndExtract(from: from, path: session.path, data: data,
+                                               linkPeer: session.remoteAddress)
 
             // Send our text probe (UI frame) after receiving first inbound I-frame (if pending).
             // Note: inbound text probes arrive via UI frames, not I-frames, so detection
@@ -2981,6 +3072,7 @@ final class SessionCoordinator: ObservableObject {
                     )
                 }
                 self.invalidateCapability(for: session.remoteAddress.display)
+                self.endRelays(carriedBy: session)
 
                 // Clear reassembly buffer for this peer to prevent stale data corruption.
                 // This is critical for multi-fragment AXDP messages - if partial data remains
@@ -3078,8 +3170,12 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Send an AXDP PING to a connected session to discover capabilities
-    func sendCapabilityPing(to session: AX25Session, overridingRememberedNo: Bool = false) {
-        let peerCallsign = session.remoteAddress.display.uppercased()
+    /// `peer` is the station asked when it is not the one at the other end
+    /// of `session`'s link: the far end of a relay through a node.
+    func sendCapabilityPing(to session: AX25Session, peer: AX25Address? = nil,
+                            overridingRememberedNo: Bool = false) {
+        let peerAddress = peer ?? session.remoteAddress
+        let peerCallsign = peerAddress.display.uppercased()
 
         if !overridingRememberedNo && isAXDPNotSupported(for: peerCallsign) {
             TxLog.debug(.capability, "Skipping PING - peer previously marked not supported", [
@@ -3103,7 +3199,7 @@ final class SessionCoordinator: ObservableObject {
             return
         }
 
-        let localCaps = AXDPCapability.defaultLocal()
+        let localCaps = localCapabilities(as: session.localAddress)
         let pingMessage = AXDP.Message(
             type: .ping,
             sessionId: UInt32(session.id.hashValue & 0xFFFFFFFF),
@@ -3118,27 +3214,27 @@ final class SessionCoordinator: ObservableObject {
         // rather than asking again itself.
         startCapabilityCheck(
             for: peerCallsign,
-            kind: .ping(destination: session.remoteAddress, path: session.path, payload: payload),
+            kind: .ping(destination: peerAddress, path: session.path, payload: payload),
             rto: session.timers.rto
         )
 
         // For connected sessions, route through session manager (I-frames)
         _ = sendAXDPPayload(
             payload,
-            to: session.remoteAddress,
+            to: peerAddress,
             path: session.path,
             displayInfo: "AXDP PING"
         )
 
         TxLog.outbound(.capability, "Sent AXDP PING via session", [
-            "dest": session.remoteAddress.display,
+            "dest": peerAddress.display,
             "features": localCaps.features.description
         ])
 
         // Emit debug event for PING sent
         onCapabilityEvent?(CapabilityDebugEvent(
             type: .pingSent,
-            peer: session.remoteAddress.display,
+            peer: peerAddress.display,
             capabilities: localCaps
         ))
     }
@@ -3156,6 +3252,8 @@ final class SessionCoordinator: ObservableObject {
     private func sendTextProbeIfNeeded(for session: AX25Session, firstData: Data?) {
         let peer = session.remoteAddress.display.uppercased()
         guard pendingTextProbe.remove(peer) != nil else { return }
+        // A node carrying another station's AXDP is not asked itself.
+        guard relayFarEnd(of: session) == nil else { return }
         switch AXDPProbePolicy.check(afterData: firstData, remembered: peerMemory.verdict(for: peer)) {
         case .none:
             debugAXDP("No capability check: remembered as not AXTerm", ["peer": peer])
@@ -3244,7 +3342,7 @@ final class SessionCoordinator: ObservableObject {
     /// Used to complete the bidirectional exchange after receiving a PONG in response
     /// to our text probe.  The peer already proved AXDP support so binary is safe.
     private func sendCapabilityPingViaUI(to address: AX25Address, path: DigiPath, radio: RadioID? = nil) {
-        let localCaps = AXDPCapability.defaultLocal()
+        let localCaps = localCapabilities(as: uiOrigin(to: address, radio: radio).source)
         let pingMessage = AXDP.Message(
             type: .ping,
             sessionId: 0,
@@ -3306,7 +3404,7 @@ final class SessionCoordinator: ObservableObject {
 
         // Answer with a binary AXDP PING via UI frame (stays out of
         // connected-mode data flow).
-        let localCaps = AXDPCapability.defaultLocal()
+        let localCaps = localCapabilities(as: sessionManager.answeringAddress(for: to, radio: radio))
         let pingMessage = AXDP.Message(
             type: .ping,
             sessionId: 0,
@@ -3434,7 +3532,8 @@ final class SessionCoordinator: ObservableObject {
     private func sendCapabilityPong(to address: AX25Address, path: DigiPath, sessionId: UInt32, messageId: UInt32,
                                     radio: RadioID? = nil, viaSession: Bool = false,
                                     reply: ((Data) -> Void)? = nil) {
-        let localCaps = AXDPCapability.defaultLocal()
+        let localCaps = localCapabilities(as: link(toPeer: address)?.localAddress
+                                              ?? uiOrigin(to: address, radio: radio).source)
         let pongMessage = AXDP.Message(
             type: .pong,
             sessionId: sessionId,
@@ -3977,13 +4076,17 @@ final class SessionCoordinator: ObservableObject {
         return split.text
     }
 
-    private func appendToReassemblyAndExtract(from: AX25Address, path: DigiPath, data: Data) {
+    /// `linkPeer` is the station at the other end of the radio link the
+    /// bytes came on, which the terminal asks `plainText` by; through a node
+    /// it is the node, while `from` is the far station.
+    private func appendToReassemblyAndExtract(from: AX25Address, path: DigiPath, data: Data,
+                                              linkPeer: AX25Address? = nil) {
         let key = reassemblyKey(from: from, path: path)
         var reassembler = inboundReassemblers[key] ?? AXDPStreamReassembler()
         let heldBefore = reassembler.buffered.count
         let discardedBefore = reassembler.discardedBytes
         let (messages, text) = reassembler.split(data)
-        deliveredText[from.display.uppercased()] = (data, text)
+        deliveredText[(linkPeer ?? from).display.uppercased()] = (data, text)
 
         if reassembler.buffered.isEmpty {
             inboundReassemblers.removeValue(forKey: key)
@@ -4068,8 +4171,19 @@ final class SessionCoordinator: ObservableObject {
     /// Handle a fully decoded AXDP message (used after reassembly or single-frame).
     /// `viaSession`: it came in the connected session's I-frames, not a UI
     /// frame.
-    private func handleAXDPMessageDecoded(from: AX25Address, path: DigiPath, message: AXDP.Message,
+    private func handleAXDPMessageDecoded(from heardFrom: AX25Address, path: DigiPath, message: AXDP.Message,
                                           radio: RadioID? = nil, viaSession: Bool = false) {
+        // A PING or PONG names its sender. When that is not the station at
+        // the other end of our link, the link is a node bridging to it: the
+        // conversation is the sender's, and the node is only carrying it.
+        var from = heardFrom
+        if message.type == .ping || message.type == .pong,
+           let claimed = message.capabilities?.station.map(CallsignNormalizer.toAddress),
+           !CallsignNormalizer.addressesMatch(claimed, heardFrom),
+           let carrier = sessionManager.connectedSession(withPeer: heardFrom) {
+            registerRelay(to: claimed, via: carrier, checksCapabilities: false)
+            from = claimed
+        }
         debugAXDP("RX", [
             "type": String(describing: message.type),
             "from": from.display,
@@ -4170,7 +4284,9 @@ final class SessionCoordinator: ObservableObject {
     func handleCapabilityMessage(_ message: AXDP.Message, from: AX25Address, path: DigiPath,
                                  radio: RadioID? = nil, viaSession: Bool = false,
                                  reply: ((Data) -> Void)? = nil) {
-        guard let caps = message.capabilities else { return }
+        guard var caps = message.capabilities else { return }
+        // Who sent it is identity, not a capability (`handleAXDPMessageDecoded`).
+        caps.station = nil
 
         let peerCallsign = from.display.uppercased()
         clearAXDPNotSupported(for: peerCallsign)
@@ -4287,11 +4403,13 @@ final class SessionCoordinator: ObservableObject {
         // Check for connected session first (more efficient path). The link's
         // own radio, or sendData takes the primary's, finds no link there and
         // opens one (smoke run 2026-10-03-1, issue 110).
-        if let link = sessionManager.connectedSession(withPeer: destination) {
+        if let link = link(toPeer: destination) {
+            // Through a node the frames go to the node, on its link's path.
+            let relayed = !CallsignNormalizer.addressesMatch(link.remoteAddress, destination)
             let frames = sessionManager.sendData(
                 payload,
-                to: destination,
-                path: path,
+                to: link.remoteAddress,
+                path: relayed ? link.path : path,
                 radio: link.radio,
                 pid: 0xF0,
                 displayInfo: displayInfo
@@ -4312,8 +4430,9 @@ final class SessionCoordinator: ObservableObject {
 
         // A UI frame stands alone: a transfer's stream has no business in
         // one, and nothing goes out over the AX.25 default N1 of 256 bytes
-        // (AX.25 2.2 §6.7.2.1).
-        guard !transferStream, payload.count <= AX25Constants.maxUIInfoLength else {
+        // (AX.25 2.2 §6.7.2.1). Nor can one reach a station behind a node.
+        guard !transferStream, payload.count <= AX25Constants.maxUIInfoLength,
+              relayRoutes[destination.display.uppercased()] == nil else {
             TxLog.warning(.axdp, "AXDP payload not sent as UI: no connected session", [
                 "destination": destination.display,
                 "payloadSize": payload.count,
@@ -4348,7 +4467,7 @@ final class SessionCoordinator: ObservableObject {
         // A peer with a link to us is answered from the link's own address,
         // which is the node alias for a link to the node: a PONG to EPINDB
         // from K0EPI-3 went unmatched (smoke run 2026-10-03-1, issue 89).
-        if let session = sessionManager.connectedSession(withPeer: peer),
+        if let session = link(toPeer: peer),
            radio == nil || session.radio == radio {
             return (session.radio, session.localAddress)
         }
@@ -4469,8 +4588,9 @@ final class SessionCoordinator: ObservableObject {
               globalAdaptiveSettings.autoNegotiateCapabilities else { return }
         let parsed = CallsignNormalizer.parse(callsign)
         let address = AX25Address(call: parsed.call, ssid: parsed.ssid)
-        guard let session = sessionManager.connectedSession(withPeer: address) else { return }
-        let peer = session.remoteAddress.display.uppercased()
+        guard let session = link(toPeer: address) else { return }
+        let relayed = isRelayed(address)
+        let peer = (relayed ? address : session.remoteAddress).display.uppercased()
         guard capabilityStatus(for: peer) == .unknown else { return }
         // The check scheduled at connect, if it has not run yet, runs now:
         // the operator is waiting on the answer.
@@ -4480,8 +4600,11 @@ final class SessionCoordinator: ObservableObject {
             return
         case .inSession:
             guard axdpAllowed(on: session.radio), !sessionManager.hasDeliveryClaim(for: session.key) else { return }
-            sendCapabilityPing(to: session)
+            sendCapabilityPing(to: session, peer: relayed ? address : nil)
         case .probe:
+            // A UI probe cannot cross a node, and a station behind one with
+            // no AXTerm sign is not sent binary.
+            guard !relayed else { return }
             sendTextProbe(to: session)
         }
         objectWillChange.send()
@@ -4494,20 +4617,27 @@ final class SessionCoordinator: ObservableObject {
         guard globalAdaptiveSettings.axdpExtensionsEnabled else { return }
         let parsed = CallsignNormalizer.parse(callsign)
         let address = AX25Address(call: parsed.call, ssid: parsed.ssid)
-        guard let session = sessionManager.connectedSession(withPeer: address) else { return }
-        let peer = session.remoteAddress.display.uppercased()
+        guard let session = link(toPeer: address) else { return }
+        let relayed = isRelayed(address)
+        let peer = (relayed ? address : session.remoteAddress).display.uppercased()
         axdpNotSupported.removeValue(forKey: peer)
         pendingCapabilityDiscovery.removeValue(forKey: peer)
         pendingTextProbe.remove(peer)
         peerMemory.forget(peer)
-        sendTextProbe(to: session)
+        if relayed {
+            // Behind a node only a PING inside the link can reach it; the
+            // operator asked, so it goes.
+            sendCapabilityPing(to: session, peer: address, overridingRememberedNo: true)
+        } else {
+            sendTextProbe(to: session)
+        }
         objectWillChange.send()
     }
 
     /// Handle incoming FILE_META message - creates pending transfer request
     private func handleFileMetaMessage(_ message: AXDP.Message, from: AX25Address, path: DigiPath) {
         guard let request = makeInboundOffer(message, from: from) else { return }
-        if sessionManager.connectedSession(withPeer: from) != nil {
+        if link(toPeer: from) != nil {
             sessionBoundTransferPeers[request.id] = from.display.uppercased()
         }
         pendingIncomingTransfers.append(request)
@@ -4616,7 +4746,7 @@ final class SessionCoordinator: ObservableObject {
     /// answer in time; the Send File sheet then shows no area picker.
     func requestUploadAreas(from destination: String, timeout: TimeInterval = 20) async -> [String]? {
         let peer = CallsignNormalizer.toAddress(destination)
-        guard sessionManager.connectedSession(withPeer: peer) != nil else { return nil }
+        guard link(toPeer: peer) != nil else { return nil }
         let messageId = UInt32.random(in: 1...UInt32.max)
         return await withCheckedContinuation { continuation in
             pendingAreaQueries[messageId] = continuation
@@ -4631,7 +4761,7 @@ final class SessionCoordinator: ObservableObject {
 
     /// An AXDP message down a connected session, through the session layer.
     private func sendInSession(_ payload: Data, to peer: AX25Address, displayInfo: String) {
-        guard let session = sessionManager.connectedSession(withPeer: peer) else { return }
+        guard let session = link(toPeer: peer) else { return }
         let frames = sessionManager.sendData(payload, to: session.remoteAddress, path: session.path,
                                              radio: session.radio, pid: 0xF0, displayInfo: displayInfo)
         for frame in frames { sendFrame(frame) }
@@ -5514,7 +5644,7 @@ final class SessionCoordinator: ObservableObject {
         clearAXDPNotSupported(for: destAddress.display)
 
         // Build AXDP PING message with our capabilities
-        let localCaps = AXDPCapability.defaultLocal()
+        let localCaps = localCapabilities(as: link(toPeer: destAddress)?.localAddress)
         let pingMessage = AXDP.Message(
             type: .ping,
             sessionId: UInt32.random(in: 0...UInt32.max),
@@ -5528,7 +5658,7 @@ final class SessionCoordinator: ObservableObject {
         startCapabilityCheck(
             for: destAddress.display,
             kind: .ping(destination: destAddress, path: path, payload: payload),
-            rto: sessionManager.connectedSession(withPeer: destAddress)?.timers.rto
+            rto: link(toPeer: destAddress)?.timers.rto
         )
 
         // Manual discovery: prefer connected session, but do not force connection
@@ -5716,9 +5846,7 @@ final class SessionCoordinator: ObservableObject {
 
         // Legacy protocols require connected mode
         if transferProtocol.requiresConnectedMode {
-            let hasConnectedSession = sessionManager.sessions.values.contains {
-                $0.remoteAddress.display.uppercased() == call && $0.state == .connected
-            }
+            let hasConnectedSession = link(toPeer: CallsignNormalizer.toAddress(call)) != nil
             guard hasConnectedSession else {
                 TxLog.warning(.session, "Cannot transfer: No connected session", [
                     "dest": destination,
@@ -5735,9 +5863,7 @@ final class SessionCoordinator: ObservableObject {
     func availableProtocols(for destination: String) -> [TransferProtocolType] {
         let call = destination.uppercased()
         let hasAXDP = hasConfirmedAXDPCapability(for: call)
-        let isConnected = sessionManager.sessions.values.contains {
-            $0.remoteAddress.display.uppercased() == call && $0.state == .connected
-        }
+        let isConnected = link(toPeer: CallsignNormalizer.toAddress(call)) != nil
 
         return TransferProtocolRegistry.shared.availableProtocols(
             for: call,
@@ -5750,9 +5876,7 @@ final class SessionCoordinator: ObservableObject {
     func recommendedProtocol(for destination: String) -> TransferProtocolType? {
         let call = destination.uppercased()
         let hasAXDP = hasConfirmedAXDPCapability(for: call)
-        let isConnected = sessionManager.sessions.values.contains {
-            $0.remoteAddress.display.uppercased() == call && $0.state == .connected
-        }
+        let isConnected = link(toPeer: CallsignNormalizer.toAddress(call)) != nil
 
         return TransferProtocolRegistry.shared.recommendedProtocol(
             for: call,
@@ -6006,7 +6130,7 @@ final class SessionCoordinator: ObservableObject {
 
         // Remembered so resume can restart the chunk loop, and so a dropped
         // session can fail this transfer by name.
-        let riding = sessionManager.connectedSession(withPeer: destAddress) != nil
+        let riding = link(toPeer: destAddress) != nil
         transferRoutes[transferId] = TransferRoute(destination: destAddress, path: path)
         if riding {
             sessionBoundTransferPeers[transferId] = destAddress.display.uppercased()
@@ -6073,7 +6197,8 @@ final class SessionCoordinator: ObservableObject {
     /// Receiver responds with completion ACK (all good) or NACK with SACK bitmap (missing/corrupt chunks)
     static let completionRequestMessageId: UInt32 = 0xFFFFFFFE
 
-    /// Interval between completion-request sends while awaiting completion (seconds)
+    /// How often the loop looks for a completion request that is due
+    /// (seconds); `CompletionRequestPacing` decides which are.
     private static let completionRequestIntervalSeconds: UInt64 = 2
 
     /// Send the next chunk for a transfer
@@ -6117,7 +6242,7 @@ final class SessionCoordinator: ObservableObject {
         // chunk only once the last one has left that queue. Offering chunks
         // while the window was full used to queue the same chunk again every
         // 200 ms, and every copy went on the air.
-        if let session = sessionManager.connectedSession(withPeer: destination),
+        if let session = link(toPeer: destination),
            !session.pendingDataQueue.isEmpty {
             scheduleNextChunk(after: 200_000_000, for: transferId, to: destination, path: path,
                               axdpSessionId: axdpSessionId)
@@ -6170,7 +6295,7 @@ final class SessionCoordinator: ObservableObject {
         // session sends it when there is room. Only a payload that went
         // nowhere (no link at all) is retried.
         let handedOver = frameSent
-            || (packetEngine != nil && sessionManager.connectedSession(withPeer: destination) != nil)
+            || (packetEngine != nil && link(toPeer: destination) != nil)
         guard handedOver else {
             // Window is full - mark chunk as needing retry and wait a bit longer before retrying
             var transfer = transfers[transferIndex]
@@ -6239,7 +6364,13 @@ final class SessionCoordinator: ObservableObject {
 
     /// For each transfer in .awaitingCompletion, send completion request (ACK 0xFFFFFFFE) so receiver responds with ACK or NACK+SACK.
     private func sendCompletionRequestForAwaitingCompletionTransfers() {
+        let now = Date()
+        let waiting = Set(transfers.filter { $0.status == .awaitingCompletion }.map(\.id))
+        // A transfer that moved on starts afresh if it comes back to waiting.
+        completionRequestPacing = completionRequestPacing.filter { waiting.contains($0.key) }
         for transfer in transfers where transfer.status == .awaitingCompletion {
+            var pacing = completionRequestPacing[transfer.id] ?? CompletionRequestPacing(startingAt: now)
+            guard pacing.isDue(at: now) else { continue }
             guard let axdpSessionId = transferSessionIds[transfer.id] else { continue }
             let destParts = transfer.destination.uppercased().split(separator: "-")
             let destCall = String(destParts.first ?? "")
@@ -6250,7 +6381,7 @@ final class SessionCoordinator: ObservableObject {
             // round trip, requests queued behind each other, and after the
             // receiver confirmed the file the queued ones kept going out
             // (smoke run 2026-10-03-1, issue 18: 45 for one 1 KB file).
-            if let session = sessionManager.connectedSession(withPeer: destAddress),
+            if let session = link(toPeer: destAddress),
                !session.pendingDataQueue.isEmpty || session.outstandingCount > 0 {
                 continue
             }
@@ -6267,6 +6398,8 @@ final class SessionCoordinator: ObservableObject {
                 path: path,
                 displayInfo: "AXDP completion request"
             )
+            pacing.sent(at: now)
+            completionRequestPacing[transfer.id] = pacing
             TxLog.debug(.axdp, "Sent completion request", [
                 "file": transfer.fileName,
                 "axdpSession": axdpSessionId,
@@ -6684,4 +6817,25 @@ struct MailboxUpload {
     let finished: (BulkTransferStatus) -> Void
     /// Bytes received so far, as chunks arrive.
     var progress: ((Int) -> Void)? = nil
+}
+
+/// When a sender waiting for the receiver to confirm a file may ask again.
+/// Unanswered requests back off exponentially, as TCP's retransmissions do:
+/// a request through a node relay crosses every hop, and a fixed 2 s
+/// outran the round trip (Docs/RemoteAccessPlan.md, part 1).
+nonisolated struct CompletionRequestPacing: Equatable, Sendable {
+    static let first: TimeInterval = 2
+    static let ceiling: TimeInterval = 60
+
+    private(set) var nextAt: Date
+    private(set) var interval: TimeInterval = CompletionRequestPacing.first
+
+    init(startingAt now: Date) { nextAt = now }
+
+    func isDue(at now: Date) -> Bool { now >= nextAt }
+
+    mutating func sent(at now: Date) {
+        nextAt = now.addingTimeInterval(interval)
+        interval = min(Self.ceiling, interval * 2)
+    }
 }
