@@ -400,6 +400,10 @@ final class SessionCoordinator: ObservableObject {
     /// to and the radio link the bytes travel on are not the same station
     /// through a node (Docs/RemoteAccessPlan.md, part 1).
     private(set) var relayRoutes: [String: SessionKey] = [:]
+    /// Stations reached over a native NET/ROM circuit, by uppercased
+    /// callsign: the circuit (Docs/RemoteAccessPlan.md, part 1, step 3).
+    private(set) var circuitRoutes: [String: NetRomCircuitID] = [:]
+    private var circuitPeers: [NetRomCircuitID: AX25Address] = [:]
     /// When each transfer waiting for the receiver's confirmation may ask
     /// again (`CompletionRequestPacing`).
     var completionRequestPacing: [UUID: CompletionRequestPacing] = [:]
@@ -429,6 +433,96 @@ final class SessionCoordinator: ObservableObject {
         relayFarEnds.removeValue(forKey: key)
         invalidateCapability(for: far)
         objectWillChange.send()
+    }
+
+    /// The circuit is a conversation with `peer`: AXDP for `peer` goes over
+    /// it, and what arrives on it is `peer`'s.
+    func registerCircuitConversation(_ id: NetRomCircuitID, peer: AX25Address,
+                                     checksCapabilities: Bool = true) {
+        if let previous = circuitPeers[id] { circuitRoutes.removeValue(forKey: previous.display.uppercased()) }
+        circuitRoutes[peer.display.uppercased()] = id
+        circuitPeers[id] = peer
+        TxLog.debug(.session, "Circuit conversation", ["peer": peer.display])
+        if checksCapabilities { startCircuitCapabilityCheck(peer: peer) }
+        objectWillChange.send()
+    }
+
+    /// The connected circuit a conversation with `peer` travels on, if any.
+    func circuit(toPeer peer: AX25Address) -> NetRomCircuitID? {
+        guard let id = circuitRoutes[peer.display.uppercased()],
+              netRomDriver.circuit(for: id)?.state == .connected else { return nil }
+        return id
+    }
+
+    func circuitPeer(of id: NetRomCircuitID) -> AX25Address? {
+        circuitPeers[id]
+    }
+
+    private func endCircuitConversation(_ id: NetRomCircuitID) {
+        guard let peer = circuitPeers.removeValue(forKey: id) else { return }
+        circuitRoutes.removeValue(forKey: peer.display.uppercased())
+        failTransfersOnLinkLoss(peer: peer, timedOut: false)
+        invalidateCapability(for: peer.display)
+        objectWillChange.send()
+    }
+
+    /// Bytes from a circuit conversation: AXDP to its handlers, the rest to
+    /// the transcript as text.
+    private func receiveCircuitConversation(_ id: NetRomCircuitID, data: Data) {
+        guard let peer = circuitPeers[id] else { return }
+        appendToReassemblyAndExtract(from: peer, path: DigiPath(), data: data)
+        let text = deliveredText.removeValue(forKey: peer.display.uppercased())?.text ?? data
+        let line = String(decoding: text, as: UTF8.self)
+        guard !line.isEmpty else { return }
+        packetEngine?.appendSessionChatLine(from: peer.display, text: line, radioID: radioOwning(peer))
+    }
+
+    /// As for a relay: remembered capabilities confirm at once, an AXTerm
+    /// sign gets a PING over the circuit, and no sign gets nothing.
+    private func startCircuitCapabilityCheck(peer: AX25Address) {
+        guard globalAdaptiveSettings.axdpExtensionsEnabled,
+              globalAdaptiveSettings.autoNegotiateCapabilities else { return }
+        let key = peer.display.uppercased()
+        if let known = peerMemory.capabilities(for: key) {
+            packetEngine?.capabilityStore.store(known, for: peer.call, ssid: peer.ssid)
+            markImplicitlyConfirmedAXDP(for: key)
+            return
+        }
+        guard peerMemory.verdict(for: key) == .axterm, !hasConfirmedAXDPCapability(for: key),
+              !isCapabilityDiscoveryPending(for: key) else { return }
+        let ping = AXDP.Message(type: .ping, sessionId: 0, messageId: 1,
+                                capabilities: localCapabilities(as: sessionManager.localCallsign))
+        let payload = ping.encode()
+        startCapabilityCheck(for: key, kind: .ping(destination: peer, path: DigiPath(), payload: payload), rto: nil)
+        _ = sendAXDPPayload(payload, to: peer, path: DigiPath(), displayInfo: "AXDP PING")
+        onCapabilityEvent?(CapabilityDebugEvent(type: .pingSent, peer: peer.display, capabilities: ping.capabilities))
+    }
+
+    /// Who a file can be sent to now, one entry per station: each connected
+    /// link's station, or the far station when a node bridges the link to
+    /// it, and each station on a circuit conversation. A station on both a
+    /// link and a circuit is listed once, by circuit, the way its AXDP goes.
+    var transferDestinations: [TransferDestination] {
+        var list: [TransferDestination] = []
+        var seen: Set<String> = []
+        for (id, peer) in circuitPeers.sorted(by: { $0.value.display < $1.value.display })
+        where netRomDriver.circuit(for: id)?.state == .connected {
+            if seen.insert(peer.display.uppercased()).inserted {
+                list.append(TransferDestination(callsign: peer.display, path: "", via: .netRom))
+            }
+        }
+        for session in connectedSessions {
+            if let far = relayFarEnd(of: session) {
+                if seen.insert(far.display.uppercased()).inserted {
+                    list.append(TransferDestination(callsign: far.display, path: "",
+                                                    via: .node(session.remoteAddress.display)))
+                }
+            } else if seen.insert(session.remoteAddress.display.uppercased()).inserted {
+                list.append(TransferDestination(callsign: session.remoteAddress.display,
+                                                path: session.path.display, via: nil))
+            }
+        }
+        return list
     }
 
     /// The far station a node on this link bridges to, if any.
@@ -1679,6 +1773,10 @@ final class SessionCoordinator: ObservableObject {
         // in the session list, so the line itself says who is talking.
         driver.onCircuitData = { [weak self] id, data in
             guard let self else { return }
+            if self.circuitPeers[id] != nil {
+                self.receiveCircuitConversation(id, data: data)
+                return
+            }
             let destination = self.netRomDriver.circuit(for: id)?.destination
             let peer = destination?.display ?? "NET/ROM"
             let text = String(decoding: data, as: UTF8.self)
@@ -1693,6 +1791,28 @@ final class SessionCoordinator: ObservableObject {
         netRomNodeHost.install(on: driver)
         netRomNodeHost.onOperatorNote = { [weak self] text in
             self?.packetEngine?.appendSystemNotification(text)
+        }
+        // A circuit caller that speaks AXDP becomes a conversation, named by
+        // the circuit's user field.
+        netRomNodeHost.onAXDPCircuit = { [weak self] id, caller, data in
+            guard let self else { return }
+            self.registerCircuitConversation(id, peer: CallsignNormalizer.toAddress(caller), checksCapabilities: false)
+            self.receiveCircuitConversation(id, data: data)
+        }
+        // After the host's own, so it still greets its callers: an outbound
+        // circuit to a station is a conversation with it, and a circuit
+        // going down ends its conversation.
+        let hostConnected = driver.onCircuitBecameConnected
+        driver.onCircuitBecameConnected = { [weak self, weak driver] id in
+            hostConnected?(id)
+            guard let self, let driver, !(driver.hostedCircuitCheck?(id) ?? false),
+                  self.circuitPeers[id] == nil, let summary = driver.circuit(for: id) else { return }
+            self.registerCircuitConversation(id, peer: summary.destination)
+        }
+        let hostTornDown = driver.onCircuitTornDown
+        driver.onCircuitTornDown = { [weak self] id in
+            hostTornDown?(id)
+            self?.endCircuitConversation(id)
         }
         return driver
     }
@@ -4179,10 +4299,15 @@ final class SessionCoordinator: ObservableObject {
         var from = heardFrom
         if message.type == .ping || message.type == .pong,
            let claimed = message.capabilities?.station.map(CallsignNormalizer.toAddress),
-           !CallsignNormalizer.addressesMatch(claimed, heardFrom),
-           let carrier = sessionManager.connectedSession(withPeer: heardFrom) {
-            registerRelay(to: claimed, via: carrier, checksCapabilities: false)
-            from = claimed
+           !CallsignNormalizer.addressesMatch(claimed, heardFrom) {
+            if let circuitID = circuit(toPeer: heardFrom) {
+                // Over a circuit to a node whose callsign is not the station's.
+                registerCircuitConversation(circuitID, peer: claimed, checksCapabilities: false)
+                from = claimed
+            } else if let carrier = sessionManager.connectedSession(withPeer: heardFrom) {
+                registerRelay(to: claimed, via: carrier, checksCapabilities: false)
+                from = claimed
+            }
         }
         debugAXDP("RX", [
             "type": String(describing: message.type),
@@ -4403,6 +4528,12 @@ final class SessionCoordinator: ObservableObject {
         // Check for connected session first (more efficient path). The link's
         // own radio, or sendData takes the primary's, finds no link there and
         // opens one (smoke run 2026-10-03-1, issue 110).
+        // A native circuit to the station is the conversation's own transport.
+        if let circuitID = circuit(toPeer: destination) {
+            netRomDriver.send(payload, on: circuitID)
+            return true
+        }
+
         if let link = link(toPeer: destination) {
             // Through a node the frames go to the node, on its link's path.
             let relayed = !CallsignNormalizer.addressesMatch(link.remoteAddress, destination)
@@ -4432,7 +4563,8 @@ final class SessionCoordinator: ObservableObject {
         // one, and nothing goes out over the AX.25 default N1 of 256 bytes
         // (AX.25 2.2 §6.7.2.1). Nor can one reach a station behind a node.
         guard !transferStream, payload.count <= AX25Constants.maxUIInfoLength,
-              relayRoutes[destination.display.uppercased()] == nil else {
+              relayRoutes[destination.display.uppercased()] == nil,
+              circuitRoutes[destination.display.uppercased()] == nil else {
             TxLog.warning(.axdp, "AXDP payload not sent as UI: no connected session", [
                 "destination": destination.display,
                 "payloadSize": payload.count,
@@ -5847,6 +5979,7 @@ final class SessionCoordinator: ObservableObject {
         // Legacy protocols require connected mode
         if transferProtocol.requiresConnectedMode {
             let hasConnectedSession = link(toPeer: CallsignNormalizer.toAddress(call)) != nil
+                || circuit(toPeer: CallsignNormalizer.toAddress(call)) != nil
             guard hasConnectedSession else {
                 TxLog.warning(.session, "Cannot transfer: No connected session", [
                     "dest": destination,
@@ -6248,6 +6381,13 @@ final class SessionCoordinator: ObservableObject {
                               axdpSessionId: axdpSessionId)
             return
         }
+        // The same over a circuit: the next chunk once the last has room in
+        // the circuit's window.
+        if let circuitID = circuit(toPeer: destination), netRomDriver.queuedWrites(on: circuitID) > 0 {
+            scheduleNextChunk(after: 200_000_000, for: transferId, to: destination, path: path,
+                              axdpSessionId: axdpSessionId)
+            return
+        }
 
         // Get chunk data from the (possibly pre-compressed) file data
         guard let chunkData = transfers[transferIndex].chunkData(from: fileData, chunk: nextChunk) else { return }
@@ -6383,6 +6523,9 @@ final class SessionCoordinator: ObservableObject {
             // (smoke run 2026-10-03-1, issue 18: 45 for one 1 KB file).
             if let session = link(toPeer: destAddress),
                !session.pendingDataQueue.isEmpty || session.outstandingCount > 0 {
+                continue
+            }
+            if let circuitID = circuit(toPeer: destAddress), netRomDriver.queuedWrites(on: circuitID) > 0 {
                 continue
             }
             let path = sessionManager.sessions.values
@@ -6837,5 +6980,33 @@ nonisolated struct CompletionRequestPacing: Equatable, Sendable {
     mutating func sent(at now: Date) {
         nextAt = now.addingTimeInterval(interval)
         interval = min(Self.ceiling, interval * 2)
+    }
+}
+
+/// A station a file can be sent to, and how it is reached
+/// (`SessionCoordinator.transferDestinations`).
+nonisolated struct TransferDestination: Equatable, Hashable, Sendable, Identifiable {
+    enum Via: Equatable, Hashable, Sendable {
+        /// Through the node this station's link goes to.
+        case node(String)
+        /// Over a native NET/ROM circuit.
+        case netRom
+    }
+
+    let callsign: String
+    /// The digipeater path of a direct link; empty otherwise.
+    let path: String
+    /// Nil for a direct link.
+    let via: Via?
+
+    var id: String { callsign.uppercased() }
+
+    /// "Connected to K0BBB-2 via K0NOD-1".
+    var connectedText: String {
+        switch via {
+        case nil: "Connected to \(callsign)"
+        case .node(let node): "Connected to \(callsign) via \(node)"
+        case .netRom: "Connected to \(callsign) over NET/ROM"
+        }
     }
 }

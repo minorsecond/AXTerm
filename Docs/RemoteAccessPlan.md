@@ -136,9 +136,11 @@ needs reading before release.
 - AXDP through a node relay: done. Conversations are routed by the far
   station, PING and PONG name their sender, and completion requests back
   off (AXTERM-TRANSMISSION-SPEC.md, "AXDP through a node relay").
-- Still to do: incoming NET/ROM circuits with AXDP over them, the digi path
-  test on the air, 7PLUS (needs its source), pushing a file on from home (an
-  open question).
+- Incoming NET/ROM circuits with AXDP over them: done. A circuit caller
+  that speaks AXDP leaves the node prompt for a conversation; outbound
+  circuits carry AXDP to their station.
+- Still to do: the digi path test on the air, 7PLUS (needs its source),
+  pushing a file on from home (an open question).
 
 ## Order
 

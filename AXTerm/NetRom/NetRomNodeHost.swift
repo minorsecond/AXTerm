@@ -88,6 +88,10 @@ nonisolated final class NetRomNodeHost {
 
     /// The operator's switch, pushed from settings.
     var isEnabled = false
+    /// A circuit caller's first bytes were AXDP, not typing: another AXTerm
+    /// that wants a conversation, not the node prompt. The host lets the
+    /// circuit go and hands over what arrived (Docs/RemoteAccessPlan.md).
+    var onAXDPCircuit: ((NetRomCircuitID, _ caller: String, _ data: Data) -> Void)?
 
     // Injected by the shell that owns the stores.
     var identityProvider: () -> (alias: String, call: String, version: String) =
@@ -278,6 +282,15 @@ nonisolated final class NetRomNodeHost {
 
     private func consume(key: CallerKey, data: Data) {
         guard var caller = callers[key] else { return }
+        // AXDP at the prompt, before anything was typed: hand the circuit to
+        // the station's AXDP conversation and stop hosting it.
+        if case .circuit(let id) = key, case .node = caller.mode, caller.buffer.isEmpty,
+           AXDP.hasMagic(data), let onAXDPCircuit {
+            callers.removeValue(forKey: key)
+            onOperatorNote?("\(caller.callsign) is talking AXDP over NET/ROM; the node let the circuit go.")
+            onAXDPCircuit(id, caller.callsign, data)
+            return
+        }
         // Bridged callers are a transparent pipe — no line assembly, no
         // command interception; BYE belongs to the far node now.
         if case .bridged(_, let outbound) = caller.mode {

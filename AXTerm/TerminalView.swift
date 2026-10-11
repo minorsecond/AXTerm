@@ -5705,7 +5705,7 @@ struct TerminalViewModifiers: ViewModifier {
                 SendFileSheet(
                     isPresented: $showingTransferSheet,
                     selectedFileURL: selectedFileURL,
-                    connectedSessions: sessionCoordinator.connectedSessions,
+                    destinations: sessionCoordinator.transferDestinations,
                     onSend: { destination, path, transferProtocol, compressionSettings, replacement in
                         startTransfer(destination, path, transferProtocol, compressionSettings, replacement)
                     },

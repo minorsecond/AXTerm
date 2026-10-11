@@ -201,6 +201,12 @@ nonisolated final class NetRomEndpoint {
         circuits[id]?.machine.state
     }
 
+    /// Frames waiting for room in the circuit's window: what a sender pacing
+    /// itself to the circuit waits on.
+    func queuedWrites(_ id: NetRomCircuitID) -> Int {
+        circuits[id]?.machine.writeQueue.count ?? 0
+    }
+
     /// Fail one circuit because the layer below it went away (the L2 link
     /// to its neighbor dropped, the port closed). Distinct from
     /// `disconnect`: no DISCREQ is attempted, because there is nothing

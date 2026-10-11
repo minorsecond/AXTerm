@@ -94,6 +94,9 @@ final class RelayAXDPTests: XCTestCase {
         XCTAssertTrue(caller.coordinator.link(toPeer: home.address) === session)
         XCTAssertEqual(caller.coordinator.relayFarEnd(of: session), home.address)
         XCTAssertTrue(caller.coordinator.link(toPeer: nodeStation.address) === session, "the node itself too")
+        // Send File offers the far station, by way of the node, not the node.
+        XCTAssertEqual(caller.coordinator.transferDestinations,
+                       [TransferDestination(callsign: "K0BBB-2", path: "", via: .node("K0NOD-1"))])
     }
 
     /// A station with an AXTerm sign is asked inside the relayed link, and

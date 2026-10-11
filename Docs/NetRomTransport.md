@@ -372,9 +372,11 @@ all.
 
 ## Not yet built (explicitly out of scope here)
 
-- **Inbound services** — the acceptor callback exists; nothing
-  registers one, so inbound connects are refused with the standard
-  kernel-shape refusal. A station running no services should refuse.
+- **Inbound services** beyond the node host: with the node running, an
+  inbound circuit lands at the node prompt, and a caller whose first bytes
+  are AXDP becomes an AXDP conversation instead (AXTERM-TRANSMISSION-SPEC.md,
+  "AXDP over a native NET/ROM circuit"). With the node off, inbound circuits
+  are refused with the standard kernel-shape refusal.
 *(The circuit-as-session work is done — see below.)*
 
 ## A circuit is a session

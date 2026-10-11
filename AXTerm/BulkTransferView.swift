@@ -958,7 +958,8 @@ struct SendFileCapabilityBadgeText {
 struct SendFileSheet: View {
     @Binding var isPresented: Bool
     let selectedFileURL: URL?
-    let connectedSessions: [AX25Session]
+    /// The stations a file can go to now (`SessionCoordinator.transferDestinations`).
+    let destinations: [TransferDestination]
     /// Destination, path, protocol, compression, and the file to send in
     /// place of the picked one: a photo shrunk to the size the operator
     /// chose, or nil to send the file as picked.
@@ -1142,7 +1143,7 @@ struct SendFileSheet: View {
                 Spacer()
 
                 Button("Send") {
-                    if let session = connectedSessions[safe: selectedSessionIndex] {
+                    if let session = destinations[safe: selectedSessionIndex] {
                         // A photo shrunk to the chosen size goes in place of
                         // the picked file.
                         var replacement: URL?
@@ -1164,9 +1165,9 @@ struct SendFileSheet: View {
                             }
                         }
                         if !mailboxArea.trimmingCharacters(in: .whitespaces).isEmpty {
-                            onMailboxArea?(session.remoteAddress.display, mailboxArea)
+                            onMailboxArea?(session.callsign, mailboxArea)
                         }
-                        onSend(session.remoteAddress.display, session.path.display, selectedProtocol,
+                        onSend(session.callsign, session.path, selectedProtocol,
                                compressionSettings, replacement)
                     }
                     isPresented = false
@@ -1174,7 +1175,7 @@ struct SendFileSheet: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
-                .disabled(connectedSessions.isEmpty || currentProtocols.isEmpty)
+                .disabled(destinations.isEmpty || currentProtocols.isEmpty)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -1195,7 +1196,7 @@ struct SendFileSheet: View {
     }
 
     private var selectedCallsign: String? {
-        connectedSessions[safe: selectedSessionIndex]?.remoteAddress.display
+        destinations[safe: selectedSessionIndex]?.callsign
     }
 
     private var selectedRate: Double? {
@@ -1212,8 +1213,8 @@ struct SendFileSheet: View {
     /// Ask the selected station about AXDP if nobody has, so the badge does
     /// not sit on "Unknown".
     private func requestCheckForSelectedStation() {
-        guard let session = connectedSessions[safe: selectedSessionIndex] else { return }
-        requestCapabilityCheck?(session.remoteAddress.display)
+        guard let session = destinations[safe: selectedSessionIndex] else { return }
+        requestCapabilityCheck?(session.callsign)
     }
 
     // MARK: - File Info Content (for Form)
@@ -1292,7 +1293,7 @@ struct SendFileSheet: View {
 
     @ViewBuilder
     private var destinationContent: some View {
-        if connectedSessions.isEmpty {
+        if destinations.isEmpty {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
@@ -1306,30 +1307,30 @@ struct SendFileSheet: View {
             }
         } else {
             Picker("Station", selection: $selectedSessionIndex) {
-                ForEach(Array(connectedSessions.enumerated()), id: \.offset) { index, session in
+                ForEach(Array(destinations.enumerated()), id: \.offset) { index, session in
                     HStack {
                         Circle()
                             .fill(.green)
                             .frame(width: 8, height: 8)
-                        Text(session.remoteAddress.display)
+                        Text(session.callsign)
                             .font(.system(.body, design: .monospaced))
                     }
                     .tag(index)
                 }
             }
 
-            if let selectedSession = connectedSessions[safe: selectedSessionIndex] {
+            if let selectedSession = destinations[safe: selectedSessionIndex] {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .font(.subheadline)
-                    Text("Connected to \(selectedSession.remoteAddress.display)")
+                    Text(selectedSession.connectedText)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
                     Spacer()
 
-                    capabilityBadge(for: selectedSession.remoteAddress.display)
+                    capabilityBadge(for: selectedSession.callsign)
                 }
             }
         }
@@ -1350,10 +1351,10 @@ struct SendFileSheet: View {
 
     /// Available protocols for the currently selected destination
     private var currentProtocols: [TransferProtocolType] {
-        guard let session = connectedSessions[safe: selectedSessionIndex] else {
+        guard let session = destinations[safe: selectedSessionIndex] else {
             return []
         }
-        return availableProtocols?(session.remoteAddress.display) ?? [.axdp]
+        return availableProtocols?(session.callsign) ?? [.axdp]
     }
 
     @ViewBuilder

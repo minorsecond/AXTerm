@@ -339,6 +339,11 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
         endpoint.send(data, on: id)
     }
 
+    /// Frames still waiting for the circuit's window.
+    func queuedWrites(on id: NetRomCircuitID) -> Int {
+        endpoint.queuedWrites(id)
+    }
+
     func disconnect(_ id: NetRomCircuitID) {
         endpoint.disconnect(id)
         refreshCircuits()
