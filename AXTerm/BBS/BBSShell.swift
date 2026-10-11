@@ -89,6 +89,9 @@ nonisolated struct BBSShell {
         /// fills — asking once, while they are there, beats hoping they
         /// discover four commands.
         case registering(remaining: [WhitePagesEntry.Key])
+        /// Long output waiting for Enter: the lines still to come and the
+        /// prompt that follows the last of them.
+        case paging(rest: [String], prompt: String?)
         case closed
     }
 
@@ -133,6 +136,11 @@ nonisolated struct BBSShell {
     }
 
     static let commandPrompt = ">"
+
+    /// Between pages of long output (Docs/RemoteAccessPlan.md, part 2).
+    static func morePrompt(remaining: Int) -> String {
+        "-- \(remaining) more \(remaining == 1 ? "line" : "lines"): Enter for more, A to stop --"
+    }
     static let version = "AXTerm mailbox 1.0"
 
     // MARK: - Configuration
@@ -180,6 +188,9 @@ nonisolated struct BBSShell {
     /// `D` still types text out; binaries and `U` are refused up front,
     /// before any airtime-cost confirmation for a file that cannot be sent.
     let linesOnlyDirectCall: String?
+    /// Lines of output per page; 0 sends it whole. 24 by default, what a
+    /// plain terminal shows; the caller changes it with FBB's `OP n`.
+    private(set) var pageRows: Int
 
     private(set) var state: State = .command
     /// The file id `D` has quoted a time for and is waiting to be asked about
@@ -200,7 +211,8 @@ nonisolated struct BBSShell {
          bytesPerSecond: Double = 100,
          maxInlineViewBytes: Int = 8 * 1024,
          longTransferSeconds: Double = 300,
-         linesOnlyDirectCall: String? = nil) {
+         linesOnlyDirectCall: String? = nil,
+         pageRows: Int = 24) {
         self.caller = caller
         self.sysop = sysop
         self.banner = banner
@@ -215,6 +227,7 @@ nonisolated struct BBSShell {
         self.maxInlineViewBytes = maxInlineViewBytes
         self.longTransferSeconds = longTransferSeconds
         self.linesOnlyDirectCall = linesOnlyDirectCall
+        self.pageRows = max(0, pageRows)
     }
 
     // MARK: - Entry
@@ -277,9 +290,55 @@ nonisolated struct BBSShell {
                                 soFar: lines, mailbox: mailbox, now: now)
         case .registering(let remaining):
             return takeRegistration(line, remaining: remaining, mailbox: mailbox, now: now)
+        case .paging(let rest, let prompt):
+            let typed = line.trimmingCharacters(in: .whitespaces)
+            if typed.isEmpty { return nextPage(rest, prompt: prompt) }
+            state = .command
+            // A stops the rest; anything else is the next command.
+            if typed.uppercased() == "A" { return Output(lines: []) }
+            return paged(runCommand(line, mailbox: mailbox, now: now))
         case .command:
-            return runCommand(line, mailbox: mailbox, now: now)
+            return paged(runCommand(line, mailbox: mailbox, now: now))
         }
+    }
+
+    // MARK: - Pages
+
+    /// The first page of a command's output, the rest held for Enter. Only
+    /// output that ends at the command prompt is paged; a message being
+    /// written or a call ending is never held up.
+    private mutating func paged(_ output: Output) -> Output {
+        guard pageRows > 0, state == .command, output.lines.count > pageRows else { return output }
+        var first = output
+        first.lines = Array(output.lines.prefix(pageRows))
+        let rest = Array(output.lines.dropFirst(pageRows))
+        state = .paging(rest: rest, prompt: output.prompt)
+        first.prompt = Self.morePrompt(remaining: rest.count)
+        return first
+    }
+
+    private mutating func nextPage(_ rest: [String], prompt: String?) -> Output {
+        let page = Array(rest.prefix(pageRows))
+        let left = Array(rest.dropFirst(pageRows))
+        if left.isEmpty {
+            state = .command
+            return Output(lines: page, prompt: prompt)
+        }
+        state = .paging(rest: left, prompt: prompt)
+        return Output(lines: page, prompt: Self.morePrompt(remaining: left.count))
+    }
+
+    private mutating func setPageLength(_ argument: String?) -> Output {
+        guard let argument else {
+            return Output(lines: [pageRows == 0
+                ? "No pages: output comes whole. OP n sets pages of n lines."
+                : "Pages of \(pageRows) lines. OP 0 sends output whole."])
+        }
+        guard let rows = Int(argument), rows >= 0, rows <= 200 else {
+            return Output(lines: ["OP takes a number of lines from 0 to 200."])
+        }
+        pageRows = rows
+        return Output(lines: [rows == 0 ? "No pages: output comes whole." : "Pages of \(rows) lines."])
     }
 
     // MARK: - Commands
@@ -308,6 +367,8 @@ nonisolated struct BBSShell {
             return Output(lines: help())
         case "V", "VER", "VERSION":
             return Output(lines: [Self.version])
+        case "OP":
+            return setPageLength(argument)
         case "I", "INFO":
             return Output(lines: info(rest, mailbox: mailbox))
         // Cross-dialect courtesy: BPQ operators type MH, Kantronics
@@ -399,6 +460,7 @@ nonisolated struct BBSShell {
             "D <name>   download (text is sent as text — no transfer needed)",
             "U          upload a file to the sysop  U <area>  into an area, if trusted",
             "A          stop a listing or transfer",
+            "OP n       pages of n lines (OP 0: no pages)",
             "I          about this station",
             "I CALL     what the directory knows about CALL",
             "WP         everyone in the directory",

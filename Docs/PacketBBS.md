@@ -158,7 +158,7 @@ SB         post a bulletin          I CALL     directory entry for CALL
 K n        kill a message           WP         the whole directory
 KM         kill your read mail      J          stations heard here
 B          disconnect               N/NQ/NH/NZ tell us about you
-V          version
+V          version                  OP n       pages of n lines (0: none)
 ```
 
 **The letters are FBB's**, because a caller who has used packet before should
@@ -174,6 +174,12 @@ the `@BBS` half only teaches white pages (§8).
 
 Every listing is bounded and says what it left out — a listing that stops
 without saying so reads as "that is all there is".
+
+Long output comes in pages of 24 lines, what a plain terminal shows, with
+"-- 30 more lines: Enter for more, A to stop --" between them. A stops the
+rest; typing a command instead runs it. `OP n` sets the page length for the
+call, as on FBB, and `OP 0` sends output whole. A message being written and
+a call ending are never paged (Docs/RemoteAccessPlan.md, part 2).
 
 `KM` kills only mail the caller has **already read**. A caller who types it
 before reading must not discover they destroyed something they never saw.
