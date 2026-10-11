@@ -458,3 +458,43 @@ private extension Result where Failure == OwnerControlDraft.Problem {
         return nil
     }
 }
+
+/// The ready-made set for the IC-705 behind Warbler. The 705 carries the
+/// operator's own link, so the set reads it and adjusts its power, and never
+/// changes its frequency or mode: that would cut the link it came in on.
+final class OwnerControlPresetTests: XCTestCase {
+
+    private let preset = OwnerControlCommand.warblerIC705Preset
+
+    func testEveryCommandIsAGoodDefinition() {
+        for command in preset {
+            XCTAssertNil(command.problem(among: preset), command.name)
+        }
+        XCTAssertEqual(preset.map(\.name), ["QRG", "MODE", "PWR", "SETPWR", "SIG", "VOLTS", "HFQRG"])
+    }
+
+    func testItNeverRetunesTheLinkRadio() {
+        for command in preset {
+            guard case .rigctl(_, let port, let set, _) = command.action else { return XCTFail(command.name) }
+            let word = set.split(separator: " ").first.map(String.init) ?? ""
+            XCTAssertFalse(["F", "M", "V", "set_freq", "set_mode", "set_vfo"].contains(word), command.name)
+            if port == 4532 { XCTAssertFalse(command.changesTransmission, "the FT-710 is read, never changed") }
+        }
+    }
+
+    /// Power can be turned down, never to nothing.
+    func testPowerHasAFloor() {
+        let setPower = preset.first { $0.name == "SETPWR" }
+        XCTAssertEqual(setPower?.argument, .number(min: 0.1, max: 1))
+        XCTAssertEqual(setPower?.changesTransmission, true)
+    }
+
+    /// Adding the set to commands already there skips names in use.
+    func testAddingItKeepsWhatIsThere() {
+        let mine = OwnerControlCommand(name: "PWR", help: "mine", argument: .none,
+                                       action: .script(name: "p.sh", restore: nil), changesTransmission: false)
+        let merged = OwnerControlCommand.adding(preset, to: [mine])
+        XCTAssertEqual(merged.filter { $0.name == "PWR" }, [mine])
+        XCTAssertEqual(merged.count, preset.count)
+    }
+}

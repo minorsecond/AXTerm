@@ -488,3 +488,38 @@ nonisolated struct OwnerControlDraft: Equatable, Sendable {
         return .success(command)
     }
 }
+
+extension OwnerControlCommand {
+    /// A ready-made set for the IC-705 behind Warbler (rigctld on
+    /// localhost:4533), with the FT-710 (4532) read only. The 705 carries the
+    /// operator's own link, so the set reads it and turns its power up or
+    /// down, and never changes its frequency or mode, which would cut the
+    /// link the command came in on. The FT-710 runs the station's HF link
+    /// unattended, so it is only read.
+    static var warblerIC705Preset: [OwnerControlCommand] {
+        func read(_ name: String, _ help: String, _ line: String, port: Int = 4533) -> OwnerControlCommand {
+            OwnerControlCommand(name: name, help: help, argument: .none,
+                                action: .rigctl(host: "localhost", port: port, set: line, read: nil),
+                                changesTransmission: false)
+        }
+        return [
+            read("QRG", "the 705's frequency in Hz", "f"),
+            read("MODE", "the 705's mode and filter width", "m"),
+            read("PWR", "the 705's power, 1 = 10 W", "l RFPOWER"),
+            OwnerControlCommand(name: "SETPWR", help: "set the 705's power, 0.1 to 1 (1 W to 10 W)",
+                                argument: .number(min: 0.1, max: 1),
+                                action: .rigctl(host: "localhost", port: 4533, set: "L RFPOWER {arg}",
+                                                read: "l RFPOWER"),
+                                changesTransmission: true),
+            read("SIG", "signal on the 705's frequency, dB over S9", "l STRENGTH"),
+            read("VOLTS", "the 705's supply voltage", "l VD_METER"),
+            read("HFQRG", "the FT-710's frequency in Hz", "f", port: 4532)
+        ]
+    }
+
+    /// `preset` added to `existing`, skipping names already in use.
+    static func adding(_ preset: [OwnerControlCommand], to existing: [OwnerControlCommand]) -> [OwnerControlCommand] {
+        let taken = Set(existing.map { $0.name.uppercased() })
+        return existing + preset.filter { !taken.contains($0.name.uppercased()) }
+    }
+}

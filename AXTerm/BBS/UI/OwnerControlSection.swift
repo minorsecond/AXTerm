@@ -46,6 +46,12 @@ struct OwnerControlSection: View {
             }
             HStack {
                 Button("Add a Command\u{2026}") { editing = OwnerControlDraft() }
+                Button("Add the IC-705 Set") {
+                    settings.ownerControlCommands = OwnerControlCommand.adding(OwnerControlCommand.warblerIC705Preset,
+                                                                                to: settings.ownerControlCommands)
+                }
+                .help("QRG, MODE, PWR, SIG, VOLTS and HFQRG read; SETPWR sets the 705's power. "
+                      + "The 705 through Warbler on localhost:4533, the FT-710 on 4532.")
                 #if os(macOS)
                 Button("Open the Scripts Folder") {
                     if let folder = try? ApplicationScriptRunner.folder() { NSWorkspace.shared.open(folder) }
