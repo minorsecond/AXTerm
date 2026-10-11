@@ -1425,6 +1425,8 @@ struct TerminalComposeView: View {
     /// AXDP capability negotiation status for the destination (if known)
     var capabilityStatus: SessionCoordinator.CapabilityStatus = .unknown
     @ObservedObject var connectBarViewModel: ConnectBarViewModel
+    /// The radio Switch to Packet is waiting on the operator's yes for.
+    @State private var pendingPacketSwitch: PacketChannelGate.Notice?
     /// Far end of an established NET/ROM circuit, when one is up.
     ///
     /// The connect bar holds the next hop while a relay runs — right for the
@@ -1512,7 +1514,25 @@ struct TerminalComposeView: View {
                     tint: .orange, actionTitle: "Switch to Packet",
                     actionHelp: "Sets this radio's Channel to Packet, as in Settings › Radios. "
                         + "Its beacon becomes an ID beacon and its packet services come back.") {
-                    connectBarViewModel.switchRadioToPacket(notice.radio)
+                    // Asked first: the radio is not retuned (finding 14).
+                    pendingPacketSwitch = notice
+                }
+                .confirmationDialog(
+                    pendingPacketSwitch.map { ChannelSwitchPrompt(radioName: $0.radioName, to: .packet).title } ?? "",
+                    isPresented: Binding(get: { pendingPacketSwitch != nil },
+                                         set: { if !$0 { pendingPacketSwitch = nil } }),
+                    titleVisibility: .visible) {
+                    if let pending = pendingPacketSwitch {
+                        Button(ChannelSwitchPrompt(radioName: pending.radioName, to: .packet).confirmLabel) {
+                            connectBarViewModel.switchRadioToPacket(pending.radio)
+                            pendingPacketSwitch = nil
+                        }
+                    }
+                    Button("Cancel", role: .cancel) { pendingPacketSwitch = nil }
+                } message: {
+                    if let pending = pendingPacketSwitch {
+                        Text(ChannelSwitchPrompt(radioName: pending.radioName, to: .packet).message)
+                    }
                 }
             }
 

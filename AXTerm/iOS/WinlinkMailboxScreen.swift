@@ -380,7 +380,9 @@ struct WinlinkMailboxScreen: View {
                     Button("OK", role: .cancel) {}
                 }
             } message: {
-                Text(exchangeAlert ?? "")
+                // The switch is not a retune (finding 14).
+                Text((exchangeAlert ?? "") + (channelBlockedRadio == nil ? ""
+                    : "\n\nSwitching does not retune the radio: set it to your packet channel yourself."))
             }
             .onReceive(selectionPublisher) { request in
                 // The publisher republishes on resubscribe and `body`

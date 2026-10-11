@@ -32,6 +32,8 @@ struct APRSMessagesView: View {
     var radioName: (RadioID) -> String = { $0.rawValue }
     /// Puts a radio on the APRS channel, as Settings › Radios does.
     var onSwitchToAPRS: ((RadioID) -> Void)?
+    /// The radio Switch to APRS is waiting on the operator's yes for.
+    @State private var pendingAPRSSwitch: RadioID?
 
     enum Presentation { case standalone, pushed }
 
@@ -85,6 +87,22 @@ struct APRSMessagesView: View {
         }
         .sheet(isPresented: $showProbe) {
             APRSWhoCanHearMeView(probe: probe)
+        }
+        .confirmationDialog(pendingAPRSSwitch.map { ChannelSwitchPrompt(radioName: radioName($0), to: .aprs).title } ?? "",
+                            isPresented: Binding(get: { pendingAPRSSwitch != nil },
+                                                 set: { if !$0 { pendingAPRSSwitch = nil } }),
+                            titleVisibility: .visible) {
+            if let id = pendingAPRSSwitch {
+                Button(ChannelSwitchPrompt(radioName: radioName(id), to: .aprs).confirmLabel) {
+                    onSwitchToAPRS?(id)
+                    pendingAPRSSwitch = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingAPRSSwitch = nil }
+        } message: {
+            if let id = pendingAPRSSwitch {
+                Text(ChannelSwitchPrompt(radioName: radioName(id), to: .aprs).message)
+            }
         }
     }
 
@@ -197,7 +215,8 @@ struct APRSMessagesView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     if let onSwitchToAPRS {
                         ForEach(switchable, id: \.self) { id in
-                            Button("Switch \(radioName(id)) to APRS") { onSwitchToAPRS(id) }
+                            // Asked first: the radio is not retuned (finding 14).
+                            Button("Switch \(radioName(id)) to APRS") { pendingAPRSSwitch = id }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                         }

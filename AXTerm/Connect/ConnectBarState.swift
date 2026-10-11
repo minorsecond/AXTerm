@@ -125,6 +125,8 @@ nonisolated struct ConnectFailure: Equatable {
 
     let reason: Reason
     let detail: String?
+    /// The radio's name, when the failure is about a radio.
+    var radioName: String? = nil
 }
 
 nonisolated struct SidebarStationSelection: Equatable {

@@ -254,7 +254,10 @@ unencrypted, and low-rate:
   channel. With none (`APRSSendAvailability`), New message, New bulletin, Who
   can hear me? and the compose bar are disabled, a note says no radio is set to
   APRS, and a **Switch … to APRS** button per enabled radio sets its Channel as
-  Settings › Radios does. Past conversations stay readable.
+  Settings › Radios does. It asks first, and says the radio is not retuned:
+  the operator sets it to the APRS frequency (144.390 MHz in North America)
+  themselves (`ChannelSwitchPrompt`). The Terminal's Switch to Packet asks the
+  same way (retest 2026-10-10, finding 14). Past conversations stay readable.
 - **A message that could not leave says so.** The service sends through
   `transmit`, which reports whether the frame left. One that did not is *Not
   sent · no radio on APRS* and is never retried, and a numbered message whose

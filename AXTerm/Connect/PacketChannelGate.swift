@@ -15,7 +15,8 @@ nonisolated enum PacketChannelGate {
         return ConnectFailure(
             reason: .radioOnAPRSChannel(radio.id),
             detail: "\(RadioDetailView.title(for: radio)) is on the APRS channel, where connected "
-                + "sessions are off. Switch it to Packet to connect.")
+                + "sessions are off. Switch it to Packet to connect.",
+            radioName: RadioDetailView.title(for: radio))
     }
 
     /// The way out: the radio's Channel setting, as Settings sets it. Its
@@ -31,13 +32,15 @@ nonisolated enum PacketChannelGate {
     struct Notice: Equatable {
         let text: String
         let radio: RadioID
+        var radioName: String = ""
     }
 
     static func notice(block: ConnectFailure?, mode: TxConnectionMode,
                        sessionState: AX25SessionState?) -> Notice? {
         guard let block, case let .radioOnAPRSChannel(radio) = block.reason,
               mode == .connected, sessionState != .connected else { return nil }
-        return Notice(text: block.detail ?? "This radio is on the APRS channel.", radio: radio)
+        return Notice(text: block.detail ?? "This radio is on the APRS channel.", radio: radio,
+                      radioName: block.radioName ?? "this radio")
     }
 
     /// Whether Connect is disabled: in session mode, while the radio is on

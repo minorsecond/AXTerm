@@ -61,6 +61,14 @@ final class PacketChannelGateTests: XCTestCase {
         XCTAssertNil(PacketChannelGate.notice(block: nil, mode: .connected, sessionState: nil))
     }
 
+    /// The notice names the radio, for the question Switch to Packet asks
+    /// first (retest 2026-10-10, finding 14).
+    func testTheNoticeNamesTheRadioForTheQuestion() {
+        let block = PacketChannelGate.connectFailure(for: radio(aprs: true))
+        XCTAssertEqual(PacketChannelGate.notice(block: block, mode: .connected, sessionState: nil)?.radioName,
+                       "TNC4 Mobilinkd")
+    }
+
     func testConnectIsDisabledWhileTheRadioIsOnAPRS() {
         let block = PacketChannelGate.connectFailure(for: radio(aprs: true))
         XCTAssertTrue(PacketChannelGate.blocksConnect(block, mode: .connected))
