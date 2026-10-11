@@ -209,6 +209,84 @@ final class BBSService: ObservableObject {
     /// The owner code's secret, nil when none has been made. The Keychain in
     /// the app; tests supply their own.
     var ownerSecret: () -> Data? = { OwnerCodeSecretStore().read() }
+
+    /// Runs the operator's control commands (`OwnerControlCommand`).
+    var controlRunner = OwnerControlRunner()
+    /// The frequency a radio is on, for the control link rule.
+    var linkFrequencyHz: (RadioID) -> Int? = { _ in nil }
+    /// How long the operator may be silent before the fail-safe puts the
+    /// changes back: under the 3 minutes 97.213(b) allows, with room for the
+    /// restore itself.
+    var controlSilenceLimit: Duration = .seconds(150)
+    /// What the fail-safe would put back for the call in progress, newest
+    /// last, by the command that changed it.
+    private var controlRestores: [(name: String, plan: OwnerControlRestore)] = []
+    private var controlWatchdog: Task<Void, Never>?
+
+    private func runControl(_ command: OwnerControlCommand, argument: String, prompt: String?) {
+        let word = command.name.uppercased()
+        let promptLines = prompt.map { [$0] } ?? []
+        if command.changesTransmission, let session,
+           let reason = TelecommandLink.refusal(frequencyHz: linkFrequencyHz(session.radio),
+                                                digipeated: !session.path.digis.isEmpty) {
+            note("refused \(word): \(reason)")
+            write(["\(word): \(reason)"] + promptLines)
+            return
+        }
+        let runner = controlRunner
+        note("ran " + (argument.isEmpty ? word : "\(word) \(argument)"))
+        Task { @MainActor [weak self] in
+            let result = await runner.run(command, argument: argument)
+            guard let self, self.session != nil else {
+                // The link went while it ran: nothing is left to say it to,
+                // and nothing to keep a change for.
+                if let restore = result.restore { _ = await runner.restore(restore) }
+                return
+            }
+            if let restore = result.restore {
+                self.controlRestores.append((word, restore))
+                self.armControlWatchdog()
+            }
+            self.write(result.lines + promptLines)
+            self.reload()
+        }
+    }
+
+    /// Heard from the operator: the link is working.
+    private func controlLinkHeard() {
+        guard !controlRestores.isEmpty else { return }
+        armControlWatchdog()
+    }
+
+    private func armControlWatchdog() {
+        controlWatchdog?.cancel()
+        let limit = controlSilenceLimit
+        controlWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: limit)
+            guard !Task.isCancelled else { return }
+            self?.putControlChangesBack(sayingTo: true)
+        }
+    }
+
+    /// The fail-safe: everything the call's commands changed, newest first.
+    private func putControlChangesBack(sayingTo caller: Bool) {
+        controlWatchdog?.cancel()
+        controlWatchdog = nil
+        let restores = controlRestores
+        controlRestores = []
+        guard !restores.isEmpty else { return }
+        if caller {
+            let names = restores.map(\.name).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+            write(["Nothing heard from you: put back \(names.joined(separator: ", "))."])
+        }
+        let runner = controlRunner
+        Task { @MainActor [weak self] in
+            for restore in restores.reversed() {
+                let what = await runner.restore(restore.plan)
+                self?.append(.note, what)
+            }
+        }
+    }
     /// One checker across calls, so a used code stays used and a lockout
     /// holds when the caller reconnects.
     private var ownerChecker: OwnerCode.Checker?
@@ -452,7 +530,7 @@ final class BBSService: ObservableObject {
             handler: { [weak self] _, data in self?.receive(data) },
             stateHandler: { [weak self] _, _, newState in
                 guard newState == .disconnected || newState == .error else { return }
-                self?.endCall(unexpected: true)
+                self?.endCall(unexpected: true, linkFailed: newState == .error)
             },
             ackHandler: { [weak self] _, _ in self?.linkAcknowledged() },
             netRomHandler: { [weak self] session in
@@ -513,6 +591,7 @@ final class BBSService: ObservableObject {
     // MARK: - Inbound bytes
 
     private func receive(_ data: Data) {
+        controlLinkHeard()
         lastActivity = now()
 
         // A running transfer owns the byte stream. Feeding these to the line
@@ -602,6 +681,7 @@ final class BBSService: ObservableObject {
             // Owner sign-in as it is set now, not as it was at connect.
             shell.checkOwnerCode = ownerCodeCheck(for: caller)
             shell.ownerKeys = ownerKeys(for: caller)
+            shell.ownerControls = settings.ownerControlCommands
         }
 
         var output = shell.handle(line: line, mailbox: currentMailbox(), now: now())
@@ -629,6 +709,15 @@ final class BBSService: ObservableObject {
         pendingLines = []
         write(output.lines)
         for effect in output.effects { apply(effect) }
+        // A control command writes what it says and then the prompt when it
+        // has run.
+        if case .runControl(let command, let argument)? = output.effects.first(where: {
+            if case .runControl = $0 { return true }; return false
+        }) {
+            flushLines()
+            runControl(command, argument: argument, prompt: output.prompt)
+            return
+        }
         // A transfer writes its own prompt when it ends, and a caller who has
         // just been told to start an upload is not at a prompt.
         if running == nil, !awaitingUpload, let prompt = output.prompt {
@@ -684,6 +773,9 @@ final class BBSService: ObservableObject {
         case .abortTransfer:
             awaitingUpload = false
             stopTransfer(tellCaller: nil, log: nil)
+        case .runControl:
+            // Run by `process(line:)`, which holds the prompt until it is done.
+            break
         case .ownerSignIn(let accepted):
             note(accepted ? "signed in as the owner" : "gave a wrong owner code")
         case .disconnect:
@@ -749,7 +841,16 @@ final class BBSService: ObservableObject {
         endCall(unexpected: false)
     }
 
-    private func endCall(unexpected: Bool) {
+    private func endCall(unexpected: Bool, linkFailed: Bool = false) {
+        // A failed link is the control link failing: put back what owner
+        // commands changed. A call ended on purpose keeps the changes.
+        if linkFailed {
+            putControlChangesBack(sayingTo: false)
+        } else {
+            controlWatchdog?.cancel()
+            controlWatchdog = nil
+            controlRestores = []
+        }
         // Nothing is sent: the link is gone or going, and a CAN written now
         // would either be lost or, on a disconnected session, make the
         // session layer dial the caller back to deliver it.
@@ -1259,6 +1360,7 @@ final class BBSService: ObservableObject {
     /// YAPP download hears nothing from the caller until its end of file, and
     /// the window has room for more.
     private func linkAcknowledged() {
+        controlLinkHeard()
         guard let running else { return }
         lastTransferActivity = now()
         (running.driver as? YAPPProtocol)?.pumpData()
@@ -1721,6 +1823,7 @@ extension BBSService {
             guard let service else { return ([], nil, true) }
             shell.checkOwnerCode = service.ownerCodeCheck(for: caller)
             shell.ownerKeys = service.ownerKeys(for: caller)
+            shell.ownerControls = service.settings.ownerControlCommands
             var output = shell.handle(
                 line: line, mailbox: service.currentMailbox(), now: Date())
             var closed = false
@@ -1745,6 +1848,10 @@ extension BBSService {
                     } else {
                         output.lines.append("\(file.name) could not be read.")
                     }
+                case .runControl:
+                    // A relayed link is not the control link 97.213 means.
+                    output.lines = ["Control commands need a direct connection to "
+                                    + "\(service.answeringCallsign)."]
                 case .sendFile, .beginUpload:
                     // The shell refuses these itself in lines-only mode; this
                     // is the backstop if that ever changes.

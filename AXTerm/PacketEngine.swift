@@ -1965,6 +1965,14 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Radios as the status surfaces see them
 
+    /// The frequency a radio is on: what the rig reports, or a sound modem's
+    /// own setting. Nil when nothing says.
+    func frequencyHz(of radio: RadioID) -> Int? {
+        if let hz = radioManager.rigStatus[radio]?.frequencyHz { return hz }
+        guard let profile = radioManager.profile(radio), profile.kind == .modem else { return nil }
+        return profile.frequencyHz
+    }
+
     /// Every enabled radio, in the operator's order, with its link's state.
     var radioSummaries: [RadioStatusSummary] {
         let station = settings.myCallsign

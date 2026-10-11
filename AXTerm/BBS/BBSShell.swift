@@ -125,6 +125,9 @@ nonisolated struct BBSShell {
         /// The operator tried to sign in from the road, rightly or not:
         /// logged and shown at home either way.
         case ownerSignIn(accepted: Bool)
+        /// Run one of the operator's control commands with its argument; the
+        /// mailbox writes what it says, then the prompt.
+        case runControl(OwnerControlCommand, argument: String)
         case disconnect
     }
 
@@ -211,6 +214,9 @@ nonisolated struct BBSShell {
     /// owner commands are on, the caller is the operator's callsign and a
     /// device is paired.
     var ownerKeys: [OwnerKey.PairedDevice]?
+    /// The operator's control commands (`OwnerControlCommand`), offered
+    /// only where owner commands are.
+    var ownerControls: [OwnerControlCommand] = []
     private let makeOneTimeKey: () -> P256.KeyAgreement.PrivateKey
     /// The one-time key of the challenge outstanding, until a sign-in uses
     /// it up or it runs out (`OwnerKey.challengeLifetime`).
@@ -230,6 +236,11 @@ nonisolated struct BBSShell {
 
     /// OWNER and ST exist for this caller.
     private var offersOwnerCommands: Bool { checkOwnerCode != nil || ownerKeys != nil }
+
+    /// The words that are owner commands for this caller.
+    private var ownerVerbs: [String] {
+        ["ST"] + ownerControls.map { $0.name.uppercased() }
+    }
 
     private(set) var state: State = .command
     /// The file id `D` has quoted a time for and is waiting to be asked about
@@ -277,6 +288,15 @@ nonisolated struct BBSShell {
 
     /// The operator's own callsign at any SSID: the only caller who may
     /// sign in as the owner.
+    /// The mailbox's own command words, which an owner control command
+    /// cannot take.
+    static let builtInVerbs: Set<String> = [
+        "?", "A", "ABORT", "B", "BYE", "D", "DB", "DOWNLOAD", "F", "FILES", "FN", "H", "HEARD", "HELP", "I", "INFO",
+        "J", "JHEARD", "K", "KILL", "KM", "L", "LB", "LIST", "LL", "LM", "MH", "MHEARD", "N", "NEW", "NH", "NQ",
+        "NZ", "OP", "OWNER", "Q", "QUIT", "R", "READ", "RM", "S", "SB", "SEND", "SP", "ST", "U", "UPLOAD", "V",
+        "VER", "VERSION", "W", "WN", "WP"
+    ]
+
     static func isOwnerCallsign(_ caller: String, station: String) -> Bool {
         BBSMessage.baseCall(caller) == BBSMessage.baseCall(station)
     }
@@ -330,7 +350,12 @@ nonisolated struct BBSShell {
 
     // MARK: - Lines
 
-    mutating func handle(line: String, mailbox: Mailbox, now: Date) -> Output {
+    mutating func handle(line rawLine: String, mailbox: Mailbox, now: Date) -> Output {
+        var line = rawLine
+        // A checked line can arrive while a message is being written (its
+        // first word happened to be an owner command): keep the text, and
+        // the counter in step with the device's.
+        if ownerByKey, !isAtCommandLine, let plain = acceptCheck(line) { line = plain }
         switch state {
         case .closed:
             return Output(lines: [], prompt: nil)
@@ -416,8 +441,12 @@ nonisolated struct BBSShell {
         if ownerByKey, verb.hasPrefix("!") {
             return checkedCommand(trimmed, mailbox: mailbox, now: now)
         }
-        if ownerByKey, !runningSignedCommand, OwnerKey.signedCommands.contains(verb) {
+        if ownerByKey, !runningSignedCommand, ownerVerbs.contains(verb) {
             return Output(lines: ["Owner commands from a paired device carry a check; AXTerm adds it for you."])
+        }
+
+        if offersOwnerCommands, let command = ownerControls.first(where: { $0.name.uppercased() == verb }) {
+            return control(command, rest)
         }
 
         switch verb {
@@ -597,21 +626,38 @@ nonisolated struct BBSShell {
             wrongChecks = 0
             isOwner = true
             ownerByKey = true
-            return Output(lines: ["Signed in as the owner until you disconnect. Owner commands carry a check."],
+            return Output(lines: ["Signed in as the owner until you disconnect. Owner commands carry a check.",
+                                  OwnerKey.ownerCommandsPrefix + ownerVerbs.joined(separator: " ")],
                           effects: [.ownerSignIn(accepted: true)])
         }
         return Output(lines: ["That sign-in is not from a paired device."], effects: [.ownerSignIn(accepted: false)])
     }
 
+    private var isAtCommandLine: Bool {
+        switch state {
+        case .command, .paging: return true
+        default: return false
+        }
+    }
+
+    /// The line without its check when the check is right for the next
+    /// counter, which it then moves on; nil otherwise.
+    private mutating func acceptCheck(_ line: String) -> String? {
+        guard line.hasPrefix("!"), var session = ownerSession else { return nil }
+        let pieces = line.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
+        let command = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
+        guard let given = pieces.first,
+              OwnerKey.matches(given, OwnerKey.check(key: session.key, counter: session.counter, command: command,
+                                                     length: OwnerKey.commandCheckBytes)) else { return nil }
+        session.counter += 1
+        ownerSession = session
+        return command
+    }
+
     /// `!<check> <command>`: an owner command with its check. A wrong one is
     /// logged, and the third ends the sign-in.
     private mutating func checkedCommand(_ line: String, mailbox: Mailbox, now: Date) -> Output {
-        let pieces = line.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
-        let given = pieces.first ?? ""
-        let command = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
-        guard var session = ownerSession,
-              OwnerKey.matches(given, OwnerKey.check(key: session.key, counter: session.counter, command: command,
-                                                     length: OwnerKey.commandCheckBytes)) else {
+        guard let command = acceptCheck(line) else {
             wrongChecks += 1
             guard wrongChecks >= OwnerKey.wrongChecksAllowed else {
                 return Output(lines: ["That check is not right."], effects: [.ownerSignIn(accepted: false)])
@@ -621,11 +667,37 @@ nonisolated struct BBSShell {
             isOwner = false
             return Output(lines: [OwnerKey.signedOutLine], effects: [.ownerSignIn(accepted: false)])
         }
-        session.counter += 1
-        ownerSession = session
         runningSignedCommand = true
         defer { runningSignedCommand = false }
         return runCommand(command, mailbox: mailbox, now: now)
+    }
+
+    /// One of the operator's control commands.
+    private func control(_ command: OwnerControlCommand, _ argument: String) -> Output {
+        guard isOwner else {
+            return Output(lines: ["Sign in first: OWNER and the six-digit code from your authenticator app."])
+        }
+        let word = command.name.uppercased()
+        if command.changesTransmission, !ownerByKey {
+            return Output(lines: ["\(word) changes how the station transmits: sign in with a paired AXTerm's key."])
+        }
+        switch command.argument.accept(argument) {
+        case .success(let accepted):
+            return Output(lines: [], effects: [.runControl(command, argument: accepted)])
+        case .failure(let refusal):
+            let fits: String
+            switch refusal {
+            case .unexpected: fits = "nothing after it"
+            case .notANumber:
+                if case .number(let min, let max) = command.argument {
+                    fits = "a number from \(OwnerControlCommand.ArgumentRule.format(min)) to "
+                        + "\(OwnerControlCommand.ArgumentRule.format(max))"
+                } else { fits = "a number" }
+            case .outOfRange(let min, let max): fits = "a number from \(min) to \(max)"
+            case .notAChoice(let choices): fits = "one of " + choices.joined(separator: ", ")
+            }
+            return Output(lines: ["\(word) takes \(fits)."])
+        }
     }
 
     private func help() -> [String] {
@@ -633,7 +705,11 @@ nonisolated struct BBSShell {
             "",
             "OWNER code sign in as the owner with your authenticator code",
             "ST         the station's state (owner)"
-        ])
+        ] + ownerControls.map { command in
+            let word = command.name.uppercased()
+            return String((word.padding(toLength: max(11, word.count + 1), withPad: " ", startingAt: 0)
+                           + command.help).prefix(79))
+        })
     }
 
     private var helpLines: [String] {

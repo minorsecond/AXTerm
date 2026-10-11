@@ -121,7 +121,8 @@ final class BBSShellOwnerKeyTests: XCTestCase {
         let out = sut.handle(line: try answer(challenge).1, mailbox: box, now: now)
         XCTAssertTrue(sut.isOwner)
         XCTAssertEqual(out.effects, [.ownerSignIn(accepted: true)])
-        XCTAssertEqual(out.lines, ["Signed in as the owner until you disconnect. Owner commands carry a check."])
+        XCTAssertEqual(out.lines, ["Signed in as the owner until you disconnect. Owner commands carry a check.",
+                                   "Owner commands: ST"])
     }
 
     /// Each owner command carries 8 characters: "!", the 6-character

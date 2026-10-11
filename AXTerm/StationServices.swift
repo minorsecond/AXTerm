@@ -63,6 +63,7 @@ final class StationServices {
     /// What the window's first task used to do, and then the subscriptions
     /// that keep the station in step with settings and with what it is doing.
     private func start() {
+        bbsService.linkFrequencyHz = { [weak client] radio in client?.frequencyHz(of: radio) }
         bbsService.attach()
         let answerer = WinlinkP2PAnswerer(coordinator: coordinator, context: winlinkContext,
                                           settings: settings, client: client)

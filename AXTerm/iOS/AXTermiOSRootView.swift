@@ -454,6 +454,7 @@ struct AXTermiOSRootView: View {
             announce: { [weak client] line in client?.appendSystemNotification(line) },
             resolveLicences: { [weak lookup] callsigns in await lookup?.resolveAll(callsigns) },
             contestedIdentityHolder: contested)
+        bbsService.linkFrequencyHz = { [weak client] radio in client?.frequencyHz(of: radio) }
         return MainWindowServices(coordinator: coordinator, bbsLibrary: library,
                                   callsignLookup: lookup, bbsService: bbsService)
     }

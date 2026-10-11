@@ -137,6 +137,43 @@ should be published before wide use; 97.309 allows data techniques whose
 technical characteristics are publicly documented, and the exact wording
 needs reading before release.
 
+### Owner control commands
+
+The operator defines control commands in the mailbox settings, under
+Control commands. Each one has:
+
+- a word to type (1 to 8 letters and digits, not one of the mailbox's own),
+  and a help line that `H` shows to the owner;
+- a rule for what follows the word: nothing, a number between a lowest and a
+  highest, or one of a list. Nothing else reaches the action, so a typed line
+  cannot smuggle a second rigctl command or shell text into it;
+- an action: a line sent to a Hamlib rigctld (`{arg}` stands for what
+  followed the word; Warbler serves the IC-705 on `localhost:4533`), or, on
+  the Mac, a script in AXTerm's Application Scripts folder, the one place a
+  sandboxed app may run the operator's scripts from;
+- whether it changes how the station transmits.
+
+Examples for the IC-705 through Warbler: `FREQ` sends `F {arg}` with a number
+from 144000000 to 148000000 and reads back with `f`; `MODE` sends
+`M {arg} 0` with one of `FM PKTFM`; `PWR` sends `l RFPOWER` and only reads.
+
+A command that changes how the station transmits:
+
+- needs a key sign-in: a code is not tied to the command it comes with;
+- runs only on a direct link (no digipeaters, not through a node) on a
+  frequency where 97.201 allows an auxiliary station;
+- reads the current value first (or names a script that puts it back), and
+  is refused if it cannot, so the fail-safe always has something to run;
+- is put back when the link fails, or when nothing is heard from the operator
+  for two and a half minutes, inside the 3 minutes 97.213(b) allows. Hanging
+  up on purpose keeps the change.
+
+A control command may never key the transmitter (rigctl `T` or `set_ptt`):
+nothing could promise to let go of it. The mailbox names its owner commands at
+sign-in (`Owner commands: ST FREQ MODE`), so the device knows which lines get
+a check without being set up at its end. Every run and every refusal goes in
+the call log.
+
 ## Progress
 
 - Pages of long output with `OP n`: done (`dd42661b`).
@@ -147,6 +184,7 @@ needs reading before release.
   read from its documentation rather than written from memory.
 - Key-pair sign-in from another AXTerm: done. Each owner command carries a
   32-bit check under a session key from ECDH (8 characters per command).
+- Owner control commands (rigctl and scripts) with the fail-safe: done.
 - AXDP through a node relay: done. Conversations are routed by the far
   station, PING and PONG name their sender, and completion requests back
   off (AXTERM-TRANSMISSION-SPEC.md, "AXDP through a node relay").

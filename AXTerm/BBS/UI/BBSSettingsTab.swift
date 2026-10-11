@@ -137,6 +137,10 @@ struct BBSSettingsTab: View {
             OwnerAccessSection(settings: settings,
                                mailboxCallsign: settings.effectiveCallsign(stationCallsign: stationCallsign))
 
+            if settings.ownerCommandsEnabled {
+                OwnerControlSection(settings: settings)
+            }
+
             Section {
                 Label("Shared folders and uploads are set up in the BBS window, "
                       + "under Files, beside the files themselves.",

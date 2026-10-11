@@ -22,6 +22,7 @@ final class BBSSettings: ObservableObject {
     static let acceptUploadsKey = "bbsAcceptUploads"
     static let ownerCommandsKey = "bbsOwnerCommands"
     static let ownerDevicesKey = "bbsOwnerDevices"
+    static let ownerControlCommandsKey = "bbsOwnerControlCommands"
     static let trustedCallersKey = "bbsTrustedCallers"
     static let maxUploadBytesKey = "bbsMaxUploadBytes"
     static let uploadQuotaBytesKey = "bbsUploadQuotaBytes"
@@ -111,6 +112,13 @@ final class BBSSettings: ObservableObject {
         didSet { defaults.set(try? JSONEncoder().encode(ownerDevices), forKey: Self.ownerDevicesKey) }
     }
 
+    /// Control commands the operator runs from the road (`OwnerControlCommand`).
+    @Published var ownerControlCommands: [OwnerControlCommand] {
+        didSet {
+            defaults.set(try? JSONEncoder().encode(ownerControlCommands), forKey: Self.ownerControlCommandsKey)
+        }
+    }
+
     /// Largest single upload. Small on purpose — 100 KB is twenty minutes of
     /// channel, and a caller who needs more can ask.
     @Published var maxUploadBytes: Int {
@@ -140,6 +148,8 @@ final class BBSSettings: ObservableObject {
         self.ownerCommandsEnabled = defaults.bool(forKey: Self.ownerCommandsKey)
         self.ownerDevices = defaults.data(forKey: Self.ownerDevicesKey)
             .flatMap { try? JSONDecoder().decode([OwnerKey.PairedDevice].self, from: $0) } ?? []
+        self.ownerControlCommands = defaults.data(forKey: Self.ownerControlCommandsKey)
+            .flatMap { try? JSONDecoder().decode([OwnerControlCommand].self, from: $0) } ?? []
         self.trustedCallers = defaults.stringArray(forKey: Self.trustedCallersKey) ?? []
         let maxUpload = defaults.integer(forKey: Self.maxUploadBytesKey)
         self.maxUploadBytes = maxUpload > 0 ? maxUpload : 100 * 1024

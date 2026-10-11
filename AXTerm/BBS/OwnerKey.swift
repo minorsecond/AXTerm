@@ -25,8 +25,11 @@ nonisolated enum OwnerKey {
         var id: String { publicKey }
     }
 
-    /// The owner commands. Signed in by key, each must carry its check.
+    /// The owner commands a device checks until the mailbox names its own.
     static let signedCommands: Set<String> = ["ST"]
+
+    /// The sign-in's line naming the mailbox's owner commands.
+    static let ownerCommandsPrefix = "Owner commands: "
 
     /// How long a challenge may wait for its answer.
     static let challengeLifetime: TimeInterval = 5 * 60
@@ -170,6 +173,7 @@ nonisolated struct OwnerSignInResponder: Sendable {
     private struct Session: @unchecked Sendable {
         let key: SymmetricKey
         var counter: UInt64
+        var verbs = OwnerKey.signedCommands
     }
 
     private var pending: Set<String> = []
@@ -193,6 +197,12 @@ nonisolated struct OwnerSignInResponder: Sendable {
             sessions[key] = nil
             return nil
         }
+        if line.hasPrefix(OwnerKey.ownerCommandsPrefix), var session = sessions[key] {
+            session.verbs = Set(line.dropFirst(OwnerKey.ownerCommandsPrefix.count)
+                .split(separator: " ").map { $0.uppercased() })
+            sessions[key] = session
+            return nil
+        }
         guard pending.contains(key), let oneTime = OwnerKey.challenge(inLine: line) else { return nil }
         pending.remove(key)
         guard let sessionKey = derive(oneTime, key, caller.uppercased()) else { return nil }
@@ -207,8 +217,7 @@ nonisolated struct OwnerSignInResponder: Sendable {
         let key = peer.uppercased()
         let command = line.trimmingCharacters(in: .whitespaces)
         guard let verb = command.split(separator: " ").first.map({ $0.uppercased() }),
-              OwnerKey.signedCommands.contains(verb),
-              var session = sessions[key] else { return nil }
+              var session = sessions[key], session.verbs.contains(verb) else { return nil }
         let check = OwnerKey.check(key: session.key, counter: session.counter, command: command,
                                    length: OwnerKey.commandCheckBytes)
         session.counter += 1
