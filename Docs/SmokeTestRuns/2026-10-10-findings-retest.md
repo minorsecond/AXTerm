@@ -131,3 +131,27 @@ The script is the one given in the session after the fixes for
     packet calls there. It does not retune the radio: set it to your APRS
     frequency (144.390 in North America) yourself." The packet direction
     names no frequency, since there is no single packet channel.
+
+## Fixes
+
+Each fixed test first, with the full macOS suite and the iOS build passing
+before the commit. Not yet installed on A (705) or the iPad.
+
+| Finding | Commit | What changed |
+|---|---|---|
+| 1 | `cae18ed3` | AXDP uploads get the live call panel's progress row; any upload waits at the top of Received with a progress bar |
+| 2 | `694bc754` | Who uploaded a file stays with it in an area (migration v41); From column, not shown to callers |
+| 3 | `3d86bc63` | Shared file rows select, with Open, Quick Look, Show in Finder, Edit Description and Move to Trash |
+| 4 | `d01d1f75` | An ack held for the peer's burst waits 0.8 s of quiet after the carrier drops, and keeps waiting if it comes back. Cause found in the iPad's own log: A's RR keyed over the iPad's second frame |
+| 5 | `6cf26b96` | Send File asks an AXTerm mailbox which areas take your uploads and offers those as a picker (new AXDP request and reply) |
+| 6 | `b5bfd1dd` | The AXDP probe goes once, only to a station that says AXTerm or is remembered as one; verdicts kept across launches |
+| 7, 10 | `b28606fb` | The iPad's history follows the status row only when the row changes kind, and scrolls to the row itself |
+| 8, 9 | `b9ef1eb1` | "Waiting to send…" only before the first frame; counts from the session; a progress bar, and the message's line darkens as it is acknowledged (plain text) |
+| 11 | `793533af` | AXDP chat compressed (deflate, else LZ4) when the peer can read it; per-message limit 256 KB |
+| 12 | `3524883e` | Send File offers a .zip for YAPP to a station without AXTerm |
+| 13 | `d12fc341` | A session grows once its peer confirms AXTerm mid-session; queued data is cut as it goes out, at the paclen in force |
+| 14 | `896b5bb9` | Switching a radio between APRS and Packet asks first and says it is not retuned |
+
+`ModemRadioLinkTests.testSetRadioOnConnectPushesThePacketSetup` failed once in
+a full run during this work and passed three times on its own: a timing test
+under load, unrelated to these changes.
