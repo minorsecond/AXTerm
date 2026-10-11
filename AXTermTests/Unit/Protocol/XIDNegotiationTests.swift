@@ -278,6 +278,66 @@ final class XIDNegotiationTests: XCTestCase {
         XCTAssertEqual(frame?.displayInfo, "SABM", "one RTO paid once, not per connect")
     }
 
+    // MARK: - A peer that ignores XID before the link is up
+
+    /// Dire Wolf drops an XID that arrives before the SABM (it only keeps
+    /// link state from SABM on; Docs/XIDCapabilityMarkerResearch.md), so
+    /// every launch's first connect to it waited out one RTO. A peer whose
+    /// XID went unanswered and whose SABM was then answered heard us and
+    /// skips XID; after that happens on two connects it is remembered, the
+    /// way DM and FRMR are. Once could be one lost frame.
+    private func launch(_ defaults: UserDefaults) -> (AX25SessionManager, AX25VirtualClock) {
+        let clock = AX25VirtualClock()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7), clock: clock)
+        manager.xidMemory = XIDAnswerMemory(defaults: defaults)
+        manager.defaultConfig = AX25SessionConfig(windowSize: 4, paclen: 128, rtoMin: 2.0, rtoMax: 8.0,
+                                                  initialRto: 2.0)
+        manager.negotiateV22 = true
+        return (manager, clock)
+    }
+
+    /// One launch's first connect: the XID goes unanswered, the SABM gets a UA.
+    private func silentXIDThenUA(_ defaults: UserDefaults) -> String? {
+        let (manager, clock) = launch(defaults)
+        let first = manager.connect(to: peer, path: DigiPath(), radio: .primary)?.displayInfo
+        clock.advance(by: 3.0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        XCTAssertEqual(manager.existingSession(for: peer, path: DigiPath(), radio: .primary)?.state, .connected)
+        return first
+    }
+
+    func testAPeerThatIgnoresXIDTwiceIsAskedNoMore() {
+        let defaults = TestDefaults.make("XIDSilentThenUA")
+        XCTAssertEqual(silentXIDThenUA(defaults), "XID")
+        XCTAssertEqual(silentXIDThenUA(defaults), "XID", "once could be a lost frame")
+        let (manager, _) = launch(defaults)
+        XCTAssertEqual(manager.connect(to: peer, path: DigiPath(), radio: .primary)?.displayInfo, "SABM")
+    }
+
+    func testAnAnsweredXIDStartsTheCountAgain() {
+        let defaults = TestDefaults.make("XIDSilentThenUAReset")
+        _ = silentXIDThenUA(defaults)
+        let (manager, _) = launch(defaults)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        _ = manager.handleInboundXID(from: peer, path: DigiPath(), radio: .primary,
+                                     info: xidResponse(srej: true), isCommand: false, pf: true)
+        _ = silentXIDThenUA(defaults)
+        let (later, _) = launch(defaults)
+        XCTAssertEqual(later.connect(to: peer, path: DigiPath(), radio: .primary)?.displayInfo, "XID")
+    }
+
+    /// A silent XID followed by a silent SABM proves nothing.
+    func testSilenceThatNeverConnectsIsNotCounted() {
+        let defaults = TestDefaults.make("XIDSilentNoUA")
+        for _ in 0..<3 {
+            let (manager, clock) = launch(defaults)
+            _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+            clock.advance(by: 60)
+        }
+        let (manager, _) = launch(defaults)
+        XCTAssertEqual(manager.connect(to: peer, path: DigiPath(), radio: .primary)?.displayInfo, "XID")
+    }
+
     func testSecondConnectAfterSuccessfulXIDSkipsStraightToSABMWithSREJ() {
         _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         _ = manager.handleInboundXID(

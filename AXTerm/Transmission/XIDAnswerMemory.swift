@@ -15,7 +15,10 @@
 //
 //  Only *answered* rejections are remembered. Silence is channel loss as
 //  often as it is old firmware, and remembering it would permanently skip
-//  negotiation with a peer that supports it. An XID answer clears the
+//  negotiation with a peer that supports it. One kind of silence is an
+//  answer: an XID unanswered while the SABM right after it is answered,
+//  which is what Dire Wolf does (it keeps no link state before a SABM).
+//  Two such connects in a row count as a rejection. An XID answer clears the
 //  memory — and, because firmware does get upgraded, a remembered
 //  rejection also *expires*: after roughly a month the probe is asked
 //  once more. The expiry is jittered per station (a deterministic hash of
@@ -42,6 +45,15 @@ nonisolated struct XIDAnswerMemory {
 
     private var unsupported: [String: Date]
 
+    /// Peers whose XID went unanswered while the SABM after it was
+    /// answered, and how many times running. Dire Wolf drops an XID that
+    /// arrives before the link is up, so it does this on every connect.
+    private var silentThenConnected: [String: Int]
+    private static let silentKey = "transmission.xidSilentThenConnected"
+    /// Times running before the peer counts as not answering XID. Once
+    /// could be one lost frame.
+    static let silentThenConnectedLimit = 2
+
     init(defaults: UserDefaults = AppEnvironment.defaults, now: Date = Date()) {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.key),
@@ -54,6 +66,7 @@ nonisolated struct XIDAnswerMemory {
         } else {
             unsupported = [:]
         }
+        silentThenConnected = defaults.dictionary(forKey: Self.silentKey) as? [String: Int] ?? [:]
     }
 
     private static func normalize(_ peer: String) -> String {
@@ -89,12 +102,33 @@ nonisolated struct XIDAnswerMemory {
                            at now: Date = Date()) {
         let key = Self.normalize(peer)
         guard !key.isEmpty else { return }
+        if !answered, silentThenConnected.removeValue(forKey: key) != nil {
+            defaults.set(silentThenConnected, forKey: Self.silentKey)
+        }
         if answered {
             unsupported[key] = now
         } else if unsupported.removeValue(forKey: key) == nil {
             return
         }
         Self.save(unsupported, to: defaults)
+    }
+
+    /// Our XID went unanswered and the SABM after it was answered: the peer
+    /// heard us and skips XID before the link is up. After
+    /// `silentThenConnectedLimit` such connects in a row it is remembered
+    /// like a DM or FRMR, with the same expiry.
+    mutating func rememberSilentThenConnected(_ peer: String, at now: Date = Date()) {
+        let key = Self.normalize(peer)
+        guard !key.isEmpty else { return }
+        let count = (silentThenConnected[key] ?? 0) + 1
+        if count >= Self.silentThenConnectedLimit {
+            silentThenConnected.removeValue(forKey: key)
+            defaults.set(silentThenConnected, forKey: Self.silentKey)
+            remember(key, unsupported: true, at: now)
+        } else {
+            silentThenConnected[key] = count
+            defaults.set(silentThenConnected, forKey: Self.silentKey)
+        }
     }
 
     private static func save(_ entries: [String: Date], to defaults: UserDefaults) {

@@ -1282,6 +1282,14 @@ final class AX25SessionManager: ObservableObject {
         }
         deliveryClaims[session.key]?.stateHandler?(session, oldState, newState)
 
+        // Our XID to this peer went unanswered and its SABM was answered:
+        // it heard us and skips XID before the link is up (Dire Wolf).
+        let peerKey = session.remoteAddress.display
+        if newState == .connected, xidGaveUp[peerKey] == session.key {
+            xidGaveUp[peerKey] = nil
+            xidMemory.rememberSilentThenConnected(peerKey)
+        }
+
         // A claim cannot outlive its session. Claim holders release their
         // own claim on disconnect, but they are held weakly here and a
         // protocol runner routinely drops its transport in the seconds

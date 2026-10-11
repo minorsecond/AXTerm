@@ -1138,6 +1138,12 @@ Outcomes, all cached per callsign so the cost is paid at most once:
   DRLNOD's DM to an XID landed 0.45 s after the SABM was handed over, was
   taken as refusing it, and DRLNOD's UA then found no session; its poll drew
   a DM. A DM or FRMR after the SABM is out is still the SABM's answer.
+  Silence followed by a UA to the SABM is a peer that heard us and skips XID
+  before the link is up, which Dire Wolf does on every connect (it keeps no
+  link state before a SABM). After two such connects in a row the peer is
+  remembered as not doing XID, like DM or FRMR, so later launches stop paying
+  the RTO (decision 2026-10-11, operator; `XIDAnswerMemory`). One alone could
+  be a single lost frame.
 - A malformed XID response resolves as unsupported — a peer's encoding bug
   must not strand the connect.
 
