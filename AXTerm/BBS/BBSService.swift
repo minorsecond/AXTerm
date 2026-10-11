@@ -206,6 +206,44 @@ final class BBSService: ObservableObject {
     /// Whether a transfer holds the session. For tests and the UI.
     var isTransferring: Bool { running != nil }
 
+    /// The owner code's secret, nil when none has been made. The Keychain in
+    /// the app; tests supply their own.
+    var ownerSecret: () -> Data? = { OwnerCodeSecretStore().read() }
+    /// One checker across calls, so a used code stays used and a lockout
+    /// holds when the caller reconnects.
+    private var ownerChecker: OwnerCode.Checker?
+
+    /// How this caller's OWNER code is checked, or nil when they cannot be
+    /// the owner: owner commands off, no secret made, or another callsign.
+    func ownerCodeCheck(for caller: String) -> ((String, Date) -> OwnerCode.Verdict)? {
+        guard settings.ownerCommandsEnabled,
+              BBSShell.isOwnerCallsign(caller, station: answeringCallsign),
+              ownerSecret() != nil else { return nil }
+        return { [weak self] code, at in self?.checkOwnerCode(code, at: at) ?? .wrong }
+    }
+
+    private func checkOwnerCode(_ code: String, at date: Date) -> OwnerCode.Verdict {
+        guard let secret = ownerSecret() else { return .wrong }
+        if ownerChecker?.secret != secret { ownerChecker = OwnerCode.Checker(secret: secret) }
+        return ownerChecker!.check(code, at: date)
+    }
+
+    /// What `ST` tells a signed-in owner.
+    private func ownerStatusLines() -> [String] {
+        let station = BBSMessage.baseCall(answeringCallsign)
+        let unread = messages.filter {
+            $0.killedAt == nil && $0.readAt == nil && !$0.isBulletin && BBSMessage.baseCall($0.to) == station
+        }.count
+        let since = now().addingTimeInterval(-86_400)
+        let callers = Set(calls.filter { $0.connectedAt > since }.map(\.callsign)).count
+        var lines = ["Mail for you: \(unread) unread",
+                     "Callers in the last day: \(callers)"]
+        if let library, library.hasInbox {
+            lines.append("Uploads waiting in \(library.inboxName ?? "the inbox"): \(library.inboxCount)")
+        }
+        return lines
+    }
+
     init(store: BBSMessageStore?,
          settings: BBSSettings,
          coordinator: SessionCoordinator,
@@ -437,7 +475,8 @@ final class BBSService: ObservableObject {
             banner: settings.banner,
             publishesHeardList: settings.publishHeardList,
             publishesWhitePages: settings.publishWhitePages,
-            bytesPerSecond: bytesPerSecond(for: caller))
+            bytesPerSecond: bytesPerSecond(for: caller),
+            checkOwnerCode: ownerCodeCheck(for: caller))
 
         let callId = (store.flatMap { try? $0.beginCall(callsign: caller, at: at, radio: session.radio) }) ?? -1
         live = LiveCall(callsign: caller, startedAt: at, callId: callId)
@@ -616,6 +655,13 @@ final class BBSService: ObservableObject {
             }
         case .viewFile(let file):
             viewFile(file)
+        case .viewFileAsBase64(let file):
+            guard let data = library?.data(for: file) else {
+                write(["\(file.name) could not be read."])
+                return
+            }
+            write(TextDownloadMarkers.markedBase64Lines(name: file.name, data: data))
+            note("read \(file.area)/\(file.name) as base64")
         case .sendFile(let file):
             sendFile(file)
         case .beginUpload:
@@ -623,6 +669,8 @@ final class BBSService: ObservableObject {
         case .abortTransfer:
             awaitingUpload = false
             stopTransfer(tellCaller: nil, log: nil)
+        case .ownerSignIn(let accepted):
+            note(accepted ? "signed in as the owner" : "gave a wrong owner code")
         case .disconnect:
             break
         }
@@ -756,6 +804,7 @@ final class BBSService: ObservableObject {
         mailbox.stationInfo = settings.stationInfo
         mailbox.files = library?.index ?? BBSFileIndex()
         mailbox.lastVisit = callerLastVisit
+        mailbox.ownerStatus = ownerStatusLines()
         return mailbox
     }
 
@@ -1638,7 +1687,8 @@ extension BBSService {
                 publishesHeardList: service.settings.publishHeardList,
                 publishesWhitePages: service.settings.publishWhitePages,
                 bytesPerSecond: service.bytesPerSecond(for: caller),
-                linesOnlyDirectCall: service.answeringCallsign)
+                linesOnlyDirectCall: service.answeringCallsign,
+                checkOwnerCode: service.ownerCodeCheck(for: caller))
         }
 
         @MainActor
@@ -1658,7 +1708,7 @@ extension BBSService {
             var closed = false
             for effect in output.effects {
                 switch effect {
-                case .store, .kill, .markRead, .learnWhitePages:
+                case .store, .kill, .markRead, .learnWhitePages, .ownerSignIn:
                     service.apply(effect)
                 case .viewFile(let file):
                     // Text is what this link carries, so a text file is
@@ -1666,6 +1716,14 @@ extension BBSService {
                     if let lines = service.textLines(for: file) {
                         output.lines.append(contentsOf: lines)
                         service.append(.note, "\(caller) read \(file.area)/\(file.name) over NET/ROM")
+                    } else {
+                        output.lines.append("\(file.name) could not be read.")
+                    }
+                case .viewFileAsBase64(let file):
+                    if let data = service.library?.data(for: file) {
+                        output.lines.append(contentsOf: TextDownloadMarkers.markedBase64Lines(name: file.name,
+                                                                                               data: data))
+                        service.append(.note, "\(caller) read \(file.area)/\(file.name) as base64 over NET/ROM")
                     } else {
                         output.lines.append("\(file.name) could not be read.")
                     }

@@ -48,7 +48,11 @@ import Foundation
 nonisolated enum TextDownloadMarkers {
     struct Begin: Equatable, Sendable {
         let name: String
+        /// The file's size; for base64, the size once decoded.
         let byteCount: Int
+        /// The lines are the file in base64, not its text: a binary file
+        /// over a link that carries only lines (Docs/RemoteAccessPlan.md).
+        var isBase64 = false
     }
 
     /// A BEGIN line announcing more than this is not believed. A mailbox
@@ -61,8 +65,9 @@ nonisolated enum TextDownloadMarkers {
     private static let endPrefix = "--- END "
     private static let suffix = " ---"
 
-    static func beginLine(name: String, byteCount: Int) -> String {
-        "\(beginPrefix)\(name) (\(byteCount) \(byteCount == 1 ? "byte" : "bytes"))\(suffix)"
+    static func beginLine(name: String, byteCount: Int, base64: Bool = false) -> String {
+        "\(beginPrefix)\(name) (\(byteCount) \(byteCount == 1 ? "byte" : "bytes")"
+            + (base64 ? ", base64" : "") + ")\(suffix)"
     }
 
     static func endLine(name: String) -> String {
@@ -79,7 +84,9 @@ nonisolated enum TextDownloadMarkers {
         guard inner.hasSuffix(")"),
               let open = inner.range(of: " (", options: .backwards) else { return nil }
         let name = String(inner[inner.startIndex..<open.lowerBound])
-        let count = inner[open.upperBound..<inner.index(before: inner.endIndex)]
+        var count = inner[open.upperBound..<inner.index(before: inner.endIndex)]
+        let isBase64 = count.hasSuffix(", base64")
+        if isBase64 { count = count.dropLast(", base64".count) }
         let parts = count.split(separator: " ", omittingEmptySubsequences: false)
         guard !name.trimmingCharacters(in: .whitespaces).isEmpty,
               parts.count == 2, parts[1] == "bytes" || parts[1] == "byte",
@@ -87,7 +94,7 @@ nonisolated enum TextDownloadMarkers {
               parts[0].allSatisfy({ $0.isASCII && $0.isNumber }),
               let bytes = Int(parts[0]), bytes <= maxAnnouncedBytes
         else { return nil }
-        return Begin(name: name, byteCount: bytes)
+        return Begin(name: name, byteCount: bytes, isBase64: isBase64)
     }
 
     /// The file as the lines the mailbox sends, and the count for its BEGIN line.
@@ -112,6 +119,17 @@ nonisolated enum TextDownloadMarkers {
             .map { String(decoding: $0, as: UTF8.self) }
         if normalized.last == 0x0A { lines.removeLast() }
         return (lines, normalized.count)
+    }
+
+    /// BEGIN, the file in base64 lines of 76 characters, END. For a binary
+    /// file over a link that carries only lines; any computer decodes it.
+    static func markedBase64Lines(name: String, data: Data) -> [String] {
+        let encoded = data.base64EncodedString()
+        let body = stride(from: 0, to: encoded.count, by: 76).map { start -> String in
+            let from = encoded.index(encoded.startIndex, offsetBy: start)
+            return String(encoded[from..<encoded.index(from, offsetBy: min(76, encoded.count - start))])
+        }
+        return [beginLine(name: name, byteCount: data.count, base64: true)] + body + [endLine(name: name)]
     }
 
     /// BEGIN, the file's lines, END.
@@ -205,7 +223,11 @@ nonisolated struct TextDownloadReceiver: Sendable {
 
     /// How far the file under way has got.
     var progress: TextDownloadProgress? {
-        active.map { TextDownloadProgress(name: $0.begin.name, received: $0.collected, total: $0.begin.byteCount) }
+        active.map {
+            TextDownloadProgress(name: $0.begin.name,
+                                 received: $0.begin.isBase64 ? $0.collected / 4 * 3 : $0.collected,
+                                 total: $0.begin.byteCount)
+        }
     }
 
     mutating func receive(line: Data) -> Result? {
@@ -218,6 +240,7 @@ nonisolated struct TextDownloadReceiver: Sendable {
             return nil
         }
         let expected = current.begin.byteCount
+        if current.begin.isBase64 { return receiveBase64(line, current) }
 
         if line == current.endLine {
             let lastLineEmpty = current.lines.last?.isEmpty ?? true
@@ -252,11 +275,47 @@ nonisolated struct TextDownloadReceiver: Sendable {
         return nil
     }
 
+    /// A base64 file: lines until its END line, then decoded and checked
+    /// against the count.
+    private mutating func receiveBase64(_ line: Data, _ current: Active) -> Result? {
+        var current = current
+        let expected = current.begin.byteCount
+        if line == current.endLine {
+            active = nil
+            let decoded = Data(base64Encoded: Self.concatenated(current.lines)) ?? Data()
+            return Result(name: current.begin.name, announcedBytes: expected, data: decoded,
+                          problem: decoded.count == expected ? nil
+                            : "The file decoded to \(decoded.count) of \(expected) bytes, so part of it is missing.")
+        }
+        // Base64 is 4 characters for every 3 bytes; more than that is not this file.
+        if current.collected + line.count > (expected + 2) / 3 * 4 {
+            active = nil
+            return Result(name: current.begin.name, announcedBytes: expected,
+                          data: Data(base64Encoded: Self.concatenated(current.lines)) ?? Data(),
+                          problem: "More than the announced \(expected) bytes arrived with no end line.")
+        }
+        current.lines.append(line)
+        current.collected += line.count
+        active = current
+        return nil
+    }
+
+    private static func concatenated(_ lines: [Data]) -> Data {
+        lines.reduce(into: Data()) { $0.append($1) }
+    }
+
     /// The link closed. Reports what had arrived of a file still coming in.
     mutating func linkClosed() -> Result? {
         guard let current = active else { return nil }
         active = nil
         let expected = current.begin.byteCount
+        if current.begin.isBase64 {
+            let whole = Self.concatenated(current.lines)
+            let usable = whole.prefix(whole.count / 4 * 4)
+            return Result(name: current.begin.name, announcedBytes: expected,
+                          data: Data(base64Encoded: usable) ?? Data(),
+                          problem: "The link closed partway through the file.")
+        }
         return incomplete(current, reason: { kept in
             "The link closed after \(kept) of \(expected) bytes."
         })

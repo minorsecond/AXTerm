@@ -55,6 +55,9 @@ nonisolated struct BBSShell {
         /// When this caller was last here, for `FN`. Nil on a first call.
         var lastVisit: Date?
 
+        /// The station's state for a signed-in owner's `ST`, one line each.
+        var ownerStatus: [String] = []
+
         init(messages: [BBSMessage] = [],
              nextID: Int64 = 1,
              whitePages: [String: WhitePagesEntry] = [:],
@@ -105,6 +108,9 @@ nonisolated struct BBSShell {
         /// which is both the cheapest option on the air and the one every
         /// terminal can receive.
         case viewFile(BBSSharedFile)
+        /// Type a file down the session as base64 between the BEGIN and END
+        /// lines: a binary over a link that carries only lines.
+        case viewFileAsBase64(BBSSharedFile)
         /// Hand the session to a transfer protocol for this file.
         case sendFile(BBSSharedFile)
         /// Arm the receiver; the transfer protocol carries the filename.
@@ -115,6 +121,9 @@ nonisolated struct BBSShell {
                              value: String,
                              source: WhitePagesEntry.Source,
                              at: Date)
+        /// The operator tried to sign in from the road, rightly or not:
+        /// logged and shown at home either way.
+        case ownerSignIn(accepted: Bool)
         case disconnect
     }
 
@@ -191,6 +200,12 @@ nonisolated struct BBSShell {
     /// Lines of output per page; 0 sends it whole. 24 by default, what a
     /// plain terminal shows; the caller changes it with FBB's `OP n`.
     private(set) var pageRows: Int
+    /// Checks an owner's one-time code (`OwnerCode.Checker`); nil unless
+    /// owner commands are on and the caller is the operator's callsign.
+    /// Without it OWNER and ST are unknown commands.
+    private let checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)?
+    /// Signed in with a right code, until the call ends.
+    private(set) var isOwner = false
 
     private(set) var state: State = .command
     /// The file id `D` has quoted a time for and is waiting to be asked about
@@ -212,7 +227,8 @@ nonisolated struct BBSShell {
          maxInlineViewBytes: Int = 8 * 1024,
          longTransferSeconds: Double = 300,
          linesOnlyDirectCall: String? = nil,
-         pageRows: Int = 24) {
+         pageRows: Int = 24,
+         checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)? = nil) {
         self.caller = caller
         self.sysop = sysop
         self.banner = banner
@@ -228,6 +244,13 @@ nonisolated struct BBSShell {
         self.longTransferSeconds = longTransferSeconds
         self.linesOnlyDirectCall = linesOnlyDirectCall
         self.pageRows = max(0, pageRows)
+        self.checkOwnerCode = checkOwnerCode
+    }
+
+    /// The operator's own callsign at any SSID: the only caller who may
+    /// sign in as the owner.
+    static func isOwnerCallsign(_ caller: String, station: String) -> Bool {
+        BBSMessage.baseCall(caller) == BBSMessage.baseCall(station)
     }
 
     // MARK: - Entry
@@ -369,6 +392,13 @@ nonisolated struct BBSShell {
             return Output(lines: [Self.version])
         case "OP":
             return setPageLength(argument)
+        case "OWNER" where checkOwnerCode != nil:
+            return signIn(argument, now: now)
+        case "ST" where checkOwnerCode != nil:
+            guard isOwner else {
+                return Output(lines: ["Sign in first: OWNER and the six-digit code from your authenticator app."])
+            }
+            return Output(lines: mailbox.ownerStatus.isEmpty ? ["Nothing to report."] : mailbox.ownerStatus)
         case "I", "INFO":
             return Output(lines: info(rest, mailbox: mailbox))
         // Cross-dialect courtesy: BPQ operators type MH, Kantronics
@@ -392,6 +422,8 @@ nonisolated struct BBSShell {
             return Output(lines: newFiles(mailbox: mailbox))
         case "D", "DOWNLOAD":
             return download(rest, mailbox: mailbox)
+        case "DB":
+            return downloadAsBase64(rest, mailbox: mailbox)
         case "U", "UPLOAD":
             if let direct = linesOnlyDirectCall {
                 return Output(lines: ["Uploads need a direct connection: this link carries "
@@ -443,7 +475,67 @@ nonisolated struct BBSShell {
         }
     }
 
+    /// Above this, `DB` refuses: base64 is a third bigger than the file.
+    static let maxBase64Bytes = 64 * 1024
+
+    private mutating func downloadAsBase64(_ request: String, mailbox: Mailbox) -> Output {
+        guard !request.isEmpty else { return Output(lines: ["Usage: DB <name>"]) }
+        guard case .found(let file) = mailbox.files.resolve(request) else {
+            // Not found, several or ambiguous: D says which, the same way.
+            return download(request, mailbox: mailbox)
+        }
+        guard file.byteCount <= Self.maxBase64Bytes else {
+            pendingDownload = nil
+            return Output(lines: ["\(file.name) is too big to send as text "
+                                  + "(\(BBSFileIndex.size(file.byteCount)); the most is "
+                                  + "\(BBSFileIndex.size(Self.maxBase64Bytes)))."])
+        }
+        let encodedBytes = (file.byteCount + 2) / 3 * 4
+        let seconds = bytesPerSecond > 0 ? Double(encodedBytes) / bytesPerSecond : 0
+        let time = BBSFileIndex.duration(bytes: encodedBytes, bytesPerSecond: bytesPerSecond)
+        let key = "base64:" + file.id
+        if seconds > longTransferSeconds && pendingDownload != key {
+            pendingDownload = key
+            return Output(lines: ["\(file.name) as base64 is about \(time) of airtime.",
+                                  "Send  DB \(request)  again to go ahead."])
+        }
+        pendingDownload = nil
+        return Output(lines: ["Sending \(file.name) as base64 text (\(time)). "
+                              + "Save it and decode it with base64 -d."],
+                      effects: [.viewFileAsBase64(file)])
+    }
+
+    // MARK: - Owner
+
+    private mutating func signIn(_ code: String?, now: Date) -> Output {
+        guard let checkOwnerCode, let code else {
+            return Output(lines: ["OWNER takes the six-digit code from your authenticator app."])
+        }
+        switch checkOwnerCode(code, now) {
+        case .accepted:
+            isOwner = true
+            return Output(lines: ["Signed in as the owner until you disconnect. ST shows the station."],
+                          effects: [.ownerSignIn(accepted: true)])
+        case .wrong:
+            return Output(lines: ["That code is not right."], effects: [.ownerSignIn(accepted: false)])
+        case .used:
+            return Output(lines: ["That code was already used. Wait for the next one."],
+                          effects: [.ownerSignIn(accepted: false)])
+        case .lockedOut:
+            return Output(lines: ["Too many wrong codes. Try again in 15 minutes."],
+                          effects: [.ownerSignIn(accepted: false)])
+        }
+    }
+
     private func help() -> [String] {
+        helpLines + (checkOwnerCode == nil ? [] : [
+            "",
+            "OWNER code sign in as the owner with your authenticator code",
+            "ST         the station's state (owner)"
+        ])
+    }
+
+    private var helpLines: [String] {
         [
             "H          this help",
             "L          list messages you can read",
@@ -458,6 +550,7 @@ nonisolated struct BBSShell {
             "W          file areas         W <area>  what is in one",
             "WN         what is new since your last call",
             "D <name>   download (text is sent as text — no transfer needed)",
+            "DB <name>  download as base64 text, for any terminal (a third more airtime)",
             "U          upload a file to the sysop  U <area>  into an area, if trusted",
             "A          stop a listing or transfer",
             "OP n       pages of n lines (OP 0: no pages)",
@@ -958,7 +1051,8 @@ nonisolated struct BBSShell {
                 pendingDownload = nil
                 return Output(lines: ["\(file.name) needs a transfer protocol, and this link "
                                       + "carries typed lines only. Connect to \(direct) "
-                                      + "to download it."])
+                                      + "to download it, or type DB \(request) to get it as "
+                                      + "base64 text (a third more airtime)."])
             }
 
             // A long transfer holds the channel against everyone else on it.

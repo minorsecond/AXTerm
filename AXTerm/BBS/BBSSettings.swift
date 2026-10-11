@@ -20,6 +20,7 @@ final class BBSSettings: ObservableObject {
     static let publishHeardListKey = "bbsPublishHeardList"
     static let publishWhitePagesKey = "bbsPublishWhitePages"
     static let acceptUploadsKey = "bbsAcceptUploads"
+    static let ownerCommandsKey = "bbsOwnerCommands"
     static let trustedCallersKey = "bbsTrustedCallers"
     static let maxUploadBytesKey = "bbsMaxUploadBytes"
     static let uploadQuotaBytesKey = "bbsUploadQuotaBytes"
@@ -97,6 +98,12 @@ final class BBSSettings: ObservableObject {
         didSet { defaults.set(acceptUploads, forKey: Self.acceptUploadsKey) }
     }
 
+    /// Lets the operator sign in from the road with a one-time code and see
+    /// the station (`OWNER`, `ST`). Off by default.
+    @Published var ownerCommandsEnabled: Bool {
+        didSet { defaults.set(ownerCommandsEnabled, forKey: Self.ownerCommandsKey) }
+    }
+
     /// Largest single upload. Small on purpose — 100 KB is twenty minutes of
     /// channel, and a caller who needs more can ask.
     @Published var maxUploadBytes: Int {
@@ -123,6 +130,7 @@ final class BBSSettings: ObservableObject {
         self.publishWhitePages =
             defaults.object(forKey: Self.publishWhitePagesKey) as? Bool ?? true
         self.acceptUploads = defaults.bool(forKey: Self.acceptUploadsKey)
+        self.ownerCommandsEnabled = defaults.bool(forKey: Self.ownerCommandsKey)
         self.trustedCallers = defaults.stringArray(forKey: Self.trustedCallersKey) ?? []
         let maxUpload = defaults.integer(forKey: Self.maxUploadBytesKey)
         self.maxUploadBytes = maxUpload > 0 ? maxUpload : 100 * 1024

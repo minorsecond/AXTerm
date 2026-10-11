@@ -124,6 +124,18 @@ should be published before wide use; 97.309 allows data techniques whose
 technical characteristics are publicly documented, and the exact wording
 needs reading before release.
 
+## Progress
+
+- Pages of long output with `OP n`: done (`dd42661b`).
+- Owner sign-in with a one-time code, and `ST`: done.
+- XID marker: built and switched off until interop tests pass (`163b2fae`).
+- Binary as text: `DB` sends any file up to 64 KB as base64 in the marked
+  download form, and AXTerm rebuilds it. 7PLUS waits until its format can be
+  read from its documentation rather than written from memory.
+- Still to do: key-pair sign-in from AXTerm, pushing a file on from home,
+  7PLUS, the digi path test, AXDP through a node relay, incoming NET/ROM
+  circuits with AXDP over them.
+
 ## Order
 
 1. Today's fixes first (constitution retest 2026-10-11, findings 1 to 5).

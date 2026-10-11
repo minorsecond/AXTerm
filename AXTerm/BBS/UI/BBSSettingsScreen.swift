@@ -132,6 +132,9 @@ struct BBSSettingsScreen: View {
                 Text("A caller who stops typing should not hold the channel open.")
             }
 
+            OwnerAccessSection(settings: settings,
+                               mailboxCallsign: settings.effectiveCallsign(stationCallsign: stationCallsign))
+
             Section {
                 Label("Shared folders and uploads are in the Mailbox tab, under Files, "
                       + "beside the files themselves.",

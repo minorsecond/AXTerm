@@ -151,9 +151,20 @@ final class BBSCircuitSessionTests: XCTestCase {
         let reply = session.handle(line: "D logo.bin")
         XCTAssertEqual(reply.lines, [
             "logo.bin needs a transfer protocol, and this link carries typed lines only. "
-            + "Connect to K0EPI-2 to download it."
+            + "Connect to K0EPI-2 to download it, or type DB logo.bin to get it as base64 text "
+            + "(a third more airtime)."
         ], "refused before any airtime confirmation for a file that cannot be sent")
         XCTAssertFalse(reply.closed)
+    }
+
+    /// DB types the binary as base64, which a lines-only link carries
+    /// (Docs/RemoteAccessPlan.md, part 2).
+    func testDBSendsABinaryAsBase64OverTheCircuit() throws {
+        let session = try openSession(caller: "W0ARP-1")
+        let reply = session.handle(line: "DB logo.bin")
+        XCTAssertTrue(reply.lines.contains { $0.hasPrefix("--- BEGIN logo.bin (") && $0.hasSuffix(", base64) ---") },
+                      "\(reply.lines)")
+        XCTAssertEqual(reply.lines.last, "--- END logo.bin ---")
     }
 
     func testByeClosesWithoutKillingTheService() throws {

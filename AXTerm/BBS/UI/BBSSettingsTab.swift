@@ -134,6 +134,9 @@ struct BBSSettingsTab: View {
                 Text("Idle")
             }
 
+            OwnerAccessSection(settings: settings,
+                               mailboxCallsign: settings.effectiveCallsign(stationCallsign: stationCallsign))
+
             Section {
                 Label("Shared folders and uploads are set up in the BBS window, "
                       + "under Files, beside the files themselves.",
