@@ -203,11 +203,13 @@ nonisolated struct BBSShell {
     /// Checks an owner's one-time code (`OwnerCode.Checker`); nil unless
     /// owner commands are on and the caller is the operator's callsign.
     /// Without it OWNER and ST are unknown commands.
-    private let checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)?
+    /// The mailbox sets it again before each line, so a change made at home
+    /// during a call applies to it.
+    var checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)?
     /// The devices that may sign in with a key (`OwnerKey`); nil unless
     /// owner commands are on, the caller is the operator's callsign and a
     /// device is paired.
-    private let ownerKeys: [OwnerKey.PairedDevice]?
+    var ownerKeys: [OwnerKey.PairedDevice]?
     private let makeChallenge: () -> String
     /// The challenge `OWNER KEY` sent, until a signature uses it up.
     private var ownerChallenge: String?
@@ -524,7 +526,10 @@ nonisolated struct BBSShell {
     private mutating func signIn(_ rest: String, now: Date) -> Output {
         let parts = rest.split(separator: " ", maxSplits: 1).map(String.init)
         let word = parts.first?.uppercased()
-        if word == "KEY", ownerKeys != nil {
+        if word == "KEY" {
+            guard ownerKeys != nil else {
+                return Output(lines: ["No device is paired with this mailbox. Pair one in its owner settings at home."])
+            }
             let challenge = makeChallenge()
             ownerChallenge = challenge
             return Output(lines: [OwnerKey.challengePrefix + challenge])

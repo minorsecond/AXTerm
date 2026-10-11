@@ -597,7 +597,12 @@ final class BBSService: ObservableObject {
         guard var shell, session != nil, running == nil else { return }
         append(.fromCaller, line)
         // Times in a listing are for the link as it is now (finding 35).
-        if let caller = live?.callsign { shell.bytesPerSecond = bytesPerSecond(for: caller) }
+        if let caller = live?.callsign {
+            shell.bytesPerSecond = bytesPerSecond(for: caller)
+            // Owner sign-in as it is set now, not as it was at connect.
+            shell.checkOwnerCode = ownerCodeCheck(for: caller)
+            shell.ownerKeys = ownerKeys(for: caller)
+        }
 
         var output = shell.handle(line: line, mailbox: currentMailbox(), now: now())
         self.shell = shell
@@ -1714,6 +1719,8 @@ extension BBSService {
         @MainActor
         func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool) {
             guard let service else { return ([], nil, true) }
+            shell.checkOwnerCode = service.ownerCodeCheck(for: caller)
+            shell.ownerKeys = service.ownerKeys(for: caller)
             var output = shell.handle(
                 line: line, mailbox: service.currentMailbox(), now: Date())
             var closed = false

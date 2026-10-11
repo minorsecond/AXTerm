@@ -124,6 +124,19 @@ final class BBSShellOwnerKeyTests: XCTestCase {
         XCTAssertTrue(sut.isOwner)
     }
 
+    /// With codes on and no device paired, OWNER KEY says so. It used to
+    /// go to the code checker as the code "KEY": a wrong code, or the
+    /// lockout message once codes were locked out.
+    func testOwnerKeyWithNoDevicePairedIsNotACode() {
+        var checked = false
+        var sut = BBSShell(caller: "K0EPI-3", sysop: "K0EPI-4", pageRows: 0,
+                           checkOwnerCode: { _, _ in checked = true; return .lockedOut })
+        let out = sut.handle(line: "OWNER KEY", mailbox: BBSShell.Mailbox(), now: now)
+        XCTAssertFalse(checked, "KEY is not a code")
+        XCTAssertEqual(out.lines, ["No device is paired with this mailbox. Pair one in its owner settings at home."])
+        XCTAssertEqual(out.effects, [])
+    }
+
     /// Without paired devices, OWNER KEY is unknown like any command.
     func testNoPairedDevicesMeansUnknown() {
         var sut = shell(paired: false)

@@ -93,4 +93,25 @@ final class BBSOwnerAccessTests: XCTestCase {
         let reply = await command("OWNER \(OwnerCode.code(secret: secret, at: Date()))")
         XCTAssertTrue(reply.hasPrefix("? OWNER"), reply)
     }
+
+    /// Owner settings changed while a call is up reach that call. The
+    /// operator turned code sign-in on, and later paired the iPad, with the
+    /// iPad already connected; the call kept what it saw at connect and
+    /// answered `? OWNER`, then took `OWNER KEY` for a wrong code (remote
+    /// access test 2026-10-11, findings 8 and 10).
+    func testOwnerSettingsChangedDuringACallApplyToIt() async {
+        settings.ownerCommandsEnabled = false
+        await connect(as: AX25Address(call: "K0EPI", ssid: 3))
+        settings.ownerCommandsEnabled = true
+        let signIn = await command("OWNER \(OwnerCode.code(secret: secret, at: Date()))")
+        XCTAssertTrue(signIn.contains("Signed in as the owner"), signIn)
+    }
+
+    func testADevicePairedDuringACallCanSignIn() async {
+        await connect(as: AX25Address(call: "K0EPI", ssid: 3))
+        settings.ownerDevices = [OwnerKey.PairedDevice(name: "iPad", publicKey: "AAAA")]
+        let reply = await command("OWNER KEY")
+        XCTAssertTrue(reply.contains(OwnerKey.challengePrefix), reply)
+    }
 }
+
