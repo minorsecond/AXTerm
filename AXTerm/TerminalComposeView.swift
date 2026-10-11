@@ -1684,6 +1684,10 @@ struct TerminalComposeView: View {
                         .accessibilityIdentifier("terminalCaptureToggle")
                     }
 
+                    if !composeRows.accessoriesInMenu, showsAXDPSwitch {
+                        AXDPPayloadToggle(isOn: $useAXDP)
+                    }
+
                     if !composeRows.accessoriesInMenu, let onSignInAsOwner {
                         Button {
                             onSignInAsOwner()
@@ -2142,6 +2146,7 @@ struct TerminalComposeView: View {
             || (onInsertPosition != nil && !isRawMode)
             || (onToggleCapture != nil && (isCapturing || sessionIsUp))
             || onSignInAsOwner != nil
+            || showsAXDPSwitch
     }
 
     /// Line/Raw, control keys, position and capture in one button, for a
@@ -2180,6 +2185,9 @@ struct TerminalComposeView: View {
             if let onSignInAsOwner {
                 Button("Sign In as Owner", systemImage: "key") { onSignInAsOwner() }
             }
+            if showsAXDPSwitch {
+                Toggle("Send as AXDP", systemImage: "bolt.fill", isOn: $useAXDP)
+            }
         } label: {
             Image(systemName: isCapturing ? "record.circle.fill" : "plus.circle")
                 .font(.title3)
@@ -2217,11 +2225,14 @@ struct TerminalComposeView: View {
 
     // MARK: - AXDP Toggle
 
-    /// Compact inline toggle for enabling AXDP payload encoding.
-    /// Shown only when we have a discovered AXDP capability for the destination.
+    private var showsAXDPSwitch: Bool {
+        ComposeAXDPSwitch.isShown(capabilityStatus: capabilityStatus, connectionMode: connectionMode,
+                                  isRawMode: isRawMode)
+    }
+
+    /// Compact inline switch between AXDP and plain text for what is typed.
     private struct AXDPPayloadToggle: View {
         @Binding var isOn: Bool
-        let capability: AXDPCapability
 
         var body: some View {
             Toggle(isOn: $isOn) {
@@ -2233,22 +2244,29 @@ struct TerminalComposeView: View {
                 }
             }
             .toggleStyle(.button)
-            .controlSize(.mini)
-            .help(tooltip)
-        }
-
-        private var tooltip: String {
-            var parts: [String] = []
-            parts.append("AXDP payloads enabled for this destination.")
-            parts.append("Peer supports AXDP v\(capability.protoMin)-\(capability.protoMax).")
-            if capability.features.contains(.compression) {
-                parts.append("Compression may be used for file transfers.")
-            }
-            parts.append("Disable if the remote behaves unexpectedly.")
-            return parts.joined(separator: " ")
+            .controlSize(.small)
+            .help(ComposeAXDPSwitch.help(isOn: isOn))
+            .accessibilityLabel("Send as AXDP")
+            .accessibilityIdentifier("terminalAXDPSwitch")
         }
     }
 
+}
+
+/// When the compose bar offers the AXDP switch, and what it says. Typed text
+/// goes as AXDP to a station confirmed as AXTerm, so the switch is offered
+/// exactly then; to anyone else the text is plain already.
+enum ComposeAXDPSwitch {
+    static func isShown(capabilityStatus: SessionCoordinator.CapabilityStatus,
+                        connectionMode: TxConnectionMode, isRawMode: Bool) -> Bool {
+        capabilityStatus == .confirmed && connectionMode == .connected && !isRawMode
+    }
+
+    static func help(isOn: Bool) -> String {
+        isOn
+            ? "What you type goes to this station as AXDP. Turn off to send plain text, as any terminal would."
+            : "What you type goes as plain text. Turn on to send it as AXDP."
+    }
 }
 
 /// TX queue entry row for displaying pending frames
