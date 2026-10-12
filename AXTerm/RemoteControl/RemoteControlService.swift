@@ -74,8 +74,12 @@ final class RemoteControlService: ObservableObject {
     init(settings: BBSSettings, defaults: UserDefaults = AppEnvironment.defaults) {
         self.settings = settings
         self.defaults = defaults
-        self.log = defaults.data(forKey: Self.logKey)
-            .flatMap { try? JSONDecoder().decode([Event].self, from: $0) } ?? []
+        self.log = Self.storedLog(defaults: defaults)
+    }
+
+    /// The log as last saved, for a page that has no service of its own.
+    nonisolated static func storedLog(defaults: UserDefaults = AppEnvironment.defaults) -> [Event] {
+        defaults.data(forKey: logKey).flatMap { try? JSONDecoder().decode([Event].self, from: $0) } ?? []
     }
 
     // MARK: - Signing in

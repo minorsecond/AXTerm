@@ -23,7 +23,30 @@ struct RemoteControlSettingsView: View {
             if settings.ownerCommandsEnabled {
                 OwnerControlSection(settings: settings)
             }
+            Section {
+                if log.isEmpty {
+                    Text("Nothing yet.").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(log.suffix(20).reversed()) { event in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(event.text)
+                        Text("\(event.caller) at the \(event.door), "
+                             + event.at.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Button("Refresh") { log = RemoteControlService.storedLog() }
+                    .buttonStyle(.borderless)
+            } header: {
+                Text("Recent activity")
+            } footer: {
+                Text("Every sign-in, control command and fail-safe step, from the mailbox and the node.")
+            }
         }
         .formStyle(.grouped)
+        .onAppear { log = RemoteControlService.storedLog() }
     }
+
+    @State private var log: [RemoteControlService.Event] = []
 }

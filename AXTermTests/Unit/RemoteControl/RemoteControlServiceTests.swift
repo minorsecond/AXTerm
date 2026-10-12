@@ -155,4 +155,13 @@ final class RemoteControlServiceTests: XCTestCase {
         XCTAssertEqual(again.log.last?.text, "signed in as the owner")
         XCTAssertEqual(again.log.last?.door, "node")
     }
+
+    /// The settings page reads the log without the service running there.
+    func testTheSettingsPageCanReadTheLog() {
+        let defaults = TestDefaults.make("rc-log-page")
+        let service = RemoteControlService(settings: BBSSettings(defaults: defaults), defaults: defaults)
+        service.record("ran PWR 705", caller: "K0EPI-3", door: "node")
+        XCTAssertEqual(RemoteControlService.storedLog(defaults: defaults).map(\.text), ["ran PWR 705"])
+    }
 }
+
