@@ -209,7 +209,7 @@ final class NodeToMailboxEndToEndTests: XCTestCase {
 
     func testFromTheNodeIntoTheMailboxAndBack() async throws {
         caller.connect()
-        let greeted = await until("BBS CONNECT INFO NODES ROUTES MH BYE")
+        let greeted = await until("BBS CONNECT INFO NODES ROUTES MH TALK BYE")
         XCTAssertTrue(greeted, caller.text)
         caller.type("OWNER \(OwnerCode.code(secret: secret, at: Date()))")
         let signedIn = await until("Signed in as the owner")

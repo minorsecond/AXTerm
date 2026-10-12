@@ -39,10 +39,10 @@ final class NetRomNodeShellOwnerTests: XCTestCase {
     /// BPQ-style: the choices up front, not only after a wrong guess.
     func testTheGreetingListsWhatTheNodeOffers() {
         XCTAssertEqual(shell().greeting(snapshot: snapshot).lines,
-                       ["AXTerm 1.0 Node EPINOD:K0EPI-7", "BBS CONNECT INFO NODES ROUTES MH BYE  (? for help)"])
+                       ["AXTerm 1.0 Node EPINOD:K0EPI-7", "BBS CONNECT INFO NODES ROUTES MH TALK BYE  (? for help)"])
         var off = snapshot
         off.bbsAvailable = false
-        XCTAssertEqual(shell().greeting(snapshot: off).lines.last, "CONNECT INFO NODES ROUTES MH BYE  (? for help)")
+        XCTAssertEqual(shell().greeting(snapshot: off).lines.last, "CONNECT INFO NODES ROUTES MH TALK BYE  (? for help)")
     }
 
     func testTheOwnerSignsInAtTheNode() {
@@ -167,7 +167,7 @@ final class NetRomNodeHostOwnerTests: XCTestCase {
 
     func testTheGreetingListsWhatTheNodeOffers() {
         attach()
-        XCTAssertTrue(text.contains("BBS CONNECT INFO NODES ROUTES MH BYE"), text)
+        XCTAssertTrue(text.contains("BBS CONNECT INFO NODES ROUTES MH TALK BYE"), text)
     }
 
     func testAReadingCommandAnswersAtTheNode() async {

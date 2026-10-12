@@ -203,6 +203,10 @@ final class StationServices {
             }
         } else {
             coordinator = SessionCoordinator()
+            // A caller asking to talk reaches an operator who is not looking
+            // at the window too.
+            coordinator.postTalkPage = { TalkPageNotification.post($0) }
+            coordinator.clearTalkPage = { TalkPageNotification.clear($0) }
             // Seed AXDP / transmission adaptive settings from persisted settings
             var adaptive = TxAdaptiveSettings()
             adaptive.axdpExtensionsEnabled = settings.axdpExtensionsEnabled

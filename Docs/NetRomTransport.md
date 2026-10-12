@@ -399,7 +399,7 @@ greeting is the banner and, under it, what the node offers:
 
 ```
 AXTerm Node EPINOD:K0EPI-7
-BBS CONNECT INFO NODES ROUTES MH BYE  (? for help)
+BBS CONNECT INFO NODES ROUTES MH TALK BYE  (? for help)
 EPINOD:K0EPI-7}
 ```
 
@@ -416,6 +416,10 @@ not the link's polls. An AXTerm caller that sends its lines as AXDP chat, which 
 since the station answers an AXDP probe for every address it has, is read
 the same as typing, and a capability check asked inside the session is
 answered (on air 2026-10-12).
+
+`TALK` (or `T`) pages the operator, as a BBS's "talk to the sysop" does;
+see Docs/PacketBBS.md, "Talking with the operator". It needs an AX.25 link
+to the station: over a NET/ROM circuit the node says so.
 
 `BBS` (also `MAIL` and `PMS`) goes to the mailbox:
 

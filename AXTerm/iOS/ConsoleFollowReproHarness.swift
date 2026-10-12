@@ -17,7 +17,7 @@ import SwiftUI
 struct ConsoleFollowReproHarness: View {
     @State private var lines: [ConsoleLine] = [
         ConsoleLine(kind: .system, text: "Connected to K0EPI-7"),
-        ConsoleLine(from: "K0EPI-7", to: "K0EPI-3", text: "EPINOD:K0EPI-7} BBS CONNECT INFO NODES ROUTES MH BYE",
+        ConsoleLine(from: "K0EPI-7", to: "K0EPI-3", text: "EPINOD:K0EPI-7} BBS CONNECT INFO NODES ROUTES MH TALK BYE",
                     messageType: .prompt)
     ]
     @State private var clearedAt: Date?

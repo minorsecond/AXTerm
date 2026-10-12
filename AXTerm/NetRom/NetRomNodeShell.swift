@@ -56,6 +56,8 @@ nonisolated struct NetRomNodeShell {
         /// Open an outbound circuit to this name and bridge the caller
         /// through — the node's whole reason to exist.
         case connectOnward(String)
+        /// Page the operator to chat on this link (`TALK`).
+        case talk
         /// The operator tried to sign in, rightly or not.
         case ownerSignIn(accepted: Bool)
         /// Run one of the operator's control commands; the host writes the
@@ -93,7 +95,7 @@ nonisolated struct NetRomNodeShell {
     func greeting(snapshot: Snapshot? = nil) -> Output {
         var lines = ["\(version) Node \(nodeAlias):\(nodeCall)"]
         if let snapshot {
-            lines.append((snapshot.bbsAvailable ? "BBS " : "") + "CONNECT INFO NODES ROUTES MH BYE  (? for help)")
+            lines.append((snapshot.bbsAvailable ? "BBS " : "") + "CONNECT INFO NODES ROUTES MH TALK BYE  (? for help)")
         }
         return Output(lines: lines, prompt: prompt)
     }
@@ -154,6 +156,8 @@ nonisolated struct NetRomNodeShell {
             return Output(lines: ["Trying \(upper)\u{2026}"],
                           prompt: nil,
                           effects: [.connectOnward(upper)])
+        case "TALK":
+            return Output(lines: ["Paging the operator\u{2026}"], prompt: nil, effects: [.talk])
         case "B", "BYE", "Q", "QUIT":
             return Output(lines: ["73 de \(nodeAlias)"],
                           prompt: nil, effects: [.disconnect])
@@ -173,7 +177,7 @@ nonisolated struct NetRomNodeShell {
         ("HELP", "HELP"), ("INFO", "INFO"), ("NODES", "NODES"), ("ROUTES", "ROUTES"),
         ("MHEARD", "MH"), ("JHEARD", "MH"), ("HEARD", "MH"),
         ("BBS", "BBS"), ("MAIL", "BBS"), ("PMS", "BBS"),
-        ("CONNECT", "CONNECT"), ("BYE", "BYE"), ("QUIT", "BYE")
+        ("CONNECT", "CONNECT"), ("TALK", "TALK"), ("BYE", "BYE"), ("QUIT", "BYE")
     ]
 
     /// What `verb` stands for: itself, or the one command it is the start
@@ -211,6 +215,7 @@ nonisolated struct NetRomNodeShell {
         if snapshot.bbsAvailable {
             lines.append("BBS     enter the mailbox")
         }
+        lines.append("TALK    page the operator to chat")
         lines.append("BYE     disconnect")
         return lines + owner.helpLines
     }

@@ -368,9 +368,13 @@ struct ContentView: View {
             }
             // A file that just arrived, with Open (park rehearsal 2026-10-08).
             .overlay(alignment: .top) {
-                ReceivedFileBanner()
-                    .frame(maxWidth: 560)
-                    .animation(.easeOut(duration: 0.25), value: TransferUIRouter.shared.receivedFile)
+                VStack(spacing: 6) {
+                    // A caller asking to talk, or the chat under way.
+                    TalkBanner(router: sessionCoordinator.talkRouter)
+                    ReceivedFileBanner()
+                        .animation(.easeOut(duration: 0.25), value: TransferUIRouter.shared.receivedFile)
+                }
+                .frame(maxWidth: 560)
             }
     }
 

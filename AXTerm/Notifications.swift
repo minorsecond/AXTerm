@@ -231,7 +231,7 @@ final class NotificationAuthorizationManager {
             intentIdentifiers: [],
             options: []
         )
-        center.setNotificationCategories([category])
+        center.setNotificationCategories([category, TalkPageNotification.notificationCategory])
     }
 }
 
@@ -294,6 +294,13 @@ final class NotificationActionHandler: NSObject, UNUserNotificationCenterDelegat
     ) {
         Task { @MainActor [router] in
             let userInfo = response.notification.request.content.userInfo
+            // A caller asking to talk: Answer or Not Now act on the page.
+            if let pageID = (userInfo[TalkPageNotification.pageKey] as? String).flatMap(UUID.init) {
+                TalkPageNotification.respond(response.actionIdentifier, pageID: pageID)
+                if response.actionIdentifier != TalkPageNotification.declineAction { router.requestOpenMainWindow() }
+                completionHandler()
+                return
+            }
             let packetIDString = userInfo[NotificationAction.packetIDKey] as? String
             let packetID = packetIDString.flatMap(UUID.init)
             // A received file's notification shows the file: the same

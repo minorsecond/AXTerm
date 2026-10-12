@@ -833,6 +833,7 @@ final class SessionCoordinator: ObservableObject {
         setupCallbacks()
         wirePingProber()
         wireNodeHost()
+        wireTalk()
         adaptiveStatusStore.updateGlobal(settings: globalAdaptiveSettings, lossRate: nil, etx: nil, srtt: nil)
     }
 
@@ -1954,8 +1955,19 @@ final class SessionCoordinator: ObservableObject {
 
     // MARK: - Node service over AX.25
 
+    /// Callers waiting to talk with the operator, and the chat under way.
+    let talkRouter = TalkRouter()
+    /// How long a page waits for the operator.
+    var talkPageTimeout: Duration = .seconds(60)
+    /// The chat under way: the caller's link, held for the operator.
+    var talkState: TalkState?
+    /// Shows a page outside the window, and takes it down once it is dealt
+    /// with: the app's system notifications. Unset in tests.
+    var postTalkPage: ((TalkRouter.Page) -> Void)?
+    var clearTalkPage: ((TalkRouter.Page) -> Void)?
+
     private var nodeL2Token: UUID?
-    private var nodeL2Claims: [SessionKey: SessionDeliveryClaim] = [:]
+    var nodeL2Claims: [SessionKey: SessionDeliveryClaim] = [:]
 
     private func ensureNodeL2Subscription() {
         guard nodeL2Token == nil else { return }
@@ -1976,8 +1988,8 @@ final class SessionCoordinator: ObservableObject {
     /// back from the mailbox with their owner console. With `toHost` false
     /// the node only claims the link again, its host still holding the
     /// caller.
-    private func attachNodeCaller(_ session: AX25Session, owner: OwnerConsole? = nil, returning: Bool = false,
-                                  toHost: Bool = true) {
+    func attachNodeCaller(_ session: AX25Session, owner: OwnerConsole? = nil, returning: Bool = false,
+                          toHost: Bool = true) {
         let write: (Data) -> Void = { [weak self] data in
             guard let self else { return }
             let frames = self.sessionManager.sendData(
@@ -2009,6 +2021,7 @@ final class SessionCoordinator: ObservableObject {
             },
             stateHandler: { [weak self] _, _, newState in
                 guard newState == .disconnected || newState == .error else { return }
+                self?.dropTalkPages(forHostKey: hostKey)
                 self?.netRomNodeHost.ax25CallerClosed(key: hostKey, failed: newState == .error)
                 self?.nodeL2Claims.removeValue(forKey: session.key)
             },

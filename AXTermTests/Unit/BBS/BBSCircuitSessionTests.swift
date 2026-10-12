@@ -77,6 +77,17 @@ final class BBSCircuitSessionTests: XCTestCase {
                      "no session for a mailbox that is not answering")
     }
 
+    /// TALK hands the operator's terminal an AX.25 link; a NET/ROM circuit
+    /// has none, so the caller is told (2026-10-12).
+    func testTalkOverACircuitNeedsADirectLink() throws {
+        let session = try openSession(caller: "W0ARP-1")
+        let reply = session.handle(line: "T")
+        let text = reply.lines.joined(separator: "\n")
+        XCTAssertTrue(text.contains("TALK needs a direct AX.25 connection"), text)
+        XCTAssertFalse(text.contains("Paging"), text)
+        XCTAssertNotNil(reply.prompt)
+    }
+
     func testAGreetingAndAQuestionWork() throws {
         let session = try openSession(caller: "W0ARP-1")
         let listing = session.handle(line: "L")

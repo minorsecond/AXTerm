@@ -917,6 +917,24 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                                         aliasCallsign: aliasCallsign(peer))
     }
 
+    /// The caller's link while the operator talks with them (`TALK`). The
+    /// terminal stays on it: another link from the same caller (their
+    /// mailbox call, say) must not take the operator's reply.
+    private(set) var pinnedTalk: AX25Session?
+
+    func pinTalk(to session: AX25Session) {
+        pinnedTalk = session
+        currentSession = session
+        viewModel.connectionMode = .connected
+        viewModel.destinationCall = session.remoteAddress.display
+        viewModel.digiPath = session.path.display
+    }
+
+    func unpinTalk() {
+        pinnedTalk = nil
+        updateCurrentSession(adoptingAnyConnected: false)
+    }
+
     /// Our address on the session on screen, when it is with `destination`:
     /// what the operator types goes on that link.
     private func linkAddress(to destination: AX25Address) -> AX25Address? {
@@ -2042,6 +2060,15 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// as connected while showing "K". So a destination the operator sets
     /// binds only its own session, and clearing it lets go.
     private func updateCurrentSession(adoptingAnyConnected: Bool = true) {
+        // A talk link wins while it is up and still the station on screen.
+        if let pinned = pinnedTalk {
+            if pinned.state == .connected,
+               CallsignNormalizer.addressesMatch(pinned.remoteAddress, parseCallsign(wireDestination.call)) {
+                currentSession = pinned
+                return
+            }
+            if pinned.state != .connected { pinnedTalk = nil }
+        }
         // If we have a destination specified, look for that specific session.
         // Through a relay that is the next-hop link, not the destination — the
         // circuit lives on the link to the node (see `wireDestination`), and so
@@ -2468,6 +2495,22 @@ struct TerminalView: View {
             }
             .onChange(of: connectBarViewModel.toCall) { _, _ in
                 syncLegacyFieldsFromConnectBar()
+            }
+            // The operator answered a caller's TALK: the terminal is on their
+            // link until the chat ends.
+            .onReceive(sessionCoordinator.talkRouter.$chat.removeDuplicates()) { chat in
+                if let chat {
+                    txViewModel.pinTalk(to: chat.session)
+                    connectBarViewModel.applySuggestedTo(chat.session.remoteAddress.display)
+                    connectBarViewModel.markConnected(
+                        sourceCall: chat.session.localAddress.display,
+                        destination: chat.session.remoteAddress.display,
+                        via: chat.session.path.digis.map(\.display),
+                        transportMode: chat.session.path.digis.isEmpty ? .ax25 : .ax25ViaDigi,
+                        forcedNextHop: nil)
+                } else if txViewModel.pinnedTalk != nil {
+                    txViewModel.unpinTalk()
+                }
             }
             .onChange(of: connectBarViewModel.viaDigipeaters) { _, _ in
                 syncLegacyFieldsFromConnectBar()

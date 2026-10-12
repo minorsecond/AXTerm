@@ -33,6 +33,9 @@ extension SessionCoordinator {
         host.bbsSessionFactory = { [weak self] caller in
             self?.nodeMailbox?.beginCircuitSession(caller: caller)
         }
+        host.onTalkRequest = { [weak self] hostKey, caller in
+            MainActor.assumeIsolated { self?.requestTalk(hostKey: hostKey, caller: caller, door: .node) }
+        }
         host.capabilityPingHandler = { [weak self] message, caller, reply in
             MainActor.assumeIsolated {
                 self?.receiveMailboxCapabilityPing(message, from: CallsignNormalizer.toAddress(caller), reply: reply)

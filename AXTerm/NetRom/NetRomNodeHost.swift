@@ -151,6 +151,23 @@ nonisolated final class NetRomNodeHost {
         }
     }
 
+    /// Asks the station to page the operator for an AX.25 caller who sent
+    /// `TALK` (`SessionCoordinator.requestTalk`).
+    var onTalkRequest: ((_ hostKey: String, _ caller: String) -> Void)?
+
+    /// Nobody answered the page: the caller is back at the prompt.
+    func talkDeclined(key: String) {
+        let identity = identityProvider()
+        writeLines(["The operator isn't at the station. BBS leaves them mail."],
+                   prompt: "\(identity.alias):\(identity.call)} ", to: .ax25(key))
+    }
+
+    /// The operator answered: the node lets the caller's link go and hands
+    /// back their owner sign-in, for when they come back.
+    func yieldForTalk(key: String) -> OwnerConsole? {
+        callers.removeValue(forKey: .ax25(key))?.owner
+    }
+
     /// Answers an AXTerm caller's capability check, asked inside its AX.25
     /// session at the prompt, with the reply's bytes for the caller.
     var capabilityPingHandler: ((AXDP.Message, _ caller: String, _ reply: @escaping (Data) -> Void) -> Void)?
@@ -487,6 +504,12 @@ nonisolated final class NetRomNodeHost {
                 line: line, snapshot: snapshotProvider(), now: Date())
             callers[key]?.owner = shell.owner
             callers[key]?.mode = .node(shell)
+            if output.effects.contains(.talk), case .circuit = key {
+                // No AX.25 link here to hand the operator's terminal.
+                writeLines(["TALK needs a direct AX.25 connection to this station."],
+                           prompt: shell.greeting().prompt, to: key)
+                return
+            }
             write(output, to: key)
             for effect in output.effects {
                 switch effect {
@@ -504,6 +527,8 @@ nonisolated final class NetRomNodeHost {
                     }
                 case .runControl(let command, let argument):
                     runControl(command, argument: argument, for: key, prompt: shell.greeting().prompt)
+                case .talk:
+                    if case .ax25(let hostKey) = key { onTalkRequest?(hostKey, caller.callsign) }
                 }
             }
         case .bbs(let session):

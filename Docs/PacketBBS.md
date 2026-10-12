@@ -950,6 +950,36 @@ up front when a file is empty, over the size limit, a folder, or bound for
 an area whose folder cannot be reached. A note under the list says what
 happened to each file.
 
+### Talking with the operator
+
+`T` (or `TALK`) at the mailbox, or `TALK` at the node, pages whoever is at
+the station, as a BBS's "talk to the sysop" did (operator, 2026-10-12). The
+caller sees "Paging the operator…". The operator gets a banner over every
+page of the app, "K0EPI-3 wants to talk (at the node)", with Answer and Not
+Now, and on the Mac a notification with the same two buttons.
+
+- Answered, the caller's own link goes to the operator's terminal, which
+  stays on it even when the caller has another link up (their mailbox call,
+  say). Nothing is dialed: the station cannot reach its own keyboard over
+  the air. The caller is told "You are talking with the operator. /EX takes
+  you back."
+- `/EX` or `/EXIT` alone on a line, or End Chat on the operator's banner,
+  takes the caller back where they asked from, the node ("Back at the
+  node.") or the mailbox ("Back at the mailbox."), still signed in if they
+  were.
+- Not Now, or a minute with no answer, tells the caller "The operator isn't
+  at the station." with a word on leaving mail, and the prompt comes back.
+- The link going down ends the chat; a failed link runs the owner's
+  fail-safe as any other. The mailbox's idle timeout waits while its call is
+  lent out, and the caller's typing in the chat counts as hearing the owner.
+- One chat at a time: while one runs, Answer waits.
+- Over a NET/ROM circuit there is no AX.25 link to hand the terminal, so
+  `TALK` answers "TALK needs a direct AX.25 connection".
+
+The code: `TalkRouter` and `TalkExit` (AXTerm/Talk), the station's part in
+`SessionCoordinator+Talk.swift`, `BBSService.lendForTalk` and
+`returnFromTalk`, and `NetRomNodeHost.yieldForTalk`.
+
 ### Owner sign-in from the road
 
 With "Sign in from the road with a one-time code" on in the mailbox settings,

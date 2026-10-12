@@ -128,6 +128,8 @@ nonisolated struct BBSShell {
         /// Run one of the operator's control commands with its argument; the
         /// mailbox writes what it says, then the prompt.
         case runControl(OwnerControlCommand, argument: String)
+        /// Page the operator to chat on this link (`T`).
+        case talk
         case disconnect
     }
 
@@ -287,7 +289,8 @@ nonisolated struct BBSShell {
     static let builtInVerbs: Set<String> = [
         "?", "A", "ABORT", "B", "BYE", "D", "DB", "DOWNLOAD", "F", "FILES", "FN", "H", "HEARD", "HELP", "I", "INFO",
         "J", "JHEARD", "K", "KILL", "KM", "L", "LB", "LIST", "LL", "LM", "MH", "MHEARD", "N", "NEW", "NH", "NQ",
-        "NZ", "OP", "OWNER", "Q", "QUIT", "R", "READ", "RM", "S", "SB", "SEND", "SP", "ST", "U", "UPLOAD", "V",
+        "NZ", "OP", "OWNER", "Q", "QUIT", "R", "READ", "RM", "S", "SB", "SEND", "SP", "ST", "T", "TALK", "U",
+        "UPLOAD", "V",
         "VER", "VERSION", "W", "WN", "WP",
         // The node's, since the same commands are offered there.
         "BBS", "C", "CONNECT", "MAIL", "NODES", "PMS", "ROUTES"
@@ -518,6 +521,8 @@ nonisolated struct BBSShell {
             return learn(.qth, value: rest, now: now)
         case "NZ":
             return learn(.zip, value: rest, now: now)
+        case "T", "TALK":
+            return Output(lines: ["Paging the operator\u{2026}"], prompt: nil, effects: [.talk])
         case "B", "BYE", "Q", "QUIT":
             state = .closed
             return Output(lines: ["73 de \(sysop.uppercased())"],
@@ -605,7 +610,7 @@ nonisolated struct BBSShell {
             "N name     your name            NQ  your town and state",
             "NH bbs     your home BBS        NZ  your ZIP code",
             "V          version",
-            "B          disconnect",
+            "B          disconnect         T  page the operator to chat",
             "",
             "When sending, end the message with /EX on a line by itself."
         ]

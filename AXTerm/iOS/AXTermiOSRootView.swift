@@ -166,6 +166,9 @@ struct AXTermiOSRootView: View {
                             .animation(.easeOut(duration: 0.25), value: transferRouter.receivedFile)
                     }
                 }
+            // A caller asking to talk, or the chat under way.
+            TalkBanner(router: sessionCoordinator.talkRouter)
+                .frame(maxWidth: 560)
             if bannerPlacement == .bottom {
                 ReceivedFileBanner(placement: .bottom)
                     .frame(maxWidth: 560)

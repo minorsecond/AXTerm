@@ -493,6 +493,45 @@ final class BBSService: ObservableObject {
         return true
     }
 
+    /// Set while the operator talks with the caller (`TALK`): the call is
+    /// still the mailbox's, its link lent to the operator's terminal.
+    private(set) var lentForTalk = false
+
+    /// The operator answered the caller's page: the mailbox lets go of the
+    /// link for the chat and keeps the call. Nil while a transfer runs.
+    func lendForTalk() -> AX25Session? {
+        guard let session, let claim, running == nil, !lentForTalk else { return nil }
+        coordinator.sessionManager.releaseDelivery(claim)
+        self.claim = nil
+        lentForTalk = true
+        idleTask?.cancel()
+        return session
+    }
+
+    /// The chat is over: the mailbox takes the link back.
+    func returnFromTalk() {
+        guard lentForTalk, let session else { return }
+        lentForTalk = false
+        claim = claimLink(session)
+        inputBuffer = Data()
+        lastActivity = now()
+        write(["Back at the mailbox.", BBSShell.commandPrompt])
+        startIdleTimer()
+    }
+
+    /// Nobody answered the page.
+    func talkDeclined() {
+        guard session != nil, !lentForTalk else { return }
+        write(["The operator isn't at the station. S leaves them mail.", BBSShell.commandPrompt])
+    }
+
+    /// The caller's link went down while it was lent for a chat.
+    func lentLinkEnded(failed: Bool) {
+        guard lentForTalk else { return }
+        lentForTalk = false
+        endCall(unexpected: true, linkFailed: failed)
+    }
+
     /// Set while a caller from the node is here: where B sends them.
     private var returnToNode: ((OwnerConsole) -> Void)?
 
@@ -508,7 +547,28 @@ final class BBSService: ObservableObject {
         // The claim keeps these bytes away from the terminal and from AXDP
         // reassembly. Failing to get it means something else already owns the
         // conversation, and two readers of one stream is worse than no mailbox.
-        guard let claim = coordinator.sessionManager.claimDelivery(
+        guard let claim = claimLink(session) else {
+            lastRefusal = "\(session.remoteAddress.display.uppercased()): another feature owns this session"
+            return false
+        }
+
+        let caller = session.remoteAddress.display.uppercased()
+        let at = now()
+
+        self.claim = claim
+        self.session = session
+        self.inputBuffer = Data()
+        self.transcript = []
+        self.lastActivity = at
+        self.lastRefusal = nil
+        return greet(session, caller: caller, owner: owner, at: at)
+    }
+
+    /// The call's link, its bytes kept from the terminal and from AXDP
+    /// reassembly. Nil when another feature already owns the conversation:
+    /// two readers of one stream is worse than no mailbox.
+    private func claimLink(_ session: AX25Session) -> SessionDeliveryClaim? {
+        coordinator.sessionManager.claimDelivery(
             for: session.key,
             handler: { [weak self] _, data in self?.receive(data) },
             stateHandler: { [weak self] _, _, newState in
@@ -524,21 +584,10 @@ final class BBSService: ObservableObject {
                              + "the mailbox stepped aside and left it to the node")
                 self?.endCall(unexpected: false)
             }
-        ) else {
-            lastRefusal = "\(session.remoteAddress.display.uppercased()): another feature owns this session"
-            return false
-        }
+        )
+    }
 
-        let caller = session.remoteAddress.display.uppercased()
-        let at = now()
-
-        self.claim = claim
-        self.session = session
-        self.inputBuffer = Data()
-        self.transcript = []
-        self.lastActivity = at
-        self.lastRefusal = nil
-
+    private func greet(_ session: AX25Session, caller: String, owner: OwnerConsole?, at: Date) -> Bool {
         var shell = BBSShell(
             caller: caller,
             sysop: answeringCallsign,
@@ -765,6 +814,10 @@ final class BBSService: ObservableObject {
                 + (session.map { Self.facts(of: $0).route } ?? "")
             note(text)
             remoteControl.record(text, caller: live?.callsign ?? "", door: "mailbox")
+        case .talk:
+            if let session, let caller = live?.callsign {
+                coordinator.requestTalk(hostKey: "\(session.key)", caller: caller, door: .mailbox)
+            }
         case .disconnect:
             break
         }
@@ -895,6 +948,7 @@ final class BBSService: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
                 guard let self, self.session != nil else { return }
+                guard !self.lentForTalk else { continue }
                 guard Self.callIsIdle(now: self.now(), lastActivity: self.lastActivity, timeout: timeout,
                                       transferRunning: self.running != nil) else { continue }
                 self.write(["", "*** no activity — disconnecting"])
@@ -1871,6 +1925,11 @@ extension BBSService {
                 case .abortTransfer:
                     // Nothing can be running here; the shell's "Stopped." is true.
                     break
+                case .talk:
+                    // The operator's terminal takes an AX.25 link; a
+                    // circuit's bytes only the node carries.
+                    output.lines = ["TALK needs a direct AX.25 connection to \(service.answeringCallsign)."]
+                    output.prompt = BBSShell.commandPrompt
                 case .disconnect:
                     closed = true
                 }
