@@ -186,6 +186,9 @@ final class BBSOwnerControlServiceTests: XCTestCase {
         XCTAssertEqual(rig.sent.last, "F 146520000")
         XCTAssertTrue(service.transcript.contains { $0.text.contains("put back: F 146520000") },
                       "\(service.transcript.map(\.text))")
+        // The call has ended by now; the restore still goes in its log.
+        let actions = try XCTUnwrap(store.recentCalls(limit: 1).first?.actions)
+        XCTAssertEqual(actions.suffix(2), ["fail-safe: the link failed", "put back: F 146520000"])
     }
 
     /// Nothing heard from the operator for the limit: put back, and said.
@@ -197,6 +200,10 @@ final class BBSOwnerControlServiceTests: XCTestCase {
         await settle()
         XCTAssertEqual(rig.sent.last, "F 146520000")
         XCTAssertTrue(caller.text.contains("Nothing heard from you: put back FREQ."), caller.text)
+        // In the call log with the commands, as the docs promise; it used to
+        // reach only the transcript on screen (2026-10-12).
+        let actions = try XCTUnwrap(store.recentCalls(limit: 1).first?.actions)
+        XCTAssertEqual(actions.suffix(2), ["fail-safe: nothing heard from the operator", "put back: F 146520000"])
     }
 
     /// Something heard from the operator keeps the change in place.

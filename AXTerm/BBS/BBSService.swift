@@ -268,13 +268,21 @@ final class BBSService: ObservableObject {
         }
     }
 
-    /// The fail-safe: everything the call's commands changed, newest first.
+    /// The fail-safe: everything the call's commands changed, newest first,
+    /// each step in the call's log.
     private func putControlChangesBack(sayingTo caller: Bool) {
         controlWatchdog?.cancel()
         controlWatchdog = nil
         let restores = controlRestores
         controlRestores = []
         guard !restores.isEmpty else { return }
+        // Kept now: by the time the restores answer, the call may be over.
+        let callId = live?.callId
+        let log: (String) -> Void = { [weak self] text in
+            self?.append(.note, text)
+            if let callId { self?.perform { try $0.appendAction(callId: callId, action: text) } }
+        }
+        log(caller ? "fail-safe: nothing heard from the operator" : "fail-safe: the link failed")
         if caller {
             let names = restores.map(\.name).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
             write(["Nothing heard from you: put back \(names.joined(separator: ", "))."])
@@ -282,11 +290,12 @@ final class BBSService: ObservableObject {
         let runner = controlRunner
         Task { @MainActor [weak self] in
             for restore in restores.reversed() {
-                let what = await runner.restore(restore.plan)
-                self?.append(.note, what)
+                log(await runner.restore(restore.plan))
             }
+            self?.reload()
         }
     }
+
     /// One checker across calls, so a used code stays used and a lockout
     /// holds when the caller reconnects.
     private var ownerChecker: OwnerCode.Checker?
