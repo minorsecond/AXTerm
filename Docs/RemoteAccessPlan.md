@@ -157,11 +157,26 @@ Control commands. Each one has:
   the unit W, `SETPWR 5` sends `L RFPOWER 0.5` and `PWR` answers `5.0 W`. The
   fail-safe still puts back exactly the value the radio reported.
 
-The ready-made IC-705 set (Add the IC-705 Set) reads the 705's frequency,
-mode, power in watts, signal and supply voltage, and the FT-710's frequency,
-and `SETPWR` sets the 705's power from 0.5 to 10 W. It never changes the
-705's frequency or mode, which would cut the link the command came in on,
-and only reads the FT-710, which runs the station's HF link unattended.
+Radio commands name the radio after the word, so one word serves every
+radio: `PWR 705` reads the IC-705's power, `PWR 710 50` sets the FT-710 to
+50 W. Each radio is set up once under Radios for control commands, with a
+short name, its rigctld, its power range in watts, its full power (what
+Hamlib's RFPOWER 1 means on it) and how many steps it keeps power in. A
+power outside the radio's range is refused before anything reaches it
+(`PWR: the 705 takes 0.5 to 10 W.`). Hamlib and Warbler truncate when they
+turn the fraction into the radio's steps, so 0.5 on the IC-705 became step
+127 of 255, which the radio shows as 49%. AXTerm picks the nearest step to
+the watts asked for and sends a value a quarter step above it, which lands
+on that step whether the far end truncates or rounds. A radio can be kept
+to reading from the road.
+
+Add the Radio Set adds QRG, MODE, PWR, SIG and VOLTS, and names Warbler's
+IC-705 (`705`, localhost:4533, 0.5 to 10 W) and FT-710 (`710`,
+localhost:4532, 5 to 100 W) if no radios are set up. Only power can be set:
+retuning the IC-705, or switching it out of FM, would cut the link the
+command came in on. The FT-710 runs the station's HF link unattended, so a
+power change there reaches that link too; turn its "can be changed from the
+road" off to keep it to reading.
 
 A command that changes how the station transmits:
 
@@ -176,7 +191,7 @@ A command that changes how the station transmits:
 
 A control command may never key the transmitter (rigctl `T` or `set_ptt`):
 nothing could promise to let go of it. The mailbox names its owner commands at
-sign-in (`Owner commands: ST QRG PWR SETPWR`), so the device knows which lines
+sign-in (`Owner commands: ST QRG MODE PWR SIG VOLTS`), so the device knows which lines
 get a check without being set up at its end. Every run, every refusal and
 every step of the fail-safe goes in the call log.
 

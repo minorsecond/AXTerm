@@ -29,6 +29,9 @@ nonisolated struct OwnerControlCommand: Codable, Equatable, Sendable, Identifiab
     var scale: Double = 1
     /// Shown after a scaled number, such as W.
     var unit = ""
+    /// How many steps the radio keeps a scaled value in (255 for an Icom's
+    /// power), so a typed number lands on the nearest one; 0 when unknown.
+    var steps = 0
 
     /// What the argument may be. Nothing else reaches rigctl or a script.
     enum ArgumentRule: Codable, Equatable, Sendable {
@@ -85,12 +88,39 @@ nonisolated struct OwnerControlCommand: Codable, Equatable, Sendable, Identifiab
         /// argument. `restore`, another script there, is what the fail-safe
         /// runs.
         case script(name: String, restore: String?)
+        /// One quantity of whichever radio is named after the word
+        /// (`ControlRadio`): `PWR 705` reads it, `PWR 705 5` sets power.
+        case radio(RadioQuantity)
     }
 
-    /// A typed number divided by the scale, for rigctl.
-    static func scaled(_ text: String, by scale: Double) -> String {
-        guard scale != 1, let value = Double(text) else { return text }
-        return String(format: "%g", value / scale)
+    /// What a radio command reads, and for power sets, by Hamlib rigctl.
+    enum RadioQuantity: String, Codable, CaseIterable, Sendable {
+        case frequency, mode, power, signal, voltage
+
+        var readLine: String {
+            switch self {
+            case .frequency: "f"
+            case .mode: "m"
+            case .power: "l RFPOWER"
+            case .signal: "l STRENGTH"
+            case .voltage: "l VD_METER"
+            }
+        }
+
+        var canSet: Bool { self == .power }
+    }
+
+    /// A typed number divided by the scale, for rigctl. With `steps`, the
+    /// nearest step to it, sent a quarter step up: rigctld truncates
+    /// (Hamlib does, and so does Warbler), and a quarter step lands on the
+    /// same step whether the far end truncates or rounds.
+    static func scaled(_ text: String, by scale: Double, steps: Int = 0) -> String {
+        guard scale != 1 || steps > 0, let value = Double(text) else { return text }
+        let fraction = value / scale
+        guard steps > 0 else { return String(format: "%g", fraction) }
+        let step = min(max((fraction * Double(steps)).rounded(), 0), Double(steps))
+        if step == Double(steps) { return "1" }
+        return String(format: "%.6f", (step + 0.25) / Double(steps))
     }
 
     static func fill(_ template: String, with argument: String) -> String {
@@ -119,6 +149,8 @@ nonisolated struct OwnerControlCommand: Codable, Equatable, Sendable, Identifiab
                 return "A script is a file name in AXTerm's scripts folder."
             }
             if changesTransmission, restore == nil { return Self.needsWayBack }
+        case .radio:
+            break
         }
         return nil
     }
@@ -186,7 +218,7 @@ nonisolated struct OwnerControlRunner: Sendable {
                     }
                     restore = .rigctl(host: host, port: port, line: OwnerControlCommand.fill(set, with: value))
                 }
-                let sent = OwnerControlCommand.scaled(argument, by: command.scale)
+                let sent = OwnerControlCommand.scaled(argument, by: command.scale, steps: command.steps)
                 let reply = try await rigctl.exchange(host: host, port: port,
                                                       line: OwnerControlCommand.fill(set, with: sent))
                 if let report = reply.first(where: { $0.hasPrefix("RPRT") }) {
@@ -201,6 +233,10 @@ nonisolated struct OwnerControlRunner: Sendable {
             } catch {
                 return OwnerControlResult(lines: ["\(word): cannot reach \(host):\(port)."])
             }
+        case .radio:
+            // The mailbox turns a radio command into a rigctl one for the
+            // radio named; one that gets here named none.
+            return OwnerControlResult(lines: ["\(word): name a radio."])
         case .script(let name, let restoreScript):
             do {
                 let output = try await scripts.run(script: name, arguments: argument.isEmpty ? [] : [argument])
@@ -410,7 +446,7 @@ nonisolated enum TelecommandLink {
 /// a command or says what to fix.
 nonisolated struct OwnerControlDraft: Equatable, Sendable {
     enum ArgumentKind: String, CaseIterable, Sendable { case none, number, choice }
-    enum ActionKind: String, CaseIterable, Sendable { case rigctl, script }
+    enum ActionKind: String, CaseIterable, Sendable { case rigctl, script, radio }
 
     struct Problem: Error, Equatable {
         let text: String
@@ -434,6 +470,7 @@ nonisolated struct OwnerControlDraft: Equatable, Sendable {
     var changesTransmission = false
     var scaleText = "1"
     var unit = ""
+    var quantity = OwnerControlCommand.RadioQuantity.power
 
     init() {}
 
@@ -465,6 +502,9 @@ nonisolated struct OwnerControlDraft: Equatable, Sendable {
             actionKind = .script
             scriptName = script
             restoreName = restore ?? ""
+        case .radio(let quantity):
+            actionKind = .radio
+            self.quantity = quantity
         }
     }
 
@@ -501,13 +541,17 @@ nonisolated struct OwnerControlDraft: Equatable, Sendable {
             guard !script.isEmpty else { return .failure(Problem(text: "Name the script to run.")) }
             let restore = restoreName.trimmingCharacters(in: .whitespaces)
             action = .script(name: script, restore: restore.isEmpty ? nil : restore)
+        case .radio:
+            action = .radio(quantity)
         }
         guard let scale = Double(scaleText.trimmingCharacters(in: .whitespaces)), scale > 0 else {
             return .failure(Problem(text: "The scale is a number above 0."))
         }
         let command = OwnerControlCommand(id: id, name: name.trimmingCharacters(in: .whitespaces).uppercased(),
-                                          help: help.trimmingCharacters(in: .whitespaces), argument: argument,
-                                          action: action, changesTransmission: changesTransmission,
+                                          help: help.trimmingCharacters(in: .whitespaces),
+                                          argument: actionKind == .radio ? .none : argument, action: action,
+                                          changesTransmission: actionKind == .radio ? quantity.canSet
+                                                                                    : changesTransmission,
                                           scale: scale, unit: unit.trimmingCharacters(in: .whitespaces))
         if let problem = command.problem(among: others) { return .failure(Problem(text: problem)) }
         return .success(command)
@@ -578,7 +622,7 @@ extension OwnerControlCommand {
 
 extension OwnerControlCommand {
     private enum CodingKeys: String, CodingKey {
-        case id, name, help, argument, action, changesTransmission, scale, unit
+        case id, name, help, argument, action, changesTransmission, scale, unit, steps
     }
 
     /// Commands saved before scales existed have none.
@@ -592,5 +636,105 @@ extension OwnerControlCommand {
         changesTransmission = try container.decode(Bool.self, forKey: .changesTransmission)
         scale = try container.decodeIfPresent(Double.self, forKey: .scale) ?? 1
         unit = try container.decodeIfPresent(String.self, forKey: .unit) ?? ""
+        steps = try container.decodeIfPresent(Int.self, forKey: .steps) ?? 0
+    }
+}
+
+/// A radio the control commands can reach, named once: `705`, `710`. Power
+/// is in watts, inside the radio's own range, so an impossible setting such
+/// as 75 W on the IC-705 never reaches it.
+nonisolated struct ControlRadio: Codable, Equatable, Sendable, Identifiable {
+    var id = UUID()
+    /// What follows the word: PWR 705.
+    var name: String
+    var host: String
+    var port: Int
+    /// Hamlib's full power (RFPOWER 1.0), in watts.
+    var fullPowerWatts: Double
+    var minWatts: Double
+    var maxWatts: Double
+    /// Off keeps the radio to reading from the road.
+    var allowsChanges = true
+    /// How many steps the radio keeps power in: 255 on the IC-705, 100 on
+    /// the FT-710. 0 sends the plain fraction.
+    var powerSteps = 0
+
+    /// The IC-705 and the FT-710 behind Warbler.
+    static var warblerPreset: [ControlRadio] {
+        [
+            ControlRadio(name: "705", host: "localhost", port: 4533, fullPowerWatts: 10, minWatts: 0.5, maxWatts: 10,
+                         powerSteps: 255),
+            ControlRadio(name: "710", host: "localhost", port: 4532, fullPowerWatts: 100, minWatts: 5, maxWatts: 100,
+                         powerSteps: 100)
+        ]
+    }
+
+    /// Why this radio cannot be saved, or nil.
+    func problem(among others: [ControlRadio]) -> String? {
+        let word = name.trimmingCharacters(in: .whitespaces)
+        guard (1...8).contains(word.count), word.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else {
+            return "A radio's name is 1 to 8 letters and digits, such as 705."
+        }
+        if others.contains(where: { $0.id != id && $0.name.caseInsensitiveCompare(word) == .orderedSame }) {
+            return "There is already a radio called \(word)."
+        }
+        guard (1...65535).contains(port), !host.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return "Give the computer and port of its rigctld."
+        }
+        guard fullPowerWatts > 0, minWatts > 0, minWatts < maxWatts, maxWatts <= fullPowerWatts else {
+            return "The lowest power is above 0 and below the highest, and the highest is at most full power."
+        }
+        return nil
+    }
+}
+
+extension OwnerControlCommand {
+    /// One word per quantity, for whichever radio is named after it.
+    static var radioPreset: [OwnerControlCommand] {
+        func radio(_ name: String, _ help: String, _ quantity: RadioQuantity) -> OwnerControlCommand {
+            OwnerControlCommand(name: name, help: help, argument: .none, action: .radio(quantity),
+                                changesTransmission: quantity.canSet)
+        }
+        return [
+            radio("QRG", "a radio's frequency in Hz", .frequency),
+            radio("MODE", "a radio's mode and filter width", .mode),
+            radio("PWR", "a radio's power in watts; with W, set it", .power),
+            radio("SIG", "signal on a radio's frequency, dB over S9", .signal),
+            radio("VOLTS", "a radio's supply voltage", .voltage)
+        ]
+    }
+
+    /// The first, one-radio sets (QRG, SETPWR, HFQRG and the rest, each
+    /// fixed to one radio) give way to the radio set, with both of Warbler's
+    /// radios named. Commands the operator changed or added stay.
+    static func movingToRadios(_ commands: [OwnerControlCommand],
+                               radios: [ControlRadio]) -> (commands: [OwnerControlCommand], radios: [ControlRadio]) {
+        let oneRadioSets = warblerIC705Preset + legacyIC705Power
+        func isOneRadioSet(_ command: OwnerControlCommand) -> Bool {
+            oneRadioSets.contains { var plain = command; plain.id = $0.id; return plain == $0 }
+        }
+        guard commands.contains(where: isOneRadioSet) else { return (commands, radios) }
+        let kept = commands.filter { !isOneRadioSet($0) }
+        return (adding(radioPreset, to: kept), radios.isEmpty ? ControlRadio.warblerPreset : radios)
+    }
+}
+
+extension ControlRadio {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, host, port, fullPowerWatts, minWatts, maxWatts, allowsChanges, powerSteps
+    }
+
+    /// Radios saved before power steps existed have none.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        host = try container.decode(String.self, forKey: .host)
+        port = try container.decode(Int.self, forKey: .port)
+        fullPowerWatts = try container.decode(Double.self, forKey: .fullPowerWatts)
+        minWatts = try container.decode(Double.self, forKey: .minWatts)
+        maxWatts = try container.decode(Double.self, forKey: .maxWatts)
+        allowsChanges = try container.decodeIfPresent(Bool.self, forKey: .allowsChanges) ?? true
+        powerSteps = try container.decodeIfPresent(Int.self, forKey: .powerSteps) ?? 0
     }
 }

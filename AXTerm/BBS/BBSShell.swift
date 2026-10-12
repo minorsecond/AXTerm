@@ -217,6 +217,8 @@ nonisolated struct BBSShell {
     /// The operator's control commands (`OwnerControlCommand`), offered
     /// only where owner commands are.
     var ownerControls: [OwnerControlCommand] = []
+    /// The radios the radio commands may name (`ControlRadio`).
+    var ownerRadios: [ControlRadio] = []
     private let makeOneTimeKey: () -> P256.KeyAgreement.PrivateKey
     /// The one-time key of the challenge outstanding, until a sign-in uses
     /// it up or it runs out (`OwnerKey.challengeLifetime`).
@@ -678,6 +680,9 @@ nonisolated struct BBSShell {
             return Output(lines: ["Sign in first: OWNER and the six-digit code from your authenticator app."])
         }
         let word = command.name.uppercased()
+        if case .radio(let quantity) = command.action {
+            return radioControl(word, quantity, argument)
+        }
         if command.changesTransmission, !ownerByKey {
             return Output(lines: ["\(word) changes how the station transmits: sign in with a paired AXTerm's key."])
         }
@@ -700,16 +705,68 @@ nonisolated struct BBSShell {
         }
     }
 
+    /// `PWR 705` reads; `PWR 705 5` sets power, inside that radio's range.
+    /// The runner gets a plain rigctl command for the radio named.
+    private func radioControl(_ word: String, _ quantity: OwnerControlCommand.RadioQuantity,
+                              _ text: String) -> Output {
+        guard let example = ownerRadios.first?.name else {
+            return Output(lines: ["No radios are set up for control commands."])
+        }
+        let parts = text.split(separator: " ").map(String.init)
+        guard let asked = parts.first else {
+            return Output(lines: ["\(word) takes a radio, such as \(word) \(example)"
+                                  + (quantity.canSet ? ", or \(word) \(example) 5 to set it." : ".")])
+        }
+        guard let radio = ownerRadios.first(where: { $0.name.caseInsensitiveCompare(asked) == .orderedSame }) else {
+            return Output(lines: ["\(word): no radio called \(asked). Radios: "
+                                  + ownerRadios.map(\.name).joined(separator: ", ") + "."])
+        }
+        let named = "\(word) \(radio.name)"
+        let isPower = quantity == .power
+        guard parts.count > 1 else {
+            let read = OwnerControlCommand(name: named, help: "", argument: .none,
+                                           action: .rigctl(host: radio.host, port: radio.port,
+                                                           set: quantity.readLine, read: nil),
+                                           changesTransmission: false,
+                                           scale: isPower ? radio.fullPowerWatts : 1, unit: isPower ? "W" : "")
+            return Output(lines: [], effects: [.runControl(read, argument: "")])
+        }
+        guard quantity.canSet else { return Output(lines: ["\(word) only reads: \(named)."]) }
+        guard radio.allowsChanges else {
+            return Output(lines: ["\(word): the \(radio.name) is set to read only from the road."])
+        }
+        var typed = parts[1]
+        if typed.lowercased().hasSuffix("w") { typed.removeLast() }
+        let range = OwnerControlCommand.ArgumentRule.number(min: radio.minWatts, max: radio.maxWatts)
+        guard parts.count == 2, case .success(let watts) = range.accept(typed) else {
+            return Output(lines: ["\(word): the \(radio.name) takes "
+                                  + "\(OwnerControlCommand.ArgumentRule.format(radio.minWatts)) to "
+                                  + "\(OwnerControlCommand.ArgumentRule.format(radio.maxWatts)) W."])
+        }
+        guard ownerByKey else {
+            return Output(lines: ["\(named) \(watts) changes how the station transmits: "
+                                  + "sign in with a paired AXTerm's key."])
+        }
+        let set = OwnerControlCommand(name: named, help: "", argument: range,
+                                      action: .rigctl(host: radio.host, port: radio.port,
+                                                      set: "L RFPOWER {arg}", read: quantity.readLine),
+                                      changesTransmission: true, scale: radio.fullPowerWatts, unit: "W",
+                                      steps: radio.powerSteps)
+        return Output(lines: [], effects: [.runControl(set, argument: watts)])
+    }
+
     private func help() -> [String] {
         helpLines + (!offersOwnerCommands ? [] : [
             "",
             "OWNER code sign in as the owner with your authenticator code",
             "ST         the station's state (owner)"
         ] + ownerControls.map { command in
-            let word = command.name.uppercased()
-            return String((word.padding(toLength: max(11, word.count + 1), withPad: " ", startingAt: 0)
+            var word = command.name.uppercased()
+            if case .radio(let quantity) = command.action { word += quantity.canSet ? " r [W]" : " r" }
+            return String((word.padding(toLength: max(11, word.count + 2), withPad: " ", startingAt: 0)
                            + command.help).prefix(79))
-        })
+        } + (ownerRadios.isEmpty || !ownerControls.contains(where: { if case .radio = $0.action { return true }; return false })
+             ? [] : ["Radios: " + ownerRadios.map(\.name).joined(separator: ", ")]))
     }
 
     private var helpLines: [String] {

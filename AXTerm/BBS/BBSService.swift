@@ -691,6 +691,7 @@ final class BBSService: ObservableObject {
             shell.checkOwnerCode = ownerCodeCheck(for: caller)
             shell.ownerKeys = ownerKeys(for: caller)
             shell.ownerControls = settings.ownerControlCommands
+            shell.ownerRadios = settings.controlRadios
         }
 
         var output = shell.handle(line: line, mailbox: currentMailbox(), now: now())
@@ -1833,6 +1834,7 @@ extension BBSService {
             shell.checkOwnerCode = service.ownerCodeCheck(for: caller)
             shell.ownerKeys = service.ownerKeys(for: caller)
             shell.ownerControls = service.settings.ownerControlCommands
+            shell.ownerRadios = service.settings.controlRadios
             var output = shell.handle(
                 line: line, mailbox: service.currentMailbox(), now: Date())
             var closed = false

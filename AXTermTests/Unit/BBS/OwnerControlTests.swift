@@ -586,3 +586,203 @@ final class OwnerControlUnitTests: XCTestCase {
         XCTAssertEqual(problem.text, "The scale is a number above 0.")
     }
 }
+
+/// Radios named once and one word per quantity (operator, 2026-10-12: "set
+/// the 710 power to 50 watts, or the 705 power to 5 watts ... without
+/// typing a long string", and "75 watts on the 705 is impossible"). PWR 705
+/// reads; PWR 705 5 sets, inside the radio's own range, with the fail-safe.
+final class OwnerControlRadioTests: XCTestCase {
+
+    private let now = Date(timeIntervalSince1970: 1_700_000_000)
+    private let device = P256.KeyAgreement.PrivateKey()
+    private let box = BBSShell.Mailbox()
+    private let radios = ControlRadio.warblerPreset
+
+    private func shell(code: Bool = false) -> BBSShell {
+        var sut = BBSShell(caller: "K0EPI-3", sysop: "K0EPI-4", pageRows: 0,
+                           checkOwnerCode: code ? { _, _ in .accepted } : nil,
+                           ownerKeys: [OwnerKey.PairedDevice(name: "iPhone", publicKey: OwnerKey.encode(device.publicKey))])
+        sut.ownerControls = OwnerControlCommand.radioPreset
+        sut.ownerRadios = radios
+        return sut
+    }
+
+    private func signIn(_ sut: inout BBSShell) throws -> SymmetricKey {
+        let challenge = try XCTUnwrap(sut.handle(line: "OWNER KEY", mailbox: box, now: now).lines.first)
+        let oneTime = try XCTUnwrap(OwnerKey.challenge(inLine: challenge))
+        let key = try XCTUnwrap(OwnerKey.sessionKey(mine: device, theirs: oneTime, station: "K0EPI-4", caller: "K0EPI-3"))
+        _ = sut.handle(line: "OWNER MAC " + OwnerKey.check(key: key, counter: 0, command: "", length: 16),
+                       mailbox: box, now: now)
+        return key
+    }
+
+    private var counter: UInt64 = 1
+    private func checked(_ sut: inout BBSShell, _ text: String, _ key: SymmetricKey) -> BBSShell.Output {
+        defer { counter += 1 }
+        let line = "!" + OwnerKey.check(key: key, counter: counter, command: text, length: 4) + " " + text
+        return sut.handle(line: line, mailbox: box, now: now)
+    }
+
+    /// The command that reaches the runner, from what was typed.
+    private func run(_ output: BBSShell.Output) -> (OwnerControlCommand, String)? {
+        guard case .runControl(let command, let argument)? = output.effects.first else { return nil }
+        return (command, argument)
+    }
+
+    func testThePresetNamesBothRadios() {
+        XCTAssertEqual(radios.map(\.name), ["705", "710"])
+        XCTAssertEqual(radios.map(\.port), [4533, 4532])
+        let preset = OwnerControlCommand.radioPreset
+        XCTAssertEqual(preset.map(\.name), ["QRG", "MODE", "PWR", "SIG", "VOLTS"])
+        for command in preset { XCTAssertNil(command.problem(among: preset)) }
+    }
+
+    func testSettingThe710To50Watts() throws {
+        var sut = shell()
+        let key = try signIn(&sut)
+        let (command, argument) = try XCTUnwrap(run(checked(&sut, "PWR 710 50", key)))
+        XCTAssertEqual(command.name, "PWR 710")
+        XCTAssertEqual(command.action, .rigctl(host: "localhost", port: 4532, set: "L RFPOWER {arg}", read: "l RFPOWER"))
+        XCTAssertEqual(command.scale, 100)
+        XCTAssertTrue(command.changesTransmission)
+        XCTAssertEqual(argument, "50")
+        XCTAssertEqual(command.steps, 100)
+    }
+
+    func testSettingThe705To5Watts() throws {
+        var sut = shell()
+        let key = try signIn(&sut)
+        let (command, argument) = try XCTUnwrap(run(checked(&sut, "pwr 705 5w", key)))
+        XCTAssertEqual(command.action, .rigctl(host: "localhost", port: 4533, set: "L RFPOWER {arg}", read: "l RFPOWER"))
+        XCTAssertEqual(command.scale, 10)
+        XCTAssertEqual(argument, "5", "a W after the number is fine")
+    }
+
+    /// Without a number it only reads, and a code sign-in may do that.
+    func testWithoutANumberItReads() throws {
+        var sut = shell(code: true)
+        _ = sut.handle(line: "OWNER 123456", mailbox: box, now: now)
+        let (command, argument) = try XCTUnwrap(run(sut.handle(line: "PWR 710", mailbox: box, now: now)))
+        XCTAssertEqual(command.action, .rigctl(host: "localhost", port: 4532, set: "l RFPOWER", read: nil))
+        XCTAssertFalse(command.changesTransmission)
+        XCTAssertEqual(command.unit, "W")
+        XCTAssertEqual(argument, "")
+    }
+
+    /// The radio's own range, so nothing impossible reaches it.
+    func testAPowerTheRadioCannotGiveIsRefused() throws {
+        var sut = shell()
+        let key = try signIn(&sut)
+        let out = checked(&sut, "PWR 705 75", key)
+        XCTAssertNil(run(out))
+        XCTAssertEqual(out.lines, ["PWR: the 705 takes 0.5 to 10 W."])
+        XCTAssertEqual(checked(&sut, "PWR 710 2", key).lines, ["PWR: the 710 takes 5 to 100 W."])
+        XCTAssertEqual(checked(&sut, "PWR 705 lots", key).lines, ["PWR: the 705 takes 0.5 to 10 W."])
+    }
+
+    func testAnUnknownRadioSaysWhichThereAre() throws {
+        var sut = shell()
+        let key = try signIn(&sut)
+        XCTAssertEqual(checked(&sut, "PWR 711 5", key).lines, ["PWR: no radio called 711. Radios: 705, 710."])
+        XCTAssertEqual(checked(&sut, "PWR", key).lines, ["PWR takes a radio, such as PWR 705, or PWR 705 5 to set it."])
+    }
+
+    /// Only power can be set; the others read.
+    func testReadingQuantitiesTakeNoNumber() throws {
+        var sut = shell()
+        let key = try signIn(&sut)
+        XCTAssertEqual(checked(&sut, "QRG 705 146520000", key).lines, ["QRG only reads: QRG 705."])
+        let (command, _) = try XCTUnwrap(run(checked(&sut, "QRG 710", key)))
+        XCTAssertEqual(command.action, .rigctl(host: "localhost", port: 4532, set: "f", read: nil))
+    }
+
+    /// A radio can be kept to reading from the road.
+    func testARadioKeptToReadingIsNotChanged() throws {
+        var sut = shell()
+        var locked = radios
+        locked[1].allowsChanges = false
+        sut.ownerRadios = locked
+        let key = try signIn(&sut)
+        XCTAssertEqual(checked(&sut, "PWR 710 50", key).lines, ["PWR: the 710 is set to read only from the road."])
+    }
+
+    /// Setting needs the key: a code is not tied to its command.
+    func testSettingNeedsTheKey() {
+        var sut = shell(code: true)
+        _ = sut.handle(line: "OWNER 123456", mailbox: box, now: now)
+        XCTAssertEqual(sut.handle(line: "PWR 705 5", mailbox: box, now: now).lines,
+                       ["PWR 705 5 changes how the station transmits: sign in with a paired AXTerm's key."])
+    }
+
+    func testHelpShowsHowToUseThem() {
+        var sut = shell(code: true)
+        let help = sut.handle(line: "H", mailbox: box, now: now).lines
+        XCTAssertTrue(help.contains("PWR r [W]  a radio's power in watts; with W, set it"), "\(help)")
+        XCTAssertTrue(help.contains("Radios: 705, 710"), "\(help)")
+    }
+
+    /// The first set saved on a station (QRG, SETPWR, HFQRG and the rest,
+    /// each fixed to one radio) gives way to the radio set, with both radios
+    /// named, as long as the operator had not changed it.
+    func testTheOneRadioSetGivesWayToTheRadioSet() {
+        let moved = OwnerControlCommand.movingToRadios(OwnerControlCommand.warblerIC705Preset, radios: [])
+        XCTAssertEqual(moved.commands.map(\.name), ["QRG", "MODE", "PWR", "SIG", "VOLTS"])
+        XCTAssertEqual(moved.radios.map(\.name), ["705", "710"])
+        let mine = OwnerControlCommand(name: "BCN", help: "", argument: .none,
+                                       action: .script(name: "b.sh", restore: nil), changesTransmission: false)
+        let kept = OwnerControlCommand.movingToRadios([mine], radios: [])
+        XCTAssertEqual(kept.commands, [mine])
+        XCTAssertEqual(kept.radios, [])
+    }
+
+    func testRadiosSurviveARestart() {
+        let defaults = TestDefaults.make("owner-control-radios")
+        let settings = MainActor.assumeIsolated { BBSSettings(defaults: defaults) }
+        MainActor.assumeIsolated { settings.controlRadios = radios }
+        XCTAssertEqual(MainActor.assumeIsolated { BBSSettings(defaults: defaults).controlRadios }, radios)
+    }
+}
+
+/// Power steps. The IC-705 keeps power as 0 to 255 and Warbler, like
+/// Hamlib, truncates: 0.5 became step 127, 49.8%, which the 705 shows as
+/// 49% (2026-10-12). AXTerm picks the nearest step to the watts asked for
+/// and sends a value that lands on it whether the far end truncates or
+/// rounds.
+final class OwnerControlPowerStepTests: XCTestCase {
+
+    private func lands(_ text: String, steps: Int) -> (truncated: Int, rounded: Int) {
+        let value = Double(text)! * Double(steps)
+        return (Int(value), Int(value.rounded()))
+    }
+
+    func testFiveWattsOnThe705IsFiftyPercent() {
+        let sent = OwnerControlCommand.scaled("5", by: 10, steps: 255)
+        XCTAssertEqual(lands(sent, steps: 255).truncated, 128)
+        XCTAssertEqual(lands(sent, steps: 255).rounded, 128)
+    }
+
+    func testFiftyWattsOnThe710() {
+        let sent = OwnerControlCommand.scaled("50", by: 100, steps: 100)
+        XCTAssertEqual(lands(sent, steps: 100).truncated, 50)
+        XCTAssertEqual(lands(sent, steps: 100).rounded, 50)
+    }
+
+    func testEveryStepLandsWhereItShould() {
+        for watts in stride(from: 0.5, through: 10, by: 0.1) {
+            let text = String(format: "%.1f", watts)
+            let want = Int((watts / 10 * 255).rounded())
+            let sent = OwnerControlCommand.scaled(text, by: 10, steps: 255)
+            XCTAssertEqual(lands(sent, steps: 255).truncated, want, text)
+            XCTAssertEqual(lands(sent, steps: 255).rounded, want, text)
+        }
+    }
+
+    func testThePresetKnowsEachRadiosSteps() {
+        XCTAssertEqual(ControlRadio.warblerPreset.map(\.powerSteps), [255, 100])
+    }
+
+    func testRadiosSavedBeforeStepsLoadWithout() throws {
+        let old = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","name":"705","host":"localhost","port":4533,"fullPowerWatts":10,"minWatts":0.5,"maxWatts":10,"allowsChanges":true}"#
+        XCTAssertEqual(try JSONDecoder().decode(ControlRadio.self, from: Data(old.utf8)).powerSteps, 0)
+    }
+}

@@ -23,6 +23,7 @@ final class BBSSettings: ObservableObject {
     static let ownerCommandsKey = "bbsOwnerCommands"
     static let ownerDevicesKey = "bbsOwnerDevices"
     static let ownerControlCommandsKey = "bbsOwnerControlCommands"
+    static let controlRadiosKey = "bbsControlRadios"
     static let trustedCallersKey = "bbsTrustedCallers"
     static let maxUploadBytesKey = "bbsMaxUploadBytes"
     static let uploadQuotaBytesKey = "bbsUploadQuotaBytes"
@@ -119,6 +120,11 @@ final class BBSSettings: ObservableObject {
         }
     }
 
+    /// The radios control commands may name (`ControlRadio`).
+    @Published var controlRadios: [ControlRadio] {
+        didSet { defaults.set(try? JSONEncoder().encode(controlRadios), forKey: Self.controlRadiosKey) }
+    }
+
     /// Largest single upload. Small on purpose — 100 KB is twenty minutes of
     /// channel, and a caller who needs more can ask.
     @Published var maxUploadBytes: Int {
@@ -148,9 +154,18 @@ final class BBSSettings: ObservableObject {
         self.ownerCommandsEnabled = defaults.bool(forKey: Self.ownerCommandsKey)
         self.ownerDevices = defaults.data(forKey: Self.ownerDevicesKey)
             .flatMap { try? JSONDecoder().decode([OwnerKey.PairedDevice].self, from: $0) } ?? []
-        self.ownerControlCommands = OwnerControlCommand.upgradingPreset(
+        let storedCommands = OwnerControlCommand.upgradingPreset(
             defaults.data(forKey: Self.ownerControlCommandsKey)
                 .flatMap { try? JSONDecoder().decode([OwnerControlCommand].self, from: $0) } ?? [])
+        let storedRadios = defaults.data(forKey: Self.controlRadiosKey)
+            .flatMap { try? JSONDecoder().decode([ControlRadio].self, from: $0) } ?? []
+        let moved = OwnerControlCommand.movingToRadios(storedCommands, radios: storedRadios)
+        self.ownerControlCommands = moved.commands
+        self.controlRadios = moved.radios
+        if moved.commands != storedCommands || moved.radios != storedRadios {
+            defaults.set(try? JSONEncoder().encode(moved.commands), forKey: Self.ownerControlCommandsKey)
+            defaults.set(try? JSONEncoder().encode(moved.radios), forKey: Self.controlRadiosKey)
+        }
         self.trustedCallers = defaults.stringArray(forKey: Self.trustedCallersKey) ?? []
         let maxUpload = defaults.integer(forKey: Self.maxUploadBytesKey)
         self.maxUploadBytes = maxUpload > 0 ? maxUpload : 100 * 1024

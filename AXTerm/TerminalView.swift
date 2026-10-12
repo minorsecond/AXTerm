@@ -931,7 +931,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
               let reply = ownerSignIn.reply(toLine: text, from: key, caller: session.localAddress.display,
                                             derive: OwnerDeviceKey().sessionKey) else { return }
         sendFrames?(sessionManager.sendData(Data((reply + "\r").utf8), to: session.remoteAddress,
-                                            path: session.path, radio: session.radio, displayInfo: "OWNER SIG"))
+                                            path: session.path, radio: session.radio, displayInfo: "OWNER MAC"))
     }
 
     /// A typed line as it goes out: an owner command to a mailbox signed in
