@@ -525,6 +525,9 @@ struct ConsoleView: View {
         guard followsNewLines else { return }
         repinTimer.poke {
             guard followsNewLines else { return }
+            #if DEBUG
+            if ConsoleFollowTrace.enabled { ConsoleFollowTrace.note("FOLLOW repin fires") }
+            #endif
             scrollToBottomToken += 1
         }
     }
@@ -840,10 +843,23 @@ struct ConsoleView: View {
             } action: { old, new in
                 let decision = PacketListFollow.decide(from: old, to: new, isFollowing: isFollowing,
                                                        userIsScrolling: userIsScrolling)
+                #if DEBUG
+                if ConsoleFollowTrace.enabled {
+                    ConsoleFollowTrace.note(String(format: "FOLLOW geo content %.0f->%.0f minY %.0f->%.0f h %.0f->%.0f following %@ scrolling %@ -> follow %@ scroll %@",
+                                 old.contentHeight, new.contentHeight, old.visibleMinY, new.visibleMinY,
+                                 old.visibleHeight, new.visibleHeight, "\(isFollowing)", "\(userIsScrolling)",
+                                 "\(decision.isFollowing)", "\(decision.scrollToNewest)"))
+                }
+                #endif
                 if isFollowing != decision.isFollowing { isFollowing = decision.isFollowing }
                 if decision.scrollToNewest { scheduleRepin() }
             }
-            .onChange(of: groupedLines.count) { _, _ in
+            .onChange(of: groupedLines.count) { old, new in
+                #if DEBUG
+                if ConsoleFollowTrace.enabled {
+                    ConsoleFollowTrace.note("FOLLOW rows \(old)->\(new) following \(isFollowing) autoScroll \(autoScroll)")
+                }
+                #endif
                 // The same place the repin goes. The marker below the padding
                 // overshoots, and the repin then moved back: a jump per line
                 // (retest 2026-10-11, finding 2).
@@ -862,6 +878,11 @@ struct ConsoleView: View {
                 }
             }
             .onChange(of: scrollToBottomToken) { _, _ in
+                #if DEBUG
+                if ConsoleFollowTrace.enabled {
+                    ConsoleFollowTrace.note("FOLLOW scroll to newest, rows \(groupedLines.count), status \(trailingSendStatus != nil)")
+                }
+                #endif
                 // Pin to the last real line, not the phantom "bottom"
                 // sentinel below the padding — anchoring to the sentinel is
                 // what an overshoot lands past. No animation: this fires
@@ -2097,3 +2118,53 @@ struct InlineSendStatusRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+#if DEBUG
+/// The console's follow decisions, for chasing a transcript that stops
+/// showing its newest lines (iPad, 2026-10-12). Printed under the simulator
+/// harness (`ConsoleFollowReproHarness`); on iPhone and iPad debug builds
+/// also kept in Documents/console-follow.log, the last 4,000 lines, to pull
+/// off the device with devicectl.
+nonisolated enum ConsoleFollowTrace {
+    nonisolated(unsafe) static var enabled: Bool = {
+        #if os(iOS)
+        return true
+        #else
+        return ProcessInfo.processInfo.arguments.contains("--console-follow-repro")
+        #endif
+    }()
+
+    private static let queue = DispatchQueue(label: "ConsoleFollowTrace")
+    nonisolated(unsafe) private static var kept: [String] = []
+    nonisolated(unsafe) private static var unsaved = 0
+    private static let limit = 4_000
+
+    static func note(_ line: String) {
+        print(line)
+        #if os(iOS)
+        let stamped = Date().formatted(.iso8601.time(includingFractionalSeconds: true)) + " " + line
+        queue.async {
+            kept.append(stamped)
+            if kept.count > limit { kept.removeFirst(kept.count - limit) }
+            unsaved += 1
+            guard unsaved >= 20 else { return }
+            unsaved = 0
+            save()
+        }
+        #endif
+    }
+
+    /// Writes what is kept now, as when the app goes to the background.
+    static func flush() {
+        #if os(iOS)
+        queue.async { unsaved = 0; save() }
+        #endif
+    }
+
+    private static func save() {
+        guard let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        try? kept.joined(separator: "\n").write(to: folder.appendingPathComponent("console-follow.log"),
+                                                atomically: true, encoding: .utf8)
+    }
+}
+#endif

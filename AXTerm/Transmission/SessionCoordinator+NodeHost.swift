@@ -41,15 +41,15 @@ extension SessionCoordinator {
         }
     }
 
-    /// The alias the operator set, and the node's callsign, which is the
-    /// primary radio's address when every radio is one node (see
-    /// `localCallsign`).
+    /// The alias the operator set, and the node's callsign: its own when
+    /// it has one (`nodeCallsign`), otherwise the primary radio's address,
+    /// as when every radio is one node (see `localCallsign`). The greeting
+    /// and prompt print them as ALIAS:NODECALL.
     func nodeHostIdentity() -> (alias: String, call: String, version: String) {
         let alias = appSettings?.netRomNodeAlias
             .trimmingCharacters(in: .whitespaces).uppercased() ?? ""
-        return (alias.isEmpty ? "NODE" : alias,
-                appSettings?.primaryCallsign.uppercased() ?? "N0CALL",
-                "AXTerm")
+        let call = nodeHasOwnCallsign ? nodeCallsign.display : appSettings?.primaryCallsign ?? "N0CALL"
+        return (alias.isEmpty ? "NODE" : alias, call.uppercased(), "AXTerm")
     }
 
     /// What this station knows right now, in the shape the node shell prints.

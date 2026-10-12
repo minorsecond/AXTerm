@@ -61,6 +61,34 @@ final class PacketListFollowDecisionTests: XCTestCase {
                        .init(isFollowing: true, scrollToNewest: true))
     }
 
+    /// iPad, 2026-10-12: a long message read as one block grows its last
+    /// row by a line or two per frame, less than the tolerance, so the view
+    /// still counted as the bottom and was not moved. The newest lines sat
+    /// hidden under the compose field until the gap passed 40 points. A
+    /// follower is moved for any growth.
+    func testGrowthInsideTheToleranceIsStillFollowed() {
+        let grown = G(contentHeight: 1_020, visibleMinY: 600, visibleHeight: 400)
+        XCTAssertTrue(grown.isAtBottom, "within the tolerance")
+        XCTAssertEqual(decide(atBottom, grown, following: true),
+                       .init(isFollowing: true, scrollToNewest: true))
+    }
+
+    /// The reader's finger is on the list near the bottom: it is not taken
+    /// from them.
+    func testGrowthInsideTheToleranceLeavesAFingerAlone() {
+        let grown = G(contentHeight: 1_020, visibleMinY: 600, visibleHeight: 400)
+        XCTAssertEqual(decide(atBottom, grown, following: true, scrolling: true),
+                       .init(isFollowing: true, scrollToNewest: false))
+    }
+
+    /// Already showing the very end after growing (the re-pin landed):
+    /// nothing more to do, so the re-pin cannot repeat itself.
+    func testGrowthAlreadyInViewNeedsNoScroll() {
+        let grown = G(contentHeight: 1_020, visibleMinY: 620, visibleHeight: 400)
+        XCTAssertEqual(decide(atBottom, grown, following: true),
+                       .init(isFollowing: true, scrollToNewest: false))
+    }
+
     func testANewLineLeavesAReaderWhereTheyAre() {
         let grown = G(contentHeight: 1_060, visibleMinY: 200, visibleHeight: 400)
         XCTAssertEqual(decide(readingUp, grown, following: false),

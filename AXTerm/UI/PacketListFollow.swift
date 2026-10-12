@@ -68,7 +68,15 @@ nonisolated extension PacketListFollow {
     static func decide(from old: Geometry, to new: Geometry,
                        isFollowing: Bool, userIsScrolling: Bool) -> Decision {
         if new.isAtBottom {
-            return Decision(isFollowing: true, scrollToNewest: false)
+            // The tolerance says the reader is at the bottom; it does not
+            // make lines below the edge visible. A follower is moved for any
+            // growth, so a block growing a line at a time is not left up to
+            // the tolerance short (iPad, 2026-10-12). A finger on the list
+            // keeps it.
+            let grew = new.contentHeight > old.contentHeight
+            let endHidden = new.visibleMinY + new.visibleHeight < new.contentHeight - 1
+            return Decision(isFollowing: true,
+                            scrollToNewest: isFollowing && grew && endHidden && !userIsScrolling)
         }
         let movedUp = old.visibleMinY - new.visibleMinY
         // The view itself changed size (the screen turned, the window or the

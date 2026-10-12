@@ -103,6 +103,32 @@ final class NodeCallsignTests: XCTestCase {
         XCTAssertTrue(sent.contains { $0.source.display == "K0EPI-7" && ($0.displayInfo ?? "").hasPrefix("Node") }, text)
     }
 
+    /// The greeting and prompt name the node as operators write it,
+    /// ALIAS:NODECALL, with the node's own callsign (on air 2026-10-12: they
+    /// said EPINOD:K0EPI-2 with the node on K0EPI-7).
+    func testThePromptNamesTheNodesCallsign() async throws {
+        XCTAssertEqual(station(nodeSSID: 7).nodeHostIdentity().call, "K0EPI-7")
+        let coordinator = station(nodeSSID: 7)
+        let user = AX25Address(call: "W0XYZ", ssid: 1)
+        coordinator.sessionManager.answerInboundSABM(from: user, to: AX25Address(call: "K0EPI", ssid: 7),
+                                                     path: DigiPath(), radio: .primary) { self.sent.append($0) }
+        sent = []
+        _ = coordinator.sessionManager.handleInboundIFrame(from: user, to: AX25Address(call: "K0EPI", ssid: 7),
+                                                           path: DigiPath(), radio: .primary, ns: 0, nr: 0,
+                                                           payload: Data("\r".utf8))
+        await spin()
+        let text = sent.map { String(decoding: $0.payload, as: UTF8.self) }.joined(separator: " ")
+        XCTAssertTrue(text.contains("EPINOD:K0EPI-7"), text)
+        XCTAssertFalse(text.contains("EPINOD:K0EPI-2"), text)
+    }
+
+    /// Left unset, the prompt names the station's primary callsign, as
+    /// before.
+    func testUnsetThePromptNamesTheStation() {
+        let coordinator = station(nodeSSID: nil)
+        XCTAssertEqual(coordinator.nodeHostIdentity().call, coordinator.appSettings?.primaryCallsign.uppercased())
+    }
+
     /// A neighbor node links to the node's callsign to carry NET/ROM: it is
     /// never greeted with the prompt's text.
     func testANeighborNodesLinkIsNotGreeted() async throws {

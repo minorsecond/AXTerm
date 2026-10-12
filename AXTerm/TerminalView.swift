@@ -3148,8 +3148,8 @@ struct TerminalView: View {
                         isTNCConnected: client.status == .connected,
                         relayHops: txViewModel.relayProgressHops,
                         plannedHops: plannedRelayPathPreview,
-                        deliverySummary: txViewModel.relayDelivery?.summary,
-                        deliveryDetail: txViewModel.relayDelivery?.detail,
+                        deliverySummary: txViewModel.relayDelivery?.summary(on: displayedDestination),
+                        deliveryDetail: txViewModel.relayDelivery?.detail(on: displayedDestination),
                         txDelayMs: txViewModel.currentSession
                             .flatMap { settings.radio($0.radio) }
                             .flatMap { $0.timingReachesTNC ? $0.txDelayMs : nil }

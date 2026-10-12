@@ -75,6 +75,30 @@ struct AXTermiOSApp: App {
 
     var body: some Scene {
         WindowGroup {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--console-follow-repro") {
+                ConsoleFollowReproHarness()
+            } else {
+                root
+            }
+            #else
+            root
+            #endif
+        }
+        .onChange(of: scenePhase) { _, phase in
+            #if DEBUG
+            if phase != .active { ConsoleFollowTrace.flush() }
+            #endif
+            guard phase == .active else { return }
+            // Coming back to the foreground is the moment the operator most
+            // expects to see what their other radio did while this one was
+            // in a pocket.
+            winlinkContext.appBecameActive()
+            reconnectIfWanted()
+        }
+    }
+
+    private var root: some View {
             AXTermiOSRootView(context: winlinkContext, settings: settings, client: client,
                               bbsSettings: bbsSettings, hazards: hazards)
                 .environmentObject(winlinkContext)
@@ -89,15 +113,6 @@ struct AXTermiOSApp: App {
                     winlinkContext.appBecameActive()
                     reconnectIfWanted()
                 }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            // Coming back to the foreground is the moment the operator most
-            // expects to see what their other radio did while this one was
-            // in a pocket.
-            winlinkContext.appBecameActive()
-            reconnectIfWanted()
-        }
     }
 
     /// Opens the link on launch and on every return to the foreground.

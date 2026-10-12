@@ -94,4 +94,27 @@ final class RelayDeliveryTests: XCTestCase {
         XCTAssertFalse(delivery.summary?.contains("KB5YZB") ?? false)
         XCTAssertFalse(delivery.summary?.contains("COSCO") ?? false)
     }
+
+    /// The status belongs to the link the message went out on. With two
+    /// links up, the iPad showed "Answered by K0EPI-7", from a call it had
+    /// ended, on its call to K0EPI-4 (on air 2026-10-12).
+    func testTheStatusIsOnlyForItsOwnLink() {
+        var delivery = RelayDelivery(firstHop: "K0EPI-7", destination: "K0EPI-7")
+        delivery.sent("bbs", at: t0)
+        delivery.answered(at: t0.addingTimeInterval(2))
+        XCTAssertEqual(delivery.summary(on: "K0EPI-7"), "Answered by K0EPI-7")
+        XCTAssertEqual(delivery.summary(on: "k0epi-7"), "Answered by K0EPI-7", "callsigns in any case")
+        XCTAssertNil(delivery.summary(on: "K0EPI-4"))
+        XCTAssertNil(delivery.detail(on: "K0EPI-4"))
+    }
+
+    /// A relay's status shows on the link to its first hop, and when the
+    /// view names the far end.
+    func testARelaysStatusShowsForItsFirstHopOrDestination() {
+        var delivery = RelayDelivery(firstHop: "DRLNOD", destination: "BBSCBH")
+        delivery.sent("N", at: t0)
+        XCTAssertNotNil(delivery.summary(on: "DRLNOD"))
+        XCTAssertNotNil(delivery.summary(on: "BBSCBH"))
+        XCTAssertNil(delivery.summary(on: "K0EPI-4"))
+    }
 }

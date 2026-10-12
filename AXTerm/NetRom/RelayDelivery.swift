@@ -71,6 +71,18 @@ nonisolated struct RelayDelivery: Equatable, Sendable {
         state = .answered
     }
 
+    /// The status strip's line for the link to `peer`: nil unless the
+    /// message went out on that link, to its first hop or its far end.
+    func summary(on peer: String) -> String? { isFor(peer) ? summary : nil }
+
+    /// The longer form for the link to `peer`, on the same terms.
+    func detail(on peer: String) -> String? { isFor(peer) ? detail : nil }
+
+    private func isFor(_ peer: String) -> Bool {
+        let peer = peer.uppercased()
+        return peer == firstHop.uppercased() || peer == destination.uppercased()
+    }
+
     /// One line for the status strip. Nil when there is nothing to report.
     var summary: String? {
         switch state {

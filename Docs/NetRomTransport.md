@@ -398,10 +398,13 @@ the node has its own callsign, a plain AX.25 connect to that. The
 greeting is the banner and, under it, what the node offers:
 
 ```
-AXTerm Node EPINOD:K0EPI-2
+AXTerm Node EPINOD:K0EPI-7
 BBS CONNECT INFO NODES ROUTES MH BYE  (? for help)
-EPINOD:K0EPI-2}
+EPINOD:K0EPI-7}
 ```
+
+The banner and prompt name the node as ALIAS:NODECALL, with the node's own
+callsign when it has one and the station's otherwise.
 
 `BBS` (also `MAIL` and `PMS`) goes to the mailbox:
 
