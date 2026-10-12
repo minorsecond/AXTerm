@@ -100,6 +100,10 @@ nonisolated final class NetRomNodeHost {
         var owner: OwnerConsole
         /// What decides whether this link may change the station.
         var facts: RemoteControlService.LinkFacts
+        /// Not greeted yet: a connect to the node's own callsign is greeted
+        /// at the caller's first line, since a neighbor node links to the
+        /// same callsign to carry NET/ROM and must not get the prompt's text.
+        var awaitingGreeting = false
     }
 
     /// The operator's switch, pushed from settings.
@@ -187,9 +191,13 @@ nonisolated final class NetRomNodeHost {
     /// their device signs owner commands for that name.
     /// `returning` is a caller coming back from the full mailbox with
     /// their `owner` console: a short word and the prompt, not the banner.
+    /// `greetsAtFirstLine` holds the greeting until the caller types, or
+    /// a moment passes; a neighbor node's NET/ROM link takes the caller
+    /// away first (`ax25CallerYielded`).
     func attachAX25Caller(key: String, callsign: String, dialed: String = "",
                           radio: RadioID? = nil, digipeated: Bool = false,
                           owner: OwnerConsole? = nil, returning: Bool = false,
+                          greetsAtFirstLine: Bool = false,
                           send: @escaping (Data) -> Void,
                           hangUp: @escaping () -> Void) {
         let identity = identityProvider()
@@ -206,8 +214,31 @@ nonisolated final class NetRomNodeHost {
             writeLines(["Back at the node."], prompt: shell.greeting().prompt, to: .ax25(key))
             return
         }
+        if greetsAtFirstLine {
+            callers[.ax25(key)]?.awaitingGreeting = true
+            scheduleTimeout(Self.greetingWait) { [weak self] in self?.greetIfWaiting(.ax25(key)) }
+            return
+        }
         write(shell.greeting(snapshot: snapshotProvider()), to: .ax25(key))
         onOperatorNote?("\(callsign) connected to this node over AX.25.")
+    }
+
+    /// How long a connect to the node's own callsign waits for its caller
+    /// to type before it is greeted anyway.
+    static let greetingWait: TimeInterval = 1.5
+
+    private func greetIfWaiting(_ key: CallerKey) {
+        guard let caller = callers[key], caller.awaitingGreeting, case .node(let shell) = caller.mode else { return }
+        callers[key]?.awaitingGreeting = false
+        write(shell.greeting(snapshot: snapshotProvider()), to: key)
+    }
+
+    /// The link turned out to be a neighbor node's, carrying NET/ROM: the
+    /// node prompt lets it go without a word.
+    func ax25CallerYielded(key: String) {
+        guard callers.removeValue(forKey: .ax25(key)) != nil else { return }
+        let link = controlLink(.ax25(key))
+        MainActor.assumeIsolated { remoteControlProvider?()?.linkEnded(link, failed: false) }
     }
 
     func ax25CallerReceived(key: String, data: Data) {
@@ -324,6 +355,7 @@ nonisolated final class NetRomNodeHost {
     }
 
     private func consume(key: CallerKey, data: Data) {
+        greetIfWaiting(key)
         guard var caller = callers[key] else { return }
         // Heard from the caller: their link is working.
         let link = controlLink(key)

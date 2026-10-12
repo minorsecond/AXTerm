@@ -370,10 +370,31 @@ Note the hard limit underneath all of this: an AX.25 address field holds
 longer name to a real callsign is the only way it can be addressed at
 all.
 
+## The node's callsign
+
+The node shares the station's callsign unless Packet Node › Node callsign
+gives it one of its own (`netRomNodeSSID`, BPQ's NODECALL), as operators
+expect of a node: often -7, so K0EPI-7 with alias EPINOD while K0EPI-2 stays
+the operator's. With its own callsign the node uses it everywhere:
+
+- NODES broadcasts leave from it, so neighbors learn the node by it.
+- Its L2 links to neighbor nodes are made from it, and circuits are
+  addressed to it at layer 3. The operator's own circuits still name the
+  operator as their user.
+- A plain AX.25 connect to it reaches the node prompt, as one to the alias
+  does. A neighbor node links to the same callsign to carry NET/ROM, so the
+  prompt greets such a connect at the caller's first line, or after 1.5 s of
+  silence, and lets the link go without a word if NET/ROM arrives first.
+
+This rests on links being identified by both addresses (AX.25's definition),
+so the node's link to a neighbor and the operator's link to the same station
+are separate links.
+
 ## The node prompt
 
-A caller reaches the node prompt (`NetRomNodeShell`) two ways: a NET/ROM
-circuit to the node's callsign, or a plain AX.25 connect to its alias. The
+A caller reaches the node prompt (`NetRomNodeShell`) three ways: a NET/ROM
+circuit to the node's callsign, a plain AX.25 connect to its alias, or, when
+the node has its own callsign, a plain AX.25 connect to that. The
 greeting is the banner and, under it, what the node offers:
 
 ```

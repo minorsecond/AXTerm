@@ -247,7 +247,8 @@ that carry it chosen in the card. Top to bottom:
 
 - **On the air now**: one line per service on the air with the radios that
   carry it, and the services that are off in one line (`PacketNodeSummary`).
-- **NET/ROM Node**: run the node, auto-routing chain length, node alias,
+- **NET/ROM Node**: run the node, auto-routing chain length, node alias, node
+  callsign (its own SSID, or the station's; see Docs/NetRomTransport.md),
   announce this station, node identity (with several radios), a "Carried on"
   row of switches for the radios that carry the NODES broadcast (with each
   radio's alias when each radio is its own node), announce interval, transit

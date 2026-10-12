@@ -239,3 +239,47 @@ final class NodeToMailboxEndToEndTests: XCTestCase {
         }, "one link all the way through")
     }
 }
+
+/// A connect to the node's own callsign is greeted at the caller's first
+/// line, or when they have not typed after a moment: a neighbor node links
+/// to the same callsign to carry NET/ROM and must not get the prompt's text.
+@MainActor
+final class NodeGreetingWaitTests: XCTestCase {
+
+    private var host: NetRomNodeHost!
+    private var written: [Data] = []
+    private var timeouts: [() -> Void] = []
+
+    override func setUp() async throws {
+        host = NetRomNodeHost()
+        host.isEnabled = true
+        host.identityProvider = { ("EPINOD", "K0EPI-7", "AXTerm 1.0") }
+        host.snapshotProvider = { NetRomNodeShell.Snapshot() }
+        host.scheduleTimeout = { [weak self] _, work in self?.timeouts.append(work) }
+        written = []
+        timeouts = []
+        host.attachAX25Caller(key: "S1", callsign: "W0XYZ-1", dialed: "K0EPI-7", greetsAtFirstLine: true,
+                              send: { [weak self] in self?.written.append($0) }, hangUp: {})
+    }
+
+    private var text: String { String(decoding: Data(written.flatMap { $0 }), as: UTF8.self) }
+
+    func testNothingIsSentUntilTheCallerTypes() {
+        XCTAssertEqual(text, "")
+        host.ax25CallerReceived(key: "S1", data: Data("ROUTES\r".utf8))
+        XCTAssertTrue(text.hasPrefix("AXTerm 1.0 Node EPINOD:K0EPI-7"), text)
+        XCTAssertTrue(text.contains("Routes"), "then the line is answered: \(text)")
+    }
+
+    func testACallerWhoWaitsIsGreetedAfterAMoment() {
+        XCTAssertEqual(timeouts.count, 1)
+        timeouts.first?()
+        XCTAssertTrue(text.hasPrefix("AXTerm 1.0 Node EPINOD:K0EPI-7"), text)
+    }
+
+    func testANeighborsLinkIsLetGoWithoutAWord() {
+        host.ax25CallerYielded(key: "S1")
+        timeouts.first?()
+        XCTAssertEqual(text, "")
+    }
+}

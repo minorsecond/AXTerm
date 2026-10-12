@@ -90,6 +90,24 @@ struct PacketNodeSettingsView: View {
                       + "callsign. BPQ calls it NODEALIAS. When each radio is its own node, "
                       + "each radio's section below can give it an alias of its own.")
 
+                if settings.netRomNodeIdentity == .unified {
+                    LabeledContent("Node callsign") {
+                        Picker("Node callsign", selection: nodeSSIDBinding) {
+                            Text("Same as the station (\(settings.primaryCallsign))").tag(-1)
+                            ForEach(NodeCallsignChoices.ssids(taken: radioSSIDs, current: settings.netRomNodeSSID),
+                                    id: \.self) { ssid in
+                                Text("\(stationBaseCall)-\(ssid)").tag(ssid)
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                    .help("The node's own callsign. BPQ calls it NODECALL. Operators expect a node on a "
+                          + "callsign of its own, often -7: it and the alias both reach the node, its NODES "
+                          + "broadcasts and links to other nodes use it, and the station's callsign stays "
+                          + "yours. \"Same as the station\" gives the node and you one callsign.")
+                }
+
                 Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
                     .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
                     .disabled(settings.allRadiosOnAPRS)
@@ -566,6 +584,24 @@ struct PacketNodeSettingsView: View {
     /// moment the operator sets them rather than at next launch.
     private func applyNetRomSettings() {
         SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+    }
+
+    /// The node's SSID, -1 for the station's callsign.
+    private var nodeSSIDBinding: Binding<Int> {
+        Binding(get: { settings.netRomNodeSSID ?? -1 },
+                set: { value in
+                    settings.netRomNodeSSID = value < 0 ? nil : value
+                    applyNetRomSettings()
+                })
+    }
+
+    private var stationBaseCall: String {
+        CallsignNormalizer.parse(settings.myCallsign).call.uppercased()
+    }
+
+    /// SSIDs the station's radios already answer on.
+    private var radioSSIDs: [Int] {
+        settings.activeRadios.map { CallsignNormalizer.toAddress($0.resolvedCallsign(station: settings.myCallsign)).ssid }
     }
 
     /// Why a packet service's switch is grayed out. The services are also

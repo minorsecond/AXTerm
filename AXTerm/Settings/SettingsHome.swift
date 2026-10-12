@@ -181,6 +181,7 @@ enum SettingsHome {
         Entry(setting: AppSettingsStore.netRomNodeAliasKey, section: .netRomNode),
         Entry(setting: AppSettingsStore.netRomAdvertiseKey, section: .netRomNode),
         Entry(setting: AppSettingsStore.netRomNodeIdentityKey, section: .netRomNode),
+        Entry(setting: AppSettingsStore.netRomNodeSSIDKey, section: .netRomNode),
         Entry(setting: AppSettingsStore.netRomBroadcastMinutesKey, section: .netRomNode),
         Entry(setting: AppSettingsStore.netRomForwardingKey, section: .netRomNode),
         Entry(setting: AppSettingsStore.autoRouteMaxChainLengthKey, section: .netRomNode),

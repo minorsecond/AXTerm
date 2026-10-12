@@ -81,6 +81,7 @@ final class AppSettingsStore: ObservableObject {
     static let netRomNodeAliasKey = "netRomNodeAlias"
     static let netRomBroadcastMinutesKey = "netRomBroadcastMinutes"
     static let netRomNodeIdentityKey = "netRomNodeIdentity"
+    static let netRomNodeSSIDKey = "netRomNodeSSID"
 
     /// Announcing this station and carrying other people's traffic both
     /// default OFF. Each changes what other operators' nodes do, so each
@@ -651,6 +652,17 @@ final class AppSettingsStore: ObservableObject {
 
     /// Whether several radios are one node or one node each. Meaningless
     /// with one radio, and not shown then.
+    /// The SSID of the node's own callsign (K0EPI-7), or nil for the node
+    /// to share the station's callsign. A node on its own callsign is what
+    /// operators expect: the callsign and the alias both reach the node, and
+    /// the station's callsign stays the operator's.
+    @Published var netRomNodeSSID: Int? {
+        didSet {
+            if let ssid = netRomNodeSSID { defaults.set(ssid, forKey: Self.netRomNodeSSIDKey) }
+            else { defaults.removeObject(forKey: Self.netRomNodeSSIDKey) }
+        }
+    }
+
     @Published var netRomNodeIdentity: NetRomNodeIdentity {
         didSet { defaults.set(netRomNodeIdentity.rawValue, forKey: Self.netRomNodeIdentityKey) }
     }
@@ -1377,6 +1389,9 @@ final class AppSettingsStore: ObservableObject {
         self.netRomForwarding = storedNetRomForwarding
         self.netRomNodeAlias = storedNetRomNodeAlias
         self.netRomBroadcastMinutes = storedNetRomBroadcastMinutes
+        self.netRomNodeSSID = (defaults.object(forKey: Self.netRomNodeSSIDKey) as? Int).flatMap {
+            (0...15).contains($0) ? $0 : nil
+        }
         self.netRomNodeIdentity = NetRomNodeIdentity(
             rawValue: defaults.string(forKey: Self.netRomNodeIdentityKey) ?? "") ?? .unified
         self.beaconEnabled = storedBeaconEnabled

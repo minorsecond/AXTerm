@@ -1817,11 +1817,33 @@ final class SessionCoordinator: ObservableObject {
         return driver
     }
 
-    /// Keeps the NET/ROM node identity in step with the station callsign.
+    /// The node's callsign: its own when an SSID is set for it, otherwise
+    /// the station's.
+    var nodeCallsign: AX25Address {
+        let station = CallsignNormalizer.toAddress(localCallsign)
+        guard let appSettings, appSettings.netRomNodeIdentity == .unified,
+              let ssid = appSettings.netRomNodeSSID else { return station }
+        let base = CallsignNormalizer.parse(appSettings.myCallsign).call.uppercased()
+        guard !base.isEmpty else { return station }
+        return AX25Address(call: base, ssid: ssid)
+    }
+
+    /// Whether the node has a callsign of its own, apart from the station's.
+    var nodeHasOwnCallsign: Bool {
+        !CallsignNormalizer.addressesMatch(nodeCallsign, CallsignNormalizer.toAddress(localCallsign))
+    }
+
+    /// The address the node's links on `radio` are made from: its own on
+    /// each radio when every radio is its own node, otherwise the node's.
+    func nodeAddress(on radio: RadioID) -> AX25Address {
+        appSettings?.netRomNodeIdentity == .perRadio ? sessionManager.localAddress(for: radio) : nodeCallsign
+    }
+
+    /// Keeps the NET/ROM node identity in step with the station callsign and
+    /// the node's own. The operator's circuits still name the operator.
     private func syncNetRomIdentity() {
-        let node = CallsignNormalizer.toAddress(localCallsign)
-        netRomDriver.localNode = node
-        netRomDriver.localUser = node
+        netRomDriver.localNode = nodeCallsign
+        netRomDriver.localUser = CallsignNormalizer.toAddress(localCallsign)
         applyNodeIdentities()
     }
 
@@ -1838,7 +1860,7 @@ final class SessionCoordinator: ObservableObject {
     func announcements() -> [NetRomAnnouncement] {
         guard let appSettings else { return [] }
         let radios = appSettings.activeRadios.filter { $0.enabled && $0.mayAnnounceNode }
-        let stationNode = CallsignNormalizer.toAddress(localCallsign)
+        let stationNode = nodeCallsign
         let stationAlias = netRomDriver.localAlias
         switch appSettings.netRomNodeIdentity {
         case .unified:
@@ -1859,7 +1881,7 @@ final class SessionCoordinator: ObservableObject {
     /// station's is.
     private func applyNodeIdentities() {
         guard let appSettings else { return }
-        let stationNode = CallsignNormalizer.toAddress(localCallsign)
+        let stationNode = nodeCallsign
         switch appSettings.netRomNodeIdentity {
         case .unified:
             netRomDriver.additionalLocalNodes = []
@@ -1881,6 +1903,9 @@ final class SessionCoordinator: ObservableObject {
         if accepting {
             let station = netRomDriver.localAlias
             if !station.isEmpty { wanted["netromNodeL2"] = station }
+            // The node's own callsign answers like its alias: operators
+            // connect to either and expect the node.
+            if nodeHasOwnCallsign { wanted["netromNodeCall"] = nodeCallsign.display }
             if appSettings?.netRomNodeIdentity == .perRadio {
                 for announcement in announcements() where announcement.alias != station {
                     wanted["netromNodeL2.\(announcement.radio.rawValue)"] = announcement.alias
@@ -1913,7 +1938,7 @@ final class SessionCoordinator: ObservableObject {
         // is here goes into every neighbor's node list.
         netRomDriver.localAlias = Self.nodeAlias(settings.netRomNodeAlias)
         netRomDriver.announcementsProvider = { [weak self] in self?.announcements() ?? [] }
-        applyNodeIdentities()
+        syncNetRomIdentity()
         // The L2 door: a KA-node neighbor cannot open circuits, so the
         // node alias also answers plain AX.25 connects while the node
         // service is on. Same shell, same rules, different transport.
@@ -1984,6 +2009,14 @@ final class SessionCoordinator: ObservableObject {
                 guard newState == .disconnected || newState == .error else { return }
                 self?.netRomNodeHost.ax25CallerClosed(key: hostKey, failed: newState == .error)
                 self?.nodeL2Claims.removeValue(forKey: session.key)
+            },
+            netRomHandler: { [weak self] session in
+                // A neighbor node's link to the node's callsign, carrying
+                // NET/ROM: the node prompt lets go, and the link is the
+                // node's for circuits.
+                guard let self, let claim = self.nodeL2Claims.removeValue(forKey: session.key) else { return }
+                self.sessionManager.releaseDelivery(claim)
+                self.netRomNodeHost.ax25CallerYielded(key: hostKey)
             }
         ) else {
             TxLog.debug(.session, "Node L2 caller lost to another claimant", [
@@ -2002,6 +2035,8 @@ final class SessionCoordinator: ObservableObject {
             digipeated: !session.path.digis.isEmpty,
             owner: owner,
             returning: returning,
+            greetsAtFirstLine: nodeHasOwnCallsign
+                && CallsignNormalizer.addressesMatch(session.localAddress, nodeCallsign),
             send: write,
             hangUp: { [weak self] in
                 guard let self else { return }
@@ -2818,8 +2853,9 @@ final class SessionCoordinator: ObservableObject {
         func datagramCapacity(toNeighbor neighbor: AX25Address) -> Int? {
             guard let coordinator else { return nil }
             return MainActor.assumeIsolated {
-                coordinator.sessionManager
-                    .session(for: neighbor, path: DigiPath(), radio: coordinator.radio(forNetRomNeighbor: neighbor))
+                let radio = coordinator.radio(forNetRomNeighbor: neighbor)
+                return coordinator.sessionManager
+                    .session(for: neighbor, path: DigiPath(), radio: radio, local: coordinator.nodeAddress(on: radio))
                     .livePaclen
             }
         }
@@ -2834,8 +2870,11 @@ final class SessionCoordinator: ObservableObject {
         func sendNodesBroadcast(_ payload: Data, summary: String, radio: RadioID) -> Bool {
             guard let coordinator else { return false }
             return MainActor.assumeIsolated {
+                // From the node announced on this radio: a NODES broadcast
+                // names its node by the address it leaves from.
+                let announced = coordinator.announcements().first { $0.radio == radio }?.node
                 let frame = AX25FrameBuilder.buildUI(
-                    from: coordinator.sessionManager.localAddress(for: radio),
+                    from: announced ?? coordinator.nodeAddress(on: radio),
                     to: AX25Address(call: NetRomNodesBroadcast.destinationCall, ssid: 0),
                     via: DigiPath(),
                     pid: NetRomWire.pid,
@@ -2854,11 +2893,13 @@ final class SessionCoordinator: ObservableObject {
                 // queues the datagram behind the SABM; either way the
                 // bytes are accepted. It never fragments here because
                 // the driver has already checked the datagram fits.
+                let radio = coordinator.radio(forNetRomNeighbor: neighbor)
                 let frames = coordinator.sessionManager.sendData(
                     data,
                     to: neighbor,
                     path: DigiPath(),
-                    radio: coordinator.radio(forNetRomNeighbor: neighbor),
+                    radio: radio,
+                    from: coordinator.nodeAddress(on: radio),
                     pid: NetRomWire.pid
                 )
                 for frame in frames { coordinator.sendFrame(frame) }
