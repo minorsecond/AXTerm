@@ -20,6 +20,22 @@ struct RemoteControlSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             OwnerAccessSection(settings: settings, mailboxCallsign: mailboxCallsign)
+            if let codesLockedUntil {
+                Section {
+                    Text("Too many wrong codes: codes are refused until "
+                         + codesLockedUntil.formatted(date: .abbreviated, time: .shortened)
+                         + ". A paired device's key still signs in.")
+                    Button("Clear Lockout") {
+                        RemoteControlService.clearCodeLockout(by: "the operator at the station")
+                        reload()
+                    }
+                } header: {
+                    Text("Code lockout")
+                } footer: {
+                    Text("Each lockout after the first is twice as long, up to a week, until a right code. "
+                         + "The wrong codes, and the path each came over, are in Recent activity.")
+                }
+            }
             if settings.ownerCommandsEnabled {
                 OwnerControlSection(settings: settings)
             }
@@ -36,7 +52,7 @@ struct RemoteControlSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                Button("Refresh") { log = RemoteControlService.storedLog() }
+                Button("Refresh") { reload() }
                     .buttonStyle(.borderless)
             } header: {
                 Text("Recent activity")
@@ -45,8 +61,14 @@ struct RemoteControlSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { log = RemoteControlService.storedLog() }
+        .onAppear { reload() }
+    }
+
+    private func reload() {
+        log = RemoteControlService.storedLog()
+        codesLockedUntil = RemoteControlService.codeLockedUntil()
     }
 
     @State private var log: [RemoteControlService.Event] = []
+    @State private var codesLockedUntil: Date?
 }

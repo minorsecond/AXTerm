@@ -195,7 +195,7 @@ nonisolated final class NetRomNodeHost {
     /// a moment passes; a neighbor node's NET/ROM link takes the caller
     /// away first (`ax25CallerYielded`).
     func attachAX25Caller(key: String, callsign: String, dialed: String = "",
-                          radio: RadioID? = nil, digipeated: Bool = false,
+                          radio: RadioID? = nil, digipeated: Bool = false, via: [String] = [],
                           owner: OwnerConsole? = nil, returning: Bool = false,
                           greetsAtFirstLine: Bool = false,
                           send: @escaping (Data) -> Void,
@@ -209,7 +209,7 @@ nonisolated final class NetRomNodeHost {
             version: identity.version, caller: callsign, owner: owner)
         callers[.ax25(key)] = Caller(
             callsign: callsign, mode: .node(shell), send: send, hangUp: hangUp, owner: owner,
-            facts: .init(radio: radio, digipeated: digipeated, relayed: false))
+            facts: .init(radio: radio, digipeated: digipeated, relayed: false, via: via))
         if returning {
             writeLines(["Back at the node."], prompt: shell.greeting().prompt, to: .ax25(key))
             return
@@ -417,7 +417,7 @@ nonisolated final class NetRomNodeHost {
                 case .connectOnward(let target):
                     dial(target, for: key)
                 case .ownerSignIn(let accepted):
-                    let text = accepted ? "signed in as the owner" : "gave a wrong owner code"
+                    let text = (accepted ? "signed in as the owner" : "gave a wrong owner code") + caller.facts.route
                     onOperatorNote?("\(caller.callsign) \(text) at the node.")
                     MainActor.assumeIsolated {
                         remoteControlProvider?()?.record(text, caller: caller.callsign, door: "node")

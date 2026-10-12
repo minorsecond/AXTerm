@@ -2033,6 +2033,7 @@ final class SessionCoordinator: ObservableObject {
             dialed: session.localAddress.display.uppercased(),
             radio: session.radio,
             digipeated: !session.path.digis.isEmpty,
+            via: session.path.digis.map(\.display),
             owner: owner,
             returning: returning,
             greetsAtFirstLine: nodeHasOwnCallsign

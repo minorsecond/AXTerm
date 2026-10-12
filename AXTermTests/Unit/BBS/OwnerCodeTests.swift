@@ -58,13 +58,15 @@ final class OwnerCodeTests: XCTestCase {
         XCTAssertEqual(checker.check(OwnerCode.code(secret: rfcSecret, at: now), at: now), .accepted)
     }
 
-    /// A clock a little off either way still works: one 30 s step.
-    func testOneStepOfClockDriftIsAllowed() {
+    /// A code is good for two minutes after it appears, for the trip over
+    /// several digipeaters, and one step early (2026-10-12; one step either
+    /// way before).
+    func testACodeIsGoodForTwoMinutes() {
         var checker = OwnerCode.Checker(secret: rfcSecret)
-        let previous = OwnerCode.code(secret: rfcSecret, at: now.addingTimeInterval(-30))
-        XCTAssertEqual(checker.check(previous, at: now), .accepted)
+        let late = OwnerCode.code(secret: rfcSecret, at: now.addingTimeInterval(-90))
+        XCTAssertEqual(checker.check(late, at: now), .accepted)
         var other = OwnerCode.Checker(secret: rfcSecret)
-        XCTAssertEqual(other.check(OwnerCode.code(secret: rfcSecret, at: now.addingTimeInterval(-90)), at: now),
+        XCTAssertEqual(other.check(OwnerCode.code(secret: rfcSecret, at: now.addingTimeInterval(-180)), at: now),
                        .wrong)
     }
 

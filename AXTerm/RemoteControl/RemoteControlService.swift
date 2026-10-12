@@ -22,6 +22,15 @@ final class RemoteControlService: ObservableObject {
         var digipeated: Bool
         /// Through a NET/ROM circuit or another node.
         var relayed: Bool
+        /// The digipeaters it came through, when known.
+        var via: [String] = []
+
+        /// How the link came in, for the log: empty for a direct link.
+        var route: String {
+            if relayed { return " through a NET/ROM circuit" }
+            if !via.isEmpty { return " via " + via.joined(separator: ",") }
+            return digipeated ? " through a digipeater" : ""
+        }
     }
 
     /// One line of the remote-control log.
@@ -35,6 +44,11 @@ final class RemoteControlService: ObservableObject {
     }
 
     static let logKey = "remoteControlLog"
+    /// The code checker's memory (`OwnerCode.Checker.State`).
+    static let codeStateKey = "ownerCodeState"
+    /// Posted with the defaults as object when the log changed outside
+    /// a service: the Remote Control page clearing a lockout.
+    nonisolated static let logChanged = Notification.Name("RemoteControlService.logChanged")
     /// The log keeps this many lines.
     static let logLimit = 200
 
@@ -53,9 +67,7 @@ final class RemoteControlService: ObservableObject {
 
     @Published private(set) var log: [Event]
 
-    /// One checker for every door, so a used code stays used and a lockout
-    /// holds wherever the caller tries next.
-    private var checker: OwnerCode.Checker?
+    nonisolated(unsafe) private var logObserver: NSObjectProtocol?
 
     /// What one link's commands changed, and how to reach its caller.
     private struct Pending {
@@ -75,6 +87,14 @@ final class RemoteControlService: ObservableObject {
         self.settings = settings
         self.defaults = defaults
         self.log = Self.storedLog(defaults: defaults)
+        logObserver = NotificationCenter.default.addObserver(
+            forName: Self.logChanged, object: defaults, queue: nil) { [weak self] _ in
+            MainActor.assumeIsolated { self?.log = Self.storedLog(defaults: defaults) }
+        }
+    }
+
+    deinit {
+        if let logObserver { NotificationCenter.default.removeObserver(logObserver) }
     }
 
     /// The log as last saved, for a page that has no service of its own.
@@ -83,6 +103,40 @@ final class RemoteControlService: ObservableObject {
     }
 
     // MARK: - Signing in
+
+    /// When codes may be tried again, or nil when they are not locked out.
+    nonisolated static func codeLockedUntil(defaults: UserDefaults = AppEnvironment.defaults,
+                                            now: Date = Date()) -> Date? {
+        guard let until = codeState(defaults: defaults).lockedUntil, until > now else { return nil }
+        return until
+    }
+
+    /// Ends a lockout early and starts the next one back at its first
+    /// length: the operator at the station, or signed in some other way.
+    /// A used code stays used. Logged as `who`.
+    nonisolated static func clearCodeLockout(defaults: UserDefaults = AppEnvironment.defaults, by who: String,
+                                             now: Date = Date()) {
+        var state = codeState(defaults: defaults)
+        state.clearLockout()
+        saveCodeState(state, defaults: defaults)
+        var log = storedLog(defaults: defaults)
+        log.append(Event(at: now, caller: who, door: "station", text: "cleared the code lockout"))
+        saveLog(log, defaults: defaults)
+        NotificationCenter.default.post(name: logChanged, object: defaults)
+    }
+
+    nonisolated private static func codeState(defaults: UserDefaults) -> OwnerCode.Checker.State {
+        defaults.data(forKey: codeStateKey)
+            .flatMap { try? JSONDecoder().decode(OwnerCode.Checker.State.self, from: $0) } ?? .init()
+    }
+
+    nonisolated private static func saveCodeState(_ state: OwnerCode.Checker.State, defaults: UserDefaults) {
+        defaults.set(try? JSONEncoder().encode(state), forKey: codeStateKey)
+    }
+
+    nonisolated private static func saveLog(_ log: [Event], defaults: UserDefaults) {
+        defaults.set(try? JSONEncoder().encode(Array(log.suffix(logLimit))), forKey: logKey)
+    }
 
     /// How this caller's OWNER code is checked at `station`, or nil when
     /// they cannot be the owner: owner commands off, no secret made, or
@@ -110,10 +164,16 @@ final class RemoteControlService: ObservableObject {
         console.radios = settings.controlRadios
     }
 
+    /// One checker for every door, its memory in preferences, so a used
+    /// code stays used and a lockout holds wherever the caller tries next,
+    /// and after a restart. A new secret needs nothing reset: steps already
+    /// used are in the past for it too.
     private func check(_ code: String, at date: Date) -> OwnerCode.Verdict {
         guard let secret = ownerSecret() else { return .wrong }
-        if checker?.secret != secret { checker = OwnerCode.Checker(secret: secret) }
-        return checker!.check(code, at: date)
+        var checker = OwnerCode.Checker(secret: secret, state: Self.codeState(defaults: defaults))
+        let verdict = checker.check(code, at: date)
+        Self.saveCodeState(checker.state, defaults: defaults)
+        return verdict
     }
 
     // MARK: - Running commands
@@ -179,9 +239,11 @@ final class RemoteControlService: ObservableObject {
 
     /// Adds a line to the log.
     func record(_ text: String, caller: String, door: String) {
+        var log = Self.storedLog(defaults: defaults)
         log.append(Event(at: now(), caller: caller, door: door, text: text))
         if log.count > Self.logLimit { log.removeFirst(log.count - Self.logLimit) }
-        defaults.set(try? JSONEncoder().encode(log), forKey: Self.logKey)
+        self.log = log
+        Self.saveLog(log, defaults: defaults)
     }
 
     private func refusal(_ facts: LinkFacts) -> String? {

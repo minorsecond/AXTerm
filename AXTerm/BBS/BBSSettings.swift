@@ -30,7 +30,9 @@ final class BBSSettings: ObservableObject {
 
     static let defaultIdleTimeout: TimeInterval = 300
 
-    private let defaults: UserDefaults
+    /// Where these settings live; the station's remote control keeps its
+    /// log and code checker beside them.
+    let defaults: UserDefaults
 
     /// Whether the mailbox answers calls.
     ///

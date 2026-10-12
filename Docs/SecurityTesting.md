@@ -3,7 +3,7 @@
 AXTerm lets its operator sign in over the air and change the station: radio
 power, frequency and mode through rigctld, and scripts the operator writes.
 This document covers what an attacker on the channel can do about that, the
-tests that try it (`AXTermTests/Security/`, SEC-1 to SEC-35), what they found,
+tests that try it (`AXTermTests/Security/`, SEC-1 to SEC-39), what they found,
 and the risks that remain.
 
 Run the suite with:
@@ -11,7 +11,7 @@ Run the suite with:
 ```
 xcodebuild test -project AXTerm.xcodeproj -scheme AXTerm -destination 'platform=macOS' \
   -only-testing:AXTermTests/SecurityOwnerCodeTests -only-testing:AXTermTests/SecurityOwnerCallsignTests \
-  -only-testing:AXTermTests/SecurityOwnerKeyTests -only-testing:AXTermTests/SecuritySessionHijackTests \
+  -only-testing:AXTermTests/SecurityOwnerKeyTests -only-testing:AXTermTests/SecurityOwnerCodeStateTests -only-testing:AXTermTests/SecuritySessionHijackTests \
   -only-testing:AXTermTests/SecurityControlInjectionTests -only-testing:AXTermTests/SecurityControlLinkTests \
   -only-testing:AXTermTests/SecurityFailSafeTests -only-testing:AXTermTests/SecurityFileNameTests \
   -only-testing:AXTermTests/SecurityBoundsTests
@@ -48,11 +48,16 @@ What the attacker wants, in rough order of harm:
   `OWNER` at all. To anyone else, `OWNER`, `ST` and every control command are
   unknown words (SEC-5). The callsign proves nothing, since anyone can send it.
   It only keeps the commands out of other people's sight.
-- **Code sign-in.** A six-digit TOTP code, accepted once, within one 30-second
-  step either way. Three wrong codes lock codes out for 15 minutes. Each later
-  lockout, with no right code between, is twice as long, up to a week
-  (SEC-1 to SEC-4). A code sign-in reads the station and never changes it
-  (SEC-18).
+- **Code sign-in.** A six-digit TOTP code, accepted once. A code is good for
+  two minutes after it appears, enough to cross several digipeaters, and one
+  30-second step early for a slow station clock. Three wrong codes lock codes
+  out for 15 minutes. Each later lockout, with no right code between, is twice
+  as long, up to a week (SEC-1 to SEC-4). The last code used and the lockout
+  are kept in preferences, so a restart changes neither, and the operator can
+  see and clear a lockout on the Remote Control page (SEC-36 to SEC-38). A
+  code sign-in reads the station and never changes it (SEC-18), because
+  nothing on the operator's end can add a per-command check, and a code
+  cannot be tied to the command it rides with.
 - **Key sign-in.** From a paired AXTerm, ECDH P-256 against a one-time key
   the station sends with its challenge, with HKDF over both callsigns. The
   answer is a 128-bit check. One answer per challenge, and a challenge goes
@@ -81,15 +86,15 @@ What the attacker wants, in rough order of harm:
 - **Bounds and records.** Received and uploaded file names cannot leave their
   folder (SEC-30, SEC-31). Paging, echoed input and the remote-control log are
   bounded (SEC-32 to SEC-34). Every attempt, right or wrong, at every door, is
-  logged with who and where (SEC-35).
+  logged with who, where, and the path it came over (SEC-35, SEC-39).
 
 ## Test map
 
 | SEC | Class | What is attacked |
 |---|---|---|
-| 1 | SecurityOwnerCodeTests | Guessing the code: lockout holds against the right code; a year at the fastest allowed pace stays under 0.1%; a right code resets the escalation |
+| 1 | SecurityOwnerCodeTests | Guessing the code: lockout holds against the right code; a year at the fastest allowed pace stays under 0.15%; a right code resets the escalation |
 | 2 | SecurityOwnerCodeTests | Replaying a heard code, or an older one after a newer |
-| 3 | SecurityOwnerCodeTests | A code from outside the drift window |
+| 3 | SecurityOwnerCodeTests | A code more than two minutes late or more than one step early |
 | 4 | SecurityOwnerCodeTests | Look-alike digits, signs, spaces, other lengths |
 | 5 | SecurityOwnerCallsignTests | Other callsigns trying `OWNER`, `ST` and control words |
 | 6 | SecurityOwnerKeyTests | Replaying a key sign-in on a new challenge; a second answer to one challenge |
@@ -122,6 +127,10 @@ What the attacker wants, in rough order of harm:
 | 33 | SecurityBoundsTests | A 100,000-character line at the mailbox and the node |
 | 34 | SecurityBoundsTests | Growing the log without bound |
 | 35 | SecurityBoundsTests | Unlogged attempts |
+| 36 | SecurityOwnerCodeStateTests | Replaying a heard code after a restart |
+| 37 | SecurityOwnerCodeStateTests | Ending a lockout, or its escalation, by a restart |
+| 38 | SecurityOwnerCodeStateTests | The lockout shown and cleared at the station; clearing it logged; a used code stays used |
+| 39 | SecurityOwnerCodeStateTests | Wrong codes logged with the digipeaters or circuit they came through |
 
 SEC-12 checks that `OwnerKey.matches` gives the right answers. The timing
 property comes from its code, which compares every byte and ORs the
@@ -135,7 +144,7 @@ was fixed with its failing test as the first step.
 
 | SEC | Finding | Fix |
 |---|---|---|
-| 1 | The 15-minute lockout let a patient guesser try about 93,000 codes a year, a 28% chance of getting in. | Each lockout after the first doubles, up to a week, until a right code. About 180 guesses a year at most, under 0.06%. |
+| 1 | The 15-minute lockout let a patient guesser try about 93,000 codes a year, a 28% chance of getting in. | Each lockout after the first doubles, up to a week, until a right code. About 180 guesses a year at most. |
 | 19 | A number argument could be any length. | At most 16 characters. |
 | 21 | The keying rule looked only for `T` and `set_ptt` split on spaces, so `T<tab>1`, `b`/`send_morse` (CW), `\send_morse`, `w`/`send_cmd` (raw CAT), `send_dtmf` and `send_voice_mem` got through. | The first word is split on any whitespace, and the short letters `T b w W` and the long names, with or without the backslash, are all refused. |
 | 23 | Radio and script output went on the air as-is: terminal escapes, BEL, NUL, backspace, bidirectional overrides. | Escape sequences and control characters are removed, tabs become spaces, before lines are cut to length. |
@@ -145,6 +154,23 @@ After the fixes, all 42 security tests pass, along with the full unit suite
 (9,935 tests, integration tests excluded because they transmit) and the iOS
 build.
 
+Later the same day, after a review with the operator:
+
+- Codes were good for 30 to 60 seconds after they appeared, too little for
+  reading, typing and several digipeater hops with retries. They are now good
+  for two minutes. Each guess can match six codes instead of three, so a year
+  of guessing at the fastest pace the lockout allows went from about 0.06% to
+  about 0.11%. The bar in SEC-1 moved from 0.1% to 0.15% to match, a choice
+  made for usability.
+- The checker's memory was in memory only. A restart ended a lockout and,
+  within two minutes of a code sign-in, let the heard code be used again. It
+  is kept in preferences now (SEC-36, SEC-37).
+- The operator can see and clear a lockout on the Remote Control page
+  (SEC-38), and wrong codes are logged with their path (SEC-39).
+
+All 48 security tests pass after these changes, with the full unit suite
+(9,941 tests) and the iOS build.
+
 ## Accepted risks
 
 - **AX.25 is unauthenticated.** Anyone can send frames into the operator's
@@ -152,15 +178,20 @@ build.
   so this cannot change the station. Ordinary mailbox commands (reading,
   listing, sending mail) have no check and can be injected, as on any packet
   BBS.
-- **A code sign-in is visible on the air.** It is used once and only reads
-  the station, but someone who hears it can inject `ST` into that session
-  until it ends. Use a paired key for anything that changes the station.
+- **Mailbox users do not sign in** (decided 2026-10-12). RF mailboxes know a
+  user by callsign; a password typed on the air would be heard by everyone.
+  Anyone sending another station's callsign can read its mail, as on any
+  packet BBS. A mailbox reached over telnet will ask for a password.
+- **A code sign-in has no per-command checks.** It is used once and only
+  reads the station, but someone who hears it can inject `ST` or a read-only
+  control command into that session until it ends. Use a paired key for
+  anything that changes the station.
 - **The lockout can be used against the operator.** Someone sending wrong
   codes on purpose can keep code sign-in shut for up to a week. A paired
-  device's key still signs in, and the log shows the attempts.
-- **The lockout is not kept across a restart.** Restarting AXTerm clears it.
-  An attacker cannot restart the station, so this only matters if it restarts
-  for some other reason during an attack.
+  device's key still signs in, the operator can clear the lockout at the
+  station (and over telnet once it exists), and the log shows each attempt
+  with its path. Keeping it shut takes days of transmitting the operator's
+  callsign, which is deliberate interference on record.
 - **Owner scripts are the operator's own code.** AXTerm controls which file
   runs and what arguments it gets. What the script does is up to its author.
 - **Fail-safe timing depends on frames.** A link that stays up with the

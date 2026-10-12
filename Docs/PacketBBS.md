@@ -954,14 +954,15 @@ happened to each file.
 
 With "Sign in from the road with a one-time code" on in the mailbox settings,
 the operator calling on their own callsign (any SSID) can type `OWNER` and the
-six-digit code from an authenticator app (TOTP, RFC 6238, 30 s steps, one step
-of clock drift either way). Signed in, `ST` shows the station: unread mail for
+six-digit code from an authenticator app (TOTP, RFC 6238, 30 s steps; a code is
+good for two minutes after it appears and one step early). Signed in, `ST` shows the station: unread mail for
 the operator, callers in the last day, and uploads waiting in the inbox. The
 code's secret is made in the settings, shown as a QR code for the app, and kept
 in the Keychain (`OwnerCodeSecretStore`). The command and code go out in plain
 text, which hides nothing, so each code is accepted once (`OwnerCode.Checker`);
 three wrong codes stop code sign-in for 15 minutes, each lockout after that
-twice as long up to a week until a right code, and every attempt, right or
+twice as long up to a week until a right code (kept across a restart, and
+cleared from the Remote Control page), and every attempt, right or
 wrong, goes in the call log. To anyone else, and with the switch off or no
 secret made, `OWNER` and `ST` are unknown commands like any other.
 

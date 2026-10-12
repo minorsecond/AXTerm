@@ -234,12 +234,18 @@ final class BBSService: ObservableObject {
     private var controlLinkID: String?
     private var controlLink: String? { live == nil ? nil : controlLinkID }
 
+    /// What decides whether this call's link may change the station.
+    private static func facts(of session: AX25Session) -> RemoteControlService.LinkFacts {
+        .init(radio: session.radio, digipeated: !session.path.digis.isEmpty, relayed: false,
+              via: session.path.digis.map(\.display))
+    }
+
     private func runControl(_ command: OwnerControlCommand, argument: String, prompt: String?) {
         guard let session, let live, let link = controlLink else { return }
         let callId = live.callId
         remoteControl.run(
             command, argument: argument, link: link,
-            facts: .init(radio: session.radio, digipeated: !session.path.digis.isEmpty, relayed: false),
+            facts: Self.facts(of: session),
             caller: live.callsign, door: "mailbox",
             write: { [weak self] lines in
                 self?.write(lines)
@@ -303,7 +309,7 @@ final class BBSService: ObservableObject {
          contestedIdentityHolder: @escaping () -> String? = { nil },
          remoteControl: RemoteControlService? = nil,
          now: @escaping () -> Date = Date.init) {
-        self.remoteControl = remoteControl ?? RemoteControlService(settings: settings)
+        self.remoteControl = remoteControl ?? RemoteControlService(settings: settings, defaults: settings.defaults)
         self.store = store
         self.settings = settings
         self.coordinator = coordinator
@@ -755,7 +761,8 @@ final class BBSService: ObservableObject {
             // Run by `process(line:)`, which holds the prompt until it is done.
             break
         case .ownerSignIn(let accepted):
-            let text = accepted ? "signed in as the owner" : "gave a wrong owner code"
+            let text = (accepted ? "signed in as the owner" : "gave a wrong owner code")
+                + (session.map { Self.facts(of: $0).route } ?? "")
             note(text)
             remoteControl.record(text, caller: live?.callsign ?? "", door: "mailbox")
         case .disconnect:

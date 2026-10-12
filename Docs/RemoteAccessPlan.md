@@ -112,12 +112,38 @@ a sign-in for owner commands.
   operator typing anything.
 - From a plain terminal: a six-digit time-based one-time code (TOTP, RFC 6238)
   from an authenticator app on the operator's phone, typed with the command.
-  Each code is accepted once. It cannot be tied to the command text the way a
-  signature is, so a code is used up by one command, and the commands that
-  send or delete something ask for a fresh one.
+  Each code is accepted once. A code is good for two minutes after it
+  appears, and one 30-second step early for a station clock running slow, so
+  it has time to be read, typed, and carried over several digipeaters with
+  retries. Nothing on the operator's end can compute the per-command check
+  (the authenticator app only shows codes, and the terminal may not be
+  AXTerm), and a code cannot be tied to the command it rides with: someone
+  who hears `PWR 705 5 123456` and reaches the station first could send
+  `PWR 705 10 123456`. So a code sign-in reads the station (`ST` and the
+  read-only control commands) and never changes it; a change needs a paired
+  device's key (decided 2026-10-12).
 - Either way: failed attempts slowed down and capped, every owner command
   logged and shown at home, and owner commands off until the operator turns
-  them on.
+  them on. Three wrong codes lock codes out for 15 minutes, each lockout
+  after that twice as long up to a week, until a right code. The checker's
+  memory (the last code used, the lockout) is kept in preferences, so a
+  restart neither lets a heard code work again nor ends a lockout. The
+  Remote Control page shows a lockout and can clear it, and each wrong code
+  is logged with the path it came over. A paired device's key is never
+  locked out.
+- Telnet, when it comes: signing in there with a username and password may
+  clear the code lockout (`RemoteControlService.clearCodeLockout`), logged as
+  that user. Telnet sends the password in the clear, so it should be reached
+  over a VPN such as Tailscale, or replaced by SSH, never opened to the
+  internet as it is.
+
+Mailbox users do not sign in (decided 2026-10-12). RF mailboxes (FBB, BPQ,
+JNOS) know a user by callsign, and passwords are for the sysop. A password
+typed on the air is heard by everyone listening and cannot be hidden under
+Part 97, so it would add trouble without protection. Anyone sending another
+station's callsign can read that station's mail, as on any packet BBS. A
+mailbox reached over the internet (telnet) is different and will ask for a
+password.
 
 What owner commands may do: mailbox-style traffic (messages, files, status)
 now. Changing how the station transmits (frequency, power, beacons, modes) is

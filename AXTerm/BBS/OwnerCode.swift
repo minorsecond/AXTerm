@@ -99,50 +99,72 @@ nonisolated enum OwnerCode {
     /// how many were wrong.
     struct Checker: Sendable {
         let secret: Data
-        /// One step either side of the mailbox's clock.
-        static let drift: UInt64 = 1
+        /// Steps a code may be late: four, so a code is good for two
+        /// minutes after it appears, time to read and type it and for it to
+        /// cross several digipeaters with retries.
+        static let lateSteps: UInt64 = 4
+        /// Steps a code may be early, for a station clock running slow.
+        static let earlySteps: UInt64 = 1
         static let allowedWrong = 3
         /// The first lockout. Each one after it, with no right code
         /// between, is twice as long, up to `longestLockout`: a guesser at
         /// the fastest pace the lockout allows gets about 180 guesses a
-        /// year, under 0.06% odds of a right one (each guess can match three
-        /// codes). A fixed 15 minutes allowed some 93,000 guesses a year,
+        /// year, about 0.11% odds of a right one (each guess can match the
+        /// six codes in the window). A fixed 15 minutes allowed some 93,000 guesses a year,
         /// 28% odds (security suite, SEC-1, 2026-10-12).
         static let lockout: TimeInterval = 15 * 60
         static let longestLockout: TimeInterval = 7 * 86_400
 
-        private(set) var lastUsedStep: UInt64?
-        private var wrongAt: [Date] = []
-        private var lockedUntil: Date?
-        /// Lockouts in a row, with no right code between.
-        private var lockouts = 0
+        /// What the checker remembers, kept in preferences so a restart
+        /// neither lets a used code work again nor ends a lockout. Nothing
+        /// in it helps anyone sign in.
+        struct State: Codable, Equatable, Sendable {
+            var lastUsedStep: UInt64?
+            var wrongAt: [Date] = []
+            var lockedUntil: Date?
+            /// Lockouts in a row, with no right code between.
+            var lockouts = 0
 
-        init(secret: Data) { self.secret = secret }
+            /// The lockout ended early by the operator: a used code stays used.
+            mutating func clearLockout() {
+                wrongAt.removeAll()
+                lockedUntil = nil
+                lockouts = 0
+            }
+        }
+
+        private(set) var state: State
+        var lastUsedStep: UInt64? { state.lastUsedStep }
+
+        init(secret: Data, state: State = State()) {
+            self.secret = secret
+            self.state = state
+        }
 
         mutating func check(_ typed: String, at now: Date) -> Verdict {
-            if let lockedUntil, now < lockedUntil { return .lockedOut }
-            lockedUntil = nil
+            if let lockedUntil = state.lockedUntil, now < lockedUntil { return .lockedOut }
+            state.lockedUntil = nil
             let typed = typed.trimmingCharacters(in: .whitespaces)
             guard typed.count == OwnerCode.digits, typed.allSatisfy(\.isASCIIDigit) else { return wrong(at: now) }
             let current = OwnerCode.step(at: now)
-            let lowest = current >= Self.drift ? current - Self.drift : 0
-            for step in lowest...(current + Self.drift) where OwnerCode.code(secret: secret, step: step) == typed {
-                if let lastUsedStep, step <= lastUsedStep { return .used }
-                lastUsedStep = step
-                wrongAt.removeAll()
-                lockouts = 0
+            let lowest = current >= Self.lateSteps ? current - Self.lateSteps : 0
+            for step in lowest...(current + Self.earlySteps) where OwnerCode.code(secret: secret, step: step) == typed {
+                if let lastUsedStep = state.lastUsedStep, step <= lastUsedStep { return .used }
+                state.lastUsedStep = step
+                state.wrongAt.removeAll()
+                state.lockouts = 0
                 return .accepted
             }
             return wrong(at: now)
         }
 
         private mutating func wrong(at now: Date) -> Verdict {
-            wrongAt = wrongAt.filter { now.timeIntervalSince($0) < Self.lockout } + [now]
-            if wrongAt.count >= Self.allowedWrong {
-                let length = min(Self.lockout * pow(2, Double(min(lockouts, 30))), Self.longestLockout)
-                lockedUntil = now.addingTimeInterval(length)
-                lockouts += 1
-                wrongAt.removeAll()
+            state.wrongAt = state.wrongAt.filter { now.timeIntervalSince($0) < Self.lockout } + [now]
+            if state.wrongAt.count >= Self.allowedWrong {
+                let length = min(Self.lockout * pow(2, Double(min(state.lockouts, 30))), Self.longestLockout)
+                state.lockedUntil = now.addingTimeInterval(length)
+                state.lockouts += 1
+                state.wrongAt.removeAll()
             }
             return .wrong
         }

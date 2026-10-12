@@ -29,10 +29,11 @@ final class SecurityOwnerCodeTests: XCTestCase {
     }
 
     /// SEC-1. A patient guesser at the fastest pace the lockout allows,
-    /// for a year: each guess can match three codes (one step of clock
-    /// drift either side), so the odds are 3 in a million per guess. The
-    /// lockout must hold a year of guessing under 0.1%.
-    func testAYearOfGuessingStaysUnderOneInAThousand() {
+    /// for a year: each guess can match every code in the window (two
+    /// minutes late to one step early, six codes), so the odds are six in a
+    /// million per guess. The lockout must hold a year of guessing under
+    /// 0.15% (0.1% until the window grew to two minutes, 2026-10-12).
+    func testAYearOfGuessingStaysUnderOneAndAHalfInAThousand() {
         var checker = OwnerCode.Checker(secret: secret)
         var now = start
         let end = start.addingTimeInterval(365 * 86_400)
@@ -43,8 +44,9 @@ final class SecurityOwnerCodeTests: XCTestCase {
             if checker.check("999999", at: now) != .lockedOut { guesses += 1 }
             now = now.addingTimeInterval(60)
         }
-        let odds = Double(guesses) * 3 / 1_000_000
-        XCTAssertLessThan(odds, 0.001, "\(guesses) guesses in a year")
+        let window = Double(OwnerCode.Checker.lateSteps + OwnerCode.Checker.earlySteps + 1)
+        let odds = Double(guesses) * window / 1_000_000
+        XCTAssertLessThan(odds, 0.0015, "\(guesses) guesses in a year")
     }
 
     /// SEC-1. A right code ends the escalation: the operator is not paying
@@ -78,11 +80,25 @@ final class SecurityOwnerCodeTests: XCTestCase {
         XCTAssertEqual(checker.check(old, at: start.addingTimeInterval(31)), .used)
     }
 
-    /// SEC-3. A code from outside the drift window is wrong.
-    func testACodeFromTwoStepsAwayIsWrong() {
-        var checker = OwnerCode.Checker(secret: secret)
-        XCTAssertEqual(checker.check(OwnerCode.code(secret: secret, at: start.addingTimeInterval(-61)), at: start), .wrong)
-        XCTAssertEqual(checker.check(OwnerCode.code(secret: secret, at: start.addingTimeInterval(90)), at: start), .wrong)
+    /// SEC-3. A code is good for two minutes after it appears, so it can
+    /// cross several digipeaters with retries, and for one step early, for
+    /// a station clock running slow. Anything older or newer is wrong.
+    func testACodeIsGoodForTwoMinutesAndNoLonger() {
+        // `start` is the first moment of a step.
+        let shown = OwnerCode.code(secret: secret, at: start)
+        var late = OwnerCode.Checker(secret: secret)
+        XCTAssertEqual(late.check(shown, at: start.addingTimeInterval(149)), .accepted,
+                       "read as it appeared, it reaches the station 2.5 minutes later")
+        var lastMoment = OwnerCode.Checker(secret: secret)
+        XCTAssertEqual(lastMoment.check(OwnerCode.code(secret: secret, at: start.addingTimeInterval(29)),
+                                        at: start.addingTimeInterval(29 + 120)), .accepted,
+                       "read just before it changed, it still has two minutes")
+        var tooLate = OwnerCode.Checker(secret: secret)
+        XCTAssertEqual(tooLate.check(shown, at: start.addingTimeInterval(150)), .wrong)
+        var early = OwnerCode.Checker(secret: secret)
+        XCTAssertEqual(early.check(OwnerCode.code(secret: secret, at: start.addingTimeInterval(30)), at: start), .accepted)
+        var tooEarly = OwnerCode.Checker(secret: secret)
+        XCTAssertEqual(tooEarly.check(OwnerCode.code(secret: secret, at: start.addingTimeInterval(60)), at: start), .wrong)
     }
 
     /// SEC-4. Only six ASCII digits are a code. Look-alike digits, signs,
