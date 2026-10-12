@@ -106,6 +106,8 @@ nonisolated final class NetRomNodeHost {
         var awaitingGreeting = false
         /// An AXTerm caller's AXDP, cut into messages (`readAXDP`).
         var axdp = AXDPStreamReassembler()
+        /// When the caller last sent anything, for the idle timeout.
+        var lastTyped = Date.distantFuture
     }
 
     /// The operator's switch, pushed from settings.
@@ -114,6 +116,40 @@ nonisolated final class NetRomNodeHost {
     /// that wants a conversation, not the node prompt. The host lets the
     /// circuit go and hands over what arrived (Docs/RemoteAccessPlan.md).
     var onAXDPCircuit: ((NetRomCircuitID, _ caller: String, _ data: Data) -> Void)?
+
+    /// How long a caller at the prompt may type nothing before the node
+    /// hangs up, as a BPQ node's IDLETIME; nil is never. Pushed from the
+    /// settings (`netRomNodeIdleMinutes`).
+    var idleTimeout: TimeInterval? {
+        didSet { scheduleIdleSweep() }
+    }
+    var now: () -> Date = Date.init
+    private var idleSweep: Timer?
+
+    /// Hangs up on every caller at the prompt who has typed nothing for
+    /// `idleTimeout`, telling them why first. The mailbox keeps its own
+    /// timer, and a caller passed through to another node is that node's.
+    func hangUpIdleCallers() {
+        guard let idleTimeout else { return }
+        let at = now()
+        for (key, caller) in callers {
+            guard case .node = caller.mode, at.timeIntervalSince(caller.lastTyped) >= idleTimeout else { continue }
+            writeLines(["", "*** no activity — disconnecting"], prompt: nil, to: key)
+            onOperatorNote?("\(caller.callsign) was idle at the node; it hung up.")
+            // Once: the link may take a while to close.
+            callers[key]?.lastTyped = .distantFuture
+            caller.hangUp()
+        }
+    }
+
+    private func scheduleIdleSweep() {
+        idleSweep?.invalidate()
+        idleSweep = nil
+        guard idleTimeout != nil else { return }
+        idleSweep = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.hangUpIdleCallers()
+        }
+    }
 
     /// Answers an AXTerm caller's capability check, asked inside its AX.25
     /// session at the prompt, with the reply's bytes for the caller.
@@ -216,6 +252,7 @@ nonisolated final class NetRomNodeHost {
         callers[.ax25(key)] = Caller(
             callsign: callsign, mode: .node(shell), send: send, hangUp: hangUp, owner: owner,
             facts: .init(radio: radio, digipeated: digipeated, relayed: false, via: via))
+        callers[.ax25(key)]?.lastTyped = now()
         if returning {
             writeLines(["Back at the node."], prompt: shell.greeting().prompt, to: .ax25(key))
             return
@@ -285,6 +322,7 @@ nonisolated final class NetRomNodeHost {
                 send: { [weak self] data in self?.circuitOps?.send(data, on: id) },
                 hangUp: { [weak self] in self?.circuitOps?.disconnect(id) },
                 owner: owner, facts: .init(radio: nil, digipeated: false, relayed: true))
+            callers[key]?.lastTyped = now()
             write(shell.greeting(snapshot: snapshotProvider()), to: key)
             onOperatorNote?("\(callsign) connected to this node over NET/ROM.")
             return
@@ -362,6 +400,7 @@ nonisolated final class NetRomNodeHost {
 
     private func consume(key: CallerKey, data: Data) {
         greetIfWaiting(key)
+        callers[key]?.lastTyped = now()
         guard var caller = callers[key] else { return }
         // Heard from the caller: their link is working.
         let link = controlLink(key)

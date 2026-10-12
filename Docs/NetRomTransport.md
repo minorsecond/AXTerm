@@ -409,7 +409,10 @@ callsign when it has one and the station's otherwise.
 Commands take any unique start, as at a BPQ node: `I`, `INF` or `INFO`;
 `N`, `NOD`; `R`, `ROU`; `MH` or `J`; `C CALL`; `BB` for BBS and `B` or `BY`
 for BYE. A start two commands share, such as `M` (MHEARD or MAIL), is not
-guessed. An AXTerm caller that sends its lines as AXDP chat, which it may
+guessed. A caller at the prompt who types nothing for the idle time (Packet
+Node, "Hang up idle callers", 15 minutes by default, or never) is told
+`*** no activity — disconnecting` and hung up on; only their typing counts,
+not the link's polls. An AXTerm caller that sends its lines as AXDP chat, which it may
 since the station answers an AXDP probe for every address it has, is read
 the same as typing, and a capability check asked inside the session is
 answered (on air 2026-10-12).

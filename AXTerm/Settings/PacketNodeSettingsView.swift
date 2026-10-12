@@ -110,6 +110,21 @@ struct PacketNodeSettingsView: View {
                           + "yours. \"Same as the station\" gives the node and you one callsign.")
                 }
 
+                LabeledContent("Hang up idle callers") {
+                    Picker("Hang up idle callers", selection: nodeIdleBinding) {
+                        Text("Never").tag(0)
+                        ForEach([5, 10, 15, 30, 60], id: \.self) { minutes in
+                            Text("After \(minutes) minutes").tag(minutes)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                .help("A caller at the node prompt who types nothing for this long is told "
+                      + "\"no activity\" and disconnected, as a BPQ node's IDLETIME does, so nobody "
+                      + "holds the channel open after wandering off. Only their typing counts; the "
+                      + "link's own polls do not. The mailbox has its own timeout.")
+
                 Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
                     .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
                     .disabled(settings.allRadiosOnAPRS)
@@ -588,6 +603,15 @@ struct PacketNodeSettingsView: View {
         SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
     }
 
+    /// Minutes before the node hangs up on an idle caller, 0 for never.
+    private var nodeIdleBinding: Binding<Int> {
+        Binding(get: { settings.netRomNodeIdleMinutes },
+                set: { value in
+                    settings.netRomNodeIdleMinutes = value
+                    applyNetRomSettings()
+                })
+    }
+
     /// The node's SSID, -1 for the station's callsign.
     private var nodeSSIDBinding: Binding<Int> {
         Binding(get: { settings.netRomNodeSSID ?? -1 },
@@ -601,7 +625,6 @@ struct PacketNodeSettingsView: View {
         CallsignNormalizer.parse(settings.myCallsign).call.uppercased()
     }
 
-    /// SSIDs the station's radios already answer on.
     /// The station's SSIDs in use, the radios' and the mailbox's, which
     /// the node's callsign must not take.
     private var radioSSIDs: [Int] {

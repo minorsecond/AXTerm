@@ -82,6 +82,7 @@ final class AppSettingsStore: ObservableObject {
     static let netRomBroadcastMinutesKey = "netRomBroadcastMinutes"
     static let netRomNodeIdentityKey = "netRomNodeIdentity"
     static let netRomNodeSSIDKey = "netRomNodeSSID"
+    static let netRomNodeIdleMinutesKey = "netRomNodeIdleMinutes"
 
     /// Announcing this station and carrying other people's traffic both
     /// default OFF. Each changes what other operators' nodes do, so each
@@ -662,6 +663,13 @@ final class AppSettingsStore: ObservableObject {
             else { defaults.removeObject(forKey: Self.netRomNodeSSIDKey) }
         }
     }
+
+    /// Minutes a caller at the node prompt may type nothing before the
+    /// node hangs up, as a BPQ node's IDLETIME. 0 is never.
+    @Published var netRomNodeIdleMinutes: Int {
+        didSet { defaults.set(netRomNodeIdleMinutes, forKey: Self.netRomNodeIdleMinutesKey) }
+    }
+    static let defaultNetRomNodeIdleMinutes = 15
 
     @Published var netRomNodeIdentity: NetRomNodeIdentity {
         didSet { defaults.set(netRomNodeIdentity.rawValue, forKey: Self.netRomNodeIdentityKey) }
@@ -1392,6 +1400,8 @@ final class AppSettingsStore: ObservableObject {
         self.netRomNodeSSID = (defaults.object(forKey: Self.netRomNodeSSIDKey) as? Int).flatMap {
             (0...15).contains($0) ? $0 : nil
         }
+        self.netRomNodeIdleMinutes = (defaults.object(forKey: Self.netRomNodeIdleMinutesKey) as? Int)
+            .map { min(max($0, 0), 1_440) } ?? Self.defaultNetRomNodeIdleMinutes
         self.netRomNodeIdentity = NetRomNodeIdentity(
             rawValue: defaults.string(forKey: Self.netRomNodeIdentityKey) ?? "") ?? .unified
         self.beaconEnabled = storedBeaconEnabled

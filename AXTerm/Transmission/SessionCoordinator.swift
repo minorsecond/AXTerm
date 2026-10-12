@@ -1933,6 +1933,8 @@ final class SessionCoordinator: ObservableObject {
         netRomDriver.advertisesItself = settings.netRomAdvertiseSelf
         netRomDriver.forwardingEnabled = settings.netRomForwarding
         netRomNodeHost.isEnabled = settings.netRomAcceptInbound
+        netRomNodeHost.idleTimeout = settings.netRomNodeIdleMinutes > 0
+            ? TimeInterval(settings.netRomNodeIdleMinutes * 60) : nil
         // Six characters, uppercase, alphanumeric — the shape BPQ shows
         // beside a callsign. Sanitized at the boundary because whatever
         // is here goes into every neighbor's node list.
