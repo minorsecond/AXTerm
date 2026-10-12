@@ -15,7 +15,7 @@ import Foundation
 /// what is not the owner's business it handles itself. The node hands its
 /// console to the mailbox when the caller types BBS and takes it back on
 /// the way out, so a sign-in and the device's counter carry across.
-struct OwnerConsole {
+nonisolated struct OwnerConsole {
     enum Effect: Equatable, Sendable {
         /// The operator tried to sign in, rightly or not: logged either way.
         case signIn(accepted: Bool)
@@ -36,10 +36,13 @@ struct OwnerConsole {
         case reply(Reply)
     }
 
-    /// The caller, and the station they called: both are in a key
-    /// sign-in's session key.
+    /// The caller, and the address they called (the node's alias, say):
+    /// both are in a key sign-in's session key, as the device derives it.
     let caller: String
     let station: String
+    /// The station's own callsign, whose operator may sign in: the same as
+    /// `station` except where the caller dialed an alias.
+    let ownerCallsign: String
     /// Checks an owner's one-time code (`OwnerCode.Checker`); nil unless
     /// owner commands are on and the caller is the operator's callsign.
     /// Without it, and without `ownerKeys`, OWNER and ST are unknown.
@@ -68,12 +71,13 @@ struct OwnerConsole {
     /// operator's callsign cannot use the sign-in.
     private(set) var byKey = false
 
-    init(caller: String, station: String,
+    init(caller: String, station: String, ownerCallsign: String? = nil,
          checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)? = nil,
          ownerKeys: [OwnerKey.PairedDevice]? = nil,
          makeOneTimeKey: @escaping () -> P256.KeyAgreement.PrivateKey = { P256.KeyAgreement.PrivateKey() }) {
         self.caller = caller
         self.station = station
+        self.ownerCallsign = ownerCallsign ?? station
         self.checkOwnerCode = checkOwnerCode
         self.ownerKeys = ownerKeys
         self.makeOneTimeKey = makeOneTimeKey

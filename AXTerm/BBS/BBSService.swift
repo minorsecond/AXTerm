@@ -208,120 +208,61 @@ final class BBSService: ObservableObject {
 
     /// The owner code's secret, nil when none has been made. The Keychain in
     /// the app; tests supply their own.
-    var ownerSecret: () -> Data? = { OwnerCodeSecretStore().read() }
+    /// The station's remote control, shared with the node.
+    let remoteControl: RemoteControlService
 
-    /// Runs the operator's control commands (`OwnerControlCommand`).
-    var controlRunner = OwnerControlRunner()
-    /// The frequency a radio is on, for the control link rule.
-    var linkFrequencyHz: (RadioID) -> Int? = { _ in nil }
-    /// How long the operator may be silent before the fail-safe puts the
-    /// changes back: under the 3 minutes 97.213(b) allows, with room for the
-    /// restore itself.
-    var controlSilenceLimit: Duration = .seconds(150)
-    /// What the fail-safe would put back for the call in progress, newest
-    /// last, by the command that changed it.
-    private var controlRestores: [(name: String, plan: OwnerControlRestore)] = []
-    private var controlWatchdog: Task<Void, Never>?
+    var ownerSecret: () -> Data? {
+        get { remoteControl.ownerSecret }
+        set { remoteControl.ownerSecret = newValue }
+    }
+    var controlRunner: OwnerControlRunner {
+        get { remoteControl.runner }
+        set { remoteControl.runner = newValue }
+    }
+    var linkFrequencyHz: (RadioID) -> Int? {
+        get { remoteControl.linkFrequencyHz }
+        set { remoteControl.linkFrequencyHz = newValue }
+    }
+    var controlSilenceLimit: Duration {
+        get { remoteControl.silenceLimit }
+        set { remoteControl.silenceLimit = newValue }
+    }
+
+    /// The fail-safe's name for this call's link.
+    private var controlLink: String? { live.map { "mailbox:\($0.callsign):\($0.callId)" } }
 
     private func runControl(_ command: OwnerControlCommand, argument: String, prompt: String?) {
-        let word = command.name.uppercased()
-        let promptLines = prompt.map { [$0] } ?? []
-        if command.changesTransmission, let session,
-           let reason = TelecommandLink.refusal(frequencyHz: linkFrequencyHz(session.radio),
-                                                digipeated: !session.path.digis.isEmpty) {
-            note("refused \(word): \(reason)")
-            write(["\(word): \(reason)"] + promptLines)
-            return
-        }
-        let runner = controlRunner
-        note("ran " + (argument.isEmpty ? word : "\(word) \(argument)"))
-        Task { @MainActor [weak self] in
-            let result = await runner.run(command, argument: argument)
-            guard let self, self.session != nil else {
-                // The link went while it ran: nothing is left to say it to,
-                // and nothing to keep a change for.
-                if let restore = result.restore { _ = await runner.restore(restore) }
-                return
-            }
-            if let restore = result.restore {
-                self.controlRestores.append((word, restore))
-                self.armControlWatchdog()
-            }
-            self.write(result.lines + promptLines)
-            self.reload()
-        }
+        guard let session, let live, let link = controlLink else { return }
+        let callId = live.callId
+        remoteControl.run(
+            command, argument: argument, link: link,
+            facts: .init(radio: session.radio, digipeated: !session.path.digis.isEmpty, relayed: false),
+            caller: live.callsign, door: "mailbox",
+            write: { [weak self] lines in
+                self?.write(lines)
+                self?.reload()
+            },
+            prompt: prompt,
+            note: { [weak self] text in
+                self?.append(.note, text)
+                self?.perform { try $0.appendAction(callId: callId, action: text) }
+            })
     }
 
     /// Heard from the operator: the link is working.
     private func controlLinkHeard() {
-        guard !controlRestores.isEmpty else { return }
-        armControlWatchdog()
+        if let controlLink { remoteControl.heard(controlLink) }
     }
-
-    private func armControlWatchdog() {
-        controlWatchdog?.cancel()
-        let limit = controlSilenceLimit
-        controlWatchdog = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: limit)
-            guard !Task.isCancelled else { return }
-            self?.putControlChangesBack(sayingTo: true)
-        }
-    }
-
-    /// The fail-safe: everything the call's commands changed, newest first,
-    /// each step in the call's log.
-    private func putControlChangesBack(sayingTo caller: Bool) {
-        controlWatchdog?.cancel()
-        controlWatchdog = nil
-        let restores = controlRestores
-        controlRestores = []
-        guard !restores.isEmpty else { return }
-        // Kept now: by the time the restores answer, the call may be over.
-        let callId = live?.callId
-        let log: (String) -> Void = { [weak self] text in
-            self?.append(.note, text)
-            if let callId { self?.perform { try $0.appendAction(callId: callId, action: text) } }
-        }
-        log(caller ? "fail-safe: nothing heard from the operator" : "fail-safe: the link failed")
-        if caller {
-            let names = restores.map(\.name).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-            write(["Nothing heard from you: put back \(names.joined(separator: ", "))."])
-        }
-        let runner = controlRunner
-        Task { @MainActor [weak self] in
-            for restore in restores.reversed() {
-                log(await runner.restore(restore.plan))
-            }
-            self?.reload()
-        }
-    }
-
-    /// One checker across calls, so a used code stays used and a lockout
-    /// holds when the caller reconnects.
-    private var ownerChecker: OwnerCode.Checker?
 
     /// How this caller's OWNER code is checked, or nil when they cannot be
-    /// the owner: owner commands off, no secret made, or another callsign.
+    /// the owner.
     func ownerCodeCheck(for caller: String) -> ((String, Date) -> OwnerCode.Verdict)? {
-        guard settings.ownerCommandsEnabled,
-              BBSShell.isOwnerCallsign(caller, station: answeringCallsign),
-              ownerSecret() != nil else { return nil }
-        return { [weak self] code, at in self?.checkOwnerCode(code, at: at) ?? .wrong }
+        remoteControl.codeCheck(for: caller, station: answeringCallsign)
     }
 
-    /// The devices this caller may sign in with by key, or nil when they
-    /// cannot be the owner or none is paired.
+    /// The devices this caller may sign in with by key, or nil.
     func ownerKeys(for caller: String) -> [OwnerKey.PairedDevice]? {
-        guard settings.ownerCommandsEnabled,
-              BBSShell.isOwnerCallsign(caller, station: answeringCallsign),
-              !settings.ownerDevices.isEmpty else { return nil }
-        return settings.ownerDevices
-    }
-
-    private func checkOwnerCode(_ code: String, at date: Date) -> OwnerCode.Verdict {
-        guard let secret = ownerSecret() else { return .wrong }
-        if ownerChecker?.secret != secret { ownerChecker = OwnerCode.Checker(secret: secret) }
-        return ownerChecker!.check(code, at: date)
+        remoteControl.keys(for: caller, station: answeringCallsign)
     }
 
     /// What `ST` tells a signed-in owner.
@@ -357,7 +298,9 @@ final class BBSService: ObservableObject {
          announce: @escaping (String) -> Void = { _ in },
          resolveLicences: @escaping ([String]) async -> Void = { _ in },
          contestedIdentityHolder: @escaping () -> String? = { nil },
+         remoteControl: RemoteControlService? = nil,
          now: @escaping () -> Date = Date.init) {
+        self.remoteControl = remoteControl ?? RemoteControlService(settings: settings)
         self.store = store
         self.settings = settings
         self.coordinator = coordinator
@@ -688,10 +631,7 @@ final class BBSService: ObservableObject {
         if let caller = live?.callsign {
             shell.bytesPerSecond = bytesPerSecond(for: caller)
             // Owner sign-in as it is set now, not as it was at connect.
-            shell.checkOwnerCode = ownerCodeCheck(for: caller)
-            shell.ownerKeys = ownerKeys(for: caller)
-            shell.ownerControls = settings.ownerControlCommands
-            shell.ownerRadios = settings.controlRadios
+            remoteControl.refresh(&shell.owner)
         }
 
         var output = shell.handle(line: line, mailbox: currentMailbox(), now: now())
@@ -787,7 +727,9 @@ final class BBSService: ObservableObject {
             // Run by `process(line:)`, which holds the prompt until it is done.
             break
         case .ownerSignIn(let accepted):
-            note(accepted ? "signed in as the owner" : "gave a wrong owner code")
+            let text = accepted ? "signed in as the owner" : "gave a wrong owner code"
+            note(text)
+            remoteControl.record(text, caller: live?.callsign ?? "", door: "mailbox")
         case .disconnect:
             break
         }
@@ -854,13 +796,7 @@ final class BBSService: ObservableObject {
     private func endCall(unexpected: Bool, linkFailed: Bool = false) {
         // A failed link is the control link failing: put back what owner
         // commands changed. A call ended on purpose keeps the changes.
-        if linkFailed {
-            putControlChangesBack(sayingTo: false)
-        } else {
-            controlWatchdog?.cancel()
-            controlWatchdog = nil
-            controlRestores = []
-        }
+        if let controlLink { remoteControl.linkEnded(controlLink, failed: linkFailed) }
         // Nothing is sent: the link is gone or going, and a CAN written now
         // would either be lost or, on a disconnected session, make the
         // session layer dial the caller back to deliver it.
@@ -922,6 +858,9 @@ final class BBSService: ObservableObject {
     }
 
     // MARK: - Store plumbing
+
+    /// What a signed-in owner's ST shows, for the node to show too.
+    var ownerStatus: [String] { ownerStatusLines() }
 
     private func currentMailbox() -> BBSShell.Mailbox {
         var mailbox = store.flatMap { try? $0.mailbox() } ?? BBSShell.Mailbox()
@@ -1828,20 +1767,33 @@ extension BBSService {
         }
 
         /// Feeds one line; applies the safe effects through the service.
+        /// One line with the session's own console.
         @MainActor
-        func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool) {
-            guard let service else { return ([], nil, true) }
-            shell.checkOwnerCode = service.ownerCodeCheck(for: caller)
-            shell.ownerKeys = service.ownerKeys(for: caller)
-            shell.ownerControls = service.settings.ownerControlCommands
-            shell.ownerRadios = service.settings.controlRadios
+        func handle(line: String) -> NodeMailboxReply {
+            var console = shell.owner
+            return handle(line: line, owner: &console)
+        }
+
+        @MainActor
+        func handle(line: String, owner: inout OwnerConsole) -> NodeMailboxReply {
+            guard let service else { return NodeMailboxReply(lines: [], prompt: nil, closed: true) }
+            // The node's console: a sign-in there holds here, and the other
+            // way round.
+            shell.owner = owner
+            defer { owner = shell.owner }
+            service.remoteControl.refresh(&shell.owner)
+            var controls: [(command: OwnerControlCommand, argument: String)] = []
             var output = shell.handle(
                 line: line, mailbox: service.currentMailbox(), now: Date())
             var closed = false
             for effect in output.effects {
                 switch effect {
-                case .store, .kill, .markRead, .learnWhitePages, .ownerSignIn:
+                case .store, .kill, .markRead, .learnWhitePages:
                     service.apply(effect)
+                case .ownerSignIn(let accepted):
+                    let text = accepted ? "signed in as the owner" : "gave a wrong owner code"
+                    service.append(.note, "\(caller) \(text) through the node")
+                    service.remoteControl.record(text, caller: caller, door: "mailbox through the node")
                 case .viewFile(let file):
                     // Text is what this link carries, so a text file is
                     // typed out here exactly as it is on a direct call.
@@ -1859,10 +1811,10 @@ extension BBSService {
                     } else {
                         output.lines.append("\(file.name) could not be read.")
                     }
-                case .runControl:
-                    // A relayed link is not the control link 97.213 means.
-                    output.lines = ["Control commands need a direct connection to "
-                                    + "\(service.answeringCallsign)."]
+                case .runControl(let command, let argument):
+                    // The node runs it: it knows whether the caller's link
+                    // is direct or a NET/ROM circuit.
+                    controls.append((command, argument))
                 case .sendFile, .beginUpload:
                     // The shell refuses these itself in lines-only mode; this
                     // is the backstop if that ever changes.
@@ -1875,7 +1827,7 @@ extension BBSService {
                     closed = true
                 }
             }
-            return (output.lines, output.prompt, closed)
+            return NodeMailboxReply(lines: output.lines, prompt: output.prompt, closed: closed, controls: controls)
         }
     }
 
