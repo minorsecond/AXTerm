@@ -179,11 +179,20 @@ command came in on. The FT-710 runs the station's HF link unattended, so a
 power change there reaches that link too; turn its "can be changed from the
 road" off to keep it to reading.
 
+Both the mailbox and the node offer the owner's commands, through one
+remote-control service for the station: one code checker, so a used code
+stays used and three wrong codes lock out every door; a fail-safe per link,
+named by the AX.25 session, so a change made at the node stays covered in the
+mailbox reached from it; and one log of every sign-in, command and restore,
+kept across restarts. A sign-in at the node carries into the mailbox with
+`BBS` and back with `B`. The terminal offers Sign In as Owner for a station on
+the operator's callsign and for a node alias that belongs to one.
+
 A command that changes how the station transmits:
 
 - needs a key sign-in: a code is not tied to the command it comes with;
-- runs only on a direct link (no digipeaters, not through a node) on a
-  frequency where 97.201 allows an auxiliary station;
+- runs only on a direct link (no digipeaters, not over a NET/ROM circuit) on
+  a frequency where 97.201 allows an auxiliary station;
 - reads the current value first (or names a script that puts it back), and
   is refused if it cannot, so the fail-safe always has something to run;
 - is put back when the link fails, or when nothing is heard from the operator

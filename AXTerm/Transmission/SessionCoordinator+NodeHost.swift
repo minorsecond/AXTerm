@@ -36,6 +36,9 @@ extension SessionCoordinator {
         host.remoteControlProvider = { [weak self] in
             self?.nodeMailbox?.remoteControl
         }
+        host.adoptAX25ForMailbox = { [weak self] hostKey, owner in
+            MainActor.assumeIsolated { self?.handNodeCallerToMailbox(hostKey, owner: owner) ?? false }
+        }
     }
 
     /// The alias the operator set, and the node's callsign, which is the

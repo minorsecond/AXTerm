@@ -116,6 +116,9 @@ nonisolated final class NetRomNodeHost {
     var bbsSessionFactory: (@MainActor (String) -> NodeMailboxSession?)?
     /// The station's remote control, shared with the mailbox.
     var remoteControlProvider: (@MainActor () -> RemoteControlService?)?
+    /// Hands an AX.25 caller's link to the full mailbox when they type BBS,
+    /// with their owner console; false when it cannot take them.
+    var adoptAX25ForMailbox: ((String, OwnerConsole) -> Bool)?
     var onOperatorNote: ((String) -> Void)?
     /// Test seam for the dial timeout.
     // `@Sendable`, because the default implementation hands the closure to
@@ -182,19 +185,27 @@ nonisolated final class NetRomNodeHost {
     /// session; from here the caller is ours.
     /// `dialed` is the address the caller connected to, usually the alias:
     /// their device signs owner commands for that name.
+    /// `returning` is a caller coming back from the full mailbox with
+    /// their `owner` console: a short word and the prompt, not the banner.
     func attachAX25Caller(key: String, callsign: String, dialed: String = "",
                           radio: RadioID? = nil, digipeated: Bool = false,
+                          owner: OwnerConsole? = nil, returning: Bool = false,
                           send: @escaping (Data) -> Void,
                           hangUp: @escaping () -> Void) {
         let identity = identityProvider()
-        let owner = OwnerConsole(caller: callsign, station: dialed.isEmpty ? identity.alias : dialed.uppercased(),
-                                 ownerCallsign: identity.call)
+        let owner = owner ?? OwnerConsole(caller: callsign,
+                                          station: dialed.isEmpty ? identity.alias : dialed.uppercased(),
+                                          ownerCallsign: identity.call)
         let shell = NetRomNodeShell(
             nodeAlias: identity.alias, nodeCall: identity.call,
             version: identity.version, caller: callsign, owner: owner)
         callers[.ax25(key)] = Caller(
             callsign: callsign, mode: .node(shell), send: send, hangUp: hangUp, owner: owner,
             facts: .init(radio: radio, digipeated: digipeated, relayed: false))
+        if returning {
+            writeLines(["Back at the node."], prompt: shell.greeting().prompt, to: .ax25(key))
+            return
+        }
         write(shell.greeting(snapshot: snapshotProvider()), to: .ax25(key))
         onOperatorNote?("\(callsign) connected to this node over AX.25.")
     }
@@ -412,7 +423,7 @@ nonisolated final class NetRomNodeHost {
     /// The fail-safe's name for a caller's link.
     private func controlLink(_ key: CallerKey) -> String {
         switch key {
-        case .ax25(let session): return "node:ax25:\(session)"
+        case .ax25(let session): return "ax25:\(session)"
         case .circuit(let id): return "node:circuit:\(id)"
         }
     }
@@ -474,6 +485,13 @@ nonisolated final class NetRomNodeHost {
     // MARK: - BBS
 
     private func enterBBS(_ key: CallerKey, caller: String) {
+        // Over AX.25 the link itself goes to the mailbox, which can run
+        // transfers on it; a NET/ROM circuit's bytes only the node carries.
+        if case .ax25(let hostKey) = key, let owner = callers[key]?.owner,
+           adoptAX25ForMailbox?(hostKey, owner) == true {
+            callers.removeValue(forKey: key)
+            return
+        }
         let session = MainActor.assumeIsolated { bbsSessionFactory?(caller) }
         guard let session else {
             // The shell only offers BBS when the snapshot said it was on

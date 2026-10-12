@@ -228,8 +228,11 @@ final class BBSService: ObservableObject {
         set { remoteControl.silenceLimit = newValue }
     }
 
-    /// The fail-safe's name for this call's link.
-    private var controlLink: String? { live.map { "mailbox:\($0.callsign):\($0.callId)" } }
+    /// The fail-safe's name for this call's link: its AX.25 session, the
+    /// same name the node uses, so a change made in either is covered
+    /// while the link moves between them.
+    private var controlLinkID: String?
+    private var controlLink: String? { live == nil ? nil : controlLinkID }
 
     private func runControl(_ command: OwnerControlCommand, argument: String, prompt: String?) {
         guard let session, let live, let link = controlLink else { return }
@@ -466,12 +469,34 @@ final class BBSService: ObservableObject {
         answer(session)
     }
 
-    private func answer(_ session: AX25Session) {
+    /// Whether the node can hand a caller over now: on the air, somewhere
+    /// to keep messages, and nobody else on the line.
+    var canAdoptCaller: Bool { session == nil && store != nil && settings.onAir }
+
+    /// Takes over a link the node answered, when its caller typed BBS: the
+    /// full mailbox, transfers and control commands included, with the
+    /// node's owner console so a sign-in there holds here. B gives the link
+    /// back through `onReturn` instead of hanging up. False when the
+    /// mailbox cannot take it, and the node keeps the caller.
+    @discardableResult
+    func adoptFromNode(_ session: AX25Session, owner: OwnerConsole,
+                       onReturn: @escaping (OwnerConsole) -> Void) -> Bool {
+        guard canAdoptCaller, answer(session, owner: owner) else { return false }
+        returnToNode = onReturn
+        append(.note, "\(session.remoteAddress.display.uppercased()) came over from the node")
+        return true
+    }
+
+    /// Set while a caller from the node is here: where B sends them.
+    private var returnToNode: ((OwnerConsole) -> Void)?
+
+    @discardableResult
+    private func answer(_ session: AX25Session, owner: OwnerConsole? = nil) -> Bool {
         // Answering without somewhere to put what the caller leaves would take
         // their message and drop it on quit, which is worse than not answering.
         guard store != nil else {
             lastRefusal = "\(session.remoteAddress.display.uppercased()): the AXTerm database could not be opened"
-            return
+            return false
         }
 
         // The claim keeps these bytes away from the terminal and from AXDP
@@ -495,7 +520,7 @@ final class BBSService: ObservableObject {
             }
         ) else {
             lastRefusal = "\(session.remoteAddress.display.uppercased()): another feature owns this session"
-            return
+            return false
         }
 
         let caller = session.remoteAddress.display.uppercased()
@@ -517,6 +542,8 @@ final class BBSService: ObservableObject {
             bytesPerSecond: bytesPerSecond(for: caller),
             checkOwnerCode: ownerCodeCheck(for: caller),
             ownerKeys: ownerKeys(for: caller))
+        if let owner { shell.owner = owner }
+        controlLinkID = "ax25:\(session.key)"
 
         let callId = (store.flatMap { try? $0.beginCall(callsign: caller, at: at, radio: session.radio) }) ?? -1
         live = LiveCall(callsign: caller, startedAt: at, callId: callId)
@@ -538,6 +565,7 @@ final class BBSService: ObservableObject {
         emit(greeting)
         reload()
         startIdleTimer()
+        return true
     }
 
     // MARK: - Inbound bytes
@@ -676,7 +704,7 @@ final class BBSService: ObservableObject {
         flushLines()
 
         if output.effects.contains(.disconnect) {
-            disconnectCurrent()
+            if returnToNode != nil { handBackToNode() } else { disconnectCurrent() }
         } else {
             reload()
         }
@@ -785,6 +813,15 @@ final class BBSService: ObservableObject {
 
     // MARK: - Ending
 
+    /// B from a caller who came over from the node: the link goes back to
+    /// the node, still up, with the owner console.
+    private func handBackToNode() {
+        guard let back = returnToNode, let console = shell?.owner else { return disconnectCurrent() }
+        returnToNode = nil
+        endCall(unexpected: false, handedBack: true)
+        back(console)
+    }
+
     private func disconnectCurrent() {
         guard let session else { return }
         if let disc = coordinator.sessionManager.disconnect(session: session) {
@@ -793,10 +830,12 @@ final class BBSService: ObservableObject {
         endCall(unexpected: false)
     }
 
-    private func endCall(unexpected: Bool, linkFailed: Bool = false) {
+    private func endCall(unexpected: Bool, linkFailed: Bool = false, handedBack: Bool = false) {
         // A failed link is the control link failing: put back what owner
-        // commands changed. A call ended on purpose keeps the changes.
-        if let controlLink { remoteControl.linkEnded(controlLink, failed: linkFailed) }
+        // commands changed. A call ended on purpose keeps the changes, and
+        // a link handed back to the node goes on.
+        if let controlLink, !handedBack { remoteControl.linkEnded(controlLink, failed: linkFailed) }
+        if !handedBack { returnToNode = nil }
         // Nothing is sent: the link is gone or going, and a CAN written now
         // would either be lost or, on a disconnected session, make the
         // session layer dial the caller back to deliver it.

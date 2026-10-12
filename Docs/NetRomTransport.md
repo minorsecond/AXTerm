@@ -370,6 +370,35 @@ Note the hard limit underneath all of this: an AX.25 address field holds
 longer name to a real callsign is the only way it can be addressed at
 all.
 
+## The node prompt
+
+A caller reaches the node prompt (`NetRomNodeShell`) two ways: a NET/ROM
+circuit to the node's callsign, or a plain AX.25 connect to its alias. The
+greeting is the banner and, under it, what the node offers:
+
+```
+AXTerm Node EPINOD:K0EPI-2
+BBS CONNECT INFO NODES ROUTES MH BYE  (? for help)
+EPINOD:K0EPI-2}
+```
+
+`BBS` (also `MAIL` and `PMS`) goes to the mailbox:
+
+- Over AX.25 the link itself goes to the full mailbox, which can run file
+  transfers and owner commands on it. `B` in the mailbox gives the link back
+  to the node, still up: "Back at the node."
+- A NET/ROM circuit's bytes only the node can carry, so a circuit caller gets
+  the lines-only mailbox inside the node, as before.
+- If the mailbox is busy with another caller, an AX.25 caller gets the
+  lines-only mailbox too.
+
+To the operator's own callsign the node offers the station's remote control,
+as the mailbox does (Docs/RemoteAccessPlan.md): `OWNER`, `OWNER KEY`, `ST` and
+the control commands, with one sign-in for the link that carries into the
+mailbox and back. The device signs for the address it dialed, usually the
+alias. Over a direct AX.25 link the node may change the station; through a
+digipeater or over a circuit it may only read it.
+
 ## Not yet built (explicitly out of scope here)
 
 - **Inbound services** beyond the node host: with the node running, an

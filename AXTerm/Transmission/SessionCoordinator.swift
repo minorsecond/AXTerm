@@ -1942,7 +1942,15 @@ final class SessionCoordinator: ObservableObject {
     private func answerNodeL2(_ session: AX25Session) {
         guard !session.isInitiator, netRomNodeHost.isEnabled else { return }
         guard nodeL2Aliases.contains(session.localAddress.display.uppercased()) else { return }
+        attachNodeCaller(session)
+    }
 
+    /// The node takes `session`: a new caller, or (`returning`) one coming
+    /// back from the mailbox with their owner console. With `toHost` false
+    /// the node only claims the link again, its host still holding the
+    /// caller.
+    private func attachNodeCaller(_ session: AX25Session, owner: OwnerConsole? = nil, returning: Bool = false,
+                                  toHost: Bool = true) {
         let write: (Data) -> Void = { [weak self] data in
             guard let self else { return }
             let frames = self.sessionManager.sendData(
@@ -1955,7 +1963,7 @@ final class SessionCoordinator: ObservableObject {
             for frame in frames { _ = self.sendFrame(frame) }
         }
 
-        guard NetRomInboundPolicy.shouldAccept(
+        guard returning || NetRomInboundPolicy.shouldAccept(
             enabled: true, activeCallers: netRomNodeHost.activeCallerCount)
         else {
             write(Data("This node is at capacity — try again shortly.\r".utf8))
@@ -1983,6 +1991,7 @@ final class SessionCoordinator: ObservableObject {
             return
         }
         nodeL2Claims[session.key] = claim
+        guard toHost else { return }
 
         netRomNodeHost.attachAX25Caller(
             key: hostKey,
@@ -1990,6 +1999,8 @@ final class SessionCoordinator: ObservableObject {
             dialed: session.localAddress.display.uppercased(),
             radio: session.radio,
             digipeated: !session.path.digis.isEmpty,
+            owner: owner,
+            returning: returning,
             send: write,
             hangUp: { [weak self] in
                 guard let self else { return }
@@ -1997,6 +2008,22 @@ final class SessionCoordinator: ObservableObject {
                     _ = self.sendFrame(disc)
                 }
             })
+    }
+
+    /// BBS at the node over AX.25: the link goes to the full mailbox, and
+    /// comes back to the node on B. False, with the node still holding the
+    /// link, when the mailbox cannot take it.
+    func handNodeCallerToMailbox(_ hostKey: String, owner: OwnerConsole) -> Bool {
+        guard let mailbox = nodeMailbox, mailbox.canAdoptCaller,
+              let (key, claim) = nodeL2Claims.first(where: { "\($0.key)" == hostKey }),
+              let session = sessionManager.sessions[key], session.state == .connected else { return false }
+        sessionManager.releaseDelivery(claim)
+        nodeL2Claims.removeValue(forKey: key)
+        let adopted = mailbox.adoptFromNode(session, owner: owner) { [weak self] owner in
+            self?.attachNodeCaller(session, owner: owner, returning: true)
+        }
+        if !adopted { attachNodeCaller(session, owner: owner, toHost: false) }
+        return adopted
     }
 
     /// Does this frame's destination name a station somebody is calling?
