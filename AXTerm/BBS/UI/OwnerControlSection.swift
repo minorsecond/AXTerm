@@ -50,7 +50,7 @@ struct OwnerControlSection: View {
                     settings.ownerControlCommands = OwnerControlCommand.adding(OwnerControlCommand.warblerIC705Preset,
                                                                                 to: settings.ownerControlCommands)
                 }
-                .help("QRG, MODE, PWR, SIG, VOLTS and HFQRG read; SETPWR sets the 705's power. "
+                .help("QRG, MODE, PWR, SIG, VOLTS and HFQRG read; SETPWR sets the 705's power in watts. "
                       + "The 705 through Warbler on localhost:4533, the FT-710 on 4532.")
                 #if os(macOS)
                 Button("Open the Scripts Folder") {
@@ -133,6 +133,16 @@ private struct OwnerControlEditor: View {
                 }
                 TextField("Line to send; {arg} is what follows the word, such as F {arg}", text: $draft.setText)
                 TextField("Line that reads the current value, such as f", text: $draft.readText)
+                HStack {
+                    TextField("Scale", text: $draft.scaleText).frame(maxWidth: 80)
+                    TextField("Unit, such as W", text: $draft.unit).frame(maxWidth: 120)
+                }
+                Text("A typed number is divided by the scale on its way to rigctld, and a number read back is "
+                     + "multiplied by it. Hamlib gives power as a fraction of full power, so 10 makes the "
+                     + "IC-705 take and show watts. 1 leaves numbers alone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             case .script:
                 TextField("Script in the scripts folder, such as beacon.sh", text: $draft.scriptName)
                 TextField("Script that puts it back, such as beacon-off.sh", text: $draft.restoreName)

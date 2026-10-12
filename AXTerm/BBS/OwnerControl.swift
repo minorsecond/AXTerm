@@ -23,6 +23,12 @@ nonisolated struct OwnerControlCommand: Codable, Equatable, Sendable, Identifiab
     var argument: ArgumentRule
     var action: Action
     var changesTransmission: Bool
+    /// What a typed number is divided by on its way to rigctl, and a number
+    /// read back multiplied by: 10 turns the IC-705's watts into Hamlib's
+    /// fraction of full power. 1 leaves numbers alone.
+    var scale: Double = 1
+    /// Shown after a scaled number, such as W.
+    var unit = ""
 
     /// What the argument may be. Nothing else reaches rigctl or a script.
     enum ArgumentRule: Codable, Equatable, Sendable {
@@ -79,6 +85,12 @@ nonisolated struct OwnerControlCommand: Codable, Equatable, Sendable, Identifiab
         /// argument. `restore`, another script there, is what the fail-safe
         /// runs.
         case script(name: String, restore: String?)
+    }
+
+    /// A typed number divided by the scale, for rigctl.
+    static func scaled(_ text: String, by scale: Double) -> String {
+        guard scale != 1, let value = Double(text) else { return text }
+        return String(format: "%g", value / scale)
     }
 
     static func fill(_ template: String, with argument: String) -> String {
@@ -174,15 +186,18 @@ nonisolated struct OwnerControlRunner: Sendable {
                     }
                     restore = .rigctl(host: host, port: port, line: OwnerControlCommand.fill(set, with: value))
                 }
+                let sent = OwnerControlCommand.scaled(argument, by: command.scale)
                 let reply = try await rigctl.exchange(host: host, port: port,
-                                                      line: OwnerControlCommand.fill(set, with: argument))
+                                                      line: OwnerControlCommand.fill(set, with: sent))
                 if let report = reply.first(where: { $0.hasPrefix("RPRT") }) {
                     guard report == "RPRT 0" else {
                         return OwnerControlResult(lines: ["\(word): the radio said \(report)."])
                     }
-                    return OwnerControlResult(lines: ["\(word): done."], restore: restore)
+                    let done = argument.isEmpty || command.unit.isEmpty
+                        ? "\(word): done." : "\(word): done, \(argument) \(command.unit)."
+                    return OwnerControlResult(lines: [done], restore: restore)
                 }
-                return OwnerControlResult(lines: Self.shorten(reply, for: word), restore: restore)
+                return OwnerControlResult(lines: Self.shorten(Self.inUnits(reply, command), for: word), restore: restore)
             } catch {
                 return OwnerControlResult(lines: ["\(word): cannot reach \(host):\(port)."])
             }
@@ -207,6 +222,14 @@ nonisolated struct OwnerControlRunner: Sendable {
             let ran = (try? await scripts.run(script: name, arguments: [])) != nil
             return ran ? "put back: ran \(name)" : "could not put back: \(name) did not run"
         }
+    }
+
+    /// A number read back, multiplied by the command's scale and shown with
+    /// its unit; anything else as it came.
+    static func inUnits(_ reply: [String], _ command: OwnerControlCommand) -> [String] {
+        guard command.scale != 1, let first = reply.first, let value = Double(first) else { return reply }
+        let shown = String(format: "%.1f", value * command.scale)
+        return [command.unit.isEmpty ? shown : "\(shown) \(command.unit)"] + reply.dropFirst()
     }
 
     /// The first line named, every line under 80 characters, and no more
@@ -409,6 +432,8 @@ nonisolated struct OwnerControlDraft: Equatable, Sendable {
     var scriptName = ""
     var restoreName = ""
     var changesTransmission = false
+    var scaleText = "1"
+    var unit = ""
 
     init() {}
 
@@ -417,6 +442,8 @@ nonisolated struct OwnerControlDraft: Equatable, Sendable {
         name = command.name
         help = command.help
         changesTransmission = command.changesTransmission
+        scaleText = OwnerControlCommand.ArgumentRule.format(command.scale)
+        unit = command.unit
         switch command.argument {
         case .none: argumentKind = .none
         case .number(let min, let max):
@@ -475,9 +502,13 @@ nonisolated struct OwnerControlDraft: Equatable, Sendable {
             let restore = restoreName.trimmingCharacters(in: .whitespaces)
             action = .script(name: script, restore: restore.isEmpty ? nil : restore)
         }
+        guard let scale = Double(scaleText.trimmingCharacters(in: .whitespaces)), scale > 0 else {
+            return .failure(Problem(text: "The scale is a number above 0."))
+        }
         let command = OwnerControlCommand(id: id, name: name.trimmingCharacters(in: .whitespaces).uppercased(),
                                           help: help.trimmingCharacters(in: .whitespaces), argument: argument,
-                                          action: action, changesTransmission: changesTransmission)
+                                          action: action, changesTransmission: changesTransmission,
+                                          scale: scale, unit: unit.trimmingCharacters(in: .whitespaces))
         if let problem = command.problem(among: others) { return .failure(Problem(text: problem)) }
         return .success(command)
     }
@@ -499,21 +530,67 @@ extension OwnerControlCommand {
         return [
             read("QRG", "the 705's frequency in Hz", "f"),
             read("MODE", "the 705's mode and filter width", "m"),
-            read("PWR", "the 705's power, 1 = 10 W", "l RFPOWER"),
-            OwnerControlCommand(name: "SETPWR", help: "set the 705's power, 0.1 to 1 (1 W to 10 W)",
-                                argument: .number(min: 0.1, max: 1),
+            OwnerControlCommand(name: "PWR", help: "the 705's power in watts", argument: .none,
+                                action: .rigctl(host: "localhost", port: 4533, set: "l RFPOWER", read: nil),
+                                changesTransmission: false, scale: 10, unit: "W"),
+            OwnerControlCommand(name: "SETPWR", help: "set the 705's power in watts, 0.5 to 10",
+                                argument: .number(min: 0.5, max: 10),
                                 action: .rigctl(host: "localhost", port: 4533, set: "L RFPOWER {arg}",
                                                 read: "l RFPOWER"),
-                                changesTransmission: true),
+                                changesTransmission: true, scale: 10, unit: "W"),
             read("SIG", "signal on the 705's frequency, dB over S9", "l STRENGTH"),
             read("VOLTS", "the 705's supply voltage", "l VD_METER"),
             read("HFQRG", "the FT-710's frequency in Hz", "f", port: 4532)
         ]
     }
 
+    /// SETPWR and PWR as the first preset had them, taking and showing
+    /// Hamlib's fraction of full power.
+    static let legacyIC705Power: [OwnerControlCommand] = [
+        OwnerControlCommand(name: "SETPWR", help: "set the 705's power, 0.1 to 1 (1 W to 10 W)",
+                            argument: .number(min: 0.1, max: 1),
+                            action: .rigctl(host: "localhost", port: 4533, set: "L RFPOWER {arg}", read: "l RFPOWER"),
+                            changesTransmission: true),
+        OwnerControlCommand(name: "PWR", help: "the 705's power, 1 = 10 W", argument: .none,
+                            action: .rigctl(host: "localhost", port: 4533, set: "l RFPOWER", read: nil),
+                            changesTransmission: false)
+    ]
+
+    /// Stored commands with the first preset's SETPWR and PWR moved to watts.
+    /// One the operator changed is left as it is.
+    static func upgradingPreset(_ stored: [OwnerControlCommand]) -> [OwnerControlCommand] {
+        let current = warblerIC705Preset
+        return stored.map { command in
+            var anonymous = command
+            guard let legacy = legacyIC705Power.first(where: { anonymous.id = $0.id; return anonymous == $0 }),
+                  var replacement = current.first(where: { $0.name == legacy.name }) else { return command }
+            replacement.id = command.id
+            return replacement
+        }
+    }
+
     /// `preset` added to `existing`, skipping names already in use.
     static func adding(_ preset: [OwnerControlCommand], to existing: [OwnerControlCommand]) -> [OwnerControlCommand] {
         let taken = Set(existing.map { $0.name.uppercased() })
         return existing + preset.filter { !taken.contains($0.name.uppercased()) }
+    }
+}
+
+extension OwnerControlCommand {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, help, argument, action, changesTransmission, scale, unit
+    }
+
+    /// Commands saved before scales existed have none.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        help = try container.decode(String.self, forKey: .help)
+        argument = try container.decode(ArgumentRule.self, forKey: .argument)
+        action = try container.decode(Action.self, forKey: .action)
+        changesTransmission = try container.decode(Bool.self, forKey: .changesTransmission)
+        scale = try container.decodeIfPresent(Double.self, forKey: .scale) ?? 1
+        unit = try container.decodeIfPresent(String.self, forKey: .unit) ?? ""
     }
 }

@@ -485,7 +485,7 @@ final class OwnerControlPresetTests: XCTestCase {
     /// Power can be turned down, never to nothing.
     func testPowerHasAFloor() {
         let setPower = preset.first { $0.name == "SETPWR" }
-        XCTAssertEqual(setPower?.argument, .number(min: 0.1, max: 1))
+        XCTAssertEqual(setPower?.argument, .number(min: 0.5, max: 10), "watts since 2026-10-12")
         XCTAssertEqual(setPower?.changesTransmission, true)
     }
 
@@ -496,5 +496,93 @@ final class OwnerControlPresetTests: XCTestCase {
         let merged = OwnerControlCommand.adding(preset, to: [mine])
         XCTAssertEqual(merged.filter { $0.name == "PWR" }, [mine])
         XCTAssertEqual(merged.count, preset.count)
+    }
+}
+
+/// Units. Hamlib gives power as a fraction of the radio's maximum, so 0.5
+/// on the IC-705 is 5 W; the operator thinks in watts and read 0.5 as half
+/// a watt (2026-10-12). A command can carry a scale: what is typed is
+/// divided by it on the way to rigctl, and a number read back is
+/// multiplied by it and shown with the unit.
+final class OwnerControlUnitTests: XCTestCase {
+
+    private final class FakeRig: RigctlTransport, @unchecked Sendable {
+        var sent: [String] = []
+        func exchange(host: String, port: Int, line: String) async throws -> [String] {
+            sent.append(line)
+            return line.hasPrefix("l ") ? ["0.498039"] : ["RPRT 0"]
+        }
+    }
+
+    private final class NoScripts: ScriptRunning, @unchecked Sendable {
+        func run(script: String, arguments: [String]) async throws -> [String] { [] }
+    }
+
+    private let setPower = OwnerControlCommand(name: "SETPWR", help: "", argument: .number(min: 0.5, max: 10),
+                                               action: .rigctl(host: "localhost", port: 4533, set: "L RFPOWER {arg}",
+                                                               read: "l RFPOWER"),
+                                               changesTransmission: true, scale: 10, unit: "W")
+    private let power = OwnerControlCommand(name: "PWR", help: "", argument: .none,
+                                            action: .rigctl(host: "localhost", port: 4533, set: "l RFPOWER", read: nil),
+                                            changesTransmission: false, scale: 10, unit: "W")
+
+    func testWattsTypedAreSentAsHamlibsFraction() async {
+        let rig = FakeRig()
+        let result = await OwnerControlRunner(rigctl: rig, scripts: NoScripts()).run(setPower, argument: "5")
+        XCTAssertEqual(rig.sent, ["l RFPOWER", "L RFPOWER 0.5"])
+        XCTAssertEqual(result.lines, ["SETPWR: done, 5 W."])
+        // The fail-safe puts back exactly what the radio said.
+        XCTAssertEqual(result.restore, .rigctl(host: "localhost", port: 4533, line: "L RFPOWER 0.498039"))
+    }
+
+    func testAReadingIsShownInWatts() async {
+        let result = await OwnerControlRunner(rigctl: FakeRig(), scripts: NoScripts()).run(power, argument: "")
+        XCTAssertEqual(result.lines, ["PWR: 5.0 W"])
+    }
+
+    func testSmallValuesKeepTheirDigits() {
+        XCTAssertEqual(OwnerControlCommand.scaled("0.5", by: 10), "0.05")
+        XCTAssertEqual(OwnerControlCommand.scaled("7.3", by: 10), "0.73")
+        XCTAssertEqual(OwnerControlCommand.scaled("145650000", by: 1), "145650000")
+    }
+
+    /// Commands saved before scales existed load as they were.
+    func testOldDefinitionsLoadWithNoScale() throws {
+        let old = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","name":"PWR","help":"","argument":{"none":{}},"action":{"rigctl":{"host":"localhost","port":4533,"set":"l RFPOWER"}},"changesTransmission":false}"#
+        let command = try JSONDecoder().decode(OwnerControlCommand.self, from: Data(old.utf8))
+        XCTAssertEqual(command.scale, 1)
+        XCTAssertEqual(command.unit, "")
+    }
+
+    /// The preset speaks watts.
+    func testThePresetSpeaksWatts() {
+        let preset = OwnerControlCommand.warblerIC705Preset
+        let set = preset.first { $0.name == "SETPWR" }
+        XCTAssertEqual(set?.argument, .number(min: 0.5, max: 10))
+        XCTAssertEqual(set?.scale, 10)
+        XCTAssertEqual(set?.unit, "W")
+        XCTAssertEqual(preset.first { $0.name == "PWR" }?.scale, 10)
+    }
+
+    /// The set already added on A is the one that took fractions: loading
+    /// moves it to watts, and leaves commands the operator changed alone.
+    func testTheOldPresetIsMovedToWatts() {
+        var mine = OwnerControlCommand.legacyIC705Power[0]
+        mine.help = "my own words"
+        let upgraded = OwnerControlCommand.upgradingPreset(OwnerControlCommand.legacyIC705Power + [mine])
+        XCTAssertEqual(upgraded[0].argument, .number(min: 0.5, max: 10))
+        XCTAssertEqual(upgraded[0].id, OwnerControlCommand.legacyIC705Power[0].id, "kept its identity")
+        XCTAssertEqual(upgraded[1].scale, 10)
+        XCTAssertEqual(upgraded[2], mine)
+    }
+
+    func testTheFormTakesAScaleAndUnit() throws {
+        var draft = OwnerControlDraft(setPower)
+        XCTAssertEqual(draft.scaleText, "10")
+        XCTAssertEqual(draft.unit, "W")
+        XCTAssertEqual(try draft.build(among: []).get(), setPower)
+        draft.scaleText = "0"
+        guard case .failure(let problem) = draft.build(among: []) else { return XCTFail("a scale of 0 was taken") }
+        XCTAssertEqual(problem.text, "The scale is a number above 0.")
     }
 }

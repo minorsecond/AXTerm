@@ -148,8 +148,9 @@ final class BBSSettings: ObservableObject {
         self.ownerCommandsEnabled = defaults.bool(forKey: Self.ownerCommandsKey)
         self.ownerDevices = defaults.data(forKey: Self.ownerDevicesKey)
             .flatMap { try? JSONDecoder().decode([OwnerKey.PairedDevice].self, from: $0) } ?? []
-        self.ownerControlCommands = defaults.data(forKey: Self.ownerControlCommandsKey)
-            .flatMap { try? JSONDecoder().decode([OwnerControlCommand].self, from: $0) } ?? []
+        self.ownerControlCommands = OwnerControlCommand.upgradingPreset(
+            defaults.data(forKey: Self.ownerControlCommandsKey)
+                .flatMap { try? JSONDecoder().decode([OwnerControlCommand].self, from: $0) } ?? [])
         self.trustedCallers = defaults.stringArray(forKey: Self.trustedCallersKey) ?? []
         let maxUpload = defaults.integer(forKey: Self.maxUploadBytesKey)
         self.maxUploadBytes = maxUpload > 0 ? maxUpload : 100 * 1024

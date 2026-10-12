@@ -151,11 +151,17 @@ Control commands. Each one has:
   followed the word; Warbler serves the IC-705 on `localhost:4533`), or, on
   the Mac, a script in AXTerm's Application Scripts folder, the one place a
   sandboxed app may run the operator's scripts from;
-- whether it changes how the station transmits.
+- whether it changes how the station transmits;
+- a scale and a unit. Hamlib gives power as a fraction of the radio's full
+  power, so 0.5 on the IC-705 is 5 W, not half a watt. With a scale of 10 and
+  the unit W, `SETPWR 5` sends `L RFPOWER 0.5` and `PWR` answers `5.0 W`. The
+  fail-safe still puts back exactly the value the radio reported.
 
-Examples for the IC-705 through Warbler: `FREQ` sends `F {arg}` with a number
-from 144000000 to 148000000 and reads back with `f`; `MODE` sends
-`M {arg} 0` with one of `FM PKTFM`; `PWR` sends `l RFPOWER` and only reads.
+The ready-made IC-705 set (Add the IC-705 Set) reads the 705's frequency,
+mode, power in watts, signal and supply voltage, and the FT-710's frequency,
+and `SETPWR` sets the 705's power from 0.5 to 10 W. It never changes the
+705's frequency or mode, which would cut the link the command came in on,
+and only reads the FT-710, which runs the station's HF link unattended.
 
 A command that changes how the station transmits:
 
@@ -170,9 +176,9 @@ A command that changes how the station transmits:
 
 A control command may never key the transmitter (rigctl `T` or `set_ptt`):
 nothing could promise to let go of it. The mailbox names its owner commands at
-sign-in (`Owner commands: ST FREQ MODE`), so the device knows which lines get
-a check without being set up at its end. Every run and every refusal goes in
-the call log.
+sign-in (`Owner commands: ST QRG PWR SETPWR`), so the device knows which lines
+get a check without being set up at its end. Every run, every refusal and
+every step of the fail-safe goes in the call log.
 
 ## Progress
 
