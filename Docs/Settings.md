@@ -48,11 +48,11 @@ macOS, top to bottom:
 
 - **Station**: General, Notifications
 - **Radios**: Radios
-- **Services**: APRS, Packet Node, File Transfers, BBS, Winlink
+- **Services**: APRS, Packet Node, File Transfers, BBS, Remote Control, Winlink
 - **Maintenance**: Advanced, Link Debug
 
 The iOS More list mirrors it: General under Station; Radios; APRS, Packet Node,
-File Transfers, Mailbox and Winlink under Services; then the device's own settings and
+File Transfers, Mailbox, Remote Control and Winlink under Services; then the device's own settings and
 Diagnostics. iOS has no Notifications, Advanced or Link Debug page; links to
 those open Diagnostics or General (`SettingsDestination.init(_:)`).
 
@@ -270,6 +270,22 @@ The APRS page has **Messaging** (a "Runs on" line and auto-reply), then each
 APRS radio's section. BBS (Mailbox on iOS) has a "Runs on" line for the radios
 the mailbox answers on. Those "Runs on" lines are not controls; the switches
 are in the Packet Node page's cards.
+
+## Remote Control
+
+Signing in from the road and what the owner can do once signed in
+(Docs/RemoteAccessPlan.md). The station's, not the mailbox's: the node offers
+the same sign-in and commands. Top to bottom:
+
+- **Owner sign-in**: the one-time code (QR code for an authenticator app), the
+  devices paired to sign in by key, and this device's own key to pair with
+  the station at home.
+- **Control commands** (once owner sign-in is on): the operator's commands,
+  Add a Command, Add the Radio Set, and on the Mac Open the Scripts Folder.
+- **Radios for control commands**: each radio's short name, its rigctld, its
+  power range and full power, and whether it can be changed from the road.
+
+The BBS page (Mailbox on iOS) points here.
 
 ## Deep links
 

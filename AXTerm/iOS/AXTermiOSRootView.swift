@@ -231,7 +231,7 @@ struct AXTermiOSRootView: View {
     /// router speaks in `SettingsTab`, so the mapping lives here rather than
     /// asking every caller to know which shell it is talking to.
     fileprivate enum SettingsDestination: Hashable {
-        case general, winlink, radios, packetNode, fileTransfers, diagnostics, mailbox, aprsSettings
+        case general, winlink, radios, packetNode, fileTransfers, remoteControl, diagnostics, mailbox, aprsSettings
         /// One radio's form, pushed over the radios list.
         case radio(RadioID)
         /// The mailbox itself, pushed — the phone's home for it.
@@ -248,6 +248,7 @@ struct AXTermiOSRootView: View {
             case .fileTransfers: self = .fileTransfers
             case .notifications, .linkDebug: self = .diagnostics
             case .bbs: self = .mailbox
+            case .remoteControl: self = .remoteControl
             case .aprs: self = .aprsSettings
             }
         }
@@ -1373,6 +1374,10 @@ struct AXTermiOSRootView: View {
                         Label("File Transfers", systemImage: SettingsTab.fileTransfers.settingsIcon)
                     }
                     .accessibilityHint("Which stations' files are accepted or refused without asking")
+                    NavigationLink(value: SettingsDestination.remoteControl) {
+                        Label("Remote Control", systemImage: SettingsTab.remoteControl.settingsIcon)
+                    }
+                    .accessibilityHint("Signing in from the road, paired devices and control commands")
                     // "BBS Settings", because the mailbox itself is the BBS
                     // row at the top of this list on a phone (issue 107).
                     NavigationLink(value: SettingsDestination.mailbox) {
@@ -1496,6 +1501,12 @@ struct AXTermiOSRootView: View {
             FileTransferSettingsView(settings: settings)
                 .environmentObject(SettingsRouter.shared)
                 .navigationTitle("File Transfers")
+                .navigationBarTitleDisplayMode(.inline)
+        case .remoteControl:
+            RemoteControlSettingsView(settings: bbsSettings,
+                                      mailboxCallsign: bbsSettings.effectiveCallsign(
+                                          stationCallsign: settings.primaryCallsign))
+                .navigationTitle("Remote Control")
                 .navigationBarTitleDisplayMode(.inline)
         case .diagnostics:
             DiagnosticsView(settings: settings, eventStore: nil)

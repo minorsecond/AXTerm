@@ -220,4 +220,15 @@ final class SettingsHomeTests: XCTestCase {
         let order = SettingsTab.sidebarOrder
         XCTAssertEqual(order.firstIndex(of: .fileTransfers), order.firstIndex(of: .packetNode).map { $0 + 1 })
     }
+
+    /// Owner sign-in, paired devices, control commands and radios control
+    /// the whole station, not the mailbox, and the node offers them too
+    /// (operator, 2026-10-12): their own page, after the services.
+    func testRemoteControlHasItsOwnPage() {
+        XCTAssertEqual(SettingsTab.remoteControl.settingsTitle, "Remote Control")
+        let order = SettingsTab.sidebarOrder
+        let after = order.firstIndex(of: .bbs) ?? order.firstIndex(of: .fileTransfers)
+        XCTAssertEqual(order.firstIndex(of: .remoteControl), after.map { $0 + 1 })
+    }
 }
+

@@ -132,11 +132,12 @@ struct BBSSettingsScreen: View {
                 Text("A caller who stops typing should not hold the channel open.")
             }
 
-            OwnerAccessSection(settings: settings,
-                               mailboxCallsign: settings.effectiveCallsign(stationCallsign: stationCallsign))
-
-            if settings.ownerCommandsEnabled {
-                OwnerControlSection(settings: settings)
+            Section {
+                Label("Signing in from the road and control commands are on the Remote Control page, "
+                      + "since the node offers them as well as the mailbox.",
+                      systemImage: "key")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {

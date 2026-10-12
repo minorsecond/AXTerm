@@ -139,8 +139,9 @@ needs reading before release.
 
 ### Owner control commands
 
-The operator defines control commands in the mailbox settings, under
-Control commands. Each one has:
+The operator defines control commands in Settings › Remote Control, which
+also holds owner sign-in and the paired devices: they control the whole
+station, and the node offers them as well as the mailbox. Each one has:
 
 - a word to type (1 to 8 letters and digits, not one of the mailbox's own),
   and a help line that `H` shows to the owner;
@@ -159,7 +160,7 @@ Control commands. Each one has:
 
 Radio commands name the radio after the word, so one word serves every
 radio: `PWR 705` reads the IC-705's power, `PWR 710 50` sets the FT-710 to
-50 W. Each radio is set up once under Radios for control commands, with a
+50 W. Each radio is set up once under Radios for control commands on the same page, with a
 short name, its rigctld, its power range in watts, its full power (what
 Hamlib's RFPOWER 1 means on it) and how many steps it keeps power in. A
 power outside the radio's range is refused before anything reaches it

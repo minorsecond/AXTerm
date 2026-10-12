@@ -7,7 +7,7 @@ import AppKit
 import UIKit
 #endif
 
-/// Owner sign-in from the road, in the mailbox settings on the Mac and iOS
+/// Owner sign-in from the road, in Settings › Remote Control on the Mac and iOS
 /// (Docs/RemoteAccessPlan.md, "Signing in"): the switch, and the code's
 /// secret as a QR code for an authenticator app.
 struct OwnerAccessSection: View {
@@ -25,7 +25,7 @@ struct OwnerAccessSection: View {
     var body: some View {
         Section {
             Toggle("Sign in from the road with a one-time code", isOn: $settings.ownerCommandsEnabled)
-            Text("Calling this mailbox on your own callsign, type OWNER and the six-digit code from an "
+            Text("Calling the mailbox or the node on your own callsign, type OWNER and the six-digit code from an "
                  + "authenticator app to open ST, the station's state. The code goes out in plain text "
                  + "with the command, which hides nothing and is allowed on the air, and it works once. "
                  + "Three wrong codes stop sign-in for 15 minutes. From another AXTerm paired below, "

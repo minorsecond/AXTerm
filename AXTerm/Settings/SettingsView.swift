@@ -63,6 +63,7 @@ struct SettingsView: View {
                     #if os(macOS)
                     sidebarRow(.bbs)
                     #endif
+                    sidebarRow(.remoteControl)
                     sidebarRow(.winlink)
                 }
                 Section("Maintenance") {
@@ -137,6 +138,10 @@ struct SettingsView: View {
             #else
             EmptyView()
             #endif
+        case .remoteControl:
+            RemoteControlSettingsView(settings: bbsSettings,
+                                      mailboxCallsign: bbsSettings.effectiveCallsign(
+                                          stationCallsign: settings.primaryCallsign))
         case .aprs:
             APRSSettingsView(settings: settings, client: client)
         case .advanced:
@@ -180,6 +185,7 @@ extension SettingsTab {
         case .packetNode: return "Packet Node"
         case .fileTransfers: return "File Transfers"
         case .bbs: return "BBS"
+        case .remoteControl: return "Remote Control"
         case .winlink: return "Winlink"
         case .advanced: return "Advanced"
         case .linkDebug: return "Link Debug"
@@ -195,6 +201,7 @@ extension SettingsTab {
         case .packetNode: return "point.3.connected.trianglepath.dotted"
         case .fileTransfers: return "arrow.up.arrow.down.circle.fill"
         case .bbs: return "tray.full.fill"
+        case .remoteControl: return "key.fill"
         case .winlink: return "envelope.fill"
         case .advanced: return "wrench.and.screwdriver.fill"
         case .linkDebug: return "ant.fill"
@@ -210,6 +217,7 @@ extension SettingsTab {
         case .packetNode: return .orange
         case .fileTransfers: return .cyan
         case .bbs: return .indigo
+        case .remoteControl: return .red
         case .winlink: return .teal
         case .advanced: return .brown
         case .linkDebug: return .purple
@@ -220,11 +228,11 @@ extension SettingsTab {
     /// Mac's; the mailbox settings on iOS have their own screen.
     static var sidebarOrder: [SettingsTab] {
         #if os(macOS)
-        return [.general, .notifications, .radios, .aprs, .packetNode, .fileTransfers, .bbs, .winlink,
-                .advanced, .linkDebug]
+        return [.general, .notifications, .radios, .aprs, .packetNode, .fileTransfers, .bbs, .remoteControl,
+                .winlink, .advanced, .linkDebug]
         #else
-        return [.general, .notifications, .radios, .aprs, .packetNode, .fileTransfers, .winlink, .advanced,
-                .linkDebug]
+        return [.general, .notifications, .radios, .aprs, .packetNode, .fileTransfers, .remoteControl, .winlink,
+                .advanced, .linkDebug]
         #endif
     }
 }

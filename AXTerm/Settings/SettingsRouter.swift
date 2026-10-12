@@ -111,6 +111,7 @@ nonisolated enum SettingsTab: Hashable, Sendable, CaseIterable {
     case packetNode
     case fileTransfers
     case bbs
+    case remoteControl
     case winlink
     case advanced
     case linkDebug
