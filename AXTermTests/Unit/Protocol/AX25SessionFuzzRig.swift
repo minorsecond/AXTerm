@@ -60,7 +60,7 @@ final class AX25SessionFuzzRig {
     private var lastAnnounced: [UUID: AX25SessionState] = [:]
 
     var key: SessionKey { SessionKey(destination: peer, path: path, radio: .primary) }
-    var session: AX25Session? { manager.sessions[key] }
+    var session: AX25Session? { manager.session(atKey: key) }
 
     private static let xidDefaults = TestDefaults.make("AX25SessionFuzzRig")
 

@@ -66,7 +66,7 @@ final class BridgeNode {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let outcome = await manager.awaitConnectionOutcome(key: key, timeout: 10)
-            guard case .connected = outcome, let far = manager.sessions[key], let caller = self.callerSession
+            guard case .connected = outcome, let far = manager.session(atKey: key), let caller = self.callerSession
             else { return }
             self.farSession = far
             if let claim = manager.claimDelivery(for: far.key, handler: { [weak self] _, data in

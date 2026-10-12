@@ -416,7 +416,7 @@ extension SessionCoordinator {
         guard let session = sessionManager.sessions[runner.sessionKey], session.state == .connected else { return }
         let queuedBefore = session.pendingDataQueue.count
         let frames = sessionManager.sendData(
-            data, to: runner.peer, path: runner.path, radio: runner.radio, pid: 0xF0,
+            data, to: runner.peer, path: runner.path, radio: runner.radio, from: session.localAddress, pid: 0xF0,
             displayInfo: "YAPP (\(data.count) bytes)")
         // Whether this block sits in the queue whole, with nothing of it on
         // the air and nothing else queued: then a cancel may drop it.
@@ -623,7 +623,8 @@ extension SessionCoordinator {
               let session = link(toPeer: CallsignNormalizer.toAddress(destination))
         else { return false }
         let frames = sessionManager.sendData(Data(line.utf8), to: session.remoteAddress, path: session.path,
-                                             radio: session.radio, pid: 0xF0, displayInfo: line)
+                                             radio: session.radio, from: session.localAddress, pid: 0xF0,
+                                             displayInfo: line)
         for frame in frames { sendFrame(frame) }
         return true
     }

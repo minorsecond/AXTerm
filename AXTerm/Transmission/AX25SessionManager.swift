@@ -18,11 +18,29 @@ nonisolated struct SessionKey: Hashable, Sendable {
     let destination: String      // "N0CALL-5"
     let pathSignature: String    // "WIDE1-1,WIDE2-1" or "" for direct
     let radio: RadioID
+    /// Our address on the link: AX.25 identifies a link by both addresses,
+    /// so links from two of our addresses to one station are two links.
+    /// Empty in a key made without one, which names whichever link to the
+    /// station the manager would choose (`AX25SessionManager.session(atKey:)`).
+    let local: String
 
-    init(destination: AX25Address, path: DigiPath, radio: RadioID = .primary) {
+    init(destination: AX25Address, path: DigiPath, radio: RadioID = .primary, local: AX25Address? = nil) {
         self.destination = destination.display
         self.pathSignature = path.display
         self.radio = radio
+        self.local = local?.display ?? ""
+    }
+
+    private init(destination: String, pathSignature: String, radio: RadioID, local: String) {
+        self.destination = destination
+        self.pathSignature = pathSignature
+        self.radio = radio
+        self.local = local
+    }
+
+    /// The same station, path and radio, on whichever of our addresses.
+    var anyLocal: SessionKey {
+        SessionKey(destination: destination, pathSignature: pathSignature, radio: radio, local: "")
     }
 }
 
@@ -309,7 +327,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
         isInitiator: Bool = true
     ) {
         self.id = UUID()
-        self.key = SessionKey(destination: remoteAddress, path: path, radio: radio)
+        self.key = SessionKey(destination: remoteAddress, path: path, radio: radio, local: localAddress)
         self.localAddress = localAddress
         self.remoteAddress = remoteAddress
         self.path = path
@@ -821,24 +839,29 @@ final class AX25SessionManager: ObservableObject {
         case response
     }
 
-    /// A frame from `source` to one of our addresses that is not the one our
-    /// link with that peer uses. AX.25 identifies a link by both addresses,
-    /// and sessions here are keyed by the peer alone, so such a frame would
-    /// drive the other link: a SABM to K0EPI-3 reset B's link to K0EPI-2 at
-    /// EPINDB and was answered UA from EPINDB (smoke run 2026-10-03-1, issue
-    /// 89). It belongs to a link this station does not hold, so the
-    /// disconnected state answers it: DM, from the address it was sent to,
-    /// for a SABM, a DISC, or a command with P set; nothing otherwise.
+    /// A frame from `source` to one of our addresses on which we hold no link
+    /// with that peer, while we hold one on another. It belongs to a link
+    /// this station does not hold, so the disconnected state answers it: DM,
+    /// from the address it was sent to, for a DISC or a command with P set;
+    /// nothing otherwise. Before links were keyed by both addresses such a
+    /// frame drove the other link: a SABM to K0EPI-3 reset B's link to
+    /// K0EPI-2 at EPINDB (smoke run 2026-10-03-1, issue 89). A SABM now opens
+    /// its own link.
     ///
     /// - Returns: nil when the frame is for the peer's link, or there is
     ///   none; otherwise the frame is taken, with the DM to send if any.
     func answerForUnheldLink(from source: AX25Address, to destination: AX25Address,
                              path: DigiPath, radio: RadioID, kind: UnheldLinkFrameKind,
                              isCommand: Bool, pf: Bool) -> UnheldLinkAnswer? {
-        guard let session = existingSession(for: source, path: path, radio: radio),
-              session.state == .connected || session.state == .connecting
-                || session.state == .disconnecting,
-              !CallsignNormalizer.addressesMatch(session.localAddress, destination)
+        // Links are keyed by both addresses: a SABM to any of ours opens its
+        // own link, and a frame to an address we hold a link on is that
+        // link's.
+        guard kind != .sabm else { return nil }
+        let peerLinks = links(to: source, path: path, radio: radio)
+        guard !peerLinks.contains(where: { CallsignNormalizer.addressesMatch($0.localAddress, destination) }),
+              let session = preferred(peerLinks.filter {
+                  $0.state == .connected || $0.state == .connecting || $0.state == .disconnecting
+              })
         else { return nil }
         let answers: Bool
         switch kind {
@@ -1181,7 +1204,7 @@ final class AX25SessionManager: ObservableObject {
     /// "connect refused" milliseconds after the first XID went out, while
     /// the link went on to connect without it).
     func isNegotiating(key: SessionKey) -> Bool {
-        pendingXID.values.contains { $0.key == key }
+        pendingXID.values.contains { $0.key == key || (key.local.isEmpty && $0.key.anyLocal == key) }
     }
 
     /// The largest information field this station accepts in an inbound
@@ -1237,10 +1260,24 @@ final class AX25SessionManager: ObservableObject {
         ackHandler: ((AX25Session, Int) -> Void)? = nil,
         netRomHandler: ((AX25Session) -> Void)? = nil
     ) -> SessionDeliveryClaim? {
+        // A key made without our address names the link the manager would
+        // choose, if there is one yet; one claimed before its link exists
+        // goes to the link when it is made (`adoptUnaddressedClaim`).
+        var key = key
+        if key.local.isEmpty, let session = session(atKey: key) { key = session.key }
         guard deliveryClaims[key] == nil else { return nil }
         let claim = SessionDeliveryClaim(key: key)
         deliveryClaims[key] = (claim.id, handler, stateHandler, ackHandler, netRomHandler)
         return claim
+    }
+
+    /// A claim made, without our address, before this link existed is the
+    /// link's now.
+    private func adoptUnaddressedClaim(for session: AX25Session) {
+        let unaddressed = session.key.anyLocal
+        guard deliveryClaims[session.key] == nil, let claim = deliveryClaims[unaddressed] else { return }
+        deliveryClaims[session.key] = claim
+        deliveryClaims[unaddressed] = nil
     }
 
     /// Fans an outbound-ack notification (new V(A)/V(S)) out to the claim
@@ -1251,12 +1288,15 @@ final class AX25SessionManager: ObservableObject {
     }
 
     func releaseDelivery(_ claim: SessionDeliveryClaim) {
-        guard deliveryClaims[claim.key]?.id == claim.id else { return }
-        deliveryClaims[claim.key] = nil
+        // By id: the claim may have moved to its link's full key since.
+        guard let key = deliveryClaims.first(where: { $0.value.id == claim.id })?.key else { return }
+        deliveryClaims[key] = nil
     }
 
     func hasDeliveryClaim(for key: SessionKey) -> Bool {
-        deliveryClaims[key] != nil
+        if deliveryClaims[key] != nil { return true }
+        guard key.local.isEmpty, let session = session(atKey: key) else { return false }
+        return deliveryClaims[session.key] != nil
     }
 
     /// Routes a state transition to the claim holder (if any) and the
@@ -1329,7 +1369,7 @@ final class AX25SessionManager: ObservableObject {
     func awaitConnectionOutcome(key: SessionKey, timeout: TimeInterval) async -> ConnectOutcome {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            guard let session = sessions[key] else { return .refused }
+            guard let session = session(atKey: key) else { return .refused }
             switch session.state {
             case .connected:
                 return .connected
@@ -1496,14 +1536,16 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Get or create a session for the given destination
+    /// `local` is our address on the link; without it, the link to the
+    /// station the manager would choose, or a new one from the radio's
+    /// address.
     func session(
         for destination: AX25Address,
         path: DigiPath = DigiPath(),
-        radio: RadioID = .primary
+        radio: RadioID = .primary,
+        local: AX25Address? = nil
     ) -> AX25Session {
-        let key = SessionKey(destination: destination, path: path, radio: radio)
-
-        if let existing = sessions[key] {
+        if let existing = existingSession(for: destination, path: path, radio: radio, local: local) {
             return existing
         }
 
@@ -1525,14 +1567,15 @@ final class AX25SessionManager: ObservableObject {
         axDebugPrint("========================================")
 
         let session = AX25Session(
-            localAddress: localAddress(for: radio),
+            localAddress: local ?? localAddress(for: radio),
             remoteAddress: destination,
             path: path,
             radio: radio,
             config: config,
             isInitiator: true
         )
-        sessions[key] = session
+        sessions[session.key] = session
+        adoptUnaddressedClaim(for: session)
 
         TxLog.debug(.session, "Session created", [
             "session": String(session.id.uuidString.prefix(8)),
@@ -1544,13 +1587,72 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Get existing session if any
+    /// The link to `destination` over `path` on `radio` from `local`, or,
+    /// without `local`, the one the manager would choose among the links to
+    /// it from any of our addresses (`preferred`).
     func existingSession(
         for destination: AX25Address,
         path: DigiPath = DigiPath(),
-        radio: RadioID = .primary
+        radio: RadioID = .primary,
+        local: AX25Address? = nil
     ) -> AX25Session? {
-        let key = SessionKey(destination: destination, path: path, radio: radio)
-        return sessions[key]
+        if let local {
+            return sessions[SessionKey(destination: destination, path: path, radio: radio, local: local)]
+        }
+        return preferred(links(to: destination, path: path, radio: radio))
+    }
+
+    /// The link a frame from `source` to `destination` belongs to.
+    private func existingSession(
+        for source: AX25Address, path: DigiPath, radio: RadioID, addressedTo destination: AX25Address?
+    ) -> AX25Session? {
+        preferred(addressed(links(to: source, path: path, radio: radio), to: destination))
+    }
+
+    /// The session a key names: exactly, or for a key made without our
+    /// address, the link the manager would choose.
+    func session(atKey key: SessionKey) -> AX25Session? {
+        if let exact = sessions[key] { return exact }
+        guard key.local.isEmpty else { return nil }
+        return preferred(sessions.values.filter { $0.key.anyLocal == key })
+    }
+
+    /// Every link to `destination` over `path` on `radio`, from any of our
+    /// addresses.
+    private func links(to destination: AX25Address, path: DigiPath, radio: RadioID) -> [AX25Session] {
+        let peer = destination.display
+        let signature = path.display
+        return sessions.values.filter {
+            $0.key.destination == peer && $0.key.pathSignature == signature && $0.key.radio == radio
+        }
+    }
+
+    /// Of `candidates`, the links on `destination`, one of our addresses,
+    /// when there are any: a frame belongs to the link it is addressed to.
+    /// Otherwise all of them, so a frame that names none of our links goes
+    /// where it always went.
+    private func addressed(_ candidates: [AX25Session], to destination: AX25Address?) -> [AX25Session] {
+        guard let destination else { return candidates }
+        let exact = candidates.filter { CallsignNormalizer.addressesMatch($0.localAddress, destination) }
+        return exact.isEmpty ? candidates : exact
+    }
+
+    /// The link to choose when none is named: one that is up, then one
+    /// coming up or closing, and among those the one on the radio's own
+    /// address, so what the operator types goes on the operator's link.
+    private func preferred(_ candidates: [AX25Session]) -> AX25Session? {
+        func rank(_ session: AX25Session) -> (Int, Int, String) {
+            let state: Int
+            switch session.state {
+            case .connected: state = 0
+            case .connecting, .disconnecting: state = 1
+            case .disconnected: state = 2
+            case .error: state = 3
+            }
+            let own = CallsignNormalizer.addressesMatch(session.localAddress, localAddress(for: session.radio)) ? 0 : 1
+            return (state, own, session.localAddress.display)
+        }
+        return candidates.min { rank($0) < rank($1) }
     }
 
     /// The live link to `destination` over `path`, on whichever radio it is:
@@ -1602,11 +1704,11 @@ final class AX25SessionManager: ObservableObject {
     }
 
     func connectedSession(withPeer peer: AX25Address, radio: RadioID) -> AX25Session? {
-        return sessions.values.first {
+        preferred(sessions.values.filter {
             $0.remoteAddress == peer &&
             $0.radio == radio &&
             $0.state == .connected
-        }
+        })
     }
 
     /// Remove a session
@@ -1620,9 +1722,10 @@ final class AX25SessionManager: ObservableObject {
     /// session instead of silently dropping it.
     @discardableResult
     private func discardEndedSession(
-        for destination: AX25Address, path: DigiPath, radio: RadioID
+        for destination: AX25Address, path: DigiPath, radio: RadioID, local: AX25Address? = nil
     ) -> [(data: Data, pid: UInt8, displayInfo: String?)] {
-        let key = SessionKey(destination: destination, path: path, radio: radio)
+        let key = SessionKey(destination: destination, path: path, radio: radio,
+                             local: local ?? localAddress(for: radio))
         guard let stale = sessions[key],
               stale.state == .error
                 || (stale.state == .disconnected && stale.hasEverConnected) else { return [] }
@@ -1710,40 +1813,43 @@ final class AX25SessionManager: ObservableObject {
     /// Used when the return path doesn't match the outbound path
     private func findSessionExpectingUA(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         radio: RadioID
     ) -> AX25Session? {
         // Look for any session to this remote address that's in connecting or disconnecting state
         let sourceDisplay = source.display.uppercased()
-        return sessions.values.first { session in
+        return preferred(addressed(sessions.values.filter { session in
             session.remoteAddress.display.uppercased() == sourceDisplay &&
             session.radio == radio &&
             (session.state == .connecting || session.state == .disconnecting)
-        }
+        }, to: destination))
     }
 
     /// Find any session for a remote address, regardless of state/path
     private func findAnySession(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         radio: RadioID
     ) -> AX25Session? {
         let sourceDisplay = source.display.uppercased()
-        return sessions.values.first { session in
+        return preferred(addressed(sessions.values.filter { session in
             session.remoteAddress.display.uppercased() == sourceDisplay &&
             session.radio == radio
-        }
+        }, to: destination))
     }
 
     /// Find any session for a remote callsign, ignoring SSID.
     /// Useful when remote responds on a different SSID than expected.
     private func findAnySessionByCallsign(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         radio: RadioID
     ) -> AX25Session? {
         let sourceCall = normalizeCallsign(source.call)
-        return sessions.values.first { session in
+        return preferred(addressed(sessions.values.filter { session in
             normalizeCallsign(session.remoteAddress.call) == sourceCall &&
             session.radio == radio
-        }
+        }, to: destination))
     }
 
     /// Find any session for a remote callsign, ignoring SSID and channel.
@@ -1765,12 +1871,22 @@ final class AX25SessionManager: ObservableObject {
         return upper
     }
 
-    private func connectingSession(withPeer peer: AX25Address, radio: RadioID) -> AX25Session? {
+    private func connectingSession(withPeer peer: AX25Address, radio: RadioID,
+                                   local: AX25Address? = nil) -> AX25Session? {
         let peerDisplay = peer.display.uppercased()
-        return sessions.values.first { session in
+        return preferred(sessions.values.filter { session in
             session.remoteAddress.display.uppercased() == peerDisplay &&
             session.radio == radio &&
-            session.state == .connecting
+            session.state == .connecting &&
+            (local.map { CallsignNormalizer.addressesMatch(session.localAddress, $0) } ?? true)
+        })
+    }
+
+    /// The link up to `peer` on `radio` from exactly `local`.
+    private func connectedSession(withPeer peer: AX25Address, radio: RadioID, local: AX25Address) -> AX25Session? {
+        sessions.values.first {
+            $0.remoteAddress == peer && $0.radio == radio && $0.state == .connected
+                && CallsignNormalizer.addressesMatch($0.localAddress, local)
         }
     }
 
@@ -1778,27 +1894,29 @@ final class AX25SessionManager: ObservableObject {
     /// Used when the return path doesn't match the outbound path (common with digipeaters)
     private func findConnectedSession(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         radio: RadioID
     ) -> AX25Session? {
         let sourceDisplay = source.display.uppercased()
-        return sessions.values.first { session in
+        return preferred(addressed(sessions.values.filter { session in
             session.remoteAddress.display.uppercased() == sourceDisplay &&
             session.radio == radio &&
             session.state == .connected
-        }
+        }, to: destination))
     }
 
     /// Find a connected session for a remote callsign, ignoring SSID.
     private func findConnectedSessionByCallsign(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         radio: RadioID
     ) -> AX25Session? {
         let sourceCall = normalizeCallsign(source.call)
-        return sessions.values.first { session in
+        return preferred(addressed(sessions.values.filter { session in
             normalizeCallsign(session.remoteAddress.call) == sourceCall &&
             session.radio == radio &&
             session.state == .connected
-        }
+        }, to: destination))
     }
 
     // MARK: - Connection Management
@@ -1808,7 +1926,8 @@ final class AX25SessionManager: ObservableObject {
     func connect(
         to destination: AX25Address,
         path: DigiPath = DigiPath(),
-        radio: RadioID = .primary
+        radio: RadioID = .primary,
+        from local: AX25Address? = nil
     ) -> OutboundFrame? {
         debugTrace("connect request", [
             "dest": destination.display,
@@ -1821,7 +1940,10 @@ final class AX25SessionManager: ObservableObject {
             ])
             return nil
         }
-        if let existing = connectedSession(withPeer: destination, radio: radio) {
+        // Only a link from the same address of ours is this link: one from
+        // another of our addresses to the same station is a separate link.
+        let ourAddress = local ?? localAddress(for: radio)
+        if let existing = connectedSession(withPeer: destination, radio: radio, local: ourAddress) {
             logPathOverrideIfNeeded(session: existing, requestedPath: path, reason: "connect")
             TxLog.warning(.session, "Cannot connect: session already connected", [
                 "peer": destination.display
@@ -1829,7 +1951,7 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
-        if let existing = connectingSession(withPeer: destination, radio: radio) {
+        if let existing = connectingSession(withPeer: destination, radio: radio, local: ourAddress) {
             logPathOverrideIfNeeded(session: existing, requestedPath: path, reason: "connect")
             TxLog.warning(.session, "Cannot connect: session already connecting", [
                 "peer": destination.display
@@ -1858,9 +1980,9 @@ final class AX25SessionManager: ObservableObject {
         // Drop it so session(for:) builds a fresh one through
         // getConfigForDestination with current learned state; any data the
         // carcass was still holding rides along.
-        let orphanedQueue = discardEndedSession(for: destination, path: path, radio: radio)
+        let orphanedQueue = discardEndedSession(for: destination, path: path, radio: radio, local: ourAddress)
 
-        let session = session(for: destination, path: path, radio: radio)
+        let session = session(for: destination, path: path, radio: radio, local: ourAddress)
         session.pendingDataQueue.append(contentsOf: orphanedQueue)
 
         guard session.state == .disconnected || session.state == .error else {
@@ -1983,7 +2105,7 @@ final class AX25SessionManager: ObservableObject {
     /// slow key-up is waited out. Quitting waits on this before it closes
     /// the radios (smoke run 2026-10-03-1, issue 85).
     func disconnectSettled(_ key: SessionKey) -> Bool {
-        guard let session = sessions[key], session.state == .disconnecting else { return true }
+        guard let session = session(atKey: key), session.state == .disconnecting else { return true }
         return session.stateMachine.retryCount > 0
     }
 
@@ -2300,10 +2422,11 @@ final class AX25SessionManager: ObservableObject {
         to destination: AX25Address,
         path: DigiPath = DigiPath(),
         radio: RadioID = .primary,
+        from local: AX25Address? = nil,
         pid: UInt8 = 0xF0,
         displayInfo: String? = nil
     ) -> [OutboundFrame] {
-        let session = selectSession(for: destination, path: path, radio: radio)
+        let session = selectSession(for: destination, path: path, radio: radio, local: local)
         if pid == NetRomWire.pid { session.carriesNetRom = true }
         // Cut at the live paclen: data segmented now uses the current value,
         // and anything cut earlier keeps its size (§7.8.1).
@@ -2321,15 +2444,16 @@ final class AX25SessionManager: ObservableObject {
 
         switch session.state {
         case .disconnected, .error:
-            // Need to connect first
-            if let sabm = connect(to: destination, path: path, radio: radio) {
+            // Need to connect first, from the address the link is ours on.
+            let from = local ?? session.localAddress
+            if let sabm = connect(to: destination, path: path, radio: radio, from: from) {
                 frames.append(sabm)
             }
             // Queue each chunk for when connection is established, on the
             // session connect() left in place: it replaces an ended session
             // with a fresh one, and data queued on the old object never went
             // out (smoke run 2026-10-03-1, 7.2: a lost NET/ROM CONREQ).
-            let connecting = self.session(for: destination, path: path, radio: radio)
+            let connecting = self.session(for: destination, path: path, radio: radio, local: from)
             if pid == NetRomWire.pid { connecting.carriesNetRom = true }
             connecting.pendingDataQueue.append(contentsOf: Self.queued(data, chunks: chunks, pid: pid,
                                                                        displayInfo: displayInfo))
@@ -2469,8 +2593,20 @@ final class AX25SessionManager: ObservableObject {
     private func selectSession(
         for destination: AX25Address,
         path: DigiPath,
-        radio: RadioID
+        radio: RadioID,
+        local: AX25Address? = nil
     ) -> AX25Session {
+        if let local {
+            if let connected = connectedSession(withPeer: destination, radio: radio, local: local) {
+                logPathOverrideIfNeeded(session: connected, requestedPath: path, reason: "sendData")
+                return connected
+            }
+            if let connecting = connectingSession(withPeer: destination, radio: radio, local: local) {
+                logPathOverrideIfNeeded(session: connecting, requestedPath: path, reason: "sendData")
+                return connecting
+            }
+            return session(for: destination, path: path, radio: radio, local: local)
+        }
         if let connected = connectedSession(withPeer: destination, radio: radio) {
             logPathOverrideIfNeeded(session: connected, requestedPath: path, reason: "sendData")
             return connected
@@ -2589,34 +2725,13 @@ final class AX25SessionManager: ObservableObject {
         // replaced: (.error, .receivedSABM) has no transition at all, so the
         // carcass would answer the peer's fresh connect with silence, and its
         // stale config/timers predate the route's current learned state.
-        discardEndedSession(for: source, path: path, radio: radio)
-        let key = SessionKey(destination: source, path: path, radio: radio)
-
-        // A link is both addresses. A record for this caller on another of
-        // our addresses is a different link: refused with DM from the called
-        // address while it is live, replaced while it is not. A (705) kept a
-        // call it had abandoned before it connected, and answered the
-        // phone's call to its mailbox with UA from K0EPI-2 (park rehearsal
-        // 2026-10-08, finding 32).
-        if let other = sessions[key], !CallsignNormalizer.addressesMatch(other.localAddress, destination) {
-            switch other.state {
-            case .connected, .connecting, .disconnecting:
-                TxLog.debug(.session, "SABM refused with DM: a link to this caller is up on another address", [
-                    "peer": source.display, "to": destination.display, "link": other.localAddress.display
-                ])
-                transmit(AX25FrameBuilder.buildDM(from: destination, to: source, via: path, pf: pf)
-                    .onRadio(radio))
-                return
-            case .disconnected, .error:
-                stopT1Timer(for: other)
-                stopT2Timer(for: other)
-                stopT3Timer(for: other)
-                removeSession(other)
-                TxLog.debug(.session, "Replaced a session on another address for an inbound SABM", [
-                    "peer": source.display, "to": destination.display, "was": other.localAddress.display
-                ])
-            }
-        }
+        discardEndedSession(for: source, path: path, radio: radio, local: destination)
+        // A link is both addresses: a call to another of our addresses is
+        // its own link, beside any link this caller has with the first. A
+        // record for the caller on another address used to stand in for it,
+        // and A (705) answered the phone's call to its mailbox with UA from
+        // K0EPI-2 (park rehearsal 2026-10-08, finding 32).
+        let key = SessionKey(destination: source, path: path, radio: radio, local: destination)
 
         let session: AX25Session
         if let existing = sessions[key] {
@@ -2651,6 +2766,7 @@ final class AX25SessionManager: ObservableObject {
                 isInitiator: false
             )
             sessions[key] = session
+            adoptUnaddressedClaim(for: session)
         }
 
         let oldState = session.state
@@ -2702,6 +2818,7 @@ final class AX25SessionManager: ObservableObject {
     @discardableResult
     func handleInboundUA(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID
     ) -> [OutboundFrame] {
@@ -2711,13 +2828,13 @@ final class AX25SessionManager: ObservableObject {
             "radio": radio.rawValue
         ])
         // Try to find session with exact path match first
-        var session = existingSession(for: source, path: path, radio: radio)
+        var session = existingSession(for: source, path: path, radio: radio, addressedTo: destination)
 
         // If not found, try to find any session to this remote address that's expecting a UA
         // This handles the common case where the return path differs from the outbound path
         // (digipeaters modify the path on return, or the path is empty on the response)
         if session == nil {
-            session = findSessionExpectingUA(from: source, radio: radio)
+            session = findSessionExpectingUA(from: source, to: destination, radio: radio)
             if session != nil {
                 TxLog.debug(.session, "Found session with different path", [
                     "from": source.display,
@@ -2729,7 +2846,7 @@ final class AX25SessionManager: ObservableObject {
 
         // If still not found, fall back to any session for this peer (late UA or path mismatch)
         if session == nil {
-            session = findAnySession(from: source, radio: radio)
+            session = findAnySession(from: source, to: destination, radio: radio)
             if session != nil {
                 TxLog.debug(.session, "Found session by peer only (late UA)", [
                     "from": source.display,
@@ -2860,6 +2977,7 @@ final class AX25SessionManager: ObservableObject {
     /// Handle an inbound DM (disconnected mode)
     func handleInboundDM(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID
     ) {
@@ -2869,17 +2987,17 @@ final class AX25SessionManager: ObservableObject {
             "radio": radio.rawValue
         ])
         // Try to find session with exact path match first
-        var session = existingSession(for: source, path: path, radio: radio)
+        var session = existingSession(for: source, path: path, radio: radio, addressedTo: destination)
 
         // If not found, try to find any session to this remote address that's expecting a response
         if session == nil {
-            session = findSessionExpectingUA(from: source, radio: radio)
+            session = findSessionExpectingUA(from: source, to: destination, radio: radio)
         }
         if session == nil {
-            session = findAnySession(from: source, radio: radio)
+            session = findAnySession(from: source, to: destination, radio: radio)
         }
         if session == nil {
-            session = findAnySessionByCallsign(from: source, radio: radio)
+            session = findAnySessionByCallsign(from: source, to: destination, radio: radio)
         }
 
         guard let session = session else {
@@ -2923,6 +3041,7 @@ final class AX25SessionManager: ObservableObject {
     /// which is the §6.4.10-sanctioned recovery for v2.0 peers.
     func handleInboundFRMR(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID
     ) {
@@ -2931,12 +3050,12 @@ final class AX25SessionManager: ObservableObject {
             "path": path.display.isEmpty ? "(empty)" : path.display,
             "radio": radio.rawValue
         ])
-        var session = existingSession(for: source, path: path, radio: radio)
+        var session = existingSession(for: source, path: path, radio: radio, addressedTo: destination)
         if session == nil {
-            session = findAnySession(from: source, radio: radio)
+            session = findAnySession(from: source, to: destination, radio: radio)
         }
         if session == nil {
-            session = findAnySessionByCallsign(from: source, radio: radio)
+            session = findAnySessionByCallsign(from: source, to: destination, radio: radio)
         }
         guard let session = session else {
             TxLog.warning(.session, "FRMR received for unknown session", ["from": source.display])
@@ -2975,23 +3094,23 @@ final class AX25SessionManager: ObservableObject {
         // with digipeaters where return path differs). Also check .disconnecting: per
         // AX.25 §6.4.2, if we sent DISC and receive DISC back simultaneously, we must
         // respond UA and finish teardown — not send DM as if no session existed.
-        let disconnecting = sessions.values.first {
+        let disconnecting = preferred(addressed(sessions.values.filter {
             $0.remoteAddress.display.uppercased() == source.display.uppercased() &&
             $0.radio == radio &&
             $0.state == .disconnecting
-        }
+        }, to: destination))
         // Bug I fix: also match a session in .connecting state.
         // Previously, if the remote peer refused the connection by sending DISC before we
         // received their UA, findConnectedSession returned nil, no state transition occurred,
         // and the session remained stuck in .connecting — continuing to retransmit SABM until
         // T1 max-retries expired. Per AX.25 §6.3.4, a DISC received while connecting MUST
         // cause an immediate disconnect: send DM and cancel the connect attempt.
-        let connecting = sessions.values.first {
+        let connecting = preferred(addressed(sessions.values.filter {
             $0.remoteAddress.display.uppercased() == source.display.uppercased() &&
             $0.radio == radio &&
             $0.state == .connecting
-        }
-        guard let session = findConnectedSession(from: source, radio: radio) ?? disconnecting ?? connecting else {
+        }, to: destination))
+        guard let session = findConnectedSession(from: source, to: destination, radio: radio) ?? disconnecting ?? connecting else {
             debugTrace("DISC with no session -> DM", [
                 "from": source.display
             ])
@@ -3080,25 +3199,25 @@ final class AX25SessionManager: ObservableObject {
         ])
         onLinkVizEvent?(.inboundIFrame(peer: source.display, ns: ns, bytes: payload.count))
         // Try exact path match first, then fall back to address-only lookup
-        var session = existingSession(for: source, path: path, radio: radio)
+        var session = existingSession(for: source, path: path, radio: radio, addressedTo: destination)
         if session == nil {
-            session = findConnectedSession(from: source, radio: radio)
+            session = findConnectedSession(from: source, to: destination, radio: radio)
         }
         if session == nil {
-            session = findConnectedSessionByCallsign(from: source, radio: radio)
+            session = findConnectedSessionByCallsign(from: source, to: destination, radio: radio)
         }
 
         if session == nil {
             // Fall back to any session for this peer, regardless of state.
             // This avoids tearing down valid links when path/state lookup fails.
-            if let anySession = findAnySession(from: source, radio: radio) {
+            if let anySession = findAnySession(from: source, to: destination, radio: radio) {
                 TxLog.warning(.session, "I-frame received for non-connected session", [
                     "peer": source.display,
                     "state": anySession.state.rawValue
                 ])
                 return nil
             }
-            if let anySession = findAnySessionByCallsign(from: source, radio: radio) {
+            if let anySession = findAnySessionByCallsign(from: source, to: destination, radio: radio) {
                 TxLog.warning(.session, "I-frame received for non-connected session (SSID mismatch)", [
                     "peer": source.display,
                     "state": anySession.state.rawValue,
@@ -3271,12 +3390,12 @@ final class AX25SessionManager: ObservableObject {
             "isCommand": isCommand ? 1 : 0
         ])
         // Try exact path match first, then fall back to address-only lookup
-        var session = existingSession(for: source, path: path, radio: radio)
+        var session = existingSession(for: source, path: path, radio: radio, addressedTo: destination)
         if session == nil {
-            session = findConnectedSession(from: source, radio: radio)
+            session = findConnectedSession(from: source, to: destination, radio: radio)
         }
         if session == nil {
-            session = findConnectedSessionByCallsign(from: source, radio: radio)
+            session = findConnectedSessionByCallsign(from: source, to: destination, radio: radio)
         }
 
         guard let session = session else {
@@ -3595,12 +3714,12 @@ final class AX25SessionManager: ObservableObject {
         ])
 
         // Same three-tier lookup as RR: exact path, then address-only fallbacks.
-        var session = existingSession(for: source, path: path, radio: radio)
+        var session = existingSession(for: source, path: path, radio: radio, addressedTo: destination)
         if session == nil {
-            session = findConnectedSession(from: source, radio: radio)
+            session = findConnectedSession(from: source, to: destination, radio: radio)
         }
         if session == nil {
-            session = findConnectedSessionByCallsign(from: source, radio: radio)
+            session = findConnectedSessionByCallsign(from: source, to: destination, radio: radio)
         }
 
         guard let session = session else {
@@ -3687,17 +3806,18 @@ final class AX25SessionManager: ObservableObject {
     /// acknowledges nothing at all.
     func handleInboundSREJ(
         from source: AX25Address,
+        to destination: AX25Address? = nil,
         path: DigiPath,
         radio: RadioID,
         nr: Int,
         pf: Bool = false
     ) -> [OutboundFrame] {
-        var session = existingSession(for: source, path: path, radio: radio)
+        var session = existingSession(for: source, path: path, radio: radio, addressedTo: destination)
         if session == nil {
-            session = findConnectedSession(from: source, radio: radio)
+            session = findConnectedSession(from: source, to: destination, radio: radio)
         }
         if session == nil {
-            session = findConnectedSessionByCallsign(from: source, radio: radio)
+            session = findConnectedSessionByCallsign(from: source, to: destination, radio: radio)
         }
         guard let session, session.state == .connected else { return [] }
 
@@ -3766,15 +3886,15 @@ final class AX25SessionManager: ObservableObject {
             "pf": pf ? 1 : 0,
             "isCommand": isCommand ? 1 : 0
         ])
-        var session = existingSession(for: source, path: path, radio: radio)
+        var session = existingSession(for: source, path: path, radio: radio, addressedTo: destination)
         if session == nil {
-            session = findConnectedSession(from: source, radio: radio)
+            session = findConnectedSession(from: source, to: destination, radio: radio)
             if let connected = session {
                 logPathOverrideIfNeeded(session: connected, requestedPath: path, reason: "rej")
             }
         }
         if session == nil {
-            session = findConnectedSessionByCallsign(from: source, radio: radio)
+            session = findConnectedSessionByCallsign(from: source, to: destination, radio: radio)
             if let connected = session {
                 logPathOverrideIfNeeded(session: connected, requestedPath: path, reason: "rej-ssid")
             }
@@ -4007,7 +4127,7 @@ final class AX25SessionManager: ObservableObject {
     /// V(S), V(A) and T1 stay as they are. Returns how many were dropped.
     @discardableResult
     func discardQueuedData(for key: SessionKey) -> Int {
-        guard let session = sessions[key], !session.pendingDataQueue.isEmpty else { return 0 }
+        guard let session = session(atKey: key), !session.pendingDataQueue.isEmpty else { return 0 }
         let count = session.pendingDataQueue.count
         session.pendingDataQueue.removeAll()
         TxLog.debug(.session, "Queued data discarded", ["peer": session.remoteAddress.display, "count": count])

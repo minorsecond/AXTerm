@@ -9,10 +9,12 @@
 //  EPINDB link and re-established it, and every retry did it again (smoke
 //  run 2026-10-03-1, issue 89).
 //
-//  A frame to one of our addresses that is not the one our link with that
-//  peer uses belongs to a link we do not hold: the disconnected state
-//  answers a SABM, a DISC, or any command with P set with DM, from the
-//  address the frame was sent to, and the other link is left alone.
+//  Links are keyed by both addresses since 2026-10-12, so A's SABM to
+//  K0EPI-3 is its own link beside the EPINDB one, answered UA from K0EPI-3.
+//  Any other frame to one of our addresses on which we hold no link with
+//  that peer belongs to a link we do not hold: the disconnected state
+//  answers a DISC, or any command with P set, with DM from the address the
+//  frame was sent to, and the other link is left alone.
 //
 
 import XCTest
@@ -41,16 +43,29 @@ final class OneLinkPerAddressPairTests: XCTestCase {
                                                  kind: .sabm, isCommand: true, pf: true))
     }
 
-    func testASABMToTheOtherAddressIsRefusedFromThatAddress() throws {
+    /// The SABM of issue 89 opens its own link now, answered from the
+    /// address it was sent to, and the EPINDB link is left alone. It used
+    /// to be refused with DM, when a link was keyed by the peer alone.
+    func testASABMToTheOtherAddressOpensItsOwnLink() throws {
         let (manager, session) = try nodeLinkUp()
-        let answer = try XCTUnwrap(manager.answerForUnheldLink(
-            from: caller, to: station, path: DigiPath(), radio: .primary,
-            kind: .sabm, isCommand: true, pf: true))
-        let dm = try XCTUnwrap(answer.response)
-        XCTAssertEqual(dm.source.display, "K0EPI-3", "answered from the address the SABM was sent to")
-        XCTAssertEqual(dm.destination.display, "K0EPI-2")
-        XCTAssertEqual(dm.displayInfo, "DM")
+        XCTAssertNil(manager.answerForUnheldLink(from: caller, to: station, path: DigiPath(), radio: .primary,
+                                                 kind: .sabm, isCommand: true, pf: true))
+        let ua = try XCTUnwrap(manager.handleInboundSABM(from: caller, to: station, path: DigiPath(), radio: .primary))
+        XCTAssertEqual(ua.displayInfo, "UA")
+        XCTAssertEqual(ua.source.display, "K0EPI-3", "answered from the address the SABM was sent to")
         XCTAssertEqual(session.state, .connected, "the EPINDB link is left alone")
+        XCTAssertEqual(manager.existingSession(for: caller, path: DigiPath(), radio: .primary, local: station)?.state,
+                       .connected)
+    }
+
+    /// With a link on each address, a frame to either is its own link's.
+    func testAFrameToAnAddressWithItsOwnLinkIsThatLinks() throws {
+        let (manager, _) = try nodeLinkUp()
+        _ = manager.handleInboundSABM(from: caller, to: station, path: DigiPath(), radio: .primary)
+        XCTAssertNil(manager.answerForUnheldLink(from: caller, to: station, path: DigiPath(), radio: .primary,
+                                                 kind: .supervisoryOrInformation, isCommand: true, pf: true))
+        XCTAssertNil(manager.answerForUnheldLink(from: caller, to: node, path: DigiPath(), radio: .primary,
+                                                 kind: .response, isCommand: false, pf: true))
     }
 
     func testACommandWithThePollBitIsAnsweredDMAndOneWithoutIsIgnored() throws {

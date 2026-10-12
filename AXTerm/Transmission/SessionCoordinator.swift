@@ -1958,6 +1958,7 @@ final class SessionCoordinator: ObservableObject {
                 to: session.remoteAddress,
                 path: session.path,
                 radio: session.radio,
+                from: session.localAddress,
                 pid: 0xF0,
                 displayInfo: "Node (\(data.count) bytes)")
             for frame in frames { _ = self.sendFrame(frame) }
@@ -4121,7 +4122,7 @@ final class SessionCoordinator: ObservableObject {
         case .UA:
             // Usually nothing to send; a UA on a link already up makes the
             // session establish it again with a SABM (live test log, bug 39).
-            for frame in sessionManager.handleInboundUA(from: from, path: path, radio: radio) {
+            for frame in sessionManager.handleInboundUA(from: from, to: to, path: path, radio: radio) {
                 sendFrame(frame)
             }
         case .DM:
@@ -4129,7 +4130,7 @@ final class SessionCoordinator: ObservableObject {
             // link to you", not a refusal. It resolves the negotiation and
             // is consumed there — see handleInboundDMDuringNegotiation.
             if sessionManager.handleInboundDMDuringNegotiation(from: from, radio: radio) { break }
-            sessionManager.handleInboundDM(from: from, path: path, radio: radio)
+            sessionManager.handleInboundDM(from: from, to: to, path: path, radio: radio)
         case .FRMR:
             // §6.3.2: during XID negotiation, FRMR is a pre-2.2 peer's
             // documented "use defaults" — resolve the negotiation first so
@@ -4137,10 +4138,10 @@ final class SessionCoordinator: ObservableObject {
             // A late FRMR to an XID we gave up on is consumed there too
             // and must not reach the SABM's session.
             if sessionManager.handleInboundFRMRDuringNegotiation(from: from, radio: radio),
-               sessionManager.existingSession(for: from, path: path, radio: radio)?.state == .connecting {
+               sessionManager.existingSession(for: from, path: path, radio: radio, local: to)?.state == .connecting {
                 break
             }
-            sessionManager.handleInboundFRMR(from: from, path: path, radio: radio)
+            sessionManager.handleInboundFRMR(from: from, to: to, path: path, radio: radio)
         case .XID:
             let responses = sessionManager.handleInboundXID(
                 from: from,
@@ -4572,6 +4573,7 @@ final class SessionCoordinator: ObservableObject {
                 to: link.remoteAddress,
                 path: relayed ? link.path : path,
                 radio: link.radio,
+                from: link.localAddress,
                 pid: 0xF0,
                 displayInfo: displayInfo
             )
@@ -4925,7 +4927,8 @@ final class SessionCoordinator: ObservableObject {
     private func sendInSession(_ payload: Data, to peer: AX25Address, displayInfo: String) {
         guard let session = link(toPeer: peer) else { return }
         let frames = sessionManager.sendData(payload, to: session.remoteAddress, path: session.path,
-                                             radio: session.radio, pid: 0xF0, displayInfo: displayInfo)
+                                             radio: session.radio, from: session.localAddress, pid: 0xF0,
+                                             displayInfo: displayInfo)
         for frame in frames { sendFrame(frame) }
     }
 
@@ -5776,6 +5779,7 @@ final class SessionCoordinator: ObservableObject {
             // case (no session, or nothing buffered at N(R)) by ignoring.
             let retransmits = sessionManager.handleInboundSREJ(
                 from: packet.from.map { AX25Address(call: $0.display) } ?? from,
+                to: packet.to,
                 path: path,
                 radio: radio,
                 nr: nr,

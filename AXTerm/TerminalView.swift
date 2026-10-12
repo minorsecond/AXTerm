@@ -917,6 +917,14 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                                         aliasCallsign: aliasCallsign(peer))
     }
 
+    /// Our address on the session on screen, when it is with `destination`:
+    /// what the operator types goes on that link.
+    private func linkAddress(to destination: AX25Address) -> AX25Address? {
+        guard let session = currentSession,
+              CallsignNormalizer.addressesMatch(session.remoteAddress, destination) else { return nil }
+        return session.localAddress
+    }
+
     /// The callsign a node alias belongs to, from the NODES broadcasts heard.
     var aliasCallsign: (String) -> String? = { _ in nil }
 
@@ -925,7 +933,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         guard canSignInAsOwner, let session = currentSession else { return }
         ownerSignIn.begin(peer: session.remoteAddress.display)
         sendFrames?(sessionManager.sendData(Data("OWNER KEY\r".utf8), to: session.remoteAddress,
-                                            path: session.path, radio: session.radio, displayInfo: "OWNER KEY"))
+                                            path: session.path, radio: session.radio, from: session.localAddress,
+                                            displayInfo: "OWNER KEY"))
     }
 
     private func answerOwnerChallenge(_ line: Data, from key: String) {
@@ -936,7 +945,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
               let reply = ownerSignIn.reply(toLine: text, from: key, caller: session.localAddress.display,
                                             derive: OwnerDeviceKey().sessionKey) else { return }
         sendFrames?(sessionManager.sendData(Data((reply + "\r").utf8), to: session.remoteAddress,
-                                            path: session.path, radio: session.radio, displayInfo: "OWNER MAC"))
+                                            path: session.path, radio: session.radio, from: session.localAddress,
+                                            displayInfo: "OWNER MAC"))
     }
 
     /// A typed line as it goes out: an owner command to a mailbox signed in
@@ -1689,7 +1699,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         let cr = Data("\r".utf8)
         let prompt = sessionManager.sendData(cr, to: session.remoteAddress,
                                              path: session.path,
-                                             radio: session.radio, pid: 0xF0)
+                                             radio: session.radio, from: session.localAddress, pid: 0xF0)
         onSendFrames?(prompt)
         TxLog.outbound(.session, "Node-prompt relay: prompted a silent node with CR", [
             "nextHop": session.remoteAddress.display, "frames": prompt.count
@@ -1802,7 +1812,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         relayAskedNode = relayWaitingOn ?? session.remoteAddress.display
 
         let command = Data("C \(destination)\r".utf8)
-        let frames = sessionManager.sendData(command, to: session.remoteAddress, path: session.path, radio: session.radio, pid: 0xF0)
+        let frames = sessionManager.sendData(command, to: session.remoteAddress, path: session.path, radio: session.radio,
+                                             from: session.localAddress, pid: 0xF0)
         onSendFrames?(frames)
         TxLog.outbound(.session, "Node-prompt relay connect command queued", [
             "destination": destination,
@@ -1932,6 +1943,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             to: dest,
             path: path,
             radio: currentSession?.radio ?? radio(for: dest, path: path),
+            from: linkAddress(to: dest),
             displayInfo: displayInfo
         )
     }
@@ -1955,6 +1967,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             to: dest,
             path: path,
             radio: currentSession?.radio ?? radio(for: dest, path: path),
+            from: linkAddress(to: dest),
             displayInfo: displayInfo
         )
     }

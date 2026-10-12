@@ -50,8 +50,12 @@ final class AnswerFromTheCalledAddressTests: XCTestCase {
     }
 
     /// A live link to the caller on another of our addresses is not taken
-    /// over: the call is refused with DM from the address it was made to.
-    func testALiveLinkOnAnotherAddressIsLeftAloneAndTheCallRefused() throws {
+    /// over, and the call is its own link beside it, answered from the
+    /// address it was made to. It used to be refused with DM, when a link
+    /// was keyed by the caller alone (2026-10-12: links are both addresses,
+    /// so a node on its own callsign can hold its link to a neighbor while
+    /// the operator holds theirs).
+    func testALiveLinkOnAnotherAddressIsLeftAloneAndTheCallIsItsOwnLink() throws {
         let manager = stationA()
         _ = manager.connect(to: phone, path: DigiPath(), radio: .primary)
         _ = manager.handleInboundUA(from: phone, path: DigiPath(), radio: .primary)
@@ -61,10 +65,13 @@ final class AnswerFromTheCalledAddressTests: XCTestCase {
         let answer = try XCTUnwrap(manager.handleInboundSABM(from: phone, to: mailbox, path: DigiPath(),
                                                              radio: .primary))
 
-        XCTAssertEqual(answer.displayInfo, "DM")
+        XCTAssertEqual(answer.displayInfo, "UA")
         XCTAssertEqual(answer.source.display, "K0EPI-4")
         XCTAssertEqual(live.state, .connected)
         XCTAssertEqual(live.localAddress.display, "K0EPI-2")
+        let call = try XCTUnwrap(manager.existingSession(for: phone, path: DigiPath(), radio: .primary, local: mailbox))
+        XCTAssertEqual(call.state, .connected)
+        XCTAssertFalse(call === live)
     }
 
     /// A call to the address the record already has is the same link.

@@ -145,11 +145,15 @@ final class WinlinkAX25Transport: WinlinkTransport {
 
     func send(_ data: Data) {
         submittedBytes += data.count
+        // On the link this transport claimed: with another link to the same
+        // station from another of our addresses, the station's address is
+        // not necessarily this one.
         let frames = sessionManager.sendData(
             data,
             to: destination,
             path: path,
             radio: radio,
+            from: claim.flatMap { sessionManager.session(atKey: $0.key) }?.localAddress,
             pid: 0xF0,
             displayInfo: "Winlink B2F (\(data.count) bytes)")
         sendFrames(frames)
