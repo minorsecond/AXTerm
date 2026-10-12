@@ -51,6 +51,22 @@ nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
             }
         }
 
+        /// The label and what it holds in words, for the iPhone's menu,
+        /// where there is no tooltip to hover for it.
+        var menuTitle: String {
+            switch self {
+            case .id: return "ID: station identification"
+            case .beacon: return "BCN: beacons"
+            case .mail: return "MAIL: mail waiting notices"
+            case .data: return "DATA: messages and text"
+            case .prompt: return "CMD: link control (SABM, RR, UA, DISC)"
+            case .other: return "OTHER: anything else"
+            case .system: return "SYS: this app's own notices"
+            case .mine: return "MINE: only traffic you are part of"
+            case .digipeats: return "DIGI: digipeater echoes of your frames"
+            }
+        }
+
         /// The seven that partition the console. MINE and DIGI are excluded:
         /// they narrow the same lines rather than naming a kind of line, so
         /// treating them as classes would let "show only mine" mean "show
@@ -545,21 +561,18 @@ struct ConsoleView: View {
             VStack(spacing: 0) {
                 // Toolbar
                 HStack(spacing: 12) {
+                    #if os(iOS)
+                    // A phone's row had room for one chip and a switch, so
+                    // the frame types could not be reached (2026-10-12). One
+                    // menu holds them all, with Auto-scroll, which stays on
+                    // unless turned off there.
+                    filterMenu
+                    Spacer(minLength: 0)
+                    #else
                     Toggle("Auto-scroll", isOn: $autoScroll)
                         .platformCheckboxToggle()
-                        // Its own width first: on a phone the chip row took
-                        // the space and broke the label into "scro / ll".
                         .fixedSize()
 
-                    // Filter toggles. On iOS they scroll sideways when the
-                    // row is short of room: squeezed into it, each chip wrapped
-                    // its label mid-word ("BC/N", "OT/HE/R").
-                    #if os(iOS)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        filterToggleGroup
-                    }
-                    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-                    #else
                     Spacer()
 
                     filterToggleGroup
@@ -925,6 +938,37 @@ struct ConsoleView: View {
                     soloTitle: "", toggleTitle: "Show APRS frames raw"))
         }
     }
+
+    #if os(iOS)
+    /// Every frame type, MINE and DIGI, raw APRS and Auto-scroll, as one
+    /// menu: the chips would not fit a phone's row.
+    private var filterMenu: some View {
+        Menu {
+            Section("Show") {
+                ForEach(ConsoleTypeFilterFlags.Kind.messageClasses, id: \.self) { kind in
+                    Toggle(kind.menuTitle, isOn: binding(for: kind))
+                }
+                Button("Show All Types") { applyFlags { $0.showAllTypes() } }
+            }
+            if !localCallsign.isEmpty {
+                Section("Narrow to") {
+                    Toggle(ConsoleTypeFilterFlags.Kind.mine.menuTitle, isOn: binding(for: .mine))
+                    Toggle(ConsoleTypeFilterFlags.Kind.digipeats.menuTitle, isOn: binding(for: .digipeats))
+                }
+            }
+            Section {
+                Toggle("Print APRS frames raw", isOn: $showsRawAPRS)
+                Toggle("Auto-scroll", isOn: $autoScroll)
+            }
+        } label: {
+            Label("Show", systemImage: currentFilterFlags.restrictionSummary == nil
+                  ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                .labelStyle(.titleAndIcon)
+                .fixedSize()
+        }
+        .accessibilityLabel("Show message types")
+    }
+    #endif
 
     private func chip(_ kind: ConsoleTypeFilterFlags.Kind) -> some View {
         FilterToggle(
