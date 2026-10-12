@@ -33,9 +33,10 @@ final class NetRomNodeHostTests: XCTestCase {
         @MainActor func greeting() -> (lines: [String], prompt: String?) {
             (["Mailbox open."], "BBS> ")
         }
-        @MainActor func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool) {
+        @MainActor func handle(line: String, owner: inout OwnerConsole) -> NodeMailboxReply {
             handled.append(line)
-            return closeOnNext ? (["73."], nil, true) : (["ok"], "BBS> ", false)
+            return closeOnNext ? NodeMailboxReply(lines: ["73."], prompt: nil, closed: true)
+                               : NodeMailboxReply(lines: ["ok"], prompt: "BBS> ", closed: false)
         }
     }
 

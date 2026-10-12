@@ -33,6 +33,9 @@ extension SessionCoordinator {
         host.bbsSessionFactory = { [weak self] caller in
             self?.nodeMailbox?.beginCircuitSession(caller: caller)
         }
+        host.remoteControlProvider = { [weak self] in
+            self?.nodeMailbox?.remoteControl
+        }
     }
 
     /// The alias the operator set, and the node's callsign, which is the
@@ -75,6 +78,7 @@ extension SessionCoordinator {
         }
         snapshot.stationInfo = nodeMailbox?.settings.stationInfo ?? ""
         snapshot.bbsAvailable = nodeMailbox?.settings.onAir ?? false
+        snapshot.ownerStatus = nodeMailbox?.ownerStatus ?? []
         return snapshot
     }
 }

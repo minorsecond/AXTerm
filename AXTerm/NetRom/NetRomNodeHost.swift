@@ -33,7 +33,19 @@ import Foundation
 // swift_task_deinitOnExecutorImpl, crash report 2026-08-29 09:17).
 nonisolated protocol NodeMailboxSession: AnyObject {
     @MainActor func greeting() -> (lines: [String], prompt: String?)
-    @MainActor func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool)
+    /// One line, with the caller's owner console: the mailbox uses it and
+    /// hands it back changed, so a sign-in carries between node and mailbox.
+    @MainActor func handle(line: String, owner: inout OwnerConsole) -> NodeMailboxReply
+}
+
+/// What the mailbox says to one line through the node. Control commands
+/// come back for the host to run, since it knows what kind of link the
+/// caller is on.
+nonisolated struct NodeMailboxReply {
+    var lines: [String]
+    var prompt: String?
+    var closed: Bool
+    var controls: [(command: OwnerControlCommand, argument: String)] = []
 }
 
 /// What the host needs from the circuit layer — a seam so tests can
@@ -84,6 +96,10 @@ nonisolated final class NetRomNodeHost {
         /// callers carry their own writer from the coordinator.
         var send: (Data) -> Void
         var hangUp: () -> Void
+        /// The owner's sign-in on this link, kept across node and mailbox.
+        var owner: OwnerConsole
+        /// What decides whether this link may change the station.
+        var facts: RemoteControlService.LinkFacts
     }
 
     /// The operator's switch, pushed from settings.
@@ -98,6 +114,8 @@ nonisolated final class NetRomNodeHost {
         { ("NODE", "N0CALL", "AXTerm") }
     var snapshotProvider: () -> NetRomNodeShell.Snapshot = { .init() }
     var bbsSessionFactory: (@MainActor (String) -> NodeMailboxSession?)?
+    /// The station's remote control, shared with the mailbox.
+    var remoteControlProvider: (@MainActor () -> RemoteControlService?)?
     var onOperatorNote: ((String) -> Void)?
     /// Test seam for the dial timeout.
     // `@Sendable`, because the default implementation hands the closure to
@@ -162,16 +180,22 @@ nonisolated final class NetRomNodeHost {
 
     /// The coordinator answered a SABM at the node alias and claimed the
     /// session; from here the caller is ours.
-    func attachAX25Caller(key: String, callsign: String,
+    /// `dialed` is the address the caller connected to, usually the alias:
+    /// their device signs owner commands for that name.
+    func attachAX25Caller(key: String, callsign: String, dialed: String = "",
+                          radio: RadioID? = nil, digipeated: Bool = false,
                           send: @escaping (Data) -> Void,
                           hangUp: @escaping () -> Void) {
         let identity = identityProvider()
+        let owner = OwnerConsole(caller: callsign, station: dialed.isEmpty ? identity.alias : dialed.uppercased(),
+                                 ownerCallsign: identity.call)
         let shell = NetRomNodeShell(
             nodeAlias: identity.alias, nodeCall: identity.call,
-            version: identity.version, caller: callsign)
+            version: identity.version, caller: callsign, owner: owner)
         callers[.ax25(key)] = Caller(
-            callsign: callsign, mode: .node(shell), send: send, hangUp: hangUp)
-        write(shell.greeting(), to: .ax25(key))
+            callsign: callsign, mode: .node(shell), send: send, hangUp: hangUp, owner: owner,
+            facts: .init(radio: radio, digipeated: digipeated, relayed: false))
+        write(shell.greeting(snapshot: snapshotProvider()), to: .ax25(key))
         onOperatorNote?("\(callsign) connected to this node over AX.25.")
     }
 
@@ -179,8 +203,10 @@ nonisolated final class NetRomNodeHost {
         consume(key: .ax25(key), data: data)
     }
 
-    func ax25CallerClosed(key: String) {
-        callerLeft(.ax25(key))
+    /// `failed` when the link gave up rather than being closed: the
+    /// remote control's fail-safe puts back what the caller changed.
+    func ax25CallerClosed(key: String, failed: Bool = false) {
+        callerLeft(.ax25(key), failed: failed)
     }
 
     // MARK: - Circuit lifecycle
@@ -199,15 +225,19 @@ nonisolated final class NetRomNodeHost {
     func circuitConnected(_ id: NetRomCircuitID) {
         if let callsign = pending.removeValue(forKey: id) {
             let identity = identityProvider()
+            let owner = OwnerConsole(caller: callsign, station: identity.call)
             let shell = NetRomNodeShell(
                 nodeAlias: identity.alias, nodeCall: identity.call,
-                version: identity.version, caller: callsign)
+                version: identity.version, caller: callsign, owner: owner)
             let key = CallerKey.circuit(id)
+            // Other stations relay a circuit: it may read the station, not
+            // change it (97.213 wants a direct control link).
             callers[key] = Caller(
                 callsign: callsign, mode: .node(shell),
                 send: { [weak self] data in self?.circuitOps?.send(data, on: id) },
-                hangUp: { [weak self] in self?.circuitOps?.disconnect(id) })
-            write(shell.greeting(), to: key)
+                hangUp: { [weak self] in self?.circuitOps?.disconnect(id) },
+                owner: owner, facts: .init(radio: nil, digipeated: false, relayed: true))
+            write(shell.greeting(snapshot: snapshotProvider()), to: key)
             onOperatorNote?("\(callsign) connected to this node over NET/ROM.")
             return
         }
@@ -224,7 +254,7 @@ nonisolated final class NetRomNodeHost {
     func circuitClosed(_ id: NetRomCircuitID) {
         pending.removeValue(forKey: id)
         if callers[.circuit(id)] != nil {
-            callerLeft(.circuit(id))
+            callerLeft(.circuit(id), failed: true)
             return
         }
         // An outbound bridge died. The caller comes back to the prompt.
@@ -232,7 +262,7 @@ nonisolated final class NetRomNodeHost {
             let identity = identityProvider()
             let shell = NetRomNodeShell(
                 nodeAlias: identity.alias, nodeCall: identity.call,
-                version: identity.version, caller: caller.callsign)
+                version: identity.version, caller: caller.callsign, owner: caller.owner)
             switch caller.mode {
             case .dialing(let target, _):
                 caller.mode = .node(shell)
@@ -250,8 +280,10 @@ nonisolated final class NetRomNodeHost {
         }
     }
 
-    private func callerLeft(_ key: CallerKey) {
+    private func callerLeft(_ key: CallerKey, failed: Bool = false) {
         guard let caller = callers.removeValue(forKey: key) else { return }
+        let link = controlLink(key)
+        MainActor.assumeIsolated { remoteControlProvider?()?.linkEnded(link, failed: failed) }
         // Take any bridge down with its owner.
         switch caller.mode {
         case .dialing(_, let outbound), .bridged(_, let outbound):
@@ -282,6 +314,9 @@ nonisolated final class NetRomNodeHost {
 
     private func consume(key: CallerKey, data: Data) {
         guard var caller = callers[key] else { return }
+        // Heard from the caller: their link is working.
+        let link = controlLink(key)
+        MainActor.assumeIsolated { remoteControlProvider?()?.heard(link) }
         // AXDP at the prompt, before anything was typed: hand the circuit to
         // the station's AXDP conversation and stop hosting it.
         if case .circuit(let id) = key, case .node = caller.mode, caller.buffer.isEmpty,
@@ -319,11 +354,15 @@ nonisolated final class NetRomNodeHost {
     }
 
     private func process(line: String, on key: CallerKey) {
-        guard let caller = callers[key] else { return }
+        guard var caller = callers[key] else { return }
+        // The owner settings as they are now, before the line is read.
+        MainActor.assumeIsolated { remoteControlProvider?()?.refresh(&caller.owner) }
         switch caller.mode {
         case .node(var shell):
+            shell.owner = caller.owner
             let output = shell.handle(
                 line: line, snapshot: snapshotProvider(), now: Date())
+            callers[key]?.owner = shell.owner
             callers[key]?.mode = .node(shell)
             write(output, to: key)
             for effect in output.effects {
@@ -334,24 +373,73 @@ nonisolated final class NetRomNodeHost {
                     enterBBS(key, caller: caller.callsign)
                 case .connectOnward(let target):
                     dial(target, for: key)
+                case .ownerSignIn(let accepted):
+                    let text = accepted ? "signed in as the owner" : "gave a wrong owner code"
+                    onOperatorNote?("\(caller.callsign) \(text) at the node.")
+                    MainActor.assumeIsolated {
+                        remoteControlProvider?()?.record(text, caller: caller.callsign, door: "node")
+                    }
+                case .runControl(let command, let argument):
+                    runControl(command, argument: argument, for: key, prompt: shell.greeting().prompt)
                 }
             }
         case .bbs(let session):
-            let result = MainActor.assumeIsolated { session.handle(line: line) }
-            writeLines(result.lines, prompt: result.prompt, to: key)
+            var owner = caller.owner
+            let result = MainActor.assumeIsolated { session.handle(line: line, owner: &owner) }
+            callers[key]?.owner = owner
+            writeLines(result.lines, prompt: result.controls.isEmpty ? result.prompt : nil, to: key)
+            for control in result.controls {
+                runControl(control.command, argument: control.argument, for: key, prompt: result.prompt)
+            }
             if result.closed {
                 // Leaving the mailbox returns to the node level, the way
                 // BPQ does — the caller said BYE to the BBS, not to us.
                 let identity = identityProvider()
                 let shell = NetRomNodeShell(
                     nodeAlias: identity.alias, nodeCall: identity.call,
-                    version: identity.version, caller: caller.callsign)
+                    version: identity.version, caller: caller.callsign, owner: owner)
                 callers[key]?.mode = .node(shell)
                 writeLines(["Back at the node."],
                            prompt: shell.greeting().prompt, to: key)
             }
         case .dialing, .bridged:
             break // handled byte-wise in consume()
+        }
+    }
+
+    // MARK: - Remote control
+
+    /// The fail-safe's name for a caller's link.
+    private func controlLink(_ key: CallerKey) -> String {
+        switch key {
+        case .ax25(let session): return "node:ax25:\(session)"
+        case .circuit(let id): return "node:circuit:\(id)"
+        }
+    }
+
+    /// Runs a control command through the station's remote control, with
+    /// what the host knows about the caller's link, then the prompt.
+    private func runControl(_ command: OwnerControlCommand, argument: String, for key: CallerKey, prompt: String?) {
+        guard let caller = callers[key] else { return }
+        let link = controlLink(key)
+        let ran = MainActor.assumeIsolated { () -> Bool in
+            guard let control = remoteControlProvider?() else { return false }
+            control.run(command, argument: argument, link: link, facts: caller.facts, caller: caller.callsign,
+                        door: "node", write: { [weak self] lines in
+                            // The prompt arrives as the last line; it is
+                            // written as a prompt, without a line end.
+                            var body = lines
+                            var promptLine: String?
+                            if let prompt, body.last == prompt {
+                                body.removeLast()
+                                promptLine = prompt
+                            }
+                            self?.writeLines(body, prompt: promptLine, to: key)
+                        }, prompt: prompt)
+            return true
+        }
+        if !ran {
+            writeLines(["Remote control is not running at this station."], prompt: prompt, to: key)
         }
     }
 

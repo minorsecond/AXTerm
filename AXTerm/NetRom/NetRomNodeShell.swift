@@ -46,6 +46,8 @@ nonisolated struct NetRomNodeShell {
         var heard: [Heard] = []
         var stationInfo: String = ""
         var bbsAvailable: Bool = false
+        /// What a signed-in owner's ST shows.
+        var ownerStatus: [String] = []
     }
 
     enum Effect: Equatable {
@@ -54,6 +56,11 @@ nonisolated struct NetRomNodeShell {
         /// Open an outbound circuit to this name and bridge the caller
         /// through — the node's whole reason to exist.
         case connectOnward(String)
+        /// The operator tried to sign in, rightly or not.
+        case ownerSignIn(accepted: Bool)
+        /// Run one of the operator's control commands; the host writes the
+        /// prompt after its answer.
+        case runControl(OwnerControlCommand, argument: String)
     }
 
     struct Output: Equatable {
@@ -67,18 +74,49 @@ nonisolated struct NetRomNodeShell {
     let version: String
     let caller: String
 
-    private var prompt: String { "\(nodeAlias):\(nodeCall)} " }
+    /// The owner's sign-in and commands on this link (`OwnerConsole`),
+    /// handed to the mailbox on BBS and taken back on the way out.
+    var owner: OwnerConsole
 
-    func greeting() -> Output {
-        Output(lines: ["\(version) Node \(nodeAlias):\(nodeCall)"],
-               prompt: prompt)
+    init(nodeAlias: String, nodeCall: String, version: String, caller: String, owner: OwnerConsole? = nil) {
+        self.nodeAlias = nodeAlias
+        self.nodeCall = nodeCall
+        self.version = version
+        self.caller = caller
+        self.owner = owner ?? OwnerConsole(caller: caller, station: nodeCall)
     }
 
-    mutating func handle(line: String, snapshot: Snapshot, now: Date) -> Output {
+    private var prompt: String { "\(nodeAlias):\(nodeCall)} " }
+
+    /// The banner; with a snapshot, the node's choices under it, the way
+    /// BPQ lists them, so a caller need not guess.
+    func greeting(snapshot: Snapshot? = nil) -> Output {
+        var lines = ["\(version) Node \(nodeAlias):\(nodeCall)"]
+        if let snapshot {
+            lines.append((snapshot.bbsAvailable ? "BBS " : "") + "CONNECT INFO NODES ROUTES MH BYE  (? for help)")
+        }
+        return Output(lines: lines, prompt: prompt)
+    }
+
+    mutating func handle(line rawLine: String, snapshot: Snapshot, now: Date) -> Output {
+        let line: String
+        let checked: Bool
+        switch owner.route(rawLine, atCommandLine: true) {
+        case .reply(let reply):
+            return owned(reply)
+        case .line(let routed, let wasChecked):
+            line = routed
+            checked = wasChecked
+        }
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return Output(prompt: prompt) }
         let parts = trimmed.split(separator: " ", maxSplits: 1)
         let verb = String(parts[0]).uppercased()
+        let rest = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespaces) : ""
+
+        if let reply = owner.command(verb, rest, checked: checked, status: snapshot.ownerStatus, now: now) {
+            return owned(reply)
+        }
 
         switch verb {
         case "?", "H", "HELP":
@@ -128,6 +166,22 @@ nonisolated struct NetRomNodeShell {
         }
     }
 
+    /// The console's answer as the node's: a control command leaves the
+    /// prompt to the host, which writes it after the command has spoken.
+    private func owned(_ reply: OwnerConsole.Reply) -> Output {
+        var output = Output(lines: reply.lines, prompt: prompt)
+        for effect in reply.effects {
+            switch effect {
+            case .signIn(let accepted):
+                output.effects.append(.ownerSignIn(accepted: accepted))
+            case .runControl(let command, let argument):
+                output.effects.append(.runControl(command, argument: argument))
+                output.prompt = nil
+            }
+        }
+        return output
+    }
+
     private func help(_ snapshot: Snapshot) -> [String] {
         var lines = [
             "C CALL  connect onward through this node",
@@ -140,7 +194,7 @@ nonisolated struct NetRomNodeShell {
             lines.append("BBS     enter the mailbox")
         }
         lines.append("BYE     disconnect")
-        return lines
+        return lines + owner.helpLines
     }
 
     private func info(_ snapshot: Snapshot) -> [String] {

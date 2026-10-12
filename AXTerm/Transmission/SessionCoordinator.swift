@@ -1973,7 +1973,7 @@ final class SessionCoordinator: ObservableObject {
             },
             stateHandler: { [weak self] _, _, newState in
                 guard newState == .disconnected || newState == .error else { return }
-                self?.netRomNodeHost.ax25CallerClosed(key: hostKey)
+                self?.netRomNodeHost.ax25CallerClosed(key: hostKey, failed: newState == .error)
                 self?.nodeL2Claims.removeValue(forKey: session.key)
             }
         ) else {
@@ -1987,6 +1987,9 @@ final class SessionCoordinator: ObservableObject {
         netRomNodeHost.attachAX25Caller(
             key: hostKey,
             callsign: session.remoteAddress.display.uppercased(),
+            dialed: session.localAddress.display.uppercased(),
+            radio: session.radio,
+            digipeated: !session.path.digis.isEmpty,
             send: write,
             hangUp: { [weak self] in
                 guard let self else { return }
