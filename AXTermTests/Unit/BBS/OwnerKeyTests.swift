@@ -226,7 +226,7 @@ final class BBSShellOwnerKeyTests: XCTestCase {
     func testAKeySignsInWhileCodesAreLockedOut() throws {
         var sut = shell(checkOwnerCode: { _, _ in .lockedOut })
         XCTAssertEqual(sut.handle(line: "OWNER 123456", mailbox: box, now: now).lines,
-                       ["Too many wrong codes. Try again in 15 minutes."])
+                       ["Too many wrong codes. Codes are refused for now; a paired device's key still works."])
         _ = try signIn(&sut, box: box)
         XCTAssertTrue(sut.isOwner)
     }

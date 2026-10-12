@@ -102,11 +102,20 @@ nonisolated enum OwnerCode {
         /// One step either side of the mailbox's clock.
         static let drift: UInt64 = 1
         static let allowedWrong = 3
+        /// The first lockout. Each one after it, with no right code
+        /// between, is twice as long, up to `longestLockout`: a guesser at
+        /// the fastest pace the lockout allows gets about 180 guesses a
+        /// year, under 0.06% odds of a right one (each guess can match three
+        /// codes). A fixed 15 minutes allowed some 93,000 guesses a year,
+        /// 28% odds (security suite, SEC-1, 2026-10-12).
         static let lockout: TimeInterval = 15 * 60
+        static let longestLockout: TimeInterval = 7 * 86_400
 
         private(set) var lastUsedStep: UInt64?
         private var wrongAt: [Date] = []
         private var lockedUntil: Date?
+        /// Lockouts in a row, with no right code between.
+        private var lockouts = 0
 
         init(secret: Data) { self.secret = secret }
 
@@ -121,6 +130,7 @@ nonisolated enum OwnerCode {
                 if let lastUsedStep, step <= lastUsedStep { return .used }
                 lastUsedStep = step
                 wrongAt.removeAll()
+                lockouts = 0
                 return .accepted
             }
             return wrong(at: now)
@@ -129,7 +139,9 @@ nonisolated enum OwnerCode {
         private mutating func wrong(at now: Date) -> Verdict {
             wrongAt = wrongAt.filter { now.timeIntervalSince($0) < Self.lockout } + [now]
             if wrongAt.count >= Self.allowedWrong {
-                lockedUntil = now.addingTimeInterval(Self.lockout)
+                let length = min(Self.lockout * pow(2, Double(min(lockouts, 30))), Self.longestLockout)
+                lockedUntil = now.addingTimeInterval(length)
+                lockouts += 1
                 wrongAt.removeAll()
             }
             return .wrong

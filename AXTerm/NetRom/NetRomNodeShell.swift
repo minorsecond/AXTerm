@@ -159,7 +159,7 @@ nonisolated struct NetRomNodeShell {
                           prompt: nil, effects: [.disconnect])
         default:
             return Output(
-                lines: ["? \(verb) — NODES, ROUTES, MH, INFO"
+                lines: ["? \(BBSShell.echo(verb)) — NODES, ROUTES, MH, INFO"
                         + (snapshot.bbsAvailable ? ", BBS" : "")
                         + ", BYE"],
                 prompt: prompt)

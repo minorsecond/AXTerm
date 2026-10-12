@@ -274,6 +274,12 @@ nonisolated struct BBSShell {
                                   ownerKeys: ownerKeys, makeOneTimeKey: makeOneTimeKey)
     }
 
+    /// An unknown word as it is said back: short, so a huge line typed at
+    /// the prompt is not sent back on the air whole (SEC-33).
+    static func echo(_ word: String) -> String {
+        word.count > 16 ? String(word.prefix(16)) + "…" : word
+    }
+
     /// The words the mailbox and the node use themselves, which an owner
     /// control command cannot take.
     static let builtInVerbs: Set<String> = [
@@ -515,7 +521,7 @@ nonisolated struct BBSShell {
             return Output(lines: ["73 de \(sysop.uppercased())"],
                           prompt: nil, effects: [.disconnect])
         default:
-            return Output(lines: ["? \(verb) — \(Self.commandSummary)"])
+            return Output(lines: ["? \(Self.echo(verb)) — \(Self.commandSummary)"])
         }
     }
 

@@ -67,7 +67,7 @@ final class BBSShellOwnerTests: XCTestCase {
         for _ in 0..<3 { _ = sut.handle(line: "OWNER 000000", mailbox: box, now: now) }
         let out = sut.handle(line: "OWNER \(code)", mailbox: box, now: now)
         XCTAssertFalse(sut.isOwner)
-        XCTAssertEqual(out.lines, ["Too many wrong codes. Try again in 15 minutes."])
+        XCTAssertEqual(out.lines, ["Too many wrong codes. Codes are refused for now; a paired device's key still works."])
     }
 
     func testSignedInSTShowsTheStation() {

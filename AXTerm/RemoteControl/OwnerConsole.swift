@@ -166,7 +166,7 @@ nonisolated struct OwnerConsole {
             return Reply(lines: ["That code was already used. Wait for the next one."],
                          effects: [.signIn(accepted: false)])
         case .lockedOut:
-            return Reply(lines: ["Too many wrong codes. Try again in 15 minutes."],
+            return Reply(lines: ["Too many wrong codes. Codes are refused for now; a paired device's key still works."],
                          effects: [.signIn(accepted: false)])
         }
     }

@@ -28,7 +28,8 @@ struct OwnerAccessSection: View {
             Text("Calling the mailbox or the node on your own callsign, type OWNER and the six-digit code from an "
                  + "authenticator app to open ST, the station's state. The code goes out in plain text "
                  + "with the command, which hides nothing and is allowed on the air, and it works once. "
-                 + "Three wrong codes stop sign-in for 15 minutes. From another AXTerm paired below, "
+                 + "Three wrong codes stop code sign-in for 15 minutes, and each lockout after that "
+                 + "is twice as long, up to a week, until a right code. From another AXTerm paired below, "
                  + "Sign In as Owner in the terminal signs in with that device's key instead. Every "
                  + "attempt shows in the call log.")
                 .font(.caption)

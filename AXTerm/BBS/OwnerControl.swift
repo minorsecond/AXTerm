@@ -66,8 +66,13 @@ nonisolated struct OwnerControlCommand: Codable, Equatable, Sendable, Identifiab
             }
         }
 
+        /// Longest number text taken: enough for any frequency in Hz or a
+        /// power to the milliwatt, short of anything to smuggle (SEC-19).
+        static let longestNumber = 16
+
         /// Digits with at most one point and an optional leading minus.
         private static func isPlainNumber(_ text: String) -> Bool {
+            guard text.count <= longestNumber else { return false }
             var body = Substring(text)
             if body.first == "-" { body = body.dropFirst() }
             guard !body.isEmpty, body.filter({ $0 == "." }).count <= 1 else { return false }
@@ -157,11 +162,23 @@ nonisolated struct OwnerControlCommand: Codable, Equatable, Sendable, Identifiab
 
     private static let needsWayBack = "It changes how the station transmits, so it needs a way to put that back."
 
-    /// rigctl's `T` and `set_ptt`: nothing could promise to let go again.
+    /// rigctl commands that make the radio transmit, or that hand it raw
+    /// commands which could: PTT, CW, DTMF, voice memories and raw CAT. In
+    /// any spelling rigctld accepts: the short letter, which is
+    /// case-sensitive, or the long name after an optional backslash, with
+    /// any whitespace between words (SEC-21).
+    private static let keyingLetters: Set<String> = ["T", "b", "w", "W"]
+    private static let keyingNames: Set<String> = [
+        "set_ptt", "send_morse", "send_cmd", "send_cmd_rx", "send_dtmf", "send_voice_mem"
+    ]
+
+    /// Whether a rigctl line could key the transmitter: nothing could
+    /// promise to let go again.
     private static func keysTheTransmitter(_ line: String) -> Bool {
-        guard var word = line.split(separator: " ").first.map(String.init) else { return false }
-        if word.hasPrefix("\\") { word.removeFirst() }
-        return word == "T" || word.lowercased() == "set_ptt"
+        guard var word = line.split(whereSeparator: \.isWhitespace).first.map(String.init) else { return false }
+        if keyingLetters.contains(word) { return true }
+        while word.hasPrefix("\\") || word.hasPrefix("+") { word.removeFirst() }
+        return keyingNames.contains(word.lowercased())
     }
 
     private static func isPlainFileName(_ name: String) -> Bool {
@@ -268,10 +285,24 @@ nonisolated struct OwnerControlRunner: Sendable {
         return [command.unit.isEmpty ? shown : "\(shown) \(command.unit)"] + reply.dropFirst()
     }
 
-    /// The first line named, every line under 80 characters, and no more
-    /// than `maxLines` of them.
+    /// A line as it may go on the air: terminal escape sequences and
+    /// control or format characters (bidirectional overrides among them)
+    /// removed, tabs as spaces (SEC-23).
+    static func clean(_ line: String) -> String {
+        let withoutEscapes = line.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[ -/]*[@-~]", with: "",
+                                                       options: .regularExpression)
+        let scalars = withoutEscapes.unicodeScalars.compactMap { scalar -> Character? in
+            if scalar == "\t" { return " " }
+            if CharacterSet.controlCharacters.contains(scalar) || (0x80...0x9F).contains(scalar.value) { return nil }
+            return Character(scalar)
+        }
+        return String(scalars)
+    }
+
+    /// The first line named, every line clean and under 80 characters, and
+    /// no more than `maxLines` of them.
     static func shorten(_ output: [String], for word: String) -> [String] {
-        let kept = output.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let kept = output.map(clean).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !kept.isEmpty else { return ["\(word): done."] }
         var lines = kept.prefix(maxLines).enumerated().map { index, line in
             String((index == 0 ? "\(word): \(line)" : line).prefix(79))

@@ -960,7 +960,8 @@ the operator, callers in the last day, and uploads waiting in the inbox. The
 code's secret is made in the settings, shown as a QR code for the app, and kept
 in the Keychain (`OwnerCodeSecretStore`). The command and code go out in plain
 text, which hides nothing, so each code is accepted once (`OwnerCode.Checker`);
-three wrong codes stop sign-in for 15 minutes, and every attempt, right or
+three wrong codes stop code sign-in for 15 minutes, each lockout after that
+twice as long up to a week until a right code, and every attempt, right or
 wrong, goes in the call log. To anyone else, and with the switch off or no
 secret made, `OWNER` and `ST` are unknown commands like any other.
 

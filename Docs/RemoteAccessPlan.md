@@ -199,8 +199,12 @@ A command that changes how the station transmits:
   for two and a half minutes, inside the 3 minutes 97.213(b) allows. Hanging
   up on purpose keeps the change.
 
-A control command may never key the transmitter (rigctl `T` or `set_ptt`):
-nothing could promise to let go of it. The mailbox names its owner commands at
+A control command may never key the transmitter, or hand the radio anything
+that could: rigctl `T`/`set_ptt`, `b`/`send_morse`, `w`/`send_cmd`,
+`W`/`send_cmd_rx`, `send_dtmf` and `send_voice_mem`, in any spelling rigctld
+takes. Nothing could promise to let go of it. Number arguments are at most 16
+characters, and what a radio or script answers goes on the air with terminal
+escapes and control characters removed (Docs/SecurityTesting.md). The mailbox names its owner commands at
 sign-in (`Owner commands: ST QRG MODE PWR SIG VOLTS`), so the device knows which lines
 get a check without being set up at its end. Every run, every refusal and
 every step of the fail-safe goes in the call log.
