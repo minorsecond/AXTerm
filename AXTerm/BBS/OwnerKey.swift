@@ -225,3 +225,14 @@ nonisolated struct OwnerSignInResponder: Sendable {
         return "!" + check + " " + command
     }
 }
+
+/// Where the terminal offers Sign In as Owner: a station on the operator's
+/// own callsign, or a node alias that belongs to one (EPINOD, the node of
+/// K0EPI-2, as its NODES broadcasts say).
+nonisolated enum OwnerSignInTarget {
+    static func offers(peer: String, local: String, aliasCallsign: String?) -> Bool {
+        if BBSShell.isOwnerCallsign(peer, station: local) { return true }
+        guard let aliasCallsign else { return false }
+        return BBSShell.isOwnerCallsign(aliasCallsign, station: local)
+    }
+}

@@ -912,8 +912,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// mailbox at home it may sign in to as the owner.
     var canSignInAsOwner: Bool {
         guard let session = currentSession, session.state == .connected else { return false }
-        return BBSShell.isOwnerCallsign(session.remoteAddress.display, station: session.localAddress.display)
+        let peer = session.remoteAddress.display
+        return OwnerSignInTarget.offers(peer: peer, local: session.localAddress.display,
+                                        aliasCallsign: aliasCallsign(peer))
     }
+
+    /// The callsign a node alias belongs to, from the NODES broadcasts heard.
+    var aliasCallsign: (String) -> String? = { _ in nil }
 
     /// Asks the mailbox for a challenge; the answer goes out by itself.
     func signInAsOwner() {
@@ -2593,6 +2598,9 @@ struct TerminalView: View {
         txViewModel.receivedTextSink = sessionCoordinator
 
         // Frames the model makes on its own: the owner sign-in's answer.
+        txViewModel.aliasCallsign = { [weak nodeAliases] alias in
+            nodeAliases?.directory.allEntries.first { $0.alias.caseInsensitiveCompare(alias) == .orderedSame }?.callsign
+        }
         txViewModel.sendFrames = { [client] frames in
             for frame in frames { client.send(frame: frame) { _ in } }
         }

@@ -349,3 +349,20 @@ final class OwnerSignInResponderTests: XCTestCase {
         XCTAssertEqual(shell.handle(line: st, mailbox: box, now: Date()).lines, ["Mail for you: 2 unread"])
     }
 }
+
+/// Where the terminal offers Sign In as Owner: a station on the operator's
+/// own callsign, or a node alias that belongs to one. Connected to EPINOD,
+/// the operator's node, the key button was hidden (2026-10-12).
+final class OwnerSignInTargetTests: XCTestCase {
+
+    func testTheOperatorsOwnCallsign() {
+        XCTAssertTrue(OwnerSignInTarget.offers(peer: "K0EPI-4", local: "K0EPI-3", aliasCallsign: nil))
+        XCTAssertFalse(OwnerSignInTarget.offers(peer: "W0ARP-1", local: "K0EPI-3", aliasCallsign: nil))
+    }
+
+    func testANodeAliasOfTheOperatorsStation() {
+        XCTAssertTrue(OwnerSignInTarget.offers(peer: "EPINOD", local: "K0EPI-3", aliasCallsign: "K0EPI-2"))
+        XCTAssertFalse(OwnerSignInTarget.offers(peer: "COSCO", local: "K0EPI-3", aliasCallsign: "KE0GB-7"))
+        XCTAssertFalse(OwnerSignInTarget.offers(peer: "EPINOD", local: "K0EPI-3", aliasCallsign: nil))
+    }
+}
