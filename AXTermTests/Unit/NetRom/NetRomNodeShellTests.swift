@@ -36,6 +36,36 @@ final class NetRomNodeShellTests: XCTestCase {
                        + "and the node capability it signals is now real")
     }
 
+    /// Any unique start of a command works, as at a BPQ node: the first
+    /// letter where the menu's words do not share it, more where they do
+    /// (operator, 2026-10-12).
+    func testAUniqueStartOfACommandIsThatCommand() {
+        func run(_ line: String) -> NetRomNodeShell.Output {
+            var shell = makeShell()
+            return shell.handle(line: line, snapshot: snapshot, now: now)
+        }
+        XCTAssertTrue(run("inf").lines.contains { $0.contains("EPINOD:K0EPI-7") })
+        XCTAssertTrue(run("NOD").lines.contains { $0.contains("COSCO") })
+        XCTAssertTrue(run("rou").lines.contains { $0.contains("KB5YZB-7") })
+        XCTAssertTrue(run("MHE").lines.contains { $0.contains("KD0SSP") })
+        XCTAssertEqual(run("bb").effects, [.enterBBS])
+        XCTAssertEqual(run("by").effects, [.disconnect])
+        XCTAssertEqual(run("con W0XYZ").effects, [.connectOnward("W0XYZ")])
+        XCTAssertEqual(run("HEL").lines, run("?").lines)
+    }
+
+    /// The single letters keep their usual meanings, and a start two
+    /// commands share is not guessed.
+    func testTheUsualLettersStandAndASharedStartIsNotGuessed() {
+        func run(_ line: String) -> NetRomNodeShell.Output {
+            var shell = makeShell()
+            return shell.handle(line: line, snapshot: snapshot, now: now)
+        }
+        XCTAssertEqual(run("b").effects, [.disconnect], "B is BYE at every node")
+        XCTAssertTrue(run("i").lines.contains { $0.contains("EPINOD:K0EPI-7") })
+        XCTAssertTrue(run("m").lines.first?.hasPrefix("? M") == true, "MHEARD or MAIL: not guessed")
+    }
+
     func testOurRoutesOutputFeedsOurOwnScraper() {
         var shell = makeShell()
         let out = shell.handle(line: "ROUTES", snapshot: snapshot, now: now)

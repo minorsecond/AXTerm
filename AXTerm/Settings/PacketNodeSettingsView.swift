@@ -18,6 +18,8 @@ struct PacketNodeSettingsView: View {
     /// Whether the mailbox is on the air (its own page's switch), for the
     /// summary at the top; nil leaves it out.
     var mailboxOnAir: Bool? = nil
+    /// The mailbox's callsign, so the node's is not offered it.
+    var mailboxCallsign: String? = nil
     /// The switched-off radios' sections, shown on request.
     @State private var showsFoldedRadios = false
     /// Folded under Advanced: the link layer and protocol tuning.
@@ -600,8 +602,12 @@ struct PacketNodeSettingsView: View {
     }
 
     /// SSIDs the station's radios already answer on.
+    /// The station's SSIDs in use, the radios' and the mailbox's, which
+    /// the node's callsign must not take.
     private var radioSSIDs: [Int] {
-        settings.activeRadios.map { CallsignNormalizer.toAddress($0.resolvedCallsign(station: settings.myCallsign)).ssid }
+        NodeCallsignChoices.taken(
+            radios: settings.activeRadios.map { $0.resolvedCallsign(station: settings.myCallsign) },
+            mailbox: mailboxCallsign, station: settings.myCallsign)
     }
 
     /// Why a packet service's switch is grayed out. The services are also

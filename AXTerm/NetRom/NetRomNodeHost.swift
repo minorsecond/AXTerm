@@ -104,6 +104,8 @@ nonisolated final class NetRomNodeHost {
         /// at the caller's first line, since a neighbor node links to the
         /// same callsign to carry NET/ROM and must not get the prompt's text.
         var awaitingGreeting = false
+        /// An AXTerm caller's AXDP, cut into messages (`readAXDP`).
+        var axdp = AXDPStreamReassembler()
     }
 
     /// The operator's switch, pushed from settings.
@@ -112,6 +114,10 @@ nonisolated final class NetRomNodeHost {
     /// that wants a conversation, not the node prompt. The host lets the
     /// circuit go and hands over what arrived (Docs/RemoteAccessPlan.md).
     var onAXDPCircuit: ((NetRomCircuitID, _ caller: String, _ data: Data) -> Void)?
+
+    /// Answers an AXTerm caller's capability check, asked inside its AX.25
+    /// session at the prompt, with the reply's bytes for the caller.
+    var capabilityPingHandler: ((AXDP.Message, _ caller: String, _ reply: @escaping (Data) -> Void) -> Void)?
 
     // Injected by the shell that owns the stores.
     var identityProvider: () -> (alias: String, call: String, version: String) =
@@ -380,7 +386,42 @@ nonisolated final class NetRomNodeHost {
         // is about to exist.
         if case .dialing = caller.mode { return }
 
+        // An AXTerm caller's AXDP at the prompt: its chat is typing. The
+        // station answers an AXDP probe for every address it has, so a
+        // caller may take the node for AXTerm and send its lines this way
+        // (on air 2026-10-12).
+        if case .ax25 = key, case .node = caller.mode,
+           caller.axdp.isMidMessage || !caller.axdp.buffered.isEmpty
+            || (caller.buffer.isEmpty && AXDP.hasMagic(data)) {
+            readAXDP(data, from: key)
+            return
+        }
+
         caller.buffer.append(data)
+        callers[key] = caller
+        drainLines(key)
+    }
+
+    /// The caller's AXDP: a CHAT message is a typed line, a PING is the
+    /// caller checking for AXDP and is answered, anything else is noted and
+    /// left. Bytes around the messages are typing.
+    private func readAXDP(_ data: Data, from key: CallerKey) {
+        guard var caller = callers[key] else { return }
+        let (messages, text) = caller.axdp.split(data)
+        for message in messages {
+            switch message.type {
+            case .chat:
+                if let payload = message.payload, !payload.isEmpty {
+                    caller.buffer.append(payload + Data([0x0D]))
+                }
+            case .ping:
+                let send = caller.send
+                capabilityPingHandler?(message, caller.callsign) { send($0) }
+            default:
+                onOperatorNote?("\(caller.callsign) sent the node an AXDP \(message.type) message; it was left unread.")
+            }
+        }
+        caller.buffer.append(text)
         callers[key] = caller
         drainLines(key)
     }

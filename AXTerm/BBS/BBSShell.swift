@@ -274,10 +274,12 @@ nonisolated struct BBSShell {
                                   ownerKeys: ownerKeys, makeOneTimeKey: makeOneTimeKey)
     }
 
-    /// An unknown word as it is said back: short, so a huge line typed at
-    /// the prompt is not sent back on the air whole (SEC-33).
+    /// An unknown word as it is said back: printable and short, so binary,
+    /// control characters or a huge line typed at the prompt are not sent
+    /// back on the air (SEC-33).
     static func echo(_ word: String) -> String {
-        word.count > 16 ? String(word.prefix(16)) + "…" : word
+        let printable = OwnerControlRunner.clean(word)
+        return printable.count > 16 ? String(printable.prefix(16)) + "…" : printable
     }
 
     /// The words the mailbox and the node use themselves, which an owner

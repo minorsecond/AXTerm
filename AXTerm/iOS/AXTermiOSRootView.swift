@@ -1493,7 +1493,8 @@ struct AXTermiOSRootView: View {
                 .navigationTitle("APRS")
                 .navigationBarTitleDisplayMode(.inline)
         case .packetNode:
-            PacketNodeSettingsView(settings: settings, client: client, mailboxOnAir: bbsSettings.onAir)
+            PacketNodeSettingsView(settings: settings, client: client, mailboxOnAir: bbsSettings.onAir,
+                                   mailboxCallsign: bbsSettings.callsign)
                 .environmentObject(SettingsRouter.shared)
                 .navigationTitle("Packet Node")
                 .navigationBarTitleDisplayMode(.inline)

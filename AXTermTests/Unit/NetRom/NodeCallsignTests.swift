@@ -172,6 +172,16 @@ final class NodeCallsignChoicesTests: XCTestCase {
         XCTAssertTrue(NodeCallsignChoices.ssids(taken: [7], current: 7).contains(7))
     }
 
+    /// The mailbox's SSID is taken too: the picker offered K0EPI-4, the
+    /// mailbox's address, for the node (2026-10-12).
+    func testTheMailboxsSSIDIsTaken() {
+        XCTAssertEqual(NodeCallsignChoices.taken(radios: ["K0EPI-2"], mailbox: "K0EPI-4", station: "K0EPI"), [2, 4])
+        XCTAssertEqual(NodeCallsignChoices.taken(radios: ["K0EPI-2"], mailbox: "W0ARP-4", station: "K0EPI"), [2],
+                       "a mailbox on another callsign takes nothing of ours")
+        XCTAssertEqual(NodeCallsignChoices.taken(radios: ["K0EPI-2"], mailbox: nil, station: "K0EPI"), [2])
+        XCTAssertFalse(NodeCallsignChoices.ssids(taken: [2, 4]).contains(4))
+    }
+
     /// 7 is the one operators most often give a node.
     func testTheUsualOneIsSeven() {
         XCTAssertEqual(NodeCallsignChoices.suggested(taken: [2, 4]), 7)

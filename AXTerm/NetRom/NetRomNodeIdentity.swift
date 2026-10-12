@@ -35,6 +35,15 @@ nonisolated enum NetRomNodeIdentity: String, Codable, CaseIterable, Sendable {
 
 /// What the Packet Node page offers for the node's own callsign.
 nonisolated enum NodeCallsignChoices {
+    /// The SSIDs of the station's callsign already in use: the radios'
+    /// and, when it is on the station's callsign, the mailbox's.
+    static func taken(radios: [String], mailbox: String?, station: String) -> [Int] {
+        let base = CallsignNormalizer.parse(station).call.uppercased()
+        let ours = (radios + [mailbox].compactMap { $0 }).map(CallsignNormalizer.toAddress)
+            .filter { $0.call.uppercased() == base }
+        return Array(Set(ours.map(\.ssid))).sorted()
+    }
+
     /// SSIDs 1 to 15 that no radio uses, with the current one kept.
     static func ssids(taken: [Int], current: Int? = nil) -> [Int] {
         (1...15).filter { !taken.contains($0) || $0 == current }

@@ -191,6 +191,18 @@ final class SecurityBoundsTests: XCTestCase {
         XCTAssertLessThan(answer.lines.joined().count, 1_000, "at the node too")
     }
 
+    /// SEC-33. An unknown word is said back as printable text only:
+    /// binary from the caller (AXDP the node could not read, on air
+    /// 2026-10-12) and control characters are not sent on the air.
+    func testTheEchoIsPrintableOnly() {
+        let junk = "AXT1\u{1}\u{0}\u{1B}[31m\u{7}\u{202E}x"
+        let echoed = BBSShell.echo(junk)
+        XCTAssertFalse(echoed.unicodeScalars.contains {
+            CharacterSet.controlCharacters.contains($0) || $0.value == 0x202E
+        }, echoed.debugDescription)
+        XCTAssertTrue(echoed.hasPrefix("AXT1"), echoed)
+    }
+
     /// SEC-34. The remote-control log cannot be grown without bound by
     /// someone sending wrong codes all day.
     func testTheLogIsBounded() {

@@ -120,7 +120,8 @@ struct SettingsView: View {
         case .radios:
             RadiosSettingsView(settings: settings, client: client)
         case .packetNode:
-            PacketNodeSettingsView(settings: settings, client: client, mailboxOnAir: bbsSettings.onAir)
+            PacketNodeSettingsView(settings: settings, client: client, mailboxOnAir: bbsSettings.onAir,
+                                   mailboxCallsign: bbsSettings.callsign)
         case .fileTransfers:
             FileTransferSettingsView(settings: settings)
         case .winlink:

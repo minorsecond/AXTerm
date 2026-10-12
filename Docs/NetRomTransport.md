@@ -406,6 +406,14 @@ EPINOD:K0EPI-7}
 The banner and prompt name the node as ALIAS:NODECALL, with the node's own
 callsign when it has one and the station's otherwise.
 
+Commands take any unique start, as at a BPQ node: `I`, `INF` or `INFO`;
+`N`, `NOD`; `R`, `ROU`; `MH` or `J`; `C CALL`; `BB` for BBS and `B` or `BY`
+for BYE. A start two commands share, such as `M` (MHEARD or MAIL), is not
+guessed. An AXTerm caller that sends its lines as AXDP chat, which it may
+since the station answers an AXDP probe for every address it has, is read
+the same as typing, and a capability check asked inside the session is
+answered (on air 2026-10-12).
+
 `BBS` (also `MAIL` and `PMS`) goes to the mailbox:
 
 - Over AX.25 the link itself goes to the full mailbox, which can run file

@@ -33,6 +33,11 @@ extension SessionCoordinator {
         host.bbsSessionFactory = { [weak self] caller in
             self?.nodeMailbox?.beginCircuitSession(caller: caller)
         }
+        host.capabilityPingHandler = { [weak self] message, caller, reply in
+            MainActor.assumeIsolated {
+                self?.receiveMailboxCapabilityPing(message, from: CallsignNormalizer.toAddress(caller), reply: reply)
+            }
+        }
         host.remoteControlProvider = { [weak self] in
             self?.nodeMailbox?.remoteControl
         }

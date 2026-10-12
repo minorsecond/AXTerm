@@ -118,7 +118,7 @@ nonisolated struct NetRomNodeShell {
             return owned(reply)
         }
 
-        switch verb {
+        switch Self.command(for: verb) {
         case "?", "H", "HELP":
             return Output(lines: help(snapshot), prompt: prompt)
         case "I", "INFO":
@@ -164,6 +164,24 @@ nonisolated struct NetRomNodeShell {
                         + ", BYE"],
                 prompt: prompt)
         }
+    }
+
+    /// The node's words, each with what it stands for. A unique start of
+    /// one is that command, as at a BPQ node: `INF`, `NOD`, `BB` for BBS,
+    /// `BY` for BYE. The single letters above keep their usual meanings.
+    private static let words: [(word: String, command: String)] = [
+        ("HELP", "HELP"), ("INFO", "INFO"), ("NODES", "NODES"), ("ROUTES", "ROUTES"),
+        ("MHEARD", "MH"), ("JHEARD", "MH"), ("HEARD", "MH"),
+        ("BBS", "BBS"), ("MAIL", "BBS"), ("PMS", "BBS"),
+        ("CONNECT", "CONNECT"), ("BYE", "BYE"), ("QUIT", "BYE")
+    ]
+
+    /// What `verb` stands for: itself, or the one command it is the start
+    /// of. A start that two commands share is left as it is.
+    static func command(for verb: String) -> String {
+        guard !words.contains(where: { $0.word == verb }) else { return verb }
+        let commands = Set(words.filter { $0.word.hasPrefix(verb) }.map(\.command))
+        return commands.count == 1 ? commands.first! : verb
     }
 
     /// The console's answer as the node's: a control command leaves the
