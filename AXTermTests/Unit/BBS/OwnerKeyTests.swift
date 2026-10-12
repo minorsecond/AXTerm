@@ -248,7 +248,7 @@ final class BBSShellOwnerKeyTests: XCTestCase {
                            checkOwnerCode: { _, _ in checked = true; return .lockedOut })
         let out = sut.handle(line: "OWNER KEY", mailbox: BBSShell.Mailbox(), now: now)
         XCTAssertFalse(checked, "KEY is not a code")
-        XCTAssertEqual(out.lines, ["No device is paired with this mailbox. Pair one in its owner settings at home."])
+        XCTAssertEqual(out.lines, ["No device is paired with this station. Pair one in its owner settings at home."])
         XCTAssertEqual(out.effects, [])
     }
 

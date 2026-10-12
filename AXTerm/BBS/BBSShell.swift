@@ -204,45 +204,32 @@ nonisolated struct BBSShell {
     /// Lines of output per page; 0 sends it whole. 24 by default, what a
     /// plain terminal shows; the caller changes it with FBB's `OP n`.
     private(set) var pageRows: Int
-    /// Checks an owner's one-time code (`OwnerCode.Checker`); nil unless
-    /// owner commands are on and the caller is the operator's callsign.
-    /// Without it OWNER and ST are unknown commands.
-    /// The mailbox sets it again before each line, so a change made at home
-    /// during a call applies to it.
-    var checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)?
-    /// The devices that may sign in with a key (`OwnerKey`); nil unless
-    /// owner commands are on, the caller is the operator's callsign and a
-    /// device is paired.
-    var ownerKeys: [OwnerKey.PairedDevice]?
-    /// The operator's control commands (`OwnerControlCommand`), offered
-    /// only where owner commands are.
-    var ownerControls: [OwnerControlCommand] = []
-    /// The radios the radio commands may name (`ControlRadio`).
-    var ownerRadios: [ControlRadio] = []
-    private let makeOneTimeKey: () -> P256.KeyAgreement.PrivateKey
-    /// The one-time key of the challenge outstanding, until a sign-in uses
-    /// it up or it runs out (`OwnerKey.challengeLifetime`).
-    private var ownerChallenge: (key: P256.KeyAgreement.PrivateKey, issued: Date)?
-    /// The session key of a key sign-in, and the counter the next owner
-    /// command's check covers.
-    private var ownerSession: (key: SymmetricKey, counter: UInt64)?
-    private var wrongChecks = 0
-    /// Signed in with a right code or key, until the call ends.
-    private(set) var isOwner = false
-    /// Signed in with a key: from then on each owner command must carry its
-    /// own check, so anyone putting frames into the session under the
-    /// operator's callsign cannot use the sign-in.
-    private var ownerByKey = false
-    /// A signed owner command is running.
-    private var runningSignedCommand = false
-
-    /// OWNER and ST exist for this caller.
-    private var offersOwnerCommands: Bool { checkOwnerCode != nil || ownerKeys != nil }
-
-    /// The words that are owner commands for this caller.
-    private var ownerVerbs: [String] {
-        ["ST"] + ownerControls.map { $0.name.uppercased() }
+    /// The owner's sign-in and commands for this link (`OwnerConsole`).
+    /// The node hands its own over when a caller comes to the mailbox
+    /// through it, so a sign-in carries across.
+    var owner: OwnerConsole
+    /// Set before each line from the owner settings as they are now, so a
+    /// change made at home during a call applies to it.
+    var checkOwnerCode: ((String, Date) -> OwnerCode.Verdict)? {
+        get { owner.checkOwnerCode }
+        set { owner.checkOwnerCode = newValue }
     }
+    var ownerKeys: [OwnerKey.PairedDevice]? {
+        get { owner.ownerKeys }
+        set { owner.ownerKeys = newValue }
+    }
+    var ownerControls: [OwnerControlCommand] {
+        get { owner.controls }
+        set { owner.controls = newValue }
+    }
+    var ownerRadios: [ControlRadio] {
+        get { owner.radios }
+        set { owner.radios = newValue }
+    }
+    /// Signed in with a right code or key, until the call ends.
+    var isOwner: Bool { owner.isOwner }
+    /// The line being handled came with a right check.
+    private var lineWasChecked = false
 
     private(set) var state: State = .command
     /// The file id `D` has quoted a time for and is waiting to be asked about
@@ -283,22 +270,23 @@ nonisolated struct BBSShell {
         self.longTransferSeconds = longTransferSeconds
         self.linesOnlyDirectCall = linesOnlyDirectCall
         self.pageRows = max(0, pageRows)
-        self.checkOwnerCode = checkOwnerCode
-        self.ownerKeys = ownerKeys
-        self.makeOneTimeKey = makeOneTimeKey
+        self.owner = OwnerConsole(caller: caller, station: sysop, checkOwnerCode: checkOwnerCode,
+                                  ownerKeys: ownerKeys, makeOneTimeKey: makeOneTimeKey)
     }
 
-    /// The operator's own callsign at any SSID: the only caller who may
-    /// sign in as the owner.
-    /// The mailbox's own command words, which an owner control command
-    /// cannot take.
+    /// The words the mailbox and the node use themselves, which an owner
+    /// control command cannot take.
     static let builtInVerbs: Set<String> = [
         "?", "A", "ABORT", "B", "BYE", "D", "DB", "DOWNLOAD", "F", "FILES", "FN", "H", "HEARD", "HELP", "I", "INFO",
         "J", "JHEARD", "K", "KILL", "KM", "L", "LB", "LIST", "LL", "LM", "MH", "MHEARD", "N", "NEW", "NH", "NQ",
         "NZ", "OP", "OWNER", "Q", "QUIT", "R", "READ", "RM", "S", "SB", "SEND", "SP", "ST", "U", "UPLOAD", "V",
-        "VER", "VERSION", "W", "WN", "WP"
+        "VER", "VERSION", "W", "WN", "WP",
+        // The node's, since the same commands are offered there.
+        "BBS", "C", "CONNECT", "MAIL", "NODES", "PMS", "ROUTES"
     ]
 
+    /// The operator's own callsign at any SSID: the only caller who may
+    /// sign in as the owner.
     static func isOwnerCallsign(_ caller: String, station: String) -> Bool {
         BBSMessage.baseCall(caller) == BBSMessage.baseCall(station)
     }
@@ -353,11 +341,15 @@ nonisolated struct BBSShell {
     // MARK: - Lines
 
     mutating func handle(line rawLine: String, mailbox: Mailbox, now: Date) -> Output {
-        var line = rawLine
-        // A checked line can arrive while a message is being written (its
-        // first word happened to be an owner command): keep the text, and
-        // the counter in step with the device's.
-        if ownerByKey, !isAtCommandLine, let plain = acceptCheck(line) { line = plain }
+        let line: String
+        switch owner.route(rawLine, atCommandLine: isAtCommandLine) {
+        case .reply(let reply):
+            return output(reply)
+        case .line(let routed, let checked):
+            line = routed
+            lineWasChecked = checked
+        }
+        defer { lineWasChecked = false }
         switch state {
         case .closed:
             return Output(lines: [], prompt: nil)
@@ -440,15 +432,8 @@ nonisolated struct BBSShell {
             ? nil
             : String(rest.split(separator: " ")[0])
 
-        if ownerByKey, verb.hasPrefix("!") {
-            return checkedCommand(trimmed, mailbox: mailbox, now: now)
-        }
-        if ownerByKey, !runningSignedCommand, ownerVerbs.contains(verb) {
-            return Output(lines: ["Owner commands from a paired device carry a check; AXTerm adds it for you."])
-        }
-
-        if offersOwnerCommands, let command = ownerControls.first(where: { $0.name.uppercased() == verb }) {
-            return control(command, rest)
+        if let reply = owner.command(verb, rest, checked: lineWasChecked, status: mailbox.ownerStatus, now: now) {
+            return output(reply)
         }
 
         switch verb {
@@ -458,13 +443,6 @@ nonisolated struct BBSShell {
             return Output(lines: [Self.version])
         case "OP":
             return setPageLength(argument)
-        case "OWNER" where offersOwnerCommands:
-            return signIn(rest, mailbox: mailbox, now: now)
-        case "ST" where offersOwnerCommands:
-            guard isOwner else {
-                return Output(lines: ["Sign in first: OWNER and the six-digit code from your authenticator app."])
-            }
-            return Output(lines: mailbox.ownerStatus.isEmpty ? ["Nothing to report."] : mailbox.ownerStatus)
         case "I", "INFO":
             return Output(lines: info(rest, mailbox: mailbox))
         // Cross-dialect courtesy: BPQ operators type MH, Kantronics
@@ -573,68 +551,6 @@ nonisolated struct BBSShell {
 
     // MARK: - Owner
 
-    private mutating func signIn(_ rest: String, mailbox: Mailbox, now: Date) -> Output {
-        let parts = rest.split(separator: " ", maxSplits: 1).map(String.init)
-        let word = parts.first?.uppercased()
-        if word == "KEY" {
-            guard ownerKeys != nil else {
-                return Output(lines: ["No device is paired with this mailbox. Pair one in its owner settings at home."])
-            }
-            let oneTime = makeOneTimeKey()
-            ownerChallenge = (oneTime, now)
-            return Output(lines: [OwnerKey.challengePrefix + OwnerKey.encode(oneTime.publicKey)])
-        }
-        if word == "MAC", let ownerKeys {
-            return keySignIn(parts.count > 1 ? parts[1] : "", paired: ownerKeys, now: now)
-        }
-        guard let checkOwnerCode, let code = parts.first else {
-            return Output(lines: [checkOwnerCode == nil
-                ? "OWNER KEY starts a sign-in from a paired AXTerm."
-                : "OWNER takes the six-digit code from your authenticator app."])
-        }
-        switch checkOwnerCode(code, now) {
-        case .accepted:
-            isOwner = true
-            return Output(lines: ["Signed in as the owner until you disconnect. ST shows the station."],
-                          effects: [.ownerSignIn(accepted: true)])
-        case .wrong:
-            return Output(lines: ["That code is not right."], effects: [.ownerSignIn(accepted: false)])
-        case .used:
-            return Output(lines: ["That code was already used. Wait for the next one."],
-                          effects: [.ownerSignIn(accepted: false)])
-        case .lockedOut:
-            return Output(lines: ["Too many wrong codes. Try again in 15 minutes."],
-                          effects: [.ownerSignIn(accepted: false)])
-        }
-    }
-
-    /// `OWNER MAC <check>`: the device's answer to the challenge, made with
-    /// the session key only a paired device can derive.
-    private mutating func keySignIn(_ given: String, paired: [OwnerKey.PairedDevice], now: Date) -> Output {
-        guard let outstanding = ownerChallenge else {
-            return Output(lines: ["Ask for a challenge first: OWNER KEY."])
-        }
-        ownerChallenge = nil
-        guard now.timeIntervalSince(outstanding.issued) <= OwnerKey.challengeLifetime else {
-            return Output(lines: ["That challenge has run out. Ask for a new one: OWNER KEY."])
-        }
-        let answer = given.trimmingCharacters(in: .whitespaces)
-        for device in paired {
-            guard let key = OwnerKey.sessionKey(mine: outstanding.key, theirs: device.publicKey,
-                                                station: sysop, caller: caller),
-                  OwnerKey.matches(answer, OwnerKey.check(key: key, counter: 0, command: "",
-                                                          length: OwnerKey.signInCheckBytes)) else { continue }
-            ownerSession = (key, 1)
-            wrongChecks = 0
-            isOwner = true
-            ownerByKey = true
-            return Output(lines: ["Signed in as the owner until you disconnect. Owner commands carry a check.",
-                                  OwnerKey.ownerCommandsPrefix + ownerVerbs.joined(separator: " ")],
-                          effects: [.ownerSignIn(accepted: true)])
-        }
-        return Output(lines: ["That sign-in is not from a paired device."], effects: [.ownerSignIn(accepted: false)])
-    }
-
     private var isAtCommandLine: Bool {
         switch state {
         case .command, .paging: return true
@@ -642,131 +558,17 @@ nonisolated struct BBSShell {
         }
     }
 
-    /// The line without its check when the check is right for the next
-    /// counter, which it then moves on; nil otherwise.
-    private mutating func acceptCheck(_ line: String) -> String? {
-        guard line.hasPrefix("!"), var session = ownerSession else { return nil }
-        let pieces = line.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
-        let command = pieces.count > 1 ? pieces[1].trimmingCharacters(in: .whitespaces) : ""
-        guard let given = pieces.first,
-              OwnerKey.matches(given, OwnerKey.check(key: session.key, counter: session.counter, command: command,
-                                                     length: OwnerKey.commandCheckBytes)) else { return nil }
-        session.counter += 1
-        ownerSession = session
-        return command
-    }
-
-    /// `!<check> <command>`: an owner command with its check. A wrong one is
-    /// logged, and the third ends the sign-in.
-    private mutating func checkedCommand(_ line: String, mailbox: Mailbox, now: Date) -> Output {
-        guard let command = acceptCheck(line) else {
-            wrongChecks += 1
-            guard wrongChecks >= OwnerKey.wrongChecksAllowed else {
-                return Output(lines: ["That check is not right."], effects: [.ownerSignIn(accepted: false)])
+    private func output(_ reply: OwnerConsole.Reply) -> Output {
+        Output(lines: reply.lines, effects: reply.effects.map { effect in
+            switch effect {
+            case .signIn(let accepted): return .ownerSignIn(accepted: accepted)
+            case .runControl(let command, let argument): return .runControl(command, argument: argument)
             }
-            ownerSession = nil
-            ownerByKey = false
-            isOwner = false
-            return Output(lines: [OwnerKey.signedOutLine], effects: [.ownerSignIn(accepted: false)])
-        }
-        runningSignedCommand = true
-        defer { runningSignedCommand = false }
-        return runCommand(command, mailbox: mailbox, now: now)
-    }
-
-    /// One of the operator's control commands.
-    private func control(_ command: OwnerControlCommand, _ argument: String) -> Output {
-        guard isOwner else {
-            return Output(lines: ["Sign in first: OWNER and the six-digit code from your authenticator app."])
-        }
-        let word = command.name.uppercased()
-        if case .radio(let quantity) = command.action {
-            return radioControl(word, quantity, argument)
-        }
-        if command.changesTransmission, !ownerByKey {
-            return Output(lines: ["\(word) changes how the station transmits: sign in with a paired AXTerm's key."])
-        }
-        switch command.argument.accept(argument) {
-        case .success(let accepted):
-            return Output(lines: [], effects: [.runControl(command, argument: accepted)])
-        case .failure(let refusal):
-            let fits: String
-            switch refusal {
-            case .unexpected: fits = "nothing after it"
-            case .notANumber:
-                if case .number(let min, let max) = command.argument {
-                    fits = "a number from \(OwnerControlCommand.ArgumentRule.format(min)) to "
-                        + "\(OwnerControlCommand.ArgumentRule.format(max))"
-                } else { fits = "a number" }
-            case .outOfRange(let min, let max): fits = "a number from \(min) to \(max)"
-            case .notAChoice(let choices): fits = "one of " + choices.joined(separator: ", ")
-            }
-            return Output(lines: ["\(word) takes \(fits)."])
-        }
-    }
-
-    /// `PWR 705` reads; `PWR 705 5` sets power, inside that radio's range.
-    /// The runner gets a plain rigctl command for the radio named.
-    private func radioControl(_ word: String, _ quantity: OwnerControlCommand.RadioQuantity,
-                              _ text: String) -> Output {
-        guard let example = ownerRadios.first?.name else {
-            return Output(lines: ["No radios are set up for control commands."])
-        }
-        let parts = text.split(separator: " ").map(String.init)
-        guard let asked = parts.first else {
-            return Output(lines: ["\(word) takes a radio, such as \(word) \(example)"
-                                  + (quantity.canSet ? ", or \(word) \(example) 5 to set it." : ".")])
-        }
-        guard let radio = ownerRadios.first(where: { $0.name.caseInsensitiveCompare(asked) == .orderedSame }) else {
-            return Output(lines: ["\(word): no radio called \(asked). Radios: "
-                                  + ownerRadios.map(\.name).joined(separator: ", ") + "."])
-        }
-        let named = "\(word) \(radio.name)"
-        let isPower = quantity == .power
-        guard parts.count > 1 else {
-            let read = OwnerControlCommand(name: named, help: "", argument: .none,
-                                           action: .rigctl(host: radio.host, port: radio.port,
-                                                           set: quantity.readLine, read: nil),
-                                           changesTransmission: false,
-                                           scale: isPower ? radio.fullPowerWatts : 1, unit: isPower ? "W" : "")
-            return Output(lines: [], effects: [.runControl(read, argument: "")])
-        }
-        guard quantity.canSet else { return Output(lines: ["\(word) only reads: \(named)."]) }
-        guard radio.allowsChanges else {
-            return Output(lines: ["\(word): the \(radio.name) is set to read only from the road."])
-        }
-        var typed = parts[1]
-        if typed.lowercased().hasSuffix("w") { typed.removeLast() }
-        let range = OwnerControlCommand.ArgumentRule.number(min: radio.minWatts, max: radio.maxWatts)
-        guard parts.count == 2, case .success(let watts) = range.accept(typed) else {
-            return Output(lines: ["\(word): the \(radio.name) takes "
-                                  + "\(OwnerControlCommand.ArgumentRule.format(radio.minWatts)) to "
-                                  + "\(OwnerControlCommand.ArgumentRule.format(radio.maxWatts)) W."])
-        }
-        guard ownerByKey else {
-            return Output(lines: ["\(named) \(watts) changes how the station transmits: "
-                                  + "sign in with a paired AXTerm's key."])
-        }
-        let set = OwnerControlCommand(name: named, help: "", argument: range,
-                                      action: .rigctl(host: radio.host, port: radio.port,
-                                                      set: "L RFPOWER {arg}", read: quantity.readLine),
-                                      changesTransmission: true, scale: radio.fullPowerWatts, unit: "W",
-                                      steps: radio.powerSteps)
-        return Output(lines: [], effects: [.runControl(set, argument: watts)])
+        })
     }
 
     private func help() -> [String] {
-        helpLines + (!offersOwnerCommands ? [] : [
-            "",
-            "OWNER code sign in as the owner with your authenticator code",
-            "ST         the station's state (owner)"
-        ] + ownerControls.map { command in
-            var word = command.name.uppercased()
-            if case .radio(let quantity) = command.action { word += quantity.canSet ? " r [W]" : " r" }
-            return String((word.padding(toLength: max(11, word.count + 2), withPad: " ", startingAt: 0)
-                           + command.help).prefix(79))
-        } + (ownerRadios.isEmpty || !ownerControls.contains(where: { if case .radio = $0.action { return true }; return false })
-             ? [] : ["Radios: " + ownerRadios.map(\.name).joined(separator: ", ")]))
+        helpLines + owner.helpLines
     }
 
     private var helpLines: [String] {
